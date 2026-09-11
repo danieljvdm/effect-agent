@@ -25,12 +25,12 @@ export const threadPortTransportLayer: Layer.Layer<
   ThreadObjectNamespace
 > = Layer.effect(ThreadPortTransport)(
   Effect.gen(function* () {
-    const { namespace } = yield* ThreadObjectNamespace;
+    const { get } = yield* ThreadObjectNamespace;
 
     return ThreadPortTransport.of({
       call: (threadId, request) =>
         Effect.tryPromise({
-          try: () => namespace.get(namespace.idFromName(threadId)).portCall(request),
+          try: () => get(threadId).portCall(request),
           catch: (cause) => portTransportFailure(threadId, cause),
         }).pipe(
           Effect.withSpan("CloudflarePortTransport.call", {

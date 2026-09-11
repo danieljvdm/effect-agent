@@ -1,3 +1,4 @@
+import { ThreadId } from "@effect-agent/core/Identifiers";
 import { type DurableBindingFailure } from "@effect-agent/thread/AgentRegistration";
 import {
   DurableAgentRuntime,
@@ -28,7 +29,7 @@ import {
   Stream,
 } from "effect";
 
-import { ThreadObjectIdentity, DurableObjectContext } from "./CloudflareBindings.ts";
+import { DurableObjectContext } from "./CloudflareBindings.ts";
 import { CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";
 import { safeCauseMessage } from "./internal/boundary.ts";
 
@@ -188,6 +189,8 @@ export type ThreadMaintenanceFailpointLocation =
   | "maintenance:ensure:after"
   | "maintenance:begin:before"
   | "maintenance:begin:after"
+  | "maintenance:select:before"
+  | "maintenance:select:after"
   | "maintenance:finish:before"
   | "maintenance:finish:after";
 
@@ -255,6 +258,26 @@ export const ThreadMessageDelivery = Context.Reference<{
   defaultValue: () => ({ drain: Effect.void, pendingDeadline: Effect.succeed(Option.none()) }),
 });
 
+/**
+ * Application obligations sharing this Object's alarm. The deadline read is local and
+ * read-only. Drain beside the native Attempt and always finish one initial bounded wave,
+ * even when `finished` was already signalled. Then stop starting new waves on that signal
+ * and finish the bounded current wave before returning. Native maintenance joins that work
+ * before acknowledging a generation. Mutations use the same ThreadMutationGate; hooks never
+ * write the raw alarm slot. Pending host work does not defer a ready model Attempt.
+ */
+export const ThreadHostMaintenance = Context.Reference<{
+  readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
+  readonly drainUntil: (
+    finished: Deferred.Deferred<void>,
+  ) => Effect.Effect<void, DurableAlarmError>;
+}>("@effect-agent/platform-cloudflare/ThreadHostMaintenance", {
+  defaultValue: () => ({
+    pendingDeadline: Effect.succeed(Option.none()),
+    drainUntil: () => Effect.void,
+  }),
+});
+
 const earliestDeadline = (
   left: Option.Option<number>,
   right: Option.Option<number>,
@@ -290,6 +313,8 @@ class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
   dirty: MaintenanceGeneration,
   processed: MaintenanceGeneration,
   nonterminal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** One physical-owner cursor; old single-lane records need no conversion. */
+  lastServedThreadId: Schema.optionalKey(ThreadId),
 }) {}
 
 const MAINTENANCE_STATE_KEY = "effect-agent:thread-maintenance:v1";
@@ -482,7 +507,6 @@ export class ThreadMaintenance extends Context.Service<
     | DurableAlarmService
     | ThreadMaintenanceFailpoint
     | CloudflareDurableRuntimeConfig
-    | ThreadObjectIdentity
     | DurableObjectContext
   > = Layer.effect(ThreadMaintenance)(
     Effect.gen(function* () {
@@ -490,7 +514,6 @@ export class ThreadMaintenance extends Context.Service<
       const ledger = yield* SubmissionLedger;
       const alarm = yield* DurableAlarmService;
       const config = yield* CloudflareDurableRuntimeConfig;
-      const identity = yield* ThreadObjectIdentity;
       const { ctx } = yield* DurableObjectContext;
       const failpoint = yield* ThreadMaintenanceFailpoint;
 
@@ -503,6 +526,7 @@ export class ThreadMaintenance extends Context.Service<
       const publication = yield* ThreadPublication;
       const projection = yield* ThreadProjectionMaintenance;
       const messages = yield* ThreadMessageDelivery;
+      const host = yield* ThreadHostMaintenance;
 
       // A broken disposable index still needs a retry alarm and must not prevent startup.
       const projectionDeadline = projection.pendingDeadline.pipe(
@@ -518,7 +542,7 @@ export class ThreadMaintenance extends Context.Service<
       const pendingDeadline = Effect.gen(function* () {
         return earliestDeadline(
           earliestDeadline(yield* publication.pendingDeadline, yield* messages.pendingDeadline),
-          yield* projectionDeadline,
+          earliestDeadline(yield* projectionDeadline, yield* host.pendingDeadline),
         );
       });
 
@@ -643,8 +667,13 @@ export class ThreadMaintenance extends Context.Service<
           messages.drainUntil?.(deliveryFinished) ?? messages.drain,
         );
 
+        const hostWork = yield* Effect.forkChild(host.drainUntil(deliveryFinished));
+
         const finishDelivery = Deferred.succeed(deliveryFinished, undefined).pipe(
-          Effect.andThen(Fiber.join(delivery)),
+          Effect.andThen(Fiber.awaitAll([delivery, hostWork])),
+          Effect.flatMap((outcomes) =>
+            Effect.forEach(outcomes, (outcome) => outcome, { discard: true }),
+          ),
         );
 
         // Capture derived-index failures until canonical work has had its turn. Interruption
@@ -717,24 +746,72 @@ export class ThreadMaintenance extends Context.Service<
         }
         // Step 2 — reconciliation strictly precedes new work in this pass (exit gate).
         const recovered: ReadonlyArray<RecoveryReport> = yield* runtime.runRecovery;
-        // One head Attempt per event. The runtime yields after a committed turn when the
-        // soft deadline is reached; queued followers belong to a subsequent alarm.
-        const settlement = yield* runtime.processThreadHead(identity.threadId, { yieldAfter });
+        const reports = new Map(recovered.map((report) => [report.submissionId, report]));
+        const current = yield* Stream.runCollect(ledger.scanNonterminal);
+        const heads = new Map<ThreadId, SubmissionSnapshot>();
+
+        for (const row of current) {
+          if (!heads.has(row.threadId)) heads.set(row.threadId, row);
+        }
+
+        const eligible = [...heads.values()]
+          .filter((head) => !stableExternalWait(head, reports))
+          .map((head) => head.threadId)
+          .sort();
+
+        let selected = eligible[0];
+
+        if (heads.size > 1 && selected !== undefined) {
+          yield* failpoint.hit("maintenance:select:before");
+          selected = yield* runTransaction("select maintenance lane", () =>
+            ctx.storage.transaction(async (transaction) => {
+              const { state } = await readMaintenanceState(transaction);
+
+              const next =
+                eligible.find(
+                  (threadId) =>
+                    state.lastServedThreadId === undefined || threadId > state.lastServedThreadId,
+                ) ?? eligible[0];
+
+              if (next !== undefined) {
+                // Persist before the Attempt so an eviction or repeated yield cannot
+                // monopolize the first lane. The generation and prearmed alarm survive.
+                await transaction.put(
+                  MAINTENANCE_STATE_KEY,
+                  encodeMaintenanceState(
+                    ThreadMaintenanceState.make({ ...state, lastServedThreadId: next }),
+                  ),
+                );
+              }
+
+              return next;
+            }),
+          );
+          yield* failpoint.hit("maintenance:select:after");
+        }
+
+        // One FIFO head per event, across all local lanes. The runtime keeps its normal
+        // bounded Attempt and recovery contracts; followers belong to another alarm.
+        const settlement =
+          selected === undefined
+            ? Option.none()
+            : yield* runtime.processThreadHead(selected, { yieldAfter });
 
         yield* finishDelivery;
         if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
         // Observe residual state before acknowledging this exact pass-start generation.
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
-        const reports = new Map(recovered.map((report) => [report.submissionId, report]));
-        const head = remaining[0];
-        const headWaiting = head !== undefined && stableExternalWait(head, reports);
+        const waitingHeads = new Map<ThreadId, boolean>();
 
-        const autonomous = remaining.some((snapshot, index) => {
+        const autonomous = remaining.some((snapshot) => {
+          const headWaiting = waitingHeads.get(snapshot.threadId);
+
+          if (headWaiting === undefined)
+            waitingHeads.set(snapshot.threadId, stableExternalWait(snapshot, reports));
           // FIFO followers cannot execute through a stable external wait. Only plain queued
           // input is dormant here; admission repairs and accepted aborts still need a pass.
           if (
-            index > 0 &&
-            headWaiting &&
+            headWaiting === true &&
             snapshot.state === "ready" &&
             reports.get(snapshot.submissionId)?.decision._tag === "ApplyInput"
           )

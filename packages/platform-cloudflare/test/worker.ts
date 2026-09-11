@@ -133,7 +133,11 @@ const scheduleHostLayer = Layer.mergeAll(
   ),
   Layer.effect(
     ThreadObjectNamespace,
-    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.THREADS })),
+    Effect.map(WorkerEnvironment, (env) =>
+      ThreadObjectNamespace.of({
+        get: (threadId) => env.THREADS.get(env.THREADS.idFromName(threadId)),
+      }),
+    ),
   ),
 );
 
@@ -162,7 +166,11 @@ const subscriptionHostLayer = Layer.mergeAll(
   subscriptionFailpointLayer,
   Layer.effect(
     ThreadObjectNamespace,
-    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.THREADS })),
+    Effect.map(WorkerEnvironment, (env) =>
+      ThreadObjectNamespace.of({
+        get: (threadId) => env.THREADS.get(env.THREADS.idFromName(threadId)),
+      }),
+    ),
   ),
 );
 

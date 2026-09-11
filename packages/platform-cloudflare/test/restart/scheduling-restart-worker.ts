@@ -72,7 +72,11 @@ let admissionReplyFailures = 0;
 const scheduleHostLayer = Layer.mergeAll(
   Layer.effect(
     ThreadObjectNamespace,
-    Effect.map(WorkerEnvironment, (env) => ({ namespace: env.RESTART_THREADS })),
+    Effect.map(WorkerEnvironment, (env) =>
+      ThreadObjectNamespace.of({
+        get: (threadId) => env.RESTART_THREADS.get(env.RESTART_THREADS.idFromName(threadId)),
+      }),
+    ),
   ),
   Layer.succeed(ScheduleAuthorizer)({
     manage: () => Effect.void,

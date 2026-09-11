@@ -1,9 +1,14 @@
-import { type AgentId } from "@effect-agent/core/Identifiers";
+import { type AgentId, type ThreadId } from "@effect-agent/core/Identifiers";
 import { SubmissionId } from "@effect-agent/core/Identifiers";
 import {
   decodePortRequest,
   encodePortResponse,
+  LedgerLookupResult,
+  PortFailed,
+  PortProtocolError,
+  PortSucceeded,
   type PortRequest,
+  type PortResponse,
 } from "@effect-agent/storage-cloudflare/PortProtocol";
 import {
   IntegrityReport,
@@ -16,6 +21,7 @@ import {
 import { DigestError } from "@effect-agent/thread/Digest";
 import {
   DurableAgentRuntime,
+  DurableRuntimeConfig,
   RecoveryReport,
   type DurableSubmitAgent,
 } from "@effect-agent/thread/DurableAgentRuntime";
@@ -55,10 +61,13 @@ import {
   ThreadMaintenance,
   DurableAlarmError,
   DurableAlarmService,
+  ThreadMutationGate,
+  publishCommitted,
   type MaintenancePassFailure,
 } from "./Alarm.ts";
 import {
   ThreadObjectIdentity,
+  ThreadObjectPlacement,
   DurableObjectContext,
   ThreadObjectNamespace,
   threadNamespaceFromEnv,
@@ -89,6 +98,7 @@ import {
   encodeHostResponse,
   type HostFailure,
   type HostResponse,
+  type SubmitRequest,
 } from "./CloudflareThreadClient.ts";
 import {
   layerConfig,
@@ -103,6 +113,9 @@ import { ProgressWaitRegistry } from "./internal/progress-wait.ts";
 export {
   layer,
   layerConfig,
+  layerHostConfig,
+  layerInHost,
+  ThreadObjectPorts,
   type ThreadPublicationOptions as PublicationOptions,
   type CloudflareDurableRuntimeOptions as RuntimeOptions,
   type CloudflareDurableRuntimeServices as Services,
@@ -231,19 +244,21 @@ const utf8Bytes = (value: PersistedJson): number =>
  * exempt: its accepted-work obligation already exists, and returning the original Receipt
  * consumes no new quota. Refusals are typed `AdmissionLimitExceeded` and nothing is written.
  */
-const gateAdmissionLimits = Effect.fn("ThreadObject.gateAdmissionLimits")(function* (request: {
-  readonly principal: SubmissionLookupByKey["principal"];
-  readonly idempotencyKey: SubmissionLookupByKey["idempotencyKey"];
-  readonly inputPayload: PersistedJson;
-}) {
-  const identity = yield* ThreadObjectIdentity;
+const gateAdmissionLimits = Effect.fn("ThreadObject.gateAdmissionLimits")(function* (
+  threadId: ThreadId,
+  request: {
+    readonly principal: SubmissionLookupByKey["principal"];
+    readonly idempotencyKey: SubmissionLookupByKey["idempotencyKey"];
+    readonly inputPayload: PersistedJson;
+  },
+) {
   const config = yield* CloudflareDurableRuntimeConfig;
   const ledger = yield* SubmissionLedger;
   const { ctx } = yield* DurableObjectContext;
 
   const existing = yield* ledger.lookup(
     SubmissionLookupByKey.make({
-      threadId: identity.threadId,
+      threadId,
       principal: request.principal,
       idempotencyKey: request.idempotencyKey,
     }),
@@ -261,8 +276,10 @@ const gateAdmissionLimits = Effect.fn("ThreadObject.gateAdmissionLimits")(functi
     });
   }
 
-  // One Thread per Object (durability §5): the local scan IS this lane's queue.
-  const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+  const nonterminal = yield* ledger.scanNonterminal.pipe(
+    Stream.filter((submission) => submission.threadId === threadId),
+    Stream.runCollect,
+  );
 
   if (nonterminal.length >= config.limits.maxQueueDepthPerLane) {
     return yield* AdmissionLimitExceeded.make({
@@ -296,39 +313,110 @@ const passthroughSubmitAgent = (agentId: AgentId): DurableSubmitAgent<typeof Per
   },
 });
 
+/** A physical owner may hold other Threads; an addressed request cannot act on their IDs. */
+const lookupAddressedSubmission = Effect.fn("ThreadObject.lookupAddressedSubmission")(function* (
+  submissionId: SubmissionId,
+) {
+  const { threadId } = yield* ThreadObjectIdentity;
+  const ports = yield* ThreadObjectPorts;
+  const submission = yield* ports.lookupSubmission(submissionId);
+
+  if (Option.isSome(submission) && submission.value.threadId !== threadId)
+    return yield* HostProtocolError.make({ message: "The Submission belongs to another Thread" });
+
+  return submission;
+});
+
+const requireSubmissionThread = Effect.fn("ThreadObject.requireSubmissionThread")(function* (
+  submissionId: SubmissionId,
+) {
+  const submission = yield* lookupAddressedSubmission(submissionId);
+
+  if (Option.isNone(submission))
+    return yield* LedgerError.make({
+      operation: "addressed Submission lookup",
+      message: "The addressed Thread has no such Submission",
+    });
+});
+
+const requireReceiptThread = Effect.fn("ThreadObject.requireReceiptThread")(function* (
+  threadId: ThreadId,
+) {
+  const identity = yield* ThreadObjectIdentity;
+
+  if (threadId !== identity.threadId)
+    return yield* HostProtocolError.make({ message: "The Receipt belongs to another Thread" });
+});
+
+const requirePortThread = (request: PortRequest) => {
+  switch (request._tag) {
+    case "LedgerLookup":
+      return request.request._tag === "SubmissionLookupById"
+        ? lookupAddressedSubmission(request.request.submissionId).pipe(Effect.asVoid)
+        : requireReceiptThread(request.request.threadId);
+    case "LedgerMarkReady":
+    case "LedgerRequestAbort":
+      return requireSubmissionThread(request.request.submissionId);
+    case "LedgerRecordChildSettled":
+      return requireSubmissionThread(request.request.parentSubmissionId);
+    case "LedgerAdmit":
+    case "LedgerResolveAdmission":
+    case "StoreMaterialize":
+    case "StoreAppend":
+    case "StoreReadPage":
+    case "StoreInspectTail":
+    case "StoreExport":
+      return requireReceiptThread(request.request.threadId);
+  }
+  request satisfies never;
+};
+
+/**
+ * Admit an already Schema-decoded request to a logical Thread in this physical owner.
+ * Custom hosts validate local placement before calling this Effect and provide their same
+ * runtime/maintenance instances. The native endpoint uses this path too: queue limits,
+ * idempotent receipts and the pre-admission generation/alarm commit have one owner.
+ */
+export const submit = Effect.fn("ThreadObject.submit")(function* (
+  threadId: ThreadId,
+  request: SubmitRequest,
+) {
+  const placement = yield* ThreadObjectPlacement;
+
+  if (!placement.ownsThread(threadId))
+    return yield* HostProtocolError.make({ message: "The Thread belongs to another Object" });
+  const mutations = yield* ThreadMutationGate;
+  const runtime = yield* DurableAgentRuntime;
+
+  yield* gateAdmissionLimits(threadId, request);
+
+  return yield* mutations.withMutation(
+    runtime
+      .submit(passthroughSubmitAgent(request.agentId), request.inputPayload, {
+        threadId,
+        principal: request.principal,
+        idempotencyKey: request.idempotencyKey,
+        ...(request.admissionGroup === undefined ? {} : { admissionGroup: request.admissionGroup }),
+        ...(request.admissionFence === undefined ? {} : { admissionFence: request.admissionFence }),
+        ...(request.workerAdmission === undefined
+          ? {}
+          : { workerAdmission: request.workerAdmission }),
+        ...(request.messageAdmission === undefined
+          ? {}
+          : { messageAdmission: request.messageAdmission }),
+        definitions: request.definitions,
+      })
+      .pipe(Effect.tap(() => publishCommitted)),
+  );
+});
+
 const submitEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
   decodeSubmitRequest(encoded).pipe(
     Effect.mapError(protocolFailure("The submit request could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
         const identity = yield* ThreadObjectIdentity;
-        const maintenance = yield* ThreadMaintenance;
-        const runtime = yield* DurableAgentRuntime;
-
-        yield* gateAdmissionLimits(request);
-
-        // Alarm invariant: the generation + alarm commit BEFORE the admission, and maintenance
-        // cannot acknowledge that generation until this mutation leaves its public RPC seam.
-        const receipt = yield* maintenance.withMutation(
-          runtime.submit(passthroughSubmitAgent(request.agentId), request.inputPayload, {
-            threadId: identity.threadId,
-            principal: request.principal,
-            idempotencyKey: request.idempotencyKey,
-            ...(request.admissionGroup === undefined
-              ? {}
-              : { admissionGroup: request.admissionGroup }),
-            ...(request.admissionFence === undefined
-              ? {}
-              : { admissionFence: request.admissionFence }),
-            ...(request.workerAdmission === undefined
-              ? {}
-              : { workerAdmission: request.workerAdmission }),
-            ...(request.messageAdmission === undefined
-              ? {}
-              : { messageAdmission: request.messageAdmission }),
-            definitions: request.definitions,
-          }),
-        );
+        const receipt = yield* submit(identity.threadId, request);
 
         return SubmitSucceeded.make({ receipt });
       }),
@@ -344,6 +432,17 @@ const submissionStatusEndpoint = (
     Effect.mapError(protocolFailure("The receipt could not be decoded")),
     Effect.flatMap((receipt) =>
       Effect.gen(function* () {
+        const authorizer = yield* OperationAuthorizer;
+
+        yield* authorizer.authorize(
+          OperationAuthorizationRequest.make({
+            operation: "awaitSettlement",
+            threadId: receipt.threadId,
+            submissionId: receipt.submissionId,
+          }),
+        );
+        yield* requireReceiptThread(receipt.threadId);
+        yield* requireSubmissionThread(receipt.submissionId);
         const runtime = yield* DurableAgentRuntime;
 
         return SubmissionStatusResponse.make({ status: yield* runtime.submissionStatus(receipt) });
@@ -360,6 +459,17 @@ const awaitSettlementEndpoint = (
     Effect.mapError(protocolFailure("The receipt could not be decoded")),
     Effect.flatMap((receipt) =>
       Effect.gen(function* () {
+        const authorizer = yield* OperationAuthorizer;
+
+        yield* authorizer.authorize(
+          OperationAuthorizationRequest.make({
+            operation: "awaitSettlement",
+            threadId: receipt.threadId,
+            submissionId: receipt.submissionId,
+          }),
+        );
+        yield* requireReceiptThread(receipt.threadId);
+        yield* requireSubmissionThread(receipt.submissionId);
         const runtime = yield* DurableAgentRuntime;
         const settlement = yield* runtime.awaitSettlement(receipt);
 
@@ -381,7 +491,9 @@ const awaitProgressEndpoint = (encoded: unknown): Effect.Effect<unknown, never, 
 
         yield* Effect.scoped(
           Effect.gen(function* () {
-            const cancelled = yield* registry.subscribe(request.waiterId);
+            const cancelled = yield* registry.subscribe(
+              JSON.stringify([identity.threadId, request.waiterId]),
+            );
 
             yield* Effect.raceFirst(
               runtime.awaitProgress(identity.threadId, request.afterSequence),
@@ -404,9 +516,10 @@ const cancelProgressEndpoint = (
     Effect.mapError(protocolFailure("The progress cancellation could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
+        const identity = yield* ThreadObjectIdentity;
         const registry = yield* ProgressWaitRegistry;
 
-        yield* registry.cancel(request.waiterId);
+        yield* registry.cancel(JSON.stringify([identity.threadId, request.waiterId]));
 
         return ProgressCancelled.make();
       }),
@@ -457,6 +570,15 @@ const abortEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoint
     Effect.mapError(protocolFailure("The abort command could not be decoded")),
     Effect.flatMap((command) =>
       Effect.gen(function* () {
+        const authorizer = yield* OperationAuthorizer;
+
+        yield* authorizer.authorize(
+          OperationAuthorizationRequest.make({
+            operation: "abort",
+            submissionId: command.submissionId,
+          }),
+        );
+        yield* requireSubmissionThread(command.submissionId);
         const maintenance = yield* ThreadMaintenance;
         const runtime = yield* DurableAgentRuntime;
         const intent = yield* maintenance.withMutation(runtime.abort(command));
@@ -475,6 +597,15 @@ const resolveApprovalEndpoint = (
     Effect.mapError(protocolFailure("The approval command could not be decoded")),
     Effect.flatMap((command) =>
       Effect.gen(function* () {
+        const authorizer = yield* OperationAuthorizer;
+
+        yield* authorizer.authorize(
+          OperationAuthorizationRequest.make({
+            operation: "resolveApproval",
+            submissionId: command.submissionId,
+          }),
+        );
+        yield* requireSubmissionThread(command.submissionId);
         const maintenance = yield* ThreadMaintenance;
         const runtime = yield* DurableAgentRuntime;
         const intent = yield* maintenance.withMutation(runtime.resolveApproval(command));
@@ -493,6 +624,15 @@ const resolveUnknownEndpoint = (
     Effect.mapError(protocolFailure("The resolution command could not be decoded")),
     Effect.flatMap((command) =>
       Effect.gen(function* () {
+        const authorizer = yield* OperationAuthorizer;
+
+        yield* authorizer.authorize(
+          OperationAuthorizationRequest.make({
+            operation: "resolveUnknown",
+            submissionId: command.submissionId,
+          }),
+        );
+        yield* requireSubmissionThread(command.submissionId);
         const maintenance = yield* ThreadMaintenance;
         const runtime = yield* DurableAgentRuntime;
         const intent = yield* maintenance.withMutation(runtime.resolveUnknown(command));
@@ -692,7 +832,30 @@ const obligationsEndpoint = (encoded: unknown): Effect.Effect<unknown, never, En
  * alarm so the mutated lane is processed promptly. Protocol anomalies answer
  * `PortFailed(PortProtocolError)`.
  */
-const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
+const encodePortResponseTotal = (response: PortResponse) =>
+  encodePortResponse(response).pipe(
+    Effect.catch((error) =>
+      Effect.succeed(
+        encodedPortProtocolFailure(`The port response could not be encoded: ${error.message}`),
+      ),
+    ),
+  );
+
+const portGuardFailure = (failure: LedgerError | HostProtocolError): PortFailed =>
+  PortFailed.make({
+    failure:
+      failure._tag === "LedgerError"
+        ? failure
+        : PortProtocolError.make({ message: "The port request is not for the addressed Thread" }),
+  });
+
+export const portCall = (
+  encoded: unknown,
+): Effect.Effect<
+  unknown,
+  never,
+  ThreadObjectPorts | ThreadMaintenance | DurableAlarmService | ThreadObjectIdentity
+> =>
   Effect.gen(function* () {
     const ports = yield* ThreadObjectPorts;
     const maintenance = yield* ThreadMaintenance;
@@ -708,6 +871,27 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
         `The port request could not be decoded: ${decoded.message}`,
       );
     }
+    if (
+      decoded.request._tag === "LedgerLookup" &&
+      decoded.request.request._tag === "SubmissionLookupById"
+    ) {
+      const response = yield* lookupAddressedSubmission(decoded.request.request.submissionId).pipe(
+        Effect.map((submission) =>
+          PortSucceeded.make({
+            result: LedgerLookupResult.make(
+              Option.isSome(submission) ? { submission: submission.value } : {},
+            ),
+          }),
+        ),
+        Effect.catch((failure) => Effect.succeed(portGuardFailure(failure))),
+      );
+
+      return yield* encodePortResponseTotal(response);
+    }
+    const identityCheck = yield* requirePortThread(decoded.request).pipe(Effect.result);
+
+    if (identityCheck._tag === "Failure")
+      return yield* encodePortResponseTotal(portGuardFailure(identityCheck.failure));
     const mutating = isMutatingPortRequest(decoded.request);
 
     const handled = yield* (
@@ -724,13 +908,7 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
       );
     }
 
-    const response = yield* encodePortResponse(handled.value).pipe(
-      Effect.catch((error) =>
-        Effect.succeed(
-          encodedPortProtocolFailure(`The port response could not be encoded: ${error.message}`),
-        ),
-      ),
-    );
+    const response = yield* encodePortResponseTotal(handled.value);
 
     if (mutating) {
       // Prompt processing hint; the pre-armed alarm already guarantees convergence.
@@ -751,6 +929,63 @@ const wakeEndpoint: Effect.Effect<void, never, EndpointServices> = Effect.gen(fu
   // Route the remote hint through this incarnation's scheduler so scoped progress waiters and
   // the alarm receive the same hint. Delivery remains droppable; canonical storage is authority.
   yield* wake.notify(identity.threadId);
+});
+
+/** The per-Thread wire operations supported by native and application-owned endpoints. */
+export const ThreadRpcOperation = Schema.Literals([
+  "submitEncoded",
+  "submissionStatusEncoded",
+  "awaitSettlementEncoded",
+  "awaitProgressEncoded",
+  "cancelProgressEncoded",
+  "observePage",
+  "abortEncoded",
+  "resolveApprovalEncoded",
+  "resolveUnknownEncoded",
+  "portCall",
+  "wake",
+]);
+
+export type ThreadRpcOperation = typeof ThreadRpcOperation.Type;
+
+const threadRpc = {
+  submitEncoded: submitEndpoint,
+  submissionStatusEncoded: submissionStatusEndpoint,
+  awaitSettlementEncoded: awaitSettlementEndpoint,
+  awaitProgressEncoded: awaitProgressEndpoint,
+  cancelProgressEncoded: cancelProgressEndpoint,
+  observePage: observePageEndpoint,
+  abortEncoded: abortEndpoint,
+  resolveApprovalEncoded: resolveApprovalEndpoint,
+  resolveUnknownEncoded: resolveUnknownEndpoint,
+  portCall,
+  wake: () => wakeEndpoint,
+} satisfies Record<
+  ThreadRpcOperation,
+  (encoded: unknown) => Effect.Effect<unknown, never, EndpointServices>
+>;
+
+/**
+ * Bind an addressed request to its logical Thread while sharing one physical runtime. This
+ * validates local placement before invoking the same native handlers. Receipts, Submission
+ * commands and port envelopes must match this identity; progress cancellation is Thread-scoped.
+ * The producer comes from the actual runtime configuration, never from caller input. These
+ * guards supplement the existing current model/Tool and operation authorization policies.
+ */
+export const handleRpc = Effect.fn("ThreadObject.handleRpc")(function* (
+  threadId: ThreadId,
+  operation: ThreadRpcOperation,
+  encoded: unknown,
+) {
+  const placement = yield* ThreadObjectPlacement;
+
+  if (!placement.ownsThread(threadId))
+    return yield* HostProtocolError.make({ message: "The Thread belongs to another Object" });
+  const { producerId } = yield* DurableRuntimeConfig;
+
+  return yield* threadRpc[operation](encoded).pipe(
+    Effect.provideService(ThreadObjectIdentity, { threadId, producerId }),
+  );
 });
 
 const alarmEndpoint: Effect.Effect<void, MaintenancePassFailure, EndpointServices> = Effect.gen(
@@ -802,7 +1037,7 @@ const effectCfPlatformLayer = (
       const binding = yield* threadNamespaceFromEnv(env, namespaceBinding);
 
       return ThreadObjectNamespace.of({
-        namespace: binding,
+        get: (threadId) => binding.get(binding.idFromName(threadId)),
         ...(rpcTracing === true ? { rpcTracing: namespaceBinding } : {}),
       });
     }),
@@ -896,21 +1131,11 @@ export const make = <
   );
 
   const rpc = {
-    submitEncoded: (encoded: unknown) => submitEndpoint(encoded),
-    submissionStatusEncoded: (encoded: unknown) => submissionStatusEndpoint(encoded),
-    awaitSettlementEncoded: (encoded: unknown) => awaitSettlementEndpoint(encoded),
-    awaitProgressEncoded: (encoded: unknown) => awaitProgressEndpoint(encoded),
-    cancelProgressEncoded: (encoded: unknown) => cancelProgressEndpoint(encoded),
-    observePage: (encoded: unknown) => observePageEndpoint(encoded),
-    abortEncoded: (encoded: unknown) => abortEndpoint(encoded),
-    resolveApprovalEncoded: (encoded: unknown) => resolveApprovalEndpoint(encoded),
-    resolveUnknownEncoded: (encoded: unknown) => resolveUnknownEndpoint(encoded),
+    ...threadRpc,
     explainEncoded: (encoded: unknown) => explainEndpoint(encoded),
     verifyEncoded: (encoded: unknown) => verifyEndpoint(encoded),
     retryEncoded: (encoded: unknown) => retryEndpoint(encoded),
     obligationsEncoded: (encoded: unknown) => obligationsEndpoint(encoded),
-    portCall: (encoded: unknown) => portCallEndpoint(encoded),
-    wake: () => wakeEndpoint,
   } satisfies EffectCfDurableObject.DurableObjectRpc<
     RuntimeServices | ApplicationServices | EventServices
   >;

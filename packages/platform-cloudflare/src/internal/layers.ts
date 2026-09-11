@@ -1,4 +1,4 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
+import { ThreadId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import {
   type RunContextPreparation,
   type RunCostEstimator,
@@ -52,16 +52,31 @@ import {
   operationAuthorizerLayer,
   type OperationAuthorizerService,
 } from "@effect-agent/thread/OperationAuthorizer";
+import { type PreparedInputAdmission } from "@effect-agent/thread/PreparedInputAdmission";
 import { ProducerId } from "@effect-agent/thread/Records";
-import { LedgerError, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import {
+  LedgerError,
+  SubmissionLedger,
+  SubmissionLookupById,
+  type SubmissionSnapshot,
+} from "@effect-agent/thread/SubmissionLedger";
 import { ThreadProjectionMaintenance } from "@effect-agent/thread/ThreadProjectionMaintenance";
 import { ThreadStoreError, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
 import { type WakeScheduler } from "@effect-agent/thread/WakeScheduler";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import type { Crypto } from "effect";
-import { Cause, Context, Duration, Effect, Layer, Schema, Semaphore } from "effect";
+import {
+  type Crypto,
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  Layer,
+  Schema,
+  Semaphore,
+  type Option,
+} from "effect";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import {
@@ -75,6 +90,7 @@ import {
 } from "../Alarm.ts";
 import {
   ThreadObjectIdentity,
+  ThreadObjectPlacement,
   DurableObjectContext,
   type ThreadObjectNamespace,
 } from "../CloudflareBindings.ts";
@@ -162,6 +178,7 @@ export interface CloudflareDurableRuntimeOptions {
 export type CloudflareBootstrapServices =
   | CloudflareDurableRuntimeConfig
   | ThreadObjectIdentity
+  | ThreadObjectPlacement
   | DurableRuntimeConfig
   | Crypto.Crypto
   | DoStorageFailpoint
@@ -208,6 +225,10 @@ export class ThreadObjectPorts extends Context.Service<
   ThreadObjectPorts,
   {
     readonly handle: (request: PortRequest) => Effect.Effect<PortResponse>;
+    /** Local-only identity check before a bound RPC can read or mutate a Submission. */
+    readonly lookupSubmission: (
+      submissionId: SubmissionId,
+    ) => Effect.Effect<Option.Option<SubmissionSnapshot>, LedgerError>;
   }
 >()("@effect-agent/platform-cloudflare/ThreadObjectPorts") {}
 
@@ -284,27 +305,21 @@ const threadIdFromState = (
  * The native class factory builds this Layer inside its constructor gate. Custom Effect hosts
  * can provide it around the complete application Layer with the native context already supplied.
  */
-export const layerConfig = (
+const runtimeConfigLayer = (
   options: CloudflareDurableRuntimeOptions,
-): Layer.Layer<CloudflareBootstrapServices, CloudflarePlatformConfigError, DurableObjectContext> =>
+  producerId: ProducerId,
+): Layer.Layer<
+  Exclude<CloudflareBootstrapServices, ThreadObjectIdentity | ThreadObjectPlacement>,
+  CloudflarePlatformConfigError,
+  DurableObjectContext
+> =>
   Layer.unwrap(
     Effect.gen(function* () {
       const { ctx } = yield* DurableObjectContext;
       const config = yield* configFromOptions(options);
-      const threadId = yield* threadIdFromState(ctx);
-
-      const producerId = yield* decodeProducerId(`${config.producerPrefix}:${threadId}`).pipe(
-        Effect.mapError((error) =>
-          CloudflarePlatformConfigError.make({
-            message: `The minted producer identity is invalid: ${error.message}`,
-            cause: error,
-          }),
-        ),
-      );
 
       return Layer.mergeAll(
         Layer.succeed(CloudflareDurableRuntimeConfig, config),
-        Layer.succeed(ThreadObjectIdentity, { threadId, producerId }),
         DurableRuntimeConfig.layer({
           deploymentId: config.deploymentId,
           producerId,
@@ -334,6 +349,59 @@ export const layerConfig = (
           : toolFailureObserverLayer(options.toolFailureObserver),
         RunContextPreparationPassthrough,
         RunToolAuthorization.allowAll,
+      );
+    }),
+  );
+
+const producerIdentity = (prefix: string, owner: string) =>
+  decodeProducerId(`${prefix}:${owner}`).pipe(
+    Effect.mapError((error) =>
+      CloudflarePlatformConfigError.make({
+        message: `The minted producer identity is invalid: ${error.message}`,
+        cause: error,
+      }),
+    ),
+  );
+
+/** Native one-Thread configuration; retains its existing producer and logical identities. */
+export const layerConfig = (
+  options: CloudflareDurableRuntimeOptions,
+): Layer.Layer<CloudflareBootstrapServices, CloudflarePlatformConfigError, DurableObjectContext> =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const { ctx } = yield* DurableObjectContext;
+      const threadId = yield* threadIdFromState(ctx);
+      const producerId = yield* producerIdentity(options.producerPrefix, threadId);
+
+      return Layer.mergeAll(
+        runtimeConfigLayer(options, producerId),
+        Layer.succeed(ThreadObjectIdentity, { threadId, producerId }),
+        Layer.succeed(ThreadObjectPlacement, { ownsThread: (target) => target === threadId }),
+      );
+    }),
+  );
+
+/**
+ * Configuration for an application Object owning several logical Threads. The producer is
+ * the stable physical Object. No logical identity is installed globally: handleRpc binds and
+ * validates it per request using the placement guard and this actual runtime producer.
+ */
+export const layerHostConfig = (
+  options: CloudflareDurableRuntimeOptions,
+  ownsThread: (threadId: ThreadId) => boolean,
+): Layer.Layer<
+  Exclude<CloudflareBootstrapServices, ThreadObjectIdentity>,
+  CloudflarePlatformConfigError,
+  DurableObjectContext
+> =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const { ctx } = yield* DurableObjectContext;
+      const producerId = yield* producerIdentity(options.producerPrefix, ctx.id.toString());
+
+      return Layer.merge(
+        runtimeConfigLayer(options, producerId),
+        Layer.succeed(ThreadObjectPlacement, { ownsThread }),
       );
     }),
   );
@@ -452,10 +520,66 @@ const boundLayer = <E = never, R = never>(
   | Exclude<R, ThreadStore | SubmissionLedger | SqlClient>
 > =>
   Layer.unwrap(
+    Effect.map(DurableObjectContext, ({ ctx }) =>
+      sharedLayer(DurableAgentRuntime.layerWithBindings(bindings), options).pipe(
+        Layer.provideMerge(SqliteClient.layer({ storage: ctx.storage })),
+      ),
+    ),
+  );
+
+/**
+ * Build the application runtime over the existing owner SqlClient and native ports, then
+ * assemble its one maintenance coordinator. The application may acquire its Bindings from
+ * those ports and expose extra services, including ThreadHostMaintenance. It must not acquire
+ * another runtime stack or require ThreadMaintenance while constructing this Layer.
+ * Supply layerHostConfig and deterministic placement; dispatch addressed ingress with handleRpc.
+ */
+export function layerInHost<A, E, R, P = never, PE = never, PR = never>(
+  application: Layer.Layer<DurableAgentRuntime | A, E, R>,
+  options: Omit<ThreadPublicationOptions<PE, PR>, "projection"> & {
+    readonly projection: Layer.Layer<ThreadProjectionMaintenance | P, PE, PR>;
+  },
+): Layer.Layer<
+  CloudflareDurableRuntimeServices | A | P,
+  Layer.Error<ReturnType<typeof sharedLayer<A, E, R, PE, PR>>>,
+  Layer.Services<ReturnType<typeof sharedLayer<A, E, Exclude<R, P>, PE, PR>>>
+>;
+
+export function layerInHost<A, E, R, PE = never, PR = never>(
+  application: Layer.Layer<DurableAgentRuntime | A, E, R>,
+  options?: ThreadPublicationOptions<PE, PR>,
+): ReturnType<typeof sharedLayer<A, E, R, PE, PR>>;
+
+export function layerInHost<A, E, R, PE = never, PR = never>(
+  application: Layer.Layer<DurableAgentRuntime | A, E, R>,
+  options: ThreadPublicationOptions<PE, PR> = {},
+) {
+  return sharedLayer(application, options);
+}
+
+type HostRuntimeServices = Exclude<
+  CloudflareDurableRuntimeServices,
+  DurableAgentRuntime | ThreadMaintenance
+>;
+
+const sharedLayer = <A, E, R, PE = never, PR = never>(
+  application: Layer.Layer<DurableAgentRuntime | A, E, R>,
+  options: ThreadPublicationOptions<PE, PR> = {},
+): Layer.Layer<
+  CloudflareDurableRuntimeServices | A,
+  DoStorageInitializationError | MessageDeliveryError | E | PE,
+  | DurableObjectContext
+  | ThreadObjectNamespace
+  | Exclude<CloudflareBootstrapServices, ThreadObjectIdentity>
+  | SqlClient
+  | Exclude<R, HostRuntimeServices | PreparedInputAdmission>
+  | Exclude<PR, ThreadStore | SubmissionLedger | SqlClient>
+> =>
+  Layer.unwrap(
     Effect.gen(function* () {
       const { ctx } = yield* DurableObjectContext;
       const config = yield* CloudflareDurableRuntimeConfig;
-      const { threadId } = yield* ThreadObjectIdentity;
+      const { ownsThread } = yield* ThreadObjectPlacement;
 
       const storageOptions: DoStorageOptions = {
         storage: ctx.storage,
@@ -467,7 +591,7 @@ const boundLayer = <E = never, R = never>(
 
       const infrastructure = Layer.mergeAll(
         storageConfigLayer(storageOptions),
-        SqliteClient.layer({ storage: ctx.storage }),
+        Layer.effect(SqlClient)(SqlClient),
       );
 
       // The same local ports serve routed decorators and owner-side RPC execution.
@@ -585,19 +709,22 @@ const boundLayer = <E = never, R = never>(
       const portsEndpointLayer = Layer.effect(ThreadObjectPorts)(
         Effect.gen(function* () {
           const local = yield* Effect.context<SubmissionLedger | ThreadStore>();
+          const ledger = Context.get(local, SubmissionLedger);
 
           return ThreadObjectPorts.of({
             handle: (request) => executePortRequest(request).pipe(Effect.provide(local)),
+            lookupSubmission: (submissionId) =>
+              ledger.lookup(SubmissionLookupById.make({ submissionId })),
           });
         }),
       ).pipe(Layer.provide(localPorts));
 
       const routedPorts = Layer.mergeAll(
-        routedSubmissionLedgerLayer({ localThreadId: threadId }),
-        routedThreadStoreLayer({ localThreadId: threadId }),
+        routedSubmissionLedgerLayer({ ownsThread }),
+        routedThreadStoreLayer({ ownsThread }),
       ).pipe(Layer.provide(localPorts), Layer.provide(threadPortTransportLayer));
 
-      const runtimeStack = DurableAgentRuntime.layerWithBindings(bindings).pipe(
+      const runtimeStack = application.pipe(
         Layer.provide(
           cloudflarePreparedInputAdmissionLayer.pipe(Layer.provide(CloudflareThreadClient.layer)),
         ),
@@ -605,6 +732,7 @@ const boundLayer = <E = never, R = never>(
         Layer.provideMerge(routedPorts),
         Layer.provideMerge(wakes),
         Layer.provideMerge(base),
+        Layer.provideMerge(portsEndpointLayer),
       );
 
       return Layer.mergeAll(

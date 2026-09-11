@@ -3,7 +3,7 @@ import { makeWakeSubscriptionHub, WakeScheduler } from "@effect-agent/thread/Wak
 import { Effect, Layer, PubSub, Schema, Stream } from "effect";
 
 import { DurableAlarmService } from "./Alarm.ts";
-import { ThreadObjectIdentity, ThreadObjectNamespace } from "./CloudflareBindings.ts";
+import { ThreadObjectPlacement, ThreadObjectNamespace } from "./CloudflareBindings.ts";
 import { safeCauseMessage } from "./internal/boundary.ts";
 
 /**
@@ -36,12 +36,12 @@ class RemoteWakeDropped extends Schema.TaggedError<RemoteWakeDropped>()("RemoteW
 export const cloudflareWakeSchedulerLayer: Layer.Layer<
   WakeScheduler,
   never,
-  DurableAlarmService | ThreadObjectIdentity | ThreadObjectNamespace
+  DurableAlarmService | ThreadObjectPlacement | ThreadObjectNamespace
 > = Layer.effect(WakeScheduler)(
   Effect.gen(function* () {
     const alarm = yield* DurableAlarmService;
-    const identity = yield* ThreadObjectIdentity;
-    const { namespace } = yield* ThreadObjectNamespace;
+    const placement = yield* ThreadObjectPlacement;
+    const { get } = yield* ThreadObjectNamespace;
     const hints = yield* PubSub.sliding<ThreadId>(WAKE_BUFFER_CAPACITY);
     const progress = yield* makeWakeSubscriptionHub;
 
@@ -61,7 +61,7 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
 
     const notifyRemote = (threadId: ThreadId) =>
       Effect.tryPromise({
-        try: () => namespace.get(namespace.idFromName(threadId)).wake(),
+        try: () => get(threadId).wake(),
         catch: (cause) =>
           RemoteWakeDropped.make({
             threadId,
@@ -77,7 +77,7 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
 
     return WakeScheduler.of({
       notify: (threadId) =>
-        threadId === identity.threadId ? notifyLocal(threadId) : notifyRemote(threadId),
+        placement.ownsThread(threadId) ? notifyLocal(threadId) : notifyRemote(threadId),
       subscribe: progress.subscribe,
       wakes: Stream.fromPubSub(hints),
     });

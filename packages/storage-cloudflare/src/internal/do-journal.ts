@@ -474,7 +474,13 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
       });
     }
 
-    yield* SqliteMigrator.run({ loader: doMigrations }).pipe(
+    yield* SqliteMigrator.run({
+      loader: doMigrations,
+      // An application can share this SQL client and own its own migration history.
+      // Keep bookkeeping outside effect_agent_% so interrupted unversioned schemas
+      // still fail the ambiguity check above.
+      table: "effect_sql_migrations_agent_threads",
+    }).pipe(
       // SqliteMigrator depends on the generic client supplied by this adapter. The concrete
       // Durable Object client is kept at the outer Layer boundary.
       Effect.provideService(SqlClient.SqlClient, sql),

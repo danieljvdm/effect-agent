@@ -229,6 +229,45 @@ They are captured when the Object acquires the runtime, not on each worker call.
 Use `options.eventLayer` for per-event observability and resources. Use
 `options.toolFailureObserver` for [recovered tool failures](../guide/run-agents#observe-recovered-tool-failures).
 
+### Share an application Object
+
+Use `ThreadObject.layerInHost(application)` when an existing SQLite Durable Object owns related
+logical Threads. The application Layer receives the existing `SqlClient`, native stores,
+`ThreadMutationGate`, wake scheduler, and `PreparedInputAdmission`. Build its Bindings from those
+services and return `DurableAgentRuntime` plus the application's services. The platform then
+constructs one maintenance coordinator from that runtime. Do not construct a second runtime or
+require `ThreadMaintenance` while building the application.
+
+Supply `ThreadObject.layerHostConfig(options, ownsThread)`, `DurableObjectContext`, and
+`ThreadObjectNamespace`. The namespace's `get(threadId)` returns a bound logical endpoint;
+its methods call the application's RPC with the selected Thread ID and native encoded payload.
+The receiver dispatches with `ThreadObject.handleRpc(threadId, operation, encoded)`. Direct local
+admission uses `ThreadObject.submit(threadId, decodedRequest)` and the same validation and prearm.
+The [shared-owner example](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/examples/shared-owner.ts) composes
+an existing SQL client, application services and an optional projection without external requirements.
+
+Placement must be deterministic and stable across reconstruction. It grants no access: authenticate
+callers and validate membership at the application's boundary. Encoded controls additionally check
+the addressed Thread against the local receipt or submission before routed runtime access. No
+logical `ThreadObjectIdentity` is installed globally; addressed dispatch binds it per invocation.
+The producer identity belongs to the physical Object. Native Thread and receipt identities remain
+unchanged. Moving existing Threads between physical Objects requires a host-owned fenced transfer;
+changing the resolver alone does not move their durable records.
+
+Own one `SqlClient`, `ThreadMutationGate` and alarm slot per physical Object. Native migrations use
+their own migration history, leaving the application's migration rows intact. Call
+`ThreadMaintenance.ensureAlarm` in the local constructor gate and one bounded
+`ThreadMaintenance.pass` from `alarm()`. A pass recovers all local lanes and serves one eligible
+FIFO head, with a durable cursor rotating between Threads. Later work retains the alarm.
+
+Application outboxes can supply `ThreadHostMaintenance` from the application Layer. Its
+`pendingDeadline` is a bounded, local, read-only earliest deadline. `drainUntil(finished)` runs
+beside native work, completes one initial bounded wave even if already signalled, stops starting
+new waves after the signal, and finishes the current wave before returning. Native maintenance
+joins it before acknowledging a generation. Every accepted host mutation must use the shared
+`ThreadMutationGate`; hooks must not write the raw alarm slot. Typed failures and defects retain
+the prearmed generation; event interruption closes scoped work and leaves durable recovery pending.
+
 ### Publish durable host activity
 
 Use the optional publication Layer to deliver canonical records or durable approval, abort, and

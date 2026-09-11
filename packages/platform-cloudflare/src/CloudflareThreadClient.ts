@@ -445,12 +445,12 @@ export class CloudflareThreadClient extends Context.Service<
     ThreadObjectNamespace | Crypto.Crypto
   > = Layer.effect(CloudflareThreadClient)(
     Effect.gen(function* () {
-      const { namespace, rpcTracing } = yield* ThreadObjectNamespace;
+      const { get, rpcTracing } = yield* ThreadObjectNamespace;
       const crypto = yield* Crypto.Crypto;
 
       const call = Effect.fn(
         function* (
-          threadId: string,
+          threadId: ThreadId,
           operation: keyof typeof hostRpcMethods,
           encoded: unknown,
         ): Effect.fn.Return<HostResponse, ThreadClientError | HostProtocolError> {
@@ -460,7 +460,7 @@ export class CloudflareThreadClient extends Context.Service<
 
           const raw = yield* Effect.tryPromise({
             try: () => {
-              const stub = namespace.get(namespace.idFromName(threadId));
+              const stub = get(threadId);
 
               return stub[hostRpcMethods[operation]](encoded, ...traceArgs);
             },

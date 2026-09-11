@@ -32,7 +32,7 @@ import { DoStorageFailpoint } from "../src/DoStorageFailpoint.ts";
 import { submissionLedgerLayer } from "../src/DoSubmissionLedger.ts";
 import { DoSubscriptionTransaction, doSubscriptionStoreLayer } from "../src/DoSubscriptionStore.ts";
 import { storageConfigLayer, type DoStorageInitializationError } from "../src/DoThreadStore.ts";
-import { withScheduleStorage } from "./harness.ts";
+import { admission, withScheduleStorage } from "./harness.ts";
 
 let counter = 0;
 
@@ -149,6 +149,46 @@ const services = (
 };
 
 describe("unpatched v2 native storage upgrade", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/78d05490ac4f3512b57ec37be37cab4a454a03a3
+  it("initializes beside an application's migration history and preserves admission receipts", () =>
+    withScheduleStorage(`shared-sql-migrations-${counter++}`, (storage) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClientService.SqlClient;
+
+        yield* sql`CREATE TABLE effect_sql_migrations (
+          migration_id INTEGER PRIMARY KEY,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          name VARCHAR(255) NOT NULL
+        )`;
+        yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (100, 'application')`;
+        yield* sql`CREATE TABLE application_messages (id TEXT PRIMARY KEY, body TEXT NOT NULL)`;
+        yield* sql`INSERT INTO application_messages VALUES ('human', 'hey')`;
+
+        const submit = Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const request = yield* admission("shared-sql-thread", "human", { text: "hey" });
+
+          return yield* ledger.admit(request);
+        }).pipe(
+          Effect.provide(
+            submissionLedgerLayer.pipe(Layer.provideMerge(services(storage, () => undefined))),
+          ),
+        );
+
+        const first = yield* submit;
+        const replay = yield* submit;
+
+        expect(first.replayed).toBe(false);
+        expect(replay).toEqual({ ...first, replayed: true });
+        expect(yield* sql`SELECT migration_id, name FROM effect_sql_migrations`).toEqual([
+          { migration_id: 100, name: "application" },
+        ]);
+        expect(yield* sql`SELECT id, body FROM application_messages`).toEqual([
+          { id: "human", body: "hey" },
+        ]);
+      }).pipe(Effect.provide(SqliteClient.layer({ storage }))),
+    ));
+
   for (const point of [
     "upgrade:before-mutation",
     "upgrade:after-mutation",
