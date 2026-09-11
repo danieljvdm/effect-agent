@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.80
+
+### Patch Changes
+
+- [#440](https://github.com/danieljvdm/effect-agent/pull/440) [`227b5e8`](https://github.com/danieljvdm/effect-agent/commit/227b5e8a98ce4d1b303bacbeaf35c15ff45f6c75) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Host multiple logical Threads inside an application Durable Object using its existing SQL client and one shared alarm, with addressed controls, recovery across local lanes, and isolated native migration history. **BEHAVIOR CHANGE:** Define custom `ThreadObjectNamespace` services with `get(threadId)` to resolve each logical endpoint.
+
+- Updated dependencies [[`227b5e8`](https://github.com/danieljvdm/effect-agent/commit/227b5e8a98ce4d1b303bacbeaf35c15ff45f6c75)]:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.80
+  - @effect-agent/core@0.1.0-beta.80
+  - @effect-agent/engine@0.1.0-beta.80
+  - @effect-agent/sandbox@0.1.0-beta.80
+  - @effect-agent/thread@0.1.0-beta.80
+
 ## 0.1.0-beta.79
 
 ### Patch Changes
