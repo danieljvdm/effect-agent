@@ -81,8 +81,12 @@ export const persistenceLayer = (AppAuth: AppAuth) =>
             ),
         }),
         Layer.succeed(AppAuth.strategies.github.ClaimsForOAuth, {
-          resolve: (credential) =>
+          resolve: (credential, verified) =>
             claims(credential.revision.subjectId).pipe(
+              Effect.map((local) => ({
+                ...local,
+                displayName: verified.profile?.displayName ?? local.displayName,
+              })),
               Effect.mapError(() => OAuthUnavailable.make({})),
             ),
         }),

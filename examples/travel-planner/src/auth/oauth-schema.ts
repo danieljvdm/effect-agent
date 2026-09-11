@@ -317,10 +317,10 @@ export const oauthRegistrationMapping: OAuthRegistrationMapping<
   allocateCredentialId: Effect.sync(() => crypto.randomUUID()),
   allocateRevision: Effect.sync(() => SecurityRevision.make(crypto.randomUUID())),
   retentionMillis: 3_600_000,
-  encodeSubjectInsert: ({ registration }, ids) => ({
+  encodeSubjectInsert: ({ intent, registration }, ids) => ({
     id: ids.subjectId,
     revision: ids.securityRevision,
     active: true,
-    displayName: registration.displayName,
+    displayName: intent.profile?.displayName ?? registration.displayName,
   }),
 };
