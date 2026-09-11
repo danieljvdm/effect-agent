@@ -137,6 +137,7 @@ classifies the last committed boundary:
 | Last committed boundary                          | Recovery                                                        |
 | ------------------------------------------------ | --------------------------------------------------------------- |
 | admission without readiness                      | finish materialization and readiness                            |
+| ready input with no attempted execution          | leave input application to the normal worker claim              |
 | input appended without its ledger marker         | repair the marker without applying input twice                  |
 | `RunStarted`                                     | preserve the original deadline                                  |
 | incomplete model response                        | retry inference when policy allows; provider charges may repeat |

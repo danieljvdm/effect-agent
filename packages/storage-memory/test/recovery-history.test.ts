@@ -18,8 +18,10 @@ import {
   ProducerEpoch,
   ProducerId,
   RepairAnnotated,
+  UserInputRecorded,
 } from "@effect-agent/thread/Records";
 import { type RecoveryDecision } from "@effect-agent/thread/Recovery";
+import { runIdForSubmission } from "@effect-agent/thread/RunJournal";
 import {
   AbortCommand,
   AdmissionRequest,
@@ -27,12 +29,15 @@ import {
   MarkReadyRequest,
   Principal,
   SubmissionLedger,
+  submissionInputBatchId,
+  submissionInputRecordId,
 } from "@effect-agent/thread/SubmissionLedger";
 import { type ThreadRead } from "@effect-agent/thread/ThreadStore";
 import {
   ThreadMaterialization,
   ThreadNotMaterialized,
   ThreadStore,
+  ThreadTailRequest,
   FencedAppendRequest,
 } from "@effect-agent/thread/ThreadStore";
 import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
@@ -272,6 +277,8 @@ describe("DurableAgentRuntime recovery history", () => {
       const ledger = yield* SubmissionLedger;
       const runtime = yield* DurableAgentRuntime;
       const probe = yield* RecoveryReadProbe;
+      const store = yield* ThreadStore;
+      let prefixTail = HISTORY_TAIL;
 
       for (let index = 0; index < 2; index++) {
         const input = { work: `suffix-race-${index}` };
@@ -299,11 +306,44 @@ describe("DurableAgentRuntime recovery history", () => {
               reason: "exercise suffix refresh after a repaired predecessor",
             }),
           );
+        } else {
+          // A lost input marker requires suffix repair; untouched ready input does not.
+          const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId: THREAD_ID }));
+
+          const appended = yield* store.append(
+            FencedAppendRequest.make({
+              threadId: THREAD_ID,
+              expectedTailSequence: tail.tailSequence,
+              expectedTailDigest: tail.tailDigest,
+              producerEpoch: tail.producerEpoch,
+              batch: CanonicalBatch.make({
+                batchId: submissionInputBatchId(admitted.submissionId),
+                producerId: PRODUCER_ID,
+                records: [
+                  CanonicalRecord.make({
+                    recordId: submissionInputRecordId(admitted.submissionId),
+                    family: "thread",
+                    schemaVersion: 1,
+                    createdAt: DateTime.toUtc(DateTime.makeUnsafe(HISTORY_RECORDS + 1)),
+                    deploymentId: DEPLOYMENT_ID,
+                    payload: UserInputRecorded.make({
+                      submissionId: admitted.submissionId,
+                      kind: "user",
+                      runId: runIdForSubmission(admitted.submissionId),
+                      input,
+                    }),
+                  }),
+                ],
+              }),
+            }),
+          );
+
+          prefixTail = appended.lastSequence;
         }
       }
 
       yield* probe.reset;
-      yield* probe.failReadAfter(HISTORY_TAIL);
+      yield* probe.failReadAfter(prefixTail);
       const failure = yield* runtime.runRecovery.pipe(Effect.flip);
 
       expect(failure).toMatchObject({
@@ -319,10 +359,10 @@ describe("DurableAgentRuntime recovery history", () => {
       expect(requests.slice(0, 3)).toEqual([
         { afterSequence: undefined, limit: 1_024 },
         { afterSequence: 1_024, limit: 1_024 },
-        { afterSequence: 2_048, limit: 2 },
+        { afterSequence: 2_048, limit: 3 },
       ]);
       expect(requests.at(-1)).toMatchObject({
-        afterSequence: HISTORY_TAIL,
+        afterSequence: prefixTail,
       });
     }).pipe(Effect.provide(runtimeLayer)),
   );

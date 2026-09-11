@@ -242,9 +242,13 @@ describe("DC Travel Planner — baseline settlement", () => {
 
     const records = await readCanonical(thread);
 
-    // Repair audit records (DUR-013) are host evidence, not scenario semantics: on DC even a
-    // clean run carries `recovery:ApplyInput`, because every pass reconciles before it claims
-    // (plan §1.4) and the ready lane's input is applied through the recovery path.
+    // A ready input belongs to its first worker claim; an untouched run needs no input repair.
+    expect(
+      records.filter(
+        ({ record: { payload } }) =>
+          payload._tag === "RepairAnnotated" && payload.reason === "recovery:ApplyInput",
+      ),
+    ).toEqual([]);
     expect(canonicalTags(records)).toEqual([
       "ThreadCreated",
       "UserInputRecorded",
