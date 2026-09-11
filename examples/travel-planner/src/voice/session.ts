@@ -120,12 +120,27 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
   const render = () => backend.view({ status, note, captions, muted: false });
 
   const replace = Effect.fn("voice.replace")(function* (next: VoiceRequest) {
-    requests = [
-      ...requests.filter((item) => item.request.requestId !== next.request.requestId),
-      next,
-    ].slice(-16);
+    // Observation must not reorder the conversation or evict an uncertain admission.
+    const retained = requests.some((item) => item.request.requestId === next.request.requestId)
+      ? requests.map((item) => (item.request.requestId === next.request.requestId ? next : item))
+      : [...requests, next];
+
+    if (retained.length > 16) {
+      const discard = retained.findIndex(
+        (item) =>
+          item.request.requestId !== next.request.requestId &&
+          (item.status === "accepted" || item.status === "settled"),
+      );
+
+      if (discard < 0)
+        return yield* new VoiceError({
+          message: "Too many voice requests need reconciliation. Reconnect before adding more.",
+        });
+      retained.splice(discard, 1);
+    }
+    yield* backend.persist(retained);
+    requests = retained;
     if (latest?.request.requestId === next.request.requestId) latest = next;
-    yield* backend.persist(requests);
   });
 
   const sendContext = Effect.fn("voice.context")(function* (
@@ -305,56 +320,65 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       lastWebsiteUpdate = website.id;
     }
     const current = latest;
+    let work: VoiceWork | undefined;
 
-    if (!current || stale || pending) {
-      render();
+    // Admission recovery belongs to every retained envelope, independently of spoken updates.
+    for (const request of requests) {
+      if (
+        request.status !== "prepared" &&
+        request.status !== "uncertain" &&
+        request.request.requestId !== current?.request.requestId
+      )
+        continue;
+      if (request.status === "prepared") {
+        // One send per envelope in this call. Reconnect looks up every unresolved identity first.
+        const admitted = yield* Effect.result(
+          backend.submit(request.request).pipe(Effect.timeout("20 seconds")),
+        );
 
-      return;
-    }
-    if (current.status === "prepared") {
-      // One initial send per frozen envelope. Reconnect first reconciles before retrying it.
-      const admitted = yield* Effect.result(
-        backend.submit(current.request).pipe(Effect.timeout("20 seconds")),
+        yield* replace({
+          ...request,
+          status: admitted._tag === "Success" ? "accepted" : "uncertain",
+        });
+        if (request.request.requestId === current?.request.requestId)
+          note = admitted._tag === "Success" ? "Working on your trip…" : "Checking your request…";
+      }
+
+      const observed = yield* Effect.result(
+        backend.read(request.request).pipe(Effect.timeout("10 seconds")),
       );
 
-      const accepted = {
-        ...current,
-        status: admitted._tag === "Success" ? ("accepted" as const) : ("uncertain" as const),
-      };
-
-      yield* replace(accepted);
-      note = accepted.status === "accepted" ? "Working on your trip…" : "Checking your request…";
+      if (observed._tag === "Failure") {
+        if (request.request.requestId === current?.request.requestId)
+          note = "Reconnecting to your trip…";
+        continue;
+      }
+      if (observed.success.state !== "missing")
+        yield* replace({
+          ...request,
+          receipt: observed.success,
+          status: observed.success.state === "pending" ? "accepted" : "settled",
+        });
+      if (request.request.requestId === current?.request.requestId) work = observed.success;
     }
-
-    const observed = yield* Effect.result(
-      backend.read(current.request).pipe(Effect.timeout("10 seconds")),
-    );
-
-    if (observed._tag === "Failure") {
-      note = "Reconnecting to your trip…";
-      render();
-
-      return;
-    }
-    const work = observed.success;
 
     if (
+      !current ||
+      !work ||
       latest?.request.requestId !== current.request.requestId ||
       stale ||
       pending ||
       typedRevision !== backend.typedRevision()
-    )
+    ) {
+      render();
+
       return;
+    }
     if (work.state === "missing") {
       render();
 
       return;
     }
-    yield* replace({
-      ...latest,
-      receipt: work,
-      status: work.state === "pending" ? "accepted" : "settled",
-    });
     const answers = backend.answers();
 
     if (lastUpdate === `settled:${work.receiptId}`)
@@ -436,11 +460,12 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
   const work = Effect.gen(function* () {
     yield* Deferred.await(ready).pipe(Effect.timeout("15 seconds"));
     // On replacement sessions, look up the original key before any retry. Known work is never resubmitted.
-    if (latest && (latest.status === "uncertain" || latest.status === "prepared")) {
-      const prior = yield* backend.read(latest.request).pipe(Effect.timeout("10 seconds"));
+    for (const request of requests) {
+      if (request.status !== "uncertain" && request.status !== "prepared") continue;
+      const prior = yield* backend.read(request.request).pipe(Effect.timeout("10 seconds"));
 
       yield* replace({
-        ...latest,
+        ...request,
         receipt: prior,
         status:
           prior.state === "missing"

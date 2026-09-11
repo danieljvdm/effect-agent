@@ -150,8 +150,13 @@ context are separate fields; a transcript never becomes a synthetic user message
 
 Reconnect creates a replacement voice session with recent saved conversation history. This tab
 retains up to sixteen frozen request envelopes in session storage, partitioned by verified email
-and conversation. An uncertain admission is looked up by its original request ID before retrying
-the exact envelope; accepted work is only observed. Closing the tab loses this local retry cache,
+and conversation. Reconnect looks up every prepared or uncertain admission by its original request
+ID before retrying any missing admission with its exact envelope; accepted work is only observed.
+Newer spoken or typed input changes which result voice follows without abandoning older uncertain
+requests. During a call, those requests remain observed; another attempt requires reconnect.
+Only known admissions can be evicted from the retry cache. If all sixteen entries are unresolved,
+voice disconnects before admitting another request so reconnect can reconcile them.
+Closing the tab loses this local retry cache,
 while already accepted work and its canonical conversation remain saved. Recent undelegated
 speech stays in this tab after ending a call, and accompanies the next typed or spoken request.
 It is not promised to survive reload before that submission. Changing conversations or
@@ -170,7 +175,7 @@ finding update. Each result is sent
 once; corrections discard pending notes. Activity labels and timers do not trigger waiting
 announcements. A planner reply does not consume unrelated pending scout findings. Raw tool data, private reasoning, and diagnostics are excluded. New scouts can deliberately report a sourced milestone with `report_research_progress` while they continue; Effect Agent durable messaging delivers it to the original conversation. The host derives the destination and account from canonical worker lineage, never model-selected routing. These milestones preserve uncertainty and cannot authorize new research or app edits. Earlier accepted workers retain their original executable definitions and completion reporting. A brief utterance
 delays an outgoing result without discarding it; actual delegated corrections and typed requests
-replace the tracked work.
+replace the work followed by voice.
 Typing redirects the current explanation without leaving audio muted. Provider acknowledgment,
 playback and durable settlement remain separate internal states; no event proves speech was heard. Website editing and deployment remain separate: editor completion reports return to the planner, while current build phases update voice context directly. A newly ready or failed website gets a spoken update without another user request; an earlier ready version is not announced as the requested edit while its editor is active.
 
