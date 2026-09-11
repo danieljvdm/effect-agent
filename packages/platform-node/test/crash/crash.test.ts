@@ -320,7 +320,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 );
 
                 expect(report?.decision._tag).toBe("ApplyInput");
-                expect(report?.disposition).toBe("repaired");
+                expect(report?.disposition).toBe("deferred");
                 const settlements = yield* drainPlanner(thread, CHILD_ANSWER);
 
                 expect(settlements[0]?.outcome).toBe("completed");

@@ -1541,7 +1541,7 @@ describe("NodeDurableAgentRuntime", () => {
             );
 
             expect(report?.decision._tag).toBe("ApplyInput");
-            expect(report?.disposition).toBe("repaired");
+            expect(report?.disposition).toBe("deferred");
 
             const reclaimed = yield* nextLedger.claim(
               ClaimRequest.make({

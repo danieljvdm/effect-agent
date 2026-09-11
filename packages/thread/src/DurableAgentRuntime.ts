@@ -8845,9 +8845,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     const decision = classifyRecovery(snapshot, evidence);
 
-    const disposition = yield* Effect.scoped(
-      executeRecoveryDecision(snapshot, evidence, decision, history.records, history),
-    );
+    // Untouched ready input belongs to the worker's first claim. Running attempts and
+    // canonical appends with a missing marker still take their classified repair path.
+    const disposition =
+      decision._tag === "ApplyInput" && snapshot.submission.state === "ready"
+        ? "deferred"
+        : yield* Effect.scoped(
+            executeRecoveryDecision(snapshot, evidence, decision, history.records, history),
+          );
 
     if (disposition === "repaired") {
       yield* annotateRepair(submission.threadId, submission.submissionId, decision);
@@ -9929,7 +9934,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
  *   unresolvable root surfaces the typed refusal after releasing the claim.
  * - `runRecovery()` — classify every nonterminal Submission with the pure `classifyRecovery` and
  *   execute the repair decisions, appending a `RepairAnnotated` audit record per executed decision
- *   (DUR-013). Model-resuming work is reported `deferred` for a worker claim; lanes blocked on
+ *   (DUR-013). Untouched ready input and model-resuming work are reported `deferred` for a
+ *   worker claim; lanes blocked on
  *   Unknown Outcomes are reported `unknown`. The S2 binding-free Subagent executors (admission
  *   completion, start-link repair, waiting restoration, wake replay, canonical join accounting,
  *   abort propagation, orphan reservation release) run here; the settlement join itself is
@@ -10170,7 +10176,7 @@ export class DurableAgentRuntime extends Context.Service<
     >;
     readonly runResolvedWorker: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
     readonly runRecovery: Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
-    /** Apply one recovery decision for this Submission. */
+    /** Apply one recovery decision; untouched ready input is deferred to its worker claim. */
     readonly recoverSubmission: (
       submissionId: SubmissionId,
     ) => Effect.Effect<RecoveryReport, DurableWorkerFailure>;
