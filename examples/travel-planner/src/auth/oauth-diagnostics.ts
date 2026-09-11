@@ -1,9 +1,9 @@
 import { OAuthPendingFlow, OAuthSignInPersistence } from "@yielded/auth/OAuth";
 import { and, eq } from "drizzle-orm";
-import type { EffectSQLiteDoDatabase } from "drizzle-orm/effect-sqlite-do";
 import { Effect, Layer, Ref, Schema } from "effect";
 
 import { oauthFlow } from "./oauth-schema";
+import { AuthDatabase } from "./persistence";
 import type { AppAuth } from "./server";
 
 export const GithubRejectionReason = Schema.Literals([
@@ -24,11 +24,6 @@ export const GithubRejectionReason = Schema.Literals([
 ]);
 
 export type GithubRejectionReason = typeof GithubRejectionReason.Type;
-export type GithubRejectionReporter = (reason: GithubRejectionReason) => Effect.Effect<void>;
-
-export const reportGithubRejection: GithubRejectionReporter = (reason) =>
-  Effect.logWarning("auth.github.callback-rejected").pipe(Effect.annotateLogs({ reason }));
-
 const pending = Schema.fromJsonString(OAuthPendingFlow);
 
 type ClaimInput = Parameters<OAuthSignInPersistence["Service"]["claim"]>[0];
@@ -36,9 +31,10 @@ type ClaimInput = Parameters<OAuthSignInPersistence["Service"]["claim"]>[0];
 /** Read only after a rejected claim has finished. These observations are diagnostic;
  * the adapter remains the sole authority for authorization and durable mutation. */
 const describeRejectedClaim = Effect.fn("Auth.describeRejectedClaim")(function* (
-  database: EffectSQLiteDoDatabase,
   input: ClaimInput,
-): Effect.fn.Return<GithubRejectionReason> {
+): Effect.fn.Return<GithubRejectionReason, never, AuthDatabase> {
+  const database = yield* AuthDatabase;
+
   return yield* Effect.gen(function* () {
     const rows = yield* database
       .select({ state: oauthFlow.state, snapshot: oauthFlow.snapshot })
@@ -83,7 +79,6 @@ const describeRejectedClaim = Effect.fn("Auth.describeRejectedClaim")(function* 
  * raw callback values, credential values, digests, or provider response bodies. */
 export const makeGithubDiagnostics = Effect.fn("Auth.makeGithubDiagnostics")(function* (
   AppAuth: AppAuth,
-  report: GithubRejectionReporter = reportGithubRejection,
 ) {
   const reason = yield* Ref.make<GithubRejectionReason>("callback-invalid");
   const binding = AppAuth.strategies.github.binding;
@@ -106,29 +101,40 @@ export const makeGithubDiagnostics = Effect.fn("Auth.makeGithubDiagnostics")(fun
 
   return {
     bindingLayer,
-    persistence: (original: OAuthSignInPersistence["Service"], database: EffectSQLiteDoDatabase) =>
-      OAuthSignInPersistence.of({
-        ...original,
-        claim: (input, prepare) =>
-          Effect.gen(function* () {
-            let rejected = false;
+    persistenceLayer: Layer.effect(
+      OAuthSignInPersistence,
+      Effect.gen(function* () {
+        const original = yield* OAuthSignInPersistence;
+        const database = yield* AuthDatabase;
 
-            const receipt = yield* original.claim(input, (decision, journal) => {
-              rejected = decision._tag !== "Claimed";
+        return OAuthSignInPersistence.of({
+          ...original,
+          claim: (input, prepare) =>
+            Effect.gen(function* () {
+              let rejected = false;
 
-              return prepare(decision, journal);
-            });
+              const receipt = yield* original.claim(input, (decision, journal) => {
+                rejected = decision._tag !== "Claimed";
 
-            yield* Ref.set(
-              reason,
-              rejected ? yield* describeRejectedClaim(database, input) : "after-claim",
-            );
+                return prepare(decision, journal);
+              });
 
-            return receipt;
-          }),
+              yield* Ref.set(
+                reason,
+                rejected
+                  ? yield* describeRejectedClaim(input).pipe(
+                      Effect.provideService(AuthDatabase, database),
+                    )
+                  : "after-claim",
+              );
+
+              return receipt;
+            }),
+        });
       }),
-    report: Effect.flatMap(Ref.get(reason), report),
+    ),
+    report: Effect.flatMap(Ref.get(reason), (reason) =>
+      Effect.logWarning("auth.github.callback-rejected").pipe(Effect.annotateLogs({ reason })),
+    ),
   };
 });
-
-export type GithubDiagnostics = Effect.Success<ReturnType<typeof makeGithubDiagnostics>>;

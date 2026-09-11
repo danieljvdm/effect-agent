@@ -523,10 +523,10 @@ it("reports only fixed callback rejection reasons without changing authorization
     /malformed-private-state|fixture-rejected-code|https:|eyJ/,
   );
 
-  for (const mode of ["defect", "interrupt", "timeout"]) {
+  {
     const started = await githubStart(client);
 
-    await mf.dispatchFetch(`https://planner.test/_fixture/reporter?mode=${mode}`);
+    await mf.dispatchFetch("https://planner.test/_fixture/reporter?mode=defect");
     try {
       await rejected({ ...started, response: { ...started.response, state: "malformed" } });
     } finally {

@@ -1,12 +1,12 @@
 import { EmailProofDelivery } from "@yielded/auth/Proofs";
 import { DurableObject } from "cloudflare:workers";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Layer, Logger, Redacted, Schema } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 
 import { handleRequest } from "../../src/worker";
 export { TravelPlannerThread } from "./worker";
 import { serveAuth } from "../../src/auth/host";
-import type { GithubRejectionReason } from "../../src/auth/oauth-diagnostics";
+import { GithubRejectionReason } from "../../src/auth/oauth-diagnostics";
 import {
   initializeAuthStorage,
   AuthStorageFailpoint,
@@ -71,17 +71,18 @@ export class AuthFixture extends DurableObject {
     ).pipe(Layer.orDie);
 
     return Effect.runPromise(
-      serveAuth(request, this.ctx.storage, fixtureAuthConfig, delivery, undefined, (reason) =>
-        Effect.suspend(() => {
-          if (this.reporterMode === "defect") return Effect.die("Fixture logger defect");
-          if (this.reporterMode === "interrupt") return Effect.interrupt;
-          if (this.reporterMode === "timeout") return Effect.never;
-
-          return Effect.sync(() => {
-            this.rejections.push(reason);
-          });
-        }),
-      ).pipe(
+      serveAuth(request, this.ctx.storage, fixtureAuthConfig, delivery).pipe(
+        Effect.provide(
+          Logger.layer([
+            Logger.map(Logger.formatStructured, ({ message, annotations }) => {
+              if (message !== "auth.github.callback-rejected") return;
+              if (this.reporterMode === "defect") throw new Error("Fixture logger defect");
+              this.rejections.push(
+                Schema.decodeUnknownSync(GithubRejectionReason)(annotations.reason),
+              );
+            }),
+          ]),
+        ),
         Effect.catchTag("AuthStorageError", (error) =>
           Effect.succeed(Response.json({ error: String(error.cause) }, { status: 500 })),
         ),

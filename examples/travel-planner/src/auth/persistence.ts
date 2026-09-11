@@ -9,23 +9,23 @@ import { ProofPersistence } from "@yielded/auth/Proofs";
 import { AuthenticationAuthority } from "@yielded/auth/Sessions";
 import { eq } from "drizzle-orm";
 import type { EffectSQLiteDoDatabase } from "drizzle-orm/effect-sqlite-do";
-import { Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 
 import { emailSignInMapping, emailRegistrationMapping } from "./email-schema";
-import type { GithubDiagnostics } from "./oauth-diagnostics";
 import { oauthSignInMapping, oauthIntentMapping, oauthRegistrationMapping } from "./oauth-schema";
 import { proofs } from "./proof-schema";
 import { subject, subjectMapping, subjectId, credentialMapping } from "./schema";
 import type { AppAuth } from "./server";
 import { sessionsMapping } from "./session-schema";
 
-export const persistenceLayer = (
-  AppAuth: AppAuth,
-  database: EffectSQLiteDoDatabase,
-  diagnostics: GithubDiagnostics,
-) =>
+export class AuthDatabase extends Context.Service<AuthDatabase, EffectSQLiteDoDatabase>()(
+  "travel-planner/AuthDatabase",
+) {}
+
+export const persistenceLayer = (AppAuth: AppAuth) =>
   Layer.unwrap(
     Effect.gen(function* () {
+      const database = yield* AuthDatabase;
       const proof = yield* Drizzle.makeProofPersistenceServices(database, proofs);
       const email = yield* Drizzle.makeEmailSignInServices(database, emailSignInMapping);
 
@@ -86,10 +86,7 @@ export const persistenceLayer = (
               Effect.mapError(() => OAuthUnavailable.make({})),
             ),
         }),
-        Layer.succeed(
-          OAuthSignInPersistence,
-          diagnostics.persistence(oauth.oauthSignInPersistence, database),
-        ),
+        Layer.succeed(OAuthSignInPersistence, oauth.oauthSignInPersistence),
         Layer.succeed(OAuthRegistrationIntents, intents.oauthRegistrationIntents),
         Layer.succeed(
           AppAuth.strategies.github.registration.RegistrationAuthority,
