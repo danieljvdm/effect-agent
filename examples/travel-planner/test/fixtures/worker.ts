@@ -1,15 +1,15 @@
 import { Effect, Layer, Schema } from "effect";
 
-import { AccessError, adminEmail, Email } from "../../src/access-domain.ts";
+import { AccountError } from "../../src/auth/account.ts";
 import { PlannerError, TripSiteStore } from "../../src/domain.ts";
-import type { AccessEnvironment } from "../../src/server/access-auth.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
 import { TripFailpoint } from "../../src/server/trips.ts";
 import { makeWorker } from "../../src/worker.ts";
 import { FixtureBrowserLive } from "./browser.ts";
+import { ownerEmail, Email, fixtureSession } from "./identity.ts";
 import { FixtureModel, advanceFixtureProgress, fixtureProgressStatus } from "./models.ts";
 
-interface TestEnvironment extends AccessEnvironment {
+interface TestEnvironment extends Cloudflare.Env {
   readonly PLANNER_TOKEN?: string;
 }
 
@@ -21,24 +21,20 @@ const fixtureAuthorized = (request: Request, env: TestEnvironment) =>
 const worker = makeWorker(
   Effect.fn("Fixture.authenticate")(function* (request: Request, env: TestEnvironment) {
     if (!fixtureAuthorized(request, env))
-      return yield* new AccessError({
+      return yield* new AccountError({
         code: "unauthorized",
         message: "Missing fixture authentication.",
       });
 
     const email = yield* Schema.decodeUnknownEffect(Email)(
-      request.headers.get("x-test-email") ?? adminEmail,
+      request.headers.get("x-test-email") ?? ownerEmail,
     ).pipe(
       Effect.mapError(
-        () => new AccessError({ code: "unauthorized", message: "Invalid fixture identity." }),
+        () => new AccountError({ code: "unauthorized", message: "Invalid fixture identity." }),
       ),
     );
 
-    return {
-      email,
-      isAdmin: email === adminEmail,
-      ...(env.ACCESS_OPEN_REGISTRATION === "true" ? { registration: "open" as const } : {}),
-    };
+    return fixtureSession(email);
   }),
 );
 
@@ -97,6 +93,14 @@ export default {
       return new Response("Armed");
     }
 
-    return worker.fetch(request, env);
+    const headers = new Headers(request.headers);
+
+    if (!headers.has("x-elsewhere-account"))
+      headers.set(
+        "x-elsewhere-account",
+        fixtureSession(headers.get("x-test-email") ?? ownerEmail).subjectId,
+      );
+
+    return worker.fetch(new Request(request, { headers }), env);
   },
 };

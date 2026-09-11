@@ -7,7 +7,6 @@ import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { expect, it } from "vite-plus/test";
 
-import { AccessSession, adminEmail } from "../src/access-domain.ts";
 import {
   VoiceWork,
   PlannerProgress,
@@ -16,20 +15,13 @@ import {
   PublishedSite,
   Trip,
 } from "../src/domain.ts";
+import { ownerEmail } from "./fixtures/identity.ts";
 import { fixtureTravelContent } from "./fixtures/models.ts";
 
 const token = "travel-planner-test-owner-token";
 const guestEmail = "guest@example.com";
 const firstConversation = "lisbon-conversation";
 const secondConversation = "kyoto-conversation";
-const accessAccountId = "a".repeat(32);
-const accessGroupId = "11111111-2222-3333-4444-555555555555";
-const accessToken = "fixture-access-api-token";
-const accessGroupUrl = `https://api.cloudflare.com/client/v4/accounts/${accessAccountId}/access/groups/${accessGroupId}`;
-
-const GroupUpdate = Schema.Struct({
-  include: Schema.Array(Schema.Struct({ email: Schema.Struct({ email: Schema.String }) })),
-});
 
 const researchedNote =
   "[Lisbon apartment candidate](https://www.airbnb.com/rooms/1234567890123456789?check_in=2026-10-14&check_out=2026-10-18&adults=2) — A researched lodging option near the planned neighborhood walks, with room to relax between outings. Compare the final total, cancellation policy, accessibility, and exact location before choosing. Dates, availability, and prices still require confirmation; this saved reference is not a booking.";
@@ -63,9 +55,6 @@ it("isolates conversations while retaining owner trips, native mutations, public
 
   if (output === undefined) throw new Error("No worker bundle");
   const directory = await mkdtemp(join(tmpdir(), "travel-planner-test-"));
-  let members = [adminEmail];
-  let redirectAccess = false;
-  const accessRequests: Array<{ url: string; method: string }> = [];
 
   const makeRuntime = () =>
     new Miniflare(
@@ -77,42 +66,8 @@ it("isolates conversations while retaining owner trips, native mutations, public
         compatibilityFlags: ["nodejs_compat"],
         bindings: {
           PLANNER_TOKEN: token,
-          ACCESS_ACCOUNT_ID: accessAccountId,
-          ACCESS_GROUP_ID: accessGroupId,
-          ACCESS_API_TOKEN: accessToken,
         },
-        outboundService: async (request) => {
-          accessRequests.push({ url: request.url, method: request.method });
-          if (request.url !== accessGroupUrl)
-            return new Response("Unexpected outbound destination", { status: 500 });
-          expect(request.headers.get("authorization")).toBe(`Bearer ${accessToken}`);
-          if (redirectAccess)
-            return new Response(null, {
-              status: 302,
-              headers: { location: "https://untrusted.example/receive-credentials" },
-            });
-          if (request.method === "PUT") {
-            const update = Schema.decodeUnknownSync(GroupUpdate)(await request.json());
-
-            members = update.include.map(({ email }) => email.email);
-          } else expect(request.method).toBe("GET");
-
-          return Response.json({
-            success: true,
-            result: {
-              id: accessGroupId,
-              uid: accessGroupId,
-              name: "effect-agent-travel-planner-invited",
-              include: members.map((email) => ({ email: { email } })),
-              require: [],
-              exclude: [],
-              created_at: "2026-09-09T21:00:21Z",
-              updated_at: "2026-09-09T21:00:21Z",
-            },
-            errors: [],
-            messages: [],
-          });
-        },
+        outboundService: () => new Response("Unexpected outbound request", { status: 500 }),
         r2Buckets: ["APP_BUILDS"],
         durableObjects: { THREADS: { className: "TravelPlannerThread", useSQLite: true } },
         resourcePersistencePath: directory,
@@ -121,7 +76,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
 
   let runtime = makeRuntime();
 
-  const rpcExit = async (tag: string, payload: unknown, path = "/api/rpc", email = adminEmail) => {
+  const rpcExit = async (tag: string, payload: unknown, path = "/api/rpc", email = ownerEmail) => {
     const response = await runtime.dispatchFetch(`http://planner${path}`, {
       method: "POST",
       redirect: "manual",
@@ -135,7 +90,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
 
     const body = await response.text();
 
-    expect({ status: response.status, body }).toMatchObject({ status: 200 });
+    expect(response.status, body).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     const lines = body.trim().split("\n");
     const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(RpcExit))(lines[0]);
@@ -145,7 +100,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
     return decoded.value.exit;
   };
 
-  const rpc = async (tag: string, payload: unknown, path = "/api/rpc", email = adminEmail) => {
+  const rpc = async (tag: string, payload: unknown, path = "/api/rpc", email = ownerEmail) => {
     const result = await rpcExit(tag, payload, path, email);
 
     if (result._tag !== "Success") throw new Error(JSON.stringify(result.cause));
@@ -156,7 +111,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
   const snapshot = async (
     path = "/api/rpc",
     conversationId = firstConversation,
-    email = adminEmail,
+    email = ownerEmail,
   ) =>
     Schema.decodeUnknownSync(PlannerSnapshot)(
       await rpc("GetPlanner", { conversationId }, path, email),
@@ -170,7 +125,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
   const until = async (
     predicate: (state: PlannerSnapshot) => boolean,
     conversationId = firstConversation,
-    email = adminEmail,
+    email = ownerEmail,
   ) => {
     let latest = await snapshot("/api/rpc", conversationId, email);
 
@@ -183,15 +138,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
   };
 
   try {
-    for (const path of [
-      "/api/voice",
-      "/api/rpc",
-      "/api/rpc/",
-      "/api/access",
-      "/api/access/",
-      "/api/progress",
-      "/api/progress/",
-    ]) {
+    for (const path of ["/api/voice", "/api/rpc", "/api/rpc/", "/api/progress", "/api/progress/"]) {
       for (const [headers, expected] of [
         [{}, 401],
         [{ authorization: "Bearer wrong-owner-token" }, 401],
@@ -228,54 +175,6 @@ it("isolates conversations while retaining owner trips, native mutations, public
     }
     for (const path of ["/api/rpc", "/api/rpc/"])
       expect((await snapshot(path)).messages[0]?.text).toBe("Where do you want to go?");
-    for (const email of [adminEmail, guestEmail]) {
-      const session = Schema.decodeUnknownSync(AccessSession)(
-        await rpc("GetSession", undefined, "/api/access", email),
-      );
-
-      expect(session).toEqual({ email, isAdmin: email === adminEmail });
-    }
-    // A guest must fail authorization before reaching the management API or its Object.
-    for (const [tag, payload] of [
-      ["GetMembers", undefined],
-      ["InviteMember", { email: "another@example.com" }],
-      ["RemoveMember", { email: adminEmail }],
-    ] as const) {
-      const denied = await rpcExit(tag, payload, "/api/access", guestEmail);
-
-      expect(denied._tag).toBe("Failure");
-      if (denied._tag !== "Failure") throw new Error("Guest access management was accepted");
-      expect(JSON.stringify(denied.cause)).toContain('"code":"forbidden"');
-    }
-    expect(accessRequests).toEqual([]);
-    // Exercise native Fetch from the real owner Object, not a Node fetch substitute.
-    expect(await rpc("GetMembers", undefined, "/api/access")).toEqual({
-      emails: [adminEmail],
-      adminEmail,
-    });
-    expect(await rpc("InviteMember", { email: guestEmail }, "/api/access")).toEqual({
-      emails: [adminEmail, guestEmail],
-      adminEmail,
-    });
-    expect(await rpc("RemoveMember", { email: guestEmail }, "/api/access")).toEqual({
-      emails: [adminEmail],
-      adminEmail,
-    });
-    redirectAccess = true;
-    const redirected = await rpcExit("GetMembers", undefined, "/api/access");
-
-    expect(redirected._tag).toBe("Failure");
-    expect(JSON.stringify(redirected)).toContain('"code":"unavailable"');
-    expect(accessRequests.map(({ method }) => method)).toEqual([
-      "GET",
-      "GET",
-      "PUT",
-      "GET",
-      "PUT",
-      "GET",
-    ]);
-    expect(accessRequests.every(({ url }) => url === accessGroupUrl)).toBe(true);
-    redirectAccess = false;
     expect((await snapshot()).messages[0]?.text).toBe("Where do you want to go?");
 
     const voice = {
@@ -640,7 +539,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
       values: Schema.Array(PlannerProgress),
     });
 
-    const openProgress = async (email = adminEmail) => {
+    const openProgress = async (email = ownerEmail) => {
       const response = await runtime.dispatchFetch("http://planner/api/progress", {
         method: "POST",
         headers: {

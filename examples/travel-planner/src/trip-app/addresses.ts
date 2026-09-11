@@ -8,7 +8,7 @@ const unavailable = () =>
   new PlannerError({ code: "unavailable", message: "The trip app address is unavailable." });
 
 /** This prefix is host-only metadata, never an asset path or generated Worker binding. */
-export const appAddressKey = (hostname: string) => `app-addresses/v1/${hostname}.json`;
+export const appAddressKey = (hostname: string) => `app-addresses/auth-v1/${hostname}.json`;
 
 export const appNameFromHost = (hostname: string, domain: string) => {
   const suffix = `-trip.${domain}`;

@@ -8,11 +8,11 @@ import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
 
-import { adminEmail } from "../src/access-domain.ts";
 import { OpenAiConnection } from "../src/credential-domain.ts";
 import type { PlannerError } from "../src/domain.ts";
 import { PlannerSnapshot } from "../src/domain.ts";
 import type { CredentialStore } from "../src/server/credentials.ts";
+import { ownerEmail } from "./fixtures/identity.ts";
 
 const token = "preference-test-token";
 const first = "sk-proj-fixture-private-first-1111";
@@ -29,7 +29,6 @@ const RpcExit = Schema.Struct({
 let directory: string;
 let worker: string;
 let runtime: Miniflare;
-let demoKey = "sk-fixture-shared-demo-3333";
 
 const makeRuntime = () =>
   new Miniflare(
@@ -41,8 +40,6 @@ const makeRuntime = () =>
       compatibilityFlags: ["nodejs_compat"],
       bindings: {
         PLANNER_TOKEN: token,
-        ACCESS_OPEN_REGISTRATION: "true",
-        DEMO_OPENAI_API_KEY: demoKey,
         BYOK_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
       },
       r2Buckets: ["APP_BUILDS"],
@@ -98,15 +95,12 @@ afterAll(async () => {
 
 const headers = (email: string) => ({ authorization: `Bearer ${token}`, "x-test-email": email });
 
-const rpcExit = async (tag: string, payload?: unknown, email = adminEmail) => {
-  const response = await runtime.dispatchFetch(
-    `http://planner/api/${["GetDemoAccess", "GrantDemoAccess", "RevokeDemoAccess"].includes(tag) ? "access" : "rpc"}`,
-    {
-      method: "POST",
-      headers: { ...headers(email), "content-type": "application/ndjson" },
-      body: `${JSON.stringify({ _tag: "Request", id: "1", tag, payload: payload ?? null, headers: [] })}\n`,
-    },
-  );
+const rpcExit = async (tag: string, payload?: unknown, email = ownerEmail) => {
+  const response = await runtime.dispatchFetch("http://planner/api/rpc", {
+    method: "POST",
+    headers: { ...headers(email), "content-type": "application/ndjson" },
+    body: `${JSON.stringify({ _tag: "Request", id: "1", tag, payload: payload ?? null, headers: [] })}\n`,
+  });
 
   const body = await response.text();
 
@@ -116,7 +110,7 @@ const rpcExit = async (tag: string, payload?: unknown, email = adminEmail) => {
   return Schema.decodeUnknownSync(Schema.fromJsonString(RpcExit))(body.trim().split("\n")[0]).exit;
 };
 
-const rpc = async (tag: string, payload?: unknown, email = adminEmail) => {
+const rpc = async (tag: string, payload?: unknown, email = ownerEmail) => {
   const result = await rpcExit(tag, payload, email);
 
   if (result._tag === "Failure") throw new Error(JSON.stringify(result.cause));
@@ -124,16 +118,16 @@ const rpc = async (tag: string, payload?: unknown, email = adminEmail) => {
   return result.value;
 };
 
-const get = async (email = adminEmail) =>
+const get = async (email = ownerEmail) =>
   Schema.decodeUnknownSync(OpenAiConnection)(await rpc("GetOpenAiConnection", undefined, email));
 
-const save = async (apiKey: string, email = adminEmail) =>
+const save = async (apiKey: string, email = ownerEmail) =>
   Schema.decodeUnknownSync(OpenAiConnection)(await rpc("ConnectOpenAi", { apiKey }, email));
 
-const remove = async (email = adminEmail) =>
+const remove = async (email = ownerEmail) =>
   Schema.decodeUnknownSync(OpenAiConnection)(await rpc("DisconnectOpenAi", undefined, email));
 
-const resolve = async (email = adminEmail) => {
+const resolve = async (email = ownerEmail) => {
   const response = await runtime.dispatchFetch("http://planner/__test/credentials?resolve", {
     headers: headers(email),
   });
@@ -144,7 +138,7 @@ const resolve = async (email = adminEmail) => {
 const arm = async (point: string, mode = "failure") => {
   const response = await runtime.dispatchFetch(
     `http://planner/__test/credentials?point=${point}&mode=${mode}`,
-    { headers: headers(adminEmail) },
+    { headers: headers(ownerEmail) },
   );
 
   await response.arrayBuffer();
@@ -167,7 +161,7 @@ it("encrypts account keys, resolves them after restart, rotates and removes with
   const guest = "friend@example.com";
 
   expect(await get()).toMatchObject({ connected: false, lastFour: null });
-  expect(await raw(adminEmail)).toEqual([]);
+  expect(await raw(ownerEmail)).toEqual([]);
   await rpc("SaveTrip", {
     conversationId: "existing-trip",
     tripId: null,
@@ -189,7 +183,7 @@ it("encrypts account keys, resolves them after restart, rotates and removes with
   expect(await save(first)).toMatchObject({ connected: true, lastFour: "1111" });
   expect(await get(guest)).toMatchObject({ connected: false });
   expect(await save(second, guest)).toMatchObject({ connected: true, lastFour: "2222" });
-  const saved = await raw(adminEmail);
+  const saved = await raw(ownerEmail);
 
   expect(saved).toHaveLength(1);
   expect(JSON.stringify(saved)).not.toContain(first);
@@ -202,7 +196,7 @@ it("encrypts account keys, resolves them after restart, rotates and removes with
   await save(second);
   expect(await resolve()).toEqual({ lastFour: "2222" });
   await remove();
-  expect(await raw(adminEmail)).toEqual([]);
+  expect(await raw(ownerEmail)).toEqual([]);
   expect(await resolve()).toMatchObject({
     error: "Connect your OpenAI API key in Settings to continue planning.",
   });
@@ -300,7 +294,7 @@ it("binds encrypted keys to their owner and rejects malformed records without re
 it("requires authentication and rejects cross-origin requests before reaching credentials", async () => {
   for (const [extra, expected] of [
     [{}, 401],
-    [{ ...headers(adminEmail), origin: "https://attacker.test" }, 403],
+    [{ ...headers(ownerEmail), origin: "https://attacker.test" }, 403],
   ] as const) {
     const response = await runtime.dispatchFetch("http://planner/api/rpc", {
       method: "POST",
@@ -315,137 +309,3 @@ it("requires authentication and rejects cross-origin requests before reaching cr
     Effect.Services<ReturnType<CredentialStore["Service"]["save"]>>
   >().toEqualTypeOf<never>();
 });
-
-it("grants shared funding only to allowlisted accounts, preserves personal keys, and rechecks revocation after restart", async () => {
-  const guest = "sponsored@example.com";
-
-  expect(await rpc("GetDemoAccess")).toEqual({ emails: [], configured: true });
-  expect(await get(guest)).toMatchObject({ connected: false });
-  expect(await resolve(guest)).toHaveProperty("error");
-  for (const tag of ["GetDemoAccess", "GrantDemoAccess", "RevokeDemoAccess"])
-    expect(
-      await rpcExit(tag, tag === "GetDemoAccess" ? undefined : { email: guest }, guest),
-    ).toMatchObject({ _tag: "Failure" });
-
-  await rpc("GrantDemoAccess", { email: "SPONSORED@example.com" });
-  expect(await rpc("GrantDemoAccess", { email: guest })).toEqual({
-    emails: [guest],
-    configured: true,
-  });
-  expect(await get(guest)).toEqual({
-    connected: true,
-    source: "demo",
-    lastFour: null,
-    updatedAt: null,
-  });
-  expect(await resolve(guest)).toEqual({ lastFour: "3333" });
-  expect(await get("unlisted@example.com")).toMatchObject({ connected: false });
-  expect(await resolve("unlisted@example.com")).toHaveProperty("error");
-
-  await save(first, guest);
-  expect(await get(guest)).toMatchObject({ connected: true, lastFour: "1111" });
-  expect(await resolve(guest)).toEqual({ lastFour: "1111" });
-  expect(await remove(guest)).toMatchObject({ connected: true, source: "demo" });
-  await runtime.dispose();
-  demoKey = "sk-fixture-shared-demo-4444";
-  runtime = makeRuntime();
-  expect(await get(guest)).toMatchObject({ source: "demo" });
-  expect(await resolve(guest)).toEqual({ lastFour: "4444" });
-
-  await rpc("RevokeDemoAccess", { email: guest });
-  expect(await get(guest)).toMatchObject({ connected: false });
-  expect(await resolve(guest)).toHaveProperty("error");
-  await rpc("GrantDemoAccess", { email: guest });
-  await save(first, guest);
-  await rpc("RevokeDemoAccess", { email: guest });
-  expect(await resolve(guest)).toEqual({ lastFour: "1111" });
-  await runtime.dispose();
-  demoKey = "";
-  runtime = makeRuntime();
-  await rpc("GrantDemoAccess", { email: "no-demo-key@example.com" });
-  expect(await rpc("GetDemoAccess")).toMatchObject({ configured: false });
-  expect(await resolve("no-demo-key@example.com")).toHaveProperty("error");
-  await rpc("RevokeDemoAccess", { email: "no-demo-key@example.com" });
-  await runtime.dispose();
-  demoKey = "sk-fixture-shared-demo-3333";
-  runtime = makeRuntime();
-}, 30_000);
-
-const armDemo = async (point: string, mode: string) => {
-  const response = await runtime.dispatchFetch(
-    `http://planner/__test/credentials?demo-point=${point}&mode=${mode}`,
-    { headers: headers(adminEmail) },
-  );
-
-  await response.arrayBuffer();
-  expect(response.status).toBe(200);
-};
-
-it("recovers uncertain demo-access writes without widening access or losing revocations", async () => {
-  const guest = "demo-failures@example.com";
-
-  for (const mode of ["failure", "defect", "interrupt"]) {
-    await rpc("RevokeDemoAccess", { email: guest });
-    await armDemo("save:before", mode);
-    expect((await rpcExit("GrantDemoAccess", { email: guest }))._tag).toBe("Failure");
-    expect(await resolve(guest)).toHaveProperty("error");
-    await armDemo("save:after", mode);
-    expect((await rpcExit("GrantDemoAccess", { email: guest }))._tag).toBe("Failure");
-    await runtime.dispose();
-    runtime = makeRuntime();
-    expect(await resolve(guest)).toEqual({ lastFour: "3333" });
-    await armDemo("save:before", mode);
-    expect((await rpcExit("RevokeDemoAccess", { email: guest }))._tag).toBe("Failure");
-    expect(await resolve(guest)).toEqual({ lastFour: "3333" });
-    await armDemo("save:after", mode);
-    expect((await rpcExit("RevokeDemoAccess", { email: guest }))._tag).toBe("Failure");
-    await runtime.dispose();
-    runtime = makeRuntime();
-    expect(await resolve(guest)).toHaveProperty("error");
-  }
-}, 30_000);
-
-it("fails closed on unreadable grants or personal credentials and preserves unsupported access data", async () => {
-  const guest = "demo-corruption@example.com";
-
-  await rpc("GrantDemoAccess", { email: guest });
-  await get(guest);
-  await raw(guest, "unsupported-private-credential");
-  expect(await resolve(guest)).toHaveProperty("error");
-
-  const row = async (value?: string) => {
-    const response = await runtime.dispatchFetch("http://planner/__test/credentials?demo-row", {
-      method: value === undefined ? "GET" : "PUT",
-      headers: headers(adminEmail),
-      ...(value === undefined ? {} : { body: value }),
-    });
-
-    return Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ value: Schema.String })))(
-      await response.json(),
-    );
-  };
-
-  const before = await row();
-
-  if (!before[0]) throw new Error("Missing access fixture");
-  try {
-    await row(JSON.stringify({ version: 99, emails: ["unlisted@example.com"] }));
-    for (const tag of ["GetDemoAccess", "GrantDemoAccess", "RevokeDemoAccess"])
-      expect(
-        (await rpcExit(tag, tag === "GetDemoAccess" ? undefined : { email: guest }))._tag,
-      ).toBe("Failure");
-    expect(await resolve("unlisted@example.com")).toHaveProperty("error");
-    expect((await row())[0]?.value).toContain('"version":99');
-    for (const point of ["schema:before", "schema:after"]) {
-      await row(before[0].value);
-      for (const mode of ["failure", "defect", "interrupt"]) {
-        await armDemo(point, mode);
-        expect((await rpcExit("GetDemoAccess"))._tag).toBe("Failure");
-        expect(await rpc("GetDemoAccess")).toMatchObject({ configured: true });
-      }
-    }
-  } finally {
-    await row(before[0].value);
-    await rpc("RevokeDemoAccess", { email: guest });
-  }
-}, 30_000);

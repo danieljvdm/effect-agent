@@ -37,7 +37,7 @@ import {
   previousDelegatingPlanner,
 } from "../../src/server/planner.ts";
 import { PlannerAttempt } from "../../src/server/progress.ts";
-import { ownerOfThread, storageOwner } from "../../src/server/tenancy.ts";
+import { ownerOfThread } from "../../src/server/tenancy.ts";
 import { EditorInput } from "../../src/trip-app/editor.ts";
 import fixtureWorker from "./worker.ts";
 
@@ -527,9 +527,7 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
 
           const options = {
             threadId,
-            principal: Schema.decodeSync(Principal)(
-              owner === storageOwner ? "travel-planner-owner" : owner,
-            ),
+            principal: Schema.decodeSync(Principal)(owner),
             idempotencyKey: Schema.decodeSync(IdempotencyKey)(
               research ? "previous-research-input" : "previous-planner-input",
             ),

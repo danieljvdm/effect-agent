@@ -150,7 +150,7 @@ const unavailableModel = (error: PlannerError) => {
 
 /** Resolve on each HTTP request so removal/rotation also affects running durable workers.
  * Capture required services when constructing the provider adapter, never the resolved key.
- * An already dispatched provider request may finish; fallback requires explicit demo funding.
+ * An already dispatched provider request may finish; subsequent requests still require the account’s own key.
  */
 export const credentialClient = Effect.fn("credentialClient")(function* <R>(
   key: Effect.Effect<Redacted.Redacted<string>, PlannerError, R>,
@@ -202,7 +202,7 @@ export const selectableModel = <R = never>(
     }),
   );
 
-/** Production resolves personal or explicitly granted demo funding for the canonical account. */
+/** Production resolves the personal key for the canonical account. */
 export const liveModel: Effect.Effect<
   {
     readonly model: Layer.Layer<Agent.ModelServices, never, PlannerAttempt | CredentialSource>;

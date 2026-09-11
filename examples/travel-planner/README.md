@@ -1,7 +1,7 @@
 # Travel planner
 
 The canonical runnable Effect Agent example: a small travel chat, saved trips, and
-standalone trip websites on Cloudflare. This is KOM-173's first vertical slice.
+standalone trip websites on Cloudflare.
 
 The app consumes published Effect Agent packages, pinned to exact npm versions in
 `package.json`. `vp install` uses the repository's `bunfig.toml` to keep those dependencies
@@ -93,8 +93,7 @@ and editors have independently funded run budgets without a cumulative token cap
 selects the expanded policy from the new worker's canonical v11 owner submission, then
 persists that policy in its immutable origin. Previously accepted runs and existing workers
 retain their original allowances and bindings, including after restart or follow-up. New
-messages on existing trips use v11; new workers receive the expanded allowance. No worker
-or conversation history is reset by the upgrade.
+messages on existing trips use v11; new workers receive the expanded allowance. Run-policy updates do not reset history. The authentication cutover described below is a deliberate clean start.
 
 Researched options appear as native stay, flight, restaurant/activity, and itinerary cards.
 Stay cards include source photos, a keyboard-accessible gallery, amenities, and listing links.
@@ -110,7 +109,7 @@ If you've scrolled up, resizing preserves your reading position instead.
 Returning to a recently opened trip shows its cached conversation immediately. An uncached
 trip shows a loading state, and the sidebar retains its latest catalogue. Only an actually
 empty conversation shows the welcome prompt. History is cached in this tab for 30 minutes,
-partitioned by verified email; only the selected conversation is polled, with the next refresh
+partitioned by local Auth subject ID; only the selected conversation is polled, with the next refresh
 scheduled after the current request finishes. Background refreshes,
 client reconnects, and temporary session-check failures preserve the last loaded view for
 that account and conversation. An explicit access rejection clears it; another account or
@@ -149,7 +148,7 @@ them. Only a delegation event admits spoken work. Its user request and attribute
 context are separate fields; a transcript never becomes a synthetic user message or title. The delegation policy explicitly includes answers to preference questions and corrections to ongoing work (such as confirming 50 km running ability). The planner sends accepted corrections to the relevant existing workers before claiming they were applied.
 
 Reconnect creates a replacement voice session with recent saved conversation history. This tab
-retains up to sixteen frozen request envelopes in session storage, partitioned by verified email
+retains up to sixteen frozen request envelopes in session storage, partitioned by local Auth subject ID
 and conversation. Reconnect looks up every prepared or uncertain admission by its original request
 ID before retrying any missing admission with its exact envelope; accepted work is only observed.
 Newer spoken or typed input changes which result voice follows without abandoning older uncertain
@@ -186,7 +185,7 @@ at 420 UTF-8 bytes, with at most one outstanding acknowledgment and progress upd
 often than every three seconds. Startup, acknowledgment, admission, and close waits are bounded.
 Failed connections require explicit reconnect. Closing audio never calls planner cancellation.
 
-Session creation runs behind the existing Access authentication, origin checks, and request-size
+Session creation runs behind Yielded Auth session authorization, account binding, origin checks, and request-size
 limit, using only the verified account's encrypted key. It requests `gpt-live-1` with client
 delegation and returns only the session ID and SDP answer. No shared key or credential reaches
 the browser. Voice sessions incur provider duration charges separately from planner inference.
@@ -209,23 +208,35 @@ vp install
 cp examples/travel-planner/.env.example examples/travel-planner/.env
 ```
 
-Set `BYOK_ENCRYPTION_KEY` to a securely generated base64-encoded 32-byte value in that
-ignored file and configure the Cloudflare Access values shown in `.env.example`.
-Keep this encryption key stable and backed up; replacing it makes existing saved API keys
-unreadable. Users connect their own OpenAI key in **Settings → Your OpenAI key**. The deployed app is at <https://travel.effect-agent.com>.
-Cloudflare handles email-code sign-in; there is no application access key. Each email
-has private trips and conversations. Daniel's existing catalogue and history keep
-their original storage addresses.
+Fill the ignored `.env` using `.env.example`. The app pins `@yielded/auth@0.1.0-beta.2`
+and the existing Effect `4.0.0-rc.112` catalog. It uses one `Auth.make` service for
+email codes and GitHub, with the published SQLite Durable Object adapters. Auth owns
+proofs, request binding, credential/session authority and OAuth exchanges; application
+mappings own durable local subjects and claims. No in-memory production stores are used.
+
+On `/login`, choose **Create account** for a new email account. Verify the registration
+code, then enter the fresh sign-in code sent automatically. This second proof is required
+by the published registration/session contract; account creation alone does not sign you in.
+Returning accounts use **Sign in**. Codes expire after five minutes; five failed guesses
+exhaust a proof. Resend cooldown is 30 seconds, with per-address and global issue/attempt
+budgets. Delivery acceptance does not promise inbox delivery; ambiguous sends are not retried.
+GitHub automatically provisions a new local account when registration is required and
+starts a fresh authorization to establish its session. Denied or failed exchanges offer
+an explicit new attempt. Email and GitHub are separate credentials/accounts even if their
+profile emails match. There is no automatic linking, admin bootstrap or invitation gate.
 
 ```sh
 vp run -F @effect-agent/example-travel-planner dev
 ```
 
-The Alchemy CLI prints the local URL. Local requests also require a valid Access assertion;
-deterministic tests substitute authentication only in their test Worker. There is no
-production development bypass. Cloudflare credentials must target the account
-that will host the application. Artifacts and Browser Run require account access to
-those products. Accounts supply their own OpenAI key unless the administrator grants Demo access to a configured shared key.
+Use a trusted local HTTPS origin matching `AUTH_ORIGIN`, with a separate GitHub OAuth App
+whose callback exactly matches that origin plus `/auth/github/callback`. The secure
+`__Host-` cookies require HTTPS. Alchemy's Email binding simulator writes local messages to
+`.alchemy/local/email`; leave it local to avoid sending real mail. Test-only Workerd fixtures
+supply deterministic codes and provider responses without production credentials. Browser
+fixtures exercise the real UI with intercepted Auth/RPC responses. There is no production
+auth bypass. Cloudflare credentials must target the intended account; Artifacts and Browser
+Run require access to those products. Every account supplies its own OpenAI key in Settings.
 
 Model selection and the provider's native web-search tool stay at the host boundary.
 The agent accepts a research toolkit and a provider-independent model Layer.
@@ -264,6 +275,9 @@ The app pins published `0.1.0-beta.78` packages, including JSON persistence,
 existing-conversation worker upgrades, and browser failure diagnostics. Library fixes
 are released separately before the demo adopts them; local library patches are not bundled.
 
+For an existing deployment, approve and complete the maintenance prerequisites in
+[Clean-start cutover and reset](#clean-start-cutover-and-reset) before deploying.
+
 ```sh
 vp run ready
 vp run -F @effect-agent/example-travel-planner deploy --dry-run
@@ -278,23 +292,93 @@ the Alchemy container build; its image and SDK use the same pinned version.
 It uses Cloudflare's remote Alchemy state store. `ALCHEMY_LOCAL_STATE=true` selects local
 state for isolated experiments; do not switch state stores for an existing deployment.
 The root docs stack is independent. Deployment credentials are never bound into the Worker.
-Alchemy owns the custom domain and Access application/policy covering both the custom
-hostname and workers.dev hostname. Public registration uses an **Allow / Everyone** policy,
-with email-code authentication still required and a 30-day session. Anyone within the account's
-Cloudflare Access seat allowance can sign in; the invitation list no longer gates membership.
-Access seat limits still apply. Existing verified emails resolve to the same private storage.
+Alchemy owns the custom domain; workers.dev and preview URLs are disabled. Generated app
+hosts remain public. The planner uses a single canonical origin and 30-day Auth sessions.
+The obsolete Access application, policy, membership APIs and demo-funding controls are removed.
 
-When upgrading a deployment that still has a shared model key, first deploy with
-`PUBLIC_SIGN_UP=false` (and the existing `ACCESS_GROUP_ID`) to keep the invitation gate while
-installing BYOK. Verify that the Worker no longer has `OPENAI_API_KEY`, then deploy with
-`PUBLIC_SIGN_UP=true`. This avoids opening access while the old, host-funded Worker is active.
-New deployments default to public registration. Generated trip app hosts remain public.
+### Provider setup for release
 
-Deployment caveat: Alchemy can report a secret binding as deleted while the uploaded Worker
-still retains it. During the BYOK rollout, this happened to `OPENAI_API_KEY`. Inspect the
-deployed bindings and explicitly remove that obsolete Worker secret before opening signup;
-removing its entry from `env` alone is insufficient. Preserve `BYOK_ENCRYPTION_KEY`. Removing
-a Worker binding does not revoke the provider key or change secrets in other Workers.
+- Enable [Cloudflare Email Sending](https://developers.cloudflare.com/email-service/get-started/send-emails/)
+  on the intended account (currently requires Workers Paid). Onboard the sender's domain
+  to Email Service, finish its `cf-bounce` MX/SPF, DKIM and DMARC checks, then set
+  `AUTH_EMAIL_FROM` to the verified sender. `AUTH_EMAIL` is a structured Workers send binding
+  restricted to that sender, with unrestricted recipients for public signup. It needs no
+  email API key. The template and bounded acceptance adapter are in `src/auth/email-delivery.ts`.
+- Create a GitHub **OAuth App**, with homepage `https://travel.effect-agent.com` and exact
+  callback `https://travel.effect-agent.com/auth/github/callback`. Supply
+  `AUTH_GITHUB_CLIENT_ID` and secret `AUTH_GITHUB_CLIENT_SECRET`. This requests identity
+  only: no repository API access, Gmail integration, Google login or provider token custody.
+- Set `AUTH_ORIGIN=https://travel.effect-agent.com`. Redirects are server-configured; the
+  return allowlist contains only `/`. Generate three independent, cryptographically random
+  32-byte **base64url** values for `AUTH_BINDING_KEY`, `AUTH_PROOF_KEY` and
+  `AUTH_TRANSACTION_KEY`, and a separate 32-byte **base64** `BYOK_ENCRYPTION_KEY`.
+  Supply secrets through the deployment environment, never source control or logs. Keep
+  them stable after launch; arbitrary replacement invalidates flows or encrypted keys.
+- Verify mail delivery and GitHub authorization with explicitly authorized test accounts
+  before public release. Deterministic tests and local browser fixtures do not establish
+  live sender readiness, inbox delivery or OAuth App configuration.
+- Automatic invocation URL logs, request traces and Worker Logpush are disabled to keep
+  callback codes/state out of telemetry. Keep that setting; review any independently managed
+  edge Logpush/analytics pipeline to exclude callback query strings before enabling it.
+  Auth diagnostics contain only safe stage names, never request bodies or provider errors.
+
+### Clean-start cutover and reset
+
+This release deliberately discards the old app accounts and their data. Everyone registers
+again and re-enters their OpenAI key. There is no identity migration or recovery path.
+The following is a release procedure for the owner to approve and execute; PR preparation
+must not deploy, change provider consoles/secrets or delete live data.
+
+| State                       | Exact reset scope                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Old account/agent data      | This stack's `PlannerThread` SQLite Durable Object namespace, including original `travel-planner-owner-v1`, `member-*` owners, their conversation Objects and child workers. This removes trips/revisions, conversation history, admitted work, journals/checkpoints, diagnostics, model settings, encrypted BYOK rows, app/editor records and the old `travel_demo_access` funding row. No other Worker/stack namespace is included. |
+| New auth and planner state  | New logical binding `AuthThreadsV1` / class `AuthPlannerThread`, and `AuthV1` / class `PlannerAuth` (Object name `auth-v1`). The latter begins empty: local subjects, identifiers/provider bindings, credentials, proof/abuse/continuation records, OAuth flow/registration records and sessions. Existing CF Access auth/proofs are external; no shared IdP or Cloudflare account-wide user store is deleted.                        |
+| Source and snapshots        | Old Artifacts namespace exactly `effect-agent-travel-planner`, including trip repositories, published snapshot branches, generated-app forks and old template. New writes use `effect-agent-travel-planner-auth-v1`. No other Artifacts namespace is included.                                                                                                                                                                        |
+| Builds and public addresses | In this stack's `TripAppBuilds` R2 bucket only, old object prefixes `apps/` and `app-addresses/v1/`. New writes use `auth-apps/v1/` and `app-addresses/auth-v1/`. Old generated URLs return not found; there is no legacy admin lookup or automatic directory repair.                                                                                                                                                                 |
+| Browser state               | Close planner tabs; clear site data only for the planner origin, including old Access/Auth cookies, local/session storage, HTTP cache and retained voice admission IDs. New account runtimes discard drafts, history, settings, key metadata, progress and media on sign-out/account change.                                                                                                                                          |
+
+1. Inventory the actual deployed Worker, Durable Object namespace ID, `TripAppBuilds`
+   bucket name, Artifacts namespace and `SiteBuild` Workflow from **this stack's existing
+   Alchemy state**. Do not guess provider IDs or run a repository-wide storage reset.
+   Export the old address directory’s hostname inventory for the scoped cache purge below.
+   Confirm no other application shares these resources. Resolve any discrepancy before release.
+2. Keep existing Access protection while preparing provider configuration and the release
+   plan. Immediately before cutover, install a temporary edge maintenance block scoped to
+   `travel.effect-agent.com`, allowing only release testers. Alchemy may remove `TravelAccess`
+   and `TravelInvitedUsers` during reconciliation; their removal must not expose the old Worker.
+   The temporary block is separate from those managed resources and remains until step 6.
+   Revoke sessions for the old `TravelAccess` application only; retain shared IdPs and groups.
+   Do not block unrelated apps or wildcard hosts.
+3. Stop admission to the old app. Terminate this app's active `SiteBuild` Workflow instances
+   and its active build Sandboxes; stop old agent work before reset. This prevents old builds
+   from republishing obsolete addresses during cutover. These are app resources, not other
+   applications' Workflow or container instances.
+4. Review the Alchemy dry-run against the existing state. Require deletion of only the old
+   `PlannerThread` class and creation of SQLite classes `AuthPlannerThread` and `PlannerAuth`;
+   the new logical ID must not be interpreted as a class rename/transfer. This is an
+   irreversible application namespace deletion on deployment. Require removal of only
+   `TravelAccess` and `TravelInvitedUsers`, the new Email binding/auth configuration, fresh
+   Artifacts namespace and disabled workers.dev/previews. Preserve the bucket and unrelated
+   stack resources. Only then execute the deployment commands above as the release decision.
+5. With maintenance still active, enumerate and delete repositories **only** in the old
+   Artifacts namespace. Enumerate R2 keys using each exact old prefix, review that inventory,
+   then delete those keys and verify both listings are empty. Do not empty the whole bucket
+   or touch the new prefixes. Purge CDN cache entries only for the retired generated hostnames
+   from step 1; old open tabs/browser caches can retain already public assets until cleared
+   or expired. Verify the old DO namespace is gone. Remove obsolete app-only
+   `ACCESS_*`, `OPENAI_API_KEY` and `DEMO_OPENAI_API_KEY` Worker bindings if still present:
+   Alchemy has previously left a removed secret bound after deployment. Never delete shared
+   IdPs, Access groups, other apps' secrets or provider credentials as part of this reset.
+6. In fresh browser profiles, test new and returning email/GitHub accounts, separate-account
+   data, sign-out, BYOK, voice session authorization, private RPC/progress denial, and a newly
+   generated public site. Check old generated URLs return not found and private APIs return
+   401 without Auth cookies. Confirm the deployed binding inventory matches the reviewed plan.
+   Remove the temporary maintenance block only after these checks pass.
+
+A failed check leaves maintenance protection in place. Redeploying the old code cannot
+restore deleted accounts or conversations and must not reopen an unprotected old Worker.
+Do not reset the new Auth database after users begin registering. Future schema upgrades
+must preserve supported state; unknown auth formats fail without mutation.
 
 ## Bring your own OpenAI key
 
@@ -315,30 +399,12 @@ reply, refresh the connection status before retrying. Unsupported rows fail with
 Every model HTTP request resolves the current key from the verified account. Planner attempts use
 the host-owned conversation namespace; scouts and editors use their validated canonical source
 lineage, never a model-supplied billing account or the child thread's name. Legacy registrations
-also require the owner's key. A missing personal key can use `DEMO_OPENAI_API_KEY` only when the canonical account is on the administrator’s Demo access list. A malformed or unreadable personal credential never falls back. Rotation affects the next
-model request; personal-key removal uses demo access if granted, otherwise it prevents new requests, including background work. An already dispatched
+also require the owner's key. There is no host-funded fallback. Rotation affects the next
+model request; key removal prevents new requests, including background work. An already dispatched
 provider request may finish. Failed work is not automatically replayed when a key is reconnected.
 Saved trips, messages, and published apps remain readable without a key, and existing accounts
-need a personal key or explicit Demo access to make model requests. Removing a key deletes the current credential row;
+need a personal key to make model requests. Removing a key deletes the current credential row;
 provider-side revocation is needed to invalidate copies in historical database backups.
-
-### Sponsored demo access
-
-Configure the optional `DEMO_OPENAI_API_KEY` Worker secret, then use **Settings → Demo access**
-as the administrator to add or remove exact email addresses (up to 200). The list starts empty;
-public registration alone never grants shared-key access. Emails are normalized to lowercase and
-matched to the namespace derived from the verified Access identity. A personal key takes precedence.
-Eligible accounts without one see **Demo access · included** and can use planning, scouts, app editing,
-and voice without receiving the shared key. Trips and conversations remain private per account.
-
-Funding permissions live in a separate versioned SQLite row in the existing administrator Object.
-Only the verified administrator can list or change them, including when public registration is open.
-The host rechecks permissions for each model HTTP request and each new voice call, using canonical
-worker lineage for scouts/editors. Removal therefore applies to subsequent requests; an in-flight
-provider request or already established voice call may finish. It does not cancel accepted tasks,
-erase trips, or revoke a personal key. Storage, decoding, and permission-lookup failures fail closed.
-Uncertain writes require refreshing the list before retrying; grants and removals are idempotent.
-The list and shared key never enter model prompts, agent records, generated sites, or diagnostics.
 
 ## Boundaries and behavior
 
@@ -356,17 +422,23 @@ The list and shared key never enter model prompts, agent records, generated site
   and restarts; no separate card database or booking mutation exists. Failed or malformed
   results never become cards. New work uses v6; v5, v4, v3 and v2 registrations remain available for
   already admitted work with their original tool schemas and output formats.
-- The Worker validates the Access JWT signature, issuer, audience, expiry, and email
-  before serving planner routes, including its assets and legacy published snapshots.
-  Generated app hosts are public and resolve through a private, schema-validated address directory. It ignores unverified
-  email headers and old bearer keys. `/api/rpc`, `/api/access`, and `/api/progress` check same-origin browser
-  requests, method, and a 32 KiB body limit. Effect HTTP serves
-  schema-defined RPCs: `GetPlanner`, `SendMessage`, `SaveTrip`, `PublishTrip`,
-  `GetPlannerSettings`, `SavePlannerSettings`, `CreateTripApp`, `RetryTripAppBuild`, and `RestoreTripApp`.
-- `/api/access` serves the signed-in session. Legacy administrator membership RPCs are disabled
-  while registration is open.
-  Identity is request-scoped. Member storage addresses derive from the verified email,
-  never a client-supplied owner ID; a member cannot address another member's private trips.
+- Auth HTTP middleware supplies request context; `auth.requireSession()` explicitly authorizes
+  private planner pages, published snapshots, RPC, voice and progress. `/login`, callback GET
+  and required static assets are public. Callback GET only renders: an inline script removes
+  secret query values before assets/hydration, then typed Auth actions submit the callback
+  through a same-origin CSRF-protected POST. Codes/state/tokens are never logged or persisted
+  in browser storage. Only the public GitHub flow ID survives the round trip in session storage.
+- `/auth/*` uses shared AuthContract actions, typed `Client.make` and `AuthAtom.make`. Named
+  auth mutations survive their own session transition; custom workflows render from
+  `auth.session` and may retire at completion. One shared Atom runtime owns the app clients.
+  Each Auth account lifetime owns a separate registry; retiring it cancels requests, progress
+  and voice resources and discards private caches. Focus/visibility and periodic session checks
+  observe cookie changes in other tabs. Requests include the registry's captured subject ID;
+  a mismatch with the server session returns 409 before reading/writing private data.
+- `/api/access` is removed. Provider profiles and emails do not select a local owner. Verified
+  Auth subjects map to server-owned `account-<UUID>` namespaces; conversation addresses cannot
+  contain a caller-supplied owner prefix. Same-origin checks, POST-only private APIs and the
+  32 KiB streaming body cap remain in place. Generated app hosts are intentionally public.
 - Each account stores one versioned model-preference row. Only explicit changes save it;
   loading defaults does not write. Saves are serialized within a tab; across devices the
   last completed save wins. Failed saves remain visible and can be retried; malformed or
@@ -390,10 +462,9 @@ The list and shared key never enter model prompts, agent records, generated site
   deltas or restarting work. Eviction may discard provisional text; saved records remain
   authoritative. Old JSON answers and new plain-text answers both retain their history.
 - Each conversation uses its own Thread Object. A private, schema-encoded namespace RPC
-  keeps the trip catalogue in the original owner Object. Creating a trip records its
+  keeps the trip catalogue in the account's owner Object. Creating a trip records its
   conversation association atomically with the first revision. Cross-conversation edits
-  are refused. Existing trips retain their data and trip-specific messages from the old
-  shared log; those messages seed the first isolated run without rewriting the original log.
+  are refused. This clean start has no shared-log seeding or legacy owner compatibility.
 - Trips are schema-encoded, versioned, append-only SQLite rows. Updates require the
   current revision. The RPC and native agent tools call the same repository and
   publication service. Corrupt or unsupported stored values fail without resetting data.
@@ -435,7 +506,7 @@ The list and shared key never enter model prompts, agent records, generated site
 - Detailed failures are schema-versioned, append-only rows in each Thread Object's SQLite database;
   they survive reloads, eviction, and model-context compaction. They are operator diagnostics, never
   model prompt history or execution/recovery authority. Source-owned worker inspection guards scout
-  and editor reads; the planner's Access authentication still applies. No diagnostic data is published
+  and editor reads; the planner's session authorization still applies. No diagnostic data is published
   into generated trip sites. Canonical tool results remain unchanged. The latest 100 diagnostic rows
   are considered for each activity view; the view shows the latest 100 events (40 for workers).
   Older diagnostic rows remain stored. Individual failure details retain up to 65,536 characters,
@@ -475,7 +546,7 @@ against an expected SHA. Conflicting edits fail without force-pushing. Source is
 
 Each committed edit starts a deterministic Workflow. The host transfers source into a fresh
 scoped Sandbox, runs `vp install --ignore-scripts`, `vp check --no-fmt`, and `vp run build`,
-then destroys it. The container has no account, model, Access, or Git credentials. Each builder
+then destroys it. The container has no account, model, Auth, or Git credentials. Each builder
 uses explicit resources matching `standard-3` (2 vCPUs, 8 GiB RAM, 16 GB disk), with capacity
 capped at four containers. Deployment verification checks the returned resource values;
 the named instance tier alone did not change the allocation through the current provider.
@@ -518,21 +589,18 @@ and have outbound server networking disabled. Browser origins are separate per a
 from the planner. API requests strip cookies and Access assertions before dispatch. Current
 app APIs are read-only; generated redirects, cookies, and caller-selected trip IDs cannot
 expand the data binding. Anyone with the app URL can read its live trip projection; raw notes,
-conversations, source editing, account settings, and invitation administration stay private.
+conversations, source editing, and account settings stay private.
 The public app URL is distinct from the old authenticated `/trips` snapshot.
 
-Existing app IDs, repository names, build objects, and saved URLs are preserved. Original
-administrator hash links can repair their directory entry from the fixed original owner on the
-first public request. Other members' existing entries are repaired when their planner loads or
-a build starts; load those planners before sharing their existing links after the first rollout.
-Missing or malformed entries never trigger an owner search. Generated app hosts have no
-Access wall; planner routes retain authenticated account access and the 30-day session.
+After cutover, new app IDs, repositories, builds and URLs persist normally within the new
+account namespaces. Missing or malformed directory entries never trigger an owner search.
+Generated app hosts have no login wall; private planner routes require Auth sessions.
 
 App state is schema-versioned append-only owner SQL with revision checks. Source SHA,
 active build SHA, and trip-data revision are separate. Restore commits the selected version's
 source as a new revision and rebuilds it; subsequent edits start from that restored tree.
 The current trip data is unchanged. The native card keeps the app discoverable without relying
-on model Markdown. Legacy snapshot links remain clickable and retain their existing access rules.
+on model Markdown. New snapshot links retain their authenticated access rules; pre-cutover snapshots are reset.
 
 ## Verification and scope
 
@@ -555,12 +623,12 @@ and exclude reasoning from progress. The stream body owns and releases its obser
 handler; closing it does not abort a durable request.
 Native-card tests cover early display, isolation, and restart persistence. Navigation tests
 cover immediate cached returns, delayed and failed loads, inactive polling, and identity
-changes, including same-account session revalidation without clearing the loaded conversation. Authentication failures still clear data and changed accounts remain isolated. Rendering tests cover legacy Markdown photos, escaped model content, and unsafe URLs.
+changes, including same-account session revalidation without clearing the loaded conversation. Authentication failures still clear data and changed accounts remain isolated. Auth tests use real Workerd SQL and HTTP cookies with deterministic email and GitHub transports, including first registration, returning signin, proof expiry/reuse/attempt limits, delivery ambiguity, callback rejection, CSRF/body limits, account isolation and schema fault seams. Cloudflare sender tests cover acceptance, rejection, timeout and interruption without real mail. Rendering tests cover legacy Markdown photos, escaped model content, and unsafe URLs.
 They substitute the model and Git service, so live provider, browser, and Artifacts
 verification still requires a deployed run. The application and Git adapters expose
 failpoints before and after durable mutations for deterministic fault tests.
 
-The initial UI deliberately has one administrator, a bounded transcript view, and a simple
+Public signup has no administrator role. The UI has a bounded transcript view and a simple
 itinerary template. Progressive tool discovery, Code Mode comparisons, durable child
 research agents, steering controls, approvals beyond publication, scheduled rechecks,
 memory controls, priced usage, and workload performance reports remain follow-up work.

@@ -12,7 +12,7 @@ import { type EditorActivity, PlannerProgress } from "../domain.ts";
 import { plannerActivity } from "../server/activity.ts";
 import { RecordedDiagnostics } from "../server/diagnostics.ts";
 import { emptyProgress } from "../server/progress.ts";
-import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
+import { ownerOfThread } from "../server/tenancy.ts";
 import { AppEditor, EditorRequest } from "./editor.ts";
 
 /** The source journal supplies the worker identity; callers cannot select another account's worker. */
@@ -52,9 +52,7 @@ export const editorSnapshot = Effect.fn("editorSnapshot")(function* (
     const sourceThreadId = yield* Schema.decodeUnknownEffect(ThreadId)(conversationId);
     const owner = ownerOfThread(conversationId);
 
-    const principal = yield* Schema.decodeUnknownEffect(Principal)(
-      owner === storageOwner ? "travel-planner-owner" : owner,
-    );
+    const principal = yield* Schema.decodeUnknownEffect(Principal)(owner);
 
     const host = yield* runtime.workerHost({ sourceThreadId, principal });
 

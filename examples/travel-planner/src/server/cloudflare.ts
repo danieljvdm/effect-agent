@@ -9,13 +9,12 @@ import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { DefinitionDigestInput } from "@effect-agent/thread/Records";
 import { SubmissionLedger, SubmissionLookupById } from "@effect-agent/thread/SubmissionLedger";
-import { Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
 import type { Tool } from "effect/unstable/ai";
 import { FetchHttpClient, HttpRouter } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
-import { AccessError } from "../access-domain.ts";
 import { TripToolsLive } from "../agent.ts";
 import type { TripSiteStore } from "../domain.ts";
 import {
@@ -59,7 +58,6 @@ import {
   retryTripAppBuild,
 } from "../trip-app/service.ts";
 import { AppToolsLive } from "../trip-app/tools-live.ts";
-import { AccessCommand, AccessReply, manageAccess } from "./access-admin.ts";
 import { PlannerModel, plannerSnapshot, sendMessage, voiceWork } from "./application.ts";
 import type { CredentialSource } from "./credentials.ts";
 import {
@@ -67,15 +65,8 @@ import {
   credentialStoreLayer,
   credentialSourceLayer,
   encodeStoredCredential,
-  connectionWithDemoAccess,
   validateOpenAiKey,
 } from "./credentials.ts";
-import {
-  DemoAccessCommand,
-  DemoAccessReply,
-  DemoAccessStore,
-  DemoAccessStoreLive,
-} from "./demo-access.ts";
 import {
   DiagnosticContext,
   DiagnosticObserverLive,
@@ -130,12 +121,7 @@ const CredentialSourceLive: Layer.Layer<CredentialSource, never, WorkerEnvironme
   Effect.map(WorkerEnvironment, credentialSourceLayer),
 );
 
-const effectiveConnection = Effect.gen(function* () {
-  const identity = yield* ThreadObjectIdentity;
-  const connection = yield* Effect.flatMap(CredentialStore, (store) => store.status);
-
-  return yield* connectionWithDemoAccess(identity.threadId, connection);
-});
+const effectiveConnection = Effect.flatMap(CredentialStore, (store) => store.status);
 
 export const plannerHandlers = PlannerRpcs.toLayer({
   GetOpenAiConnection: () => safeRpc(effectiveConnection),
@@ -590,7 +576,6 @@ export const plannerApplication = <E, R>(
     OwnerAppRepositoryLive,
     AppBuildBucketLive,
     PlannerSettingsStoreLive,
-    DemoAccessStoreLive,
     Layer.unwrap(
       Effect.gen(function* () {
         const env = yield* WorkerEnvironment;
@@ -649,41 +634,6 @@ export const makeTravelPlannerThread = <E>(
     maxQueueDepthPerLane: 8,
     maxInputBytes: 16 * 1024,
   }) {
-    private readonly accessChanges = Semaphore.makeUnsafe(1);
-
-    /** Host-only permission check: a browser/model cannot select its funding identity. */
-    demoAccessAllowed(owner: string): Promise<boolean> {
-      return this[DurableObject.RunSymbol](
-        Effect.flatMap(DemoAccessStore, (store) => store.allows(owner)),
-      );
-    }
-
-    /** The edge requires the verified administrator before exposing this mutation. */
-    manageDemoAccess(encoded: string): Promise<string> {
-      return this[DurableObject.RunSymbol](
-        Schema.decodeUnknownEffect(Schema.fromJsonString(DemoAccessCommand))(encoded).pipe(
-          Effect.mapError(
-            () => new AccessError({ code: "invalid", message: "Invalid demo access request." }),
-          ),
-          Effect.flatMap((command) =>
-            Effect.flatMap(DemoAccessStore, (store) => store.manage(command)),
-          ),
-          Effect.catchDefect(
-            () =>
-              new AccessError({
-                code: "unavailable",
-                message: "Demo access failed unexpectedly. Refresh the list before retrying.",
-              }),
-          ),
-          Effect.match({
-            onSuccess: (value) => ({ _tag: "Success" as const, value }),
-            onFailure: (error) => ({ _tag: "Failure" as const, error }),
-          }),
-          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(DemoAccessReply))),
-        ),
-      );
-    }
-
     /** Host-only lookup; no HTTP route exposes ciphertext or decrypted model credentials. */
     modelCredential(): Promise<string> {
       return this[DurableObject.RunSymbol](
@@ -711,33 +661,6 @@ export const makeTravelPlannerThread = <E>(
       );
     }
 
-    /** Called only by the edge after checking the verified administrator identity. */
-    manageInvitations(encoded: string): Promise<string> {
-      return this[DurableObject.RunSymbol](
-        this.accessChanges.withPermit(
-          Effect.gen(function* () {
-            const env = yield* WorkerEnvironment;
-
-            const command = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(AccessCommand))(
-              encoded,
-            ).pipe(
-              Effect.mapError(
-                () => new AccessError({ code: "invalid", message: "Invalid access request." }),
-              ),
-            );
-
-            return yield* manageAccess(command, env);
-          }).pipe(
-            Effect.provide(FetchHttpClient.layer),
-            Effect.match({
-              onSuccess: (value) => ({ _tag: "Success" as const, value }),
-              onFailure: (error) => ({ _tag: "Failure" as const, error }),
-            }),
-            Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(AccessReply))),
-          ),
-        ),
-      );
-    }
     /** Private namespace RPC; callers cannot access it through the public HTTP API. */
     tripRepository(request: string): Promise<string> {
       return this[DurableObject.RunSymbol](serveTripRepository(request));

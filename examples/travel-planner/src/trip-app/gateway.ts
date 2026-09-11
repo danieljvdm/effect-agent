@@ -1,9 +1,8 @@
 import { Effect, Layer, Schema } from "effect";
 import { Worker, WorkerEnvironment } from "effect-cf";
 
-import { AppId, PlannerError, TripApp, TripAppData, TripId } from "../domain.ts";
-import { storageOwner } from "../server/tenancy.ts";
-import { appNameFromHost, publishTripAppAddress, readTripAppAddress } from "./addresses.ts";
+import { PlannerError, TripApp, TripAppData, TripId } from "../domain.ts";
+import { appNameFromHost, readTripAppAddress } from "./addresses.ts";
 import { buildPrefix, readBuild } from "./build.ts";
 import { callAppRepository } from "./remote.ts";
 
@@ -69,21 +68,8 @@ export const serveTripApp = Effect.fn("serveTripApp")(function* (
   const name = appNameFromHost(hostname, domain);
 
   if (name === null) return new Response("Not found", { status: 404 });
-  let address = yield* readTripAppAddress(hostname);
+  const address = yield* readTripAppAddress(hostname);
 
-  // Original administrator apps predate the directory. Only this fixed storage
-  // owner can be recovered from a legacy ID; caller identity is never consulted.
-  if (address === null && Schema.is(AppId)(name)) {
-    const legacy = yield* callAppRepository(storageOwner, Schema.NullOr(TripApp), {
-      _tag: "GetById",
-      appId: name,
-    });
-
-    if (legacy !== null && legacy.id === name && legacy.url === `https://${hostname}`) {
-      yield* publishTripAppAddress(storageOwner, legacy, domain);
-      address = yield* readTripAppAddress(hostname);
-    }
-  }
   if (address === null) return new Response("Not found", { status: 404 });
   const { owner, appId } = address;
 
@@ -141,7 +127,7 @@ export const serveTripApp = Effect.fn("serveTripApp")(function* (
           };
         });
 
-        // In particular, do not forward Access assertions, cookies, or caller-supplied service headers.
+        // In particular, do not forward authentication cookies, or caller-supplied service headers.
         return worker.getEntrypoint().fetch(
           new Request(request.url, {
             method: request.method,

@@ -1,38 +1,35 @@
 import { Effect, Schema } from "effect";
 
-import { adminEmail } from "../access-domain.ts";
+import { AccountId } from "../auth/account.ts";
 import { PlannerError, type PlannerSnapshot } from "../domain.ts";
 
-export const storageOwner = "travel-planner-owner-v1";
+export const StorageOwner = Schema.String.check(
+  Schema.isPattern(/^account-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/),
+);
 
-/** Keep Daniel's existing Object and history; other verified emails own disjoint namespaces. */
-export const plannerOwner = Effect.fn("plannerOwner")(function* (email: string) {
-  if (email === adminEmail) return storageOwner;
-
-  const digest = yield* Effect.promise(() =>
-    crypto.subtle.digest("SHA-256", new TextEncoder().encode(email)),
+export const plannerOwner = (subjectId: string) =>
+  Schema.decodeUnknownEffect(AccountId)(subjectId).pipe(
+    Effect.map((id) => `account-${id}`),
+    Effect.mapError(() => new PlannerError({ code: "invalid", message: "Invalid account." })),
   );
 
-  return `member-${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-});
-
+/** Internal object addresses must have a server-assigned owner; corrupt addresses fail closed. */
 export const ownerOfThread = (threadId: string): string =>
-  /^member-[a-f0-9]{64}(?=--|$)/.exec(threadId)?.[0] ?? storageOwner;
+  Schema.decodeUnknownSync(StorageOwner)(threadId.split("--", 1)[0]);
 
 export const privateConversation = (owner: string, conversationId: string) =>
-  owner === storageOwner
-    ? Schema.decodeUnknownEffect(
-        Schema.String.check(Schema.makeFilter((id) => !id.startsWith("member-"))),
-      )(conversationId).pipe(
-        Effect.mapError(
-          () => new PlannerError({ code: "invalid", message: "Invalid conversation." }),
-        ),
-      )
-    : Effect.succeed(`${owner}--${conversationId}`);
+  Schema.decodeUnknownEffect(StorageOwner)(owner).pipe(
+    Effect.flatMap((owner) =>
+      Schema.decodeUnknownEffect(
+        Schema.String.check(Schema.makeFilter((id) => !id.includes("--"))),
+      )(conversationId).pipe(Effect.map((id) => `${owner}--${id}`)),
+    ),
+    Effect.mapError(() => new PlannerError({ code: "invalid", message: "Invalid conversation." })),
+  );
 
 /** Namespace addresses stay server-owned; the browser sees only its original conversation IDs. */
 export const publicSnapshot = (owner: string, snapshot: PlannerSnapshot): PlannerSnapshot => {
-  const unqualify = (id: string) => (owner === storageOwner ? id : id.slice(owner.length + 2));
+  const unqualify = (id: string) => id.slice(owner.length + 2);
 
   return {
     ...snapshot,

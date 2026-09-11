@@ -82,6 +82,23 @@ export const OwnerTripRepositoryLive: Layer.Layer<
 > = Layer.unwrap(
   Effect.gen(function* () {
     const identity = yield* ThreadObjectIdentity;
+
+    // Worker objects acquire parent repositories only inside their authorized attempt.
+    if (identity.threadId.startsWith("worker:")) {
+      const denied = Effect.fail(
+        new PlannerError({ code: "invalid", message: "An authorized parent account is required." }),
+      );
+
+      return Layer.succeed(TripRepository, {
+        list: denied,
+        listConversations: denied,
+        rememberConversation: () => denied,
+        get: () => denied,
+        conversationId: () => denied,
+        save: () => denied,
+        recordPublication: () => denied,
+      });
+    }
     const storageOwner = ownerOfThread(identity.threadId);
 
     if (identity.threadId === storageOwner) return TripRepositoryLive;

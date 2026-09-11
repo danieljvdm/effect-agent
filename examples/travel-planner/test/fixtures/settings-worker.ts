@@ -2,12 +2,12 @@ import { Effect, Layer, Schema } from "effect";
 import { DurableObject } from "effect-cf";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
-import { adminEmail } from "../../src/access-domain.ts";
 import { PlannerError, TripSiteStore } from "../../src/domain.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
 import { SettingsFailpoint } from "../../src/server/settings.ts";
 import { plannerOwner } from "../../src/server/tenancy.ts";
 import { FixtureBrowserLive } from "./browser.ts";
+import { ownerEmail, fixtureSubject } from "./identity.ts";
 import { FixtureModel } from "./models.ts";
 import fixtureWorker from "./worker.ts";
 
@@ -82,7 +82,7 @@ export default {
       }
 
       const owner = await Effect.runPromise(
-        plannerOwner(request.headers.get("x-test-email") ?? adminEmail),
+        plannerOwner(fixtureSubject(request.headers.get("x-test-email") ?? ownerEmail)),
       );
 
       const response = await env.THREADS.getByName(owner).fetch(request);

@@ -4,10 +4,9 @@ import { Effect, Layer, Schema } from "effect";
 import { Worker, WorkerEnvironment } from "effect-cf";
 
 import { artifactsLayer } from "./artifacts";
+import type { AuthConfiguration } from "./auth/server";
+import { authenticate, type PlannerAuth } from "./auth/worker";
 import { Trip, TripId, TripSiteStore, type AppBuildRequest } from "./domain";
-import { type AccessAdminEnvironment } from "./server/access-admin";
-import { authenticate, type AccessEnvironment } from "./server/access-auth";
-import { accessResponse } from "./server/access-http";
 import { makeTravelPlannerThread } from "./server/cloudflare";
 import { credentialSourceLayer, type CredentialEnvironment } from "./server/credentials";
 import { serveProgress } from "./server/progress-http";
@@ -17,11 +16,12 @@ import { appNameFromHost } from "./trip-app/addresses.ts";
 import { AppBuildBucketLive } from "./trip-app/bindings.ts";
 import { serveTripApp } from "./trip-app/gateway.ts";
 
+export { PlannerAuth } from "./auth/worker";
 export { Sandbox } from "@cloudflare/sandbox";
 export { SiteBuild } from "./trip-app/build.ts";
 export { TripData } from "./trip-app/gateway.ts";
 
-export class PlannerThread extends makeTravelPlannerThread(
+export class AuthPlannerThread extends makeTravelPlannerThread(
   Layer.unwrap(
     Effect.map(WorkerEnvironment, (env) => artifactsLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE)),
   ),
@@ -29,8 +29,10 @@ export class PlannerThread extends makeTravelPlannerThread(
 
 declare global {
   namespace Cloudflare {
-    interface Env extends AccessEnvironment, AccessAdminEnvironment, CredentialEnvironment {
-      THREADS: DurableObjectNamespace<PlannerThread>;
+    interface Env extends AuthConfiguration, CredentialEnvironment {
+      AUTH: DurableObjectNamespace<PlannerAuth>;
+      AUTH_EMAIL: SendEmail;
+      THREADS: DurableObjectNamespace<AuthPlannerThread>;
       ARTIFACTS: Artifacts;
       ARTIFACTS_GIT_BASE: string;
       ASSETS?: Fetcher;
@@ -105,7 +107,7 @@ const publishedResponse = Effect.fn("publishedResponse")(
     ),
 );
 
-/** Cloudflare authentication and routing stay in the Effect request scope. */
+/** Session authorization and routing stay in the Effect request scope. */
 export const handleRequest = (verify = authenticate) =>
   Effect.fn("Planner.fetch")(function* (
     request: Request,
@@ -130,6 +132,39 @@ export const handleRequest = (verify = authenticate) =>
       );
     }
 
+    // Auth routes own their Origin/CSRF and body-size checks. Callback GET only renders.
+    if (url.pathname === "/login" || url.pathname === "/auth/github/callback") {
+      if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
+      const pageUrl = new URL(request.url);
+
+      pageUrl.search = "";
+
+      const response = yield* Effect.promise(async () =>
+        start.fetch(new Request(pageUrl, request)),
+      );
+
+      const headers = new Headers(response.headers);
+
+      headers.set("cache-control", "no-store");
+      headers.set("referrer-policy", "no-referrer");
+
+      return new Response(response.body, { status: response.status, headers });
+    }
+    if (url.pathname.startsWith("/auth/")) {
+      return yield* Effect.tryPromise({
+        try: () => env.AUTH.getByName("auth-v1").fetch(request),
+        catch: () => "AuthUnavailable" as const,
+      }).pipe(
+        Effect.catch(() =>
+          Effect.succeed(
+            new Response("Authentication is temporarily unavailable.", { status: 503 }),
+          ),
+        ),
+      );
+    }
+    if ((url.pathname.startsWith("/assets/") || url.pathname === "/favicon.svg") && env.ASSETS)
+      return yield* Effect.promise(() => env.ASSETS!.fetch(request));
+
     const identity = yield* verify(request, env).pipe(
       Effect.match({
         onSuccess: (session) => ({ _tag: "Granted" as const, session }),
@@ -137,28 +172,43 @@ export const handleRequest = (verify = authenticate) =>
       }),
     );
 
-    if (identity._tag === "Denied")
+    if (identity._tag === "Denied") {
+      if (
+        identity.error.code === "unauthorized" &&
+        request.method === "GET" &&
+        !url.pathname.startsWith("/api/") &&
+        !url.pathname.startsWith("/trips/")
+      )
+        return new Response(null, {
+          status: 303,
+          headers: { location: "/login", "cache-control": "no-store" },
+        });
+
       return new Response(identity.error.message, {
         status: identity.error.code === "unavailable" ? 503 : 401,
         headers: { "cache-control": "no-store" },
       });
+    }
+    if (url.pathname === "/api/access" || url.pathname.startsWith("/api/access/"))
+      return new Response("Not found", { status: 404 });
     if (url.pathname.startsWith("/trips/")) return yield* publishedResponse(request, env);
     if (
-      [
-        "/api/voice",
-        "/api/rpc",
-        "/api/rpc/",
-        "/api/access",
-        "/api/access/",
-        "/api/progress",
-        "/api/progress/",
-      ].includes(url.pathname)
+      ["/api/voice", "/api/rpc", "/api/rpc/", "/api/progress", "/api/progress/"].includes(
+        url.pathname,
+      )
     ) {
       const origin = request.headers.get("origin");
 
       if (origin !== null && origin !== url.origin)
         return new Response("Forbidden", { status: 403 });
       if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
+
+      // A cookie changed in another tab must never fill this tab's previous account cache.
+      if (request.headers.get("x-elsewhere-account") !== identity.session.subjectId)
+        return new Response("Account changed. Sign in again.", {
+          status: 409,
+          headers: { "cache-control": "no-store" },
+        });
 
       return yield* Effect.scoped(
         Effect.gen(function* () {
@@ -196,11 +246,9 @@ export const handleRequest = (verify = authenticate) =>
             return yield* serveVoice(bounded, identity.session).pipe(
               Effect.provide(credentialSourceLayer(env)),
             );
-          if (url.pathname.startsWith("/api/access"))
-            return yield* accessResponse(bounded, env, identity.session);
           if (url.pathname.startsWith("/api/progress"))
             return yield* serveProgress(bounded, env, identity.session);
-          const owner = yield* plannerOwner(identity.session.email);
+          const owner = yield* plannerOwner(identity.session.subjectId);
 
           return yield* Effect.promise(async () => {
             using response = await env.THREADS.getByName(owner).plannerFetch(bounded);
@@ -213,16 +261,11 @@ export const handleRequest = (verify = authenticate) =>
         }),
       );
     }
-    if ((url.pathname.startsWith("/assets/") || url.pathname === "/favicon.svg") && env.ASSETS) {
-      const assets = env.ASSETS;
-
-      return yield* Effect.promise(() => assets.fetch(request));
-    }
 
     return yield* Effect.promise(async () => start.fetch(request));
   });
 
-// Test fixtures may substitute signature verification; production always uses authenticate.
+// Test fixtures may substitute session verification; production always uses authenticate.
 export const makeWorker = (verify = authenticate) => ({
   fetch: (request: Request, env: Cloudflare.Env, ctx?: ExecutionContext) =>
     Effect.runPromise(handleRequest(verify)(request, env, ctx)),

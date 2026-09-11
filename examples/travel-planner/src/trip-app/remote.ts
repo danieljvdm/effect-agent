@@ -107,6 +107,18 @@ export const callAppRepository = <A, I>(
 export const OwnerAppRepositoryLive = Layer.unwrap(
   Effect.gen(function* () {
     const identity = yield* ThreadObjectIdentity;
+
+    if (identity.threadId.startsWith("worker:")) {
+      const denied = Effect.fail(
+        new PlannerError({ code: "invalid", message: "An authorized parent account is required." }),
+      );
+
+      return Layer.succeed(AppRepository, {
+        get: () => denied,
+        getById: () => denied,
+        save: () => denied,
+      });
+    }
     const owner = ownerOfThread(identity.threadId);
 
     if (owner === identity.threadId) return AppRepositoryLive;

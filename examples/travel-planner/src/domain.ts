@@ -32,7 +32,9 @@ export const AppSiteName = Schema.String.check(
 
 export const AppSiteRegistration = Schema.Struct({
   version: Schema.Literal(1),
-  owner: Schema.String.check(Schema.isPattern(/^(?:travel-planner-owner-v1|member-[a-f0-9]{64})$/)),
+  owner: Schema.String.check(
+    Schema.isPattern(/^account-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/),
+  ),
   appId: AppId,
   tripId: TripId,
   hostname: Schema.String.check(Schema.isPattern(/^[a-z0-9.-]{1,253}$/)),

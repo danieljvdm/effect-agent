@@ -22,7 +22,7 @@ import {
 } from "../research/scout.ts";
 import { activeWorkerLimit, editorPolicy, scoutPolicy } from "../server/agent-limits.ts";
 import { PlannerAttempt, ProgressStore, trackTool } from "../server/progress.ts";
-import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
+import { ownerOfThread, StorageOwner } from "../server/tenancy.ts";
 import { tripRepositoryForOwner } from "../server/trip-rpc.ts";
 import { TripRepository } from "../server/trips.ts";
 import { AppEditor, appEditor, coordinatorId, EditorInput, EditorReadTrip } from "./editor.ts";
@@ -188,9 +188,9 @@ export const editorAttemptLayer = (context: {
 
 const sourceAllowed = (threadId: string, principal: string) => {
   if (!/^[a-zA-Z0-9-]{1,240}$/.test(threadId)) return false;
-  const owner = ownerOfThread(threadId);
+  const owner = threadId.split("--", 1)[0];
 
-  return principal === (owner === storageOwner ? "travel-planner-owner" : owner);
+  return Schema.is(StorageOwner)(owner) && principal === owner;
 };
 
 /** Native caller identity and canonical lineage, never a model-supplied account, confer access. */

@@ -57,7 +57,9 @@ const setup = () => {
 it("owns and releases media and the peer on normal scope exit and malformed session answers", async () => {
   const test = setup();
 
-  await Effect.runPromise(connectBrowserVoice([], test.audio).pipe(Effect.scoped));
+  await Effect.runPromise(
+    connectBrowserVoice([], test.audio, "00000000-0000-0000-0000-000000000001").pipe(Effect.scoped),
+  );
   expect(test.stop).toHaveBeenCalledTimes(1);
   expect(test.close).toHaveBeenCalledTimes(1);
   expect(test.channel.close).toHaveBeenCalledTimes(1);
@@ -65,7 +67,10 @@ it("owns and releases media and the peer on normal scope exit and malformed sess
   vi.stubGlobal("fetch", async () => Response.json({ credential: "never accepted" }));
 
   const failed = await Effect.runPromise(
-    connectBrowserVoice([], test.audio).pipe(Effect.scoped, Effect.exit),
+    connectBrowserVoice([], test.audio, "00000000-0000-0000-0000-000000000001").pipe(
+      Effect.scoped,
+      Effect.exit,
+    ),
   );
 
   expect(failed._tag).toBe("Failure");
@@ -91,7 +96,10 @@ it("stops a microphone grant that arrives after call interruption", async () => 
         }),
     },
   });
-  const fiber = Effect.runFork(connectBrowserVoice([], test.audio).pipe(Effect.scoped));
+
+  const fiber = Effect.runFork(
+    connectBrowserVoice([], test.audio, "00000000-0000-0000-0000-000000000001").pipe(Effect.scoped),
+  );
 
   await requested;
   await Effect.runPromise(Fiber.interrupt(fiber));

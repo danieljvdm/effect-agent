@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { AtomRegistry } from "effect/unstable/reactivity";
+import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -84,7 +84,6 @@ const setup = () => {
 
       const success = (value: unknown) => response({ _tag: "Success", value });
 
-      if (packet.tag === "GetSession") return success({ email, isAdmin: true });
       if (packet.tag === "SavePlannerSettings")
         return success(Schema.decodeUnknownSync(PlannerSettings)(packet.payload));
 
@@ -135,6 +134,8 @@ const setup = () => {
 
     registry.set(selectionAtom, { conversationId: "lisbon", tripId: null });
 
+    registry.set(sessionAtom, AsyncResult.success({ subjectId: email, displayName: email }));
+
     const unmounts = [
       registry.mount(draftAtom),
       registry.mount(plannerAtom),
@@ -149,7 +150,7 @@ const setup = () => {
       registry,
       setEmail: (value: string) => {
         email = value;
-        registry.refresh(sessionAtom);
+        registry.set(sessionAtom, AsyncResult.success({ subjectId: email, displayName: email }));
       },
       close: () => {
         for (const unmount of unmounts) unmount();
@@ -382,7 +383,7 @@ it("carries the spoken exchange into a typed follow-up without displaying a tran
     fixture.reads[0]!.succeed(snapshot());
     await flush();
     registry.set(spokenConversationAtom, {
-      email: "danieljmerwe@gmail.com",
+      subjectId: "danieljmerwe@gmail.com",
       conversationId: "lisbon",
       active: true,
       baseline: [],

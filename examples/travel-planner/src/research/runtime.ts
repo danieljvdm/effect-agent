@@ -14,7 +14,7 @@ import { PlannerError, PlannerInput } from "../domain.ts";
 import { planner, previousProgressPlanner, previousDelegatingPlanner } from "../server/planner.ts";
 import { PlannerAttempt, ProgressStore } from "../server/progress.ts";
 import { publicationAuthorization } from "../server/security.ts";
-import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
+import { ownerOfThread } from "../server/tenancy.ts";
 import { AppEditor, EditorInput } from "../trip-app/editor.ts";
 import { CheckedFinishResearchLive } from "./completion.ts";
 import type { ScoutFindings } from "./contracts.ts";
@@ -206,8 +206,7 @@ export const ScoutMessagingLive = Layer.unwrap(
         return yield* denied();
       const owner = ownerOfThread(origin.origin.source.threadId);
 
-      if (principal !== (owner === storageOwner ? "travel-planner-owner" : owner))
-        return yield* denied();
+      if (principal !== owner) return yield* denied();
 
       return origin.origin.source;
     });

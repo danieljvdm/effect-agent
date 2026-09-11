@@ -55,7 +55,7 @@ import { AppSourceStore } from "../src/trip-app/source.ts";
 import { AppBuildBucketLive } from "../src/trip-app/bindings.ts";
 import { createTripApp, addTripAppMap, editTripApp, readTripAppFiles, restoreTripApp, retryTripAppBuild } from "../src/trip-app/service.ts";
 import { recordBuildProgress, settleBuild } from "../src/trip-app/build.ts";
-const conversation = "lisbon-conversation";
+const conversation = "account-00000000-0000-0000-0000-000000000001--lisbon-conversation";
 const draft = { title:"Lisbon with friends", destination:"Lisbon", summary:"Three friends exploring Lisbon", startDate:null, endDate:null, travelers:3, days:[{title:"Arrival",activities:["Walk by the river"]}], notes:["Coming for work"], places:[] };
 export class ServiceFixture extends DurableObject {
   trees = new Map(); heads = new Map(); workflows = new Map(); forks=0; commits=0; creates=0; restarts=0; sequence=0;
@@ -106,11 +106,11 @@ export class ServiceFixture extends DurableObject {
         const app=yield* apps.get(trip.id);
         const id=app.id+"-"+app.sourceCommit;
         const pending=fixture.workflows.get(id); if(pending)pending.status=input.error ? "errored":"complete";
-        operation=settleBuild({owner:"travel-planner-owner-v1",appId:app.id,tripId:trip.id,repoName:app.repoName,commitId:app.sourceCommit,label:input.error?"Failed change":"Built app"},input.error??null);
+        operation=settleBuild({owner:"account-00000000-0000-0000-0000-000000000001",appId:app.id,tripId:trip.id,repoName:app.repoName,commitId:app.sourceCommit,label:input.error?"Failed change":"Built app"},input.error??null);
       }
       if(input.kind==="progress") {
         const app=yield* apps.get(trip.id);
-        operation=recordBuildProgress({owner:"travel-planner-owner-v1",appId:app.id,tripId:trip.id,repoName:app.repoName,commitId:input.commitId??app.sourceCommit,label:"Built app"},input.update);
+        operation=recordBuildProgress({owner:"account-00000000-0000-0000-0000-000000000001",appId:app.id,tripId:trip.id,repoName:app.repoName,commitId:input.commitId??app.sourceCommit,label:"Built app"},input.update);
       }
       if(input.kind==="read") operation=readTripAppFiles(trip.id,input.paths);
       const exit=yield* operation.pipe(Effect.exit);
@@ -207,7 +207,7 @@ it("creates, builds, edits a real map source, and restores the old source withou
   );
   expect(created.app?.buildProgress?.map(({ phase }) => phase)).toEqual(["queued"]);
   expect(created.workflows[0]?.params).toMatchObject({
-    owner: "travel-planner-owner-v1",
+    owner: "account-00000000-0000-0000-0000-000000000001",
     tripId: created.trip.id,
   });
   const first = appOf(await call("loop", "settle"));
@@ -353,13 +353,18 @@ it("persists progress through save failures, defects, interruption, and a real r
 }, 30_000);
 
 it("rejects another conversation and stale edits before changing source or scheduling a build", async () => {
-  const denied = await call("scope", "create", { conversation: "different-conversation" });
+  const denied = await call("scope", "create", {
+    conversation: "account-00000000-0000-0000-0000-000000000001--different-conversation",
+  });
 
   expect(denied.exit.tag).toBe("Failure");
   expect(denied.app).toBeNull();
   expect(denied.forks).toBe(0);
   const created = await call("scope", "create");
-  const deniedMap = await call("scope", "map", { conversation: "different-conversation" });
+
+  const deniedMap = await call("scope", "map", {
+    conversation: "account-00000000-0000-0000-0000-000000000001--different-conversation",
+  });
 
   expect(deniedMap.exit.tag).toBe("Failure");
   expect(deniedMap.files).toEqual(created.files);

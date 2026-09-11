@@ -2,7 +2,7 @@ import { Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
-import type { AccessSession } from "../access-domain.ts";
+import type { AccountSession } from "../auth/account.ts";
 import { PlannerError, PlannerProgress, ProgressRpcs } from "../domain.ts";
 import { plannerOwner, privateConversation } from "./tenancy.ts";
 
@@ -68,11 +68,11 @@ const transferResponse = (response: Response, close: () => Promise<void>): Respo
 
 /** Worker ingress has already verified the session and bounded the RPC request body. */
 export const serveProgress = Effect.fn("serveProgress")(
-  function* (request: Request, env: ProgressEnvironment, session: AccessSession) {
+  function* (request: Request, env: ProgressEnvironment, session: AccountSession) {
     const scope = yield* Scope.make();
 
     const response = yield* Effect.gen(function* () {
-      const owner = yield* plannerOwner(session.email);
+      const owner = yield* plannerOwner(session.subjectId);
 
       const handlers = ProgressRpcs.toLayer({
         WatchProgress: ({ conversationId }) =>

@@ -1,7 +1,7 @@
 import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { Mic, PhoneOff, Volume2, VolumeX } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 
 import {
   muteVoiceAtom,
@@ -21,8 +21,6 @@ export function VoiceControls({ enabled }: { readonly enabled: boolean }) {
 
   const active =
     view.status === "connecting" || view.status === "listening" || view.status === "ending";
-
-  useEffect(() => () => stop(), [stop]);
 
   return (
     <div className="voice-controls">
