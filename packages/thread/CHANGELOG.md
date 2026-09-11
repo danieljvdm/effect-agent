@@ -1,5 +1,15 @@
 # @effect-agent/session
 
+## 0.1.0-beta.82
+
+### Patch Changes
+
+- [#450](https://github.com/danieljvdm/effect-agent/pull/450) [`c7fb67c`](https://github.com/danieljvdm/effect-agent/commit/c7fb67c0607f9a7e7a31e4f90ba3b20c7e6079aa) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Leave untouched ready inputs for their normal worker claim while preserving interrupted input and marker repair. BEHAVIOR CHANGE: `runRecovery` and `recoverSubmission` report these inputs as `ApplyInput/deferred` until a worker runs them.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.82
+  - @effect-agent/engine@0.1.0-beta.82
+
 ## 0.1.0-beta.81
 
 ### Patch Changes
