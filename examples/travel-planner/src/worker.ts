@@ -4,6 +4,7 @@ import { Effect, Layer, Schema } from "effect";
 import { Worker, WorkerEnvironment } from "effect-cf";
 
 import { artifactsLayer } from "./artifacts";
+import { captureCallbackScript } from "./auth/callback";
 import type { AuthConfiguration } from "./auth/server";
 import { authenticate, type PlannerAuth } from "./auth/worker";
 import { Trip, TripId, TripSiteStore, type AppBuildRequest } from "./domain";
@@ -148,7 +149,17 @@ export const handleRequest = (verify = authenticate) =>
       headers.set("cache-control", "no-store");
       headers.set("referrer-policy", "no-referrer");
 
-      return new Response(response.body, { status: response.status, headers });
+      const page = new Response(response.body, { status: response.status, headers });
+
+      return url.pathname === "/auth/github/callback"
+        ? new HTMLRewriter()
+            .on("head", {
+              element: (head) => {
+                head.prepend(`<script>${captureCallbackScript}</script>`, { html: true });
+              },
+            })
+            .transform(page)
+        : page;
     }
     if (url.pathname.startsWith("/auth/")) {
       return yield* Effect.tryPromise({
