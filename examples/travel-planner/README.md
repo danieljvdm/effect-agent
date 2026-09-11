@@ -116,7 +116,8 @@ level from Low through Maximum. Luna also supports None. The lightning button sw
 between Standard and Fast processing; Fast uses higher token rates. Preferences are saved to
 the signed-in account and restored on other browsers and devices. Settings are captured when
 a message is admitted. Changing a setting cannot alter
-work already running. The default remains Luna, Low reasoning, Standard speed.
+work already running. Accounts without saved preferences default to Astra, Low reasoning,
+Fast processing. Existing saved preferences remain unchanged.
 
 ## Voice conversation
 

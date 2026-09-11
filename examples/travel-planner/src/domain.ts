@@ -217,9 +217,9 @@ export const PlannerSettings = Schema.Union([
 export type PlannerSettings = typeof PlannerSettings.Type;
 
 export const defaultPlannerSettings: PlannerSettings = {
-  model: "gpt-5.6-luna",
+  model: "gpt-6-astra",
   reasoningEffort: "low",
-  fast: false,
+  fast: true,
 };
 
 /** App-owned speech history, separate from requests to execute work. */

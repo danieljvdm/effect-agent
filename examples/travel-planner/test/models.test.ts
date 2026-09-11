@@ -346,7 +346,13 @@ it.effect(
     Effect.gen(function* () {
       const store = yield* ProgressStore;
       const progress = yield* store.begin("submission", "attempt");
-      const selection = yield* Ref.make<PlannerSettings>(defaultPlannerSettings);
+
+      const selection = yield* Ref.make<PlannerSettings>({
+        model: "gpt-5.6-luna",
+        reasoningEffort: "low",
+        fast: false,
+      });
+
       const settings = yield* Effect.cached(Ref.get(selection));
 
       const model = selectableModel(Redacted.make("fake-api-key")).pipe(
