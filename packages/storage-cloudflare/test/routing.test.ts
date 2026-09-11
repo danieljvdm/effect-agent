@@ -143,12 +143,14 @@ const withRoutedPorts = <A, E>(
       build.pipe(
         Effect.provide(
           Layer.mergeAll(
-            routedSubmissionLedgerLayer({ localThreadId: thread(objectName) }).pipe(
+            routedSubmissionLedgerLayer({
+              ownsThread: (target) => target === thread(objectName),
+            }).pipe(
               Layer.provide(
                 Layer.mergeAll(ledgerLayer({ storage: doState.storage }), transportLayer(state)),
               ),
             ),
-            routedThreadStoreLayer({ localThreadId: thread(objectName) }).pipe(
+            routedThreadStoreLayer({ ownsThread: (target) => target === thread(objectName) }).pipe(
               Layer.updateService(ThreadStore, (store) =>
                 includeCheckpoints
                   ? store

@@ -52,15 +52,18 @@ export interface ThreadObjectRpc extends Rpc.DurableObjectBranded {
   wake(): Promise<void>;
 }
 
+/** A logical Thread endpoint may be bound to an application Object without forging its brand. */
+export type ThreadObjectClient = Omit<ThreadObjectRpc, keyof Rpc.DurableObjectBranded>;
+
 /**
- * The `DurableObjectNamespace` binding that addresses Thread Objects. The Object
- * identity rule is `namespace.idFromName(threadId)` (plan §1.2): Thread IDs are
- * globally unique, so the mapping is total and deterministic and no directory service exists.
+ * Deterministic logical Thread placement. The native adapter uses `idFromName(threadId)`;
+ * a shared application owner can bind that logical identity into its RPC adapter instead.
+ * Lookup performs no I/O and grants no authority. Every call resolves its target afresh.
  */
 export class ThreadObjectNamespace extends Context.Service<
   ThreadObjectNamespace,
   {
-    readonly namespace: DurableObjectNamespace<ThreadObjectRpc>;
+    readonly get: (threadId: ThreadId) => ThreadObjectClient;
     /** Stable binding name for opted-in native RPC tracing; absent by default. */
     readonly rpcTracing?: string;
   }
@@ -70,7 +73,7 @@ export class ThreadObjectNamespace extends Context.Service<
     options: { readonly rpcTracing?: string } = {},
   ): Layer.Layer<ThreadObjectNamespace> {
     return Layer.succeed(ThreadObjectNamespace)({
-      namespace,
+      get: (threadId) => namespace.get(namespace.idFromName(threadId)),
       ...(options.rpcTracing === undefined ? {} : { rpcTracing: options.rpcTracing }),
     });
   }
@@ -135,7 +138,7 @@ export const threadNamespaceLayer = (
 ): Layer.Layer<ThreadObjectNamespace, CloudflareBindingError> =>
   Layer.effect(ThreadObjectNamespace)(
     Effect.map(threadNamespaceFromEnv(env, binding), (namespace) => ({
-      namespace,
+      get: (threadId) => namespace.get(namespace.idFromName(threadId)),
       ...(options.rpcTracing === true ? { rpcTracing: binding } : {}),
     })),
   );
@@ -169,3 +172,9 @@ export class ThreadObjectIdentity extends Context.Service<
     readonly producerId: ProducerId;
   }
 >()("@effect-agent/platform-cloudflare/ThreadObjectIdentity") {}
+
+/** Logical Threads whose canonical stores and admission ledger live in this physical Object. */
+export class ThreadObjectPlacement extends Context.Service<
+  ThreadObjectPlacement,
+  { readonly ownsThread: (threadId: ThreadId) => boolean }
+>()("@effect-agent/platform-cloudflare/ThreadObjectPlacement") {}

@@ -151,11 +151,11 @@ export class ThreadPortTransport extends Context.Service<
 /** Construction options shared by both routed port Layers. */
 export interface RoutedPortOptions {
   /**
-   * The Thread this Durable Object owns (the Object identity rule is
-   * `namespace.idFromName(threadId)`). Requests addressed here execute on the local
-   * facet; requests addressed anywhere else route through the transport or fail fast typed.
+   * Decide whether this physical owner stores the addressed logical Thread. Local
+   * requests use the same SQLite facets; foreign requests use the transport or fail
+   * fast typed. The predicate determines placement, never caller authorization.
    */
-  readonly localThreadId: ThreadId;
+  readonly ownsThread: (threadId: ThreadId) => boolean;
 }
 
 /** Where one port request must execute. */
@@ -175,7 +175,7 @@ const LOCAL: RouteTarget = { _tag: "local" };
  * refused them at admission, so they cannot name any stored row anywhere.
  */
 const routableSubmissionTarget = (
-  localThreadId: ThreadId,
+  ownsThread: RoutedPortOptions["ownsThread"],
 ): ((operation: string, submissionId: string) => Effect.Effect<RouteTarget, LedgerError>) =>
   Effect.fn("DoPortRouting.routableSubmissionTarget")(function* (
     operation: string,
@@ -196,10 +196,10 @@ const routableSubmissionTarget = (
     if (!UUID_HEAD_PATTERN.test(submissionId.slice(0, separator))) return LOCAL;
     const tail = submissionId.slice(separator + 1);
 
-    if (tail === localThreadId) return LOCAL;
-
     return yield* decodeThreadId(tail).pipe(
-      Effect.map((threadId): RouteTarget => ({ _tag: "foreign", threadId })),
+      Effect.map((threadId): RouteTarget =>
+        ownsThread(threadId) ? LOCAL : { _tag: "foreign", threadId },
+      ),
       Effect.orElseSucceed(() => LOCAL),
     );
   });
@@ -261,7 +261,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
   const local = yield* SubmissionLedger;
   const transport = yield* ThreadPortTransport;
   const transportCall: TransportCall = makeTransportCall(transport);
-  const submissionTarget = routableSubmissionTarget(options.localThreadId);
+  const submissionTarget = routableSubmissionTarget(options.ownsThread);
 
   const routeFailure =
     (operation: string, target: string) =>
@@ -476,7 +476,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
     capabilities: local.capabilities,
 
     admit: (request) =>
-      request.threadId === options.localThreadId
+      options.ownsThread(request.threadId)
         ? local.admit(request)
         : foreignLedgerCall(
             "ledger admit",
@@ -510,7 +510,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
                 : foreignLookupById("ledger lookup", target.threadId, request.submissionId),
             ),
           )
-        : request.threadId === options.localThreadId
+        : options.ownsThread(request.threadId)
           ? local.lookup(request)
           : foreignLedgerCall(
               "ledger lookup",
@@ -525,7 +525,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
             ),
 
     resolveAdmission: (request) =>
-      request.threadId === options.localThreadId
+      options.ownsThread(request.threadId)
         ? local.resolveAdmission(request)
         : resolveForeignAdmission(request.threadId, request),
 
@@ -562,12 +562,12 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
     // Every operation below is lane-local by construction (plan §1.3): a foreign address is
     // an out-of-contract call and fails fast typed instead of being quietly distributed.
     claim: (request) =>
-      request.threadId === options.localThreadId
+      options.ownsThread(request.threadId)
         ? local.claim(request)
         : Effect.fail(crossThreadLedgerError("ledger claim", request.threadId)),
 
     claimJoining: (request) =>
-      request.threadId === options.localThreadId
+      options.ownsThread(request.threadId)
         ? local.claimJoining(request)
         : Effect.fail(crossThreadLedgerError("ledger claim joining", request.threadId)),
 
@@ -793,7 +793,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
 
   const routed = ThreadStore.of({
     materialize: (request) =>
-      request.threadId === options.localThreadId
+      options.ownsThread(request.threadId)
         ? local.materialize(request)
         : foreignStoreCall(
             "thread materialize",
@@ -804,7 +804,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
           ).pipe(Effect.asVoid),
 
     append: (request) =>
-      request.threadId === options.localThreadId
+      options.ownsThread(request.threadId)
         ? local.append(request)
         : foreignStoreCall(
             "thread append",
@@ -815,7 +815,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
           ).pipe(Effect.map((reply) => reply.result)),
 
     read: (request) =>
-      request.threadId === options.localThreadId
+      options.ownsThread(request.threadId)
         ? local.read(request)
         : Stream.unwrap(
             foreignStoreCall(
@@ -828,7 +828,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
           ),
 
     inspectTail: (request) =>
-      request.threadId === options.localThreadId
+      options.ownsThread(request.threadId)
         ? local.inspectTail(request)
         : foreignStoreCall(
             "thread inspect tail",
@@ -839,7 +839,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
           ).pipe(Effect.map((reply) => reply.tail)),
 
     export: (request) =>
-      request.threadId === options.localThreadId
+      options.ownsThread(request.threadId)
         ? local.export(request)
         : foreignStoreCall(
             "thread export",
@@ -853,7 +853,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
     // is materialize/append/read/inspectTail/export. Recovery cache misses can fall back
     // to those canonical reads, including when the cache belongs to a foreign Object.
     observe: (request) =>
-      request.threadId === options.localThreadId
+      options.ownsThread(request.threadId)
         ? local.observe(request)
         : Stream.unwrap(Effect.fail(crossThreadStoreError("thread observe", request.threadId))),
 
@@ -862,7 +862,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
       : {
           recoveryCheckpoints: {
             save: (request) =>
-              request.checkpoint.threadId === options.localThreadId
+              options.ownsThread(request.checkpoint.threadId)
                 ? recoveryCheckpoints.save(request)
                 : Effect.fail(
                     crossThreadStoreError(
@@ -871,7 +871,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
                     ),
                   ),
             load: (request) =>
-              request.threadId === options.localThreadId
+              options.ownsThread(request.threadId)
                 ? recoveryCheckpoints.load(request)
                 : Effect.succeed(Option.none()),
           },
@@ -881,13 +881,13 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
       : {
           checkpoints: {
             save: (request) =>
-              request.checkpoint.threadId === options.localThreadId
+              options.ownsThread(request.checkpoint.threadId)
                 ? checkpoints.save(request)
                 : Effect.fail(
                     crossThreadStoreError("thread save checkpoint", request.checkpoint.threadId),
                   ),
             load: (request) =>
-              request.threadId === options.localThreadId
+              options.ownsThread(request.threadId)
                 ? checkpoints.load(request)
                 : Effect.fail(crossThreadStoreError("thread load checkpoint", request.threadId)),
           },
