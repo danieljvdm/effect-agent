@@ -5,6 +5,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { expect } from "vite-plus/test";
 
 import { adminEmail } from "../src/access-domain.ts";
+import { credentialForOwner } from "../src/server/credentials.ts";
 import { storageOwner as ownerThread } from "../src/server/tenancy.ts";
 import { createVoiceSession } from "../src/server/voice-http.ts";
 
@@ -32,6 +33,7 @@ const environment = Effect.gen(function* () {
     BYOK_ENCRYPTION_KEY: btoa(String.fromCharCode(...bytes)),
     THREADS: {
       getByName: (owner: string) => ({
+        demoAccessAllowed: async () => false,
         modelCredential: async () => {
           expect(owner).toBe(ownerThread);
 
@@ -123,5 +125,88 @@ it.effect("times out session creation, aborts transport, and retains no provider
     expect(result._tag).toBe("Failure");
     expect(JSON.stringify(result)).not.toContain("PRIVATE");
     expect(signal?.aborted).toBe(true);
+  }),
+);
+
+it.effect(
+  "uses sponsored voice only for the verified account and rechecks new-call revocation",
+  () =>
+    Effect.gen(function* () {
+      let allowed = true;
+      let calls = 0;
+
+      const env = {
+        DEMO_OPENAI_API_KEY: "sk-demo-voice-PRIVATE",
+        THREADS: {
+          getByName: (owner: string) => ({
+            modelCredential: async () => {
+              expect(owner).toBe(ownerThread);
+
+              return "null";
+            },
+            demoAccessAllowed: async (account: string) => {
+              expect(owner).toBe(ownerThread);
+              expect(account).toBe(ownerThread);
+
+              return allowed;
+            },
+          }),
+        },
+      };
+
+      const fetch: typeof globalThis.fetch = async (_url, init) => {
+        calls++;
+        expect(new Headers(init?.headers).get("authorization")).toBe(
+          "Bearer sk-demo-voice-PRIVATE",
+        );
+
+        return Response.json(
+          { session: { id: "sponsored-voice" }, transport: { type: "webrtc", sdp: "answer" } },
+          { status: 201 },
+        );
+      };
+
+      const run = createVoiceSession(offer, env, session).pipe(
+        Effect.provide(FetchHttpClient.layer),
+        Effect.provideService(FetchHttpClient.Fetch, fetch),
+        Effect.result,
+      );
+
+      const accepted = yield* run;
+
+      expect(accepted._tag).toBe("Success");
+      expect(JSON.stringify(accepted)).not.toContain("PRIVATE");
+      allowed = false;
+      expect((yield* run)._tag).toBe("Failure");
+      expect(calls).toBe(1);
+    }),
+);
+
+it.effect("bounds a stalled funding lookup and never grants access after timeout", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+
+    const env = {
+      DEMO_OPENAI_API_KEY: "sk-stalled-demo-PRIVATE",
+      THREADS: {
+        getByName: () => ({
+          modelCredential: async () => "null",
+          demoAccessAllowed: () => {
+            Deferred.doneUnsafe(entered, Effect.void);
+
+            return new Promise<boolean>(() => {});
+          },
+        }),
+      },
+    };
+
+    const fiber = yield* credentialForOwner(env, ownerThread).pipe(Effect.result, Effect.forkChild);
+
+    yield* Deferred.await(entered);
+    yield* TestClock.adjust("11 seconds");
+    const result = yield* Fiber.join(fiber);
+
+    expect(result._tag).toBe("Failure");
+    expect(JSON.stringify(result)).not.toContain("PRIVATE");
   }),
 );

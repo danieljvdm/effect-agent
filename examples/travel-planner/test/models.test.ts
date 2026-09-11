@@ -409,7 +409,12 @@ it.effect(
 it.effect("retains the exact legacy model identity and rejects unsupported UI settings", () =>
   Effect.gen(function* () {
     const legacy = yield* liveModel({
-      THREADS: { getByName: () => ({ modelCredential: async () => "null" }) },
+      THREADS: {
+        getByName: () => ({
+          modelCredential: async () => "null",
+          demoAccessAllowed: async () => false,
+        }),
+      },
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(ConfigProvider.fromEnvRecord({ OPENAI_API_KEY: "fake-api-key" })),
@@ -768,6 +773,7 @@ it.effect(
         BYOK_ENCRYPTION_KEY: btoa(String.fromCharCode(...encryption)),
         THREADS: {
           getByName: (owner) => ({
+            demoAccessAllowed: async () => false,
             modelCredential: async () => {
               lookedUp.push(owner);
 

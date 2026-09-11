@@ -4,6 +4,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { AccessError, AccessRpcs, adminEmail, type AccessSession } from "../access-domain.ts";
 import { AccessCommand, AccessReply } from "./access-admin.ts";
+import { DemoAccessCommand, DemoAccessReply } from "./demo-access.ts";
 import { storageOwner } from "./tenancy.ts";
 
 export const accessResponse = Effect.fn("accessResponse")(function* (
@@ -11,6 +12,52 @@ export const accessResponse = Effect.fn("accessResponse")(function* (
   env: Cloudflare.Env,
   session: AccessSession,
 ) {
+  const manageDemo = Effect.fn("manageDemoAccess")(
+    function* (command: typeof DemoAccessCommand.Type) {
+      if (session.email !== adminEmail || !session.isAdmin)
+        return yield* new AccessError({
+          code: "forbidden",
+          message: "Only the administrator can manage demo access.",
+        });
+      const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(DemoAccessCommand))(command);
+
+      const reply = yield* Effect.tryPromise({
+        try: () => env.THREADS.getByName(storageOwner).manageDemoAccess(encoded),
+        catch: () =>
+          new AccessError({
+            code: "unavailable",
+            message: "Demo access is unavailable. Refresh the list before retrying.",
+          }),
+      }).pipe(
+        Effect.timeout("10 seconds"),
+        Effect.catchTag(
+          "TimeoutError",
+          () =>
+            new AccessError({
+              code: "unavailable",
+              message: "Demo access timed out. Refresh the list before retrying.",
+            }),
+        ),
+      );
+
+      const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(DemoAccessReply))(
+        reply,
+      );
+
+      if (result._tag === "Failure") return yield* result.error;
+
+      return result.value;
+    },
+    Effect.catchTag(
+      "SchemaError",
+      () =>
+        new AccessError({
+          code: "unavailable",
+          message: "Demo access returned an invalid response. Refresh before retrying.",
+        }),
+    ),
+  );
+
   const manage = Effect.fn("accessManage")(
     function* (command: typeof AccessCommand.Type) {
       if (session.registration === "open")
@@ -50,6 +97,9 @@ export const accessResponse = Effect.fn("accessResponse")(function* (
 
   const handlers = AccessRpcs.toLayer({
     GetSession: () => Effect.succeed(session),
+    GetDemoAccess: () => manageDemo({ _tag: "List" }),
+    GrantDemoAccess: ({ email }) => manageDemo({ _tag: "Grant", email }),
+    RevokeDemoAccess: ({ email }) => manageDemo({ _tag: "Revoke", email }),
     GetMembers: () => manage({ _tag: "List" }),
     InviteMember: ({ email }) => manage({ _tag: "Invite", email }),
     RemoveMember: ({ email }) => manage({ _tag: "Remove", email }),

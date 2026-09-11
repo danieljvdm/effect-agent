@@ -8,6 +8,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ActivityPanel } from "./components/activity-panel";
 import { AgentProgress } from "./components/agent-progress.tsx";
+import { DemoAccessForm } from "./components/demo-access";
 import { MessageText } from "./components/message-text";
 import { OpenAiConnectionForm } from "./components/openai-connection";
 import { PendingMessages } from "./components/pending-messages";
@@ -612,6 +613,9 @@ function ModelControls() {
           <OpenAiConnectionForm
             key={AsyncResult.isSuccess(session) ? session.value.email : "signed-out"}
           />
+          {AsyncResult.isSuccess(session) && session.value.isAdmin && (
+            <DemoAccessForm key={session.value.email} />
+          )}
           <label htmlFor="planner-model">Model</label>
           <select
             id="planner-model"

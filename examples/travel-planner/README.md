@@ -212,7 +212,7 @@ The Alchemy CLI prints the local URL. Local requests also require a valid Access
 deterministic tests substitute authentication only in their test Worker. There is no
 production development bypass. Cloudflare credentials must target the account
 that will host the application. Artifacts and Browser Run require account access to
-those products. The deployment has no OpenAI API key; each account supplies its own.
+those products. Accounts supply their own OpenAI key unless the administrator grants Demo access to a configured shared key.
 
 Model selection and the provider's native web-search tool stay at the host boundary.
 The agent accepts a research toolkit and a provider-independent model Layer.
@@ -302,12 +302,30 @@ reply, refresh the connection status before retrying. Unsupported rows fail with
 Every model HTTP request resolves the current key from the verified account. Planner attempts use
 the host-owned conversation namespace; scouts and editors use their validated canonical source
 lineage, never a model-supplied billing account or the child thread's name. Legacy registrations
-also require the owner's key. There is no deployment-key fallback. Rotation affects the next
-model request; removal prevents new requests, including background work. An already dispatched
+also require the owner's key. A missing personal key can use `DEMO_OPENAI_API_KEY` only when the canonical account is on the administrator’s Demo access list. A malformed or unreadable personal credential never falls back. Rotation affects the next
+model request; personal-key removal uses demo access if granted, otherwise it prevents new requests, including background work. An already dispatched
 provider request may finish. Failed work is not automatically replayed when a key is reconnected.
 Saved trips, messages, and published apps remain readable without a key, and existing accounts
-must connect a key after this upgrade. Removing a key deletes the current credential row;
+need a personal key or explicit Demo access to make model requests. Removing a key deletes the current credential row;
 provider-side revocation is needed to invalidate copies in historical database backups.
+
+### Sponsored demo access
+
+Configure the optional `DEMO_OPENAI_API_KEY` Worker secret, then use **Settings → Demo access**
+as the administrator to add or remove exact email addresses (up to 200). The list starts empty;
+public registration alone never grants shared-key access. Emails are normalized to lowercase and
+matched to the namespace derived from the verified Access identity. A personal key takes precedence.
+Eligible accounts without one see **Demo access · included** and can use planning, scouts, app editing,
+and voice without receiving the shared key. Trips and conversations remain private per account.
+
+Funding permissions live in a separate versioned SQLite row in the existing administrator Object.
+Only the verified administrator can list or change them, including when public registration is open.
+The host rechecks permissions for each model HTTP request and each new voice call, using canonical
+worker lineage for scouts/editors. Removal therefore applies to subsequent requests; an in-flight
+provider request or already established voice call may finish. It does not cancel accepted tasks,
+erase trips, or revoke a personal key. Storage, decoding, and permission-lookup failures fail closed.
+Uncertain writes require refreshing the list before retrying; grants and removals are idempotent.
+The list and shared key never enter model prompts, agent records, generated sites, or diagnostics.
 
 ## Boundaries and behavior
 

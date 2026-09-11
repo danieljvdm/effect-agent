@@ -61,8 +61,15 @@ import {
   CredentialStore,
   credentialStoreLayer,
   encodeStoredCredential,
+  connectionWithDemoAccess,
   validateOpenAiKey,
 } from "./credentials.ts";
+import {
+  DemoAccessCommand,
+  DemoAccessReply,
+  DemoAccessStore,
+  DemoAccessStoreLive,
+} from "./demo-access.ts";
 import {
   DiagnosticContext,
   DiagnosticObserverLive,
@@ -112,8 +119,16 @@ const safeRpc = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     ),
   );
 
+const effectiveConnection = Effect.gen(function* () {
+  const env = yield* WorkerEnvironment;
+  const identity = yield* ThreadObjectIdentity;
+  const connection = yield* Effect.flatMap(CredentialStore, (store) => store.status);
+
+  return yield* connectionWithDemoAccess(env, identity.threadId, connection);
+});
+
 export const plannerHandlers = PlannerRpcs.toLayer({
-  GetOpenAiConnection: () => safeRpc(Effect.flatMap(CredentialStore, (store) => store.status)),
+  GetOpenAiConnection: () => safeRpc(effectiveConnection),
   ConnectOpenAi: ({ apiKey }) =>
     safeRpc(
       Effect.gen(function* () {
@@ -126,7 +141,12 @@ export const plannerHandlers = PlannerRpcs.toLayer({
         return yield* store.save(verified);
       }),
     ),
-  DisconnectOpenAi: () => safeRpc(Effect.flatMap(CredentialStore, (store) => store.remove)),
+  DisconnectOpenAi: () =>
+    safeRpc(
+      Effect.flatMap(CredentialStore, (store) => store.remove).pipe(
+        Effect.andThen(effectiveConnection),
+      ),
+    ),
   CreateTripApp: ({ tripId }) => safeRpc(createTripApp(tripId)),
   RetryTripAppBuild: ({ tripId }) => safeRpc(retryTripAppBuild(tripId)),
   RestoreTripApp: ({ tripId, commitId }) => safeRpc(restoreTripApp(tripId, commitId)),
@@ -528,6 +548,7 @@ export const plannerApplication = <E, R>(
     OwnerAppRepositoryLive,
     AppBuildBucketLive,
     PlannerSettingsStoreLive,
+    DemoAccessStoreLive,
     Layer.unwrap(
       Effect.gen(function* () {
         const env = yield* WorkerEnvironment;
@@ -560,9 +581,12 @@ const PlannerLive = Layer.unwrap(
 
     const model: Effect.Success<ReturnType<typeof liveModel>> = yield* liveModel({
       BYOK_ENCRYPTION_KEY: env.BYOK_ENCRYPTION_KEY,
+      DEMO_OPENAI_API_KEY: env.DEMO_OPENAI_API_KEY,
       THREADS: {
         getByName: (owner) => ({
           modelCredential: (): Promise<string> => env.THREADS.getByName(owner).modelCredential(),
+          demoAccessAllowed: (account: string): Promise<boolean> =>
+            env.THREADS.getByName(owner).demoAccessAllowed(account),
         }),
       },
     });
@@ -592,6 +616,39 @@ export const makeTravelPlannerThread = <E>(
     maxInputBytes: 16 * 1024,
   }) {
     private readonly accessChanges = Semaphore.makeUnsafe(1);
+
+    /** Host-only permission check: a browser/model cannot select its funding identity. */
+    demoAccessAllowed(owner: string): Promise<boolean> {
+      return this[DurableObject.RunSymbol](
+        Effect.flatMap(DemoAccessStore, (store) => store.allows(owner)),
+      );
+    }
+
+    /** The edge requires the verified administrator before exposing this mutation. */
+    manageDemoAccess(encoded: string): Promise<string> {
+      return this[DurableObject.RunSymbol](
+        Schema.decodeUnknownEffect(Schema.fromJsonString(DemoAccessCommand))(encoded).pipe(
+          Effect.mapError(
+            () => new AccessError({ code: "invalid", message: "Invalid demo access request." }),
+          ),
+          Effect.flatMap((command) =>
+            Effect.flatMap(DemoAccessStore, (store) => store.manage(command)),
+          ),
+          Effect.catchDefect(
+            () =>
+              new AccessError({
+                code: "unavailable",
+                message: "Demo access failed unexpectedly. Refresh the list before retrying.",
+              }),
+          ),
+          Effect.match({
+            onSuccess: (value) => ({ _tag: "Success" as const, value }),
+            onFailure: (error) => ({ _tag: "Failure" as const, error }),
+          }),
+          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(DemoAccessReply))),
+        ),
+      );
+    }
 
     /** Host-only lookup; no HTTP route exposes ciphertext or decrypted model credentials. */
     modelCredential(): Promise<string> {

@@ -2441,7 +2441,8 @@
   max-height: calc(var(--planner-viewport-height, 100dvh) - 100px);
   overflow-y: auto;
 }
-.openai-connection {
+.openai-connection,
+.demo-access {
   border-bottom: 1px solid #e5e9dd;
   padding-bottom: 18px;
   margin-bottom: 16px;
@@ -2450,7 +2451,8 @@
   font-size: 14px;
   font-weight: 600;
 }
-.openai-connection input {
+.openai-connection input,
+.demo-access input {
   width: 100%;
   min-width: 0;
   border: 1px solid #dce1d3;
@@ -2551,4 +2553,45 @@
 }
 .conversation-details[open] {
   color: inherit;
+}
+
+.demo-access summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+.demo-access summary span {
+  float: right;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.demo-access-list {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.demo-access-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.demo-access-list li span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.demo-access-list button {
+  flex-shrink: 0;
+  padding: 6px;
+  color: #6b4b3d;
+  text-decoration: underline;
+}
+.demo-access-list button:disabled {
+  opacity: 0.5;
 }

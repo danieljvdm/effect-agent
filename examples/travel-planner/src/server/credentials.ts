@@ -2,17 +2,24 @@ import { Context, DateTime, Effect, Layer, Redacted, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
-import { type OpenAiConnection } from "../credential-domain.ts";
+import {
+  demoKeyConfigured,
+  type DemoAccessEnvironment,
+  type OpenAiConnection,
+} from "../credential-domain.ts";
 import { PlannerError } from "../domain.ts";
-import { ownerOfThread } from "./tenancy.ts";
+import { ownerOfThread, storageOwner } from "./tenancy.ts";
 
-export interface CredentialEnvironment {
+export interface CredentialEnvironment extends DemoAccessEnvironment {
   readonly BYOK_ENCRYPTION_KEY?: string;
 }
 
 export interface CredentialHost extends CredentialEnvironment {
   readonly THREADS: {
-    readonly getByName: (owner: string) => { readonly modelCredential: () => Promise<string> };
+    readonly getByName: (owner: string) => {
+      readonly modelCredential: () => Promise<string>;
+      readonly demoAccessAllowed: (owner: string) => Promise<boolean>;
+    };
   };
 }
 
@@ -273,7 +280,31 @@ export const credentialStoreLayer = (env: CredentialEnvironment, threadId: strin
     }),
   );
 
-/** Private namespace RPC returns ciphertext only. The model host resolves the verified task owner. */
+/** Re-read funding permission for each model request; no failure grants shared-key access. */
+const hasDemoAccess = Effect.fn("hasDemoAccess")(function* (env: CredentialHost, owner: string) {
+  if (!demoKeyConfigured(env)) return false;
+
+  return yield* Effect.tryPromise({
+    try: () => env.THREADS.getByName(storageOwner).demoAccessAllowed(owner),
+    catch: unavailable,
+  }).pipe(
+    Effect.timeout("10 seconds"),
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)),
+    Effect.mapError(unavailable),
+  );
+});
+
+export const connectionWithDemoAccess = Effect.fn("connectionWithDemoAccess")(function* (
+  env: CredentialHost,
+  owner: string,
+  connection: OpenAiConnection,
+) {
+  if (connection.connected || !(yield* hasDemoAccess(env, owner))) return connection;
+
+  return { connected: true, source: "demo" as const, lastFour: null, updatedAt: null };
+});
+
+/** Resolve the canonical account's personal key first, then explicitly granted demo funding. */
 export const credentialForOwner = Effect.fn("credentialForOwner")(function* (
   env: CredentialHost,
   owner: string,
@@ -287,7 +318,13 @@ export const credentialForOwner = Effect.fn("credentialForOwner")(function* (
     encoded,
   ).pipe(Effect.mapError(unavailable));
 
-  if (sealed === null) return yield* missingKey();
+  if (sealed === null) {
+    const demoKey = env.DEMO_OPENAI_API_KEY;
+
+    if (demoKey !== undefined && (yield* hasDemoAccess(env, owner))) return Redacted.make(demoKey);
+
+    return yield* missingKey();
+  }
 
   return yield* decryptCredential(env, owner, sealed);
 });
