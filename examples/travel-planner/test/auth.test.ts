@@ -20,6 +20,8 @@ let mf: Miniflare;
 let directory: string;
 let githubExchanges = 0;
 let githubName: string | null = "River Traveler";
+let githubUserId = 424242;
+let githubLogin = "fixture-traveler";
 const githubIssuer = "https://github.com/login/oauth";
 
 beforeAll(async () => {
@@ -70,8 +72,8 @@ beforeAll(async () => {
         }
         if (request.url === "https://api.github.com/user")
           return Response.json({
-            id: 424242,
-            login: "fixture-traveler",
+            id: githubUserId,
+            login: githubLogin,
             name: githubName,
             email: "reader@example.com",
             site_admin: true,
@@ -690,4 +692,118 @@ it("initializes auth storage atomically, survives lost replies, and fails closed
   expect(rejected.outcome).toBe("Failure");
   expect(rejected.tables).toEqual(lost.tables);
   expect((await inspect("lost")).outcome).toBe("Failure");
+});
+
+it("serves funding administration only to the verified owner and fences cross-origin and stale-account requests", async () => {
+  expect((await mf.dispatchFetch("https://planner.test/api/funding/users")).status).toBe(401);
+  expect(
+    (
+      await mf.dispatchFetch(
+        "https://planner.test/_internal/funding/00000000-0000-0000-0000-000000000001",
+      )
+    ).status,
+  ).toBe(404);
+
+  const signInAs = async (id: number, login: string) => {
+    githubUserId = id;
+    githubLogin = login;
+    const client = makeClient();
+
+    const complete = async () => {
+      const flowId = crypto.randomUUID();
+
+      const start = Schema.decodeUnknownSync(OAuthSignInAuthorization)(
+        await client.call("signIn", {
+          flowId,
+          commandId: flowId,
+          provider: "github",
+          callbackId: "github",
+          returnTarget: "/",
+        }),
+      );
+
+      const result = await client.call("completeSignIn", {
+        flowId,
+        provider: "github",
+        callbackId: "github",
+        response: {
+          _tag: "Code",
+          state: new URL(Redacted.value(start.authorizationUrl)).searchParams.get("state"),
+          code: "fixture-code",
+          issuer: githubIssuer,
+        },
+      });
+
+      return { flowId, result };
+    };
+
+    const first = await complete();
+
+    if (Schema.is(OAuthRegistrationRequired)(first.result)) {
+      await client.call("register", {
+        flowId: first.flowId,
+        commandId: crypto.randomUUID(),
+        reference: first.result.reference,
+        registration: { displayName: login },
+      });
+      await complete();
+    }
+
+    const session = Schema.decodeUnknownSync(Schema.Struct({ subjectId: Schema.String }))(
+      await client.call("getSession"),
+    );
+
+    return { client, id: session.subjectId };
+  };
+
+  try {
+    const owner = await signInAs(3450486, "danieljvdm");
+    const reader = await signInAs(424242, "fixture-traveler");
+
+    const request = (
+      account: typeof owner,
+      path: string,
+      body?: object,
+      origin = "https://planner.test",
+      id = account.id,
+    ) =>
+      account.client.request(`/api/funding/${path}`, {
+        method: body ? "POST" : "GET",
+        headers: { origin, "x-elsewhere-account": id, "content-type": "application/json" },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+
+    const status = await request(owner, "status");
+
+    expect(status.status).toBe(200);
+    expect(status.headers.get("cache-control")).toBe("no-store");
+    expect(await status.json()).toEqual({ admin: true, allowed: true, configured: false });
+    expect((await request(reader, "users")).status).toBe(400);
+    const grant = { kind: "account", value: reader.id };
+
+    expect((await request(reader, "grant", grant)).status).toBe(400);
+    expect((await request(owner, "grant", grant, "https://attacker.test")).status).toBe(400);
+    expect((await request(owner, "grant", grant, "https://planner.test", reader.id)).status).toBe(
+      400,
+    );
+    expect((await request(owner, "grant", grant)).status).toBe(200);
+    expect(await (await request(reader, "status")).json()).toMatchObject({
+      admin: false,
+      allowed: true,
+    });
+    expect(await (await request(owner, "users")).json()).toMatchObject({
+      users: expect.arrayContaining([
+        expect.objectContaining({ subjectId: reader.id, allowed: true }),
+      ]),
+    });
+    expect((await request(owner, "revoke", { kind: "account", target: reader.id })).status).toBe(
+      200,
+    );
+    expect(await (await request(reader, "status")).json()).toMatchObject({ allowed: false });
+    await owner.client.call("signOut", {});
+    expect((await request(owner, "users")).status).toBe(401);
+  } finally {
+    githubUserId = 424242;
+    githubLogin = "fixture-traveler";
+  }
 });

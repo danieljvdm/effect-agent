@@ -2443,6 +2443,67 @@
 .connection-error button {
   text-decoration: underline;
 }
+.funding-panel {
+  margin-block: 20px;
+  padding-block: 18px;
+  border-block: 1px solid #dce3d5;
+}
+.funding-panel h4 {
+  margin-block: 18px 8px;
+  font-size: 12px;
+}
+.funding-panel input {
+  width: 100%;
+  border: 1px solid #dce1d3;
+  border-radius: 7px;
+  padding: 10px;
+  background: white;
+  font-size: 16px;
+  font-weight: 400;
+}
+.funding-heading,
+.funding-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.funding-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.funding-list li {
+  padding-block: 10px;
+  border-bottom: 1px solid #e4e8df;
+}
+.funding-list span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.funding-list strong {
+  display: block;
+  font-size: 12px;
+}
+.funding-list small {
+  display: block;
+  font-size: 11px;
+  color: #66715f;
+  margin-top: 3px;
+}
+.funding-list button,
+.funding-heading button {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #476c51;
+  padding: 6px;
+  text-decoration: underline;
+  border: 0;
+  background: transparent;
+}
+.funding-list button:disabled {
+  opacity: 0.5;
+}
 .connect-key-prompt {
   width: 100%;
   padding: 10px;

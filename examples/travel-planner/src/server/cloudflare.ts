@@ -59,8 +59,8 @@ import {
 } from "../trip-app/service.ts";
 import { AppToolsLive } from "../trip-app/tools-live.ts";
 import { PlannerModel, plannerSnapshot, sendMessage, voiceWork } from "./application.ts";
-import type { CredentialSource } from "./credentials.ts";
 import {
+  CredentialSource,
   CredentialStore,
   credentialStoreLayer,
   credentialSourceLayer,
@@ -121,7 +121,17 @@ const CredentialSourceLive: Layer.Layer<CredentialSource, never, WorkerEnvironme
   Effect.map(WorkerEnvironment, credentialSourceLayer),
 );
 
-const effectiveConnection = Effect.flatMap(CredentialStore, (store) => store.status);
+const effectiveConnection = Effect.gen(function* () {
+  const connection = yield* Effect.flatMap(CredentialStore, (store) => store.status);
+
+  if (connection.connected) return connection;
+  const identity = yield* ThreadObjectIdentity;
+  const source = yield* CredentialSource;
+
+  return (yield* source.funded(ownerOfThread(identity.threadId)))
+    ? { ...connection, connected: true, serverFunded: true }
+    : connection;
+});
 
 export const plannerHandlers = PlannerRpcs.toLayer({
   GetOpenAiConnection: () => safeRpc(effectiveConnection),

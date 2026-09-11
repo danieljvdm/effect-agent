@@ -118,6 +118,8 @@ export const handleRequest = (verify = authenticate) =>
     const url = new URL(request.url);
     const appName = appNameFromHost(url.hostname, env.APP_DOMAIN ?? "effect-agent.com");
 
+    if (url.pathname.startsWith("/_internal/")) return new Response("Not found", { status: 404 });
+
     if (url.hostname.includes("-trip.") && appName === null)
       return new Response("Not found", { status: 404 });
 
@@ -202,6 +204,23 @@ export const handleRequest = (verify = authenticate) =>
     }
     if (url.pathname === "/api/access" || url.pathname.startsWith("/api/access/"))
       return new Response("Not found", { status: 404 });
+    if (url.pathname.startsWith("/api/funding/")) {
+      return yield* Effect.tryPromise({
+        try: () => env.AUTH.getByName("auth-v1").fetch(request),
+        catch: () => "FundingUnavailable" as const,
+      }).pipe(
+        Effect.map((response) => {
+          const headers = new Headers(response.headers);
+
+          headers.set("cache-control", "no-store");
+
+          return new Response(response.body, { status: response.status, headers });
+        }),
+        Effect.catch(() =>
+          Effect.succeed(new Response("Funding access is unavailable.", { status: 503 })),
+        ),
+      );
+    }
     if (url.pathname.startsWith("/trips/")) return yield* publishedResponse(request, env);
     if (
       ["/api/voice", "/api/rpc", "/api/rpc/", "/api/progress", "/api/progress/"].includes(

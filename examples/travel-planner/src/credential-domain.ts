@@ -5,6 +5,7 @@ export const OpenAiConnection = Schema.Struct({
   connected: Schema.Boolean,
   lastFour: Schema.NullOr(Schema.String),
   updatedAt: Schema.NullOr(Schema.String),
+  serverFunded: Schema.optionalKey(Schema.Boolean),
 });
 
 export type OpenAiConnection = typeof OpenAiConnection.Type;

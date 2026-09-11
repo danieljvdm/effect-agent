@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { Sandbox } from "@cloudflare/sandbox";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Config, Effect, Layer, Schema } from "effect";
+import { Config, Effect, Layer, Redacted, Schema } from "effect";
 
 const state = Layer.unwrap(
   Config.boolean("ALCHEMY_LOCAL_STATE").pipe(
@@ -22,6 +22,10 @@ export default Alchemy.Stack(
   },
   Effect.gen(function* () {
     const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
+
+    const serverOpenAiKey = yield* Config.redacted("SERVER_OPENAI_KEY").pipe(
+      Config.withDefault(Redacted.make("")),
+    );
 
     const artifacts = yield* Cloudflare.Artifacts.Namespace("ARTIFACTS", {
       namespace: "effect-agent-travel-planner-auth-v1",
@@ -49,6 +53,7 @@ export default Alchemy.Stack(
       compatibility: { date: "2026-07-01", flags: ["nodejs_compat"] },
       assets: { runWorkerFirst: true },
       env: {
+        ...(Redacted.value(serverOpenAiKey) ? { SERVER_OPENAI_KEY: serverOpenAiKey } : {}),
         // Alchemy keys env-bound Objects by the binding name, overriding the
         // declaration ID. Change both binding and class for this clean start.
         // Keep both stable after release; changing them deletes account data.

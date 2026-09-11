@@ -8,9 +8,15 @@ import { ownerOfThread } from "./tenancy.ts";
 
 export interface CredentialEnvironment {
   readonly BYOK_ENCRYPTION_KEY?: string;
+  readonly SERVER_OPENAI_KEY?: string;
 }
 
 export interface CredentialBindings extends CredentialEnvironment {
+  readonly AUTH?: {
+    readonly getByName: (name: string) => {
+      readonly fetch: (request: Request) => Promise<Response>;
+    };
+  };
   readonly ACCOUNT_THREADS: {
     readonly getByName: (owner: string) => {
       readonly modelCredential: () => Promise<string>;
@@ -36,6 +42,7 @@ export class CredentialSource extends Context.Service<
   {
     readonly configuration: CredentialEnvironment;
     readonly stored: (owner: string) => Effect.Effect<typeof StoredCredential.Type, PlannerError>;
+    readonly funded: (owner: string) => Effect.Effect<boolean, PlannerError>;
   }
 >()("travel-planner/CredentialSource") {}
 
@@ -54,7 +61,36 @@ export const credentialSourceLayer = (env: CredentialBindings) =>
   Layer.succeed(CredentialSource, {
     configuration: {
       BYOK_ENCRYPTION_KEY: env.BYOK_ENCRYPTION_KEY,
+      SERVER_OPENAI_KEY: env.SERVER_OPENAI_KEY,
     },
+    funded: (owner) =>
+      Effect.gen(function* () {
+        if (!env.SERVER_OPENAI_KEY) return false;
+        const id = ownerOfThread(owner).slice("account-".length);
+        const auth = env.AUTH;
+
+        if (!auth) return yield* unavailable();
+
+        const response = yield* Effect.tryPromise({
+          try: (signal) =>
+            auth
+              .getByName("auth-v1")
+              .fetch(new Request(`https://auth.internal/_internal/funding/${id}`, { signal })),
+          catch: unavailable,
+        });
+
+        if (!response.ok) return yield* unavailable();
+
+        const status = yield* Effect.tryPromise({
+          try: () => response.json(),
+          catch: unavailable,
+        }).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ allowed: Schema.Boolean }))),
+          Effect.mapError(unavailable),
+        );
+
+        return status.allowed;
+      }).pipe(Effect.timeout("10 seconds"), Effect.mapError(unavailable)),
     stored: (owner) =>
       Effect.tryPromise({
         try: () => env.ACCOUNT_THREADS.getByName(owner).modelCredential(),
@@ -307,12 +343,20 @@ export const credentialStoreLayer = (env: CredentialEnvironment, threadId: strin
     }),
   );
 
-/** Resolve only the canonical account's own key. */
+/** Personal keys take precedence. Shared funding is reauthorized on every provider request. */
 export const credentialForOwner = Effect.fn("credentialForOwner")(function* (owner: string) {
   const source = yield* CredentialSource;
   const sealed = yield* source.stored(owner);
 
-  if (sealed === null) return yield* missingKey();
+  if (sealed === null) {
+    if (yield* source.funded(owner)) {
+      const key = source.configuration.SERVER_OPENAI_KEY;
+
+      if (key) return Redacted.make(key);
+    }
+
+    return yield* missingKey();
+  }
 
   return yield* decryptCredential(source.configuration, owner, sealed);
 });
