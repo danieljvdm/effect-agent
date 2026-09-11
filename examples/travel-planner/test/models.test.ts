@@ -19,12 +19,17 @@ import {
 } from "../src/domain.ts";
 import { CheckedFinishResearch, CheckedFinishResearchLive } from "../src/research/completion.ts";
 import { ScoutFindings } from "../src/research/contracts.ts";
+import {
+  credentialSourceLayer,
+  credentialForOwner,
+  type CredentialSource,
+} from "../src/server/credentials.ts";
 import { FailureDiagnostics, type FailureDiagnostic } from "../src/server/diagnostics.ts";
 import { liveModel, observeOpenAi, selectableModel } from "../src/server/models.ts";
 // Retain these protocol/legacy-publication regressions against the admitted v5 definition.
 import { previousResponsePlanner as planner } from "../src/server/planner.ts";
 import { PlannerAttempt, ProgressStore } from "../src/server/progress.ts";
-import { observePublicOutput } from "../src/server/public-output.ts";
+import { PublicOutputLive } from "../src/server/public-output.ts";
 import { TripRepository } from "../src/server/trips.ts";
 import { FixtureBrowserLive } from "./fixtures/browser.ts";
 
@@ -338,7 +343,7 @@ it.effect(
         expect((yield* store.read).text).toBe("A useful answer.");
       }
       expectTypeOf<
-        Layer.Services<ReturnType<typeof selectableModel>>
+        Layer.Services<ReturnType<typeof selectableModel<never>>>
       >().toEqualTypeOf<PlannerAttempt>();
     }).pipe(Effect.provide(ProgressStore.layer)),
 );
@@ -417,14 +422,14 @@ it.effect(
 
 it.effect("retains the exact legacy model identity and rejects unsupported UI settings", () =>
   Effect.gen(function* () {
-    const legacy = yield* liveModel({
-      THREADS: {
-        getByName: () => ({
-          modelCredential: async () => "null",
-          demoAccessAllowed: async () => false,
-        }),
-      },
-    }).pipe(
+    const funded = selectableModel(credentialForOwner("fixture"));
+
+    expectTypeOf<Layer.Services<typeof funded>>().toEqualTypeOf<
+      PlannerAttempt | CredentialSource
+    >();
+    expectTypeOf<Layer.Error<typeof funded>>().toEqualTypeOf<never>();
+
+    const legacy = yield* liveModel.pipe(
       Effect.provide(
         ConfigProvider.layer(ConfigProvider.fromEnvRecord({ OPENAI_API_KEY: "fake-api-key" })),
       ),
@@ -637,17 +642,25 @@ it.effect("streams only deliver-response message arguments through the real SDK 
       ),
     );
 
-    const observed = observePublicOutput(native, {
-      ...progress,
-      text: (delta) =>
-        progress.text(delta).pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              writes.push(delta);
-            }),
-          ),
-        ),
-    });
+    const observed = yield* LanguageModel.LanguageModel.pipe(
+      Effect.provide(PublicOutputLive),
+      Effect.provideService(LanguageModel.LanguageModel, native),
+      Effect.provideService(PlannerAttempt, {
+        billingOwner: Effect.succeed("fixture"),
+        settings: Effect.succeed(defaultPlannerSettings),
+        progress: {
+          ...progress,
+          text: (delta) =>
+            progress.text(delta).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  writes.push(delta);
+                }),
+              ),
+            ),
+        },
+      }),
+    );
 
     const responseTools = Toolkit.make(
       Tool.make("deliver_response", {
@@ -778,7 +791,7 @@ it.effect(
 
       const lookedUp: string[] = [];
 
-      const live = yield* liveModel({
+      const credentials = credentialSourceLayer({
         BYOK_ENCRYPTION_KEY: btoa(String.fromCharCode(...encryption)),
         THREADS: {
           getByName: (owner) => ({
@@ -792,6 +805,7 @@ it.effect(
         },
       });
 
+      const live = yield* liveModel;
       const requests: string[] = [];
 
       const fetch: typeof globalThis.fetch = async (_url, init) => {
@@ -815,6 +829,7 @@ it.effect(
       }).pipe(
         Effect.provide(
           live.selectable.pipe(
+            Layer.provide(credentials),
             Layer.provide(
               Layer.succeed(PlannerAttempt, {
                 billingOwner: Effect.succeed(alice),
@@ -829,6 +844,7 @@ it.effect(
       yield* ask.pipe(
         Effect.provide(
           live.selectable.pipe(
+            Layer.provide(credentials),
             Layer.provide(
               Layer.succeed(PlannerAttempt, {
                 billingOwner: Effect.succeed(bob),

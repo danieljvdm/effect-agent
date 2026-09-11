@@ -3,7 +3,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/
 
 import type { AccessSession } from "../access-domain.ts";
 import { VoiceAnswer, VoiceError, VoiceOffer } from "../voice/protocol.ts";
-import { credentialForOwner, type CredentialHost } from "./credentials.ts";
+import { credentialForOwner } from "./credentials.ts";
 import { plannerOwner } from "./tenancy.ts";
 
 const unavailable = () =>
@@ -13,9 +13,9 @@ const unavailable = () =>
 
 /** Authenticated ingress supplies the owner. No key or provider body reaches the browser. */
 export const createVoiceSession = Effect.fn("createVoiceSession")(
-  function* (offer: typeof VoiceOffer.Type, env: CredentialHost, session: AccessSession) {
+  function* (offer: typeof VoiceOffer.Type, session: AccessSession) {
     const owner = yield* plannerOwner(session.email);
-    const key = yield* credentialForOwner(env, owner);
+    const key = yield* credentialForOwner(owner);
     const http = yield* HttpClient.HttpClient;
 
     const request = yield* HttpClientRequest.post("https://api.openai.com/v1/live/sessions").pipe(
@@ -69,10 +69,10 @@ export const createVoiceSession = Effect.fn("createVoiceSession")(
 );
 
 export const serveVoice = Effect.fn("serveVoice")(
-  function* (request: Request, env: CredentialHost, session: AccessSession) {
+  function* (request: Request, session: AccessSession) {
     const body = yield* Effect.tryPromise({ try: () => request.text(), catch: unavailable });
     const offer = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(VoiceOffer))(body);
-    const answer = yield* createVoiceSession(offer, env, session);
+    const answer = yield* createVoiceSession(offer, session);
 
     return Response.json(answer, { status: 201, headers: { "cache-control": "no-store" } });
   },

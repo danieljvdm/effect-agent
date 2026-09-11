@@ -1,10 +1,22 @@
 import { it } from "@effect/vitest";
-import { Context, Effect, Exit, Ref, Schema, Stream } from "effect";
+import { Context, Effect, Exit, Layer, Ref, Schema, Stream } from "effect";
 import { AiError, LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai";
 import { expect, expectTypeOf } from "vite-plus/test";
 
-import { ProgressStore } from "../src/server/progress.ts";
-import { observePublicOutput } from "../src/server/public-output.ts";
+import { defaultPlannerSettings } from "../src/domain.ts";
+import { PlannerAttempt, ProgressStore, type ProgressWriter } from "../src/server/progress.ts";
+import { PublicOutputLive } from "../src/server/public-output.ts";
+
+const outputLayer = (progress: ProgressWriter) =>
+  PublicOutputLive.pipe(
+    Layer.provide(
+      Layer.succeed(PlannerAttempt, {
+        billingOwner: Effect.succeed("fixture"),
+        settings: Effect.succeed(defaultPlannerSettings),
+        progress,
+      }),
+    ),
+  );
 
 it.effect(
   "native output preserves order, isolates private parts, and fences replaced attempts",
@@ -45,8 +57,9 @@ it.effect(
         streamText: () => Stream.fromIterable(parts),
       });
 
-      const received = yield* Stream.runCollect(
-        observePublicOutput(model, current).streamText({ prompt: "test" }),
+      const received = yield* Stream.runCollect(LanguageModel.streamText({ prompt: "test" })).pipe(
+        Effect.provide(outputLayer(current)),
+        Effect.provideService(LanguageModel.LanguageModel, model),
       );
 
       expect(received.map((part) => part.type)).toEqual(parts.map((part) => part.type));
@@ -54,7 +67,10 @@ it.effect(
       expect(JSON.stringify(yield* store.read)).not.toContain("PRIVATE");
       const before = yield* store.read;
 
-      yield* Stream.runDrain(observePublicOutput(model, old).streamText({ prompt: "stale" }));
+      yield* Stream.runDrain(LanguageModel.streamText({ prompt: "stale" })).pipe(
+        Effect.provide(outputLayer(old)),
+        Effect.provideService(LanguageModel.LanguageModel, model),
+      );
       expect(yield* store.read).toEqual(before);
     }).pipe(Effect.provide(ProgressStore.layer)),
 );
@@ -78,7 +94,10 @@ it.effect(
         streamText: () => Stream.fail(failure).pipe(Stream.ensuring(Ref.set(finalized, true))),
       });
 
-      const observed = observePublicOutput(model, writer);
+      const observed = yield* LanguageModel.LanguageModel.pipe(
+        Effect.provide(outputLayer(writer)),
+        Effect.provideService(LanguageModel.LanguageModel, model),
+      );
 
       const result = yield* Stream.runDrain(observed.streamText({ prompt: "test" })).pipe(
         Effect.exit,
@@ -86,6 +105,11 @@ it.effect(
 
       expect(result).toEqual(Exit.fail(failure));
       expect(yield* Ref.get(finalized)).toBe(true);
+
+      expectTypeOf<Layer.Services<typeof PublicOutputLive>>().toEqualTypeOf<
+        LanguageModel.LanguageModel | PlannerAttempt
+      >();
+      expectTypeOf<Layer.Error<typeof PublicOutputLive>>().toEqualTypeOf<never>();
 
       class Dependency extends Context.Service<Dependency, { readonly value: string }>()(
         "voice-test/Dependency",

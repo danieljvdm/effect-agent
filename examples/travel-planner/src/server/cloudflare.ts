@@ -61,9 +61,11 @@ import {
 import { AppToolsLive } from "../trip-app/tools-live.ts";
 import { AccessCommand, AccessReply, manageAccess } from "./access-admin.ts";
 import { PlannerModel, plannerSnapshot, sendMessage, voiceWork } from "./application.ts";
+import type { CredentialSource } from "./credentials.ts";
 import {
   CredentialStore,
   credentialStoreLayer,
+  credentialSourceLayer,
   encodeStoredCredential,
   connectionWithDemoAccess,
   validateOpenAiKey,
@@ -124,12 +126,15 @@ const safeRpc = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     ),
   );
 
+const CredentialSourceLive: Layer.Layer<CredentialSource, never, WorkerEnvironment> = Layer.unwrap(
+  Effect.map(WorkerEnvironment, credentialSourceLayer),
+);
+
 const effectiveConnection = Effect.gen(function* () {
-  const env = yield* WorkerEnvironment;
   const identity = yield* ThreadObjectIdentity;
   const connection = yield* Effect.flatMap(CredentialStore, (store) => store.status);
 
-  return yield* connectionWithDemoAccess(env, identity.threadId, connection);
+  return yield* connectionWithDemoAccess(identity.threadId, connection);
 });
 
 export const plannerHandlers = PlannerRpcs.toLayer({
@@ -594,6 +599,7 @@ export const plannerApplication = <E, R>(
         return credentialStoreLayer(env, identity.threadId);
       }),
     ),
+    CredentialSourceLive,
     FailureDiagnosticsLive,
     sourceLayer,
   ).pipe(Layer.provideMerge(ThreadObject.layer([])));
@@ -616,24 +622,15 @@ const PlannerLive = Layer.unwrap(
         message: "The planner requires a Browser Run binding.",
       });
 
-    const model: Effect.Success<ReturnType<typeof liveModel>> = yield* liveModel({
-      BYOK_ENCRYPTION_KEY: env.BYOK_ENCRYPTION_KEY,
-      DEMO_OPENAI_API_KEY: env.DEMO_OPENAI_API_KEY,
-      THREADS: {
-        getByName: (owner) => ({
-          modelCredential: (): Promise<string> => env.THREADS.getByName(owner).modelCredential(),
-          demoAccessAllowed: (account: string): Promise<boolean> =>
-            env.THREADS.getByName(owner).demoAccessAllowed(account),
-        }),
-      },
-    });
+    const model: Effect.Success<typeof liveModel> = yield* liveModel;
+    const credentials: Layer.Layer<CredentialSource> = credentialSourceLayer(env);
 
     return plannerApplication(
-      model.model,
+      model.model.pipe(Layer.provide(credentials)),
       model.identity,
       model.label,
       CloudflareBrowser.layer({ handlers: ReadTravelPageLive }, { browser: env.BROWSER }),
-      model.selectable,
+      model.selectable.pipe(Layer.provide(credentials)),
     );
   }),
 );

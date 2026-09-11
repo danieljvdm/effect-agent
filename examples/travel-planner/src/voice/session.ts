@@ -1,4 +1,4 @@
-import { Clock, Deferred, Effect, Schema, Stream } from "effect";
+import { Clock, Context, Deferred, Effect, Schema, Stream } from "effect";
 
 import {
   SendMessageRequest,
@@ -9,7 +9,6 @@ import {
   type SpokenMessage,
 } from "../domain.ts";
 import { websiteContext, websiteUpdate, type VoiceBackground } from "./background.ts";
-import type { VoiceConnection } from "./browser.ts";
 import {
   appendCaption,
   delegationMessage,
@@ -17,7 +16,13 @@ import {
   voiceUpdate,
   type VoiceRequest,
 } from "./delegation.ts";
-import { contextParts, shortContext, VoiceError, type Caption } from "./protocol.ts";
+import {
+  contextParts,
+  shortContext,
+  VoiceError,
+  type Caption,
+  type LiveEvent,
+} from "./protocol.ts";
 
 export interface VoiceView {
   readonly status: "idle" | "connecting" | "listening" | "ending" | "disconnected";
@@ -26,30 +31,45 @@ export interface VoiceView {
   readonly muted: boolean;
 }
 
-export interface VoiceBackend {
-  readonly submit: (request: SendMessageRequest) => Effect.Effect<unknown, PlannerError>;
-  readonly read: (request: typeof VoiceWorkRequest.Type) => Effect.Effect<VoiceWork, PlannerError>;
-  readonly progress: () => PlannerProgress | null;
-  readonly background: () => VoiceBackground | null;
-  readonly typedRevision: () => number;
-  readonly typedContext: () => string;
-  readonly typedRequest: () => SendMessageRequest | null;
-  readonly speech: () => ReadonlyArray<SpokenMessage>;
-  readonly caption: (caption: Caption) => void;
-  readonly context: () => string;
-  readonly answers: () => ReadonlyArray<{ readonly id: string; readonly text: string }>;
-  readonly persist: (requests: ReadonlyArray<VoiceRequest>) => Effect.Effect<void, VoiceError>;
-  readonly view: (view: VoiceView) => void;
-}
+export class VoiceConnection extends Context.Service<
+  VoiceConnection,
+  {
+    readonly events: Stream.Stream<LiveEvent, VoiceError>;
+    readonly send: (event: Readonly<Record<string, unknown>>) => Effect.Effect<void, VoiceError>;
+    readonly silence: Effect.Effect<void>;
+    readonly resume: Effect.Effect<void, VoiceError>;
+  }
+>()("travel-planner/voice/VoiceConnection") {}
 
-/** No audio lifecycle operation owns the admitted request's lifetime. */
+export class VoiceBackend extends Context.Service<
+  VoiceBackend,
+  {
+    readonly submit: (request: SendMessageRequest) => Effect.Effect<unknown, PlannerError>;
+    readonly read: (
+      request: typeof VoiceWorkRequest.Type,
+    ) => Effect.Effect<VoiceWork, PlannerError>;
+    readonly progress: () => PlannerProgress | null;
+    readonly background: () => VoiceBackground | null;
+    readonly typedRevision: () => number;
+    readonly typedContext: () => string;
+    readonly typedRequest: () => SendMessageRequest | null;
+    readonly speech: () => ReadonlyArray<SpokenMessage>;
+    readonly caption: (caption: Caption) => void;
+    readonly context: () => string;
+    readonly answers: () => ReadonlyArray<{ readonly id: string; readonly text: string }>;
+    readonly persist: (requests: ReadonlyArray<VoiceRequest>) => Effect.Effect<void, VoiceError>;
+    readonly view: (view: VoiceView) => void;
+  }
+>()("travel-planner/voice/VoiceBackend") {}
+
+/** Per-call ports are provided at the browser boundary. Audio never owns admitted work's lifetime. */
 export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
-  connection: VoiceConnection,
-  backend: VoiceBackend,
   envelope: Omit<SendMessageRequest, "message" | "requestId">,
   retained: ReadonlyArray<VoiceRequest>,
   stop: Deferred.Deferred<void>,
 ) {
+  const connection = yield* VoiceConnection;
+  const backend = yield* VoiceBackend;
   const ready = yield* Deferred.make<void>();
   const closed = yield* Deferred.make<void>();
   let sessionId = "";

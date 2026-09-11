@@ -5,7 +5,11 @@ import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { AccessError, adminEmail } from "../../src/access-domain.ts";
 import { PlannerError, TripSiteStore } from "../../src/domain.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
-import { credentialForOwner, CredentialFailpoint } from "../../src/server/credentials.ts";
+import {
+  credentialForOwner,
+  CredentialFailpoint,
+  credentialSourceLayer,
+} from "../../src/server/credentials.ts";
 import { DemoAccessFailpoint } from "../../src/server/demo-access.ts";
 import { plannerOwner } from "../../src/server/tenancy.ts";
 import { FixtureBrowserLive } from "./browser.ts";
@@ -120,7 +124,8 @@ export default {
 
       if (url.searchParams.has("resolve")) {
         const resolved = await Effect.runPromise(
-          credentialForOwner(env, owner).pipe(
+          credentialForOwner(owner).pipe(
+            Effect.provide(credentialSourceLayer(env)),
             Effect.match({
               onFailure: (error) => ({ error: error.message }),
               onSuccess: (key) => ({ lastFour: Redacted.value(key).slice(-4) }),

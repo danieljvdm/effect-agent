@@ -22,7 +22,7 @@ import {
 } from "../src/voice/delegation.ts";
 import { contextParts, LiveEvent, VoiceError } from "../src/voice/protocol.ts";
 import type { Caption } from "../src/voice/protocol.ts";
-import { runVoiceSession, type VoiceBackend } from "../src/voice/session.ts";
+import { runVoiceSession, VoiceBackend, VoiceConnection } from "../src/voice/session.ts";
 
 const envelope = {
   conversationId: "lisbon",
@@ -72,7 +72,7 @@ const setup = Effect.fn("voiceTest.setup")(function* (retained: ReadonlyArray<Vo
   let finalized = false;
   let typed = 0;
 
-  const backend: { -readonly [K in keyof VoiceBackend]: VoiceBackend[K] } = {
+  const backend: { -readonly [K in keyof VoiceBackend["Service"]]: VoiceBackend["Service"][K] } = {
     submit: (input) =>
       Effect.sync(() => {
         admitted.push(input);
@@ -97,8 +97,8 @@ const setup = Effect.fn("voiceTest.setup")(function* (retained: ReadonlyArray<Vo
     view: () => {},
   };
 
-  const run = runVoiceSession(
-    {
+  const run = runVoiceSession(envelope, retained, stop).pipe(
+    Effect.provideService(VoiceConnection, {
       events: Stream.fromQueue(queue).pipe(
         Stream.ensuring(
           Effect.sync(() => {
@@ -112,11 +112,8 @@ const setup = Effect.fn("voiceTest.setup")(function* (retained: ReadonlyArray<Vo
         }),
       silence: Effect.void,
       resume: Effect.void,
-    },
-    backend,
-    envelope,
-    retained,
-    stop,
+    }),
+    Effect.provideService(VoiceBackend, backend),
   );
 
   const offer = (event: LiveEvent) => Queue.offer(queue, event);
@@ -484,7 +481,9 @@ it("selects public output by receipt and attempt and leaves structured previews 
   expectTypeOf<Effect.Services<ReturnType<typeof planner.instructions>>>().toEqualTypeOf<
     Effect.Services<ReturnType<typeof previousTextPlanner.instructions>>
   >();
-  expectTypeOf<Effect.Services<ReturnType<typeof runVoiceSession>>>().toEqualTypeOf<never>();
+  expectTypeOf<Effect.Services<ReturnType<typeof runVoiceSession>>>().toEqualTypeOf<
+    VoiceBackend | VoiceConnection
+  >();
 });
 
 it("joins transcript fragments into readable speaker rows without merging overlapping speakers or later input", () => {

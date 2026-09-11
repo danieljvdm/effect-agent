@@ -9,7 +9,7 @@ import { type AccessAdminEnvironment } from "./server/access-admin";
 import { authenticate, type AccessEnvironment } from "./server/access-auth";
 import { accessResponse } from "./server/access-http";
 import { makeTravelPlannerThread } from "./server/cloudflare";
-import type { CredentialEnvironment } from "./server/credentials";
+import { credentialSourceLayer, type CredentialEnvironment } from "./server/credentials";
 import { serveProgress } from "./server/progress-http";
 import { plannerOwner } from "./server/tenancy";
 import { serveVoice } from "./server/voice-http";
@@ -193,7 +193,9 @@ export const handleRequest = (verify = authenticate) =>
           const bounded = new Request(request, { method: "POST", body });
 
           if (url.pathname === "/api/voice")
-            return yield* serveVoice(bounded, env, identity.session);
+            return yield* serveVoice(bounded, identity.session).pipe(
+              Effect.provide(credentialSourceLayer(env)),
+            );
           if (url.pathname.startsWith("/api/access"))
             return yield* accessResponse(bounded, env, identity.session);
           if (url.pathname.startsWith("/api/progress"))

@@ -14,7 +14,7 @@ export interface CredentialEnvironment extends DemoAccessEnvironment {
   readonly BYOK_ENCRYPTION_KEY?: string;
 }
 
-export interface CredentialHost extends CredentialEnvironment {
+export interface CredentialBindings extends CredentialEnvironment {
   readonly THREADS: {
     readonly getByName: (owner: string) => {
       readonly modelCredential: () => Promise<string>;
@@ -34,6 +34,17 @@ export const SealedCredential = Schema.Struct({
 });
 
 const StoredCredential = Schema.NullOr(SealedCredential);
+
+/** Account credential and funding reads; request policy acquires this inward port. */
+export class CredentialSource extends Context.Service<
+  CredentialSource,
+  {
+    readonly configuration: CredentialEnvironment;
+    readonly stored: (owner: string) => Effect.Effect<typeof StoredCredential.Type, PlannerError>;
+    readonly demoAllowed: (owner: string) => Effect.Effect<boolean, PlannerError>;
+  }
+>()("travel-planner/CredentialSource") {}
+
 const Rows = Schema.Array(Schema.Struct({ value: Schema.String }));
 const ApiKey = Schema.String.check(Schema.isPattern(/^[\x21-\x7e]{16,512}$/));
 const empty: OpenAiConnection = { connected: false, lastFour: null, updatedAt: null };
@@ -42,6 +53,32 @@ const unavailable = () =>
   new PlannerError({
     code: "unavailable",
     message: "Your OpenAI connection is unavailable. Refresh before retrying.",
+  });
+
+/** Cloudflare adapter construction is the only boundary accepting the foreign RPC binding. */
+export const credentialSourceLayer = (env: CredentialBindings) =>
+  Layer.succeed(CredentialSource, {
+    configuration: {
+      BYOK_ENCRYPTION_KEY: env.BYOK_ENCRYPTION_KEY,
+      DEMO_OPENAI_API_KEY: env.DEMO_OPENAI_API_KEY,
+    },
+    stored: (owner) =>
+      Effect.tryPromise({
+        try: () => env.THREADS.getByName(owner).modelCredential(),
+        catch: unavailable,
+      }).pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(StoredCredential))),
+        Effect.mapError(unavailable),
+      ),
+    demoAllowed: (owner) =>
+      Effect.tryPromise({
+        try: () => env.THREADS.getByName(storageOwner).demoAccessAllowed(owner),
+        catch: unavailable,
+      }).pipe(
+        Effect.timeout("10 seconds"),
+        Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)),
+        Effect.mapError(unavailable),
+      ),
   });
 
 export const missingKey = () =>
@@ -281,52 +318,37 @@ export const credentialStoreLayer = (env: CredentialEnvironment, threadId: strin
   );
 
 /** Re-read funding permission for each model request; no failure grants shared-key access. */
-const hasDemoAccess = Effect.fn("hasDemoAccess")(function* (env: CredentialHost, owner: string) {
-  if (!demoKeyConfigured(env)) return false;
+const hasDemoAccess = Effect.fn("hasDemoAccess")(function* (owner: string) {
+  const source = yield* CredentialSource;
 
-  return yield* Effect.tryPromise({
-    try: () => env.THREADS.getByName(storageOwner).demoAccessAllowed(owner),
-    catch: unavailable,
-  }).pipe(
-    Effect.timeout("10 seconds"),
-    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)),
-    Effect.mapError(unavailable),
-  );
+  if (!demoKeyConfigured(source.configuration)) return false;
+
+  return yield* source.demoAllowed(owner);
 });
 
 export const connectionWithDemoAccess = Effect.fn("connectionWithDemoAccess")(function* (
-  env: CredentialHost,
   owner: string,
   connection: OpenAiConnection,
 ) {
-  if (connection.connected || !(yield* hasDemoAccess(env, owner))) return connection;
+  if (connection.connected || !(yield* hasDemoAccess(owner))) return connection;
 
   return { connected: true, source: "demo" as const, lastFour: null, updatedAt: null };
 });
 
 /** Resolve the canonical account's personal key first, then explicitly granted demo funding. */
-export const credentialForOwner = Effect.fn("credentialForOwner")(function* (
-  env: CredentialHost,
-  owner: string,
-) {
-  const encoded = yield* Effect.tryPromise({
-    try: () => env.THREADS.getByName(owner).modelCredential(),
-    catch: unavailable,
-  });
-
-  const sealed = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(StoredCredential))(
-    encoded,
-  ).pipe(Effect.mapError(unavailable));
+export const credentialForOwner = Effect.fn("credentialForOwner")(function* (owner: string) {
+  const source = yield* CredentialSource;
+  const sealed = yield* source.stored(owner);
 
   if (sealed === null) {
-    const demoKey = env.DEMO_OPENAI_API_KEY;
+    const demoKey = source.configuration.DEMO_OPENAI_API_KEY;
 
-    if (demoKey !== undefined && (yield* hasDemoAccess(env, owner))) return Redacted.make(demoKey);
+    if (demoKey !== undefined && (yield* hasDemoAccess(owner))) return Redacted.make(demoKey);
 
     return yield* missingKey();
   }
 
-  return yield* decryptCredential(env, owner, sealed);
+  return yield* decryptCredential(source.configuration, owner, sealed);
 });
 
 export const encodeStoredCredential = Schema.encodeEffect(Schema.fromJsonString(StoredCredential));

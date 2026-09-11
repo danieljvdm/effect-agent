@@ -19,7 +19,7 @@ import {
 import { connectBrowserVoice } from "./browser.ts";
 import { VoiceRequest } from "./delegation.ts";
 import { VoiceError } from "./protocol.ts";
-import { runVoiceSession, type VoiceView } from "./session.ts";
+import { runVoiceSession, VoiceBackend, VoiceConnection, type VoiceView } from "./session.ts";
 import { groupCaption, type CaptionGroups } from "./transcript.ts";
 
 export const voiceViewAtom = Atom.make<VoiceView>({
@@ -151,8 +151,12 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
           resume: connection.resume,
         });
         yield* runVoiceSession(
-          connection,
-          {
+          { conversationId, selectedTripId: get(activeTripAtom)?.id ?? null, settings },
+          stored.requests,
+          stop,
+        ).pipe(
+          Effect.provideService(VoiceConnection, connection),
+          Effect.provideService(VoiceBackend, {
             submit: (request) =>
               Reactivity.mutation(client("SendMessage", request), ["planner"]).pipe(
                 Effect.provideService(Reactivity.Reactivity, reactivity),
@@ -251,10 +255,7 @@ export const startVoiceAtom = PlannerClient.runtime.fn<HTMLAudioElement>()(
               }
               get.set(voiceViewAtom, { ...view, muted: audio.muted });
             },
-          },
-          { conversationId, selectedTripId: get(activeTripAtom)?.id ?? null, settings },
-          stored.requests,
-          stop,
+          }),
         );
       }),
     ).pipe(

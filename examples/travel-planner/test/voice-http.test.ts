@@ -1,13 +1,16 @@
 import { it } from "@effect/vitest";
 import { Deferred, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
-import { FetchHttpClient } from "effect/unstable/http";
-import { expect } from "vite-plus/test";
+import { FetchHttpClient, type HttpClient } from "effect/unstable/http";
+import { expect, expectTypeOf } from "vite-plus/test";
 
 import { adminEmail } from "../src/access-domain.ts";
-import { credentialForOwner } from "../src/server/credentials.ts";
+import type { PlannerError } from "../src/domain.ts";
+import type { CredentialSource, connectionWithDemoAccess } from "../src/server/credentials.ts";
+import { credentialForOwner, credentialSourceLayer } from "../src/server/credentials.ts";
 import { storageOwner as ownerThread } from "../src/server/tenancy.ts";
 import { createVoiceSession } from "../src/server/voice-http.ts";
+import type { VoiceError } from "../src/voice/protocol.ts";
 
 const environment = Effect.gen(function* () {
   const bytes = new Uint8Array(32);
@@ -61,7 +64,8 @@ it.effect(
       const signals: AbortSignal[] = [];
 
       for (const status of [201, 302, 401, 429]) {
-        const result = yield* createVoiceSession(offer, env, session).pipe(
+        const result = yield* createVoiceSession(offer, session).pipe(
+          Effect.provide(credentialSourceLayer(env)),
           Effect.provide(FetchHttpClient.layer),
           Effect.provideService(FetchHttpClient.Fetch, async (url, init) => {
             expect(String(url)).toBe("https://api.openai.com/v1/live/sessions");
@@ -104,7 +108,8 @@ it.effect("times out session creation, aborts transport, and retains no provider
     const entered = yield* Deferred.make<void>();
     let signal: AbortSignal | undefined;
 
-    const fiber = yield* createVoiceSession(offer, env, session).pipe(
+    const fiber = yield* createVoiceSession(offer, session).pipe(
+      Effect.provide(credentialSourceLayer(env)),
       Effect.provide(FetchHttpClient.layer),
       Effect.provideService(FetchHttpClient.Fetch, async (_url, init) => {
         signal = init?.signal ?? undefined;
@@ -166,7 +171,8 @@ it.effect(
         );
       };
 
-      const run = createVoiceSession(offer, env, session).pipe(
+      const run = createVoiceSession(offer, session).pipe(
+        Effect.provide(credentialSourceLayer(env)),
         Effect.provide(FetchHttpClient.layer),
         Effect.provideService(FetchHttpClient.Fetch, fetch),
         Effect.result,
@@ -200,7 +206,11 @@ it.effect("bounds a stalled funding lookup and never grants access after timeout
       },
     };
 
-    const fiber = yield* credentialForOwner(env, ownerThread).pipe(Effect.result, Effect.forkChild);
+    const fiber = yield* credentialForOwner(ownerThread).pipe(
+      Effect.provide(credentialSourceLayer(env)),
+      Effect.result,
+      Effect.forkChild,
+    );
 
     yield* Deferred.await(entered);
     yield* TestClock.adjust("11 seconds");
@@ -210,3 +220,17 @@ it.effect("bounds a stalled funding lookup and never grants access after timeout
     expect(JSON.stringify(result)).not.toContain("PRIVATE");
   }),
 );
+
+it("keeps credential and voice dependencies visible", () => {
+  expectTypeOf<
+    Effect.Services<ReturnType<typeof credentialForOwner>>
+  >().toEqualTypeOf<CredentialSource>();
+  expectTypeOf<
+    Effect.Services<ReturnType<typeof connectionWithDemoAccess>>
+  >().toEqualTypeOf<CredentialSource>();
+  expectTypeOf<Effect.Error<ReturnType<typeof credentialForOwner>>>().toEqualTypeOf<PlannerError>();
+  expectTypeOf<Effect.Error<ReturnType<typeof createVoiceSession>>>().toEqualTypeOf<VoiceError>();
+  expectTypeOf<Effect.Services<ReturnType<typeof createVoiceSession>>>().toEqualTypeOf<
+    CredentialSource | HttpClient.HttpClient
+  >();
+});

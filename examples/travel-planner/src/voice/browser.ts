@@ -1,16 +1,10 @@
 import { Cause, Effect, Queue, Schema, Stream } from "effect";
 
 import { LiveEvent, VoiceAnswer, VoiceError, type VoiceOffer } from "./protocol.ts";
+import type { VoiceConnection } from "./session.ts";
 
 const failed = () =>
   new VoiceError({ message: "Voice disconnected. Reconnect to check existing work." });
-
-export interface VoiceConnection {
-  readonly events: Stream.Stream<LiveEvent, VoiceError>;
-  readonly send: (event: Readonly<Record<string, unknown>>) => Effect.Effect<void, VoiceError>;
-  readonly silence: Effect.Effect<void>;
-  readonly resume: Effect.Effect<void, VoiceError>;
-}
 
 /** The call scope owns microphone tracks, media, data listeners, queues and the peer. */
 export const connectBrowserVoice = Effect.fn("connectBrowserVoice")(function* (
@@ -166,5 +160,5 @@ export const connectBrowserVoice = Effect.fn("connectBrowserVoice")(function* (
       },
       catch: failed,
     }),
-  } satisfies VoiceConnection;
+  } satisfies VoiceConnection["Service"];
 });
