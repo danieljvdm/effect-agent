@@ -233,7 +233,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
         result: { errorTag: "CompactionError", message: failure.message },
       });
       expect(JSON.stringify(settlements)).not.toContain(original.message);
-    }),
+    }).pipe(Effect.annotateLogs({ hostContext: "captured registration" })),
   );
 
   it.effect.each(["new-failure", "provider-failure", "retained-incomplete"] as const)(
