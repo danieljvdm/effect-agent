@@ -9,7 +9,7 @@ import { ProofPersistence } from "@yielded/auth/Proofs";
 import { AuthenticationAuthority } from "@yielded/auth/Sessions";
 import { eq } from "drizzle-orm";
 import type { EffectSQLiteDoDatabase } from "drizzle-orm/effect-sqlite-do";
-import { Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 
 import { emailSignInMapping, emailRegistrationMapping } from "./email-schema";
 import { oauthSignInMapping, oauthIntentMapping, oauthRegistrationMapping } from "./oauth-schema";
@@ -18,9 +18,14 @@ import { subject, subjectMapping, subjectId, credentialMapping } from "./schema"
 import type { AppAuth } from "./server";
 import { sessionsMapping } from "./session-schema";
 
-export const persistenceLayer = (AppAuth: AppAuth, database: EffectSQLiteDoDatabase) =>
+export class AuthDatabase extends Context.Service<AuthDatabase, EffectSQLiteDoDatabase>()(
+  "travel-planner/AuthDatabase",
+) {}
+
+export const persistenceLayer = (AppAuth: AppAuth) =>
   Layer.unwrap(
     Effect.gen(function* () {
+      const database = yield* AuthDatabase;
       const proof = yield* Drizzle.makeProofPersistenceServices(database, proofs);
       const email = yield* Drizzle.makeEmailSignInServices(database, emailSignInMapping);
 

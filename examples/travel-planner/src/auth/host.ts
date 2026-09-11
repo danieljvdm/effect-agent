@@ -4,12 +4,22 @@ import type { OAuthProtocol } from "@yielded/auth/OAuth";
 import type { EmailProofDelivery } from "@yielded/auth/Proofs";
 import { layerWebCrypto } from "@yielded/auth/WebCrypto";
 import * as Drizzle from "drizzle-orm/effect-sqlite-do";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
 
-import { persistenceLayer } from "./persistence";
+import { makeGithubDiagnostics } from "./oauth-diagnostics";
+import { AuthDatabase, persistenceLayer } from "./persistence";
 import { makeAuth, type AuthConfiguration } from "./server";
 import { initializeAuthStorage } from "./storage";
+
+const rejectedCallback = Schema.decodeOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      _tag: Schema.Literal("Failure"),
+      error: Schema.Struct({ _tag: Schema.Literal("OAuthRejected") }),
+    }),
+  ),
+);
 
 /** The Auth object owns only auth state; planner data never passes through it. */
 export const serveAuth = Effect.fn("Auth.fetch")(function* (
@@ -21,17 +31,26 @@ export const serveAuth = Effect.fn("Auth.fetch")(function* (
 ) {
   yield* initializeAuthStorage(storage);
   const { AppAuth, http, security, github } = makeAuth(config);
+  const diagnostics = yield* makeGithubDiagnostics(AppAuth);
 
   const database = Layer.effectContext(
     Effect.gen(function* () {
       const db = yield* Drizzle.makeWithDefaults({ storage });
 
-      return yield* Layer.build(persistenceLayer(AppAuth, db));
+      return yield* Layer.build(
+        persistenceLayer(AppAuth).pipe(Layer.provideMerge(Layer.succeed(AuthDatabase, db))),
+      );
     }),
   ).pipe(Layer.provide(SqliteClient.layer({ storage })), Layer.provide(LifecycleHooks.empty));
 
   const live = AppAuth.layer.pipe(
-    Layer.provide([database, security, protocol ?? github, delivery]),
+    Layer.provide([
+      diagnostics.persistenceLayer.pipe(Layer.provideMerge(database)),
+      security,
+      protocol ?? github,
+      delivery,
+      diagnostics.bindingLayer.pipe(Layer.provide(security)),
+    ]),
     Layer.provide(layerWebCrypto),
   );
 
@@ -66,6 +85,16 @@ export const serveAuth = Effect.fn("Auth.fetch")(function* (
 
   const response = yield* Effect.promise(() => web.handler(request));
   const body = yield* Effect.promise(() => response.arrayBuffer());
+
+  if (
+    new URL(request.url).pathname === "/auth/completeSignIn" &&
+    response.status === 400 &&
+    Option.isSome(rejectedCallback(new TextDecoder().decode(body)))
+  )
+    yield* diagnostics.report.pipe(
+      Effect.timeout("100 millis"),
+      Effect.catchCause(() => Effect.void),
+    );
 
   return new Response(body, { status: response.status, headers: response.headers });
 }, Effect.scoped);

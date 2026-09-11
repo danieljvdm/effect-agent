@@ -340,6 +340,12 @@ The obsolete Access application, policy, membership APIs and demo-funding contro
 - Automatic invocation URL logs, request traces and Worker Logpush are disabled to keep
   callback codes/state out of telemetry. Keep that setting; review any independently managed
   edge Logpush/analytics pipeline to exclude callback query strings before enabling it.
+- Rejected GitHub callbacks emit `auth.github.callback-rejected` in Workers Logs with a fixed
+  `reason` label for the observed binding, state, issuer, flow or post-claim failure stage.
+  These records contain no account/flow IDs, codes, state values, cookies, digests or provider
+  response bodies. Flow inspection happens only after rejection, is read-only and bounded,
+  and cannot authorize a request or trigger another exchange. Logging failure leaves the
+  original public `OAuthRejected` response intact.
   Auth diagnostics contain only safe stage names, never request bodies or provider errors.
 
 ### Clean-start cutover and reset
