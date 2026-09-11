@@ -11,6 +11,7 @@ import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
 
 import type { AccountError } from "../src/auth/account";
+import { GithubRejectionReason } from "../src/auth/oauth-diagnostics";
 import type { authenticate } from "../src/auth/worker";
 import type { PlannerSettings } from "../src/domain";
 import { defaultPlannerSettings } from "../src/domain";
@@ -55,6 +56,9 @@ beforeAll(async () => {
       outboundService: async (request) => {
         if (request.url === "https://github.com/login/oauth/access_token") {
           githubExchanges++;
+
+          if (new URLSearchParams(await request.text()).get("code") === "fixture-rejected-code")
+            return Response.json({ error: "bad_verification_code" });
 
           return Response.json({
             access_token: "fixture-token",
@@ -476,6 +480,61 @@ it("rejects invalid and replayed GitHub callbacks, and handles denial without ex
       })
     ).status,
   ).toBe(400);
+});
+
+it("reports only fixed callback rejection reasons without changing authorization or retrying an exchange", async () => {
+  const read = async () =>
+    Schema.decodeUnknownSync(Schema.Array(GithubRejectionReason))(
+      await (await mf.dispatchFetch("https://planner.test/_fixture/rejections")).json(),
+    );
+
+  const before = (await read()).length;
+  const exchanges = githubExchanges;
+  const client = makeClient();
+  const superseded = await githubStart(client);
+  const input = await githubStart(client);
+
+  const rejected = async (payload: object) => {
+    expect(await client.raw("completeSignIn", payload)).toEqual({
+      status: 400,
+      body: { _tag: "Failure", error: { _tag: "OAuthRejected" } },
+    });
+  };
+
+  await rejected(superseded);
+  await rejected({ ...input, response: { ...input.response, state: "malformed-private-state" } });
+  await rejected({ ...input, response: { ...input.response, state: "A".repeat(43) } });
+  await rejected({
+    ...input,
+    response: { ...input.response, issuer: "https://github.com/login/oauth" },
+  });
+  expect(githubExchanges).toBe(exchanges);
+  await rejected({ ...input, response: { ...input.response, code: "fixture-rejected-code" } });
+  expect(githubExchanges).toBe(exchanges + 1);
+  expect((await read()).slice(before)).toEqual([
+    "request-binding-invalid",
+    "state-invalid",
+    "state-mismatch",
+    "issuer-unexpected",
+    "after-claim",
+  ]);
+  // Missing/invalid private values never appear in the diagnostic sink.
+  expect(JSON.stringify(await read())).not.toMatch(
+    /malformed-private-state|fixture-rejected-code|https:|eyJ/,
+  );
+
+  for (const mode of ["defect", "interrupt", "timeout"]) {
+    const started = await githubStart(client);
+
+    await mf.dispatchFetch(`https://planner.test/_fixture/reporter?mode=${mode}`);
+    try {
+      await rejected({ ...started, response: { ...started.response, state: "malformed" } });
+    } finally {
+      await mf.dispatchFetch("https://planner.test/_fixture/reporter");
+    }
+  }
+  expect(githubExchanges).toBe(exchanges + 1);
+  expect((await read()).length).toBe(before + 5);
 });
 
 it("keeps callback GET inert, exposes only login assets, and rejects unauthenticated private APIs", async () => {
