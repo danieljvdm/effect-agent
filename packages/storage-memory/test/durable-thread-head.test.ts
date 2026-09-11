@@ -55,14 +55,17 @@ import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
   DateTime,
+  Cause,
   Deferred,
   Duration,
   Effect,
   Exit,
   Fiber,
   Layer,
+  Logger,
   Option,
   Ref,
+  References,
   Schema,
   Stream,
 } from "effect";
@@ -153,6 +156,86 @@ const snapshot = Effect.fn(function* (receipt: Receipt) {
 });
 
 layer(baseLayer)("bounded durable Thread processing", (it) => {
+  // Regression: https://github.com/reve-ai/kommunikasie/commit/b98ab37b8976c536e766bea8e51572d73fcb23f4
+  // A failed context preparation settled durably without reporting its live cause.
+  it.effect("reports a terminal preparation failure once with its cause and durable identity", () =>
+    Effect.gen(function* () {
+      const original = new Error("Tool schema cannot be estimated");
+
+      const failure = CompactionError.make({
+        message: "Could not prepare context",
+        cause: original,
+      });
+
+      const events: Array<{
+        cause: Cause.Cause<unknown>;
+        annotations: Readonly<Record<string, unknown>>;
+      }> = [];
+
+      const logger = Logger.make(({ logLevel, cause, fiber }) => {
+        if (logLevel === "Error")
+          events.push({ cause, annotations: fiber.getRef(References.CurrentLogAnnotations) });
+      });
+
+      const agent = Agent.withModel(definition, makeModel(Stream.die("provider must not start")));
+      const binding = yield* DurableWorkerBinding.make(agent, digests);
+
+      const runtime = yield* makeRuntime([binding]).pipe(
+        Effect.provideService(RunContextPreparation, {
+          hook: { prepare: () => Effect.fail(failure) },
+        }),
+      );
+
+      const receipt = yield* runtime.submit(
+        agent,
+        "private request",
+        options("failed-preparation", "first"),
+      );
+
+      yield* runtime
+        .processThreadHead(receipt.threadId)
+        .pipe(Effect.provide(Logger.layer([logger])));
+      expect((yield* runtime.submissionStatus(receipt))._tag).toBe("settled");
+      expect(events).toHaveLength(1);
+      expect(Cause.squash(events[0]!.cause)).toBe(failure);
+      expect(Cause.pretty(events[0]!.cause)).toContain(original.message);
+      expect(events[0]!.annotations).toMatchObject({
+        threadId: receipt.threadId,
+        submissionId: receipt.submissionId,
+        agentId: definition.id,
+      });
+
+      const duplicate = yield* runtime.submit(
+        agent,
+        "private request",
+        options("failed-preparation", "first"),
+      );
+
+      expect(duplicate).toEqual(receipt);
+      expect(
+        yield* runtime
+          .processThreadHead(receipt.threadId)
+          .pipe(Effect.provide(Logger.layer([logger]))),
+      ).toEqual(Option.none());
+      expect(events).toHaveLength(1);
+
+      const records = yield* (yield* ThreadStore).export(
+        ThreadExportRequest.make({ threadId: receipt.threadId }),
+      );
+
+      const settlements = records.records.filter(
+        ({ record }) => record.payload._tag === "SubmissionSettled",
+      );
+
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]!.record.payload).toMatchObject({
+        outcome: "failed",
+        result: { errorTag: "CompactionError", message: failure.message },
+      });
+      expect(JSON.stringify(settlements)).not.toContain(original.message);
+    }).pipe(Effect.annotateLogs({ hostContext: "captured registration" })),
+  );
+
   it.effect.each(["new-failure", "provider-failure", "retained-incomplete"] as const)(
     "rolls over after terminal Tool failure without rewriting evidence: %s",
     (scenario) =>

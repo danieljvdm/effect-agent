@@ -1,6 +1,12 @@
 import type * as Agent from "@effect-agent/core/Agent";
 import { type RunDispositionDeclaration, type InputPromptSource } from "@effect-agent/core/Agent";
-import { AgentApprovalPending, AgentInputError, PolicyLimit } from "@effect-agent/core/AgentError";
+import {
+  AgentApprovalDenied,
+  AgentApprovalPending,
+  AgentInputError,
+  AgentToolAuthorizationDenied,
+  PolicyLimit,
+} from "@effect-agent/core/AgentError";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import {
   type ReceiptId,
@@ -82,6 +88,7 @@ import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { RunToolVisibility } from "@effect-agent/engine/ToolExposure";
 import type { Scope } from "effect";
 import {
+  Cause,
   Clock,
   Context,
   Crypto,
@@ -7014,6 +7021,23 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               if (halted !== undefined) {
                 return yield* halted;
               }
+
+              // Settlement keeps only a bounded diagnostic. Report the live failure here,
+              // after excluding suspensions, so hosts retain its cause and stack exactly
+              // once per failed Run; reading or retrying its receipt never reports again.
+              if (
+                !(error instanceof AgentApprovalDenied) &&
+                !(error instanceof AgentToolAuthorizationDenied)
+              )
+                yield* Effect.logError("Agent run failed", Cause.fail(error)).pipe(
+                  Effect.annotateLogs({
+                    agentId: agent.definition.id,
+                    runId,
+                    threadId: ctx.threadId,
+                    submissionId,
+                    attemptId: lineage.attemptId,
+                  }),
+                );
 
               return {
                 _tag: "failedRun" as const,
