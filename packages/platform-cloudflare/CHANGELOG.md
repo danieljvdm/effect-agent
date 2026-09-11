@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.81
+
+### Patch Changes
+
+- [#442](https://github.com/danieljvdm/effect-agent/pull/442) [`e43996e`](https://github.com/danieljvdm/effect-agent/commit/e43996e78959c64fca1e44baa4ce15934f50d466) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep alarm updates independent of concurrent SQLite transactions, and retain the earliest requested recovery deadline atomically. Provide the owner's SqlClient when building standalone alarm or maintenance layers.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.81
+  - @effect-agent/engine@0.1.0-beta.81
+  - @effect-agent/sandbox@0.1.0-beta.81
+  - @effect-agent/thread@0.1.0-beta.81
+  - @effect-agent/storage-cloudflare@0.1.0-beta.81
+
 ## 0.1.0-beta.80
 
 ### Patch Changes

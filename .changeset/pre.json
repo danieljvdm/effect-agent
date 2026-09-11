@@ -217,6 +217,7 @@
     "subscription-input-bindings",
     "subscription-mixed-causes",
     "terminal-tool-history",
+    "tidy-alarm-isolation",
     "tidy-browsers-roam",
     "tidy-memory-accounting",
     "transient-native-rpc-tracing",
