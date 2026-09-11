@@ -108,7 +108,7 @@ it.effect(
   "requires response delivery while retaining the accepted v11/v10/v9/v8/v7/v6/v5/v4/v3/v2 contracts",
   () =>
     Effect.gen(function* () {
-      expect(planner.id).toBe("travel-planner-v12");
+      expect(planner.id).toBe("travel-planner-v13");
       expect(previousTextPlanner.id).toBe("travel-planner-v11");
       expect(yield* previousTextPlanner.instructions()).not.toContain("voice.messages");
       expect(yield* planner.instructions()).toContain("voice.messages");

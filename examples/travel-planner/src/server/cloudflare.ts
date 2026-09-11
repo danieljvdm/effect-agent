@@ -26,17 +26,23 @@ import {
   defaultPlannerSettings,
 } from "../domain.ts";
 import { ReadTravelPageLive } from "../research.ts";
-import { CoordinatorInput } from "../research/contracts.ts";
+import { LiveConversationInput } from "../research/contracts.ts";
 import {
   ResearchAuthorizationLive,
   researchScoutReport,
   conversationScoutReport,
   scoutAttemptLayer,
+  liveScoutReport,
+  editorReport,
+  ScoutMessagingLive,
 } from "../research/runtime.ts";
 import {
   ExpandedResearchScoutBackground,
   ResearchScoutBackground,
   researchScout,
+  progressResearchScout,
+  ProgressResearchScoutBackground,
+  PreviousResearchScoutBackground,
 } from "../research/scout.ts";
 import { AppBuildBucketLive } from "../trip-app/bindings.ts";
 import { EditorHostLive, editorAttemptLayer } from "../trip-app/editor-runtime.ts";
@@ -67,6 +73,7 @@ import {
 import { liveModel } from "./models.ts";
 import {
   planner,
+  previousVoicePlanner,
   previousTextPlanner,
   previousBudgetPlanner,
   previousResearchPlanner,
@@ -251,13 +258,18 @@ export const plannerApplication = <E, R>(
       readonly submissionId: SubmissionLookupById["submissionId"];
       readonly attemptId: string;
     },
-    expandedResearch = false,
+    expandedResearch: boolean | "progress" = false,
   ) =>
     Layer.mergeAll(
       TripToolsLive(context.threadId),
       AppToolsLive,
       AppEditorBackground.layer,
-      expandedResearch ? ExpandedResearchScoutBackground.layer : ResearchScoutBackground.layer,
+      PreviousResearchScoutBackground.layer,
+      expandedResearch === "progress"
+        ? ProgressResearchScoutBackground.layer
+        : expandedResearch
+          ? ExpandedResearchScoutBackground.layer
+          : ResearchScoutBackground.layer,
     ).pipe(
       Layer.provideMerge(
         Layer.effect(
@@ -278,7 +290,9 @@ export const plannerApplication = <E, R>(
                 Effect.flatMap((found) =>
                   Option.isNone(found) || found.value.threadId !== context.threadId
                     ? Effect.fail(unavailable())
-                    : Schema.decodeUnknownEffect(CoordinatorInput)(found.value.inputPayload).pipe(
+                    : Schema.decodeUnknownEffect(LiveConversationInput)(
+                        found.value.inputPayload,
+                      ).pipe(
                         Effect.map((input) => input.settings ?? defaultPlannerSettings),
                         Effect.mapError(unavailable),
                       ),
@@ -312,9 +326,20 @@ export const plannerApplication = <E, R>(
       agent: planner,
       model: selectedModel ?? model,
       definitions: DefinitionDigestInput.make({
-        agent: { id: planner.id, version: "travel-planner-v12" },
+        agent: { id: planner.id, version: "travel-planner-v13" },
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(planner.toolkit.tools),
+      }),
+      reporting: [liveScoutReport, editorReport],
+      attemptLayer: (context) => attemptLayer(context, "progress"),
+    },
+    {
+      agent: previousVoicePlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousVoicePlanner.id, version: "travel-planner-v12" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousVoicePlanner.toolkit.tools),
       }),
       reporting: [conversationScoutReport],
       attemptLayer: (context) => attemptLayer(context, true),
@@ -361,6 +386,24 @@ export const plannerApplication = <E, R>(
         tools: Object.keys(previousEditorPlanner.toolkit.tools),
       }),
       attemptLayer,
+    },
+    {
+      agent: progressResearchScout,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: progressResearchScout.id, version: "travel-research-scout-v2" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(progressResearchScout.toolkit.tools),
+      }),
+      attemptLayer: (context) =>
+        scoutAttemptLayer(context).pipe(
+          Layer.provideMerge(
+            Layer.succeed(DiagnosticContext, {
+              submissionId: context.submissionId,
+              attemptId: context.attemptId,
+            }),
+          ),
+        ),
     },
     {
       agent: researchScout,
@@ -463,6 +506,7 @@ export const plannerApplication = <E, R>(
     Layer.provide(EditorHostLive),
     Layer.provide(ResearchAuthorizationLive),
     Layer.provide(DiagnosticObserverLive),
+    Layer.provide(ScoutMessagingLive),
   );
 
   // Acquire the owner's SQL once, then capture the repository in the registered tools.

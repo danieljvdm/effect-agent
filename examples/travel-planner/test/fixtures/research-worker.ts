@@ -23,7 +23,10 @@ import {
 } from "../../src/domain.ts";
 import { ReadTravelPage } from "../../src/research.ts";
 import { ScoutInput } from "../../src/research/contracts.ts";
-import { ResearchScoutBackground } from "../../src/research/scout.ts";
+import {
+  ResearchScoutBackground,
+  ProgressResearchScoutBackground,
+} from "../../src/research/scout.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
 import { previousEditorPlanner, previousResearchPlanner } from "../../src/server/planner.ts";
 import { PlannerAttempt } from "../../src/server/progress.ts";
@@ -154,6 +157,25 @@ const model = Model.make(
               );
               const key = `gate/${scout.input.title}`;
 
+              if (
+                scout.input.title === "Live progress" &&
+                tools.some((tool) => tool.name === "report_research_progress") &&
+                !results(prompt, scout.index).some(
+                  (result) => result.name === "report_research_progress",
+                )
+              )
+                return Stream.fromIterable(
+                  call(
+                    "report_research_progress",
+                    {
+                      summary:
+                        "The coastal trail offers a verified 50 km route; entry availability is unconfirmed.",
+                      sources: ["https://visitlisboa.com"],
+                    },
+                    `milestone-${scout.index}`,
+                  ),
+                );
+
               yield* Effect.promise(() => bucket.put(`${key}/entered`, "yes"));
               while ((yield* Effect.promise(() => bucket.head(`${key}/open`))) === null)
                 yield* Effect.sleep("25 millis");
@@ -191,6 +213,22 @@ const model = Model.make(
             }
             const parent = inputs(prompt, PlannerInput).at(-1);
 
+            const internalIndex = prompt.content.findLastIndex(
+              (message) =>
+                message.role === "user" &&
+                message.content.some(
+                  (part) =>
+                    part.type === "text" &&
+                    (part.text.startsWith("Internal research milestone") ||
+                      part.text.startsWith("Internal app editor completion")),
+                ),
+            );
+
+            if (internalIndex > (parent?.index ?? -1))
+              return Stream.fromIterable(
+                finish("Verified milestone received while research continues."),
+              );
+
             const reportIndex = prompt.content.findLastIndex(
               (message) =>
                 message.role === "user" &&
@@ -224,6 +262,42 @@ const model = Model.make(
             }
             if (!parent) return Stream.fromIterable(finish("Ready"));
             const current = results(prompt, parent.index);
+
+            if (parent.input.message === "start live progress")
+              return Stream.fromIterable(
+                current.some((result) => result.name === "research_scout_start")
+                  ? finish("Research started.")
+                  : call("research_scout_start", {
+                      title: "Live progress",
+                      message: "Find coastal trails; distance unknown",
+                    }),
+              );
+            if (parent.input.message === "steer live progress 50 km") {
+              const started = results(prompt).find(
+                (result) => result.name === "research_scout_start" && !result.isFailure,
+              );
+
+              if (!started) return yield* Effect.die("Missing live scout");
+
+              const accepted = yield* Schema.decodeUnknownEffect(
+                ProgressResearchScoutBackground.tools.research_scout_start.successSchema,
+              )(started.result).pipe(Effect.orDie);
+
+              return Stream.fromIterable(
+                current.some((result) => result.name === "research_scout_follow_up")
+                  ? finish("50 km correction accepted.")
+                  : call("research_scout_follow_up", {
+                      worker: Schema.encodeSync(
+                        ProgressResearchScoutBackground.tools.research_scout_follow_up
+                          .parametersSchema.fields.worker,
+                      )(accepted.worker),
+                      parameters: {
+                        title: "Live progress",
+                        message: "Experienced at 50 km; include ultra distances",
+                      },
+                    }),
+              );
+            }
 
             if (parent.input.message === "start expanded research") {
               const started = current.filter(
@@ -283,7 +357,7 @@ const model = Model.make(
             }
             if (
               parent.input.message.startsWith("follow research") &&
-              !current.some((result) => result.name === "research_scout_follow_up")
+              !current.some((result) => result.name === "previous_research_scout_follow_up")
             ) {
               const started = results(prompt).find(
                 (result) => result.name === "research_scout_start" && !result.isFailure,
@@ -297,7 +371,7 @@ const model = Model.make(
 
               return Stream.fromIterable(
                 call(
-                  "research_scout_follow_up",
+                  "previous_research_scout_follow_up",
                   {
                     worker: Schema.encodeSync(
                       ResearchScoutBackground.tools.research_scout_follow_up.parametersSchema.fields

@@ -14,7 +14,7 @@ import { RecordedDiagnostics } from "../server/diagnostics.ts";
 import { emptyProgress } from "../server/progress.ts";
 import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
 import { ScoutFindings, ScoutRequest } from "./contracts.ts";
-import { ResearchScout } from "./scout.ts";
+import { ResearchScout, ProgressResearchScout } from "./scout.ts";
 
 /** Discover only source-owned native workers; opaque worker IDs never grant cross-account access. */
 export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
@@ -55,7 +55,12 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
       };
 
       return Effect.gen(function* () {
-        const worker = yield* Schema.decodeUnknownEffect(Subagent.Worker(ResearchScout))(reference);
+        const declaration =
+          reference.targetAgentId === ProgressResearchScout.target.id
+            ? ProgressResearchScout
+            : ResearchScout;
+
+        const worker = yield* Schema.decodeUnknownEffect(Subagent.Worker(declaration))(reference);
         const runtime = yield* DurableAgentRuntime;
         const sourceThreadId = yield* Schema.decodeUnknownEffect(ThreadId)(conversationId);
         const owner = ownerOfThread(conversationId);
@@ -66,11 +71,11 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
 
         const host = yield* runtime.workerHost({ sourceThreadId, principal });
 
-        const summary = yield* Subagent.inspect(ResearchScout, worker).pipe(
+        const summary = yield* Subagent.inspect(declaration, worker).pipe(
           Effect.provideService(SubagentHost, host),
         );
 
-        const history = yield* Subagent.observe(ResearchScout, worker).pipe(
+        const history = yield* Subagent.observe(declaration, worker).pipe(
           Stream.takeRight(100),
           Stream.mapEffect((entry) =>
             Schema.decodeUnknownEffect(RecordEnvelope)(entry.record).pipe(

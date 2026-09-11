@@ -9,12 +9,14 @@ import { TravelPhoto, TravelUrl } from "../travel-content.ts";
 export const previousResearchCoordinatorId = "travel-planner-v9";
 export const previousBudgetCoordinatorId = "travel-planner-v10";
 export const previousTextCoordinatorId = "travel-planner-v11";
-export const researchCoordinatorId = "travel-planner-v12";
+export const previousVoiceCoordinatorId = "travel-planner-v12";
+export const researchCoordinatorId = "travel-planner-v13";
 
 export const researchCoordinatorIds = [
   previousResearchCoordinatorId,
   previousBudgetCoordinatorId,
   previousTextCoordinatorId,
+  previousVoiceCoordinatorId,
   researchCoordinatorId,
 ];
 
@@ -62,4 +64,37 @@ export const CoordinatorInput = Schema.Union([TextPlannerInput, ScoutReportInput
 /** New admissions share this exact schema with the research reporting registration. */
 export const ConversationInput = Schema.Union([PlannerInput, ScoutReportInput]);
 
-export const expandedCoordinatorIds = [previousTextCoordinatorId, researchCoordinatorId];
+/** A deliberately authored, sourced milestone, never a partial model response. */
+export const ScoutProgress = Schema.Struct({
+  summary: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(900)),
+  sources: Schema.Array(TravelUrl).check(Schema.isMinLength(1), Schema.isMaxLength(3)),
+});
+
+export const ScoutProgressInput = Schema.Struct({
+  _tag: Schema.Literal("ResearchScoutProgress"),
+  worker: WorkerRef,
+  title: ShortText,
+  settings: PlannerSettings,
+  finding: ScoutProgress,
+});
+
+export const EditorReportInput = Schema.Struct({
+  _tag: Schema.Literal("AppEditorReport"),
+  worker: WorkerRef,
+  settings: PlannerSettings,
+  outcome: Schema.Literals(["completed", "failed", "aborted"]),
+  summary: Schema.NullOr(Text),
+});
+
+export const LiveConversationInput = Schema.Union([
+  PlannerInput,
+  ScoutReportInput,
+  ScoutProgressInput,
+  EditorReportInput,
+]);
+
+export const expandedCoordinatorIds = [
+  previousTextCoordinatorId,
+  previousVoiceCoordinatorId,
+  researchCoordinatorId,
+];

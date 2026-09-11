@@ -7,8 +7,8 @@ import {
   type VoiceWork,
   type VoiceWorkRequest,
   type SpokenMessage,
-  type PlannerSnapshot,
 } from "../domain.ts";
+import { websiteContext, websiteUpdate, type VoiceBackground } from "./background.ts";
 import type { VoiceConnection } from "./browser.ts";
 import {
   appendCaption,
@@ -30,7 +30,7 @@ export interface VoiceBackend {
   readonly submit: (request: SendMessageRequest) => Effect.Effect<unknown, PlannerError>;
   readonly read: (request: typeof VoiceWorkRequest.Type) => Effect.Effect<VoiceWork, PlannerError>;
   readonly progress: () => PlannerProgress | null;
-  readonly background: () => Pick<PlannerSnapshot, "scouts" | "editor"> | null;
+  readonly background: () => VoiceBackground | null;
   readonly typedRevision: () => number;
   readonly typedContext: () => string;
   readonly typedRequest: () => SendMessageRequest | null;
@@ -88,6 +88,7 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
 
   let typedRequestId = backend.typedRequest()?.requestId;
   let lastContext = "";
+  let lastWebsiteUpdate = websiteUpdate(backend.background())?.id;
   let seenAnswers = new Set(backend.answers().map((answer) => answer.id));
   let status: VoiceView["status"] = "connecting";
   let note = "Connecting…";
@@ -264,11 +265,24 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
         );
       }
     }
-    const context = backend.context();
+    const context = `${websiteContext(backend.background())} ${backend.context()}`.trim();
 
     if (context && context !== lastContext && !append && !typedContext && !pending) {
       yield* sendContext("session.thinking.append", context, null);
       lastContext = context;
+    }
+    const website = websiteUpdate(backend.background());
+
+    if (
+      website &&
+      website.id !== lastWebsiteUpdate &&
+      !append &&
+      !pending &&
+      !typedContext &&
+      now - lastSpeechAt >= 1500
+    ) {
+      yield* sendContext("session.commentary.append", website.text, null);
+      lastWebsiteUpdate = website.id;
     }
     const current = latest;
 
@@ -322,7 +336,10 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       status: work.state === "pending" ? "accepted" : "settled",
     });
     const answers = backend.answers();
-    const answer = answers.findLast((item) => !seenAnswers.has(item.id));
+
+    if (lastUpdate === `settled:${work.receiptId}`)
+      for (const item of answers) if (item.text === work.text) seenAnswers.add(item.id);
+    const answer = answers.find((item) => !seenAnswers.has(item.id));
 
     const update =
       !work.superseded && work.state === "completed" && answer && answer.text !== work.text
@@ -342,14 +359,13 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
 
       yield* sendContext(
         update.kind === "result" ? "session.commentary.append" : "session.thinking.append",
-        update.text,
+        [websiteContext(backend.background()), update.text].filter(Boolean).join("\n"),
         delegation,
       );
       lastUpdate = update.key;
       if (update.kind === "result") {
-        researchNote = undefined;
-        for (const finding of findings()) rememberFinding(finding.id);
-        for (const answer of answers) seenAnswers.add(answer.id);
+        if (answer && (update.key === `answer:${answer.id}` || answer.text === work.text))
+          seenAnswers.add(answer.id);
         // A later research answer continues the exchange; don't then repeat the earlier receipt answer.
         if (update.key.startsWith("answer:")) lastUpdate = `settled:${work.receiptId}`;
       }

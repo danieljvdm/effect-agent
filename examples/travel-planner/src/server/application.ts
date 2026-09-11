@@ -32,7 +32,7 @@ import { AppRepository } from "../trip-app/repository.ts";
 import { plannerActivity } from "./activity.ts";
 import { completedAnswer, legacyTripMessages, type Messages } from "./conversation.ts";
 import { readDiagnostics } from "./diagnostics.ts";
-import { planner, previousTextPlanner } from "./planner.ts";
+import { planner, previousTextPlanner, previousVoicePlanner } from "./planner.ts";
 import { requestsPublication } from "./security.ts";
 import { ownerOfThread } from "./tenancy.ts";
 import { TripRepository } from "./trips.ts";
@@ -127,16 +127,15 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
       });
     // Preserve the admitted publication revision and legacy seed when acknowledgement was lost.
     // Resubmission completes readiness; finding an admitted ledger row alone is not acceptance.
-    yield* runtime
-      .submitRegistered(
-        {
-          definition:
-            admitted.value.agentId === previousTextPlanner.id ? previousTextPlanner : planner,
-        },
-        input,
-        { threadId, principal, idempotencyKey },
-      )
-      .pipe(Effect.mapError(unavailable));
+    const options = { threadId, principal, idempotencyKey };
+
+    yield* (
+      admitted.value.agentId === previousTextPlanner.id
+        ? runtime.submitRegistered({ definition: previousTextPlanner }, input, options)
+        : admitted.value.agentId === previousVoicePlanner.id
+          ? runtime.submitRegistered({ definition: previousVoicePlanner }, input, options)
+          : runtime.submitRegistered({ definition: planner }, input, options)
+    ).pipe(Effect.mapError(unavailable));
 
     return { accepted: true as const };
   }

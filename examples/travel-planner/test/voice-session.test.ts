@@ -9,6 +9,7 @@ import {
   type SendMessageRequest,
   type VoiceWork,
   type ResearchScoutActivity,
+  type TripApp,
 } from "../src/domain.ts";
 import type { planner, previousTextPlanner } from "../src/server/planner.ts";
 import { emptyProgress } from "../src/server/progress.ts";
@@ -807,6 +808,95 @@ it.effect("superseded work and failed scouts cannot supply spoken findings", () 
   }),
 );
 
+it.effect("a planner reply cannot consume or discard a different scout's pending finding", () =>
+  Effect.gen(function* () {
+    const test = yield* setup([researchRequest]);
+    let scouts = [activeScout];
+
+    test.backend.background = () => ({ scouts });
+    const fiber = yield* test.run.pipe(Effect.forkChild);
+
+    yield* test.start;
+    yield* TestClock.adjust("1 second");
+    scouts = [
+      {
+        ...activeScout,
+        state: "idle",
+        finding: {
+          id: "race-finding",
+          text: "The night race offers a 50 km route. Entry availability remains unverified.",
+        },
+      },
+    ];
+    yield* TestClock.adjust("500 millis");
+    yield* acknowledge(test);
+    test.backend.read = () =>
+      Effect.succeed({
+        ...observation(request.requestId, "completed"),
+        text: "Your website layout is saved.",
+      });
+    for (let step = 0; step < 8; step++) {
+      yield* TestClock.adjust("500 millis");
+      yield* acknowledge(test);
+    }
+    const spoken = test.sent.filter((event) => event.type === "session.commentary.append");
+
+    expect(spoken.some((event) => String(event.content).includes("website layout"))).toBe(true);
+    expect(spoken.filter((event) => String(event.content).includes("50 km route"))).toHaveLength(1);
+    yield* Fiber.interrupt(fiber);
+  }),
+);
+
+it.effect(
+  "website readiness reaches voice after the editor and build finish, without another planner request",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup();
+
+      let app: TripApp = {
+        id: "app-one",
+        tripId: "trip-one",
+        revision: 1,
+        url: "https://example.com/trip",
+        repoName: "trip-app",
+        sourceCommit: "a".repeat(40),
+        activeCommit: null,
+        pendingCommit: "a".repeat(40),
+        status: "building",
+        error: null,
+        updatedAt: "2026-09-10T23:16:00Z",
+        versions: [],
+      };
+
+      let editing = true;
+
+      test.backend.background = () => ({
+        app,
+        editor: { ...activeScout, state: editing ? "active" : "idle" },
+      });
+      const fiber = yield* test.run.pipe(Effect.forkChild);
+
+      yield* test.start;
+      yield* TestClock.adjust("1 second");
+      yield* acknowledge(test);
+      app = { ...app, status: "ready", activeCommit: app.sourceCommit, pendingCommit: null };
+      yield* TestClock.adjust("2 seconds");
+      expect(test.sent.filter((event) => event.type === "session.commentary.append")).toEqual([]);
+      editing = false;
+      for (let step = 0; step < 8; step++) {
+        yield* TestClock.adjust("500 millis");
+        yield* acknowledge(test);
+      }
+      const spoken = test.sent.filter((event) => event.type === "session.commentary.append");
+
+      expect(spoken).toHaveLength(1);
+      expect(spoken[0]?.content).toContain("ready to open");
+      expect(spoken[0]?.content).toContain(app.url);
+      expect(test.admitted).toEqual([]);
+      yield* Fiber.interrupt(fiber);
+    }),
+);
+
 it("splits complete Unicode research summaries without losing caveats or exceeding append limits", () => {
   const summary = "海辺の宿 🏖️ ".repeat(100) + "Price unconfirmed.";
   const parts = contextParts(summary);
@@ -815,3 +905,40 @@ it("splits complete Unicode research summaries without losing caveats or exceedi
   expect(parts.every((part) => new TextEncoder().encode(part).length <= 330)).toBe(true);
   expect(contextParts("")).toEqual([]);
 });
+
+it.effect(
+  "delivers both research answers when they arrive together instead of consuming only the newest",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* setup([researchRequest]);
+
+      test.backend.read = () => Effect.succeed(observation(request.requestId, "completed"));
+      let answers: ReadonlyArray<{ id: string; text: string }> = [];
+
+      test.backend.answers = () => answers;
+      const fiber = yield* test.run.pipe(Effect.forkChild);
+
+      yield* test.start;
+      yield* TestClock.adjust("2 seconds");
+      yield* acknowledge(test);
+      answers = [
+        { id: "race", text: "The race has a verified 50 km route." },
+        { id: "food", text: "The forest restaurant opens on Fridays." },
+      ];
+      for (let step = 0; step < 8; step++) {
+        yield* TestClock.adjust("500 millis");
+        yield* acknowledge(test);
+      }
+
+      const spoken = test.sent
+        .filter((event) => event.type === "session.commentary.append")
+        .map((event) => event.content);
+
+      expect(spoken).toEqual([
+        "Saved your Lisbon trip.",
+        "The race has a verified 50 km route.",
+        "The forest restaurant opens on Fridays.",
+      ]);
+      yield* Fiber.interrupt(fiber);
+    }),
+);

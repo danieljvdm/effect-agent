@@ -135,7 +135,7 @@ remain available under **Trip details** while voice carries
 the exchange; cards stay visible. You can type during a call or return to text afterward. Typed
 follow-ups include recent spoken context, and voice follows their results without resubmitting
 them. Only a delegation event admits spoken work. Its user request and attributed conversation
-context are separate fields; a transcript never becomes a synthetic user message or title.
+context are separate fields; a transcript never becomes a synthetic user message or title. The delegation policy explicitly includes answers to preference questions and corrections to ongoing work (such as confirming 50 km running ability). The planner sends accepted corrections to the relevant existing workers before claiming they were applied.
 
 Reconnect creates a replacement voice session with recent saved conversation history. This tab
 retains up to sixteen frozen request envelopes in session storage, partitioned by verified email
@@ -157,11 +157,11 @@ can reach voice before the planner finishes synthesizing the full answer. The co
 summary arrives as bounded quiet context chunks, including its caveats, before one spoken
 finding update. Each result is sent
 once; corrections discard pending notes. Activity labels and timers do not trigger waiting
-announcements. Provisional scout findings, raw tool data, and diagnostics are excluded. A brief utterance
+announcements. A planner reply does not consume unrelated pending scout findings. Raw tool data, private reasoning, and diagnostics are excluded. New scouts can deliberately report a sourced milestone with `report_research_progress` while they continue; Effect Agent durable messaging delivers it to the original conversation. The host derives the destination and account from canonical worker lineage, never model-selected routing. These milestones preserve uncertainty and cannot authorize new research or app edits. Earlier accepted workers retain their original executable definitions and completion reporting. A brief utterance
 delays an outgoing result without discarding it; actual delegated corrections and typed requests
 replace the tracked work.
 Typing redirects the current explanation without leaving audio muted. Provider acknowledgment,
-playback and durable settlement remain separate internal states; no event proves speech was heard.
+playback and durable settlement remain separate internal states; no event proves speech was heard. Website editing and deployment remain separate: editor completion reports return to the planner, while current build phases update voice context directly. A newly ready or failed website gets a spoken update without another user request; an earlier ready version is not announced as the requested edit while its editor is active.
 
 The browser uses WebRTC media and a bounded event queue (128 events, 32 KiB per event). It waits
 for `session.started`, keeps at most 128 caption fragments, coalesces pending delegation metadata,

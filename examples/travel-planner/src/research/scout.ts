@@ -1,6 +1,8 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import * as Agent from "@effect-agent/core/Agent";
-import { SubagentGrant } from "@effect-agent/core/SubagentContract";
+import { MessagingError, MessageStatus } from "@effect-agent/core/Messaging";
+import { SubagentGrant, WorkerOperationTool } from "@effect-agent/core/SubagentContract";
+import { MessagingHost } from "@effect-agent/engine/MessagingHost";
 import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 import { OpenAiTool } from "@effect/ai-openai";
 import { Effect } from "effect";
@@ -10,7 +12,7 @@ import { PlannerError } from "../domain.ts";
 import { ReadTravelPage } from "../research.ts";
 import { researchScoutLimit, scoutPolicy } from "../server/agent-limits.ts";
 import { PlannerAttempt } from "../server/progress.ts";
-import { ScoutFindings, ScoutInput, ScoutRequest } from "./contracts.ts";
+import { ScoutFindings, ScoutInput, ScoutRequest, ScoutProgress } from "./contracts.ts";
 
 export const FinishResearch = Tool.make("finish_research", {
   description:
@@ -108,3 +110,57 @@ export const ExpandedResearchScoutBackground = Subagent.background(ExpandedResea
   cancel: true,
   budgetScope: "worker-run",
 });
+
+export const ReportResearchProgress = Tool.make("report_research_progress", {
+  description:
+    "Send a concrete sourced finding or material constraint to the conversation now, while continuing research. Preserve caveats. Send at most three distinct useful milestones per research pass; never send waiting, plans, or repeated findings.",
+  parameters: ScoutProgress,
+  success: MessageStatus,
+  failure: MessagingError,
+})
+  .annotate(WorkerOperationTool, true)
+  .addDependency(MessagingHost);
+
+// Keep the prior executable registration for accepted workers; new work uses the progress-capable target.
+export const progressResearchScout = Agent.make("travel-research-scout-v2", {
+  input: ScoutInput,
+  output: ScoutFindings,
+  policy: researchScout.policy,
+  toolkit: Toolkit.merge(scoutTools, Toolkit.make(ReportResearchProgress)),
+  instructions:
+    researchScout.instructions +
+    " Use report_research_progress after verifying your first useful finding and later material changes, before finishing the full pass. Include source URLs and uncertainty. Continue the remaining research after sending the milestone. Do not send generic status updates or private reasoning.",
+  completion: { tool: "finish_research", required: true, project: ({ result }) => result },
+});
+
+export const ProgressResearchScout = Subagent.make("research_scout", {
+  ...ExpandedResearchScout,
+  target: progressResearchScout,
+  grant: SubagentGrant.make({
+    ...ResearchScout.grant,
+    allowedToolNames: Object.keys(progressResearchScout.toolkit.tools),
+  }),
+});
+
+export const ProgressResearchScoutBackground = Subagent.background(ProgressResearchScout, {
+  start: true,
+  followUp: true,
+  summary: true,
+  inspect: true,
+  list: true,
+  cancel: true,
+  budgetScope: "worker-run",
+});
+
+/** Existing worker references keep their original target and grant; only their tool labels differ. */
+export const PreviousResearchScoutBackground = Subagent.background(
+  { ...ResearchScout, name: "previous_research_scout" as const },
+  {
+    followUp: true,
+    summary: true,
+    inspect: true,
+    list: true,
+    cancel: true,
+    budgetScope: "worker-run",
+  },
+);

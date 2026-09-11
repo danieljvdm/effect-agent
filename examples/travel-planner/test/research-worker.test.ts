@@ -16,6 +16,7 @@ import {
   researchCoordinatorId,
   ScoutInput,
   ScoutReportInput,
+  ScoutProgressInput,
 } from "../src/research/contracts.ts";
 
 const token = "research-worker-fixture";
@@ -335,6 +336,62 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
         ),
     ),
   ).toBe(true);
+}, 90_000);
+
+it("delivers a sourced milestone before worker completion and accepts a correction on that active worker", async () => {
+  const email = "progress@example.com";
+  const thread = `member-${createHash("sha256").update(email).digest("hex")}--research`;
+
+  await send("start live progress", email);
+
+  const active = await until(
+    () => snapshot(email),
+    (state) =>
+      state.pending === 0 &&
+      state.scouts?.[0]?.state === "active" &&
+      state.messages.some(
+        (message) => message.text === "Verified milestone received while research continues.",
+      ),
+  );
+
+  const id = active.scouts?.[0]?.id;
+
+  expect(id).toBeTruthy();
+  expect(
+    (await snapshot("unrelated@example.com")).messages.some((message) =>
+      message.text.includes("milestone"),
+    ),
+  ).toBe(false);
+  const parent = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
+
+  const updates = parent.records.flatMap(({ record }) =>
+    record.payload._tag === "UserInputRecorded" &&
+    Schema.is(ScoutProgressInput)(record.payload.input)
+      ? [record.payload.input]
+      : [],
+  );
+
+  expect(updates).toHaveLength(1);
+  expect(updates[0]?.settings).toEqual(settings);
+  expect(updates[0]?.finding.summary).toContain("availability is unconfirmed");
+  await send("steer live progress 50 km", email);
+
+  const steered = await until(
+    () => snapshot(email),
+    (state) =>
+      state.pending === 0 && state.scouts?.[0]?.task.includes("Experienced at 50 km") === true,
+  );
+
+  expect(steered.scouts?.[0]?.id).toBe(id);
+  expect(steered.scouts?.[0]?.state).toBe("active");
+  await fixture("gate", { name: "Live progress" }, "POST");
+
+  const completed = await until(
+    () => snapshot(email),
+    (state) => state.scouts?.[0]?.state === "idle",
+  );
+
+  expect(completed.scouts?.[0]?.finding?.text).toContain("Experienced at 50 km");
 }, 90_000);
 
 it("runs six scouts and an editor beyond the old budgets, preserves them across restart, and bounds admission", async () => {
