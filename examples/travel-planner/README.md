@@ -225,6 +225,10 @@ starts a fresh authorization to establish its session. Denied or failed exchange
 an explicit new attempt. Email and GitHub are separate credentials/accounts even if their
 profile emails match. There is no automatic linking, admin bootstrap or invitation gate.
 
+GitHub authorization and callback completion show a dedicated loading screen until the
+session is ready. A successful sign-in never appears as an error while account state is
+replaced; actual failures offer a fresh attempt without automatically repeating an exchange.
+
 GitHub accounts display the authenticated profile name, falling back to the GitHub username.
 Registration saves that name, and each fresh GitHub sign-in refreshes the session's display
 name without changing the local account or its stored data. After upgrading an existing

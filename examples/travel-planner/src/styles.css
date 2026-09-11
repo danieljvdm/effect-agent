@@ -2596,3 +2596,51 @@
   padding: 12px;
   background: #fff4f1;
 }
+.login-loading {
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+}
+.login-loading-content {
+  flex: 1;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  text-align: center;
+  padding: 20px 0 40px;
+}
+.login-loading-content h1 {
+  font-size: 26px;
+  margin-bottom: 8px;
+}
+.login-loading-content p {
+  max-width: 260px;
+  margin: 0;
+  font-size: 14px;
+}
+.login-loader {
+  width: 76px;
+  height: 76px;
+  display: grid;
+  place-items: center;
+  position: relative;
+  margin-bottom: 32px;
+  border-radius: 50%;
+  background: #f1f5e9;
+  color: #587047;
+  font-size: 36px;
+}
+.login-loader::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border: 2px solid #e3e9d9;
+  border-top-color: #789064;
+  border-radius: 50%;
+  animation: app-spin 1.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .login-loader::after {
+    animation: none;
+  }
+}
