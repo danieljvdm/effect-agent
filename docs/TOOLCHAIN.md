@@ -160,6 +160,9 @@ retain a cached preview after a deployment.
 
 All fifteen public packages share one Changesets fixed group and publish to `beta`
 as `X.Y.Z-beta.N`. Keep the group in `.changeset/config.json` aligned with public workspaces.
+The travel planner is a private application with no package version. It does not receive
+changesets, version bumps, changelogs, package tags, or npm releases. Private-package versioning
+and tagging remain disabled in the Changesets configuration.
 Changesets updates internal dependency ranges only when they use `workspace:`. Exact registry
 pins, including the travel planner's published Effect Agent dependencies, stay unchanged during
 versioning. Upgrade those consumers separately after publication; otherwise the version task's

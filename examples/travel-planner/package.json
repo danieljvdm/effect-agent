@@ -1,6 +1,5 @@
 {
   "name": "@effect-agent/example-travel-planner",
-  "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
