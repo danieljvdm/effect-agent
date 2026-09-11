@@ -19,6 +19,7 @@ import { defaultPlannerSettings } from "../src/domain";
 let mf: Miniflare;
 let directory: string;
 let githubExchanges = 0;
+const githubIssuer = "https://github.com/login/oauth";
 
 beforeAll(async () => {
   const bundle = await build({
@@ -290,6 +291,7 @@ it("registers and signs in new and returning email and GitHub accounts through d
         _tag: "Code",
         state: authorization.searchParams.get("state"),
         code: "fixture-code",
+        issuer: githubIssuer,
       },
     };
   };
@@ -435,7 +437,12 @@ const githubStart = async (client: ReturnType<typeof makeClient>) => {
     flowId,
     provider: "github",
     callbackId: "github",
-    response: { _tag: "Code", state: url.searchParams.get("state"), code: "fixture-code" },
+    response: {
+      _tag: "Code",
+      state: url.searchParams.get("state"),
+      code: "fixture-code",
+      issuer: githubIssuer,
+    },
   };
 };
 
@@ -459,7 +466,12 @@ it("rejects invalid and replayed GitHub callbacks, and handles denial without ex
   expect(
     await client.call("completeSignIn", {
       ...denied,
-      response: { _tag: "Error", state: denied.response.state, error: "access-denied" },
+      response: {
+        _tag: "Error",
+        state: denied.response.state,
+        error: "access-denied",
+        issuer: githubIssuer,
+      },
     }),
   ).toMatchObject({ _tag: "Cancelled" });
   expect(githubExchanges).toBe(count);
@@ -504,10 +516,8 @@ it("reports only fixed callback rejection reasons without changing authorization
   await rejected(superseded);
   await rejected({ ...input, response: { ...input.response, state: "malformed-private-state" } });
   await rejected({ ...input, response: { ...input.response, state: "A".repeat(43) } });
-  await rejected({
-    ...input,
-    response: { ...input.response, issuer: "https://github.com/login/oauth" },
-  });
+  for (const issuer of [undefined, "https://github.com"])
+    await rejected({ ...input, response: { ...input.response, issuer } });
   expect(githubExchanges).toBe(exchanges);
   await rejected({ ...input, response: { ...input.response, code: "fixture-rejected-code" } });
   expect(githubExchanges).toBe(exchanges + 1);
@@ -515,7 +525,8 @@ it("reports only fixed callback rejection reasons without changing authorization
     "request-binding-invalid",
     "state-invalid",
     "state-mismatch",
-    "issuer-unexpected",
+    "issuer-mismatch",
+    "issuer-mismatch",
     "after-claim",
   ]);
   // Missing/invalid private values never appear in the diagnostic sink.
@@ -534,7 +545,7 @@ it("reports only fixed callback rejection reasons without changing authorization
     }
   }
   expect(githubExchanges).toBe(exchanges + 1);
-  expect((await read()).length).toBe(before + 5);
+  expect((await read()).length).toBe(before + 6);
 });
 
 it("keeps callback GET inert, exposes only login assets, and rejects unauthenticated private APIs", async () => {

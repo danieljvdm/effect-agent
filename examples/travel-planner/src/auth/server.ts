@@ -106,7 +106,7 @@ export const makeAuth = (config: AuthConfiguration) => {
   const github = gitHubOAuthAppProtocolLayer({
     registrations: [
       {
-        configurationGeneration: 1,
+        configurationGeneration: 2,
         issuance: "active",
         clientId: config.AUTH_GITHUB_CLIENT_ID,
         clientSecret: Redacted.make(config.AUTH_GITHUB_CLIENT_SECRET),

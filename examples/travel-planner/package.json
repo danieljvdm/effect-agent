@@ -25,7 +25,7 @@
     "@streamparser/json": "catalog:",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-start": "catalog:",
-    "@yielded/auth": "0.1.0-beta.2",
+    "@yielded/auth": "0.1.0-beta.4",
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",
     "drizzle-orm": "1.0.0-rc.5-ab785fc",

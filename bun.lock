@@ -66,7 +66,7 @@
         "@streamparser/json": "catalog:",
         "@tanstack/react-router": "catalog:",
         "@tanstack/react-start": "catalog:",
-        "@yielded/auth": "0.1.0-beta.2",
+        "@yielded/auth": "0.1.0-beta.4",
         "class-variance-authority": "catalog:",
         "clsx": "catalog:",
         "drizzle-orm": "1.0.0-rc.5-ab785fc",
@@ -1743,7 +1743,7 @@
 
     "@vueuse/shared": ["@vueuse/shared@14.4.0", "", { "peerDependencies": { "vue": "^3.5.0" } }, "sha512-JRgY90Sz8DDtPMsaDflvPMp9xYk69JZAmbuDvAquUVXKr2gEjqtzGNTTthLfckH0BzBqvnu31gb4a8TGLRe79g=="],
 
-    "@yielded/auth": ["@yielded/auth@0.1.0-beta.2", "", { "dependencies": { "@noble/ciphers": "2.1.1", "@noble/hashes": "2.3.0" }, "peerDependencies": { "@effect/sql-d1": ">=4.0.0-rc.112", "@effect/sql-libsql": ">=4.0.0-rc.112", "@effect/sql-mysql2": ">=4.0.0-rc.112", "@effect/sql-pg": ">=4.0.0-rc.112", "@effect/sql-pglite": ">=4.0.0-rc.112", "@effect/sql-sqlite-bun": ">=4.0.0-rc.112", "@effect/sql-sqlite-do": ">=4.0.0-rc.112", "@effect/sql-sqlite-node": ">=4.0.0-rc.112", "@effect/sql-sqlite-wasm": ">=4.0.0-rc.112", "@simplewebauthn/browser": ">=14.0.0 <15", "@simplewebauthn/server": ">=14.0.1 <15", "drizzle-orm": ">=1.0.0-rc.5-ab785fc", "effect": "^4.0.0-rc.112", "effect-cf": "^0.40.0", "openid-client": ">=6.8.8 <7", "tldts": ">=7.4.11 <8" }, "optionalPeers": ["@effect/sql-d1", "@effect/sql-libsql", "@effect/sql-mysql2", "@effect/sql-pg", "@effect/sql-pglite", "@effect/sql-sqlite-bun", "@effect/sql-sqlite-do", "@effect/sql-sqlite-node", "@effect/sql-sqlite-wasm", "@simplewebauthn/browser", "@simplewebauthn/server", "drizzle-orm", "effect-cf", "openid-client", "tldts"] }, "sha512-u8YYKaB5TQBeIDXG/hcE4ZSphZBnUMbfEqi3gLyBE7ZW1E1V8jc5NH/hXQO7JTPhSQ8KAJTIbAODezksU1T/qw=="],
+    "@yielded/auth": ["@yielded/auth@0.1.0-beta.4", "", { "dependencies": { "@noble/ciphers": "2.1.1", "@noble/hashes": "2.3.0" }, "peerDependencies": { "@effect/sql-d1": ">=4.0.0-rc.112", "@effect/sql-libsql": ">=4.0.0-rc.112", "@effect/sql-mysql2": ">=4.0.0-rc.112", "@effect/sql-pg": ">=4.0.0-rc.112", "@effect/sql-pglite": ">=4.0.0-rc.112", "@effect/sql-sqlite-bun": ">=4.0.0-rc.112", "@effect/sql-sqlite-do": ">=4.0.0-rc.112", "@effect/sql-sqlite-node": ">=4.0.0-rc.112", "@effect/sql-sqlite-wasm": ">=4.0.0-rc.112", "@simplewebauthn/browser": ">=14.0.0 <15", "@simplewebauthn/server": ">=14.0.1 <15", "drizzle-orm": ">=1.0.0-rc.5-ab785fc", "effect": "^4.0.0-rc.112", "effect-cf": "^0.40.0", "openid-client": ">=6.8.8 <7", "tldts": ">=7.4.11 <8" }, "optionalPeers": ["@effect/sql-d1", "@effect/sql-libsql", "@effect/sql-mysql2", "@effect/sql-pg", "@effect/sql-pglite", "@effect/sql-sqlite-bun", "@effect/sql-sqlite-do", "@effect/sql-sqlite-node", "@effect/sql-sqlite-wasm", "@simplewebauthn/browser", "@simplewebauthn/server", "drizzle-orm", "effect-cf", "openid-client", "tldts"] }, "sha512-EYJrNY8+gb2EECfw1GURL28sWP5d9Q6LFlMZTj3YQKeh8AxBz/tG7xKSU6d6lxcbk1KpAKx//B8KbRwa19aasw=="],
 
     "@yuku-codegen/binding-darwin-arm64": ["@yuku-codegen/binding-darwin-arm64@0.5.48", "", { "os": "darwin", "cpu": "arm64" }, "sha512-yo96Oef12WzqnphInfz/eexVse3+kWgfGS5g2S3rFS3dcGn1ENW9xLFDZUP9rh+yP76DOq38wBoFi1+I9+6qBg=="],
 

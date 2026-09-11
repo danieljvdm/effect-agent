@@ -208,7 +208,7 @@ vp install
 cp examples/travel-planner/.env.example examples/travel-planner/.env
 ```
 
-Fill the ignored `.env` using `.env.example`. The app pins `@yielded/auth@0.1.0-beta.2`
+Fill the ignored `.env` using `.env.example`. The app pins `@yielded/auth@0.1.0-beta.4`
 and the existing Effect `4.0.0-rc.112` catalog. It uses one `Auth.make` service for
 email codes and GitHub, with the published SQLite Durable Object adapters. Auth owns
 proofs, request binding, credential/session authority and OAuth exchanges; application
@@ -224,6 +224,13 @@ GitHub automatically provisions a new local account when registration is require
 starts a fresh authorization to establish its session. Denied or failed exchanges offer
 an explicit new attempt. Email and GitHub are separate credentials/accounts even if their
 profile emails match. There is no automatic linking, admin bootstrap or invitation gate.
+
+GitHub callbacks must retain the provider's `iss` value as `response.issuer`. The
+provider requires `https://github.com/login/oauth` and rejects missing or mismatched
+issuers before exchanging a code. The corrected provider uses configuration generation
+2; start a fresh GitHub attempt after upgrading from beta.2. This does not reset Auth or
+planner storage. Existing GitHub bindings under the previous `https://github.com` issuer
+are not linked automatically; email accounts and existing account data remain intact.
 
 ```sh
 vp run -F @effect-agent/example-travel-planner dev

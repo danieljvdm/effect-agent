@@ -207,6 +207,7 @@ it("consumes callback credentials once and rejects ambiguous callback shapes bef
       "?state=s&code=one&error=access_denied",
       "?code=one",
       "?state=s&error=x&error=y",
+      "?state=s&code=one&iss=https://github.com/login/oauth&iss=https://other.test",
     ]) {
       const captured = { __elsewhereCallback: query };
       let removed = false;
@@ -223,6 +224,36 @@ it("consumes callback credentials once and rejects ambiguous callback shapes bef
       expect(exit._tag).toBe("Failure");
       expect(captured.__elsewhereCallback).toBeUndefined();
       expect(removed).toBe(true);
+    }
+
+    for (const response of [
+      { _tag: "Code", code: "fixture-code" },
+      { _tag: "Error", error: "access-denied" },
+    ]) {
+      const issuer = "https://github.com/login/oauth";
+      const query = new URLSearchParams({ state: "fixture-state", iss: issuer });
+
+      if (response.code) query.set("code", response.code);
+      else query.set("error", "access_denied");
+      const captured = { __elsewhereCallback: `?${query}` };
+      let removed = false;
+
+      vi.stubGlobal("window", captured);
+      vi.stubGlobal("sessionStorage", {
+        getItem: () => JSON.stringify({ flowId: "public-flow" }),
+        removeItem: () => {
+          removed = true;
+        },
+      });
+      expect(await Effect.runPromise(callbackInput)).toEqual({
+        flowId: "public-flow",
+        provider: "github",
+        callbackId: "github",
+        response: { ...response, state: "fixture-state", issuer },
+      });
+      expect(captured.__elsewhereCallback).toBeUndefined();
+      expect(removed).toBe(true);
+      expect((await Effect.runPromiseExit(callbackInput))._tag).toBe("Failure");
     }
   } finally {
     vi.unstubAllGlobals();
