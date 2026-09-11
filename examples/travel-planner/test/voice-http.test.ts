@@ -35,7 +35,7 @@ const environment = Effect.gen(function* () {
 
   return {
     BYOK_ENCRYPTION_KEY: btoa(String.fromCharCode(...bytes)),
-    THREADS: {
+    ACCOUNT_THREADS: {
       getByName: (owner: string) => ({
         modelCredential: async () => {
           expect(owner).toBe(ownerThread);
@@ -135,7 +135,7 @@ it.effect("refuses voice without BYOK even when an obsolete host key exists", ()
   Effect.gen(function* () {
     const env = {
       DEMO_OPENAI_API_KEY: "sk-obsolete-host-key",
-      THREADS: { getByName: () => ({ modelCredential: async () => "null" }) },
+      ACCOUNT_THREADS: { getByName: () => ({ modelCredential: async () => "null" }) },
     };
 
     let calls = 0;

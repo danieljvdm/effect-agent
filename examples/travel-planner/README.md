@@ -295,7 +295,13 @@ The root docs stack is independent. Deployment credentials are never bound into 
 The `Deploy travel planner` GitHub Actions workflow deploys changes on `main` to this
 production stack and also supports manual dispatch from `main`. It reuses the docs workflow's
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, including the account-wide Alchemy state
-store; it does not need a second Alchemy key. Application checks and tests run before deployment.
+store; it does not need a second Alchemy key. The shared token must cover this app's zone,
+not only the docs zone: Zone Read, DNS Read/Write and Workers Routes Read/Write for
+`effect-agent.com`; account permissions include Workers Scripts, Workers Containers and
+Workers R2 Storage Read/Write, plus the existing Alchemy state-store access. The initial
+cutover also needs temporary Access Apps and Policies Write to remove this app's old
+resources; remove that permission once reconciliation completes. Cloudflare scopes these
+account permissions beyond a single Worker. Application checks and tests run before deployment.
 Set repository Actions secrets `TRAVEL_PLANNER_GITHUB_CLIENT_ID`,
 `TRAVEL_PLANNER_GITHUB_CLIENT_SECRET`, `TRAVEL_PLANNER_AUTH_BINDING_KEY`,
 `TRAVEL_PLANNER_AUTH_PROOF_KEY`, `TRAVEL_PLANNER_AUTH_TRANSACTION_KEY` and
@@ -343,13 +349,13 @@ again and re-enters their OpenAI key. There is no identity migration or recovery
 The following is a release procedure for the owner to approve and execute; PR preparation
 must not deploy, change provider consoles/secrets or delete live data.
 
-| State                       | Exact reset scope                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Old account/agent data      | This stack's `PlannerThread` SQLite Durable Object namespace, including original `travel-planner-owner-v1`, `member-*` owners, their conversation Objects and child workers. This removes trips/revisions, conversation history, admitted work, journals/checkpoints, diagnostics, model settings, encrypted BYOK rows, app/editor records and the old `travel_demo_access` funding row. No other Worker/stack namespace is included. |
-| New auth and planner state  | New logical binding `AuthThreadsV1` / class `AuthPlannerThread`, and `AuthV1` / class `PlannerAuth` (Object name `auth-v1`). The latter begins empty: local subjects, identifiers/provider bindings, credentials, proof/abuse/continuation records, OAuth flow/registration records and sessions. Existing CF Access auth/proofs are external; no shared IdP or Cloudflare account-wide user store is deleted.                        |
-| Source and snapshots        | Old Artifacts namespace exactly `effect-agent-travel-planner`, including trip repositories, published snapshot branches, generated-app forks and old template. New writes use `effect-agent-travel-planner-auth-v1`. No other Artifacts namespace is included.                                                                                                                                                                        |
-| Builds and public addresses | In this stack's `TripAppBuilds` R2 bucket only, old object prefixes `apps/` and `app-addresses/v1/`. New writes use `auth-apps/v1/` and `app-addresses/auth-v1/`. Old generated URLs return not found; there is no legacy admin lookup or automatic directory repair.                                                                                                                                                                 |
-| Browser state               | Close planner tabs; clear site data only for the planner origin, including old Access/Auth cookies, local/session storage, HTTP cache and retained voice admission IDs. New account runtimes discard drafts, history, settings, key metadata, progress and media on sign-out/account change.                                                                                                                                          |
+| State                       | Exact reset scope                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Old account/agent data      | This stack's `PlannerThread` SQLite Durable Object namespace, including original `travel-planner-owner-v1`, `member-*` owners, their conversation Objects and child workers. This removes trips/revisions, conversation history, admitted work, journals/checkpoints, diagnostics, model settings, encrypted BYOK rows, app/editor records and the old `travel_demo_access` funding row. No other Worker/stack namespace is included.            |
+| New auth and planner state  | New env binding `ACCOUNT_THREADS` / declaration `AccountThreadsV1` / class `AccountPlannerThread`, and `AuthV1` / class `PlannerAuth` (Object name `auth-v1`). The latter begins empty: local subjects, identifiers/provider bindings, credentials, proof/abuse/continuation records, OAuth flow/registration records and sessions. Existing CF Access auth/proofs are external; no shared IdP or Cloudflare account-wide user store is deleted. |
+| Source and snapshots        | Old Artifacts namespace exactly `effect-agent-travel-planner`, including trip repositories, published snapshot branches, generated-app forks and old template. New writes use `effect-agent-travel-planner-auth-v1`. No other Artifacts namespace is included.                                                                                                                                                                                   |
+| Builds and public addresses | In this stack's `TripAppBuilds` R2 bucket only, old object prefixes `apps/` and `app-addresses/v1/`. New writes use `auth-apps/v1/` and `app-addresses/auth-v1/`. Old generated URLs return not found; there is no legacy admin lookup or automatic directory repair.                                                                                                                                                                            |
+| Browser state               | Close planner tabs; clear site data only for the planner origin, including old Access/Auth cookies, local/session storage, HTTP cache and retained voice admission IDs. New account runtimes discard drafts, history, settings, key metadata, progress and media on sign-out/account change.                                                                                                                                                     |
 
 1. Inventory the actual deployed Worker, Durable Object namespace ID, `TripAppBuilds`
    bucket name, Artifacts namespace and `SiteBuild` Workflow from **this stack's existing
@@ -368,9 +374,14 @@ must not deploy, change provider consoles/secrets or delete live data.
    from republishing obsolete addresses during cutover. These are app resources, not other
    applications' Workflow or container instances.
 4. Review the Alchemy dry-run against the existing state. Require deletion of only the old
-   `PlannerThread` class and creation of SQLite classes `AuthPlannerThread` and `PlannerAuth`;
-   the new logical ID must not be interpreted as a class rename/transfer. This is an
-   irreversible application namespace deletion on deployment. Require removal of only
+   planner class (`PlannerThread`, or `AuthPlannerThread` if the initial cutover renamed it)
+   and creation of SQLite class `AccountPlannerThread`. Create `PlannerAuth` only if absent;
+   retain an existing Auth database. The old `THREADS` env binding must disappear and
+   `ACCOUNT_THREADS` must be new: Alchemy keys env-bound Objects by binding name, overriding
+   the declaration ID. Changing the declaration ID alone preserves the namespace through a
+   class rename. Require no class rename/transfer and verify that the new planner namespace ID
+   differs from the inventoried old ID. Keep the binding and class stable after this reset.
+   This is an irreversible application namespace deletion on deployment. Require removal of only
    `TravelAccess` and `TravelInvitedUsers`, the new Email binding/auth configuration, fresh
    Artifacts namespace and disabled workers.dev/previews. Preserve the bucket and unrelated
    stack resources. Only then execute the deployment commands above as the release decision.
@@ -379,7 +390,8 @@ must not deploy, change provider consoles/secrets or delete live data.
    then delete those keys and verify both listings are empty. Do not empty the whole bucket
    or touch the new prefixes. Purge CDN cache entries only for the retired generated hostnames
    from step 1; old open tabs/browser caches can retain already public assets until cleared
-   or expired. Verify the old DO namespace is gone. Remove obsolete app-only
+   or expired. Verify the old DO namespace ID is absent from the account listing, even if
+   its class was renamed. Remove obsolete app-only
    `ACCESS_*`, `OPENAI_API_KEY` and `DEMO_OPENAI_API_KEY` Worker bindings if still present:
    Alchemy has previously left a removed secret bound after deployment. Never delete shared
    IdPs, Access groups, other apps' secrets or provider credentials as part of this reset.

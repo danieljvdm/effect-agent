@@ -7,7 +7,7 @@ import { PlannerError, PlannerProgress, ProgressRpcs } from "../domain.ts";
 import { plannerOwner, privateConversation } from "./tenancy.ts";
 
 export interface ProgressEnvironment {
-  readonly THREADS: {
+  readonly ACCOUNT_THREADS: {
     readonly getByName: (name: string) => { readonly plannerProgress: () => Promise<string> };
   };
 }
@@ -81,7 +81,7 @@ export const serveProgress = Effect.fn("serveProgress")(
               const id = yield* privateConversation(owner, conversationId);
 
               const read = Effect.tryPromise({
-                try: () => env.THREADS.getByName(id).plannerProgress(),
+                try: () => env.ACCOUNT_THREADS.getByName(id).plannerProgress(),
                 catch: unavailable,
               }).pipe(
                 Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PlannerProgress))),

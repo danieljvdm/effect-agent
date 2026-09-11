@@ -21,7 +21,7 @@ export { Sandbox } from "@cloudflare/sandbox";
 export { SiteBuild } from "./trip-app/build.ts";
 export { TripData } from "./trip-app/gateway.ts";
 
-export class AuthPlannerThread extends makeTravelPlannerThread(
+export class AccountPlannerThread extends makeTravelPlannerThread(
   Layer.unwrap(
     Effect.map(WorkerEnvironment, (env) => artifactsLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE)),
   ),
@@ -32,7 +32,7 @@ declare global {
     interface Env extends AuthConfiguration, CredentialEnvironment {
       AUTH: DurableObjectNamespace<PlannerAuth>;
       AUTH_EMAIL: SendEmail;
-      THREADS: DurableObjectNamespace<AuthPlannerThread>;
+      ACCOUNT_THREADS: DurableObjectNamespace<AccountPlannerThread>;
       ARTIFACTS: Artifacts;
       ARTIFACTS_GIT_BASE: string;
       ASSETS?: Fetcher;
@@ -251,7 +251,7 @@ export const handleRequest = (verify = authenticate) =>
           const owner = yield* plannerOwner(identity.session.subjectId);
 
           return yield* Effect.promise(async () => {
-            using response = await env.THREADS.getByName(owner).plannerFetch(bounded);
+            using response = await env.ACCOUNT_THREADS.getByName(owner).plannerFetch(bounded);
             const headers = new Headers(response.headers);
 
             headers.set("cache-control", "no-store");

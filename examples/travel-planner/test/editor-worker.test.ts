@@ -36,7 +36,7 @@ const makeRuntime = () =>
       compatibilityDate: "2026-07-01",
       compatibilityFlags: ["nodejs_compat"],
       bindings: { PLANNER_TOKEN: token, APP_DOMAIN: "effect-agent.com" },
-      durableObjects: { THREADS: { className: "TravelPlannerThread", useSQLite: true } },
+      durableObjects: { ACCOUNT_THREADS: { className: "TravelPlannerThread", useSQLite: true } },
       r2Buckets: ["APP_BUILDS"],
       workflows: { SITE_BUILD: { name: "editor-build", className: "FixtureBuild" } },
       resourcePersistencePath: directory,
