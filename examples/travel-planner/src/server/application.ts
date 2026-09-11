@@ -32,7 +32,12 @@ import { AppRepository } from "../trip-app/repository.ts";
 import { plannerActivity } from "./activity.ts";
 import { completedAnswer, legacyTripMessages, type Messages } from "./conversation.ts";
 import { readDiagnostics } from "./diagnostics.ts";
-import { planner, previousTextPlanner, previousVoicePlanner } from "./planner.ts";
+import {
+  planner,
+  previousProgressPlanner,
+  previousTextPlanner,
+  previousVoicePlanner,
+} from "./planner.ts";
 import { requestsPublication } from "./security.ts";
 import { ownerOfThread } from "./tenancy.ts";
 import { TripRepository } from "./trips.ts";
@@ -134,7 +139,9 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
         ? runtime.submitRegistered({ definition: previousTextPlanner }, input, options)
         : admitted.value.agentId === previousVoicePlanner.id
           ? runtime.submitRegistered({ definition: previousVoicePlanner }, input, options)
-          : runtime.submitRegistered({ definition: planner }, input, options)
+          : admitted.value.agentId === previousProgressPlanner.id
+            ? runtime.submitRegistered({ definition: previousProgressPlanner }, input, options)
+            : runtime.submitRegistered({ definition: planner }, input, options)
     ).pipe(Effect.mapError(unavailable));
 
     return { accepted: true as const };

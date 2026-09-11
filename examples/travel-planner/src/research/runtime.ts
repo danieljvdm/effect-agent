@@ -11,7 +11,7 @@ import { Effect, Layer, Option, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
 
 import { PlannerError, PlannerInput } from "../domain.ts";
-import { planner } from "../server/planner.ts";
+import { planner, previousProgressPlanner } from "../server/planner.ts";
 import { PlannerAttempt, ProgressStore } from "../server/progress.ts";
 import { publicationAuthorization } from "../server/security.ts";
 import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
@@ -26,7 +26,7 @@ import {
   ScoutProgressInput,
   EditorReportInput,
   LiveConversationInput,
-  researchCoordinatorId,
+  progressCoordinatorIds,
 } from "./contracts.ts";
 import {
   FinishResearch,
@@ -138,7 +138,7 @@ export const editorReport = Subagent.reporting(AppEditor, {
       !origin ||
       origin.worker.threadId !== report.worker.threadId ||
       origin.source.threadId !== input.sourceThreadId ||
-      origin.source.agentId !== researchCoordinatorId ||
+      !progressCoordinatorIds.includes(origin.source.agentId) ||
       found.value.receiptId !== report.receipt.receiptId
     )
       return yield* unavailable();
@@ -154,6 +154,10 @@ export const editorReport = Subagent.reporting(AppEditor, {
 });
 
 const conversationPeer = Messaging.peer("travel_conversation", { target: planner });
+
+const previousConversationPeer = Messaging.peer("travel_conversation", {
+  target: previousProgressPlanner,
+});
 
 /** Only the canonical scout origin can select the receiving conversation and account. */
 export const ScoutMessagingLive = Layer.unwrap(
@@ -180,7 +184,7 @@ export const ScoutMessagingLive = Layer.unwrap(
         origin.origin.worker.threadId !== source.threadId ||
         origin.origin.worker.targetAgentId !== source.agentId ||
         origin.origin.worker.delegationId !== ResearchScout.delegationId ||
-        origin.origin.source.agentId !== planner.id ||
+        !progressCoordinatorIds.includes(origin.origin.source.agentId) ||
         origin.origin.depth !== 1
       )
         return yield* denied();
@@ -196,10 +200,15 @@ export const ScoutMessagingLive = Layer.unwrap(
       Layer.succeed(PeerRoutes, {
         resolve: (request) =>
           Effect.gen(function* () {
-            if (request.peerName !== conversationPeer.name || request.targetAgentId !== planner.id)
+            const target = yield* destination(request.source, request.principal);
+
+            if (
+              request.peerName !== conversationPeer.name ||
+              request.targetAgentId !== target.agentId
+            )
               return yield* MessagingError.make({ operation: "send", reason: "denied" });
 
-            return (yield* destination(request.source, request.principal)).threadId;
+            return target.threadId;
           }),
       }),
       Layer.succeed(PeerAuthorizer, {
@@ -212,7 +221,7 @@ export const ScoutMessagingLive = Layer.unwrap(
               (request.peerName !== undefined && request.peerName !== conversationPeer.name) ||
               (request.destination &&
                 (request.destination.threadId !== target.threadId ||
-                  request.destination.agentId !== planner.id))
+                  request.destination.agentId !== target.agentId))
             )
               return yield* MessagingError.make({ operation: request.operation, reason: "denied" });
 
@@ -267,7 +276,9 @@ export const scoutAttemptLayer = (context: {
               );
 
               return yield* Messaging.send(
-                conversationPeer,
+                captured.origin.source.agentId === previousProgressPlanner.id
+                  ? previousConversationPeer
+                  : conversationPeer,
                 {
                   _tag: "ResearchScoutProgress",
                   worker: captured.origin.worker,

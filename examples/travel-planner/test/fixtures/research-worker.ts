@@ -28,7 +28,11 @@ import {
   ProgressResearchScoutBackground,
 } from "../../src/research/scout.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
-import { previousEditorPlanner, previousResearchPlanner } from "../../src/server/planner.ts";
+import {
+  previousEditorPlanner,
+  previousResearchPlanner,
+  previousProgressPlanner,
+} from "../../src/server/planner.ts";
 import { PlannerAttempt } from "../../src/server/progress.ts";
 import { ownerOfThread, storageOwner } from "../../src/server/tenancy.ts";
 import { EditorInput } from "../../src/trip-app/editor.ts";
@@ -459,13 +463,22 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
           url.searchParams.get("thread") ?? identity.threadId,
         );
 
-        if (url.pathname === "/__research/seed" || url.pathname === "/__research/seed-research") {
+        if (
+          url.pathname === "/__research/seed" ||
+          url.pathname === "/__research/seed-research" ||
+          url.pathname === "/__research/seed-progress"
+        ) {
           const runtime = yield* DurableAgentRuntime;
           const owner = ownerOfThread(threadId);
-          const research = url.pathname === "/__research/seed-research";
+          const progress = url.pathname === "/__research/seed-progress";
+          const research = progress || url.pathname === "/__research/seed-research";
 
           const input = {
-            message: research ? "start research" : "Previous trip conversation",
+            message: progress
+              ? "start live progress"
+              : research
+                ? "start research"
+                : "Previous trip conversation",
             selectedTripId: null,
             publication: null,
             ...(research
@@ -487,9 +500,11 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
             ),
           };
 
-          yield* research
-            ? runtime.submitRegistered({ definition: previousResearchPlanner }, input, options)
-            : runtime.submitRegistered({ definition: previousEditorPlanner }, input, options);
+          yield* progress
+            ? runtime.submitRegistered({ definition: previousProgressPlanner }, input, options)
+            : research
+              ? runtime.submitRegistered({ definition: previousResearchPlanner }, input, options)
+              : runtime.submitRegistered({ definition: previousEditorPlanner }, input, options);
 
           return Response.json({ accepted: true });
         }
@@ -514,7 +529,11 @@ export default {
         request.headers.get("authorization") !== `Bearer ${env.PLANNER_TOKEN}`
       )
         return new Response("Unauthorized", { status: 401 });
-      if (url.pathname === "/__research/seed" || url.pathname === "/__research/seed-research")
+      if (
+        url.pathname === "/__research/seed" ||
+        url.pathname === "/__research/seed-research" ||
+        url.pathname === "/__research/seed-progress"
+      )
         return env.THREADS.getByName(ownerOfThread(url.searchParams.get("thread") ?? "")).fetch(
           request,
         );
@@ -532,6 +551,7 @@ export default {
         const key = `gate/${url.searchParams.get("name") ?? ""}`;
 
         if (request.method === "POST") await bucket.put(`${key}/open`, "yes");
+        if (request.method === "DELETE") await bucket.delete(`${key}/open`);
 
         return Response.json({ entered: (await bucket.head(`${key}/entered`)) !== null });
       }

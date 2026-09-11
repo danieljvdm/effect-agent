@@ -74,6 +74,7 @@ import { liveModel } from "./models.ts";
 import {
   planner,
   previousVoicePlanner,
+  previousProgressPlanner,
   previousTextPlanner,
   previousBudgetPlanner,
   previousResearchPlanner,
@@ -326,9 +327,20 @@ export const plannerApplication = <E, R>(
       agent: planner,
       model: selectedModel ?? model,
       definitions: DefinitionDigestInput.make({
-        agent: { id: planner.id, version: "travel-planner-v13" },
+        agent: { id: planner.id, version: "travel-planner-v14" },
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(planner.toolkit.tools),
+      }),
+      reporting: [liveScoutReport, editorReport],
+      attemptLayer: (context) => attemptLayer(context, "progress"),
+    },
+    {
+      agent: previousProgressPlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousProgressPlanner.id, version: "travel-planner-v13" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousProgressPlanner.toolkit.tools),
       }),
       reporting: [liveScoutReport, editorReport],
       attemptLayer: (context) => attemptLayer(context, "progress"),

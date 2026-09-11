@@ -10,13 +10,17 @@ export const previousResearchCoordinatorId = "travel-planner-v9";
 export const previousBudgetCoordinatorId = "travel-planner-v10";
 export const previousTextCoordinatorId = "travel-planner-v11";
 export const previousVoiceCoordinatorId = "travel-planner-v12";
-export const researchCoordinatorId = "travel-planner-v13";
+export const previousProgressCoordinatorId = "travel-planner-v13";
+export const researchCoordinatorId = "travel-planner-v14";
+
+export const progressCoordinatorIds = [previousProgressCoordinatorId, researchCoordinatorId];
 
 export const researchCoordinatorIds = [
   previousResearchCoordinatorId,
   previousBudgetCoordinatorId,
   previousTextCoordinatorId,
   previousVoiceCoordinatorId,
+  previousProgressCoordinatorId,
   researchCoordinatorId,
 ];
 
@@ -96,5 +100,6 @@ export const LiveConversationInput = Schema.Union([
 export const expandedCoordinatorIds = [
   previousTextCoordinatorId,
   previousVoiceCoordinatorId,
+  previousProgressCoordinatorId,
   researchCoordinatorId,
 ];

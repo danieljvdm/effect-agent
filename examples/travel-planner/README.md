@@ -45,8 +45,11 @@ viewport while the conversation scrolls. Search results and saved source URLs ar
 Replies arrive as live text. The expandable activity chip keeps a stable step count;
 current work and public progress appear in its details and the response.
 
-The planner can send up to six focused research scouts into the background while asking about
-your preferences. Later details steer those same durable workers. Completed findings return
+The conversational planner delegates public-source research to up to six focused scouts;
+it has no web search or page-reading tools. It dispatches useful independent tasks before
+optional draft saves, then replies after acceptance while asking about your preferences.
+Scouts do not require a saved trip; the app editor does, so a requested site may need a save first.
+Later details steer those same durable workers. Completed findings return
 to the planner automatically; you do not need to ask it to check again. A compact research
 dock above the composer opens live progress and recorded activity in a dialog. Scouts can
 research public sources but cannot book, change trip apps, or launch more agents. Internal
