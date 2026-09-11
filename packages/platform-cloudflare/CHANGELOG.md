@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.79
+
+### Patch Changes
+
+- [#436](https://github.com/danieljvdm/effect-agent/pull/436) [`cf8306d`](https://github.com/danieljvdm/effect-agent/commit/cf8306d6c9de9d561ceb3ff94edf181b4e8adad4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Report recognized Browser Run navigation timeouts with their provider limit and distinguish Quick Action API statuses from destination page statuses.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.79
+  - @effect-agent/engine@0.1.0-beta.79
+  - @effect-agent/sandbox@0.1.0-beta.79
+  - @effect-agent/thread@0.1.0-beta.79
+  - @effect-agent/storage-cloudflare@0.1.0-beta.79
+
 ## 0.1.0-beta.78
 
 ### Patch Changes
