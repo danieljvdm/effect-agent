@@ -170,8 +170,9 @@ describe("unpatched v2 native storage upgrade", () => {
 
           return yield* ledger.admit(request);
         }).pipe(
-          Effect.provide(submissionLedgerLayer),
-          Effect.provide(services(storage, () => undefined)),
+          Effect.provide(
+            submissionLedgerLayer.pipe(Layer.provideMerge(services(storage, () => undefined))),
+          ),
         );
 
         const first = yield* submit;
