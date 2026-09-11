@@ -8,6 +8,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ActivityPanel } from "./components/activity-panel";
 import { AgentProgress } from "./components/agent-progress.tsx";
+import { DemoAccessForm } from "./components/demo-access";
 import { MessageText } from "./components/message-text";
 import { OpenAiConnectionForm } from "./components/openai-connection";
 import { PendingMessages } from "./components/pending-messages";
@@ -15,6 +16,7 @@ import { ResearchScoutCard } from "./components/research-scout-card.tsx";
 import { TravelCards } from "./components/travel/travel-cards";
 import { TripAppCard } from "./components/trip-app-card.tsx";
 import { useMobileViewport } from "./components/use-mobile-viewport";
+import { VoiceControls } from "./components/voice-controls";
 import type { Trip } from "./domain";
 import {
   sessionAtom,
@@ -39,6 +41,7 @@ import {
   messagesAtom,
   openAiConnectionAtom,
   modelSettingsOpenAtom,
+  spokenConversationAtom,
 } from "./state";
 
 function failure(result: AsyncResult.AsyncResult<unknown, unknown>): string | null {
@@ -91,6 +94,12 @@ function PlannerContent() {
   const progress = Option.getOrNull(AsyncResult.value(progressResult));
 
   const messages = useAtomValue(messagesAtom);
+  const spoken = useAtomValue(spokenConversationAtom);
+
+  const voiceActive =
+    spoken?.active &&
+    spoken.conversationId === selection.conversationId &&
+    spoken.email === session?.email;
 
   const busy = sendResult.waiting || (snapshot?.pending ?? 0) > 0;
   const canSend = session !== null && connected && !sendResult.waiting && draft.trim().length > 0;
@@ -112,6 +121,7 @@ function PlannerContent() {
   const transcript = useRef<HTMLDivElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const lastMessageId = messages.at(-1)?.id;
+  const lastMessageText = messages.at(-1)?.text;
   const followResponse = useRef(true);
 
   useMobileViewport(transcript);
@@ -131,7 +141,13 @@ function PlannerContent() {
   useEffect(() => {
     if (followResponse.current)
       transcript.current?.scrollTo({ top: transcript.current.scrollHeight });
-  }, [selection.conversationId, lastMessageId, live?.revision, snapshot?.app?.revision]);
+  }, [
+    selection.conversationId,
+    lastMessageId,
+    lastMessageText,
+    live?.revision,
+    snapshot?.app?.revision,
+  ]);
 
   useEffect(() => {
     const desktop = window.matchMedia("(min-width: 701px)");
@@ -355,45 +371,57 @@ function PlannerContent() {
                     area.scrollHeight - area.scrollTop - area.clientHeight < 80;
                 }}
               >
-                {messages.map((message) => (
-                  <article
-                    key={message.requestId ?? message.id}
-                    className={`message ${message.role}${message.content ? " has-cards" : ""}`}
-                  >
-                    <span className="message-label">
-                      {message.role === "user" ? (
-                        "YOU"
-                      ) : (
-                        <>
-                          ELSEWHERE <ArrowUpRight size={13} aria-hidden="true" />
-                        </>
-                      )}
-                    </span>
-                    {message.content ? (
-                      <TravelCards content={message.content} />
-                    ) : message.role === "user" ? (
-                      <p>{message.text}</p>
-                    ) : (
+                {messages.map((message) =>
+                  message.supporting && !message.content ? (
+                    <details key={message.id} className="conversation-details">
+                      <summary>Trip details</summary>
                       <MessageText text={message.text} />
-                    )}
-                    {message.delivery === "failed" && (
-                      <div className="pending-message-footer">
-                        <span className="pending-message-status" role="status">
-                          Couldn't confirm delivery
-                        </span>
-                        <button
-                          className="pending-message-retry"
-                          type="button"
-                          disabled={sendResult.waiting}
-                          onClick={() => send(message.id)}
-                        >
-                          Retry
-                        </button>
-                      </div>
-                    )}
-                  </article>
-                ))}
-                <AgentProgress progress={visibleProgress} active={live !== null} busy={busy} />
+                    </details>
+                  ) : (
+                    <article
+                      key={message.requestId ?? message.id}
+                      className={`message ${message.role}${message.content ? " has-cards" : ""}`}
+                    >
+                      <span className="message-label">
+                        {message.role === "user" ? (
+                          "YOU"
+                        ) : (
+                          <>
+                            ELSEWHERE <ArrowUpRight size={13} aria-hidden="true" />
+                          </>
+                        )}
+                      </span>
+                      {message.content ? (
+                        <TravelCards content={message.content} />
+                      ) : message.role === "user" ? (
+                        <p>{message.text}</p>
+                      ) : (
+                        <MessageText text={message.text} />
+                      )}
+                      {message.delivery === "failed" && (
+                        <div className="pending-message-footer">
+                          <span className="pending-message-status" role="status">
+                            Couldn't confirm delivery
+                          </span>
+                          <button
+                            className="pending-message-retry"
+                            type="button"
+                            disabled={sendResult.waiting}
+                            onClick={() => send(message.id)}
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  ),
+                )}
+                <AgentProgress
+                  progress={visibleProgress}
+                  active={live !== null}
+                  busy={busy}
+                  showText={!voiceActive}
+                />
               </div>
             )}
             <form
@@ -426,6 +454,7 @@ function PlannerContent() {
                 onRetry={(id) => send(id)}
                 retrying={sendResult.waiting}
               />
+              <VoiceControls enabled={session !== null && connected} />
               <div className="input-wrap">
                 <textarea
                   ref={composerInput}
@@ -584,6 +613,9 @@ function ModelControls() {
           <OpenAiConnectionForm
             key={AsyncResult.isSuccess(session) ? session.value.email : "signed-out"}
           />
+          {AsyncResult.isSuccess(session) && session.value.isAdmin && (
+            <DemoAccessForm key={session.value.email} />
+          )}
           <label htmlFor="planner-model">Model</label>
           <select
             id="planner-model"

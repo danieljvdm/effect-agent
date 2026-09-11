@@ -45,8 +45,11 @@ viewport while the conversation scrolls. Search results and saved source URLs ar
 Replies arrive as live text. The expandable activity chip keeps a stable step count;
 current work and public progress appear in its details and the response.
 
-The planner can send up to six focused research scouts into the background while asking about
-your preferences. Later details steer those same durable workers. Completed findings return
+The conversational planner delegates public-source research to up to six focused scouts;
+it has no web search or page-reading tools. It dispatches useful independent tasks before
+optional draft saves, then replies after acceptance while asking about your preferences.
+Scouts do not require a saved trip; the app editor does, so a requested site may need a save first.
+Later details steer those same durable workers. Completed findings return
 to the planner automatically; you do not need to ask it to check again. A compact research
 dock above the composer opens live progress and recorded activity in a dialog. Scouts can
 research public sources but cannot book, change trip apps, or launch more agents. Internal
@@ -60,6 +63,13 @@ The host allows seven active workers across research and app editing, leaving ro
 scouts and an editor, and retains at most 100 workers per conversation. Each worker accepts
 up to 256 total inputs and 16 pending inputs; its reference lasts seven days. Existing
 conversations and app editors continue to work.
+
+New research scouts validate completion drafts inside the `finish_research` handler. A rejected
+draft returns corrective feedback to the same running scout, preserving its research context.
+Accepted findings still require a summary of at most 4,000 characters, at most six sources, valid
+public HTTPS links, and a complete encoded result of at most 8 KiB. Nothing is silently truncated.
+Corrections use the existing turn, tool, and duration budgets; structural provider errors and
+exhausted budgets can still fail a run. Previously accepted scouts retain their original contracts.
 
 For a request with several parts, the coordinator must complete or dispatch every part
 before its final reply. A request to build a site and find golf courses and surf breaks
@@ -113,7 +123,82 @@ level from Low through Maximum. Luna also supports None. The lightning button sw
 between Standard and Fast processing; Fast uses higher token rates. Preferences are saved to
 the signed-in account and restored on other browsers and devices. Settings are captured when
 a message is admitted. Changing a setting cannot alter
-work already running. The default remains Luna, Low reasoning, Standard speed.
+work already running. Accounts without saved preferences default to Astra, Low reasoning,
+Fast processing. Existing saved preferences remain unchanged.
+
+## Voice conversation
+
+Connect an OpenAI key with access to `gpt-live-1`, then select **Start voice** and allow the
+microphone. GPT-Live handles the spoken conversation and delegates travel work to the existing
+planner. Voice and typed messages use the selected trip conversation, tools, account credentials,
+and durable admission. The voice model is fixed; the planner uses the model settings captured
+when the call starts. This uses [GPT-Live client delegation](https://developers.openai.com/api/docs/guides/live-delegation).
+
+**Stop playback** mutes audio locally. **End voice** closes the call; accepted planning and app
+work continues. Spoken lines appear under the same You and Elsewhere speakers in the main
+conversation. Display grouping follows each speaker’s transcript timestamps independently:
+brief overlapping acknowledgments do not split a continuing user sentence, while distinct
+assistant updates get separate messages. Questions and substantive replies separate quick
+user answers. Grouping uses revisable timing heuristics, retains original caption fragments,
+and never submits or cancels work. A typed-input boundary or replacement call starts fresh
+groups; already saved transcripts are not retrospectively rewritten. Full planner answers
+remain available under **Trip details** while voice carries
+the exchange; cards stay visible. You can type during a call or return to text afterward. Typed
+follow-ups include recent spoken context, and voice follows their results without resubmitting
+them. Only a delegation event admits spoken work. Its user request and attributed conversation
+context are separate fields; a transcript never becomes a synthetic user message or title. The delegation policy explicitly includes answers to preference questions and corrections to ongoing work (such as confirming 50 km running ability). The planner sends accepted corrections to the relevant existing workers before claiming they were applied.
+
+Reconnect creates a replacement voice session with recent saved conversation history. This tab
+retains up to sixteen frozen request envelopes in session storage, partitioned by verified email
+and conversation. Reconnect looks up every prepared or uncertain admission by its original request
+ID before retrying any missing admission with its exact envelope; accepted work is only observed.
+Newer spoken or typed input changes which result voice follows without abandoning older uncertain
+requests. During a call, those requests remain observed; another attempt requires reconnect.
+Only known admissions can be evicted from the retry cache. If all sixteen entries are unresolved,
+voice disconnects before admitting another request so reconnect can reconcile them.
+Closing the tab loses this local retry cache,
+while already accepted work and its canonical conversation remain saved. Recent undelegated
+speech stays in this tab after ending a call, and accompanies the next typed or spoken request.
+It is not promised to survive reload before that submission. Changing conversations or
+accounts closes the media session. A full page reload can require reopening the original trip
+before reconnecting.
+
+Only native response text, designated `deliver_response.message` previews,
+and schema-decoded settled answers reach the voice model. Previews are explicitly
+provisional and sent as context; final answers use canonical settlement. Reasoning, credentials,
+raw tool output and diagnostics are excluded. A short summary of the saved trip and visible
+option names keeps references such as “the second one” grounded in the screen. Later canonical
+research answers return to the same voice exchange. Successfully settled research summaries
+can reach voice before the planner finishes synthesizing the full answer. The complete public
+summary arrives as bounded quiet context chunks, including its caveats, before one spoken
+finding update. Each result is sent
+once; corrections discard pending notes. Activity labels and timers do not trigger waiting
+announcements. A planner reply does not consume unrelated pending scout findings. Raw tool data, private reasoning, and diagnostics are excluded. New scouts can deliberately report a sourced milestone with `report_research_progress` while they continue; Effect Agent durable messaging delivers it to the original conversation. The host derives the destination and account from canonical worker lineage, never model-selected routing. These milestones preserve uncertainty and cannot authorize new research or app edits. Earlier accepted workers retain their original executable definitions and completion reporting. A brief utterance
+delays an outgoing result without discarding it; actual delegated corrections and typed requests
+replace the work followed by voice.
+Typing redirects the current explanation without leaving audio muted. Provider acknowledgment,
+playback and durable settlement remain separate internal states; no event proves speech was heard. Website editing and deployment remain separate: editor completion reports return to the planner, while current build phases update voice context directly. A newly ready or failed website gets a spoken update without another user request; an earlier ready version is not announced as the requested edit while its editor is active.
+
+The browser uses WebRTC media and a bounded event queue (128 events, 32 KiB per event). It waits
+for `session.started`, keeps at most 128 caption fragments, coalesces pending delegation metadata,
+and limits each call to fifteen minutes and 64 delegation IDs. Public context appends are capped
+at 420 UTF-8 bytes, with at most one outstanding acknowledgment and progress updates no more
+often than every three seconds. Startup, acknowledgment, admission, and close waits are bounded.
+Failed connections require explicit reconnect. Closing audio never calls planner cancellation.
+
+Session creation runs behind the existing Access authentication, origin checks, and request-size
+limit, using only the verified account's encrypted key. It requests `gpt-live-1` with client
+delegation and returns only the session ID and SDP answer. No shared key or credential reaches
+the browser. Voice sessions incur provider duration charges separately from planner inference.
+Removing a saved key prevents new sessions and new planner model requests; an already established
+voice session must be ended separately.
+
+For the live acceptance check, start a new conversation and speak a request that requires saving
+or researching a trip. Confirm tool activity, a saved planner answer, and an audible answer.
+Interrupt playback while work is pending, end and reconnect the call, and verify that the same
+request/receipt finishes without repeating the accepted work. Then type a correction and confirm
+it updates the same conversation. Deterministic transport tests cover these boundaries but do
+not substitute for checking real microphone input, provider delegation, and audible playback.
 
 ## Run
 
@@ -140,7 +225,7 @@ The Alchemy CLI prints the local URL. Local requests also require a valid Access
 deterministic tests substitute authentication only in their test Worker. There is no
 production development bypass. Cloudflare credentials must target the account
 that will host the application. Artifacts and Browser Run require account access to
-those products. The deployment has no OpenAI API key; each account supplies its own.
+those products. Accounts supply their own OpenAI key unless the administrator grants Demo access to a configured shared key.
 
 Model selection and the provider's native web-search tool stay at the host boundary.
 The agent accepts a research toolkit and a provider-independent model Layer.
@@ -230,12 +315,30 @@ reply, refresh the connection status before retrying. Unsupported rows fail with
 Every model HTTP request resolves the current key from the verified account. Planner attempts use
 the host-owned conversation namespace; scouts and editors use their validated canonical source
 lineage, never a model-supplied billing account or the child thread's name. Legacy registrations
-also require the owner's key. There is no deployment-key fallback. Rotation affects the next
-model request; removal prevents new requests, including background work. An already dispatched
+also require the owner's key. A missing personal key can use `DEMO_OPENAI_API_KEY` only when the canonical account is on the administrator’s Demo access list. A malformed or unreadable personal credential never falls back. Rotation affects the next
+model request; personal-key removal uses demo access if granted, otherwise it prevents new requests, including background work. An already dispatched
 provider request may finish. Failed work is not automatically replayed when a key is reconnected.
 Saved trips, messages, and published apps remain readable without a key, and existing accounts
-must connect a key after this upgrade. Removing a key deletes the current credential row;
+need a personal key or explicit Demo access to make model requests. Removing a key deletes the current credential row;
 provider-side revocation is needed to invalidate copies in historical database backups.
+
+### Sponsored demo access
+
+Configure the optional `DEMO_OPENAI_API_KEY` Worker secret, then use **Settings → Demo access**
+as the administrator to add or remove exact email addresses (up to 200). The list starts empty;
+public registration alone never grants shared-key access. Emails are normalized to lowercase and
+matched to the namespace derived from the verified Access identity. A personal key takes precedence.
+Eligible accounts without one see **Demo access · included** and can use planning, scouts, app editing,
+and voice without receiving the shared key. Trips and conversations remain private per account.
+
+Funding permissions live in a separate versioned SQLite row in the existing administrator Object.
+Only the verified administrator can list or change them, including when public registration is open.
+The host rechecks permissions for each model HTTP request and each new voice call, using canonical
+worker lineage for scouts/editors. Removal therefore applies to subsequent requests; an in-flight
+provider request or already established voice call may finish. It does not cancel accepted tasks,
+erase trips, or revoke a personal key. Storage, decoding, and permission-lookup failures fail closed.
+Uncertain writes require refreshing the list before retrying; grants and removals are idempotent.
+The list and shared key never enter model prompts, agent records, generated sites, or diagnostics.
 
 ## Boundaries and behavior
 

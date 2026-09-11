@@ -18,6 +18,13 @@ export type AccessSession = typeof AccessSession.Type;
 export const AccessMembers = Schema.Struct({ emails: Schema.Array(Email), adminEmail: Email });
 export type AccessMembers = typeof AccessMembers.Type;
 
+export const DemoAccessList = Schema.Struct({
+  emails: Schema.Array(Email).check(Schema.isMaxLength(200)),
+  configured: Schema.Boolean,
+});
+
+export type DemoAccessList = typeof DemoAccessList.Type;
+
 export class AccessError extends Schema.TaggedError<AccessError>()("AccessError", {
   code: Schema.Literals(["unauthorized", "forbidden", "invalid", "unavailable"]),
   message: Schema.String,
@@ -25,6 +32,17 @@ export class AccessError extends Schema.TaggedError<AccessError>()("AccessError"
 
 export const AccessRpcs = RpcGroup.make(
   Rpc.make("GetSession", { success: AccessSession, error: AccessError }),
+  Rpc.make("GetDemoAccess", { success: DemoAccessList, error: AccessError }),
+  Rpc.make("GrantDemoAccess", {
+    payload: Schema.Struct({ email: Email }),
+    success: DemoAccessList,
+    error: AccessError,
+  }),
+  Rpc.make("RevokeDemoAccess", {
+    payload: Schema.Struct({ email: Email }),
+    success: DemoAccessList,
+    error: AccessError,
+  }),
   Rpc.make("GetMembers", { success: AccessMembers, error: AccessError }),
   Rpc.make("InviteMember", {
     payload: Schema.Struct({ email: Email }),

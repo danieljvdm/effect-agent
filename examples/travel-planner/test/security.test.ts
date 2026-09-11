@@ -91,9 +91,7 @@ it("allows only the admitted selected trip and revision, ignoring model claims o
 
 it("assembles read-only planner access without a deployment OpenAI key", async () => {
   const configured = (values: Record<string, string>) =>
-    liveModel({
-      THREADS: { getByName: () => ({ modelCredential: async () => "null" }) },
-    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(values))));
+    liveModel.pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(values))));
 
   expect((await Effect.runPromise(configured({}))).label).toBe("gpt-5.6-luna");
   expect(

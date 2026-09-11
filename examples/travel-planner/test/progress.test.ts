@@ -57,7 +57,7 @@ it.effect("bounds progress and ignores writers from replaced attempts", () =>
 );
 
 it.effect(
-  "passes provider events through unchanged while exposing only answer text and real search lifecycle",
+  "passes provider events through unchanged while observing only provider diagnostics and search lifecycle",
   () =>
     Effect.gen(function* () {
       const store = yield* ProgressStore;
@@ -147,7 +147,7 @@ it.effect(
         { id: "search", label: "Searching the web", state: "running", startedAt: 0 },
       ]);
       expect(frames.at(-1)?.tools[0]?.state).toBe("complete");
-      expect(frames.at(-1)?.text).toBe("A cabin with a hot tub.");
+      expect(frames.at(-1)?.text).toBe("");
       expect(JSON.stringify(frames)).not.toContain("private reasoning");
       expect(JSON.stringify(frames)).not.toContain("Tahoe cabins");
     }).pipe(Effect.provide(ProgressStore.layer)),

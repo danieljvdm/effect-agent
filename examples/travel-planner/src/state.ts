@@ -11,6 +11,7 @@ import {
   type AccessMembers,
   type AccessSession,
 } from "./access-domain";
+import { mergeSpeech, speechContext } from "./conversation.ts";
 import type { OpenAiConnection } from "./credential-domain";
 import {
   PlannerError,
@@ -23,6 +24,8 @@ import {
   type SavedTrip,
   type ConversationSummary,
   type PlannerSnapshot,
+  type SendMessageRequest,
+  type SpokenMessage,
 } from "./domain";
 
 export class AccessClient extends AtomRpc.Service<AccessClient>()("travel-planner/AccessClient", {
@@ -102,6 +105,22 @@ export const selectionAtom = Atom.make<{
 
 export const draftAtom = Atom.make("");
 
+/** New typed input fences earlier spoken results without cancelling accepted work. */
+export const latestTypedInputAtom = Atom.make({ revision: 0, text: "" });
+
+/** The same submitted request is observed by voice; voice never resubmits a typed input. */
+export const conversationRequestAtom = Atom.make<SendMessageRequest | null>(null);
+
+/** In-tab speech remains available after ending a call, including exchanges without work. */
+export const spokenConversationAtom = Atom.make<{
+  readonly email: string;
+  readonly conversationId: string;
+  readonly messages: ReadonlyArray<SpokenMessage>;
+  readonly baseline: ReadonlyArray<string>;
+  readonly responses: ReadonlyArray<string>;
+  readonly active: boolean;
+} | null>(null).pipe(Atom.keepAlive);
+
 type PendingMessage = {
   readonly email: string;
   readonly text: string;
@@ -109,6 +128,7 @@ type PendingMessage = {
   readonly conversationId: string;
   readonly id: string;
   readonly settings?: PlannerSettings;
+  readonly voice?: SendMessageRequest["voice"];
   readonly placement: "conversation" | "queue";
   readonly status: "sending" | "accepted" | "failed";
 };
@@ -572,7 +592,7 @@ export const messagesAtom = Atom.make((get): ReadonlyArray<ConversationMessage> 
   if (get(visibleSessionAtom) === null) return [];
   const snapshot = Option.getOrNull(AsyncResult.value(get(plannerAtom)));
 
-  return [
+  const messages: ReadonlyArray<ConversationMessage> = [
     ...(snapshot?.messages.filter((message) => message.id !== "welcome") ?? []),
     ...get(unrecordedMessagesAtom)
       .filter((entry) => entry.placement === "conversation")
@@ -585,6 +605,26 @@ export const messagesAtom = Atom.make((get): ReadonlyArray<ConversationMessage> 
         delivery: entry.status,
       })),
   ];
+
+  const spoken = get(spokenConversationAtom);
+
+  if (
+    spoken?.email !== get(visibleSessionAtom)?.email ||
+    spoken?.conversationId !== get(selectionAtom).conversationId
+  )
+    return messages;
+
+  return mergeSpeech(
+    messages.map((message) =>
+      message.response &&
+      !message.content &&
+      (spoken.responses.includes(message.id) ||
+        (spoken.active && !spoken.baseline.includes(message.id)))
+        ? { ...message, supporting: true }
+        : message,
+    ),
+    spoken.messages,
+  );
 });
 
 /** The server queue survives reload; local entries preserve where each send first appeared. */
@@ -664,6 +704,21 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
     const conversationId = retry?.conversationId ?? selection.conversationId ?? crypto.randomUUID();
     const selectedTripId = retry ? retry.tripId : (get(activeTripAtom)?.id ?? null);
     const requestId = retry?.id ?? crypto.randomUUID();
+    const spoken = get(spokenConversationAtom);
+
+    const voice = retry
+      ? retry.voice
+      : spoken?.email === session.email &&
+          spoken.conversationId === conversationId &&
+          spoken.messages.length > 0
+        ? { input: false, messages: speechContext(spoken.messages) }
+        : undefined;
+
+    if (retry === undefined)
+      get.set(latestTypedInputAtom, {
+        revision: get(latestTypedInputAtom).revision + 1,
+        text: message,
+      });
     const snapshot = Option.getOrNull(AsyncResult.value(get(plannerAtom)));
 
     const waiting =
@@ -680,8 +735,18 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
       tripId: selectedTripId,
       conversationId,
       id: requestId,
-      placement: retry?.placement ?? (waiting ? "queue" : "conversation"),
+      placement:
+        retry?.placement ??
+        (waiting &&
+        !(
+          spoken?.active &&
+          spoken.email === session.email &&
+          spoken.conversationId === conversationId
+        )
+          ? "queue"
+          : "conversation"),
       status: "sending",
+      ...(voice === undefined ? {} : { voice }),
     };
 
     get.set(
@@ -709,10 +774,17 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
       );
       const client = yield* PlannerClient;
 
-      yield* Reactivity.mutation(
-        client("SendMessage", { message, requestId, selectedTripId, conversationId, settings }),
-        ["planner"],
-      );
+      const request = {
+        message,
+        requestId,
+        selectedTripId,
+        conversationId,
+        settings,
+        ...(voice === undefined ? {} : { voice }),
+      };
+
+      get.set(conversationRequestAtom, request);
+      yield* Reactivity.mutation(client("SendMessage", request), ["planner"]);
     }).pipe(
       Effect.onExit((exit) =>
         Effect.sync(() => {

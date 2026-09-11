@@ -2441,7 +2441,8 @@
   max-height: calc(var(--planner-viewport-height, 100dvh) - 100px);
   overflow-y: auto;
 }
-.openai-connection {
+.openai-connection,
+.demo-access {
   border-bottom: 1px solid #e5e9dd;
   padding-bottom: 18px;
   margin-bottom: 16px;
@@ -2450,7 +2451,8 @@
   font-size: 14px;
   font-weight: 600;
 }
-.openai-connection input {
+.openai-connection input,
+.demo-access input {
   width: 100%;
   min-width: 0;
   border: 1px solid #dce1d3;
@@ -2501,4 +2503,95 @@
   background: #eef1e7;
   color: #476c51;
   font-size: 13px;
+}
+
+.voice-controls {
+  font-size: 0.8rem;
+  margin-bottom: 0.65rem;
+}
+.voice-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.voice-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.voice-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.voice-controls audio {
+  height: 30px;
+  max-width: 100%;
+  margin-top: 0.5rem;
+}
+.voice-controls p {
+  margin: 0.35rem 0;
+}
+.voice-captions {
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 0.4rem;
+}
+
+.conversation-details {
+  color: var(--muted, #737d70);
+  font-size: 0.9rem;
+  margin: 0 0 1.5rem;
+}
+.conversation-details summary {
+  cursor: pointer;
+}
+.conversation-details[open] {
+  color: inherit;
+}
+
+.demo-access summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+.demo-access summary span {
+  float: right;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.demo-access-list {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.demo-access-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.demo-access-list li span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.demo-access-list button {
+  flex-shrink: 0;
+  padding: 6px;
+  color: #6b4b3d;
+  text-decoration: underline;
+}
+.demo-access-list button:disabled {
+  opacity: 0.5;
 }

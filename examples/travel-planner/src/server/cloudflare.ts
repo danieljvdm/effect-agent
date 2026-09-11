@@ -26,16 +26,27 @@ import {
   defaultPlannerSettings,
 } from "../domain.ts";
 import { ReadTravelPageLive } from "../research.ts";
-import { CoordinatorInput } from "../research/contracts.ts";
+import { LiveConversationInput } from "../research/contracts.ts";
 import {
   ResearchAuthorizationLive,
   researchScoutReport,
+  conversationScoutReport,
   scoutAttemptLayer,
+  liveScoutReport,
+  recoverableScoutReport,
+  editorReport,
+  ScoutMessagingLive,
 } from "../research/runtime.ts";
 import {
   ExpandedResearchScoutBackground,
   ResearchScoutBackground,
   researchScout,
+  progressResearchScout,
+  recoverableResearchScout,
+  RecoverableResearchScoutBackground,
+  PreviousProgressResearchScoutBackground,
+  ProgressResearchScoutBackground,
+  PreviousResearchScoutBackground,
 } from "../research/scout.ts";
 import { AppBuildBucketLive } from "../trip-app/bindings.ts";
 import { EditorHostLive, editorAttemptLayer } from "../trip-app/editor-runtime.ts";
@@ -49,13 +60,22 @@ import {
 } from "../trip-app/service.ts";
 import { AppToolsLive } from "../trip-app/tools-live.ts";
 import { AccessCommand, AccessReply, manageAccess } from "./access-admin.ts";
-import { PlannerModel, plannerSnapshot, sendMessage } from "./application.ts";
+import { PlannerModel, plannerSnapshot, sendMessage, voiceWork } from "./application.ts";
+import type { CredentialSource } from "./credentials.ts";
 import {
   CredentialStore,
   credentialStoreLayer,
+  credentialSourceLayer,
   encodeStoredCredential,
+  connectionWithDemoAccess,
   validateOpenAiKey,
 } from "./credentials.ts";
+import {
+  DemoAccessCommand,
+  DemoAccessReply,
+  DemoAccessStore,
+  DemoAccessStoreLive,
+} from "./demo-access.ts";
 import {
   DiagnosticContext,
   DiagnosticObserverLive,
@@ -66,6 +86,10 @@ import {
 import { liveModel } from "./models.ts";
 import {
   planner,
+  previousVoicePlanner,
+  previousProgressPlanner,
+  previousDelegatingPlanner,
+  previousTextPlanner,
   previousBudgetPlanner,
   previousResearchPlanner,
   previousEditorPlanner,
@@ -102,8 +126,19 @@ const safeRpc = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     ),
   );
 
+const CredentialSourceLive: Layer.Layer<CredentialSource, never, WorkerEnvironment> = Layer.unwrap(
+  Effect.map(WorkerEnvironment, credentialSourceLayer),
+);
+
+const effectiveConnection = Effect.gen(function* () {
+  const identity = yield* ThreadObjectIdentity;
+  const connection = yield* Effect.flatMap(CredentialStore, (store) => store.status);
+
+  return yield* connectionWithDemoAccess(identity.threadId, connection);
+});
+
 export const plannerHandlers = PlannerRpcs.toLayer({
-  GetOpenAiConnection: () => safeRpc(Effect.flatMap(CredentialStore, (store) => store.status)),
+  GetOpenAiConnection: () => safeRpc(effectiveConnection),
   ConnectOpenAi: ({ apiKey }) =>
     safeRpc(
       Effect.gen(function* () {
@@ -116,7 +151,12 @@ export const plannerHandlers = PlannerRpcs.toLayer({
         return yield* store.save(verified);
       }),
     ),
-  DisconnectOpenAi: () => safeRpc(Effect.flatMap(CredentialStore, (store) => store.remove)),
+  DisconnectOpenAi: () =>
+    safeRpc(
+      Effect.flatMap(CredentialStore, (store) => store.remove).pipe(
+        Effect.andThen(effectiveConnection),
+      ),
+    ),
   CreateTripApp: ({ tripId }) => safeRpc(createTripApp(tripId)),
   RetryTripAppBuild: ({ tripId }) => safeRpc(retryTripAppBuild(tripId)),
   RestoreTripApp: ({ tripId, commitId }) => safeRpc(restoreTripApp(tripId, commitId)),
@@ -182,6 +222,19 @@ export const plannerHandlers = PlannerRpcs.toLayer({
         return publicSnapshot(identity.threadId, snapshot);
       }),
     ),
+  GetVoiceWork: (request) =>
+    safeRpc(
+      Effect.gen(function* () {
+        const identity = yield* ThreadObjectIdentity;
+
+        const conversationId = yield* privateConversation(
+          identity.threadId,
+          request.conversationId,
+        );
+
+        return yield* voiceWork({ ...request, conversationId });
+      }),
+    ),
   SendMessage: (request) =>
     Effect.gen(function* () {
       const identity = yield* ThreadObjectIdentity;
@@ -236,13 +289,21 @@ export const plannerApplication = <E, R>(
       readonly submissionId: SubmissionLookupById["submissionId"];
       readonly attemptId: string;
     },
-    expandedResearch = false,
+    expandedResearch: boolean | "progress" | "recoverable" = false,
   ) =>
     Layer.mergeAll(
       TripToolsLive(context.threadId),
       AppToolsLive,
       AppEditorBackground.layer,
-      expandedResearch ? ExpandedResearchScoutBackground.layer : ResearchScoutBackground.layer,
+      PreviousResearchScoutBackground.layer,
+      PreviousProgressResearchScoutBackground.layer,
+      expandedResearch === "recoverable"
+        ? RecoverableResearchScoutBackground.layer
+        : expandedResearch === "progress"
+          ? ProgressResearchScoutBackground.layer
+          : expandedResearch
+            ? ExpandedResearchScoutBackground.layer
+            : ResearchScoutBackground.layer,
     ).pipe(
       Layer.provideMerge(
         Layer.effect(
@@ -263,7 +324,9 @@ export const plannerApplication = <E, R>(
                 Effect.flatMap((found) =>
                   Option.isNone(found) || found.value.threadId !== context.threadId
                     ? Effect.fail(unavailable())
-                    : Schema.decodeUnknownEffect(CoordinatorInput)(found.value.inputPayload).pipe(
+                    : Schema.decodeUnknownEffect(LiveConversationInput)(
+                        found.value.inputPayload,
+                      ).pipe(
                         Effect.map((input) => input.settings ?? defaultPlannerSettings),
                         Effect.mapError(unavailable),
                       ),
@@ -297,9 +360,53 @@ export const plannerApplication = <E, R>(
       agent: planner,
       model: selectedModel ?? model,
       definitions: DefinitionDigestInput.make({
-        agent: { id: planner.id, version: "travel-planner-v11" },
+        agent: { id: planner.id, version: "travel-planner-v15" },
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(planner.toolkit.tools),
+      }),
+      reporting: [recoverableScoutReport, editorReport],
+      attemptLayer: (context) => attemptLayer(context, "recoverable"),
+    },
+    {
+      agent: previousDelegatingPlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousDelegatingPlanner.id, version: "travel-planner-v14" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousDelegatingPlanner.toolkit.tools),
+      }),
+      reporting: [liveScoutReport, editorReport],
+      attemptLayer: (context) => attemptLayer(context, "progress"),
+    },
+    {
+      agent: previousProgressPlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousProgressPlanner.id, version: "travel-planner-v13" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousProgressPlanner.toolkit.tools),
+      }),
+      reporting: [liveScoutReport, editorReport],
+      attemptLayer: (context) => attemptLayer(context, "progress"),
+    },
+    {
+      agent: previousVoicePlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousVoicePlanner.id, version: "travel-planner-v12" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousVoicePlanner.toolkit.tools),
+      }),
+      reporting: [conversationScoutReport],
+      attemptLayer: (context) => attemptLayer(context, true),
+    },
+    {
+      agent: previousTextPlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousTextPlanner.id, version: "travel-planner-v11" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousTextPlanner.toolkit.tools),
       }),
       reporting: [researchScoutReport],
       attemptLayer: (context) => attemptLayer(context, true),
@@ -335,6 +442,42 @@ export const plannerApplication = <E, R>(
         tools: Object.keys(previousEditorPlanner.toolkit.tools),
       }),
       attemptLayer,
+    },
+    {
+      agent: recoverableResearchScout,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: recoverableResearchScout.id, version: "travel-research-scout-v3" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(recoverableResearchScout.toolkit.tools),
+      }),
+      attemptLayer: (context) =>
+        scoutAttemptLayer(context, true).pipe(
+          Layer.provideMerge(
+            Layer.succeed(DiagnosticContext, {
+              submissionId: context.submissionId,
+              attemptId: context.attemptId,
+            }),
+          ),
+        ),
+    },
+    {
+      agent: progressResearchScout,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: progressResearchScout.id, version: "travel-research-scout-v2" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(progressResearchScout.toolkit.tools),
+      }),
+      attemptLayer: (context) =>
+        scoutAttemptLayer(context).pipe(
+          Layer.provideMerge(
+            Layer.succeed(DiagnosticContext, {
+              submissionId: context.submissionId,
+              attemptId: context.attemptId,
+            }),
+          ),
+        ),
     },
     {
       agent: researchScout,
@@ -437,6 +580,7 @@ export const plannerApplication = <E, R>(
     Layer.provide(EditorHostLive),
     Layer.provide(ResearchAuthorizationLive),
     Layer.provide(DiagnosticObserverLive),
+    Layer.provide(ScoutMessagingLive),
   );
 
   // Acquire the owner's SQL once, then capture the repository in the registered tools.
@@ -446,6 +590,7 @@ export const plannerApplication = <E, R>(
     OwnerAppRepositoryLive,
     AppBuildBucketLive,
     PlannerSettingsStoreLive,
+    DemoAccessStoreLive,
     Layer.unwrap(
       Effect.gen(function* () {
         const env = yield* WorkerEnvironment;
@@ -454,6 +599,7 @@ export const plannerApplication = <E, R>(
         return credentialStoreLayer(env, identity.threadId);
       }),
     ),
+    CredentialSourceLive,
     FailureDiagnosticsLive,
     sourceLayer,
   ).pipe(Layer.provideMerge(ThreadObject.layer([])));
@@ -476,21 +622,15 @@ const PlannerLive = Layer.unwrap(
         message: "The planner requires a Browser Run binding.",
       });
 
-    const model: Effect.Success<ReturnType<typeof liveModel>> = yield* liveModel({
-      BYOK_ENCRYPTION_KEY: env.BYOK_ENCRYPTION_KEY,
-      THREADS: {
-        getByName: (owner) => ({
-          modelCredential: (): Promise<string> => env.THREADS.getByName(owner).modelCredential(),
-        }),
-      },
-    });
+    const model: Effect.Success<typeof liveModel> = yield* liveModel;
+    const credentials: Layer.Layer<CredentialSource> = credentialSourceLayer(env);
 
     return plannerApplication(
-      model.model,
+      model.model.pipe(Layer.provide(credentials)),
       model.identity,
       model.label,
       CloudflareBrowser.layer({ handlers: ReadTravelPageLive }, { browser: env.BROWSER }),
-      model.selectable,
+      model.selectable.pipe(Layer.provide(credentials)),
     );
   }),
 );
@@ -510,6 +650,39 @@ export const makeTravelPlannerThread = <E>(
     maxInputBytes: 16 * 1024,
   }) {
     private readonly accessChanges = Semaphore.makeUnsafe(1);
+
+    /** Host-only permission check: a browser/model cannot select its funding identity. */
+    demoAccessAllowed(owner: string): Promise<boolean> {
+      return this[DurableObject.RunSymbol](
+        Effect.flatMap(DemoAccessStore, (store) => store.allows(owner)),
+      );
+    }
+
+    /** The edge requires the verified administrator before exposing this mutation. */
+    manageDemoAccess(encoded: string): Promise<string> {
+      return this[DurableObject.RunSymbol](
+        Schema.decodeUnknownEffect(Schema.fromJsonString(DemoAccessCommand))(encoded).pipe(
+          Effect.mapError(
+            () => new AccessError({ code: "invalid", message: "Invalid demo access request." }),
+          ),
+          Effect.flatMap((command) =>
+            Effect.flatMap(DemoAccessStore, (store) => store.manage(command)),
+          ),
+          Effect.catchDefect(
+            () =>
+              new AccessError({
+                code: "unavailable",
+                message: "Demo access failed unexpectedly. Refresh the list before retrying.",
+              }),
+          ),
+          Effect.match({
+            onSuccess: (value) => ({ _tag: "Success" as const, value }),
+            onFailure: (error) => ({ _tag: "Failure" as const, error }),
+          }),
+          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(DemoAccessReply))),
+        ),
+      );
+    }
 
     /** Host-only lookup; no HTTP route exposes ciphertext or decrypted model credentials. */
     modelCredential(): Promise<string> {

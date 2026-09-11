@@ -115,7 +115,7 @@ it("allows exact legacy trip links without enabling arbitrary local actions", ()
     expect(safeMessageUrl(path)).toBeUndefined();
 });
 
-it("preserves the v9 coordinator's native worker requirements and typed failures", () => {
+it("keeps the conversational coordinator's native worker requirements and typed failures", () => {
   const run = AgentRuntime.run(currentPlanner, {
     message: "Restyle the trip app and continue camping research",
     selectedTripId: "trip",

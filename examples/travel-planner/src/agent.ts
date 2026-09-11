@@ -7,7 +7,7 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 import {
   PlannerAnswer,
   PlannerError,
-  PlannerInput,
+  TextPlannerInput,
   PublishTripRequest,
   PublishedSite,
   SaveTripRequest,
@@ -133,7 +133,7 @@ export const makePlanner = <Tools extends Record<string, Tool.Any>>(
   cards = false,
 ) =>
   Agent.make(legacy ? "travel-planner" : cards ? "travel-planner-v4" : "travel-planner-v3", {
-    input: PlannerInput,
+    input: TextPlannerInput,
     output: legacy ? PlannerAnswer : Output.text(Text),
     instructions: () =>
       Effect.map(

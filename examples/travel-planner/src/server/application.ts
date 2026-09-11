@@ -11,10 +11,13 @@ import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadSto
 import { Context, Effect, Option, Schema, Stream } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 
+import { mergeSpeech } from "../conversation.ts";
 import {
+  type VoiceWork,
   PlannerError,
   PlannerInput,
   PlannerSettings,
+  type VoiceWorkRequest,
   defaultPlannerSettings,
   type PlannerSnapshot,
   type SendMessageRequest,
@@ -29,7 +32,12 @@ import { AppRepository } from "../trip-app/repository.ts";
 import { plannerActivity } from "./activity.ts";
 import { completedAnswer, legacyTripMessages, type Messages } from "./conversation.ts";
 import { readDiagnostics } from "./diagnostics.ts";
-import { planner } from "./planner.ts";
+import {
+  planner,
+  previousProgressPlanner,
+  previousTextPlanner,
+  previousVoicePlanner,
+} from "./planner.ts";
 import { requestsPublication } from "./security.ts";
 import { ownerOfThread } from "./tenancy.ts";
 import { TripRepository } from "./trips.ts";
@@ -112,6 +120,7 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
 
     if (
       input.message !== request.message ||
+      JSON.stringify(input.voice) !== JSON.stringify(request.voice) ||
       input.selectedTripId !== request.selectedTripId ||
       priorSettings.model !== settings.model ||
       priorSettings.reasoningEffort !== settings.reasoningEffort ||
@@ -123,9 +132,17 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
       });
     // Preserve the admitted publication revision and legacy seed when acknowledgement was lost.
     // Resubmission completes readiness; finding an admitted ledger row alone is not acceptance.
-    yield* runtime
-      .submitRegistered({ definition: planner }, input, { threadId, principal, idempotencyKey })
-      .pipe(Effect.mapError(unavailable));
+    const options = { threadId, principal, idempotencyKey };
+
+    yield* (
+      admitted.value.agentId === previousTextPlanner.id
+        ? runtime.submitRegistered({ definition: previousTextPlanner }, input, options)
+        : admitted.value.agentId === previousVoicePlanner.id
+          ? runtime.submitRegistered({ definition: previousVoicePlanner }, input, options)
+          : admitted.value.agentId === previousProgressPlanner.id
+            ? runtime.submitRegistered({ definition: previousProgressPlanner }, input, options)
+            : runtime.submitRegistered({ definition: planner }, input, options)
+    ).pipe(Effect.mapError(unavailable));
 
     return { accepted: true as const };
   }
@@ -162,6 +179,7 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
       { definition: planner },
       {
         message: request.message,
+        ...(request.voice === undefined ? {} : { voice: request.voice }),
         settings,
         selectedTripId: request.selectedTripId,
         publication:
@@ -206,7 +224,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
     Effect.mapError(unavailable),
   );
 
-  const messages: Messages = [
+  let messages: Messages = [
     { id: "welcome", role: "assistant", text: "Where do you want to go?", tripId: null },
     ...previous,
   ];
@@ -236,13 +254,31 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
         if (input._tag === "Some") {
           selected = input.value.selectedTripId;
           if (payload.submissionId !== undefined) recordedInputs.add(payload.submissionId);
-          messages.push({
-            id,
-            role: "user",
-            text: input.value.message,
-            tripId: selected,
-            ...(payload.submissionId === undefined ? {} : { submissionId: payload.submissionId }),
-          });
+          if (input.value.voice) messages = [...mergeSpeech(messages, input.value.voice.messages)];
+
+          const spokenInput = input.value.voice?.input
+            ? input.value.voice.messages.findLast((message) => message.role === "user")
+            : undefined;
+
+          if (spokenInput) {
+            messages = messages.map((message) =>
+              message.id === spokenInput.id
+                ? {
+                    ...message,
+                    ...(payload.submissionId === undefined
+                      ? {}
+                      : { submissionId: payload.submissionId }),
+                  }
+                : message,
+            );
+          } else
+            messages.push({
+              id,
+              role: "user",
+              text: input.value.message,
+              tripId: selected,
+              ...(payload.submissionId === undefined ? {} : { submissionId: payload.submissionId }),
+            });
         }
         break;
       }
@@ -255,6 +291,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
             role: "assistant",
             text: typeof answer.value === "string" ? answer.value : answer.value.message,
             tripId: selected,
+            response: true,
           });
         break;
       }
@@ -358,7 +395,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
     if (recordedInputs.has(submission.submissionId)) return [];
     const input = Schema.decodeUnknownOption(PlannerInput)(submission.inputPayload);
 
-    return Option.isSome(input)
+    return Option.isSome(input) && !input.value.voice?.input
       ? [{ requestId: submission.idempotencyKey, text: input.value.message }]
       : [];
   });
@@ -386,4 +423,107 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
       estimatedCostMicrousd: null,
     },
   } satisfies PlannerSnapshot;
+});
+
+/** Reconcile by the original admitted key. Never admit or replay from a read. */
+export const voiceWork = Effect.fn("voiceWork")(function* (request: typeof VoiceWorkRequest.Type) {
+  const identity = yield* ThreadObjectIdentity;
+
+  const lookup = yield* Schema.decodeUnknownEffect(SubmissionLookupByKey)({
+    _tag: "SubmissionLookupByKey",
+    threadId: request.conversationId,
+    principal: identity.threadId === ownerThread ? ownerPrincipal : identity.threadId,
+    idempotencyKey: request.requestId,
+  }).pipe(Effect.mapError(unavailable));
+
+  const ledger = yield* SubmissionLedger;
+  const found = yield* ledger.lookup(lookup).pipe(Effect.mapError(unavailable));
+
+  if (Option.isNone(found))
+    return {
+      requestId: request.requestId,
+      receiptId: null,
+      superseded: false,
+      submissionId: null,
+      runId: null,
+      state: "missing",
+      text: null,
+    } satisfies VoiceWork;
+  const submission = found.value;
+  const history = yield* readThread(request.conversationId);
+  const records = history?.records ?? [];
+
+  const pending = yield* ledger.scanNonterminal.pipe(
+    Stream.runCollect,
+    Effect.mapError(unavailable),
+  );
+
+  const inputIndex = records.findIndex(
+    ({ record }) =>
+      record.payload._tag === "UserInputRecorded" &&
+      record.payload.submissionId === submission.submissionId,
+  );
+
+  const superseded =
+    pending.some(
+      (next) =>
+        next.threadId === submission.threadId &&
+        next.queueSequence > submission.queueSequence &&
+        Schema.is(PlannerInput)(next.inputPayload),
+    ) ||
+    (inputIndex >= 0 &&
+      records
+        .slice(inputIndex + 1)
+        .some(
+          ({ record }) =>
+            record.payload._tag === "UserInputRecorded" &&
+            Schema.is(PlannerInput)(record.payload.input),
+        ));
+
+  const settled = records.find(
+    ({ record }) =>
+      record.payload._tag === "SubmissionSettled" &&
+      record.payload.submissionId === submission.submissionId,
+  )?.record.payload;
+
+  const input = records.find(
+    ({ record }) =>
+      record.payload._tag === "UserInputRecorded" &&
+      record.payload.submissionId === submission.submissionId,
+  )?.record.payload;
+
+  const runId =
+    (settled?._tag === "SubmissionSettled" ? settled.runId : undefined) ??
+    (input?._tag === "UserInputRecorded" ? input.runId : undefined);
+
+  // Joined inputs settle with the host; only the host stores the validated result.
+  const host =
+    runId === undefined
+      ? undefined
+      : records.find(
+          ({ record }) =>
+            record.payload._tag === "SubmissionSettled" && record.payload.runId === runId,
+        )?.record.payload;
+
+  const result = host?._tag === "SubmissionSettled" ? host : settled;
+  const state = settled?._tag === "SubmissionSettled" ? settled.outcome : "pending";
+
+  const answer =
+    state === "completed" && result?._tag === "SubmissionSettled"
+      ? Schema.decodeUnknownOption(completedAnswer)(result.result)
+      : Option.none();
+
+  return {
+    requestId: request.requestId,
+    receiptId: submission.receiptId,
+    superseded,
+    submissionId: submission.submissionId,
+    runId: runId ?? null,
+    state,
+    text: Option.isSome(answer)
+      ? typeof answer.value === "string"
+        ? answer.value
+        : answer.value.message
+      : null,
+  } satisfies VoiceWork;
 });

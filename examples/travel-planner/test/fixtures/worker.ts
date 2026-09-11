@@ -34,7 +34,11 @@ const worker = makeWorker(
       ),
     );
 
-    return { email, isAdmin: email === adminEmail };
+    return {
+      email,
+      isAdmin: email === adminEmail,
+      ...(env.ACCESS_OPEN_REGISTRATION === "true" ? { registration: "open" as const } : {}),
+    };
   }),
 );
 

@@ -16,6 +16,7 @@ import {
   researchCoordinatorId,
   ScoutInput,
   ScoutReportInput,
+  ScoutProgressInput,
 } from "../src/research/contracts.ts";
 
 const token = "research-worker-fixture";
@@ -192,6 +193,7 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
   expect(active.messages.some((message) => message.text.includes("What is your budget?"))).toBe(
     true,
   );
+  expect(active.scouts?.every((scout) => scout.finding === undefined)).toBe(true);
   const ids = active.scouts?.map((scout) => scout.id).sort();
 
   expect((await snapshot("other@example.com")).scouts).toEqual([]);
@@ -262,6 +264,14 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
       await fixture("journal", { thread: scout.id }),
     );
 
+    const settled = journal.records.findLast(
+      ({ record }) => record.payload._tag === "SubmissionSettled",
+    )?.record.payload;
+
+    if (settled?._tag !== "SubmissionSettled") throw new Error("Expected settled scout");
+    expect(scout.finding).toEqual({ id: settled.settlementId, text: scout.progress.text });
+    expect(settled.outcome).toBe("completed");
+
     const admitted = journal.records.flatMap(({ record }) =>
       record.payload._tag === "UserInputRecorded"
         ? [Schema.decodeUnknownSync(ScoutInput)(record.payload.input)]
@@ -327,6 +337,104 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
     ),
   ).toBe(true);
 }, 90_000);
+
+it.each(["current", "retained", "delegating"])(
+  "delivers a %s sourced milestone before worker completion and accepts a correction on that active worker",
+  async (version) => {
+    const email = `progress-${version}@example.com`;
+    const thread = `member-${createHash("sha256").update(email).digest("hex")}--research`;
+
+    await fixture("gate", { name: "Live progress" }, "DELETE");
+    if (version !== "current")
+      await fixture(
+        "seed-progress",
+        { thread, version, settings: JSON.stringify(settings) },
+        "POST",
+      );
+    else await send("start live progress", email);
+
+    const active = await until(
+      () => snapshot(email),
+      (state) =>
+        state.pending === 0 &&
+        state.scouts?.[0]?.state === "active" &&
+        state.messages.some(
+          (message) => message.text === "Verified milestone received while research continues.",
+        ),
+    );
+
+    const id = active.scouts?.[0]?.id;
+
+    expect(id).toBeTruthy();
+    expect(
+      (await snapshot("unrelated@example.com")).messages.some((message) =>
+        message.text.includes("milestone"),
+      ),
+    ).toBe(false);
+    const parent = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
+
+    const updates = parent.records.flatMap(({ record }) =>
+      record.payload._tag === "UserInputRecorded" &&
+      Schema.is(ScoutProgressInput)(record.payload.input)
+        ? [record.payload.input]
+        : [],
+    );
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.settings).toEqual(settings);
+    expect(updates[0]?.finding.summary).toContain("availability is unconfirmed");
+    await send("steer live progress 50 km", email);
+
+    const steered = await until(
+      () => snapshot(email),
+      (state) =>
+        state.pending === 0 && state.scouts?.[0]?.task.includes("Experienced at 50 km") === true,
+    );
+
+    expect(steered.scouts?.[0]?.id).toBe(id);
+    expect(steered.scouts?.[0]?.state).toBe("active");
+    await fixture("gate", { name: "Live progress" }, "POST");
+
+    const completed = await until(
+      () => snapshot(email),
+      (state) => state.scouts?.[0]?.state === "idle",
+    );
+
+    expect(completed.scouts?.[0]?.finding?.text).toContain("Experienced at 50 km");
+    if (!id) throw new Error("Missing completed scout identity");
+    const child = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread: id }));
+
+    const failed = child.records.flatMap(({ record }) =>
+      record.payload._tag === "ToolCallSettled" &&
+      record.payload.toolName === "finish_research" &&
+      record.payload.isFailure
+        ? [record.payload]
+        : [],
+    );
+
+    expect(failed).toHaveLength(version === "current" ? 1 : 0);
+    expect(
+      child.records.filter(({ record }) => record.payload._tag === "RunCompleted"),
+    ).toHaveLength(1);
+
+    const completionStarted = child.records.findIndex(
+      ({ record }) =>
+        record.payload._tag === "ToolCallSettled" && record.payload.toolName === "finish_research",
+    );
+
+    expect(completionStarted).toBeGreaterThanOrEqual(0);
+    expect(
+      child.records
+        .slice(completionStarted)
+        .filter(
+          ({ record }) =>
+            record.payload._tag === "ToolCallSettled" &&
+            record.payload.toolName === "read_travel_page",
+        ),
+    ).toHaveLength(0);
+  },
+  90_000,
+);
 
 it("runs six scouts and an editor beyond the old budgets, preserves them across restart, and bounds admission", async () => {
   const email = "expanded@example.com";

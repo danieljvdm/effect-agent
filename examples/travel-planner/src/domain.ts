@@ -217,10 +217,25 @@ export const PlannerSettings = Schema.Union([
 export type PlannerSettings = typeof PlannerSettings.Type;
 
 export const defaultPlannerSettings: PlannerSettings = {
-  model: "gpt-5.6-luna",
+  model: "gpt-6-astra",
   reasoningEffort: "low",
-  fast: false,
+  fast: true,
 };
+
+/** App-owned speech history, separate from requests to execute work. */
+export const SpokenMessage = Schema.Struct({
+  id: Schema.String.check(Schema.isPattern(/^speech-[a-zA-Z0-9-]+$/), Schema.isMaxLength(100)),
+  role: Schema.Literals(["user", "assistant"]),
+  text: Schema.String.check(Schema.isMaxLength(8000)),
+  after: Schema.NullOr(Schema.String),
+});
+
+export type SpokenMessage = typeof SpokenMessage.Type;
+
+export const VoiceContext = Schema.Struct({
+  input: Schema.Boolean,
+  messages: Schema.Array(SpokenMessage).check(Schema.isMaxLength(48)),
+}).check(Schema.makeFilter((value) => JSON.stringify(value).length <= 24000));
 
 export const SendMessageRequest = Schema.Struct({
   message: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4000)),
@@ -228,11 +243,30 @@ export const SendMessageRequest = Schema.Struct({
   selectedTripId: Schema.NullOr(TripId),
   conversationId: ConversationId,
   settings: Schema.optionalKey(PlannerSettings),
+  voice: Schema.optionalKey(VoiceContext),
 });
 
 export type SendMessageRequest = typeof SendMessageRequest.Type;
 
-export const PlannerInput = Schema.Struct({
+export const VoiceWorkRequest = Schema.Struct({
+  requestId: TripId,
+  conversationId: ConversationId,
+});
+
+/** Read-only receipt/result projection; never implies that speech was heard. */
+export const VoiceWork = Schema.Struct({
+  requestId: TripId,
+  receiptId: Schema.NullOr(Schema.String),
+  superseded: Schema.Boolean,
+  submissionId: Schema.NullOr(Schema.String),
+  runId: Schema.NullOr(Schema.String),
+  state: Schema.Literals(["missing", "pending", "completed", "failed", "aborted"]),
+  text: Schema.NullOr(Text),
+});
+
+export type VoiceWork = typeof VoiceWork.Type;
+
+export const TextPlannerInput = Schema.Struct({
   message: SendMessageRequest.fields.message,
   selectedTripId: Schema.NullOr(TripId),
   publication: Schema.NullOr(PublishTripRequest),
@@ -240,6 +274,11 @@ export const PlannerInput = Schema.Struct({
   previousMessages: Schema.optionalKey(
     Schema.Array(Schema.Struct({ role: Schema.Literals(["user", "assistant"]), text: Text })),
   ),
+});
+
+export const PlannerInput = Schema.Struct({
+  ...TextPlannerInput.fields,
+  voice: SendMessageRequest.fields.voice,
 });
 
 export const PlannerAnswer = Schema.Struct({ message: Text });
@@ -301,6 +340,8 @@ export type EditorActivity = typeof EditorActivity.Type;
 export const ResearchScoutActivity = Schema.Struct({
   ...EditorActivity.fields,
   title: ShortText,
+  /** Latest successfully settled public summary; never a partial model preview. */
+  finding: Schema.optionalKey(Schema.Struct({ id: Schema.String, text: Text })),
 });
 
 export type ResearchScoutActivity = typeof ResearchScoutActivity.Type;
@@ -319,6 +360,8 @@ export const PlannerSnapshot = Schema.Struct({
       requestId: Schema.optionalKey(Schema.String),
       submissionId: Schema.optionalKey(Schema.String),
       content: Schema.optionalKey(TravelContent),
+      supporting: Schema.optionalKey(Schema.Boolean),
+      response: Schema.optionalKey(Schema.Boolean),
     }),
   ),
   trips: Schema.Array(SavedTrip),
@@ -394,6 +437,11 @@ export const PlannerRpcs = RpcGroup.make(
   Rpc.make("SendMessage", {
     payload: SendMessageRequest,
     success: Schema.Struct({ accepted: Schema.Literal(true) }),
+    error: PlannerError,
+  }),
+  Rpc.make("GetVoiceWork", {
+    payload: VoiceWorkRequest,
+    success: VoiceWork,
     error: PlannerError,
   }),
   Rpc.make("SaveTrip", { payload: SaveTripRpcRequest, success: Trip, error: PlannerError }),

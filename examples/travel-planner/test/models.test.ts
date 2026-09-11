@@ -1,10 +1,11 @@
+import * as Agent from "@effect-agent/core/Agent";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { OpenAiClient } from "@effect/ai-openai";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { it } from "@effect/vitest";
 import { ConfigProvider, Effect, Layer, Redacted, Ref, Result, Schema, Stream } from "effect";
-import { LanguageModel, Model } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 import { expect, expectTypeOf } from "vite-plus/test";
 
@@ -16,11 +17,19 @@ import {
   Trip,
   TripSiteStore,
 } from "../src/domain.ts";
+import { CheckedFinishResearch, CheckedFinishResearchLive } from "../src/research/completion.ts";
+import { ScoutFindings } from "../src/research/contracts.ts";
+import {
+  credentialSourceLayer,
+  credentialForOwner,
+  type CredentialSource,
+} from "../src/server/credentials.ts";
 import { FailureDiagnostics, type FailureDiagnostic } from "../src/server/diagnostics.ts";
 import { liveModel, observeOpenAi, selectableModel } from "../src/server/models.ts";
 // Retain these protocol/legacy-publication regressions against the admitted v5 definition.
 import { previousResponsePlanner as planner } from "../src/server/planner.ts";
 import { PlannerAttempt, ProgressStore } from "../src/server/progress.ts";
+import { PublicOutputLive } from "../src/server/public-output.ts";
 import { TripRepository } from "../src/server/trips.ts";
 import { FixtureBrowserLive } from "./fixtures/browser.ts";
 
@@ -334,7 +343,7 @@ it.effect(
         expect((yield* store.read).text).toBe("A useful answer.");
       }
       expectTypeOf<
-        Layer.Services<ReturnType<typeof selectableModel>>
+        Layer.Services<ReturnType<typeof selectableModel<never>>>
       >().toEqualTypeOf<PlannerAttempt>();
     }).pipe(Effect.provide(ProgressStore.layer)),
 );
@@ -345,7 +354,13 @@ it.effect(
     Effect.gen(function* () {
       const store = yield* ProgressStore;
       const progress = yield* store.begin("submission", "attempt");
-      const selection = yield* Ref.make<PlannerSettings>(defaultPlannerSettings);
+
+      const selection = yield* Ref.make<PlannerSettings>({
+        model: "gpt-5.6-luna",
+        reasoningEffort: "low",
+        fast: false,
+      });
+
       const settings = yield* Effect.cached(Ref.get(selection));
 
       const model = selectableModel(Redacted.make("fake-api-key")).pipe(
@@ -407,9 +422,14 @@ it.effect(
 
 it.effect("retains the exact legacy model identity and rejects unsupported UI settings", () =>
   Effect.gen(function* () {
-    const legacy = yield* liveModel({
-      THREADS: { getByName: () => ({ modelCredential: async () => "null" }) },
-    }).pipe(
+    const funded = selectableModel(credentialForOwner("fixture"));
+
+    expectTypeOf<Layer.Services<typeof funded>>().toEqualTypeOf<
+      PlannerAttempt | CredentialSource
+    >();
+    expectTypeOf<Layer.Error<typeof funded>>().toEqualTypeOf<never>();
+
+    const legacy = yield* liveModel.pipe(
       Effect.provide(
         ConfigProvider.layer(ConfigProvider.fromEnvRecord({ OPENAI_API_KEY: "fake-api-key" })),
       ),
@@ -614,19 +634,46 @@ it.effect("streams only deliver-response message arguments through the real SDK 
       Effect.provideService(FetchHttpClient.Fetch, fetch),
     );
 
-    const observed = observeOpenAi(client, {
-      ...progress,
-      text: (delta) =>
-        progress.text(delta).pipe(
-          Effect.andThen(
-            Effect.sync(() => {
-              writes.push(delta);
-            }),
-          ),
+    const native = yield* LanguageModel.LanguageModel.pipe(
+      Effect.provide(
+        OpenAiLanguageModel.model("gpt-5.6-luna").pipe(
+          Layer.provide(Layer.succeed(OpenAiClient.OpenAiClient, client)),
         ),
-    });
+      ),
+    );
 
-    const [, stream] = yield* observed.createResponseStream({ model: "gpt-5.6-luna", input: [] });
+    const observed = yield* LanguageModel.LanguageModel.pipe(
+      Effect.provide(PublicOutputLive),
+      Effect.provideService(LanguageModel.LanguageModel, native),
+      Effect.provideService(PlannerAttempt, {
+        billingOwner: Effect.succeed("fixture"),
+        settings: Effect.succeed(defaultPlannerSettings),
+        progress: {
+          ...progress,
+          text: (delta) =>
+            progress.text(delta).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  writes.push(delta);
+                }),
+              ),
+            ),
+        },
+      }),
+    );
+
+    const responseTools = Toolkit.make(
+      Tool.make("deliver_response", {
+        parameters: Schema.Struct({ message: Schema.String, content: Schema.Unknown }),
+        success: Schema.Void,
+      }),
+    );
+
+    const stream = observed.streamText({
+      prompt: "Research a stay",
+      disableToolCallResolution: true,
+      toolkit: responseTools,
+    });
 
     const received = yield* Stream.runCollect(
       stream.pipe(
@@ -638,14 +685,13 @@ it.effect("streams only deliver-response message arguments through the real SDK 
           ),
         ),
       ),
-    );
+    ).pipe(Effect.provide(responseTools.toLayer({ deliver_response: () => Effect.void })));
 
-    expect(received.map((event) => event.type)).toEqual(events.map((event) => event.type));
+    expect(received.some((part) => part.type === "tool-params-start")).toBe(true);
     expect(writes.length).toBeGreaterThan(2);
     expect(writes[0]).toBe("A ");
     expect(writes.join("")).toBe('A "quiet" stay\nTahoe 🚀.');
-    expect(frames.slice(0, 4)).toEqual(["", "", "", ""]);
-    expect(frames[4]).toBe("A ");
+    expect(frames).toContain("A ");
     expect(frames.at(-1)).toBe('A "quiet" stay\nTahoe 🚀.');
     expect(JSON.stringify(frames)).not.toContain("SECRET");
     expect((yield* store.read).tools).toEqual([]);
@@ -745,10 +791,11 @@ it.effect(
 
       const lookedUp: string[] = [];
 
-      const live = yield* liveModel({
+      const credentials = credentialSourceLayer({
         BYOK_ENCRYPTION_KEY: btoa(String.fromCharCode(...encryption)),
         THREADS: {
           getByName: (owner) => ({
+            demoAccessAllowed: async () => false,
             modelCredential: async () => {
               lookedUp.push(owner);
 
@@ -758,6 +805,7 @@ it.effect(
         },
       });
 
+      const live = yield* liveModel;
       const requests: string[] = [];
 
       const fetch: typeof globalThis.fetch = async (_url, init) => {
@@ -781,6 +829,7 @@ it.effect(
       }).pipe(
         Effect.provide(
           live.selectable.pipe(
+            Layer.provide(credentials),
             Layer.provide(
               Layer.succeed(PlannerAttempt, {
                 billingOwner: Effect.succeed(alice),
@@ -795,6 +844,7 @@ it.effect(
       yield* ask.pipe(
         Effect.provide(
           live.selectable.pipe(
+            Layer.provide(credentials),
             Layer.provide(
               Layer.succeed(PlannerAttempt, {
                 billingOwner: Effect.succeed(bob),
@@ -822,4 +872,92 @@ it.effect(
         ),
       ),
     ),
+);
+
+it.effect(
+  "lets the scout correct oversized findings through OpenAI and the agent loop before completing",
+  () =>
+    Effect.gen(function* () {
+      const evidence = {
+        summary:
+          "Ferry Building food stops and Golden Gate Park suit a balanced San Francisco week. October dates and hotel prices remain unverified.",
+        sources: [
+          {
+            title: "San Francisco",
+            url: "https://www.sftravel.com/",
+            notes: "Destination reference; no hotel availability confirmed.",
+            photos: [],
+          },
+        ],
+      };
+
+      const oversized = { ...evidence, summary: "Research detail. ".repeat(300) };
+
+      const oversizedBytes = {
+        ...evidence,
+        summary: "😀".repeat(1900),
+        sources: Array.from({ length: 6 }, () => evidence.sources[0]),
+      };
+
+      const invalidUrl = {
+        ...evidence,
+        sources: [{ ...evidence.sources[0], url: "https://localhost/secret" }],
+      };
+
+      for (const rejected of [oversized, oversizedBytes, invalidUrl]) {
+        const drafts = [rejected, evidence];
+        const requests: string[] = [];
+
+        const scout = Agent.make("research-validation-fixture", {
+          input: Schema.String,
+          output: ScoutFindings,
+          toolkit: Toolkit.make(CheckedFinishResearch),
+          policy: { maxTurns: 5, maxToolCalls: 5 },
+          instructions:
+            "Finish the existing research. Correct rejected drafts without starting over.",
+          completion: { tool: "finish_research", required: true, project: ({ result }) => result },
+        });
+
+        const fetch: typeof globalThis.fetch = async (_url, init) => {
+          requests.push(await new Response(init?.body).text());
+          const draft = drafts[requests.length - 1];
+
+          if (!draft) throw new Error("Unexpected additional research turn");
+
+          return functionAnswer([{ name: "finish_research", params: draft }], requests.length);
+        };
+
+        const client = OpenAiClient.layer({ apiKey: Redacted.make("fake-api-key") }).pipe(
+          Layer.provide(FetchHttpClient.layer),
+        );
+
+        const events = yield* AgentRuntime.stream(
+          scout,
+          "Plan one week in San Francisco from Louisville; preserve the research already gathered.",
+        ).pipe(
+          Stream.runCollect,
+          Effect.provide([
+            OpenAiLanguageModel.model("gpt-6-astra").pipe(Layer.provide(client)),
+            CheckedFinishResearchLive,
+            IdGenerator.layer,
+            ThreadHistory.layerTransient,
+          ]),
+          Effect.provideService(FetchHttpClient.Fetch, fetch),
+        );
+
+        expect(requests).toHaveLength(2);
+        for (const request of requests.slice(1)) {
+          expect(request).toContain("Findings were not accepted");
+          expect(request).toContain("8192 bytes");
+          expect(request).toContain("Louisville");
+        }
+        expect(events.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
+        expect(events.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(1);
+        const completed = events.find((event) => event._tag === "RunCompleted");
+
+        expect(completed?.output).toEqual(evidence);
+      }
+      expectTypeOf<Layer.Services<typeof CheckedFinishResearchLive>>().toEqualTypeOf<never>();
+      expectTypeOf<Layer.Error<typeof CheckedFinishResearchLive>>().toEqualTypeOf<never>();
+    }),
 );

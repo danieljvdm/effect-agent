@@ -23,9 +23,19 @@ import {
 } from "../../src/domain.ts";
 import { ReadTravelPage } from "../../src/research.ts";
 import { ScoutInput } from "../../src/research/contracts.ts";
-import { ResearchScoutBackground } from "../../src/research/scout.ts";
+import {
+  ResearchScoutBackground,
+  ProgressResearchScoutBackground,
+  RecoverableResearchScoutBackground,
+  PreviousProgressResearchScoutBackground,
+} from "../../src/research/scout.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
-import { previousEditorPlanner, previousResearchPlanner } from "../../src/server/planner.ts";
+import {
+  previousEditorPlanner,
+  previousResearchPlanner,
+  previousProgressPlanner,
+  previousDelegatingPlanner,
+} from "../../src/server/planner.ts";
 import { PlannerAttempt } from "../../src/server/progress.ts";
 import { ownerOfThread, storageOwner } from "../../src/server/tenancy.ts";
 import { EditorInput } from "../../src/trip-app/editor.ts";
@@ -154,6 +164,25 @@ const model = Model.make(
               );
               const key = `gate/${scout.input.title}`;
 
+              if (
+                scout.input.title === "Live progress" &&
+                tools.some((tool) => tool.name === "report_research_progress") &&
+                !results(prompt, scout.index).some(
+                  (result) => result.name === "report_research_progress",
+                )
+              )
+                return Stream.fromIterable(
+                  call(
+                    "report_research_progress",
+                    {
+                      summary:
+                        "The coastal trail offers a verified 50 km route; entry availability is unconfirmed.",
+                      sources: ["https://visitlisboa.com"],
+                    },
+                    `milestone-${scout.index}`,
+                  ),
+                );
+
               yield* Effect.promise(() => bucket.put(`${key}/entered`, "yes"));
               while ((yield* Effect.promise(() => bucket.head(`${key}/open`))) === null)
                 yield* Effect.sleep("25 millis");
@@ -168,6 +197,24 @@ const model = Model.make(
                     "read_travel_page",
                     { url: "https://visitlisboa.com", focus: scout.input.message },
                     `read-${scout.index}-${reads}`,
+                  ),
+                );
+
+              if (
+                scout.input.title === "Live progress" &&
+                tools.some(
+                  (tool) => tool.name === "finish_research" && tool.failureMode === "return",
+                ) &&
+                !results(prompt, scout.index).some((result) => result.name === "finish_research")
+              )
+                return Stream.fromIterable(
+                  call(
+                    "finish_research",
+                    {
+                      summary: "Evidence that must be shortened. ".repeat(150),
+                      sources: [],
+                    },
+                    `oversized-${scout.index}`,
                   ),
                 );
 
@@ -190,6 +237,22 @@ const model = Model.make(
               );
             }
             const parent = inputs(prompt, PlannerInput).at(-1);
+
+            const internalIndex = prompt.content.findLastIndex(
+              (message) =>
+                message.role === "user" &&
+                message.content.some(
+                  (part) =>
+                    part.type === "text" &&
+                    (part.text.startsWith("Internal research milestone") ||
+                      part.text.startsWith("Internal app editor completion")),
+                ),
+            );
+
+            if (internalIndex > (parent?.index ?? -1))
+              return Stream.fromIterable(
+                finish("Verified milestone received while research continues."),
+              );
 
             const reportIndex = prompt.content.findLastIndex(
               (message) =>
@@ -224,6 +287,56 @@ const model = Model.make(
             }
             if (!parent) return Stream.fromIterable(finish("Ready"));
             const current = results(prompt, parent.index);
+
+            if (parent.input.message === "start live progress")
+              return Stream.fromIterable(
+                current.some((result) => result.name === "research_scout_start")
+                  ? finish("Research started.")
+                  : call("research_scout_start", {
+                      title: "Live progress",
+                      message: "Find coastal trails; distance unknown",
+                    }),
+              );
+            if (parent.input.message === "steer live progress 50 km") {
+              const started = results(prompt).find(
+                (result) => result.name === "research_scout_start" && !result.isFailure,
+              );
+
+              if (!started) return yield* Effect.die("Missing live scout");
+
+              const previous = Option.isSome(
+                Schema.decodeUnknownOption(
+                  ProgressResearchScoutBackground.tools.research_scout_start.successSchema,
+                )(started.result),
+              );
+
+              const start = previous
+                ? ProgressResearchScoutBackground.tools.research_scout_start
+                : RecoverableResearchScoutBackground.tools.research_scout_start;
+
+              const follow = previous
+                ? PreviousProgressResearchScoutBackground.tools
+                    .previous_progress_research_scout_follow_up
+                : RecoverableResearchScoutBackground.tools.research_scout_follow_up;
+
+              const accepted = yield* Schema.decodeUnknownEffect(start.successSchema)(
+                started.result,
+              ).pipe(Effect.orDie);
+
+              return Stream.fromIterable(
+                current.some((result) => result.name === follow.name)
+                  ? finish("50 km correction accepted.")
+                  : call(follow.name, {
+                      worker: Schema.encodeSync(follow.parametersSchema.fields.worker)(
+                        accepted.worker,
+                      ),
+                      parameters: {
+                        title: "Live progress",
+                        message: "Experienced at 50 km; include ultra distances",
+                      },
+                    }),
+              );
+            }
 
             if (parent.input.message === "start expanded research") {
               const started = current.filter(
@@ -283,7 +396,7 @@ const model = Model.make(
             }
             if (
               parent.input.message.startsWith("follow research") &&
-              !current.some((result) => result.name === "research_scout_follow_up")
+              !current.some((result) => result.name === "previous_research_scout_follow_up")
             ) {
               const started = results(prompt).find(
                 (result) => result.name === "research_scout_start" && !result.isFailure,
@@ -297,7 +410,7 @@ const model = Model.make(
 
               return Stream.fromIterable(
                 call(
-                  "research_scout_follow_up",
+                  "previous_research_scout_follow_up",
                   {
                     worker: Schema.encodeSync(
                       ResearchScoutBackground.tools.research_scout_follow_up.parametersSchema.fields
@@ -385,13 +498,22 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
           url.searchParams.get("thread") ?? identity.threadId,
         );
 
-        if (url.pathname === "/__research/seed" || url.pathname === "/__research/seed-research") {
+        if (
+          url.pathname === "/__research/seed" ||
+          url.pathname === "/__research/seed-research" ||
+          url.pathname === "/__research/seed-progress"
+        ) {
           const runtime = yield* DurableAgentRuntime;
           const owner = ownerOfThread(threadId);
-          const research = url.pathname === "/__research/seed-research";
+          const progress = url.pathname === "/__research/seed-progress";
+          const research = progress || url.pathname === "/__research/seed-research";
 
           const input = {
-            message: research ? "start research" : "Previous trip conversation",
+            message: progress
+              ? "start live progress"
+              : research
+                ? "start research"
+                : "Previous trip conversation",
             selectedTripId: null,
             publication: null,
             ...(research
@@ -413,9 +535,20 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
             ),
           };
 
-          yield* research
-            ? runtime.submitRegistered({ definition: previousResearchPlanner }, input, options)
-            : runtime.submitRegistered({ definition: previousEditorPlanner }, input, options);
+          yield* progress
+            ? runtime.submitRegistered(
+                {
+                  definition:
+                    url.searchParams.get("version") === "delegating"
+                      ? previousDelegatingPlanner
+                      : previousProgressPlanner,
+                },
+                input,
+                options,
+              )
+            : research
+              ? runtime.submitRegistered({ definition: previousResearchPlanner }, input, options)
+              : runtime.submitRegistered({ definition: previousEditorPlanner }, input, options);
 
           return Response.json({ accepted: true });
         }
@@ -440,7 +573,11 @@ export default {
         request.headers.get("authorization") !== `Bearer ${env.PLANNER_TOKEN}`
       )
         return new Response("Unauthorized", { status: 401 });
-      if (url.pathname === "/__research/seed" || url.pathname === "/__research/seed-research")
+      if (
+        url.pathname === "/__research/seed" ||
+        url.pathname === "/__research/seed-research" ||
+        url.pathname === "/__research/seed-progress"
+      )
         return env.THREADS.getByName(ownerOfThread(url.searchParams.get("thread") ?? "")).fetch(
           request,
         );
@@ -458,6 +595,7 @@ export default {
         const key = `gate/${url.searchParams.get("name") ?? ""}`;
 
         if (request.method === "POST") await bucket.put(`${key}/open`, "yes");
+        if (request.method === "DELETE") await bucket.delete(`${key}/open`);
 
         return Response.json({ entered: (await bucket.head(`${key}/entered`)) !== null });
       }

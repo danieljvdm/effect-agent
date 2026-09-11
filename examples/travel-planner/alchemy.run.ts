@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { Sandbox } from "@cloudflare/sandbox";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Config, Effect, Layer, Schema } from "effect";
+import { Config, Effect, Layer, Option, Redacted, Schema } from "effect";
 
 import { adminEmail } from "./src/access-domain.ts";
 
@@ -28,6 +28,11 @@ export default Alchemy.Stack(
     const publicRegistration = yield* Config.boolean("PUBLIC_SIGN_UP").pipe(
       Config.withDefault(true),
     );
+
+    const demoKey = (yield* Config.schema(
+      Schema.Redacted(Schema.String),
+      "DEMO_OPENAI_API_KEY",
+    ).pipe(Config.option)).pipe(Option.filter((key) => Redacted.value(key).length > 0));
 
     const include = publicRegistration
       ? [{ everyone: {} }]
@@ -109,6 +114,7 @@ export default Alchemy.Stack(
         ),
         ACCESS_AUD: access.aud,
         OPENAI_MODEL: Config.string("OPENAI_MODEL").pipe(Config.withDefault("gpt-5.6-luna")),
+        ...(Option.isSome(demoKey) ? { DEMO_OPENAI_API_KEY: demoKey.value } : {}),
         BYOK_ENCRYPTION_KEY: Config.schema(
           Schema.Redacted(Schema.NonEmptyString),
           "BYOK_ENCRYPTION_KEY",

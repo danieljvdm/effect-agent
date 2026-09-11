@@ -9,13 +9,15 @@ export function AgentProgress({
   active,
   busy,
   persistText = false,
+  showText = true,
 }: {
   readonly progress: PlannerProgress | null;
   readonly active: boolean;
   readonly busy: boolean;
   readonly persistText?: boolean;
+  readonly showText?: boolean;
 }) {
-  const hasText = (active || persistText) && !!progress?.text.trim();
+  const hasText = showText && (active || persistText) && !!progress?.text.trim();
   const hasSteps = !!progress?.tools.length;
 
   return (

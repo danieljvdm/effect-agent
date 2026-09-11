@@ -10,13 +10,13 @@ import {
 } from "effect/unstable/http";
 
 import { type PlannerError, type PlannerSettings } from "../domain.ts";
-import { credentialForOwner, type CredentialHost } from "./credentials.ts";
+import type { CredentialSource } from "./credentials.ts";
+import { credentialForOwner } from "./credentials.ts";
 import { recordDiagnostic } from "./diagnostics.ts";
 import { PlannerAttempt, type ProgressWriter } from "./progress.ts";
-import { responseTextPreview } from "./response-stream.ts";
+import { PublicOutputLive } from "./public-output.ts";
 
 const PublicProviderEvent = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("response.output_text.delta"), delta: Schema.String }),
   Schema.Struct({
     type: Schema.Literals(["response.output_item.added", "response.output_item.done"]),
     item: Schema.Union([
@@ -32,11 +32,6 @@ const PublicProviderEvent = Schema.Union([
       }),
     ]),
   }),
-  Schema.Struct({
-    type: Schema.Literal("response.function_call_arguments.delta"),
-    item_id: Schema.String,
-    delta: Schema.String,
-  }),
 ]);
 
 /** Observe typed public SSE events without altering the stream consumed by Effect AI. */
@@ -47,11 +42,7 @@ export const observeOpenAi = (
   ...client,
   createResponseStream: (request) =>
     Effect.suspend(() => {
-      let responseCall: string | undefined;
-      const preview = responseTextPreview();
-
-      return writer.newResponse.pipe(
-        Effect.andThen(client.createResponseStream(request)),
+      return client.createResponseStream(request).pipe(
         Effect.tapCause((cause) =>
           recordDiagnostic("OpenAI: response request failed", {
             request: {
@@ -88,29 +79,11 @@ export const observeOpenAi = (
                   if (decoded._tag === "None") return Effect.void;
                   const visible = decoded.value;
 
-                  if (visible.type === "response.output_text.delta")
-                    return writer.text(visible.delta);
-                  if (visible.type === "response.function_call_arguments.delta") {
-                    if (visible.item_id !== responseCall) return Effect.void;
-                    const delta = preview(visible.delta);
-
-                    return delta.length > 0 ? writer.text(delta) : Effect.void;
-                  }
                   if (
                     visible.type === "response.output_item.added" ||
                     visible.type === "response.output_item.done"
                   ) {
                     if (visible.item.type === "function_call") {
-                      if (
-                        visible.type === "response.output_item.added" &&
-                        visible.item.name === "deliver_response" &&
-                        responseCall === undefined
-                      ) {
-                        responseCall = visible.item.id;
-
-                        return writer.newResponse;
-                      }
-
                       return Effect.void;
                     }
 
@@ -176,13 +149,19 @@ const unavailableModel = (error: PlannerError) => {
 };
 
 /** Resolve on each HTTP request so removal/rotation also affects running durable workers.
- * An already dispatched provider request may finish; there is no host-key fallback.
+ * Capture required services when constructing the provider adapter, never the resolved key.
+ * An already dispatched provider request may finish; fallback requires explicit demo funding.
  */
-export const credentialClient = (key: Effect.Effect<Redacted.Redacted<string>, PlannerError>) =>
-  OpenAiClient.make({
+export const credentialClient = Effect.fn("credentialClient")(function* <R>(
+  key: Effect.Effect<Redacted.Redacted<string>, PlannerError, R>,
+) {
+  const context = yield* Effect.context<R>();
+
+  return yield* OpenAiClient.make({
     transformClient: (client) =>
       HttpClient.mapRequestEffect(client, (request) =>
         key.pipe(
+          Effect.provideContext(context),
           Effect.map((apiKey) => HttpClientRequest.bearerToken(request, Redacted.value(apiKey))),
           Effect.mapError(
             (error) =>
@@ -193,14 +172,11 @@ export const credentialClient = (key: Effect.Effect<Redacted.Redacted<string>, P
         ),
       ),
   });
+});
 
 /** Settings are read once from the trusted claimed Submission, not from model prompts. */
-export const selectableModel = (
-  resolve:
-    | Redacted.Redacted<string>
-    | ((
-        attempt: PlannerAttempt["Service"],
-      ) => Effect.Effect<Redacted.Redacted<string>, PlannerError>),
+export const selectableModel = <R = never>(
+  resolve: Redacted.Redacted<string> | Effect.Effect<Redacted.Redacted<string>, PlannerError, R>,
 ) =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -213,61 +189,58 @@ export const selectableModel = (
       const client = Layer.effect(
         OpenAiClient.OpenAiClient,
         Effect.map(
-          credentialClient(
-            Redacted.isRedacted(resolve) ? Effect.succeed(resolve) : resolve(attempt),
-          ),
+          credentialClient(Redacted.isRedacted(resolve) ? Effect.succeed(resolve) : resolve),
           (base) => observeOpenAi(base, attempt.progress),
         ),
       ).pipe(Layer.provide(FetchHttpClient.layer));
 
-      return OpenAiLanguageModel.model(settings.model, selectedModelConfig(settings)).pipe(
+      const model = OpenAiLanguageModel.model(settings.model, selectedModelConfig(settings)).pipe(
         Layer.provide(client),
       );
+
+      return PublicOutputLive.pipe(Layer.provideMerge(model));
     }),
   );
 
-/** Production uses only the key belonging to the verified account. No deployment API key. */
-export const liveModel = (
-  env: CredentialHost,
-): Effect.Effect<
+/** Production resolves personal or explicitly granted demo funding for the canonical account. */
+export const liveModel: Effect.Effect<
   {
-    readonly model: Layer.Layer<Agent.ModelServices, never, PlannerAttempt>;
-    readonly selectable: Layer.Layer<Agent.ModelServices, never, PlannerAttempt>;
+    readonly model: Layer.Layer<Agent.ModelServices, never, PlannerAttempt | CredentialSource>;
+    readonly selectable: Layer.Layer<Agent.ModelServices, never, PlannerAttempt | CredentialSource>;
     readonly identity: string;
     readonly label: string;
   },
   Config.ConfigError
-> =>
-  Effect.gen(function* () {
-    const resolve = (attempt: PlannerAttempt["Service"]) =>
-      attempt.billingOwner.pipe(Effect.flatMap((owner) => credentialForOwner(env, owner)));
+> = Effect.gen(function* () {
+  const resolve = Effect.gen(function* () {
+    const attempt = yield* PlannerAttempt;
+    const owner = yield* attempt.billingOwner;
 
-    const name = yield* Config.nonEmptyString("OPENAI_MODEL").pipe(
-      Config.withDefault("gpt-5.6-luna"),
-    );
+    return yield* credentialForOwner(owner);
+  });
 
-    const config = {
-      store: false,
-      max_output_tokens: 4096,
-      max_tool_calls: 1,
-      reasoning: { effort: "low" },
-    } as const;
+  const name = yield* Config.nonEmptyString("OPENAI_MODEL").pipe(
+    Config.withDefault("gpt-5.6-luna"),
+  );
 
-    return {
-      // Preserve the legacy definition identity while changing only secret resolution.
-      model: Layer.unwrap(
-        Effect.map(PlannerAttempt, (attempt) =>
-          OpenAiLanguageModel.model(name, config).pipe(
-            Layer.provide(
-              Layer.effect(OpenAiClient.OpenAiClient, credentialClient(resolve(attempt))).pipe(
-                Layer.provide(FetchHttpClient.layer),
-              ),
-            ),
-          ),
+  const config = {
+    store: false,
+    max_output_tokens: 4096,
+    max_tool_calls: 1,
+    reasoning: { effort: "low" },
+  } as const;
+
+  return {
+    // Preserve the legacy definition identity while changing only secret resolution.
+    model: OpenAiLanguageModel.model(name, config).pipe(
+      Layer.provide(
+        Layer.effect(OpenAiClient.OpenAiClient, credentialClient(resolve)).pipe(
+          Layer.provide(FetchHttpClient.layer),
         ),
       ),
-      identity: JSON.stringify({ provider: "openai", name, ...config }),
-      label: name,
-      selectable: selectableModel(resolve),
-    };
-  });
+    ),
+    identity: JSON.stringify({ provider: "openai", name, ...config }),
+    label: name,
+    selectable: selectableModel(resolve),
+  };
+});

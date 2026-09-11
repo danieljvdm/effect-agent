@@ -9,6 +9,7 @@ import { expect, it } from "vite-plus/test";
 
 import { AccessSession, adminEmail } from "../src/access-domain.ts";
 import {
+  VoiceWork,
   PlannerProgress,
   PlannerSettings,
   PlannerSnapshot,
@@ -183,6 +184,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
 
   try {
     for (const path of [
+      "/api/voice",
       "/api/rpc",
       "/api/rpc/",
       "/api/access",
@@ -275,11 +277,26 @@ it("isolates conversations while retaining owner trips, native mutations, public
     expect(accessRequests.every(({ url }) => url === accessGroupUrl)).toBe(true);
     redirectAccess = false;
     expect((await snapshot()).messages[0]?.text).toBe("Where do you want to go?");
+
+    const voice = {
+      input: true,
+      messages: [
+        {
+          id: "speech-question",
+          role: "assistant",
+          text: "Where would you like to go?",
+          after: null,
+        },
+        { id: "speech-reply", role: "user", text: "Let's go to Lisbon", after: "speech-question" },
+      ],
+    };
+
     await rpc("SendMessage", {
       conversationId: firstConversation,
       message: "Let's go to Lisbon",
       selectedTripId: null,
       requestId: "create-lisbon",
+      voice,
     });
     const saved = await until((state) => state.pending === 0 && state.trips.length === 1);
 
@@ -290,13 +307,63 @@ it("isolates conversations while retaining owner trips, native mutations, public
       "create-lisbon",
     );
     expect(saved.activity.some((item) => item.text === "save_trip: completed")).toBe(true);
+    expect(saved.messages.find((message) => message.id === "speech-question")).toMatchObject({
+      role: "assistant",
+      text: "Where would you like to go?",
+    });
+    expect(
+      saved.messages.filter((message) => message.role === "user").map((message) => message.text),
+    ).toEqual(["Let's go to Lisbon"]);
+    expect(
+      saved.conversations?.find((conversation) => conversation.conversationId === firstConversation)
+        ?.title,
+    ).toBe("Let's go to Lisbon");
+    expect(
+      (
+        await rpcExit("SendMessage", {
+          conversationId: firstConversation,
+          message: "Let's go to Lisbon",
+          selectedTripId: null,
+          requestId: "create-lisbon",
+          voice: { ...voice, messages: [] },
+        })
+      )._tag,
+    ).toBe("Failure");
     const trip = saved.trips[0]!;
+
+    const voiceReceipt = Schema.decodeUnknownSync(VoiceWork)(
+      await rpc("GetVoiceWork", {
+        conversationId: firstConversation,
+        requestId: "create-lisbon",
+      }),
+    );
+
+    expect(voiceReceipt).toMatchObject({ state: "completed", superseded: false });
+    expect(voiceReceipt.receiptId).toBeTruthy();
+    expect(voiceReceipt.text).toBe(
+      saved.messages.filter((message) => message.role === "assistant" && !message.content).at(-1)
+        ?.text,
+    );
+    expect(
+      Schema.decodeUnknownSync(VoiceWork)(
+        await rpc(
+          "GetVoiceWork",
+          {
+            conversationId: firstConversation,
+            requestId: "create-lisbon",
+          },
+          "/api/rpc",
+          guestEmail,
+        ),
+      ).state,
+    ).toBe("missing");
 
     await rpc("SendMessage", {
       conversationId: firstConversation,
       message: "Let's go to Lisbon",
       selectedTripId: null,
       requestId: "create-lisbon",
+      voice,
     });
     expect((await snapshot()).trips).toHaveLength(1);
     await rpc("SendMessage", {
@@ -308,6 +375,14 @@ it("isolates conversations while retaining owner trips, native mutations, public
     const revised = await until((state) => state.pending === 0 && state.trips[0]?.revision === 2);
 
     expect(revised.trips[0]?.notes).toContain("Include a relaxed afternoon");
+    expect(
+      Schema.decodeUnknownSync(VoiceWork)(
+        await rpc("GetVoiceWork", {
+          conversationId: firstConversation,
+          requestId: "create-lisbon",
+        }),
+      ),
+    ).toMatchObject({ receiptId: voiceReceipt.receiptId, state: "completed", superseded: true });
     expect((await rpcExit("PublishTrip", { tripId: trip.id, expectedRevision: 1 }))._tag).toBe(
       "Failure",
     );
