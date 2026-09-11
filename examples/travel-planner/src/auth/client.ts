@@ -1,7 +1,7 @@
 import * as AuthAtom from "@yielded/auth/Atom";
 import * as Client from "@yielded/auth/Client";
 import type { ProofReference } from "@yielded/auth/Proofs";
-import { Effect, Redacted, Schema } from "effect";
+import { Cause, Effect, Option, Redacted, Schema } from "effect";
 import { Atom, AsyncResult } from "effect/unstable/reactivity";
 
 import { LoginApi } from "./contract";
@@ -73,15 +73,14 @@ const browser = <A>(run: () => A) =>
 const id = () => browser(() => crypto.randomUUID());
 const PendingGithub = Schema.fromJsonString(Schema.Struct({ flowId: Schema.NonEmptyString }));
 
-const startGithub = Effect.gen(function* () {
-  const client = yield* AppClient;
+const startGithub = Effect.fn("Login.startGithub")(function* (get: Atom.FnContext) {
   const flowId = yield* id();
 
   yield* browser(() =>
     sessionStorage.setItem("elsewhere:github", Schema.encodeSync(PendingGithub)({ flowId })),
   );
 
-  const started = yield* client.auth.signIn({
+  const started = yield* get.setResult(auth.signIn, {
     flowId,
     commandId: yield* id(),
     provider: "github",
@@ -92,7 +91,7 @@ const startGithub = Effect.gen(function* () {
   yield* browser(() => location.assign(Redacted.value(started.authorizationUrl)));
 });
 
-export const githubLogin = auth.runtime.fn<void>()(() => startGithub);
+export const githubLogin = Atom.fn<void>()((_, get) => startGithub(get)).pipe(Atom.setIdleTTL(0));
 
 // The Worker captures callback credentials in memory before loading page resources.
 // Only public flow correlation survives navigation.
@@ -144,14 +143,15 @@ export const callbackInput = Effect.gen(function* () {
   };
 });
 
-export const completeGithub = auth.runtime.fn<void>()(() =>
+// Public login workflows compose named mutations in the host registry. Those mutations
+// retain their own success or rejection while Auth replaces the private account registry.
+export const completeGithub = Atom.fn<void>()((_, get) =>
   Effect.gen(function* () {
-    const client = yield* AppClient;
     const input = yield* callbackInput;
-    const result = yield* client.auth.completeSignIn(input);
+    const result = yield* get.setResult(auth.completeSignIn, input);
 
     if ("_tag" in result && result._tag === "RegistrationRequired") {
-      const registered = yield* client.auth.register({
+      const registered = yield* get.setResult(auth.register, {
         flowId: input.flowId,
         commandId: yield* id(),
         reference: result.reference,
@@ -160,12 +160,12 @@ export const completeGithub = auth.runtime.fn<void>()(() =>
 
       if (registered._tag !== "RegistrationAccepted") return yield* new BrowserFlowUnavailable();
       // Accepted registration creates an account, not a session. Start a NEW authorized flow.
-      yield* startGithub;
+      yield* startGithub(get);
     }
 
     return result;
   }),
-);
+).pipe(Atom.setIdleTTL(0));
 
 const callbackStarted = Atom.make(false).pipe(Atom.keepAlive);
 
@@ -182,13 +182,15 @@ export type EmailPending = {
   readonly reference: typeof ProofReference.Encoded;
 };
 
-const sendSignInCode = Effect.fn("Login.sendSignInCode")(function* (email: string) {
-  const client = yield* AppClient;
+const sendSignInCode = Effect.fn("Login.sendSignInCode")(function* (
+  email: string,
+  get: Atom.FnContext,
+) {
   const flowId = yield* id();
 
-  yield* client.auth.beginEmailSignIn({ flowId });
+  yield* get.setResult(auth.beginEmailSignIn, { flowId });
 
-  const receipt = yield* client.auth.requestEmailCode({
+  const receipt = yield* get.setResult(auth.requestEmailCode, {
     flowId,
     email,
     requestId: yield* id(),
@@ -199,20 +201,19 @@ const sendSignInCode = Effect.fn("Login.sendSignInCode")(function* (email: strin
   return { mode: "signin", flowId, email, reference: receipt.reference } satisfies EmailPending;
 });
 
-export const requestEmailCode = auth.runtime.fn<{
+export const requestEmailCode = Atom.fn<{
   readonly mode: "register" | "signin";
   readonly email: string;
-}>()((input) =>
+}>()((input, get) =>
   Effect.gen(function* () {
     const email = input.email.trim().toLowerCase();
 
-    if (input.mode === "signin") return yield* sendSignInCode(email);
-    const client = yield* AppClient;
+    if (input.mode === "signin") return yield* sendSignInCode(email, get);
     const flowId = yield* id();
 
-    yield* client.auth.beginEmailRegistration({ flowId });
+    yield* get.setResult(auth.beginEmailRegistration, { flowId });
 
-    const receipt = yield* client.auth.registerEmail({
+    const receipt = yield* get.setResult(auth.registerEmail, {
       flowId,
       email,
       registration: { displayName: "Traveler" },
@@ -222,26 +223,25 @@ export const requestEmailCode = auth.runtime.fn<{
 
     return { mode: "register", flowId, email, reference: receipt.reference } satisfies EmailPending;
   }),
-);
+).pipe(Atom.setIdleTTL(0));
 
-export const verifyEmailCode = auth.runtime.fn<{
+export const verifyEmailCode = Atom.fn<{
   readonly pending: EmailPending;
   readonly code: string;
-}>()((input) =>
+}>()((input, get) =>
   Effect.gen(function* () {
-    const client = yield* AppClient;
     const { flowId, email, reference, mode } = input.pending;
 
     if (mode === "register") {
       const base = { flowId, email, registration: { displayName: "Traveler" } };
 
-      const verified = yield* client.auth.verifyEmailRegistration({
+      const verified = yield* get.setResult(auth.verifyEmailRegistration, {
         ...base,
         reference,
         secret: input.code,
       });
 
-      const result = yield* client.auth.completeEmailRegistration({
+      const result = yield* get.setResult(auth.completeEmailRegistration, {
         ...base,
         continuationId: verified.continuation.continuationId,
         commandId: yield* id(),
@@ -249,15 +249,98 @@ export const verifyEmailCode = auth.runtime.fn<{
 
       if (result._tag !== "RegistrationAccepted") return yield* new BrowserFlowUnavailable();
 
-      return yield* sendSignInCode(email);
+      return yield* sendSignInCode(email, get);
     }
     const base = { flowId, email, returnTarget: "/" };
-    const verified = yield* client.auth.verifyEmailCode({ ...base, reference, secret: input.code });
 
-    yield* client.auth.completeEmailSignIn({
+    const verified = yield* get.setResult(auth.verifyEmailCode, {
+      ...base,
+      reference,
+      secret: input.code,
+    });
+
+    yield* get.setResult(auth.completeEmailSignIn, {
       ...base,
       continuationId: verified.continuation.continuationId,
     });
-    // Session rendering owns the transition: this custom workflow may retire here.
+    // auth.session remains the rendering authority after credential settlement.
   }),
+).pipe(Atom.setIdleTTL(0));
+
+export type LoginLoadingStep = "session" | "github" | "callback";
+
+type LoginView =
+  | { readonly _tag: "Authenticated" }
+  | { readonly _tag: "Loading"; readonly step: LoginLoadingStep }
+  | {
+      readonly _tag: "Form";
+      readonly pending: EmailPending | undefined;
+      readonly registered: boolean;
+      readonly busy: boolean;
+      readonly error: "github" | "email" | "session" | undefined;
+      readonly cancelled: boolean;
+    };
+
+const interrupted = <A, E>(result: AsyncResult.AsyncResult<A, E>) =>
+  AsyncResult.isFailure(result) && Cause.hasInterruptsOnly(result.cause);
+
+const failed = <A, E>(result: AsyncResult.AsyncResult<A, E>) =>
+  AsyncResult.isFailure(result) && !result.waiting && !interrupted(result);
+
+/** Session publication owns success; public login results live only as long as this screen. */
+export const loginView = Atom.family((callback: boolean) =>
+  Atom.make((get): LoginView => {
+    const session = get(auth.session);
+    const github = get(githubLogin);
+    const completed = get(completeGithub);
+    const requested = get(requestEmailCode);
+    const verified = get(verifyEmailCode);
+
+    if (AsyncResult.isSuccess(session) && session.value !== null) return { _tag: "Authenticated" };
+
+    if (github.waiting || AsyncResult.isSuccess(github)) return { _tag: "Loading", step: "github" };
+    if (
+      callback &&
+      (completed._tag === "Initial" ||
+        completed.waiting ||
+        (AsyncResult.isSuccess(completed) &&
+          "_tag" in completed.value &&
+          completed.value._tag === "RegistrationRequired"))
+    )
+      return { _tag: "Loading", step: "callback" };
+
+    const registered = Option.getOrUndefined(AsyncResult.value(verified));
+    const busy = requested.waiting || verified.waiting;
+
+    const authenticated =
+      (AsyncResult.isSuccess(completed) &&
+        "completion" in completed.value &&
+        completed.value.completion._tag === "Authenticated") ||
+      (AsyncResult.isSuccess(verified) && verified.value === undefined);
+
+    if (session.waiting && authenticated) return { _tag: "Loading", step: "callback" };
+    if (session._tag === "Initial" && !busy)
+      return { _tag: "Loading", step: callback ? "callback" : "session" };
+
+    return {
+      _tag: "Form",
+      pending: registered ?? Option.getOrUndefined(AsyncResult.value(requested)),
+      registered: registered !== undefined,
+      busy,
+      error: busy
+        ? undefined
+        : failed(github) || (callback && failed(completed))
+          ? "github"
+          : failed(requested) || failed(verified)
+            ? "email"
+            : failed(session)
+              ? "session"
+              : undefined,
+      cancelled:
+        callback &&
+        AsyncResult.isSuccess(completed) &&
+        "_tag" in completed.value &&
+        completed.value._tag === "Cancelled",
+    };
+  }).pipe(Atom.setIdleTTL(0)),
 );

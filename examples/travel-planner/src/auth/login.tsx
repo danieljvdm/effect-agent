@@ -1,24 +1,23 @@
-import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Navigate } from "@tanstack/react-router";
-import { Atom, AsyncResult } from "effect/unstable/reactivity";
+import { Atom } from "effect/unstable/reactivity";
 import { useEffect, useState } from "react";
 
 import {
-  auth,
-  completeGithub,
   consumeCallback,
   githubLogin,
+  loginView,
   requestEmailCode,
   verifyEmailCode,
+  type LoginLoadingStep,
 } from "./client";
 
 export function Login({ callback = false }: { readonly callback?: boolean }) {
-  const session = useAtomValue(auth.session);
-  const [github, startGithub] = useAtom(githubLogin);
-  const completed = useAtomValue(completeGithub);
+  const view = useAtomValue(loginView(callback));
+  const startGithub = useAtomSet(githubLogin);
   const consume = useAtomSet(consumeCallback);
-  const [requested, requestCode] = useAtom(requestEmailCode);
-  const [verified, verifyCode] = useAtom(verifyEmailCode);
+  const requestCode = useAtomSet(requestEmailCode);
+  const verifyCode = useAtomSet(verifyEmailCode);
   const [mode, setMode] = useState<"register" | "signin">("signin");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -26,26 +25,10 @@ export function Login({ callback = false }: { readonly callback?: boolean }) {
   useEffect(() => {
     if (callback) consume();
   }, [callback, consume]);
-  if (AsyncResult.isSuccess(session) && session.value !== null) return <Navigate to="/" replace />;
+  if (view._tag === "Authenticated") return <Navigate to="/" replace />;
+  if (view._tag === "Loading") return <LoginLoading step={view.step} />;
 
-  const pending =
-    AsyncResult.isSuccess(verified) && verified.value
-      ? verified.value
-      : AsyncResult.isSuccess(requested)
-        ? requested.value
-        : undefined;
-
-  const busy =
-    requested.waiting || verified.waiting || github.waiting || (callback && completed.waiting);
-
-  const failed = [requested, verified, github, ...(callback ? [completed] : [])].some(
-    (result) => result._tag === "Failure",
-  );
-
-  const cancelled =
-    AsyncResult.isSuccess(completed) &&
-    "_tag" in completed.value &&
-    completed.value._tag === "Cancelled";
+  const { pending, busy } = view;
 
   return (
     <main className="login-page">
@@ -110,7 +93,7 @@ export function Login({ callback = false }: { readonly callback?: boolean }) {
             }}
           >
             <p role="status">
-              {AsyncResult.isSuccess(verified) && verified.value
+              {view.registered
                 ? "Your account is ready. We sent a new code to finish signing in."
                 : pending.mode === "register"
                   ? "Enter the code to create your account. Then we’ll send a fresh sign-in code."
@@ -154,18 +137,52 @@ export function Login({ callback = false }: { readonly callback?: boolean }) {
             </p>
           </form>
         )}
-        {failed && (
+        {view.error && (
           <p className="error" role="alert">
-            We couldn’t complete that step. Check your code or start a new sign-in attempt. If you
-            just created an account, choose Sign in.
+            {view.error === "github"
+              ? "We couldn’t finish signing in with GitHub. Please start a new attempt."
+              : view.error === "email"
+                ? "We couldn’t complete that step. Check your code or request a new one."
+                : "We couldn’t check your sign-in. Please try again."}
           </p>
         )}
-        {cancelled && (
+        {view.cancelled && (
           <p role="status">GitHub sign-in was cancelled. You can start again when you’re ready.</p>
         )}
         <p className="login-note">
           Email and GitHub create separate accounts. Use the same method when you return.
         </p>
+      </section>
+    </main>
+  );
+}
+
+export function LoginLoading({ step }: { readonly step: LoginLoadingStep }) {
+  return (
+    <main className="login-page">
+      <section className="login-card login-loading" aria-labelledby="login-loading-title">
+        <a className="wordmark" href="/login">
+          elsewhere<span>↗</span>
+        </a>
+        <div className="login-loading-content" role="status" aria-live="polite">
+          <div className="login-loader" aria-hidden="true">
+            <span>↗</span>
+          </div>
+          <h1 id="login-loading-title">
+            {step === "github"
+              ? "Connecting to GitHub"
+              : step === "callback"
+                ? "Signing you in"
+                : "Getting things ready"}
+          </h1>
+          <p>
+            {step === "github"
+              ? "Taking you to GitHub to continue."
+              : step === "callback"
+                ? "Finishing up. Your planner will open shortly."
+                : "One moment while we check your sign-in."}
+          </p>
+        </div>
       </section>
     </main>
   );
