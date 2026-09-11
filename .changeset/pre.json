@@ -204,6 +204,7 @@
     "semantic-source-identity-budget",
     "semantic-vector-capacity",
     "settled-sibling-order",
+    "shared-application-owner",
     "shared-effect-peer",
     "shared-node-recovery-scans",
     "shared-publication-gate",
