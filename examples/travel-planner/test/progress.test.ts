@@ -6,11 +6,11 @@ import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import { expect, expectTypeOf } from "vite-plus/test";
 
-import { adminEmail } from "../src/access-domain.ts";
 import { defaultPlannerSettings, PlannerError, PlannerProgress } from "../src/domain.ts";
 import { observeOpenAi } from "../src/server/models.ts";
 import { serveProgress, watchProgress } from "../src/server/progress-http.ts";
 import { emptyProgress, PlannerAttempt, ProgressStore, trackTool } from "../src/server/progress.ts";
+import { ownerEmail, fixtureSession, fixtureOwner } from "./fixtures/identity.ts";
 
 it.effect("bounds progress and ignores writers from replaced attempts", () =>
   Effect.gen(function* () {
@@ -296,7 +296,7 @@ it("streams HTTP before completion and cancellation disposes the request without
           },
         },
       },
-      { email: "friend@example.com", isAdmin: false },
+      fixtureSession("friend@example.com"),
     ),
   );
 
@@ -308,7 +308,7 @@ it("streams HTTP before completion and cancellation disposes the request without
 
   expect(chunk?.done).toBe(false);
   expect(new TextDecoder().decode(chunk?.value)).toContain("Live");
-  expect(addresses[0]).toMatch(/^member-[a-f0-9]{64}--travel-planner-owner-v1$/);
+  expect(addresses[0]).toBe(`${fixtureOwner("friend@example.com")}--travel-planner-owner-v1`);
   await reader?.cancel();
   reader?.releaseLock();
 
@@ -337,7 +337,7 @@ it("streams HTTP before completion and cancellation disposes the request without
           },
         },
       },
-      { email: adminEmail, isAdmin: true },
+      fixtureSession(ownerEmail),
     ),
   );
 

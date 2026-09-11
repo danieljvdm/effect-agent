@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { AtomRegistry } from "effect/unstable/reactivity";
+import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 import { PlannerSettings, defaultPlannerSettings } from "../src/domain.ts";
@@ -10,7 +10,7 @@ const guest = "guest@example.com";
 
 const Packet = Schema.Struct({
   id: Schema.Union([Schema.String, Schema.Number]),
-  tag: Schema.Literals(["GetSession", "GetPlannerSettings", "SavePlannerSettings"]),
+  tag: Schema.Literals(["GetPlannerSettings", "SavePlannerSettings"]),
   payload: Schema.Unknown,
 });
 
@@ -53,8 +53,6 @@ const setup = (initial: PlannerSettings) => {
           headers: { "content-type": "application/ndjson" },
         });
 
-      if (packet.tag === "GetSession")
-        return response({ _tag: "Success", value: { email, isAdmin: email === owner } });
       const requestEmail = email;
       const tag = packet.tag;
 
@@ -104,6 +102,8 @@ const setup = (initial: PlannerSettings) => {
     createDevice: () => {
       const registry = AtomRegistry.make({ defaultIdleTTL: 0, timeoutResolution: 1 });
 
+      registry.set(sessionAtom, AsyncResult.success({ subjectId: email, displayName: email }));
+
       const unmounts = [
         registry.mount(settingsAtom),
         registry.mount(settingsStatusAtom),
@@ -114,7 +114,7 @@ const setup = (initial: PlannerSettings) => {
         registry,
         setEmail: (value: string) => {
           email = value;
-          registry.refresh(sessionAtom);
+          registry.set(sessionAtom, AsyncResult.success({ subjectId: email, displayName: email }));
         },
         close: () => {
           for (const unmount of unmounts) unmount();

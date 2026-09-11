@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
-import { AccessError } from "../src/access-domain.ts";
+import { AccountError } from "../src/auth/account.ts";
 import { PlannerSnapshot, SavedTrip } from "../src/domain.ts";
 import {
   activeTripAtom,
@@ -63,8 +63,6 @@ const setup = () => {
   vi.useFakeTimers();
   vi.stubGlobal("location", new URL("https://planner.test"));
   let email = "danieljmerwe@gmail.com";
-  let heldSession: ((value: string | AccessError) => void) | undefined;
-  let holdSession = false;
 
   const requests: Array<{
     readonly conversationId: string | null;
@@ -90,25 +88,6 @@ const setup = () => {
           headers: { "content-type": "application/ndjson" },
         });
 
-      if (packet.tag === "GetSession" && holdSession)
-        return new Promise<Response>((resolve) => {
-          heldSession = (value) =>
-            resolve(
-              response(
-                typeof value === "string"
-                  ? {
-                      _tag: "Success",
-                      value: { email: value, isAdmin: value === "danieljmerwe@gmail.com" },
-                    }
-                  : { _tag: "Failure", cause: [{ _tag: "Fail", error: value }] },
-              ),
-            );
-        });
-      if (packet.tag === "GetSession")
-        return response({
-          _tag: "Success",
-          value: { email, isAdmin: email === "danieljmerwe@gmail.com" },
-        });
       const payload = Schema.decodeUnknownSync(Payload)(packet.payload);
 
       return new Promise<Response>((resolve) => {
@@ -144,6 +123,8 @@ const setup = () => {
 
   registry.set(selectionAtom, { conversationId: "lisbon", tripId: "lisbon" });
 
+  registry.set(sessionAtom, AsyncResult.success({ subjectId: email, displayName: email }));
+
   const unmounts = [
     registry.mount(plannerAtom),
     registry.mount(savedTripsAtom),
@@ -155,19 +136,17 @@ const setup = () => {
   return {
     registry,
     requests,
-    revalidateSession: () => {
-      holdSession = true;
-      registry.refresh(sessionAtom);
-    },
-    finishSession: (value: string | AccessError) => {
-      if (typeof value === "string") email = value;
-      heldSession?.(value);
-      heldSession = undefined;
-      holdSession = false;
+    revalidateSession: () =>
+      registry.set(sessionAtom, AsyncResult.waiting(registry.get(sessionAtom))),
+    finishSession: (value: string | AccountError) => {
+      if (typeof value === "string") {
+        email = value;
+        registry.set(sessionAtom, AsyncResult.success({ subjectId: email, displayName: email }));
+      } else registry.set(sessionAtom, AsyncResult.fail(value));
     },
     setEmail: (value: string) => {
       email = value;
-      registry.refresh(sessionAtom);
+      registry.set(sessionAtom, AsyncResult.success({ subjectId: email, displayName: email }));
     },
     close: () => {
       for (const unmount of unmounts) unmount();
@@ -243,7 +222,7 @@ it("preserves the loaded conversation through repeated reconnect failures withou
     for (let cycle = 0; cycle < 6; cycle++) {
       fixture.revalidateSession();
       await flush();
-      fixture.finishSession(new AccessError({ code: "unavailable", message: "Reconnecting" }));
+      fixture.finishSession(new AccountError({ code: "unavailable", message: "Reconnecting" }));
       await vi.advanceTimersByTimeAsync(5_000);
       expect(registry.get(savedTripsAtom)).toEqual(trips);
       expect(AsyncResult.getOrThrow(registry.get(plannerAtom))).toEqual(snapshot("lisbon"));
@@ -258,7 +237,7 @@ it("preserves the loaded conversation through repeated reconnect failures withou
     expect(frames.every((status) => status === "ready")).toBe(true);
     fixture.revalidateSession();
     await flush();
-    fixture.finishSession(new AccessError({ code: "forbidden", message: "Access removed" }));
+    fixture.finishSession(new AccountError({ code: "unauthorized", message: "Access removed" }));
     await flush();
     expect(AsyncResult.value(registry.get(plannerAtom))._tag).toBe("None");
     expect(registry.get(savedTripsAtom)).toEqual([]);
@@ -311,7 +290,7 @@ it("keeps every loaded frame visible during delayed polls and session revalidati
     expect(frames.every((status) => status === "ready")).toBe(true);
     fixture.revalidateSession();
     await flush();
-    fixture.finishSession(new AccessError({ code: "unauthorized", message: "Sign in again" }));
+    fixture.finishSession(new AccountError({ code: "unauthorized", message: "Sign in again" }));
     await flush();
     expect(AsyncResult.value(registry.get(plannerAtom))._tag).toBe("None");
     expect(registry.get(savedTripsAtom)).toEqual([]);

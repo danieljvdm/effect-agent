@@ -108,7 +108,7 @@ export default {async fetch(request,env,ctx){
    if(input.value!==undefined)await env.APP_BUILDS.put(appAddressKey(input.hostname),JSON.stringify(input.value));
    const value=await env.APP_BUILDS.get(appAddressKey(input.hostname));return Response.json(value?await value.json():null);
  }
- return Effect.runPromise(handleRequest()(request,env,ctx));
+ return Effect.runPromise(handleRequest()(request,env,ctx).pipe(Effect.provideService(WorkerEnvironment,env)));
 }};
 `,
     },
@@ -153,8 +153,8 @@ afterAll(async () => {
   await runtime?.dispose();
 });
 
-const storageOwner = "travel-planner-owner-v1";
-const memberOwner = `member-${"1".repeat(64)}`;
+const storageOwner = "account-00000000-0000-0000-0000-000000000001";
+const memberOwner = "account-00000000-0000-0000-0000-000000000002";
 
 const seed = async (owner: string, value: TripApp = app, register = true) => {
   const response = await runtime.dispatchFetch("https://app.example/__seed", {
@@ -211,9 +211,11 @@ it("serves public assets without authentication and keeps planner routes protect
     "/assets/style.css",
     "/trips/lisbon/1",
   ]) {
-    const denied = await runtime.dispatchFetch(`https://travel.effect-agent.com${path}`);
+    const denied = await runtime.dispatchFetch(`https://travel.effect-agent.com${path}`, {
+      redirect: "manual",
+    });
 
-    expect(denied.status).toBe(401);
+    expect(denied.status).toBe(path === "/" || path.startsWith("/assets/") ? 303 : 401);
     await denied.text();
   }
   for (const path of ["/api/rpc", "/api/access", "/api/progress"]) {
@@ -334,7 +336,7 @@ const directory = async (path: string, input: Record<string, unknown>) => {
   return response.json();
 };
 
-it("preserves hash aliases, recovers original legacy sites, and never accepts caller-selected ownership", async () => {
+it("preserves registered aliases, rejects orphaned legacy sites, and never accepts caller-selected ownership", async () => {
   await seed(storageOwner);
   const alias = { ...app, url: `https://${app.id}-trip.effect-agent.com` };
 
@@ -353,13 +355,9 @@ it("preserves hash aliases, recovers original legacy sites, and never accepts ca
     "x-test-owner": memberOwner,
   });
 
-  expect(restored.status).toBe(200);
-  expect(await restored.json()).toEqual(data);
-  expect(await directory("/__address", { hostname: new URL(legacy.url).hostname })).toMatchObject({
-    owner: storageOwner,
-    appId: legacy.id,
-    tripId: legacy.tripId,
-  });
+  expect(restored.status).toBe(404);
+  await restored.text();
+  expect(await directory("/__address", { hostname: new URL(legacy.url).hostname })).toBeNull();
 
   const unknown = await runtime.dispatchFetch(
     `https://${"f".repeat(32)}-trip.effect-agent.com/api/trip?owner=${storageOwner}`,

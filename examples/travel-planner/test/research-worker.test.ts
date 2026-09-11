@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,9 +17,10 @@ import {
   ScoutReportInput,
   ScoutProgressInput,
 } from "../src/research/contracts.ts";
+import { fixtureOwner } from "./fixtures/identity.ts";
 
 const token = "research-worker-fixture";
-const sourceThread = `member-${createHash("sha256").update("research@example.com").digest("hex")}--research`;
+const sourceThread = `${fixtureOwner("research@example.com")}--research`;
 const settings: PlannerSettings = { model: "gpt-6-astra", reasoningEffort: "high", fast: true };
 
 const RpcExit = Schema.Struct({
@@ -342,7 +342,7 @@ it.each(["current", "retained", "delegating"])(
   "delivers a %s sourced milestone before worker completion and accepts a correction on that active worker",
   async (version) => {
     const email = `progress-${version}@example.com`;
-    const thread = `member-${createHash("sha256").update(email).digest("hex")}--research`;
+    const thread = `${fixtureOwner(email)}--research`;
 
     await fixture("gate", { name: "Live progress" }, "DELETE");
     if (version !== "current")
@@ -438,7 +438,7 @@ it.each(["current", "retained", "delegating"])(
 
 it("runs six scouts and an editor beyond the old budgets, preserves them across restart, and bounds admission", async () => {
   const email = "expanded@example.com";
-  const expandedThread = `member-${createHash("sha256").update(email).digest("hex")}--research`;
+  const expandedThread = `${fixtureOwner(email)}--research`;
 
   await rpc(
     "SaveTrip",

@@ -72,7 +72,10 @@ export const BuildManifest = Schema.Struct({
 });
 
 export type BuildManifest = typeof BuildManifest.Type;
-export const buildPrefix = (appId: string, commitId: string) => `apps/${appId}/${commitId}/`;
+
+export const buildPrefix = (appId: string, commitId: string) =>
+  `auth-apps/v1/${appId}/${commitId}/`;
+
 const buildIdentity = Schema.Struct({ appId: AppId, commitId: AppCommit });
 const OutputFile = Schema.Struct({ path: outputPath, body: Schema.Uint8Array });
 

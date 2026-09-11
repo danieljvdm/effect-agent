@@ -191,9 +191,8 @@
   .sidebar .account-actions .quiet {
     width: auto;
   }
-  .account-actions a,
-  .session-status a,
-  .access-panel a {
+  .account-actions button,
+  .session-status a {
     text-decoration: underline;
     text-underline-offset: 3px;
   }
@@ -203,42 +202,6 @@
   }
   .session-status a {
     display: block;
-  }
-  .member-form {
-    display: grid;
-    gap: 10px;
-    margin: 20px 0;
-  }
-  .member-form label {
-    font-size: 12px;
-  }
-  .member-form input {
-    width: 100%;
-    min-width: 0;
-    padding: 10px;
-    border: 1px solid #d7ddce;
-    border-radius: 6px;
-  }
-  .member-list {
-    list-style: none;
-    padding: 0;
-  }
-  .member-list li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    border-left: 0;
-    border-top: 1px solid #e9ecdf;
-    padding: 12px 0;
-    font-size: 11px;
-  }
-  .member-list span {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-  .member-list small {
-    flex-shrink: 0;
   }
   .powered {
     color: #919784;
@@ -1135,7 +1098,6 @@
       overflow-y: auto;
     }
     .model-settings select,
-    .member-form input,
     .input-wrap textarea {
       font-size: 16px;
     }
@@ -2442,25 +2404,11 @@
   overflow-y: auto;
 }
 .openai-connection,
-.demo-access {
-  border-bottom: 1px solid #e5e9dd;
-  padding-bottom: 18px;
-  margin-bottom: 16px;
-}
 .openai-connection h3 {
   font-size: 14px;
   font-weight: 600;
 }
 .openai-connection input,
-.demo-access input {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid #dce1d3;
-  border-radius: 7px;
-  padding: 10px;
-  background: white;
-  font-size: 16px;
-}
 .connection-status {
   margin-top: 12px;
   font-size: 12px;
@@ -2555,43 +2503,96 @@
   color: inherit;
 }
 
-.demo-access summary {
-  cursor: pointer;
+.login-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 40px 20px;
+  background: #faf8f3;
+}
+.login-card {
+  width: min(100%, 440px);
+  padding: 36px;
+  border: 1px solid #e2e4d9;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 18px 70px #3144260a;
+}
+.login-card .wordmark {
+  margin-bottom: 36px;
+  display: inline-flex;
+}
+.login-card h1 {
+  font-size: 30px;
+  line-height: 1.15;
+  margin: 0 0 16px;
+}
+.login-card p {
+  line-height: 1.6;
+  color: #64705c;
+}
+.login-card form {
+  display: grid;
+  gap: 12px;
+}
+.login-card label {
   font-size: 14px;
   font-weight: 600;
 }
-.demo-access summary span {
-  float: right;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 400;
+.login-card input {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid #bcc4b3;
+  border-radius: 8px;
+  background: #fff;
+  color: #24341e;
 }
-.demo-access-list {
-  display: grid;
-  gap: 8px;
-  margin: 14px 0;
-  padding: 0;
-  list-style: none;
-  max-height: 220px;
-  overflow-y: auto;
+.login-card button {
+  min-height: 44px;
+  border-radius: 8px;
+  cursor: pointer;
 }
-.demo-access-list li {
+.login-card button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.login-github {
+  width: 100%;
+  padding: 12px;
+  margin-top: 16px;
+  background: #24341e;
+  color: white;
+  font-weight: 600;
+}
+.login-divider {
+  text-align: center;
+  color: #7c8476;
+  font-size: 13px;
+  margin: 24px 0;
+}
+.login-modes {
   display: flex;
-  align-items: center;
   gap: 8px;
-  font-size: 12px;
+  margin-bottom: 8px;
 }
-.demo-access-list li span {
+.login-modes button {
   flex: 1;
-  min-width: 0;
+  background: #f5f6f0;
+}
+.login-modes button[aria-pressed="true"] {
+  background: #e7efdc;
+  font-weight: 600;
+}
+.login-note {
+  font-size: 12px;
+  margin-top: 20px;
+}
+.login-recipient {
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
-.demo-access-list button {
-  flex-shrink: 0;
-  padding: 6px;
-  color: #6b4b3d;
-  text-decoration: underline;
-}
-.demo-access-list button:disabled {
-  opacity: 0.5;
+.login-card .error {
+  color: #8b3434;
+  padding: 12px;
+  background: #fff4f1;
 }

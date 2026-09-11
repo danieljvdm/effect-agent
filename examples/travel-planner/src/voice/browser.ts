@@ -10,6 +10,7 @@ const failed = () =>
 export const connectBrowserVoice = Effect.fn("connectBrowserVoice")(function* (
   history: (typeof VoiceOffer.Type)["history"],
   audio: HTMLAudioElement,
+  subjectId: string,
 ) {
   const queue = yield* Queue.bounded<LiveEvent, VoiceError>(128);
 
@@ -118,7 +119,7 @@ export const connectBrowserVoice = Effect.fn("connectBrowserVoice")(function* (
     try: async (signal) => {
       const response = await fetch("/api/voice", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-elsewhere-account": subjectId },
         body: JSON.stringify({ sdp, history }),
         signal,
       });

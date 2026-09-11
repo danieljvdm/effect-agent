@@ -1,14 +1,21 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { useAtom, useAtomInitialValues, useAtomSet, useAtomValue } from "@effect/atom-react";
-import { Link } from "@tanstack/react-router";
+import {
+  RegistryContext,
+  useAtom,
+  useAtomInitialValues,
+  useAtomSet,
+  useAtomValue,
+} from "@effect/atom-react";
+import { Link, Navigate } from "@tanstack/react-router";
 import { Option } from "effect";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { ArrowUp, ArrowUpRight, Clock3, Map, Menu, Plus, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import type { AccountSession } from "./auth/account";
+import { auth, accountLifetime } from "./auth/client";
 import { ActivityPanel } from "./components/activity-panel";
 import { AgentProgress } from "./components/agent-progress.tsx";
-import { DemoAccessForm } from "./components/demo-access";
 import { MessageText } from "./components/message-text";
 import { OpenAiConnectionForm } from "./components/openai-connection";
 import { PendingMessages } from "./components/pending-messages";
@@ -20,10 +27,6 @@ import { VoiceControls } from "./components/voice-controls";
 import type { Trip } from "./domain";
 import {
   sessionAtom,
-  membersAtom,
-  memberEmailAtom,
-  manageMemberAtom,
-  refreshMembersAtom,
   activeTripAtom,
   draftAtom,
   plannerAtom,
@@ -57,25 +60,69 @@ function failure(result: AsyncResult.AsyncResult<unknown, unknown>): string | nu
 }
 
 export function Planner({ conversationId }: { readonly conversationId: string }) {
+  const session = useAtomValue(auth.session);
+  const account = useAtomValue(accountLifetime);
+  const signOut = useAtomSet(auth.signOut);
+
+  if (AsyncResult.isSuccess(session) && session.value === null)
+    return <Navigate to="/login" replace />;
+  if (
+    !AsyncResult.isSuccess(session) ||
+    session.value === null ||
+    !AsyncResult.isSuccess(account) ||
+    account.value.subject !== session.value.subjectId
+  )
+    return (
+      <main className="empty">
+        <p>Checking your session…</p>
+      </main>
+    );
+
+  return (
+    <RegistryContext.Provider value={account.value.registry}>
+      <PlannerAccount
+        key={account.value.generation}
+        conversationId={conversationId}
+        session={{
+          subjectId: session.value.subjectId,
+          displayName: session.value.claims.displayName,
+        }}
+        signOut={() => signOut()}
+      />
+    </RegistryContext.Provider>
+  );
+}
+
+function PlannerAccount({
+  conversationId,
+  session,
+  signOut,
+}: {
+  readonly conversationId: string;
+  readonly session: AccountSession;
+  readonly signOut: () => void;
+}) {
   // Seed before any authenticated query mounts on a direct link. Later route
   // changes update the existing registry, retaining its account-scoped cache.
-  useAtomInitialValues([[selectionAtom, { conversationId, tripId: null }]]);
+  useAtomInitialValues([
+    [selectionAtom, { conversationId, tripId: null }],
+    [sessionAtom, AsyncResult.success(session)],
+  ]);
   const selectTrip = useAtomSet(selectTripAtom);
 
   useLayoutEffect(() => {
     selectTrip({ conversationId, id: null });
   }, [conversationId, selectTrip]);
 
-  return <PlannerContent />;
+  return <PlannerContent signOut={signOut} />;
 }
 
-function PlannerContent() {
+function PlannerContent({ signOut }: { readonly signOut: () => void }) {
   const connectionResult = useAtomValue(openAiConnectionAtom);
   const connected = AsyncResult.isSuccess(connectionResult) && connectionResult.value.connected;
   const openSettings = useAtomSet(modelSettingsOpenAtom);
   const sessionResult = useAtomValue(sessionAtom);
   const session = AsyncResult.isSuccess(sessionResult) ? sessionResult.value : null;
-  const [manageAccess, setManageAccess] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
   const selection = useAtomValue(selectionAtom);
@@ -99,7 +146,7 @@ function PlannerContent() {
   const voiceActive =
     spoken?.active &&
     spoken.conversationId === selection.conversationId &&
-    spoken.email === session?.email;
+    spoken.subjectId === session?.subjectId;
 
   const busy = sendResult.waiting || (snapshot?.pending ?? 0) > 0;
   const canSend = session !== null && connected && !sendResult.waiting && draft.trim().length > 0;
@@ -224,7 +271,6 @@ function PlannerContent() {
         <button
           onClick={() => {
             setInspect(!inspect);
-            setManageAccess(false);
             setMenuOpen(false);
           }}
           aria-pressed={inspect}
@@ -236,20 +282,9 @@ function PlannerContent() {
       <div className="sidebar-bottom">
         {session ? (
           <div className="account">
-            <span className="account-email">{session.email}</span>
+            <span className="account-email">{session.displayName}</span>
             <div className="account-actions">
-              {session.isAdmin && session.registration !== "open" && (
-                <button
-                  className="quiet"
-                  onClick={() => {
-                    setManageAccess(!manageAccess);
-                    setMenuOpen(false);
-                  }}
-                >
-                  Manage access
-                </button>
-              )}
-              <a href="/cdn-cgi/access/logout">Sign out</a>
+              <button onClick={signOut}>Sign out</button>
             </div>
           </div>
         ) : (
@@ -508,8 +543,7 @@ function PlannerContent() {
             />
           )}
         </div>
-        {manageAccess && session?.isAdmin && <AccessPanel onClose={() => setManageAccess(false)} />}
-        {inspect && !manageAccess && (
+        {inspect && (
           <ActivityPanel
             snapshot={snapshot}
             progress={visibleProgress}
@@ -611,11 +645,8 @@ function ModelControls() {
           <p className="eyebrow">MAKE IT YOURS</p>
           <h2>Planner settings</h2>
           <OpenAiConnectionForm
-            key={AsyncResult.isSuccess(session) ? session.value.email : "signed-out"}
+            key={AsyncResult.isSuccess(session) ? session.value.subjectId : "signed-out"}
           />
-          {AsyncResult.isSuccess(session) && session.value.isAdmin && (
-            <DemoAccessForm key={session.value.email} />
-          )}
           <label htmlFor="planner-model">Model</label>
           <select
             id="planner-model"
@@ -659,94 +690,6 @@ function ModelControls() {
         </div>
       )}
     </div>
-  );
-}
-
-function AccessPanel({ onClose }: { readonly onClose: () => void }) {
-  const membersResult = useAtomValue(membersAtom);
-  const members = Option.getOrNull(AsyncResult.value(membersResult));
-  const [email, setEmail] = useAtom(memberEmailAtom);
-  const [changeResult, change] = useAtom(manageMemberAtom);
-  const refresh = useAtomSet(refreshMembersAtom);
-  const error = failure(changeResult) ?? failure(membersResult);
-
-  return (
-    <aside className="activity-panel access-panel" aria-label="Manage access">
-      <div className="activity-title">
-        <h2>Manage access</h2>
-        <button aria-label="Close access settings" onClick={onClose}>
-          ×
-        </button>
-      </div>
-      <p>
-        Allow someone to sign in with their email, then share the{" "}
-        <a href="/" target="_blank" rel="noreferrer">
-          planner sign-in link
-        </a>{" "}
-        with them.
-      </p>
-      <form
-        className="member-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          change({ action: "invite" });
-        }}
-      >
-        <label htmlFor="member-email">Email address</label>
-        <input
-          id="member-email"
-          type="email"
-          autoComplete="email"
-          required
-          maxLength={254}
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          disabled={changeResult.waiting}
-        />
-        <button className="primary" disabled={!members || changeResult.waiting || !email.trim()}>
-          {changeResult.waiting ? "Updating access…" : "Allow access"}
-        </button>
-      </form>
-      {error && (
-        <div className="error" role="alert">
-          <p>{error}</p>
-          <button
-            className="quiet"
-            disabled={membersResult.waiting || changeResult.waiting}
-            onClick={() => refresh()}
-          >
-            {membersResult.waiting ? "Refreshing members…" : "Refresh members"}
-          </button>
-        </div>
-      )}
-      {AsyncResult.isSuccess(changeResult) && !changeResult.waiting && (
-        <p role="status">{changeResult.value}</p>
-      )}
-      {!members && !error && <p role="status">Loading members…</p>}
-      <ul className="member-list">
-        {members?.emails.map((member) => (
-          <li key={member}>
-            <span>{member}</span>
-            {member === members.adminEmail ? (
-              <small>Administrator</small>
-            ) : (
-              <button
-                className="quiet"
-                aria-label={`Remove access for ${member}`}
-                disabled={changeResult.waiting}
-                onClick={() => change({ action: "remove", email: member })}
-              >
-                Remove
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-      <p className="access-help">
-        Removing an email prevents its next sign-in. Existing Cloudflare sessions can last up to 30
-        days.
-      </p>
-    </aside>
   );
 }
 

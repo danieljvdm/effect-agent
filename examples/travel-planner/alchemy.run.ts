@@ -3,9 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { Sandbox } from "@cloudflare/sandbox";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Config, Effect, Layer, Option, Redacted, Schema } from "effect";
-
-import { adminEmail } from "./src/access-domain.ts";
+import { Config, Effect, Layer, Schema } from "effect";
 
 const state = Layer.unwrap(
   Config.boolean("ALCHEMY_LOCAL_STATE").pipe(
@@ -25,47 +23,8 @@ export default Alchemy.Stack(
   Effect.gen(function* () {
     const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
 
-    const publicRegistration = yield* Config.boolean("PUBLIC_SIGN_UP").pipe(
-      Config.withDefault(true),
-    );
-
-    const demoKey = (yield* Config.schema(
-      Schema.Redacted(Schema.String),
-      "DEMO_OPENAI_API_KEY",
-    ).pipe(Config.option)).pipe(Option.filter((key) => Redacted.value(key).length > 0));
-
-    const include = publicRegistration
-      ? [{ everyone: {} }]
-      : [
-          { email: { email: adminEmail } },
-          { group: { id: yield* Config.nonEmptyString("ACCESS_GROUP_ID") } },
-        ];
-
-    const allowInvited = yield* Cloudflare.Access.Policy("TravelInvitedUsers", {
-      name: publicRegistration
-        ? "effect-agent-travel-planner-public-sign-in"
-        : "effect-agent-travel-planner-invited",
-      decision: "allow",
-      // Authenticate every user; do not use bypass, which would omit a verified identity.
-      include,
-    });
-
-    const access = yield* Cloudflare.Access.Application("TravelAccess", {
-      name: "Effect Agent Travel Planner",
-      type: "self_hosted",
-      domain: "travel.effect-agent.com",
-      destinations: [
-        { type: "public", uri: "travel.effect-agent.com" },
-        { type: "public", uri: "effect-agent-travel-planner.danieljmerwe.workers.dev" },
-      ],
-      allowedIdps: ["363645f2-553c-455d-89d4-dd287272a51e"],
-      autoRedirectToIdentity: true,
-      sessionDuration: "720h",
-      policies: [allowInvited.policyId],
-    });
-
     const artifacts = yield* Cloudflare.Artifacts.Namespace("ARTIFACTS", {
-      namespace: "effect-agent-travel-planner",
+      namespace: "effect-agent-travel-planner-auth-v1",
     });
 
     const zoneId = "9662e63e42d87b741fbcae6b65506924";
@@ -84,13 +43,32 @@ export default Alchemy.Stack(
       name: "effect-agent-travel-planner",
       domain: "travel.effect-agent.com",
       routes: [{ pattern: "*-trip.effect-agent.com/*", zoneId }],
-      workersDev: { enabled: true, previewsEnabled: false },
+      workersDev: { enabled: false, previewsEnabled: false },
       rootDir: fileURLToPath(new URL(".", import.meta.url)),
       main: "src/worker.ts",
       compatibility: { date: "2026-07-01", flags: ["nodejs_compat"] },
       assets: { runWorkerFirst: true },
       env: {
-        THREADS: Cloudflare.DurableObject("THREADS", { className: "PlannerThread" }),
+        // New logical ID AND class: the reviewed clean-start deploy deletes only
+        // this app's old PlannerThread namespace instead of renaming/migrating it.
+        THREADS: Cloudflare.DurableObject("AuthThreadsV1", { className: "AuthPlannerThread" }),
+        AUTH: Cloudflare.DurableObject("AuthV1", { className: "PlannerAuth" }),
+        AUTH_EMAIL: Cloudflare.Email.SendEmail("AuthEmail", {
+          allowedSenderAddresses: [yield* Config.nonEmptyString("AUTH_EMAIL_FROM")],
+        }),
+        AUTH_ORIGIN: Config.nonEmptyString("AUTH_ORIGIN"),
+        AUTH_EMAIL_FROM: Config.nonEmptyString("AUTH_EMAIL_FROM"),
+        AUTH_GITHUB_CLIENT_ID: Config.nonEmptyString("AUTH_GITHUB_CLIENT_ID"),
+        AUTH_GITHUB_CLIENT_SECRET: Config.schema(
+          Schema.Redacted(Schema.NonEmptyString),
+          "AUTH_GITHUB_CLIENT_SECRET",
+        ),
+        AUTH_BINDING_KEY: Config.schema(Schema.Redacted(Schema.NonEmptyString), "AUTH_BINDING_KEY"),
+        AUTH_PROOF_KEY: Config.schema(Schema.Redacted(Schema.NonEmptyString), "AUTH_PROOF_KEY"),
+        AUTH_TRANSACTION_KEY: Config.schema(
+          Schema.Redacted(Schema.NonEmptyString),
+          "AUTH_TRANSACTION_KEY",
+        ),
         ARTIFACTS: artifacts,
         APP_BUILDS: builds,
         APP_LOADER: Cloudflare.WorkerLoader("APP_LOADER"),
@@ -108,19 +86,19 @@ export default Alchemy.Stack(
         }),
         ARTIFACTS_GIT_BASE: `https://${accountId}.artifacts.cloudflare.net/git/${artifacts.namespace}`,
         BROWSER: Cloudflare.Browser(),
-        ACCESS_OPEN_REGISTRATION: String(publicRegistration),
-        ACCESS_TEAM_DOMAIN: Config.nonEmptyString("ACCESS_TEAM_DOMAIN").pipe(
-          Config.withDefault("https://orange-cake-d758.cloudflareaccess.com"),
-        ),
-        ACCESS_AUD: access.aud,
         OPENAI_MODEL: Config.string("OPENAI_MODEL").pipe(Config.withDefault("gpt-5.6-luna")),
-        ...(Option.isSome(demoKey) ? { DEMO_OPENAI_API_KEY: demoKey.value } : {}),
         BYOK_ENCRYPTION_KEY: Config.schema(
           Schema.Redacted(Schema.NonEmptyString),
           "BYOK_ENCRYPTION_KEY",
         ),
       },
-      observability: { enabled: true },
+      // Callback query values must not enter automatic request URL logs.
+      observability: {
+        enabled: true,
+        logs: { enabled: true, invocationLogs: false },
+        traces: { enabled: false },
+      },
+      logpush: false,
       memo: {
         include: ["src/**", "site-builder/**", "vite.config.ts", "package.json"],
         lockfile: true,

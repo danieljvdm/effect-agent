@@ -10,6 +10,7 @@ import {
   voiceBoundaryAtom,
   voiceViewAtom,
 } from "../src/voice/state.ts";
+import { fixtureSession } from "./fixtures/identity.ts";
 
 const Packet = Schema.Struct({ id: Schema.Unknown, tag: Schema.String });
 
@@ -23,7 +24,6 @@ it("starts a fresh conversation, retains stop controls, and clears captions acro
   vi.useFakeTimers();
   vi.stubGlobal("location", new URL("https://planner.test"));
   vi.stubGlobal("sessionStorage", { getItem: () => null, setItem: () => {} });
-  let email = "first@example.com";
 
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(
@@ -35,18 +35,15 @@ it("starts a fresh conversation, retains stop controls, and clears captions acro
       (await request.text()).trim(),
     );
 
-    const exit =
-      packet.tag === "GetSession"
-        ? { _tag: "Success", value: { email, isAdmin: false } }
-        : {
-            _tag: "Failure",
-            cause: [
-              {
-                _tag: "Fail",
-                error: { _tag: "PlannerError", code: "unavailable", message: "No snapshot" },
-              },
-            ],
-          };
+    const exit = {
+      _tag: "Failure",
+      cause: [
+        {
+          _tag: "Fail",
+          error: { _tag: "PlannerError", code: "unavailable", message: "No snapshot" },
+        },
+      ],
+    };
 
     return new Response(`${JSON.stringify({ _tag: "Exit", requestId: packet.id, exit })}\n`, {
       headers: { "content-type": "application/ndjson" },
@@ -114,6 +111,8 @@ it("starts a fresh conversation, retains stop controls, and clears captions acro
   );
   const registry = AtomRegistry.make({ defaultIdleTTL: 0, timeoutResolution: 1 });
 
+  registry.set(sessionAtom, AsyncResult.success(fixtureSession("first@example.com")));
+
   const unmounts = [
     registry.mount(voiceBoundaryAtom),
     registry.mount(voiceViewAtom),
@@ -143,8 +142,7 @@ it("starts a fresh conversation, retains stop controls, and clears captions acro
     expect(finalized).toBe(1);
     expect(registry.get(voiceViewAtom).captions).toHaveLength(5);
     expect(registry.get(messagesAtom)).toEqual(displayed);
-    email = "second@example.com";
-    registry.refresh(sessionAtom);
+    registry.set(sessionAtom, AsyncResult.success(fixtureSession("second@example.com")));
     await vi.advanceTimersByTimeAsync(1);
     expect(registry.get(voiceViewAtom).captions).toEqual([]);
     expect(registry.get(messagesAtom)).toEqual([]);

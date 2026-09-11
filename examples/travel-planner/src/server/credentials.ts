@@ -2,15 +2,11 @@ import { Context, DateTime, Effect, Layer, Redacted, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
-import {
-  demoKeyConfigured,
-  type DemoAccessEnvironment,
-  type OpenAiConnection,
-} from "../credential-domain.ts";
+import type { OpenAiConnection } from "../credential-domain.ts";
 import { PlannerError } from "../domain.ts";
-import { ownerOfThread, storageOwner } from "./tenancy.ts";
+import { ownerOfThread } from "./tenancy.ts";
 
-export interface CredentialEnvironment extends DemoAccessEnvironment {
+export interface CredentialEnvironment {
   readonly BYOK_ENCRYPTION_KEY?: string;
 }
 
@@ -18,7 +14,6 @@ export interface CredentialBindings extends CredentialEnvironment {
   readonly THREADS: {
     readonly getByName: (owner: string) => {
       readonly modelCredential: () => Promise<string>;
-      readonly demoAccessAllowed: (owner: string) => Promise<boolean>;
     };
   };
 }
@@ -35,13 +30,12 @@ export const SealedCredential = Schema.Struct({
 
 const StoredCredential = Schema.NullOr(SealedCredential);
 
-/** Account credential and funding reads; request policy acquires this inward port. */
+/** Account credential reads; request policy acquires this inward port. */
 export class CredentialSource extends Context.Service<
   CredentialSource,
   {
     readonly configuration: CredentialEnvironment;
     readonly stored: (owner: string) => Effect.Effect<typeof StoredCredential.Type, PlannerError>;
-    readonly demoAllowed: (owner: string) => Effect.Effect<boolean, PlannerError>;
   }
 >()("travel-planner/CredentialSource") {}
 
@@ -60,7 +54,6 @@ export const credentialSourceLayer = (env: CredentialBindings) =>
   Layer.succeed(CredentialSource, {
     configuration: {
       BYOK_ENCRYPTION_KEY: env.BYOK_ENCRYPTION_KEY,
-      DEMO_OPENAI_API_KEY: env.DEMO_OPENAI_API_KEY,
     },
     stored: (owner) =>
       Effect.tryPromise({
@@ -68,15 +61,6 @@ export const credentialSourceLayer = (env: CredentialBindings) =>
         catch: unavailable,
       }).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(StoredCredential))),
-        Effect.mapError(unavailable),
-      ),
-    demoAllowed: (owner) =>
-      Effect.tryPromise({
-        try: () => env.THREADS.getByName(storageOwner).demoAccessAllowed(owner),
-        catch: unavailable,
-      }).pipe(
-        Effect.timeout("10 seconds"),
-        Effect.flatMap(Schema.decodeUnknownEffect(Schema.Boolean)),
         Effect.mapError(unavailable),
       ),
   });
@@ -211,6 +195,12 @@ export const credentialStoreLayer = (env: CredentialEnvironment, threadId: strin
   Layer.effect(
     CredentialStore,
     Effect.gen(function* () {
+      // Child workers can resolve a parent's key only through canonical authorized input.
+      if (threadId.startsWith("worker:")) {
+        const denied = Effect.fail(unavailable());
+
+        return { sealed: denied, status: denied, save: () => denied, remove: denied };
+      }
       const sql = yield* SqlClient;
       const failpoint = yield* CredentialFailpoint;
       const owner = ownerOfThread(threadId);
@@ -317,36 +307,12 @@ export const credentialStoreLayer = (env: CredentialEnvironment, threadId: strin
     }),
   );
 
-/** Re-read funding permission for each model request; no failure grants shared-key access. */
-const hasDemoAccess = Effect.fn("hasDemoAccess")(function* (owner: string) {
-  const source = yield* CredentialSource;
-
-  if (!demoKeyConfigured(source.configuration)) return false;
-
-  return yield* source.demoAllowed(owner);
-});
-
-export const connectionWithDemoAccess = Effect.fn("connectionWithDemoAccess")(function* (
-  owner: string,
-  connection: OpenAiConnection,
-) {
-  if (connection.connected || !(yield* hasDemoAccess(owner))) return connection;
-
-  return { connected: true, source: "demo" as const, lastFour: null, updatedAt: null };
-});
-
-/** Resolve the canonical account's personal key first, then explicitly granted demo funding. */
+/** Resolve only the canonical account's own key. */
 export const credentialForOwner = Effect.fn("credentialForOwner")(function* (owner: string) {
   const source = yield* CredentialSource;
   const sealed = yield* source.stored(owner);
 
-  if (sealed === null) {
-    const demoKey = source.configuration.DEMO_OPENAI_API_KEY;
-
-    if (demoKey !== undefined && (yield* hasDemoAccess(owner))) return Redacted.make(demoKey);
-
-    return yield* missingKey();
-  }
+  if (sealed === null) return yield* missingKey();
 
   return yield* decryptCredential(source.configuration, owner, sealed);
 });

@@ -8,8 +8,8 @@ import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
-import { adminEmail } from "../src/access-domain.ts";
 import { AppFile, PlannerSnapshot, Trip, TripApp, type PlannerSettings } from "../src/domain.ts";
+import { ownerEmail } from "./fixtures/identity.ts";
 
 const token = "editor-worker-fixture";
 const member = "editor-member@example.com";
@@ -174,10 +174,10 @@ const appOf = (state: PlannerSnapshot) => {
 
 it("keeps planning available while a scoped durable editor edits source, accepts follow-ups, and resumes after restart", async () => {
   const conversation = "member-editor";
-  const other = await save("admin-editor", adminEmail);
+  const other = await save("admin-editor", ownerEmail);
 
   const adminApp = Schema.decodeUnknownSync(TripApp)(
-    await rpc("CreateTripApp", { tripId: other.id }, adminEmail),
+    await rpc("CreateTripApp", { tripId: other.id }, ownerEmail),
   );
 
   const adminFiles = await files(adminApp);
@@ -307,7 +307,7 @@ it("keeps planning available while a scoped durable editor edits source, accepts
   expect(app.id).not.toBe(adminApp.id);
   expect(await files(adminApp)).toEqual(adminFiles);
   expect(await files(otherApp)).toEqual(otherFiles);
-  const admin = await snapshot("admin-editor", adminEmail);
+  const admin = await snapshot("admin-editor", ownerEmail);
 
   expect(admin.editor ?? null).toBeNull();
   expect(admin.trips.map((value) => value.id)).not.toContain(trip.id);
@@ -335,7 +335,7 @@ it("keeps planning available while a scoped durable editor edits source, accepts
   const sourceThread = captured[0]?.sourceThreadId;
 
   if (!sourceThread) throw new Error("Missing captured source");
-  expect(sourceThread).toMatch(/^member-[a-f0-9]{64}--member-editor$/);
+  expect(sourceThread).toMatch(/^account-[a-f0-9-]{36}--member-editor$/);
   expect(sourceThread).not.toBe(editorId);
   const parent = await journal(sourceThread);
 

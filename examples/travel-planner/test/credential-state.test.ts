@@ -43,8 +43,6 @@ const setup = () => {
           headers: { "content-type": "application/ndjson" },
         });
 
-      if (packet.tag === "GetSession")
-        return response({ _tag: "Success", value: { email, isAdmin: false } });
       if (packet.tag === "GetOpenAiConnection")
         return new Promise<Response>((resolve) =>
           reads.push({ email, succeed: (value) => resolve(response({ _tag: "Success", value })) }),
@@ -67,6 +65,8 @@ const setup = () => {
   );
   const registry = AtomRegistry.make({ defaultIdleTTL: 0, timeoutResolution: 1 });
 
+  registry.set(sessionAtom, AsyncResult.success({ subjectId: email, displayName: email }));
+
   const unmounts = [
     registry.mount(openAiConnectionAtom),
     registry.mount(changeOpenAiConnectionAtom),
@@ -78,7 +78,7 @@ const setup = () => {
     writes,
     switchAccount() {
       email = "second@example.com";
-      registry.refresh(sessionAtom);
+      registry.set(sessionAtom, AsyncResult.success({ subjectId: email, displayName: email }));
     },
     close() {
       for (const unmount of unmounts) unmount();
@@ -121,6 +121,7 @@ it("does not carry a key edit across an unresolved sign-in and refresh clears fa
   const fixture = setup();
 
   try {
+    fixture.registry.set(sessionAtom, AsyncResult.waiting(fixture.registry.get(sessionAtom)));
     fixture.registry.set(changeOpenAiConnectionAtom, {
       action: "connect",
       apiKey: Redacted.make("sk-fixture-private-1111"),
@@ -128,6 +129,10 @@ it("does not carry a key edit across an unresolved sign-in and refresh clears fa
     await flush();
     expect(fixture.writes).toEqual([]);
     expect(AsyncResult.isFailure(fixture.registry.get(changeOpenAiConnectionAtom))).toBe(true);
+    fixture.registry.set(
+      sessionAtom,
+      AsyncResult.success({ subjectId: "first@example.com", displayName: "first@example.com" }),
+    );
     fixture.reads[0]?.succeed(disconnected);
     await flush();
     fixture.registry.set(changeOpenAiConnectionAtom, {

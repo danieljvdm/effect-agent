@@ -8,10 +8,10 @@ import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
 
-import { adminEmail } from "../src/access-domain.ts";
 import type { PlannerError } from "../src/domain.ts";
 import { PlannerSettings, PlannerSnapshot, defaultPlannerSettings } from "../src/domain.ts";
 import type { PlannerSettingsStore } from "../src/server/settings.ts";
+import { ownerEmail } from "./fixtures/identity.ts";
 
 const token = "preference-test-token";
 const astra: PlannerSettings = { model: "gpt-6-astra", reasoningEffort: "high", fast: true };
@@ -76,7 +76,7 @@ afterAll(async () => {
 
 const headers = (email: string) => ({ authorization: `Bearer ${token}`, "x-test-email": email });
 
-const rpcExit = async (tag: string, payload?: unknown, email = adminEmail) => {
+const rpcExit = async (tag: string, payload?: unknown, email = ownerEmail) => {
   const response = await runtime.dispatchFetch("http://planner/api/rpc", {
     method: "POST",
     headers: { ...headers(email), "content-type": "application/ndjson" },
@@ -91,7 +91,7 @@ const rpcExit = async (tag: string, payload?: unknown, email = adminEmail) => {
   return Schema.decodeUnknownSync(Schema.fromJsonString(RpcExit))(body.trim().split("\n")[0]).exit;
 };
 
-const rpc = async (tag: string, payload?: unknown, email = adminEmail) => {
+const rpc = async (tag: string, payload?: unknown, email = ownerEmail) => {
   const result = await rpcExit(tag, payload, email);
 
   if (result._tag === "Failure") throw new Error(JSON.stringify(result.cause));
@@ -99,16 +99,16 @@ const rpc = async (tag: string, payload?: unknown, email = adminEmail) => {
   return result.value;
 };
 
-const get = async (email = adminEmail) =>
+const get = async (email = ownerEmail) =>
   Schema.decodeUnknownSync(PlannerSettings)(await rpc("GetPlannerSettings", undefined, email));
 
-const save = async (settings: PlannerSettings, email = adminEmail) =>
+const save = async (settings: PlannerSettings, email = ownerEmail) =>
   Schema.decodeUnknownSync(PlannerSettings)(await rpc("SavePlannerSettings", settings, email));
 
 const arm = async (point: string, mode = "failure") => {
   const response = await runtime.dispatchFetch(
     `http://planner/__test/preferences?point=${point}&mode=${mode}`,
-    { headers: headers(adminEmail) },
+    { headers: headers(ownerEmail) },
   );
 
   await response.arrayBuffer();
@@ -131,7 +131,7 @@ it("persists one private account preference across devices and restarts without 
   const guest = "friend@example.com";
 
   expect(await get()).toEqual(defaultPlannerSettings);
-  expect(await raw(adminEmail)).toEqual([]);
+  expect(await raw(ownerEmail)).toEqual([]);
   expect(await get(guest)).toEqual(defaultPlannerSettings);
   await rpc("SaveTrip", {
     conversationId: "existing-trip",

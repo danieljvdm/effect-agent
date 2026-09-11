@@ -1,16 +1,11 @@
 import type { Redacted } from "effect";
 import { Data, Effect, Exit, Layer, Option, Schedule, Schema, Semaphore, Stream } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { AsyncResult, Atom, AtomRpc, Reactivity } from "effect/unstable/reactivity";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 
-import {
-  AccessError,
-  AccessRpcs,
-  Email,
-  type AccessMembers,
-  type AccessSession,
-} from "./access-domain";
+import { AccountError, type AccountSession } from "./auth/account";
+import { runtime } from "./auth/client";
 import { mergeSpeech, speechContext } from "./conversation.ts";
 import type { OpenAiConnection } from "./credential-domain";
 import {
@@ -28,74 +23,23 @@ import {
   type SpokenMessage,
 } from "./domain";
 
-export class AccessClient extends AtomRpc.Service<AccessClient>()("travel-planner/AccessClient", {
-  group: AccessRpcs,
-  protocol: RpcClient.layerProtocolHttp({ url: "/api/access" }).pipe(
-    Layer.provide([RpcSerialization.layerNdjson, FetchHttpClient.layer]),
-  ),
-}) {}
+// Seeded once from auth.session in Auth's current account registry. Disposing that
+// registry cancels every request/stream and drops all cached state, including drafts.
+export const sessionAtom = Atom.make<AsyncResult.AsyncResult<AccountSession, AccountError>>(
+  AsyncResult.initial(),
+);
 
-export const sessionAtom = AccessClient.query("GetSession", undefined);
-
-// A client reconnect must not blank data already shown to this verified account.
-// Mutations still require the live session; an explicit rejection clears the view.
-const visibleSessionAtom = Atom.make((get): AccessSession | null => {
+const visibleSessionAtom = Atom.make((get): AccountSession | null => {
   const result = get(sessionAtom);
 
   if (AsyncResult.isSuccess(result)) return result.value;
-  if (AsyncResult.isFailure(result)) {
-    const error = Option.getOrNull(AsyncResult.error(result));
+  if (
+    AsyncResult.isFailure(result) &&
+    Option.getOrNull(AsyncResult.error(result))?.code !== "unavailable"
+  )
+    return null;
 
-    if (error?._tag === "AccessError" && error.code !== "unavailable") return null;
-  }
-
-  return Option.getOrNull(get.self<AccessSession | null>());
-});
-
-const membersQuery = AccessClient.query("GetMembers", undefined, {
-  reactivityKeys: ["access-members"],
-});
-
-export const membersAtom = Atom.make((get) => {
-  const session = get(sessionAtom);
-
-  return AsyncResult.isSuccess(session) && session.value.isAdmin
-    ? get(membersQuery)
-    : AsyncResult.initial<AccessMembers>();
-});
-
-export const memberEmailAtom = Atom.make("");
-
-export const manageMemberAtom = AccessClient.runtime.fn<
-  { readonly action: "invite" } | { readonly action: "remove"; readonly email: string }
->()(
-  Effect.fnUntraced(function* (request, get) {
-    const draft = get(memberEmailAtom);
-
-    const email = yield* Schema.decodeUnknownEffect(Email)(
-      (request.action === "invite" ? draft : request.email).trim().toLowerCase(),
-    );
-
-    const client = yield* AccessClient;
-
-    yield* Reactivity.mutation(
-      request.action === "invite"
-        ? client("InviteMember", { email })
-        : client("RemoveMember", { email }),
-      ["access-members"],
-    );
-    if (request.action === "invite" && get(memberEmailAtom) === draft) get.set(memberEmailAtom, "");
-
-    return request.action === "invite"
-      ? `${email} can now sign in. Share this site's address with them.`
-      : `Access removed for ${email}.`;
-  }),
-);
-
-export const refreshMembersAtom = Atom.fnSync<void>()((_, get) => {
-  if (get(manageMemberAtom).waiting) return;
-  get.set(manageMemberAtom, Atom.Reset);
-  get.refresh(membersQuery);
+  return Option.getOrNull(get.self<AccountSession | null>());
 });
 
 export const selectionAtom = Atom.make<{
@@ -113,7 +57,7 @@ export const conversationRequestAtom = Atom.make<SendMessageRequest | null>(null
 
 /** In-tab speech remains available after ending a call, including exchanges without work. */
 export const spokenConversationAtom = Atom.make<{
-  readonly email: string;
+  readonly subjectId: string;
   readonly conversationId: string;
   readonly messages: ReadonlyArray<SpokenMessage>;
   readonly baseline: ReadonlyArray<string>;
@@ -122,7 +66,7 @@ export const spokenConversationAtom = Atom.make<{
 } | null>(null).pipe(Atom.keepAlive);
 
 type PendingMessage = {
-  readonly email: string;
+  readonly subjectId: string;
   readonly text: string;
   readonly tripId: string | null;
   readonly conversationId: string;
@@ -134,38 +78,52 @@ type PendingMessage = {
 };
 
 export class PlannerClient extends AtomRpc.Service<PlannerClient>()("travel-planner/Client", {
+  runtime,
   group: PlannerRpcs,
-  protocol: RpcClient.layerProtocolHttp({ url: "/api/rpc" }).pipe(
-    Layer.provide([RpcSerialization.layerNdjson, FetchHttpClient.layer]),
-  ),
+  protocol: (get) =>
+    RpcClient.layerProtocolHttp({
+      url: "/api/rpc",
+      transformClient: (client) =>
+        HttpClient.mapRequest(
+          client,
+          HttpClientRequest.setHeader(
+            "x-elsewhere-account",
+            AsyncResult.getOrElse(get.once(sessionAtom), () => null)?.subjectId ?? "",
+          ),
+        ),
+    }).pipe(Layer.provide([RpcSerialization.layerNdjson, FetchHttpClient.layer])),
 }) {}
 
-const connectionQuery = Atom.family((email: string) =>
+const connectionQuery = Atom.family((subjectId: string) =>
   PlannerClient.runtime
     .atom((get) =>
       Effect.gen(function* () {
         const session = get(sessionAtom);
 
-        if (!AsyncResult.isSuccess(session) || session.waiting || session.value.email !== email)
+        if (
+          !AsyncResult.isSuccess(session) ||
+          session.waiting ||
+          session.value.subjectId !== subjectId
+        )
           return yield* Effect.interrupt;
         const client = yield* PlannerClient;
         const connection = yield* client("GetOpenAiConnection", undefined);
         const current = get.once(sessionAtom);
 
-        if (!AsyncResult.isSuccess(current) || current.value.email !== email)
+        if (!AsyncResult.isSuccess(current) || current.value.subjectId !== subjectId)
           return yield* Effect.interrupt;
 
         return connection;
       }),
     )
-    .pipe(PlannerClient.runtime.factory.withReactivity([`openai-connection:${email}`])),
+    .pipe(PlannerClient.runtime.factory.withReactivity([`openai-connection:${subjectId}`])),
 );
 
 export const openAiConnectionAtom = Atom.make((get) => {
   const session = get(sessionAtom);
 
   return AsyncResult.isSuccess(session)
-    ? get(connectionQuery(session.value.email))
+    ? get(connectionQuery(session.value.subjectId))
     : AsyncResult.initial<OpenAiConnection>();
 });
 
@@ -190,7 +148,7 @@ export const changeOpenAiConnectionAtom = PlannerClient.runtime.fn<
     if (
       !AsyncResult.isSuccess(current) ||
       current.waiting ||
-      current.value.email !== session.value.email
+      current.value.subjectId !== session.value.subjectId
     )
       return yield* Effect.interrupt;
 
@@ -198,7 +156,7 @@ export const changeOpenAiConnectionAtom = PlannerClient.runtime.fn<
       request.action === "connect"
         ? client("ConnectOpenAi", { apiKey: request.apiKey })
         : client("DisconnectOpenAi", undefined),
-      [`openai-connection:${session.value.email}`],
+      [`openai-connection:${session.value.subjectId}`],
     );
   }),
 );
@@ -207,7 +165,7 @@ export const refreshOpenAiConnectionAtom = Atom.fnSync<void>()((_, get) => {
   get.set(changeOpenAiConnectionAtom, Atom.Reset);
   const session = get(sessionAtom);
 
-  if (AsyncResult.isSuccess(session)) get.refresh(connectionQuery(session.value.email));
+  if (AsyncResult.isSuccess(session)) get.refresh(connectionQuery(session.value.subjectId));
 });
 
 type AccountPreferences = {
@@ -217,7 +175,7 @@ type AccountPreferences = {
   readonly saveFailed: boolean;
 };
 
-const accountPreferences = Atom.family((_email: string) =>
+const accountPreferences = Atom.family((_subjectId: string) =>
   Atom.make<AccountPreferences>({
     settings: null,
     generation: 0,
@@ -228,15 +186,19 @@ const accountPreferences = Atom.family((_email: string) =>
 
 const preferencesWriteLock = Atom.make(Semaphore.make(1)).pipe(Atom.keepAlive);
 
-const preferencesQuery = Atom.family((email: string) =>
+const preferencesQuery = Atom.family((subjectId: string) =>
   PlannerClient.runtime
     .atom((get) =>
       Effect.gen(function* () {
         const session = get(sessionAtom);
 
-        if (!AsyncResult.isSuccess(session) || session.waiting || session.value.email !== email)
+        if (
+          !AsyncResult.isSuccess(session) ||
+          session.waiting ||
+          session.value.subjectId !== subjectId
+        )
           return yield* Effect.interrupt;
-        const state = accountPreferences(email);
+        const state = accountPreferences(subjectId);
         const generation = get.once(state).generation;
         const client = yield* PlannerClient;
         const settings = yield* client("GetPlannerSettings", undefined);
@@ -247,7 +209,7 @@ const preferencesQuery = Atom.family((email: string) =>
           latest.generation === generation &&
           AsyncResult.isSuccess(verified) &&
           !verified.waiting &&
-          verified.value.email === email
+          verified.value.subjectId === subjectId
         )
           get.set(state, { ...latest, settings });
 
@@ -266,8 +228,8 @@ const settingsResultAtom = Atom.make((get) => {
 
   if (!AsyncResult.isSuccess(session) || session.waiting)
     return AsyncResult.initial<PlannerSettings>();
-  const query = get(preferencesQuery(session.value.email));
-  const state = get(accountPreferences(session.value.email));
+  const query = get(preferencesQuery(session.value.subjectId));
+  const state = get(accountPreferences(session.value.subjectId));
 
   return state.settings === null ? query : AsyncResult.success(state.settings);
 });
@@ -282,8 +244,8 @@ export const settingsStatusAtom = Atom.make((get) => {
 
   if (!AsyncResult.isSuccess(session) || session.waiting)
     return { loading: true, saving: false, error: null };
-  const query = get(preferencesQuery(session.value.email));
-  const state = get(accountPreferences(session.value.email));
+  const query = get(preferencesQuery(session.value.subjectId));
+  const state = get(accountPreferences(session.value.subjectId));
 
   return {
     loading: state.settings === null,
@@ -305,18 +267,22 @@ export const changeSettingsAtom = PlannerClient.runtime.fn<
     const session = get(sessionAtom);
 
     if (!AsyncResult.isSuccess(session) || session.waiting)
-      return yield* new AccessError({
+      return yield* new AccountError({
         code: "unauthorized",
         message: "Sign in before choosing model settings.",
       });
-    const email = session.value.email;
+    const subjectId = session.value.subjectId;
     const lock = yield* get.result(preferencesWriteLock);
 
     return yield* lock.withPermits(1)(
       Effect.gen(function* () {
         const verified = get(sessionAtom);
 
-        if (!AsyncResult.isSuccess(verified) || verified.waiting || verified.value.email !== email)
+        if (
+          !AsyncResult.isSuccess(verified) ||
+          verified.waiting ||
+          verified.value.subjectId !== subjectId
+        )
           return yield* Effect.interrupt;
         const current = yield* get.result(settingsResultAtom);
         const hydratedSession = get(sessionAtom);
@@ -324,7 +290,7 @@ export const changeSettingsAtom = PlannerClient.runtime.fn<
         if (
           !AsyncResult.isSuccess(hydratedSession) ||
           hydratedSession.waiting ||
-          hydratedSession.value.email !== email
+          hydratedSession.value.subjectId !== subjectId
         )
           return yield* Effect.interrupt;
 
@@ -343,7 +309,7 @@ export const changeSettingsAtom = PlannerClient.runtime.fn<
               : { ...current, fast: !current.fast };
 
         const settings = yield* Schema.decodeUnknownEffect(PlannerSettings)(candidate);
-        const state = accountPreferences(email);
+        const state = accountPreferences(subjectId);
         const generation = get(state).generation + 1;
 
         get.set(state, { settings, generation, saving: true, saveFailed: false });
@@ -370,15 +336,25 @@ export const changeSettingsAtom = PlannerClient.runtime.fn<
 export class ProgressClient extends AtomRpc.Service<ProgressClient>()(
   "travel-planner/ProgressClient",
   {
+    runtime,
     group: ProgressRpcs,
-    protocol: RpcClient.layerProtocolHttp({ url: "/api/progress" }).pipe(
-      Layer.provide([RpcSerialization.layerNdjson, FetchHttpClient.layer]),
-    ),
+    protocol: (get) =>
+      RpcClient.layerProtocolHttp({
+        url: "/api/progress",
+        transformClient: (client) =>
+          HttpClient.mapRequest(
+            client,
+            HttpClientRequest.setHeader(
+              "x-elsewhere-account",
+              AsyncResult.getOrElse(get.once(sessionAtom), () => null)?.subjectId ?? "",
+            ),
+          ),
+      }).pipe(Layer.provide([RpcSerialization.layerNdjson, FetchHttpClient.layer])),
   },
 ) {}
 
 class ConversationKey<Id extends string | null> extends Data.Class<{
-  readonly email: string;
+  readonly subjectId: string;
   readonly conversationId: Id;
 }> {}
 
@@ -402,23 +378,25 @@ export const progressAtom = Atom.make((get) => {
     !session.waiting &&
     conversationId !== null &&
     (snapshot?.pending ?? 0) > 0
-    ? get(progressStream(new ConversationKey({ email: session.value.email, conversationId })))
+    ? get(
+        progressStream(new ConversationKey({ subjectId: session.value.subjectId, conversationId })),
+      )
     : AsyncResult.initial<PlannerProgress>();
 });
 
 // Retain only the query, not its polling wrapper: switching trips stops that
 // conversation's timer but preserves its history for return visits in this tab.
-// Each verified identity has separate nodes, without putting emails on the wire.
+// Each verified identity has separate nodes, without putting subjectIds on the wire.
 // Use one structural key: nested family functions can be collected independently
 // of their mounted atoms because Atom.family holds its values through WeakRef.
-const snapshotQuery = Atom.family(({ email, conversationId }: ConversationKey<string | null>) =>
+const snapshotQuery = Atom.family(({ subjectId, conversationId }: ConversationKey<string | null>) =>
   PlannerClient.runtime
     .atom((get) =>
       Effect.gen(function* () {
         const session = yield* get.result(sessionAtom, { suspendOnWaiting: true });
 
         // A retained inactive query must not refetch using a different user's cookie.
-        if (session.email !== email) return yield* Effect.interrupt;
+        if (session.subjectId !== subjectId) return yield* Effect.interrupt;
         const client = yield* PlannerClient;
 
         return yield* client("GetPlanner", { conversationId });
@@ -441,7 +419,7 @@ const polledSnapshot = Atom.family((key: ConversationKey<string | null>) => {
 });
 
 type ConversationView = {
-  readonly email: string | null;
+  readonly subjectId: string | null;
   readonly conversationId: string | null;
   readonly result: Atom.Type<ReturnType<typeof snapshotQuery>>;
 };
@@ -450,17 +428,21 @@ const conversationViewAtom = Atom.make((get): ConversationView => {
   const session = get(visibleSessionAtom);
   const conversationId = get(selectionAtom).conversationId;
 
-  if (session === null) return { email: null, conversationId, result: AsyncResult.initial() };
-  const result = get(polledSnapshot(new ConversationKey({ email: session.email, conversationId })));
+  if (session === null) return { subjectId: null, conversationId, result: AsyncResult.initial() };
+
+  const result = get(
+    polledSnapshot(new ConversationKey({ subjectId: session.subjectId, conversationId })),
+  );
+
   const previous = Option.getOrNull(get.self<ConversationView>());
 
   const sameConversation =
-    previous?.email === session.email && previous.conversationId === conversationId;
+    previous?.subjectId === session.subjectId && previous.conversationId === conversationId;
 
   // Only a new conversation needs an initial loading screen. Runtime rebuilds
   // and overlapping refreshes preserve the last view for this exact identity.
   return {
-    email: session.email,
+    subjectId: session.subjectId,
     conversationId,
     result:
       sameConversation && Option.isSome(AsyncResult.value(previous.result))
@@ -485,7 +467,7 @@ export const conversationStatusAtom = Atom.make((get): "loading" | "ready" | "er
 });
 
 type TripList = {
-  readonly email: string | null;
+  readonly subjectId: string | null;
   readonly trips: ReadonlyArray<SavedTrip>;
   readonly conversations: ReadonlyArray<ConversationSummary>;
   readonly timestamp: number;
@@ -494,7 +476,7 @@ type TripList = {
 const tripListAtom = Atom.make((get): TripList => {
   const session = get(visibleSessionAtom);
 
-  if (session === null) return { email: null, trips: [], conversations: [], timestamp: 0 };
+  if (session === null) return { subjectId: null, trips: [], conversations: [], timestamp: 0 };
   const result = get(plannerAtom);
 
   const success = AsyncResult.isSuccess(result)
@@ -506,13 +488,13 @@ const tripListAtom = Atom.make((get): TripList => {
   const previous = Option.getOrNull(get.self<TripList>());
 
   const current =
-    previous?.email === session.email
+    previous?.subjectId === session.subjectId
       ? previous
-      : { email: session.email, trips: [], conversations: [], timestamp: 0 };
+      : { subjectId: session.subjectId, trips: [], conversations: [], timestamp: 0 };
 
   return success && success.timestamp >= current.timestamp
     ? {
-        email: session.email,
+        subjectId: session.subjectId,
         trips: success.value.trips,
         conversations: success.value.conversations ?? [],
         timestamp: success.timestamp,
@@ -549,7 +531,7 @@ const outboxAtom = Atom.writable<ReadonlyArray<PendingMessage>, ReadonlyArray<Pe
 
       const remaining = entries.filter(
         (entry) =>
-          entry.email !== view.email ||
+          entry.subjectId !== view.subjectId ||
           entry.conversationId !== view.conversationId ||
           !recorded.has(entry.id),
       );
@@ -577,7 +559,7 @@ const unrecordedMessagesAtom = Atom.make((get) => {
 
   return get(outboxAtom).filter(
     (entry) =>
-      entry.email === session.email &&
+      entry.subjectId === session.subjectId &&
       entry.conversationId === conversationId &&
       !recorded.has(entry.id),
   );
@@ -609,7 +591,7 @@ export const messagesAtom = Atom.make((get): ReadonlyArray<ConversationMessage> 
   const spoken = get(spokenConversationAtom);
 
   if (
-    spoken?.email !== get(visibleSessionAtom)?.email ||
+    spoken?.subjectId !== get(visibleSessionAtom)?.subjectId ||
     spoken?.conversationId !== get(selectionAtom).conversationId
   )
     return messages;
@@ -692,7 +674,7 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
         : get(outboxAtom).find(
             (entry) =>
               entry.id === retryId &&
-              entry.email === session.email &&
+              entry.subjectId === session.subjectId &&
               entry.conversationId === selection.conversationId &&
               entry.status === "failed",
           );
@@ -708,7 +690,7 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
 
     const voice = retry
       ? retry.voice
-      : spoken?.email === session.email &&
+      : spoken?.subjectId === session.subjectId &&
           spoken.conversationId === conversationId &&
           spoken.messages.length > 0
         ? { input: false, messages: speechContext(spoken.messages) }
@@ -730,7 +712,7 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
 
     const entry: PendingMessage = {
       ...retry,
-      email: session.email,
+      subjectId: session.subjectId,
       text: message,
       tripId: selectedTripId,
       conversationId,
@@ -740,7 +722,7 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
         (waiting &&
         !(
           spoken?.active &&
-          spoken.email === session.email &&
+          spoken.subjectId === session.subjectId &&
           spoken.conversationId === conversationId
         )
           ? "queue"
@@ -761,8 +743,8 @@ export const sendMessageAtom = PlannerClient.runtime.fn<string | void>()(
       const settings = retry?.settings ?? (yield* get.result(settingsResultAtom));
       const liveSession = get(sessionAtom);
 
-      if (!AsyncResult.isSuccess(liveSession) || liveSession.value.email !== session.email)
-        return yield* new AccessError({
+      if (!AsyncResult.isSuccess(liveSession) || liveSession.value.subjectId !== session.subjectId)
+        return yield* new AccountError({
           code: "unauthorized",
           message: "Sign in to the same account before retrying this message.",
         });

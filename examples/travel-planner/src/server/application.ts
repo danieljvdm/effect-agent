@@ -30,7 +30,7 @@ import { publishTripAppAddress } from "../trip-app/addresses.ts";
 import { editorSnapshot } from "../trip-app/editor-state.ts";
 import { AppRepository } from "../trip-app/repository.ts";
 import { plannerActivity } from "./activity.ts";
-import { completedAnswer, legacyTripMessages, type Messages } from "./conversation.ts";
+import { completedAnswer, type Messages } from "./conversation.ts";
 import { readDiagnostics } from "./diagnostics.ts";
 import {
   planner,
@@ -41,10 +41,6 @@ import {
 import { requestsPublication } from "./security.ts";
 import { ownerOfThread } from "./tenancy.ts";
 import { TripRepository } from "./trips.ts";
-
-// The storage owner remains stable; individual conversations use separate framework Threads.
-export const ownerThread = Schema.decodeSync(ThreadId)("travel-planner-owner-v1");
-export const ownerPrincipal = Schema.decodeSync(Principal)("travel-planner-owner");
 
 export class PlannerModel extends Context.Service<PlannerModel, { readonly model: string }>()(
   "travel-planner/PlannerModel",
@@ -69,15 +65,6 @@ const readThread = Effect.fn("readPlannerThread")(function* (id: string) {
   );
 });
 
-const earlierMessages = Effect.fn("earlierTripMessages")(function* (
-  conversationId: string,
-  tripId: string | null,
-) {
-  if (tripId === null || conversationId !== `trip-${tripId}`) return [];
-
-  return legacyTripMessages(yield* readThread(ownerThread), tripId);
-});
-
 export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMessageRequest) {
   const runtime = yield* DurableAgentRuntime;
   const repository = yield* TripRepository;
@@ -92,7 +79,7 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
   );
 
   const principal = yield* Schema.decodeUnknownEffect(Principal)(
-    identity.threadId === ownerThread ? ownerPrincipal : identity.threadId,
+    ownerOfThread(identity.threadId),
   ).pipe(Effect.mapError(unavailable));
 
   const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(request.conversationId).pipe(
@@ -159,16 +146,6 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
       message: "Open this trip's conversation before sending a message.",
     });
 
-  const existing = yield* readThread(threadId);
-
-  const previous =
-    existing === undefined ? yield* earlierMessages(threadId, selectedTrip?.id ?? null) : [];
-
-  // A bounded seed keeps existing trip conversations useful on their first isolated Run.
-  const previousMessages = previous
-    .slice(-6)
-    .map(({ role, text }) => ({ role, text: text.slice(0, 1000) }));
-
   yield* repository.rememberConversation({
     conversationId: request.conversationId,
     title: request.message.trim().replace(/\s+/g, " ").slice(0, 160) || "New trip",
@@ -186,7 +163,6 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
           selectedTrip !== null && requestsPublication(request.message)
             ? { tripId: selectedTrip.id, expectedRevision: selectedTrip.revision }
             : null,
-        ...(previousMessages.length === 0 ? {} : { previousMessages }),
       },
       { threadId, principal, idempotencyKey },
     )
@@ -213,9 +189,6 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
   const source = conversationId === null ? undefined : yield* readThread(conversationId);
   const currentTrip = trips.find((trip) => trip.conversationId === conversationId);
 
-  const previous =
-    conversationId === null ? [] : yield* earlierMessages(conversationId, currentTrip?.id ?? null);
-
   const ledger = yield* SubmissionLedger;
 
   const pending = yield* ledger.scanNonterminal.pipe(
@@ -226,7 +199,6 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
 
   let messages: Messages = [
     { id: "welcome", role: "assistant", text: "Where do you want to go?", tripId: null },
-    ...previous,
   ];
 
   let selected: string | null = null;
@@ -432,7 +404,7 @@ export const voiceWork = Effect.fn("voiceWork")(function* (request: typeof Voice
   const lookup = yield* Schema.decodeUnknownEffect(SubmissionLookupByKey)({
     _tag: "SubmissionLookupByKey",
     threadId: request.conversationId,
-    principal: identity.threadId === ownerThread ? ownerPrincipal : identity.threadId,
+    principal: ownerOfThread(identity.threadId),
     idempotencyKey: request.requestId,
   }).pipe(Effect.mapError(unavailable));
 

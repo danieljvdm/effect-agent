@@ -12,7 +12,7 @@ import { PlannerProgress, type ResearchScoutActivity } from "../domain.ts";
 import { plannerActivity } from "../server/activity.ts";
 import { RecordedDiagnostics } from "../server/diagnostics.ts";
 import { emptyProgress } from "../server/progress.ts";
-import { ownerOfThread, storageOwner } from "../server/tenancy.ts";
+import { ownerOfThread } from "../server/tenancy.ts";
 import { ScoutFindings, ScoutRequest } from "./contracts.ts";
 import { ResearchScout, ProgressResearchScout, RecoverableResearchScout } from "./scout.ts";
 
@@ -67,9 +67,7 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
         const sourceThreadId = yield* Schema.decodeUnknownEffect(ThreadId)(conversationId);
         const owner = ownerOfThread(conversationId);
 
-        const principal = yield* Schema.decodeUnknownEffect(Principal)(
-          owner === storageOwner ? "travel-planner-owner" : owner,
-        );
+        const principal = yield* Schema.decodeUnknownEffect(Principal)(owner);
 
         const host = yield* runtime.workerHost({ sourceThreadId, principal });
 

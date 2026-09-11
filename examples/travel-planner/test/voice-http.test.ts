@@ -4,11 +4,12 @@ import { TestClock } from "effect/testing";
 import { FetchHttpClient, type HttpClient } from "effect/unstable/http";
 import { expect, expectTypeOf } from "vite-plus/test";
 
-import { adminEmail } from "../src/access-domain.ts";
 import type { PlannerError } from "../src/domain.ts";
-import type { CredentialSource, connectionWithDemoAccess } from "../src/server/credentials.ts";
-import { credentialForOwner, credentialSourceLayer } from "../src/server/credentials.ts";
-import { storageOwner as ownerThread } from "../src/server/tenancy.ts";
+import type { CredentialSource, credentialForOwner } from "../src/server/credentials.ts";
+import { credentialSourceLayer } from "../src/server/credentials.ts";
+import { ownerEmail, fixtureOwner, fixtureSession } from "./fixtures/identity.ts";
+const ownerThread = fixtureOwner(ownerEmail);
+
 import { createVoiceSession } from "../src/server/voice-http.ts";
 import type { VoiceError } from "../src/voice/protocol.ts";
 
@@ -36,7 +37,6 @@ const environment = Effect.gen(function* () {
     BYOK_ENCRYPTION_KEY: btoa(String.fromCharCode(...bytes)),
     THREADS: {
       getByName: (owner: string) => ({
-        demoAccessAllowed: async () => false,
         modelCredential: async () => {
           expect(owner).toBe(ownerThread);
 
@@ -53,7 +53,7 @@ const environment = Effect.gen(function* () {
   };
 });
 
-const session = { email: adminEmail, isAdmin: true };
+const session = fixtureSession(ownerEmail);
 const offer = { sdp: "offer", history: [{ role: "user" as const, text: "Plan Lisbon" }] };
 
 it.effect(
@@ -131,99 +131,33 @@ it.effect("times out session creation, aborts transport, and retains no provider
   }),
 );
 
-it.effect(
-  "uses sponsored voice only for the verified account and rechecks new-call revocation",
-  () =>
-    Effect.gen(function* () {
-      let allowed = true;
-      let calls = 0;
-
-      const env = {
-        DEMO_OPENAI_API_KEY: "sk-demo-voice-PRIVATE",
-        THREADS: {
-          getByName: (owner: string) => ({
-            modelCredential: async () => {
-              expect(owner).toBe(ownerThread);
-
-              return "null";
-            },
-            demoAccessAllowed: async (account: string) => {
-              expect(owner).toBe(ownerThread);
-              expect(account).toBe(ownerThread);
-
-              return allowed;
-            },
-          }),
-        },
-      };
-
-      const fetch: typeof globalThis.fetch = async (_url, init) => {
-        calls++;
-        expect(new Headers(init?.headers).get("authorization")).toBe(
-          "Bearer sk-demo-voice-PRIVATE",
-        );
-
-        return Response.json(
-          { session: { id: "sponsored-voice" }, transport: { type: "webrtc", sdp: "answer" } },
-          { status: 201 },
-        );
-      };
-
-      const run = createVoiceSession(offer, session).pipe(
-        Effect.provide([credentialSourceLayer(env), FetchHttpClient.layer]),
-        Effect.provideService(FetchHttpClient.Fetch, fetch),
-        Effect.result,
-      );
-
-      const accepted = yield* run;
-
-      expect(accepted._tag).toBe("Success");
-      expect(JSON.stringify(accepted)).not.toContain("PRIVATE");
-      allowed = false;
-      expect((yield* run)._tag).toBe("Failure");
-      expect(calls).toBe(1);
-    }),
-);
-
-it.effect("bounds a stalled funding lookup and never grants access after timeout", () =>
+it.effect("refuses voice without BYOK even when an obsolete host key exists", () =>
   Effect.gen(function* () {
-    const entered = yield* Deferred.make<void>();
-
     const env = {
-      DEMO_OPENAI_API_KEY: "sk-stalled-demo-PRIVATE",
-      THREADS: {
-        getByName: () => ({
-          modelCredential: async () => "null",
-          demoAccessAllowed: () => {
-            Deferred.doneUnsafe(entered, Effect.void);
-
-            return new Promise<boolean>(() => {});
-          },
-        }),
-      },
+      DEMO_OPENAI_API_KEY: "sk-obsolete-host-key",
+      THREADS: { getByName: () => ({ modelCredential: async () => "null" }) },
     };
 
-    const fiber = yield* credentialForOwner(ownerThread).pipe(
-      Effect.provide(credentialSourceLayer(env)),
+    let calls = 0;
+
+    const result = yield* createVoiceSession(offer, session).pipe(
+      Effect.provide([credentialSourceLayer(env), FetchHttpClient.layer]),
+      Effect.provideService(FetchHttpClient.Fetch, async () => {
+        calls++;
+
+        return new Response();
+      }),
       Effect.result,
-      Effect.forkChild,
     );
 
-    yield* Deferred.await(entered);
-    yield* TestClock.adjust("11 seconds");
-    const result = yield* Fiber.join(fiber);
-
     expect(result._tag).toBe("Failure");
-    expect(JSON.stringify(result)).not.toContain("PRIVATE");
+    expect(calls).toBe(0);
   }),
 );
 
 it("keeps credential and voice dependencies visible", () => {
   expectTypeOf<
     Effect.Services<ReturnType<typeof credentialForOwner>>
-  >().toEqualTypeOf<CredentialSource>();
-  expectTypeOf<
-    Effect.Services<ReturnType<typeof connectionWithDemoAccess>>
   >().toEqualTypeOf<CredentialSource>();
   expectTypeOf<Effect.Error<ReturnType<typeof credentialForOwner>>>().toEqualTypeOf<PlannerError>();
   expectTypeOf<Effect.Error<ReturnType<typeof createVoiceSession>>>().toEqualTypeOf<VoiceError>();

@@ -1,7 +1,7 @@
 import { Effect, Redacted, Schema, Stream } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
-import type { AccessSession } from "../access-domain.ts";
+import type { AccountSession } from "../auth/account.ts";
 import { VoiceAnswer, VoiceError, VoiceOffer } from "../voice/protocol.ts";
 import { credentialForOwner } from "./credentials.ts";
 import { plannerOwner } from "./tenancy.ts";
@@ -13,8 +13,8 @@ const unavailable = () =>
 
 /** Authenticated ingress supplies the owner. No key or provider body reaches the browser. */
 export const createVoiceSession = Effect.fn("createVoiceSession")(
-  function* (offer: typeof VoiceOffer.Type, session: AccessSession) {
-    const owner = yield* plannerOwner(session.email);
+  function* (offer: typeof VoiceOffer.Type, session: AccountSession) {
+    const owner = yield* plannerOwner(session.subjectId);
     const key = yield* credentialForOwner(owner);
     const http = yield* HttpClient.HttpClient;
 
@@ -69,7 +69,7 @@ export const createVoiceSession = Effect.fn("createVoiceSession")(
 );
 
 export const serveVoice = Effect.fn("serveVoice")(
-  function* (request: Request, session: AccessSession) {
+  function* (request: Request, session: AccountSession) {
     const body = yield* Effect.tryPromise({ try: () => request.text(), catch: unavailable });
     const offer = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(VoiceOffer))(body);
     const answer = yield* createVoiceSession(offer, session);

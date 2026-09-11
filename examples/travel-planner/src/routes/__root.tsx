@@ -1,5 +1,7 @@
-import { RegistryProvider } from "@effect/atom-react";
+import { RegistryProvider, useAtomMount } from "@effect/atom-react";
 import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
+
+import { captureCallbackScript, sessionObservation } from "../auth/client";
 
 import appCss from "../styles.css?url";
 
@@ -33,12 +35,23 @@ function Document({ children }: { readonly children: React.ReactNode }) {
   return (
     <html lang="en">
       <head>
+        <script dangerouslySetInnerHTML={{ __html: captureCallbackScript }} />
+        <meta name="referrer" content="no-referrer" />
         <HeadContent />
       </head>
       <body>
-        <RegistryProvider>{children}</RegistryProvider>
+        <RegistryProvider>
+          <SessionObservation />
+          {children}
+        </RegistryProvider>
         <Scripts />
       </body>
     </html>
   );
+}
+
+function SessionObservation() {
+  useAtomMount(sessionObservation);
+
+  return null;
 }
