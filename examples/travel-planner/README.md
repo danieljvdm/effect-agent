@@ -292,6 +292,19 @@ the Alchemy container build; its image and SDK use the same pinned version.
 It uses Cloudflare's remote Alchemy state store. `ALCHEMY_LOCAL_STATE=true` selects local
 state for isolated experiments; do not switch state stores for an existing deployment.
 The root docs stack is independent. Deployment credentials are never bound into the Worker.
+The `Deploy travel planner` GitHub Actions workflow deploys changes on `main` to this
+production stack and also supports manual dispatch from `main`. It reuses the docs workflow's
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`, including the account-wide Alchemy state
+store; it does not need a second Alchemy key. Application checks and tests run before deployment.
+Set repository Actions secrets `TRAVEL_PLANNER_GITHUB_CLIENT_ID`,
+`TRAVEL_PLANNER_GITHUB_CLIENT_SECRET`, `TRAVEL_PLANNER_AUTH_BINDING_KEY`,
+`TRAVEL_PLANNER_AUTH_PROOF_KEY`, `TRAVEL_PLANNER_AUTH_TRANSACTION_KEY` and
+`TRAVEL_PLANNER_BYOK_ENCRYPTION_KEY`. The workflow fixes the origin to
+`https://travel.effect-agent.com` and the sender to `auth@effect-agent.com`.
+Use manual dispatch for the initial cutover only after the maintenance and reset prerequisites
+below are complete. After the cutover and live login checks, set repository variable
+`TRAVEL_PLANNER_DEPLOY_ENABLED=true` to enable automatic deployments. Until then push-triggered
+jobs are skipped. Normal deployments never run the one-time cleanup.
 Alchemy owns the custom domain; workers.dev and preview URLs are disabled. Generated app
 hosts remain public. The planner uses a single canonical origin and 30-day Auth sessions.
 The obsolete Access application, policy, membership APIs and demo-funding controls are removed.
@@ -304,6 +317,7 @@ The obsolete Access application, policy, membership APIs and demo-funding contro
   `AUTH_EMAIL_FROM` to the verified sender. `AUTH_EMAIL` is a structured Workers send binding
   restricted to that sender, with unrestricted recipients for public signup. It needs no
   email API key. The template and bounded acceptance adapter are in `src/auth/email-delivery.ts`.
+  Disable the sending domain's activity-log message previews so login codes do not appear there.
 - Create a GitHub **OAuth App**, with homepage `https://travel.effect-agent.com` and exact
   callback `https://travel.effect-agent.com/auth/github/callback`. Supply
   `AUTH_GITHUB_CLIENT_ID` and secret `AUTH_GITHUB_CLIENT_SECRET`. This requests identity
