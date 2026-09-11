@@ -492,6 +492,26 @@ it("keeps callback GET inert, exposes only login assets, and rejects unauthentic
 
   expect(home.status).toBe(303);
   expect(home.headers.get("location")).toBe("/login");
+
+  const callback = await client.request(
+    "/auth/github/callback?code=PRIVATE_CODE&state=PRIVATE_STATE",
+  );
+
+  const callbackHtml = await callback.text();
+
+  // The browser must clear the query before React's hoisted resource links.
+  expect(callbackHtml).toMatch(/<head><script>.*history\.replaceState/);
+  expect(callbackHtml.indexOf("history.replaceState")).toBeLessThan(
+    callbackHtml.indexOf('<link rel="stylesheet"'),
+  );
+  expect(callbackHtml.indexOf("history.replaceState")).toBeLessThan(
+    callbackHtml.indexOf('<link rel="modulepreload"'),
+  );
+  expect(callbackHtml.match(/window\.__elsewhereCallback=q/g)).toHaveLength(1);
+  expect(callbackHtml).not.toMatch(/PRIVATE_CODE|PRIVATE_STATE/);
+  expect(callback.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(callback.headers.get("cache-control")).toBe("no-store");
+  expect(callback.headers.has("set-cookie")).toBe(false);
   for (const path of [
     "/login",
     "/auth/github/callback?code=PRIVATE_CODE&state=PRIVATE_STATE",

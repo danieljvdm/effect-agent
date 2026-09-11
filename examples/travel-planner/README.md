@@ -450,7 +450,8 @@ provider-side revocation is needed to invalidate copies in historical database b
   already admitted work with their original tool schemas and output formats.
 - Auth HTTP middleware supplies request context; `auth.requireSession()` explicitly authorizes
   private planner pages, published snapshots, RPC, voice and progress. `/login`, callback GET
-  and required static assets are public. Callback GET only renders: an inline script removes
+  and required static assets are public. Callback GET only renders: the Worker prepends an
+  inline script to the rendered head, ahead of React's hoisted resource links. It removes
   secret query values before assets/hydration, then typed Auth actions submit the callback
   through a same-origin CSRF-protected POST. Codes/state/tokens are never logged or persisted
   in browser storage. Only the public GitHub flow ID survives the round trip in session storage.

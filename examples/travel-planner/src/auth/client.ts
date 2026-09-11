@@ -94,9 +94,8 @@ const startGithub = Effect.gen(function* () {
 
 export const githubLogin = auth.runtime.fn<void>()(() => startGithub);
 
-// This static script runs before styles, hydration, analytics or other page scripts.
-// Only public flow correlation survives navigation; callback credentials stay in memory.
-export const captureCallbackScript = `if(location.pathname==='/auth/github/callback'){const q=location.search;history.replaceState(null,'',location.pathname);window.__elsewhereCallback=q;}`;
+// The Worker captures callback credentials in memory before loading page resources.
+// Only public flow correlation survives navigation.
 declare global {
   interface Window {
     __elsewhereCallback?: string;
