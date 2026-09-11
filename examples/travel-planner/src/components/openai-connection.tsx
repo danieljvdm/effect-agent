@@ -15,6 +15,7 @@ export function OpenAiConnectionForm() {
   const refresh = useAtomSet(refreshOpenAiConnectionAtom);
   const [draft, setDraft] = useState("");
   const current = Option.getOrNull(AsyncResult.value(connection));
+  const personalKey = current?.connected && !current.serverFunded;
 
   const error = Option.getOrNull(
     AsyncResult.error(AsyncResult.isFailure(result) ? result : connection),
@@ -26,14 +27,18 @@ export function OpenAiConnectionForm() {
     <section className="openai-connection" aria-label="OpenAI connection">
       <h3>Your OpenAI key</h3>
       <p className="settings-help">
-        Your key pays for the planner, research scouts, and app editor. Hosting is included.
+        {current?.serverFunded
+          ? "A personal key is optional. Add one to use your own OpenAI account instead."
+          : "Your key pays for the planner, research scouts, and app editor. Hosting is included."}
       </p>
       <p className="connection-status" role="status">
-        {current?.connected
-          ? `Connected · ending in ${current.lastFour}`
-          : connection.waiting
-            ? "Checking your connection…"
-            : "Connect a key to start planning."}
+        {current?.serverFunded
+          ? "Server-funded access · no personal key required"
+          : current?.connected
+            ? `Connected · ending in ${current.lastFour}`
+            : connection.waiting
+              ? "Checking your connection…"
+              : "Connect a key to start planning."}
       </p>
       <form
         onSubmit={(event) => {
@@ -42,7 +47,7 @@ export function OpenAiConnectionForm() {
           setDraft("");
         }}
       >
-        <label htmlFor="openai-key">{current?.connected ? "Replace API key" : "API key"}</label>
+        <label htmlFor="openai-key">{personalKey ? "Replace API key" : "API key"}</label>
         <input
           id="openai-key"
           type="password"
@@ -57,9 +62,9 @@ export function OpenAiConnectionForm() {
         />
         <div className="connection-actions">
           <button type="submit" disabled={result.waiting || draft.trim().length < 16}>
-            {result.waiting ? "Updating…" : current?.connected ? "Replace key" : "Connect key"}
+            {result.waiting ? "Updating…" : personalKey ? "Replace key" : "Connect key"}
           </button>
-          {current?.connected && (
+          {personalKey && (
             <button
               type="button"
               className="connection-remove"
@@ -80,8 +85,9 @@ export function OpenAiConnectionForm() {
         </p>
       )}
       <p className="settings-help">
-        Stored encrypted on the server for background work. Removing it stops new model requests;
-        your trips remain saved.
+        Stored encrypted on the server for background work. Removing a personal key uses
+        server-funded access if you are allowlisted; otherwise new model requests stop. Your trips
+        remain saved.
       </p>
       <a
         className="settings-help"

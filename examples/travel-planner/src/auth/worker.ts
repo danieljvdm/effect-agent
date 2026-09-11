@@ -2,16 +2,30 @@ import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Schema } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 
-import { AccountError, AccountSession } from "./account";
+import { AccountError, AccountSession, AccountId } from "./account";
 import { emailDeliveryLayer } from "./email-delivery";
+import { makeFundingStore } from "./funding";
 import { serveAuth } from "./host";
 import { AuthConfiguration } from "./server";
+import { initializeAuthStorage } from "./storage";
 
 /** Only the planner Worker can reach this object; it has no public service route. */
 export class PlannerAuth extends DurableObject<Cloudflare.Env> {
   fetch(request: Request): Promise<Response> {
     return Effect.runPromise(
       Effect.gen({ self: this }, function* () {
+        const url = new URL(request.url);
+
+        if (url.pathname.startsWith("/_internal/funding/")) {
+          const id = yield* Schema.decodeUnknownEffect(AccountId)(
+            url.pathname.slice("/_internal/funding/".length),
+          );
+
+          yield* initializeAuthStorage(this.ctx.storage);
+          const store = yield* makeFundingStore(this.ctx.storage);
+
+          return Response.json(yield* store.status(id));
+        }
         const config = yield* Schema.decodeUnknownEffect(AuthConfiguration)(this.env);
 
         return yield* serveAuth(
@@ -19,6 +33,8 @@ export class PlannerAuth extends DurableObject<Cloudflare.Env> {
           this.ctx.storage,
           config,
           emailDeliveryLayer(this.env.AUTH_EMAIL, config.AUTH_EMAIL_FROM).pipe(Layer.orDie),
+          undefined,
+          Boolean(this.env.SERVER_OPENAI_KEY),
         );
       }).pipe(
         Effect.catch(() =>

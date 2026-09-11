@@ -6,7 +6,10 @@ import { layerWebCrypto } from "@yielded/auth/WebCrypto";
 import * as Drizzle from "drizzle-orm/effect-sqlite-do";
 import { Effect, Layer, Option, Schema } from "effect";
 import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
+import { HttpApiBuilder } from "effect/unstable/httpapi";
 
+import { FundingApi, FundingError } from "../funding-domain";
+import { makeFundingStore } from "./funding";
 import { makeGithubDiagnostics } from "./oauth-diagnostics";
 import { AuthDatabase, persistenceLayer } from "./persistence";
 import { makeAuth, type AuthConfiguration } from "./server";
@@ -28,6 +31,7 @@ export const serveAuth = Effect.fn("Auth.fetch")(function* (
   config: AuthConfiguration,
   delivery: Layer.Layer<EmailProofDelivery>,
   protocol?: Layer.Layer<OAuthProtocol>,
+  serverKeyConfigured = false,
 ) {
   yield* initializeAuthStorage(storage);
   const { AppAuth, http, security, github } = makeAuth(config);
@@ -73,10 +77,53 @@ export const serveAuth = Effect.fn("Auth.fetch")(function* (
     ),
   ).pipe(http.middleware);
 
-  const routes = Layer.merge(http.routes(), authorized).pipe(
-    Layer.provide(live),
-    Layer.provide(HttpServer.layerServices),
+  const fundingHandlers = HttpApiBuilder.group(
+    FundingApi,
+    "funding",
+    Effect.fn(function* (handlers) {
+      const store = yield* makeFundingStore(storage);
+
+      const actor = Effect.gen(function* () {
+        const auth = yield* AppAuth;
+
+        const session = yield* auth
+          .requireSession()
+          .pipe(Effect.mapError(() => new FundingError({ message: "Sign in to continue." })));
+
+        if (request.headers.get("x-elsewhere-account") !== session.subjectId)
+          return yield* new FundingError({ message: "Account changed. Sign in again." });
+        if (request.method !== "GET" && request.headers.get("origin") !== config.AUTH_ORIGIN)
+          return yield* new FundingError({ message: "Invalid request origin." });
+
+        return session.subjectId;
+      });
+
+      return handlers
+        .handle("status", () =>
+          Effect.gen(function* () {
+            const status = yield* store.status(yield* actor);
+
+            return { ...status, configured: serverKeyConfigured };
+          }),
+        )
+        .handle("list", ({ query }) => Effect.flatMap(actor, (id) => store.list(id, query.after)))
+        .handle("grant", ({ payload }) => Effect.flatMap(actor, (id) => store.grant(id, payload)))
+        .handle("revoke", ({ payload }) =>
+          Effect.flatMap(actor, (id) => store.revoke(id, payload)),
+        );
+    }),
   );
+
+  const fundingRoutes = HttpApiBuilder.layer(FundingApi).pipe(
+    Layer.provide(fundingHandlers),
+    http.middleware,
+  );
+
+  const routes = Layer.mergeAll(
+    http.routes(),
+    authorized,
+    ...(new URL(request.url).pathname.startsWith("/api/funding/") ? [fundingRoutes] : []),
+  ).pipe(Layer.provide(live), Layer.provide(HttpServer.layerServices));
 
   const web = yield* Effect.acquireRelease(
     Effect.sync(() => HttpRouter.toWebHandler(routes, { disableLogger: true })),

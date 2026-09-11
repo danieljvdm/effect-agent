@@ -16,6 +16,7 @@ import type { AccountSession } from "./auth/account";
 import { auth, accountLifetime } from "./auth/client";
 import { ActivityPanel } from "./components/activity-panel";
 import { AgentProgress } from "./components/agent-progress.tsx";
+import { FundingPanel } from "./components/funding-panel";
 import { MessageText } from "./components/message-text";
 import { OpenAiConnectionForm } from "./components/openai-connection";
 import { PendingMessages } from "./components/pending-messages";
@@ -647,6 +648,7 @@ function ModelControls() {
           <OpenAiConnectionForm
             key={AsyncResult.isSuccess(session) ? session.value.subjectId : "signed-out"}
           />
+          <FundingPanel />
           <label htmlFor="planner-model">Model</label>
           <select
             id="planner-model"

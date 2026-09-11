@@ -331,7 +331,8 @@ below are complete. After the cutover and live login checks, set repository vari
 jobs are skipped. Normal deployments never run the one-time cleanup.
 Alchemy owns the custom domain; workers.dev and preview URLs are disabled. Generated app
 hosts remain public. The planner uses a single canonical origin and 30-day Auth sessions.
-The obsolete Access application, policy, membership APIs and demo-funding controls are removed.
+The obsolete Access application, policy, and membership APIs are removed. Server-funded access
+uses the app's verified Auth identities and the funding panel described below.
 
 ### Provider setup for release
 
@@ -430,6 +431,34 @@ restore deleted accounts or conversations and must not reopen an unprotected old
 Do not reset the new Auth database after users begin registering. Future schema upgrades
 must preserve supported state; unknown auth formats fail without mutation.
 
+## Server-funded access
+
+The verified GitHub account `danieljvdm` (immutable GitHub ID `3450486`) administers funding
+from **Planner settings → Server-funded access** and is automatically eligible. Registration
+order, display names, GitHub profile email, and GitHub's `site_admin` flag never confer this role.
+The panel lists registered users in pages of 25 and supports grants by account, verified email
+address, or GitHub username. Email addresses, including Gmail addresses, must be verified through
+email-code login; the app does not offer Google sign-in. GitHub usernames are resolved once to
+their immutable provider ID, so a later username change or reuse does not transfer the grant.
+An email grant can precede registration. At most 1,000 grants are retained.
+
+Set the optional `SERVER_OPENAI_KEY` deployment secret to fund eligible accounts. The deployment
+workflow supplies the existing repository `OPENAI_API_KEY` secret. The panel reports whether it is
+configured; it never exposes the key. Without a configured key, every account still needs BYOK.
+Existing personal keys take precedence over server funding. Grants do not provide admin access
+or access to anyone else's trips, conversations, or keys.
+
+Funding grants live in a separate, versioned table in the existing Auth Object. Initialization
+is atomic and preserves existing accounts and sessions. Unknown funding formats fail without
+mutation. Administrative reads and writes require a current verified administrator session,
+account-matching header, and same-origin mutations. Directory responses are never cached.
+Every server-funded provider request, including voice, scouts, and editors, rechecks current
+grants against the canonical owner and active verified identities. A lookup failure denies
+funding. Revoking all applicable grants stops new server-funded requests; already dispatched
+requests may finish. A personal key continues to work independently. A failed save or revoke
+may have committed before its reply was lost: use **Refresh** to inspect the current allowlist.
+Grant records retain the administrator and timestamp; keys and provider responses are not logged.
+
 ## Bring your own OpenAI key
 
 Settings lets each account connect, replace, or remove its key. Connection checks use OpenAI's
@@ -449,8 +478,9 @@ reply, refresh the connection status before retrying. Unsupported rows fail with
 Every model HTTP request resolves the current key from the verified account. Planner attempts use
 the host-owned conversation namespace; scouts and editors use their validated canonical source
 lineage, never a model-supplied billing account or the child thread's name. Legacy registrations
-also require the owner's key. There is no host-funded fallback. Rotation affects the next
-model request; key removal prevents new requests, including background work. An already dispatched
+use the same policy. If the account has no personal key, an explicit funding grant or administrator
+eligibility permits the configured server key. Rotation affects the next model request; removing
+a personal key prevents new requests unless server funding applies, including background work. An already dispatched
 provider request may finish. Failed work is not automatically replayed when a key is reconnected.
 Saved trips, messages, and published apps remain readable without a key, and existing accounts
 need a personal key to make model requests. Removing a key deletes the current credential row;
