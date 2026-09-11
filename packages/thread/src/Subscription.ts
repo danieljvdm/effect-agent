@@ -1,5 +1,5 @@
 import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
-import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { InputMessage } from "@effect-agent/core/Messaging";
 import { Receipt } from "@effect-agent/core/Receipt";
 import { Context, Effect, Schema } from "effect";
 
@@ -152,7 +152,7 @@ export const PreparedInput = Schema.Struct({
   admissionKey: IdempotencyKey,
   authorization: ScheduleAuthorizationDecision,
   workerAdmission: Schema.optionalKey(WorkerAdmission),
-  messageAdmission: Schema.optionalKey(MessageAdmission),
+  messageAdmission: Schema.optionalKey(InputMessage),
 });
 
 export type PreparedInput = typeof PreparedInput.Type;

@@ -1,13 +1,14 @@
 import type * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId, type SubmissionId } from "@effect-agent/core/Identifiers";
-import { IdempotencyKey, type Receipt } from "@effect-agent/core/Receipt";
+import { ThreadId, type AgentId, type SubmissionId } from "@effect-agent/core/Identifiers";
+import { IdempotencyKey, Receipt } from "@effect-agent/core/Receipt";
 import { SubagentDelegationCaps, SubagentGrant } from "@effect-agent/core/SubagentContract";
 import {
+  WorkerCompletion,
   WorkerError,
   WorkerHistoryEntry,
   type WorkerContext,
-  type WorkerRef,
+  WorkerRef,
 } from "@effect-agent/core/Worker";
 import {
   type SubagentHost,
@@ -360,13 +361,14 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     if (
       reports.length !== 1 ||
       !Object.is(report.target, target.definition) ||
-      !Object.is(report.input, source.definition.input) ||
+      (report.mode !== "standard" && !Object.is(report.input, source.definition.input)) ||
       (report.destination !== undefined && !Object.is(report.destination.target, source.definition))
     )
       return yield* failure("start", "declaration-unavailable");
 
     return {
       sourceDigests: source.digests,
+      ...(report.mode === undefined ? {} : { mode: report.mode }),
       ...(report.destination === undefined
         ? {}
         : { destinationDelegationId: report.destination.delegationId }),
@@ -1076,7 +1078,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         descriptor === undefined ||
         reports.length !== 1 ||
         !Object.is(descriptor.target, targetBinding.definition) ||
-        !Object.is(descriptor.input, sourceBinding.definition.input) ||
+        (descriptor.mode !== "standard" &&
+          !Object.is(descriptor.input, sourceBinding.definition.input)) ||
+        descriptor.mode !== intent.mode ||
         descriptor.destination?.delegationId !== intent.destinationDelegationId ||
         (descriptor.destination !== undefined &&
           !Object.is(descriptor.destination.target, sourceBinding.definition))
@@ -1129,6 +1133,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       if (source.depth !== 0 && sourceOrigin === undefined) return refused("destination");
       if (
+        descriptor.mode !== "standard" &&
         sourceOrigin !== undefined &&
         (descriptor.destination === undefined ||
           descriptor.destination.delegationId !== sourceOrigin.worker.delegationId ||
@@ -1158,12 +1163,12 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         context,
         observation: {
           _tag: "Settled",
-          receipt: {
+          receipt: Receipt.make({
             threadId: hostSubmission.threadId,
             submissionId: hostSubmission.submissionId,
             receiptId: hostSubmission.receiptId,
             queueSequence: hostSubmission.queueSequence,
-          },
+          }),
           runId,
           settlementId: host.settlementId,
           outcome: host.outcome,
@@ -1189,12 +1194,31 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       if (projection._tag === "WorkerReportRefused") return projection;
 
+      if (descriptor.mode === "standard") {
+        const message = projection.value.message;
+
+        if (source.submission === undefined || !Schema.is(WorkerCompletion)(message))
+          return refused("input");
+        if (
+          !Schema.toEquivalence(WorkerRef)(message.report.worker, origin.worker) ||
+          !Schema.toEquivalence(Receipt)(message.report.receipt, report.observation.receipt) ||
+          message.report.runId !== runId ||
+          message.report.settlementId !== host.settlementId ||
+          message.report.outcome !== host.outcome ||
+          message.budgetExhausted !== report.observation.budgetExhausted
+        )
+          return refused("input");
+      } else if (projection.value.message !== undefined) return refused("input");
+
+      const reportInput =
+        descriptor.mode === "standard"
+          ? source.submission?.inputPayload
+          : projection.value.encodedInput;
+
       const validated = yield* Schema.decodeUnknownEffect(
         Schema.toEncoded(sourceBinding.definition.input),
-      )(projection.value.encodedInput).pipe(
-        Effect.flatMap(() =>
-          Schema.decodeUnknownEffect(PersistedJson)(projection.value.encodedInput),
-        ),
+      )(reportInput).pipe(
+        Effect.flatMap(() => Schema.decodeUnknownEffect(PersistedJson)(reportInput)),
         Effect.option,
       );
 
@@ -1209,10 +1233,15 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       let principal = hostSubmission.principal;
 
       if (sourceOrigin !== undefined) {
-        if (hostAdmission.sourceSubmissionId === undefined) return refused("destination");
+        const ownerId =
+          descriptor.mode === "standard"
+            ? firstInput.admission.sourceSubmissionId
+            : hostAdmission.sourceSubmissionId;
+
+        if (ownerId === undefined) return refused("destination");
 
         const sourceSnapshot = yield* deps.ledger
-          .lookup(SubmissionLookupById.make({ submissionId: hostAdmission.sourceSubmissionId }))
+          .lookup(SubmissionLookupById.make({ submissionId: ownerId }))
           .pipe(Effect.mapError(storageFailure("inspect")));
 
         if (
@@ -1224,7 +1253,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           return refused("destination");
 
         const parameters = yield* Schema.decodeUnknownEffect(PersistedJson)(
-          projection.value.encodedParameters,
+          descriptor.mode === "standard"
+            ? sourceSnapshot.value.workerAdmission.parameters
+            : projection.value.encodedParameters,
         ).pipe(Effect.option);
 
         if (Option.isNone(parameters)) return refused("destination");
@@ -1279,6 +1310,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         inputDigest,
         admissionKey: messageId,
         authorization: { policyId: "worker-report", decisionId: messageId },
+        ...(projection.value.message === undefined
+          ? {}
+          : { messageAdmission: projection.value.message }),
         ...(workerAdmission === undefined
           ? {}
           : { workerAdmission: { ...workerAdmission, deliveryPrincipal: authorized.value } }),
@@ -1831,6 +1865,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
             ? yield* reportIntent(sourceBinding, resolved, request.delegationId)
             : previousOrigin.reporting;
 
+        if (reporting?.mode === "standard" && sourceSubmissionId === undefined)
+          return yield* failure("start", "denied");
+
         const origin = yield* decode(
           WorkerOrigin,
           {
@@ -2074,6 +2111,80 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     };
   };
 
+  const validateCompletion = Effect.fn("WorkerHost.validateCompletion")(function* (
+    unvalidated: WorkerCompletion,
+    options: DurableSubmitOptions,
+    agentId: AgentId,
+    inputDigest: Digest,
+  ) {
+    const message = yield* Schema.decodeUnknownEffect(WorkerCompletion)(unvalidated).pipe(
+      Effect.mapError(() => failure("followUp", "corrupt")),
+    );
+
+    const child = yield* read(message.report.worker.threadId, "followUp");
+
+    const decision = child.records.find(
+      ({ record }) =>
+        record.payload._tag === "WorkerReportPrepared" &&
+        record.payload.runId === message.report.runId,
+    )?.record.payload;
+
+    if (decision?._tag !== "WorkerReportPrepared") return yield* failure("followUp", "denied");
+
+    const envelope = yield* Schema.decodeUnknownEffect(PreparedInput)(decision.envelope).pipe(
+      Effect.mapError(() => failure("followUp", "corrupt")),
+    );
+
+    if (
+      !Schema.is(WorkerCompletion)(envelope.messageAdmission) ||
+      !Schema.toEquivalence(WorkerCompletion)(envelope.messageAdmission, message) ||
+      envelope.threadId !== options.threadId ||
+      envelope.agentId !== agentId ||
+      envelope.inputDigest !== inputDigest ||
+      envelope.deliveryPrincipal !== options.principal ||
+      envelope.admissionKey !== options.idempotencyKey ||
+      !definitionDigestsEqual(envelope.definitions, options.definitions) ||
+      !Schema.toEquivalence(Schema.UndefinedOr(WorkerAdmission))(
+        envelope.workerAdmission,
+        options.workerAdmission,
+      )
+    )
+      return yield* failure("followUp", "denied");
+
+    const recorded = child.records.find(
+      ({ record }) => record.payload._tag === "WorkerOriginRecorded",
+    )?.record.payload;
+
+    if (recorded?._tag !== "WorkerOriginRecorded" || recorded.origin.reporting?.mode !== "standard")
+      return yield* failure("followUp", "denied");
+    const origin = recorded.origin;
+    const source = yield* read(origin.source.threadId, "followUp");
+
+    const first = requests(source.records).find(
+      (row) => row.admission.messageId === origin.firstMessageId,
+    );
+
+    if (first === undefined || !sameOrigin(first.admission.origin, origin))
+      return yield* failure("followUp", "denied");
+    const receiving = envelope.workerAdmission;
+
+    const sourceSubmissionId =
+      receiving === undefined ? first.admission.sourceSubmissionId : receiving.sourceSubmissionId;
+
+    const principal = yield* deps.authorizer.authorize({
+      sourceThreadId: receiving?.origin.source.threadId ?? origin.source.threadId,
+      ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
+      principal: options.principal,
+      operation: "followUp",
+      access: "send",
+      worker: receiving?.origin.worker ?? origin.worker,
+    });
+
+    if (principal !== options.principal) return yield* failure("followUp", "denied");
+
+    return message;
+  });
+
   const acquire = Effect.fn("WorkerHost.acquire")(function* (request: {
     readonly sourceThreadId: ThreadId;
     readonly principal: Principal;
@@ -2145,5 +2256,13 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     );
   });
 
-  return { facet, acquire, validateAdmission, ensureOrigin, completeInput, reserveSubtree };
+  return {
+    facet,
+    acquire,
+    validateCompletion,
+    validateAdmission,
+    ensureOrigin,
+    completeInput,
+    reserveSubtree,
+  };
 });

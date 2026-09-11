@@ -351,30 +351,45 @@ concurrency. Idle workers own no execution resources.
 
 ## Completion report guarantees
 
-Configure the mapping with `Subagent.reporting` as shown in the
-[background walkthrough](../guide/subagents/background#turn-the-findings-into-parent-input).
+Use `Subagent.background(Research, { start: true, reportToParent: true })` for a standard
+`WorkerCompletion` message, as shown in the [background walkthrough](../guide/subagents/background).
+Its `report` has the same typed projected success or bounded failure as `Subagent.WorkerReport`;
+`budgetExhausted` also preserves exhaustion when an application projection omits it.
+The admitted parent input stays available to instructions and policy. The model receives the
+completion as a user message, so child output never becomes trusted instructions.
+Canonical `UserInputRecorded.messageAdmission` distinguishes framework completions from peer
+provenance through the `InputMessage` Schema. Inspect `WorkerCompletion` with its Schema before
+reading a completion; use `MessageAdmission` for peer messages.
 
-The Schema must be the coordinator Definition's exact input Schema. Registration captures the
-projection's required services separately from per-Attempt services. Declare an expected mapper
-failure with the optional `failure` Schema. Change the existing registration versions when changing
-report behavior; recovery never substitutes another source binding or target Definition.
+For an application-specific format, pass a `Subagent.reporting(Research, { input, prepare })`
+descriptor as `reportToParent`. Its input Schema must be the parent's exact input Schema.
+The existing registration `reporting` array remains supported for stored custom-report intents;
+do not register the same descriptor twice. Projection services are captured separately from
+per-Attempt services. Declare expected mapper failures with its optional `failure` Schema.
+Change registration versions when changing projection behavior. Automatic discovery pins its
+mode and target in the registration digest; recovery never substitutes another source or target.
+
+Application-driven starts with standard reports must acquire the host facet with the exact
+`sourceSubmissionId` whose application input supplies parent context. Model tool calls already
+carry that identity. No current or latest input is guessed for a programmatic caller.
 
 Launch intent pins reporting before acceptance. Each actual child Run has one logical report,
 even when several steering Receipts join it; an input cancelled before any Run starts has no Run
-report. The declaration's result projection and mapper produce a frozen `PreparedInput` before
+report. The declaration's result projection and optional mapper produce a frozen `PreparedInput` before
 delivery insertion. They should be deterministic and free of external side effects: a crash before
 the canonical preparation decision commits can rerun them. Delivery retries never reproject a
 committed decision. Expected failure, defect, invalid output, or preparation timeout records a
 bounded refusal without replacing the child's outcome. Preparation has its own Scope and a
 5-second default timeout, configurable up to 30 seconds in `WorkerHostConfig`.
 
-For a receiving coordinator that is itself a background worker, express the report in its incoming
-declaration's Parameters Schema and wrap it with
-`Subagent.reportingToWorker(report, receivingDeclaration)`. This explicitly maps parameters into
-Agent input and charges the additional input to the original ancestor allocation. It cannot reuse
-old parameters or obtain a fresh budget. An attached destination has no independent continuing
-input lifetime; delivery to it is refused. An attached scout returns directly through its waiting
-parent's tool result.
+A standard report to a parent that is itself a background worker retains that parent's
+original application input and declaration parameters. Its additional run is charged to the
+original ancestor allocation, with the same grants, lifetime, and resource ceilings. No extra
+nested-worker adapter is required. For **custom** report inputs, use
+`Subagent.reportingToWorker(report, receivingDeclaration)` to convert the receiving declaration's
+Parameters into its Agent input. A custom input cannot pretend to be the old parameters or
+obtain a fresh budget. An attached destination has no independent continuing input lifetime;
+delivery to it is refused. An attached scout returns through its waiting parent's tool result.
 
 Report preparation decisions appear in authorized canonical worker history. Retained delivery
 records expose pending, accepted, processed, parked, and refused states through the host-owned

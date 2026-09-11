@@ -28,7 +28,7 @@ import {
   type RunTotals,
   type ModelCallUsage,
 } from "@effect-agent/core/Usage";
-import type { WorkerBudgetScope } from "@effect-agent/core/Worker";
+import type { WorkerBudgetScope, WorkerCompletion } from "@effect-agent/core/Worker";
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai";
 
@@ -405,6 +405,7 @@ export type RunToolAuthorizationDecision =
  * reauthorized because no Handler can start for them.
  */
 export interface RunToolAuthorizationRequest {
+  readonly workerCompletion?: WorkerCompletion;
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly turnId: TurnId;
@@ -889,6 +890,9 @@ export interface RunBufferLimits {
  * through the generic parameters.
  */
 export interface RunOptions<HookError = never, HookRequirements = never> {
+  /** Host-validated completion; application input still supplies instructions and policy context. */
+  readonly workerCompletion?: WorkerCompletion;
+
   /** Initial or canonically restored run-scoped native selection. */
   readonly toolSelection?: Selection | undefined;
   /**

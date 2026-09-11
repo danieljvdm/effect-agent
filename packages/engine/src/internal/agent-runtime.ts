@@ -86,7 +86,7 @@ import {
   sumRunTotals,
   type UsageCompleteness,
 } from "@effect-agent/core/Usage";
-import type { WorkerBudgetScope } from "@effect-agent/core/Worker";
+import { WorkerCompletion, type WorkerBudgetScope } from "@effect-agent/core/Worker";
 import type { Take } from "effect";
 import {
   Cause,
@@ -7714,11 +7714,20 @@ function streamWithCompletion<
               context.input = encodedInput;
               if (retained !== undefined) yield* retained.stageInput(encodedInput);
 
-              const inputPrompt = yield* renderInputPrompt(
-                agent.definition.inputPrompt,
-                decodedInput,
-                encodedInput,
-              );
+              const inputPrompt =
+                options.workerCompletion === undefined
+                  ? yield* renderInputPrompt(
+                      agent.definition.inputPrompt,
+                      decodedInput,
+                      encodedInput,
+                    )
+                  : yield* Schema.encodeEffect(Schema.fromJsonString(WorkerCompletion))(
+                      options.workerCompletion,
+                    ).pipe(
+                      Effect.mapError(() =>
+                        AgentInputError.make({ message: "Invalid worker completion message" }),
+                      ),
+                    );
 
               const priorHistoryLength = context.history.content.length;
               const prompt = yield* makeInitialPrompt(instructions, inputPrompt, context.history);

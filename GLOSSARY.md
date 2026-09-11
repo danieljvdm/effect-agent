@@ -218,8 +218,8 @@ identifies the Thread; a separate Receipt identifies each accepted input. Owners
 reservations, and reporting persist independently of the launching Run.
 
 **Worker Report**
-One declaration-projected canonical child Run outcome converted to coordinator input by the
-coordinator's existing registration. Joined Receipts do not duplicate reports. Preparation and
+One declaration-projected canonical child Run outcome delivered to its parent as a typed
+framework completion message, or optionally mapped to application input. Joined Receipts do not duplicate reports. Preparation and
 delivery can refuse independently of the child's terminal outcome.
 
 **Peer Message**

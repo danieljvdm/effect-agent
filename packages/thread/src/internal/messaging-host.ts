@@ -121,7 +121,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
     ).pipe(Effect.mapError(() => failure("send", "corrupt")));
 
     if (
-      envelope.messageAdmission === undefined ||
+      !Schema.is(MessageAdmission)(envelope.messageAdmission) ||
       envelope.messageAdmission.message.messageId !== record.payload.messageId
     )
       return yield* failure("send", "corrupt");
@@ -148,7 +148,8 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
     const saved = yield* decodeProof(record);
 
     if (
-      saved.envelope.messageAdmission?.sender.agentId !== source.address.agentId ||
+      !Schema.is(MessageAdmission)(saved.envelope.messageAdmission) ||
+      saved.envelope.messageAdmission.sender.agentId !== source.address.agentId ||
       !sameRef(saved.envelope.messageAdmission.message, message)
     )
       return yield* failure("reply", "invalid-reference");
@@ -162,7 +163,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
   ) {
     const metadata = saved.envelope.messageAdmission;
 
-    if (metadata === undefined) return yield* failure(operation, "corrupt");
+    if (!Schema.is(MessageAdmission)(metadata)) return yield* failure(operation, "corrupt");
 
     const principal = yield* deps.authorizer.authorize({
       source: metadata.sender,
@@ -306,7 +307,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
           const metadata = saved.envelope.messageAdmission;
 
           if (
-            metadata === undefined ||
+            !Schema.is(MessageAdmission)(metadata) ||
             metadata.peerName !== request.name ||
             saved.envelope.agentId !== target.agentId ||
             !definitionDigestsEqual(saved.envelope.definitions, target.digests) ||
@@ -336,13 +337,13 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
             const inbound = current.log.records.find(
               ({ record }) =>
                 record.payload._tag === "UserInputRecorded" &&
-                record.payload.messageAdmission !== undefined &&
+                Schema.is(MessageAdmission)(record.payload.messageAdmission) &&
                 sameRef(record.payload.messageAdmission.message, inReplyTo),
             )?.record.payload;
 
             if (
               inbound?._tag !== "UserInputRecorded" ||
-              inbound.messageAdmission === undefined ||
+              !Schema.is(MessageAdmission)(inbound.messageAdmission) ||
               inbound.messageAdmission.sender.agentId !== target.agentId
             )
               return yield* failure(operation, "invalid-reference");
@@ -482,7 +483,8 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
 
       if (row === null) return yield* failure(operation, "not-found");
       if (
-        row.envelope.messageAdmission?.peerName !== request.name ||
+        !Schema.is(MessageAdmission)(row.envelope.messageAdmission) ||
+        row.envelope.messageAdmission.peerName !== request.name ||
         row.envelope.agentId !== request.target.id
       )
         return yield* failure(operation, "invalid-reference");
@@ -546,7 +548,8 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
 
             if (
               payload._tag === "UserInputRecorded" &&
-              payload.messageAdmission?.sender.agentId === request.target.id
+              Schema.is(MessageAdmission)(payload.messageAdmission) &&
+              payload.messageAdmission.sender.agentId === request.target.id
             ) {
               yield* authorize("inbox", "read", request, payload.messageAdmission.sender);
               items.push({ sequence: entry.sequence, admission: payload.messageAdmission });
@@ -587,7 +590,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
       const envelope = saved.envelope;
 
       if (
-        envelope.messageAdmission === undefined ||
+        !Schema.is(MessageAdmission)(envelope.messageAdmission) ||
         !sameAdmission(envelope.messageAdmission, admission) ||
         envelope.threadId !== options.threadId ||
         envelope.agentId !== agentId ||

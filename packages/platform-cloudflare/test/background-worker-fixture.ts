@@ -124,6 +124,21 @@ export const backgroundReportingWorkers = Subagent.make("reported_research", {
   }),
 });
 
+const standardReports = Subagent.background(backgroundReportingWorkers, {
+  start: true,
+  followUp: true,
+  reportToParent: true,
+});
+
+export const backgroundStandardReportSource = Agent.make("cf-background-standard-report-source", {
+  input: backgroundReportSource.input,
+  output: backgroundReportSource.output,
+  instructions: ({ question }) => `Answer ${question} and consume WorkerCompletion messages.`,
+  inputPrompt: ({ question }) => question,
+  toolkit: standardReports.toolkit,
+  policy: backgroundReportSource.policy,
+});
+
 export const independentBudgetSource = Agent.make("cf-independent-source", {
   input: backgroundSource.input,
   output: backgroundSource.output,
@@ -290,6 +305,10 @@ const independentScoutHandlers = Subagent.SubagentRuntime.layer(
 ).pipe(Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]));
 
 export const backgroundWorkerBindings = Effect.all([
+  DurableWorkerBinding.make(
+    Agent.withModel(backgroundStandardReportSource, model),
+    TEST_DIGESTS,
+  ).pipe(Effect.provide(standardReports.layer)),
   DurableWorkerBinding.make(Agent.withModel(capturedPolicySource, model), TEST_DIGESTS),
   DurableWorkerBinding.make(Agent.withModel(independentBudgetSource, model), TEST_DIGESTS),
   DurableWorkerBinding.make(Agent.withModel(independentScout, model), TEST_DIGESTS),

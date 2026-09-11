@@ -12,7 +12,7 @@ import {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core/Identifiers";
-import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { InputMessage } from "@effect-agent/core/Messaging";
 import { IdempotencyKey, Principal } from "@effect-agent/core/Receipt";
 import { ExhaustedLimit } from "@effect-agent/core/RunEvent";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
@@ -224,7 +224,7 @@ export class UserInputRecorded extends Schema.TaggedClass<UserInputRecorded>(
   kind: Schema.Literals(["user", "steering", "follow-up"]),
   runId: Schema.optionalKey(RunId),
   input: PersistedJson,
-  messageAdmission: Schema.optionalKey(MessageAdmission),
+  messageAdmission: Schema.optionalKey(InputMessage),
 }) {}
 
 /** Immutable clock and duration allowance for one logical Run, before any agent execution. */
@@ -766,6 +766,8 @@ export class SubagentLineageRecorded extends Schema.TaggedClass<SubagentLineageR
 }) {}
 
 export const WorkerReportingIntent = Schema.Struct({
+  /** Omitted preserves existing application-mapped reports. */
+  mode: Schema.optionalKey(Schema.Literal("standard")),
   sourceDigests: DefinitionDigests,
   destinationDelegationId: Schema.optionalKey(DelegationId),
 });

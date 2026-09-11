@@ -70,6 +70,8 @@ import {
   SubagentReservations,
 } from "./SubagentReservations.ts";
 
+export { WorkerCompletion } from "@effect-agent/core/Worker";
+
 export { SubagentGrant } from "@effect-agent/core/SubagentContract";
 
 export {
@@ -2116,7 +2118,7 @@ const layer = <
  */
 export const SubagentRuntime = { layer } as const;
 
-export { reporting, reportingToWorker, type WorkerReport } from "./internal/subagent-reporting.ts";
+export { reporting, reportingToWorker, WorkerReport } from "./internal/subagent-reporting.ts";
 
 export {
   Worker,

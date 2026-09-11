@@ -1,6 +1,6 @@
 import { Context, Schema } from "effect";
 
-import { AgentId, ThreadId, DelegationId, RunId, ToolCallId } from "./Identifiers.ts";
+import { AgentId, ThreadId, DelegationId, RunId, ToolCallId, SubmissionId } from "./Identifiers.ts";
 
 const Natural = Schema.Natural;
 
@@ -143,3 +143,54 @@ export class SubagentParentLink extends Schema.Class<SubagentParentLink>("Subage
   parentToolCallId: ToolCallId,
   depth: DelegationDepth,
 }) {}
+
+/**
+ * Classification of one bounded durable delegation failure.
+ * `"child-failed"` and `"child-aborted"` project the
+ * child's canonical failed/aborted Settlement; `"child-compatibility"`
+ * projects the framework's `ChildCompatibilityFailure` child Settlement (the
+ * stored child Binding digest was unavailable — recovery never substituted
+ * current code); `"establishment-denied"` is a fail-closed coordinator
+ * refusal (lineage/digest verification, divergent replay); and
+ * `"declaration-unavailable"` is retained for decoding failures recorded by
+ * versions that required an explicit durable digest declaration.
+ */
+export const SubagentExecutionFailureClassification = Schema.Literals([
+  "child-failed",
+  "child-aborted",
+  "child-compatibility",
+  "establishment-denied",
+  "declaration-unavailable",
+]);
+
+export type SubagentExecutionFailureClassification =
+  typeof SubagentExecutionFailureClassification.Type;
+
+export const maxErrorTagLength = 256;
+const BoundedErrorTag = Schema.NonEmptyString.check(Schema.isMaxLength(maxErrorTagLength));
+
+/**
+ * Bounded framework projection of a durable child failure, shared by attached joins and reports.
+ * A failed or aborted durable child
+ * joins its parent Tool Call as exactly this typed failure: a classification,
+ * the child references, and the coordinator's bounded `{errorTag, message}`
+ * projection — never a raw Cause, stack, provider response, secret, or child
+ * payload. The typed child failure union does not survive a durable
+ * Settlement, so `mapChildFailure` remains the ephemeral-path contract;
+ * Schema-declared durable domain-failure mapping is a recorded later
+ * extension.
+ */
+export class SubagentExecutionFailure extends Schema.TaggedError<SubagentExecutionFailure>()(
+  "SubagentExecutionFailure",
+  {
+    delegationId: DelegationId,
+    targetAgentId: AgentId,
+    classification: SubagentExecutionFailureClassification,
+    /** Child references, present once establishment reached a child identity. */
+    childThreadId: Schema.optionalKey(ThreadId),
+    childSubmissionId: Schema.optionalKey(SubmissionId),
+    childRunId: Schema.optionalKey(RunId),
+    errorTag: BoundedErrorTag,
+    message: Schema.String.check(Schema.isMaxLength(4 * 1024)),
+  },
+) {}

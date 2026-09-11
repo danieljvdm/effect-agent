@@ -89,6 +89,27 @@ const selected = Subagent.background(declaration, { start: true, inspect: true, 
 const onlyList = Subagent.background(declaration, { list: true });
 const onlyStart = Subagent.background(declaration, { start: true });
 const onlyInspect = Subagent.background(declaration, { inspect: true });
+const automatic = Subagent.background(declaration, { start: true, reportToParent: true });
+
+const mapped = Subagent.background(declaration, {
+  start: true,
+  reportToParent: Subagent.reporting(declaration, {
+    input: text,
+    prepare: (report) =>
+      Effect.as(Project, report.outcome === "completed" ? report.result : "failed"),
+  }),
+});
+
+const automaticServices: Assert<
+  Equal<Layer.Services<typeof automatic.layer>, Prepare | Project | Encoder | Decoder>
+> = true;
+
+const mappedServices: Assert<
+  Equal<Layer.Services<typeof mapped.layer>, Prepare | Project | Encoder | Decoder>
+> = true;
+
+const automaticErrors: Assert<Equal<Layer.Error<typeof automatic.layer>, never>> = true;
+const automaticKeys: Assert<Equal<keyof typeof automatic.tools, "research_start">> = true;
 const onlySummary = Subagent.background(declaration, { summary: true });
 
 type StartErrors =
@@ -201,6 +222,7 @@ const rejectInvalidCalls = () => {
 describe("background authoring types", () => {
   it("preserves operation errors, schema services, and selected native Tool names", () => {
     expect(proofs.every(Boolean)).toBe(true);
+    expect(automaticServices && mappedServices && automaticErrors && automaticKeys).toBe(true);
     expect(nestedParameterProof && nestedSuccessProof).toBe(true);
     expect(typeof rejectInvalidCalls).toBe("function");
   });

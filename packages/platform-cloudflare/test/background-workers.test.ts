@@ -1,12 +1,14 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import type { SubmissionId } from "@effect-agent/core/Identifiers";
+import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { WorkerCompletion } from "@effect-agent/core/Worker";
 import { SubagentHost } from "@effect-agent/engine/SubagentHost";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { MessageDeliveryStore } from "@effect-agent/thread/MessageDelivery";
 import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { DurableObject } from "effect-cf";
 import { expect, it } from "vite-plus/test";
 
@@ -22,6 +24,7 @@ import {
   backgroundWorkers,
   backgroundWakeDropPrefixes,
   backgroundReportSource,
+  backgroundStandardReportSource,
   backgroundReportProjections,
   backgroundReportingWorkers,
   backgroundReportGates,
@@ -324,7 +327,8 @@ it("drains private worker progress through rebuilt runtime maintenance into an i
       return (await readCanonical(source)).some(
         ({ record }) =>
           record.payload._tag === "UserInputRecorded" &&
-          record.payload.messageAdmission?.sender.threadId === started.worker.threadId &&
+          Schema.is(MessageAdmission)(record.payload.messageAdmission) &&
+          record.payload.messageAdmission.sender.threadId === started.worker.threadId &&
           record.payload.messageAdmission.peerName === "private_progress",
       );
     });
@@ -469,120 +473,140 @@ it("reopens a background worker and admits follow-up input across Objects after 
   }
 }, 20_000);
 
-it("delivers one frozen report after child eviction and source eviction with all wake hints dropped", async () => {
-  const source = `background-cf-report-${crypto.randomUUID()}`;
+for (const mode of ["custom", "standard"] as const)
+  it(`${mode}: delivers one frozen report after child eviction and source eviction with all wake hints dropped`, async () => {
+    const source = `background-cf-report-${crypto.randomUUID()}`;
 
-  await runClient(
-    Effect.flatMap(CloudflareThreadClient, (client) =>
-      client.submit(
-        { definition: backgroundReportSource },
-        { question: "launch complete" },
-        submitOptions(source, "source"),
-      ),
-    ),
-  );
-  await drainAlarmsUntil(source, allSettled(source));
-  backgroundWakeDropPrefixes.add("worker:");
-  droppedMessageWakes.add(source);
-
-  const started = await withOwner(source, (host) =>
-    Subagent.start(
-      backgroundReportingWorkers,
-      { question: source },
-      { idempotencyKey: decodeIdempotencyKey("first") },
-    ).pipe(Effect.provideService(SubagentHost, host)),
-  );
-
-  droppedMessageWakes.add(started.worker.threadId);
-  try {
-    await withOwner(source, (host) =>
-      Subagent.followUp(
-        backgroundReportingWorkers,
-        started.worker,
-        { question: "joined input" },
-        { idempotencyKey: decodeIdempotencyKey("joined") },
-      ).pipe(Effect.provideService(SubagentHost, host)),
-    );
-    armRuntimeEviction(started.worker.threadId, "worker:after-report-append");
-    backgroundReportGates.add(source);
-    await evict(source);
-    await drainAlarmsUntil(started.worker.threadId, async () => {
-      const records = await readCanonical(started.worker.threadId);
-
-      return (
-        records.some(({ record }) => record.payload._tag === "WorkerReportPrepared") &&
-        armedEvictionsRemaining(started.worker.threadId) === 0
-      );
-    });
-    await evict(started.worker.threadId);
-    await drainAlarmsUntil(started.worker.threadId, async () => {
-      const rows = await runInDurableObject(stubFor(started.worker.threadId), (instance) =>
-        instance[DurableObject.RunSymbol](
-          Effect.flatMap(MessageDeliveryStore, (store) =>
-            store.list({ ownerThreadId: started.worker.threadId, limit: 100 }),
-          ),
+    const sourceReceipt = await runClient(
+      Effect.flatMap(CloudflareThreadClient, (client) =>
+        client.submit(
+          {
+            definition:
+              mode === "standard" ? backgroundStandardReportSource : backgroundReportSource,
+          },
+          { question: "launch complete" },
+          submitOptions(source, "source"),
         ),
-      );
-
-      return rows.items.length === 1 && rows.items[0]?.status !== "pending";
-    });
-    await drainAlarmsUntil(source, async () => {
-      const records = await readCanonical(source);
-
-      return (
-        records.filter(({ record }) => record.payload._tag === "SubmissionSettled").length === 2
-      );
-    });
-    await drainAlarmsUntil(started.worker.threadId, async () => {
-      const rows = await runInDurableObject(stubFor(started.worker.threadId), (instance) =>
-        instance[DurableObject.RunSymbol](
-          Effect.flatMap(MessageDeliveryStore, (store) =>
-            store.list({ ownerThreadId: started.worker.threadId, limit: 100 }),
-          ),
-        ),
-      );
-
-      return rows.items.length === 1 && rows.items[0]?.status === "processed";
-    });
-    const child = await readCanonical(started.worker.threadId);
-
-    const reports = child.flatMap(({ record }) =>
-      record.payload._tag === "WorkerReportPrepared" ? [record.payload] : [],
-    );
-
-    expect(reports).toHaveLength(1);
-    const report = reports[0];
-
-    if (report === undefined) throw new Error("Expected frozen report");
-    expect(backgroundReportProjections.get(report.runId)).toBe(1);
-
-    const childSettlements = child.flatMap(({ record }) =>
-      record.payload._tag === "SubmissionSettled" ? [record.payload] : [],
-    );
-
-    expect(childSettlements).toHaveLength(2);
-    expect(childSettlements.map((row) => row.runId)).toEqual([report.runId, report.runId]);
-    const sourceRecords = await readCanonical(source);
-
-    const inputs = sourceRecords.flatMap(({ record }) =>
-      record.payload._tag === "UserInputRecorded" ? [record.payload] : [],
-    );
-
-    expect(inputs).toHaveLength(2);
-    expect(inputs[1]?.input).toEqual({ question: `report:${report.runId}:done` });
-    expect(inputs[1]?.runId).not.toBe(inputs[0]?.runId);
-    expect(
-      sourceRecords.flatMap(({ record }) =>
-        record.payload._tag === "SubmissionSettled" ? [record.payload.outcome] : [],
       ),
-    ).toEqual(["completed", "completed"]);
-  } finally {
-    backgroundReportGates.delete(source);
-    backgroundWakeDropPrefixes.delete("worker:");
-    droppedMessageWakes.delete(source);
-    droppedMessageWakes.delete(started.worker.threadId);
-  }
-}, 20_000);
+    );
+
+    await drainAlarmsUntil(source, allSettled(source));
+    backgroundWakeDropPrefixes.add("worker:");
+    droppedMessageWakes.add(source);
+
+    const started = await withOwner(
+      source,
+      (host) =>
+        Subagent.start(
+          backgroundReportingWorkers,
+          { question: source },
+          { idempotencyKey: decodeIdempotencyKey("first") },
+        ).pipe(Effect.provideService(SubagentHost, host)),
+      sourceReceipt.submissionId,
+    );
+
+    droppedMessageWakes.add(started.worker.threadId);
+    try {
+      await withOwner(source, (host) =>
+        Subagent.followUp(
+          backgroundReportingWorkers,
+          started.worker,
+          { question: "joined input" },
+          { idempotencyKey: decodeIdempotencyKey("joined") },
+        ).pipe(Effect.provideService(SubagentHost, host)),
+      );
+      armRuntimeEviction(started.worker.threadId, "worker:after-report-append");
+      backgroundReportGates.add(source);
+      await evict(source);
+      await drainAlarmsUntil(started.worker.threadId, async () => {
+        const records = await readCanonical(started.worker.threadId);
+
+        return (
+          records.some(({ record }) => record.payload._tag === "WorkerReportPrepared") &&
+          armedEvictionsRemaining(started.worker.threadId) === 0
+        );
+      });
+      await evict(started.worker.threadId);
+      await drainAlarmsUntil(started.worker.threadId, async () => {
+        const rows = await runInDurableObject(stubFor(started.worker.threadId), (instance) =>
+          instance[DurableObject.RunSymbol](
+            Effect.flatMap(MessageDeliveryStore, (store) =>
+              store.list({ ownerThreadId: started.worker.threadId, limit: 100 }),
+            ),
+          ),
+        );
+
+        return rows.items.length === 1 && rows.items[0]?.status !== "pending";
+      });
+      await drainAlarmsUntil(source, async () => {
+        const records = await readCanonical(source);
+
+        return (
+          records.filter(({ record }) => record.payload._tag === "SubmissionSettled").length === 2
+        );
+      });
+      await drainAlarmsUntil(started.worker.threadId, async () => {
+        const rows = await runInDurableObject(stubFor(started.worker.threadId), (instance) =>
+          instance[DurableObject.RunSymbol](
+            Effect.flatMap(MessageDeliveryStore, (store) =>
+              store.list({ ownerThreadId: started.worker.threadId, limit: 100 }),
+            ),
+          ),
+        );
+
+        return rows.items.length === 1 && rows.items[0]?.status === "processed";
+      });
+      const child = await readCanonical(started.worker.threadId);
+
+      const reports = child.flatMap(({ record }) =>
+        record.payload._tag === "WorkerReportPrepared" ? [record.payload] : [],
+      );
+
+      expect(reports).toHaveLength(1);
+      const report = reports[0];
+
+      if (report === undefined) throw new Error("Expected frozen report");
+      if (mode === "custom") expect(backgroundReportProjections.get(report.runId)).toBe(1);
+
+      const childSettlements = child.flatMap(({ record }) =>
+        record.payload._tag === "SubmissionSettled" ? [record.payload] : [],
+      );
+
+      expect(childSettlements).toHaveLength(2);
+      expect(childSettlements.map((row) => row.runId)).toEqual([report.runId, report.runId]);
+      const sourceRecords = await readCanonical(source);
+
+      const inputs = sourceRecords.flatMap(({ record }) =>
+        record.payload._tag === "UserInputRecorded" ? [record.payload] : [],
+      );
+
+      expect(inputs).toHaveLength(2);
+      if (mode === "custom")
+        expect(inputs[1]?.input).toEqual({ question: `report:${report.runId}:done` });
+      else {
+        expect(inputs[1]?.input).toEqual({ question: "launch complete" });
+        const message = Schema.decodeUnknownSync(WorkerCompletion)(inputs[1]?.messageAdmission);
+
+        expect(message.report).toMatchObject({
+          worker: started.worker,
+          runId: report.runId,
+          outcome: "completed",
+          result: { answer: "done" },
+        });
+      }
+      expect(inputs[1]?.runId).not.toBe(inputs[0]?.runId);
+      expect(
+        sourceRecords.flatMap(({ record }) =>
+          record.payload._tag === "SubmissionSettled" ? [record.payload.outcome] : [],
+        ),
+      ).toEqual(["completed", "completed"]);
+    } finally {
+      backgroundReportGates.delete(source);
+      backgroundWakeDropPrefixes.delete("worker:");
+      droppedMessageWakes.delete(source);
+      droppedMessageWakes.delete(started.worker.threadId);
+    }
+  }, 20_000);
 
 // Regression: https://github.com/danieljvdm/effect-agent/pull/358
 it("funds native persona Runs independently while joins, eviction and scouts retain one allowance", async () => {

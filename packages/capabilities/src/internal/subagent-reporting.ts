@@ -1,6 +1,5 @@
-import type { RunId, SettlementId } from "@effect-agent/core/Identifiers";
-import type { Receipt } from "@effect-agent/core/Receipt";
-import type { WorkerRef } from "@effect-agent/core/Worker";
+import { Receipt } from "@effect-agent/core/Receipt";
+import { type WorkerReport, WorkerCompletion } from "@effect-agent/core/Worker";
 import {
   WorkerReportPreparationFailure,
   type WorkerReporting,
@@ -12,21 +11,138 @@ import { type Declaration } from "./subagent-background.ts";
 import { SubagentExecutionFailure } from "./subagent-contract.ts";
 import { utf8ByteLength } from "./utf8.ts";
 
-/** One actual worker Run's projected terminal outcome, including its portable worker identity. */
-export type WorkerReport<Success extends Schema.Top> = {
-  readonly _tag: "Settled";
-  readonly worker: WorkerRef;
-  readonly receipt: Receipt;
-  readonly runId: RunId;
-  readonly settlementId: SettlementId;
-} & (
-  | { readonly outcome: "completed"; readonly result: Success["Type"] }
-  | { readonly outcome: "failed" | "aborted"; readonly failure: SubagentExecutionFailure }
-);
+export { WorkerReport } from "@effect-agent/core/Worker";
+
+const projectReport = <
+  const Name extends string,
+  Input extends Schema.Top,
+  Output extends Schema.Top,
+  Parameters extends Schema.Top,
+  Success extends Schema.Top,
+  Failure extends Schema.Top,
+  Prepare,
+  Project,
+>(
+  declaration: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
+) =>
+  Effect.fn("Subagent.projectReport")(function* (report: WorkerRunReport) {
+    const { worker, observation } = report;
+    const invalid = () => WorkerReportPreparationFailure.make({ stage: "projection" });
+
+    if (
+      worker.delegationId !== declaration.delegationId ||
+      worker.targetAgentId !== declaration.target.id ||
+      observation.receipt.threadId !== worker.threadId
+    )
+      return yield* invalid();
+
+    const base = {
+      _tag: "Settled" as const,
+      worker,
+      receipt: yield* Schema.decodeUnknownEffect(Receipt)(observation.receipt).pipe(
+        Effect.mapError(invalid),
+      ),
+      runId: observation.runId,
+      settlementId: observation.settlementId,
+    };
+
+    let projected: WorkerReport<Success>;
+    let encodedResult: Schema.Json = null;
+
+    if (observation.outcome === "completed") {
+      const parameters = yield* Schema.decodeUnknownEffect(declaration.parameters)(
+        observation.encodedParameters,
+      ).pipe(Effect.mapError(invalid));
+
+      const output = yield* Schema.decodeUnknownEffect(declaration.target.output)(
+        observation.encodedResult,
+      ).pipe(Effect.mapError(invalid));
+
+      const result = yield* declaration.projectResult(
+        output,
+        { budgetExhausted: observation.budgetExhausted },
+        parameters,
+      );
+
+      const encoded = yield* Schema.encodeEffect(declaration.success)(result).pipe(
+        Effect.mapError(invalid),
+      );
+
+      const json = yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
+        Effect.mapError(invalid),
+      );
+
+      if (
+        utf8ByteLength(JSON.stringify(json)) >
+        (declaration.policy?.maxResultBytes ?? declaration.target.policy.toolResultBounds.maxBytes)
+      )
+        return yield* invalid();
+      projected = { ...base, outcome: "completed", result };
+      encodedResult = json;
+    } else {
+      projected = {
+        ...base,
+        outcome: observation.outcome,
+        failure: SubagentExecutionFailure.make({
+          delegationId: declaration.delegationId,
+          targetAgentId: declaration.target.id,
+          classification: observation.outcome === "failed" ? "child-failed" : "child-aborted",
+          childThreadId: worker.threadId,
+          childSubmissionId: observation.receipt.submissionId,
+          childRunId: observation.runId,
+          errorTag: observation.outcome === "failed" ? "WorkerFailed" : "WorkerAborted",
+          message:
+            observation.outcome === "failed" ? "Worker input failed" : "Worker input was aborted",
+        }),
+      };
+    }
+
+    return { projected, encodedResult };
+  });
+
+/** Framework reporting shares the same bounded declaration projection as custom mapping. */
+export const automaticReporting = <
+  const Name extends string,
+  Input extends Schema.Top,
+  Output extends Schema.Top,
+  Parameters extends Schema.Top,
+  Success extends Schema.Top,
+  Failure extends Schema.Top,
+  Prepare,
+  Project,
+>(
+  declaration: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
+) => ({
+  delegationId: declaration.delegationId,
+  target: declaration.target,
+  mode: "standard" as const,
+  prepare: Effect.fn("Subagent.automaticReport")(function* (report: WorkerRunReport) {
+    const { projected, encodedResult } = yield* projectReport(declaration)(report);
+
+    const encoded =
+      projected.outcome === "completed"
+        ? { ...projected, result: encodedResult }
+        : {
+            ...projected,
+            failure: yield* Schema.encodeEffect(SubagentExecutionFailure)(projected.failure).pipe(
+              Effect.mapError(() => WorkerReportPreparationFailure.make({ stage: "projection" })),
+            ),
+          };
+
+    const message = yield* Schema.decodeUnknownEffect(WorkerCompletion)({
+      _tag: "WorkerCompletion",
+      schemaVersion: 1,
+      report: encoded,
+      budgetExhausted: report.observation.budgetExhausted,
+    }).pipe(Effect.mapError(() => WorkerReportPreparationFailure.make({ stage: "projection" })));
+
+    return { encodedInput: null, message };
+  }),
+});
 
 /**
- * Declare the conversion to coordinator input once, on its existing Agent Registration's
- * `reporting` array. The input Schema must be the coordinator Definition's exact input Schema.
+ * Define an optional application-specific conversion for `background({ reportToParent: report })`.
+ * Existing Agent Registration `reporting` arrays remain supported. The input Schema must be the coordinator Definition's exact input Schema.
  * Preparation is bounded by the durable host; a retained prepared envelope is never reprojected
  * during delivery retries. The callback should be deterministic and have no external side effects.
  */
@@ -61,72 +177,7 @@ export const reporting = <
   | ReportRequirements
 > => {
   const prepare = Effect.fn("Subagent.reporting.prepare")(function* (report: WorkerRunReport) {
-    const { worker, observation } = report;
-    const invalid = () => WorkerReportPreparationFailure.make({ stage: "projection" });
-
-    if (
-      worker.delegationId !== declaration.delegationId ||
-      worker.targetAgentId !== declaration.target.id ||
-      observation.receipt.threadId !== worker.threadId
-    )
-      return yield* invalid();
-
-    const base = {
-      _tag: "Settled" as const,
-      worker,
-      receipt: observation.receipt,
-      runId: observation.runId,
-      settlementId: observation.settlementId,
-    };
-
-    let projected: WorkerReport<Success>;
-
-    if (observation.outcome === "completed") {
-      const parameters = yield* Schema.decodeUnknownEffect(declaration.parameters)(
-        observation.encodedParameters,
-      ).pipe(Effect.mapError(invalid));
-
-      const output = yield* Schema.decodeUnknownEffect(declaration.target.output)(
-        observation.encodedResult,
-      ).pipe(Effect.mapError(invalid));
-
-      const result = yield* declaration.projectResult(
-        output,
-        { budgetExhausted: observation.budgetExhausted },
-        parameters,
-      );
-
-      const encoded = yield* Schema.encodeEffect(declaration.success)(result).pipe(
-        Effect.mapError(invalid),
-      );
-
-      const json = yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
-        Effect.mapError(invalid),
-      );
-
-      if (
-        utf8ByteLength(JSON.stringify(json)) >
-        (declaration.policy?.maxResultBytes ?? declaration.target.policy.toolResultBounds.maxBytes)
-      )
-        return yield* invalid();
-      projected = { ...base, outcome: "completed", result };
-    } else {
-      projected = {
-        ...base,
-        outcome: observation.outcome,
-        failure: SubagentExecutionFailure.make({
-          delegationId: declaration.delegationId,
-          targetAgentId: declaration.target.id,
-          classification: observation.outcome === "failed" ? "child-failed" : "child-aborted",
-          childThreadId: worker.threadId,
-          childSubmissionId: observation.receipt.submissionId,
-          childRunId: observation.runId,
-          errorTag: observation.outcome === "failed" ? "WorkerFailed" : "WorkerAborted",
-          message:
-            observation.outcome === "failed" ? "Worker input failed" : "Worker input was aborted",
-        }),
-      };
-    }
+    const { projected } = yield* projectReport(declaration)(report);
     const input = yield* options.prepare(projected);
 
     const encoded = yield* Schema.encodeEffect(options.input)(input).pipe(

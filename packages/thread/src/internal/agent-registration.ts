@@ -15,6 +15,7 @@ import {
 } from "@effect-agent/core/ToolExposure";
 import { type RuntimeBinding } from "@effect-agent/engine/AgentRuntime";
 import {
+  BackgroundReporting,
   WorkerReportPreparationFailure,
   type WorkerReporting,
 } from "@effect-agent/engine/SubagentHost";
@@ -176,6 +177,16 @@ const captureReporting = <R>(reports: ReadonlyArray<WorkerReporting<unknown, R>>
     })),
   );
 
+const backgroundReports = (definition: Agent.AnyDefinition) => [
+  ...new Set(
+    Object.values(definition.toolkit.tools).flatMap((tool) => {
+      const report = Context.get(tool.annotations, BackgroundReporting);
+
+      return report === undefined ? [] : [report];
+    }),
+  ),
+];
+
 /** One exact executable registration used by durable claim-time resolution. */
 export interface ResolvedBinding extends CapturedBinding {
   readonly digests: DefinitionDigests;
@@ -255,7 +266,11 @@ export const DurableWorkerBinding = {
   > =>
     Effect.gen(function* () {
       const binding = yield* capture(agent);
-      const reports = yield* captureReporting(reporting ?? []);
+
+      const reports = yield* captureReporting([
+        ...(reporting ?? []),
+        ...backgroundReports(agent.definition),
+      ]);
 
       return { ...binding, digests, reporting: reports };
     }) as Effect.Effect<
@@ -385,6 +400,24 @@ type RegistrationRequirements<Entries extends ReadonlyArray<AgentRegistration>> 
 
 const registrationDefinitions = (entry: AgentRegistration): DefinitionDigestInput => {
   const definition = entry.model === undefined ? entry.agent.definition : entry.agent;
+  const automatic = backgroundReports(definition);
+
+  const definitions =
+    automatic.length === 0
+      ? entry.definitions
+      : {
+          ...entry.definitions,
+          agent: {
+            declaration: entry.definitions.agent,
+            backgroundReporting: automatic.map((report) => ({
+              delegationId: report.delegationId,
+              targetAgentId: report.target.id,
+              mode: report.mode ?? "custom",
+              destinationDelegationId: report.destination?.delegationId ?? null,
+            })),
+          },
+        };
+
   const exposure = definition.toolExposure;
 
   if (
@@ -394,12 +427,12 @@ const registrationDefinitions = (entry: AgentRegistration): DefinitionDigestInpu
         Context.get(tool.annotations, DiscoveryTool) || Context.get(tool.annotations, PinnedTool),
     )
   )
-    return entry.definitions;
+    return definitions;
 
   return {
-    ...entry.definitions,
+    ...definitions,
     agent: {
-      declaration: entry.definitions.agent,
+      declaration: definitions.agent,
       toolExposure: {
         initialToolNames: exposure === undefined ? null : [...(exposure.initialToolNames ?? [])],
         maxTools: exposure?.maxTools ?? 64,
@@ -435,7 +468,10 @@ const compileRegistration = <Entry extends AgentRegistration>(
           entry.attemptLayer,
         );
 
-        const reporting = yield* captureReporting(entry.reporting ?? []);
+        const reporting = yield* captureReporting([
+          ...(entry.reporting ?? []),
+          ...backgroundReports(binding.definition),
+        ]);
 
         return { ...binding, digests, reporting };
       }),

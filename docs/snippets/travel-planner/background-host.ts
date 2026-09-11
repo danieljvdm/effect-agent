@@ -3,7 +3,6 @@ import { Layer } from "effect";
 
 import { WorkerAccessLive } from "./background-access.ts";
 import { BackgroundCoordinator, ResearchBackground } from "./background-coordinator.ts";
-import { researchReport } from "./background-report.ts";
 import { Research } from "./delegation.ts";
 import { definitions, ModelLive, OpenAiLive } from "./node-agent.ts";
 import { TravelToolsLive } from "./tools.ts";
@@ -14,7 +13,6 @@ export const HostLive = NodeDurableHost.layer(
       agent: BackgroundCoordinator,
       model: ModelLive,
       definitions,
-      reporting: [researchReport],
     },
     { agent: Research.target, model: ModelLive, definitions },
   ],

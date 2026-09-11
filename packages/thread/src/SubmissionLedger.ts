@@ -7,7 +7,7 @@ import {
   SubmissionId,
   ToolCallId,
 } from "@effect-agent/core/Identifiers";
-import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { InputMessage } from "@effect-agent/core/Messaging";
 import type { JoinedToHost } from "@effect-agent/core/Receipt";
 import { IdempotencyKey, QueueSequence, Principal } from "@effect-agent/core/Receipt";
 import { RunUsageSummary } from "@effect-agent/core/Usage";
@@ -157,7 +157,7 @@ export class AdmissionRequest extends Schema.Class<AdmissionRequest>(
   inputDigest: Digest,
   parentLinkage: Schema.optionalKey(ParentLinkage),
   workerAdmission: Schema.optionalKey(WorkerAdmission),
-  messageAdmission: Schema.optionalKey(MessageAdmission),
+  messageAdmission: Schema.optionalKey(InputMessage),
   admissionGroup: Schema.optionalKey(AdmissionGroup),
   admissionFence: Schema.optionalKey(AdmissionFence),
 }) {}
@@ -224,7 +224,7 @@ export class SubmissionSnapshot extends Schema.Class<SubmissionSnapshot>(
   admissionFence: Schema.optionalKey(AdmissionFence),
   parentLinkage: Schema.optionalKey(ParentLinkage),
   workerAdmission: Schema.optionalKey(WorkerAdmission),
-  messageAdmission: Schema.optionalKey(MessageAdmission),
+  messageAdmission: Schema.optionalKey(InputMessage),
 }) {}
 
 /** The authoritative store proves the scoped idempotency key was never admitted (SUB-031). */

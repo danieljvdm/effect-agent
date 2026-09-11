@@ -15,7 +15,7 @@ import {
   SubagentReservationAmounts,
 } from "@effect-agent/core/SubagentContract";
 import { ToolResultBounds } from "@effect-agent/core/ToolResult";
-import { WorkerError } from "@effect-agent/core/Worker";
+import { WorkerCompletion, WorkerError } from "@effect-agent/core/Worker";
 import {
   WorkerReportPreparationFailure,
   type StartWorkerRequest,
@@ -2259,9 +2259,9 @@ layer(NodeCrypto.layer)((it) => {
     }),
   );
 
-  it.effect(
-    "charges an explicitly mapped report input to the receiving worker's original ancestor",
-    () =>
+  it.effect.each(["custom", "standard"] as const)(
+    "charges a %s report input to the receiving worker's original ancestor",
+    (mode) =>
       Effect.gen(function* () {
         const scoutId = Schema.decodeSync(DelegationId)("scout");
 
@@ -2271,12 +2271,35 @@ layer(NodeCrypto.layer)((it) => {
               delegationId: scoutId,
               target,
               input: target.input,
-              destination: { delegationId: Schema.decodeSync(DelegationId)("research"), target },
-              prepare: () =>
-                Effect.succeed({
-                  encodedInput: { text: "scout-result" },
-                  encodedParameters: { note: "explicit-report-parameters" },
-                }),
+              ...(mode === "custom"
+                ? {
+                    destination: {
+                      delegationId: Schema.decodeSync(DelegationId)("research"),
+                      target,
+                    },
+                  }
+                : { mode: "standard" as const }),
+              prepare: (report) =>
+                mode === "custom"
+                  ? Effect.succeed({
+                      encodedInput: { text: "scout-result" },
+                      encodedParameters: { note: "explicit-report-parameters" },
+                    })
+                  : Schema.decodeUnknownEffect(WorkerCompletion)({
+                      _tag: "WorkerCompletion",
+                      schemaVersion: 1,
+                      budgetExhausted: false,
+                      report: {
+                        worker: report.worker,
+                        ...report.observation,
+                        result: "scout-result",
+                      },
+                    }).pipe(
+                      Effect.map((message) => ({ encodedInput: null, message })),
+                      Effect.mapError(() =>
+                        WorkerReportPreparationFailure.make({ stage: "projection" }),
+                      ),
+                    ),
             },
           ],
         });
@@ -2361,12 +2384,16 @@ layer(NodeCrypto.layer)((it) => {
 
         expect(report.envelope.threadId).toBe(builder.worker.threadId);
         expect(report.envelope.workerAdmission?.parameters).toEqual({
-          note: "explicit-report-parameters",
+          note: mode === "custom" ? "explicit-report-parameters" : "report-builder",
         });
         expect(report.envelope.workerAdmission?.origin).toEqual(
           h.submissions.get(builder.receipt.submissionId)?.workerAdmission?.origin,
         );
         expect(report.envelope.workerAdmission?.sourceSubmissionId).toBeUndefined();
+        if (mode === "standard") {
+          expect(report.envelope.input).toEqual({ text: "report-builder" });
+          expect(Schema.is(WorkerCompletion)(report.envelope.messageAdmission)).toBe(true);
+        }
         const metadata = report.envelope.workerAdmission!;
 
         const options = {
@@ -2376,6 +2403,57 @@ layer(NodeCrypto.layer)((it) => {
           definitions: report.envelope.definitions,
           workerAdmission: metadata,
         };
+
+        if (mode === "standard") {
+          const message = yield* Schema.decodeUnknownEffect(WorkerCompletion)(
+            report.envelope.messageAdmission,
+          );
+
+          const validate = (
+            completion = message,
+            admission: Parameters<typeof h.runtime.validateCompletion>[1] = options,
+            inputDigest = report.envelope.inputDigest,
+          ) =>
+            h.runtime.validateCompletion(
+              completion,
+              admission,
+              report.envelope.agentId,
+              inputDigest,
+            );
+
+          expect(yield* validate()).toEqual(message);
+          for (const changed of [
+            { ...options, threadId: sourceId },
+            { ...options, principal: Schema.decodeSync(Principal)("other") },
+            { ...options, idempotencyKey: Schema.decodeSync(IdempotencyKey)("other") },
+            { ...options, workerAdmission: undefined },
+            {
+              ...options,
+              definitions: DefinitionDigests.make({
+                ...options.definitions,
+                agent: Schema.decodeSync(Digest)("b".repeat(64)),
+              }),
+            },
+          ])
+            expect((yield* validate(message, changed).pipe(Effect.flip)).reason).toBe("denied");
+          expect(
+            (yield* validate({ ...message, budgetExhausted: true }).pipe(Effect.flip)).reason,
+          ).toBe("denied");
+          expect(
+            (yield* validate({
+              ...message,
+              report: { ...message.report, runId: Schema.decodeSync(RunId)("unprepared-run") },
+            }).pipe(Effect.flip)).reason,
+          ).toBe("denied");
+          expect(
+            (yield* validate(message, options, Schema.decodeSync(Digest)("b".repeat(64))).pipe(
+              Effect.flip,
+            )).reason,
+          ).toBe("denied");
+          h.deny("send");
+          expect((yield* validate().pipe(Effect.flip)).reason).toBe("denied");
+          h.deny(undefined);
+        }
 
         yield* h.runtime.validateAdmission(
           metadata,

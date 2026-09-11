@@ -7,12 +7,13 @@ import {
   ToolCallId,
   DelegationId,
 } from "@effect-agent/core/Identifiers";
-import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { InputMessage, MessageAdmission } from "@effect-agent/core/Messaging";
 import {
   SubagentDelegationCaps,
   SubagentGrant,
   SubagentReservationAmounts,
 } from "@effect-agent/core/SubagentContract";
+import { WorkerCompletion } from "@effect-agent/core/Worker";
 import type { Crypto } from "effect";
 import { Clock, DateTime, Duration, Effect, Option, Result, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
@@ -796,14 +797,14 @@ const messageAdmissionIdentity = conformanceCase(
 
       yield* ensure(
         saved.messageAdmission !== undefined &&
-          Schema.toEquivalence(MessageAdmission)(saved.messageAdmission, metadata),
+          Schema.toEquivalence(InputMessage)(saved.messageAdmission, metadata),
         "Peer sender and return address must survive lookup without becoming application input",
       );
       const recovery = yield* recoverySnapshot(admitted.submissionId);
 
       yield* ensure(
         recovery.submission.messageAdmission !== undefined &&
-          Schema.toEquivalence(MessageAdmission)(recovery.submission.messageAdmission, metadata),
+          Schema.toEquivalence(InputMessage)(recovery.submission.messageAdmission, metadata),
         "Recovery must retain peer provenance",
       );
 
@@ -833,6 +834,95 @@ const messageAdmissionIdentity = conformanceCase(
         yield* ensure(
           isAdmissionConflict(conflict),
           "Peer provenance changes must produce AdmissionConflict",
+        );
+      }
+    }),
+);
+
+const workerCompletionIdentity = conformanceCase(
+  "retains framework completions and rejects same-key changes or omission",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      const base = yield* admissionRequest(
+        decodeThreadId("ledger-conformance-completion"),
+        "completion-message",
+        { text: "hello" },
+      );
+
+      const metadata = Schema.decodeUnknownSync(WorkerCompletion)({
+        _tag: "WorkerCompletion",
+        schemaVersion: 1,
+        budgetExhausted: false,
+        report: {
+          _tag: "Settled",
+          worker: {
+            schemaVersion: 1,
+            delegationId: "research",
+            targetAgentId: "child",
+            threadId: "child-thread",
+          },
+          receipt: {
+            threadId: "child-thread",
+            submissionId: "child-input",
+            receiptId: "child-receipt",
+            queueSequence: 1,
+          },
+          runId: "child-run",
+          settlementId: "child-settlement",
+          outcome: "completed",
+          result: { answer: "done" },
+        },
+      });
+
+      const admitted = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, messageAdmission: metadata }),
+      );
+
+      const saved = yield* expectSome(
+        "completion admission lookup",
+        yield* lookupById(admitted.submissionId),
+      );
+
+      yield* ensure(
+        saved.messageAdmission !== undefined &&
+          Schema.toEquivalence(InputMessage)(saved.messageAdmission, metadata),
+        "Completion identity and projected result must survive lookup without becoming application input",
+      );
+      const recovery = yield* recoverySnapshot(admitted.submissionId);
+
+      yield* ensure(
+        recovery.submission.messageAdmission !== undefined &&
+          Schema.toEquivalence(InputMessage)(recovery.submission.messageAdmission, metadata),
+        "Recovery must retain completion provenance",
+      );
+
+      const replayed = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, messageAdmission: metadata }),
+      );
+
+      yield* ensure(
+        replayed.replayed && replayed.receiptId === admitted.receiptId,
+        "Identical completion metadata must replay its receipt",
+      );
+      for (const changed of [
+        undefined,
+        WorkerCompletion.make({ ...metadata, budgetExhausted: true }),
+      ]) {
+        const conflict = yield* expectFailure(
+          "different or omitted completion metadata",
+          ledger.admit(
+            AdmissionRequest.make({
+              ...base,
+              ...(changed === undefined ? {} : { messageAdmission: changed }),
+            }),
+          ),
+        );
+
+        yield* ensure(
+          isAdmissionConflict(conflict),
+          "Completion metadata changes must produce AdmissionConflict",
         );
       }
     }),
@@ -4366,6 +4456,7 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   admissionIdempotency,
   workerAdmissionIdentity,
   messageAdmissionIdentity,
+  workerCompletionIdentity,
   admissionGroupRace,
   admissionGroupSettlement,
   crossPrincipalAdmissionScoping,

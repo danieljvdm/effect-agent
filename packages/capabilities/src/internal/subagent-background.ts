@@ -19,9 +19,13 @@ import {
 } from "@effect-agent/core/Worker";
 import {
   SubagentHost,
+  BackgroundReporting,
+  WorkerReportPreparationFailure,
+  type WorkerReporting,
   type WorkerObservation as HostObservation,
 } from "@effect-agent/engine/SubagentHost";
-import { Crypto, Effect, Encoding, type Layer, Option, Schema, Stream } from "effect";
+import type { Scope } from "effect";
+import { Context, Crypto, Effect, Encoding, Layer, Option, Schema, Stream } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import type { SubagentDefineOptions, SubagentPrepareContext } from "../Subagent.ts";
@@ -31,6 +35,7 @@ import {
   SubagentProjectionFailure,
 } from "./subagent-contract.ts";
 import { resolveSubagentPolicy, resolveToolCallAllowance } from "./subagent-policy.ts";
+import { automaticReporting } from "./subagent-reporting.ts";
 import { utf8ByteLength, utf8Bytes } from "./utf8.ts";
 
 export type Declaration<
@@ -675,6 +680,8 @@ export const cancel = <
 
 /** Opt in to each model-facing operation. Waiting remains programmatic only. */
 export interface BackgroundOptions {
+  /** Deliver a standard completion, or use an optional application input mapper. */
+  readonly reportToParent?: true | WorkerReporting<unknown, unknown>;
   readonly start?: true;
   readonly followUp?: true;
   readonly inspect?: true;
@@ -685,7 +692,7 @@ export interface BackgroundOptions {
   readonly budgetScope?: WorkerBudgetScope;
 }
 
-type Operation = Exclude<keyof BackgroundOptions, "budgetScope">;
+type Operation = Exclude<keyof BackgroundOptions, "budgetScope" | "reportToParent">;
 type Suffix = {
   start: "start";
   followUp: "follow_up";
@@ -863,6 +870,10 @@ const modelKey = Effect.fn("Subagent.workerToolKey")(function* (operation: "star
   ).pipe(Effect.mapError(() => WorkerError.make({ operation, reason: "unavailable" })));
 });
 
+// Construction-local service keys distinguish projections for co-registered parent versions.
+// These keys are never persisted; worker/run identity and registration digests remain canonical.
+let reportingServiceId = 0;
+
 /**
  * Derive optional native AI Tools and their handler Layer from one immutable declaration.
  * Projection services are captured by the Layer; the host and stable-key Crypto service remain
@@ -882,6 +893,32 @@ export const background = <
   declaration: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
   selected: Selected,
 ) => {
+  const report =
+    selected.reportToParent === true ? automaticReporting(declaration) : selected.reportToParent;
+
+  if (
+    report !== undefined &&
+    (report.delegationId !== declaration.delegationId || report.target !== declaration.target)
+  )
+    throw new TypeError("Background reporting must use the same subagent declaration and target");
+
+  const reportService = Context.Service<WorkerReporting<WorkerReportPreparationFailure>>(
+    `@effect-agent/capabilities/BackgroundReport/${declaration.name}/${reportingServiceId++}`,
+  );
+
+  const descriptor: WorkerReporting<WorkerReportPreparationFailure> | undefined =
+    report === undefined
+      ? undefined
+      : {
+          ...report,
+          prepare: (value) =>
+            Effect.flatMap(Effect.serviceOption(reportService), (service) =>
+              Option.isSome(service)
+                ? service.value.prepare(value)
+                : WorkerReportPreparationFailure.make({ stage: "preparation" }),
+            ),
+        };
+
   const ops = operations(declaration);
   const failure = preparationFailure(declaration.failure);
   const receiptParameters = ReceiptParameters(declaration);
@@ -954,7 +991,7 @@ export const background = <
 
   const chosen = Object.entries(available)
     .filter(([operation]) => selected[operation as Operation] === true)
-    .map(([, tool]) => tool);
+    .map(([, tool]) => tool.annotate(BackgroundReporting, descriptor));
 
   type Tools = BackgroundTools<Name, Parameters, Success, Failure, Selected>;
   // The mapped keys depend on literal selection flags; the runtime filter applies exactly those flags.
@@ -966,6 +1003,11 @@ export const background = <
     | Parameters["DecodingServices"]
     | Output["DecodingServices"]
     | Success["EncodingServices"];
+  type ReportServices = Selected["reportToParent"] extends true
+    ? Exclude<ProjectServices, Scope.Scope>
+    : Selected["reportToParent"] extends WorkerReporting<infer _E, infer R>
+      ? Exclude<R, Scope.Scope>
+      : never;
   type Services = PrepareServices | ProjectServices;
 
   const build = Effect.gen(function* () {
@@ -1023,10 +1065,33 @@ export const background = <
   type SelectedServices =
     | (Selected["start"] extends true ? PrepareServices : never)
     | (Selected["followUp"] extends true ? PrepareServices : never)
-    | (Selected["inspect"] extends true ? ProjectServices : never);
+    | (Selected["inspect"] extends true ? ProjectServices : never)
+    | ReportServices;
 
   // Unselected handlers are never installed. Only selected operations consume projection services.
-  const layer = toolkit.toLayer(build) as Layer.Layer<
+  const reportingLayer =
+    report === undefined
+      ? Layer.empty
+      : Layer.effect(
+          reportService,
+          Effect.map(
+            Effect.context<Effect.Services<ReturnType<typeof report.prepare>>>(),
+            (context): WorkerReporting<WorkerReportPreparationFailure> => ({
+              ...report,
+              prepare: (value) =>
+                Effect.scoped(Effect.suspend(() => report.prepare(value))).pipe(
+                  Effect.provide(context),
+                  Effect.mapError((error) =>
+                    Schema.is(WorkerReportPreparationFailure)(error)
+                      ? error
+                      : WorkerReportPreparationFailure.make({ stage: "preparation" }),
+                  ),
+                ),
+            }),
+          ),
+        );
+
+  const layer = Layer.merge(toolkit.toLayer(build), reportingLayer) as Layer.Layer<
     Tool.HandlersFor<Tools>,
     never,
     SelectedServices

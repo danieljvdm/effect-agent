@@ -1,6 +1,6 @@
 import { AgentInputError } from "@effect-agent/core/AgentError";
 import { AgentId, type ThreadId } from "@effect-agent/core/Identifiers";
-import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { InputMessage } from "@effect-agent/core/Messaging";
 import { DigestError } from "@effect-agent/thread/Digest";
 import {
   Receipt,
@@ -121,7 +121,7 @@ export class SubmitRequest extends Schema.Class<SubmitRequest>(
   admissionGroup: Schema.optionalKey(AdmissionGroup),
   admissionFence: Schema.optionalKey(AdmissionFence),
   workerAdmission: Schema.optionalKey(WorkerAdmission),
-  messageAdmission: Schema.optionalKey(MessageAdmission),
+  messageAdmission: Schema.optionalKey(InputMessage),
   definitions: DefinitionDigests,
   inputPayload: PersistedJson,
 }) {}

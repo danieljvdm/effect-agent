@@ -19,7 +19,11 @@ import {
   type TurnId,
 } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import { type MessageAdmission, type MessagingError } from "@effect-agent/core/Messaging";
+import {
+  type InputMessage,
+  MessageAdmission,
+  type MessagingError,
+} from "@effect-agent/core/Messaging";
 import { Receipt } from "@effect-agent/core/Receipt";
 import { type ExhaustedLimit, type RunEvent } from "@effect-agent/core/RunEvent";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
@@ -46,6 +50,7 @@ import {
   summarizeModelUsage,
   OutputTokenUsage,
 } from "@effect-agent/core/Usage";
+import { WorkerCompletion } from "@effect-agent/core/Worker";
 import type { WorkerError } from "@effect-agent/core/Worker";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
@@ -562,8 +567,8 @@ export interface DurableSubmitOptions {
   readonly admissionFence?: AdmissionFence;
   /** Host-prepared worker input; immutable origin and per-input projection parameters. */
   readonly workerAdmission?: WorkerAdmission;
-  /** Authenticated peer provenance, verified against the source's frozen canonical proof. */
-  readonly messageAdmission?: MessageAdmission;
+  /** Peer provenance or a worker completion, verified against frozen canonical delivery proof. */
+  readonly messageAdmission?: InputMessage;
   /** Application-computed digests of the Agent/Model/Toolkit definitions (see `digestDefinitions`). */
   readonly definitions: DefinitionDigests;
 }
@@ -5617,8 +5622,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
        * so the next Turn's response commit makes it model-visible canonically — exactly the
        * prompt-coverage rule recovery relies on.
        */
-      const renderJoinedInput = (encodedInput: PersistedJson) =>
+      const renderJoinedInput = ({
+        input: encodedInput,
+        messageAdmission,
+      }: Pick<UserInputRecorded, "input" | "messageAdmission">) =>
         Effect.gen(function* () {
+          if (Schema.is(WorkerCompletion)(messageAdmission))
+            return yield* Schema.encodeEffect(Schema.fromJsonString(WorkerCompletion))(
+              messageAdmission,
+            ).pipe(
+              Effect.mapError(() =>
+                AgentInputError.make({ message: "Invalid worker completion message" }),
+              ),
+            );
           const inputPrompt = agent.definition.inputPrompt;
 
           if (inputPrompt === undefined) {
@@ -5647,7 +5663,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             const joinedInputs = yield* recordHalt(
               Effect.gen(function* () {
                 const limit = policy === "one" ? 1 : MAX_JOIN_DRAIN;
-                const joinedInputs: Array<PersistedJson> = [];
+
+                const joinedInputs: Array<Pick<UserInputRecorded, "input" | "messageAdmission">> =
+                  [];
 
                 if (joinBacklog === undefined) {
                   const hostSnapshot = yield* ledger.loadRecoverySnapshot(
@@ -5689,7 +5707,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   const payload = existing.record.payload;
 
                   if (payload._tag !== "UserInputRecorded") continue;
-                  joinedInputs.push(payload.input);
+                  joinedInputs.push(payload);
                 }
                 if (joinedInputs.length < limit) {
                   const ownershipToken = yield* Ref.get(tokenRef);
@@ -5767,7 +5785,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                       }),
                     );
                     deliveredJoinInputs.add(claim.submissionId);
-                    joinedInputs.push(claim.inputPayload);
+                    joinedInputs.push({
+                      input: claim.inputPayload,
+                      ...(claimSnapshot.submission.messageAdmission === undefined
+                        ? {}
+                        : { messageAdmission: claimSnapshot.submission.messageAdmission }),
+                    });
                   }
                 }
 
@@ -6383,6 +6406,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 // Preserve the admitted wire value even when an Agent Schema's decode/encode
                 // pair normalizes differently on a second pass.
                 input: submission.inputPayload,
+                ...(Schema.is(WorkerCompletion)(submission.messageAdmission)
+                  ? { workerCompletion: submission.messageAdmission }
+                  : {}),
               }),
       };
 
@@ -6398,6 +6424,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         history: pending === undefined ? journal.historyBefore : resumeProjection.historyBefore,
         onHistory,
         input,
+        ...(Schema.is(WorkerCompletion)(submission.messageAdmission)
+          ? { workerCompletion: submission.messageAdmission }
+          : {}),
         approval,
         toolAuthorization,
         ...(journal.toolSelection === undefined ? {} : { toolSelection: journal.toolSelection }),
@@ -8992,22 +9021,36 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               ),
             );
 
+    const pendingMessage = options.messageAdmission;
+
     const messageAdmission =
-      options.messageAdmission === undefined
+      pendingMessage === undefined
         ? undefined
-        : yield* messagingRuntime
-            .validateAdmission(options.messageAdmission, options, agent.definition.id, inputDigest)
-            .pipe(
-              Effect.mapError((cause) =>
-                AdmissionPolicyError.make({
-                  reason:
-                    cause.reason === "storage" || cause.reason === "unavailable"
-                      ? "unavailable"
-                      : "refused",
-                  code: `message-${cause.reason}`,
-                }),
-              ),
-            );
+        : yield* Effect.suspend((): Effect.Effect<InputMessage, MessagingError | WorkerError> =>
+            Schema.is(MessageAdmission)(pendingMessage)
+              ? messagingRuntime.validateAdmission(
+                  pendingMessage,
+                  options,
+                  agent.definition.id,
+                  inputDigest,
+                )
+              : workerRuntime.validateCompletion(
+                  pendingMessage,
+                  options,
+                  agent.definition.id,
+                  inputDigest,
+                ),
+          ).pipe(
+            Effect.mapError((cause) =>
+              AdmissionPolicyError.make({
+                reason:
+                  cause.reason === "storage" || cause.reason === "unavailable"
+                    ? "unavailable"
+                    : "refused",
+                code: `message-${cause.reason}`,
+              }),
+            ),
+          );
 
     const admitted = yield* ledger.admit(
       yield* Schema.decodeUnknownEffect(AdmissionRequest)({

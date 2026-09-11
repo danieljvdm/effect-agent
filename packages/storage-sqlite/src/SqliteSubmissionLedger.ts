@@ -1,4 +1,4 @@
-import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { InputMessage } from "@effect-agent/core/Messaging";
 import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
 import {
   ApprovalDecision,
@@ -1023,7 +1023,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       const messageAdmissionJson =
         validated.messageAdmission === undefined
           ? null
-          : yield* Schema.encodeEffect(Schema.fromJsonString(MessageAdmission))(
+          : yield* Schema.encodeEffect(Schema.fromJsonString(InputMessage))(
               validated.messageAdmission,
             ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -1096,10 +1096,10 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
                     existing[0].worker_admission_json,
                   ).pipe(Effect.mapError(internalFailure(operation)));
 
-            const retainedMessageAdmission =
+            const retainedInputMessage =
               existing[0].message_admission_json === null
                 ? undefined
-                : yield* Schema.decodeEffect(Schema.fromJsonString(MessageAdmission))(
+                : yield* Schema.decodeEffect(Schema.fromJsonString(InputMessage))(
                     existing[0].message_admission_json,
                   ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -1116,8 +1116,8 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
                 retainedWorkerAdmission,
                 validated.workerAdmission,
               ) ||
-              !Schema.toEquivalence(Schema.optional(MessageAdmission))(
-                retainedMessageAdmission,
+              !Schema.toEquivalence(Schema.optional(InputMessage))(
+                retainedInputMessage,
                 validated.messageAdmission,
               ) ||
               !Schema.toEquivalence(Schema.optional(AdmissionFence))(
