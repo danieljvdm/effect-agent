@@ -28,6 +28,7 @@ import {
   Semaphore,
   Stream,
 } from "effect";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { DurableObjectContext } from "./CloudflareBindings.ts";
 import { CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";
@@ -64,6 +65,25 @@ const alarmFailure =
       cause,
     });
 
+// SQL and raw KV/alarm operations share one physical SQLite transaction. Reserve its
+// connection for each short storage operation, never around a mutation or snapshot body.
+const makeStorageOperation = Effect.map(
+  SqlClient,
+  (sql) =>
+    <A>(operation: string, execute: () => Promise<A>) =>
+      Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) => {
+        const body = Effect.uninterruptible(
+          Effect.tryPromise({ try: execute, catch: alarmFailure(operation) }),
+        );
+
+        return current._tag === "Some"
+          ? body
+          : Effect.scoped(
+              Effect.andThen(sql.reserve.pipe(Effect.mapError(alarmFailure(operation))), body),
+            );
+      }),
+);
+
 /** `ctx.storage` alarm slot as an Effect service; storage is truth, never a memory field. */
 export class DurableAlarmService extends Context.Service<
   DurableAlarmService,
@@ -97,7 +117,7 @@ export class DurableAlarmService extends Context.Service<
     readonly cancel: Effect.Effect<void, DurableAlarmError>;
   }
 >()("@effect-agent/platform-cloudflare/DurableAlarmService") {
-  static readonly layer: Layer.Layer<DurableAlarmService, never, DurableObjectContext> =
+  static readonly layer: Layer.Layer<DurableAlarmService, never, DurableObjectContext | SqlClient> =
     Layer.effect(DurableAlarmService)(
       Effect.gen(function* () {
         const { ctx } = yield* DurableObjectContext;
@@ -108,28 +128,26 @@ export class DurableAlarmService extends Context.Service<
          */
         const runningPasses = yield* Ref.make(0);
 
-        const scheduled = Effect.tryPromise({
-          try: () => ctx.storage.getAlarm(),
-          catch: alarmFailure("get alarm"),
-        }).pipe(
+        const storageOperation = yield* makeStorageOperation;
+
+        const scheduled = storageOperation("get alarm", () => ctx.storage.getAlarm()).pipe(
           Effect.map((deadline) =>
             deadline === null ? Option.none<number>() : Option.some(deadline),
           ),
         );
 
         const scheduleAt = (epochMillis: number) =>
-          Effect.tryPromise({
-            try: () => ctx.storage.setAlarm(epochMillis),
-            catch: alarmFailure("set alarm"),
-          });
+          storageOperation("set alarm", () => ctx.storage.setAlarm(epochMillis));
 
         const ensureScheduledBy = (epochMillis: number) =>
-          scheduled.pipe(
-            Effect.flatMap((existing) =>
-              Option.isSome(existing) && existing.value <= epochMillis
-                ? Effect.void
-                : scheduleAt(epochMillis),
-            ),
+          storageOperation("ensure alarm", () =>
+            ctx.storage.transaction(async (transaction) => {
+              const existing = await transaction.getAlarm();
+
+              if (existing === null || existing > epochMillis) {
+                await transaction.setAlarm(epochMillis);
+              }
+            }),
           );
 
         const armNow = Clock.currentTimeMillis.pipe(
@@ -146,10 +164,7 @@ export class DurableAlarmService extends Context.Service<
             Effect.ensuring(Ref.update(runningPasses, (passes) => passes - 1)),
           );
 
-        const cancel = Effect.tryPromise({
-          try: () => ctx.storage.deleteAlarm(),
-          catch: alarmFailure("delete alarm"),
-        });
+        const cancel = storageOperation("delete alarm", () => ctx.storage.deleteAlarm());
 
         return DurableAlarmService.of({
           scheduled,
@@ -404,8 +419,7 @@ export class ThreadMutationGate extends Context.Service<
       const generationGate = yield* Semaphore.make(1);
       const minimumAlarmDelay = Math.max(1, Math.ceil(config.alarmBackoffBase / 2));
 
-      const runTransaction = <A>(operation: string, transaction: () => Promise<A>) =>
-        Effect.tryPromise({ try: transaction, catch: alarmFailure(operation) });
+      const runTransaction = yield* makeStorageOperation;
 
       const beginMutation = Effect.fn("ThreadMaintenance.beginMutation")(function* () {
         yield* failpoint.hit("maintenance:dirty:before");
@@ -508,6 +522,7 @@ export class ThreadMaintenance extends Context.Service<
     | ThreadMaintenanceFailpoint
     | CloudflareDurableRuntimeConfig
     | DurableObjectContext
+    | SqlClient
   > = Layer.effect(ThreadMaintenance)(
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
@@ -549,8 +564,7 @@ export class ThreadMaintenance extends Context.Service<
       const maintenancePassGate = yield* Semaphore.make(1);
       const minimumAlarmDelay = Math.max(1, Math.ceil(config.alarmBackoffBase / 2));
 
-      const runTransaction = <A>(operation: string, transaction: () => Promise<A>) =>
-        Effect.tryPromise({ try: transaction, catch: alarmFailure(operation) });
+      const runTransaction = yield* makeStorageOperation;
 
       const ensureAlarm = Effect.fn("ThreadMaintenance.ensureAlarm")(function* () {
         yield* failpoint.hit("maintenance:ensure:before");
