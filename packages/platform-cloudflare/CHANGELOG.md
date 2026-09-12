@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.84
+
+### Patch Changes
+
+- [#457](https://github.com/danieljvdm/effect-agent/pull/457) [`7298014`](https://github.com/danieljvdm/effect-agent/commit/7298014b83979d44716082f1c52cfc151c6edeaa) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reuse native RPC targets within each Cloudflare invocation so delegated work, progress observation, memory and scheduling callbacks do not exhaust subrequest depth. Replace failed channels and start fresh target scopes for incoming requests and durable retries.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.84
+  - @effect-agent/engine@0.1.0-beta.84
+  - @effect-agent/sandbox@0.1.0-beta.84
+  - @effect-agent/thread@0.1.0-beta.84
+  - @effect-agent/storage-cloudflare@0.1.0-beta.84
+
 ## 0.1.0-beta.83
 
 ### Patch Changes
