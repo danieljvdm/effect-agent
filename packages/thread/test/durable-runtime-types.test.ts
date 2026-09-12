@@ -1,4 +1,5 @@
 import type { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import type { UpdateError } from "@effect-agent/core/AgentUpdates";
 import { type ThreadId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import type { MessagingError } from "@effect-agent/core/Messaging";
 import type { WorkerError } from "@effect-agent/core/Worker";
@@ -15,6 +16,7 @@ import {
   type Settlement,
   type Principal,
   type SubmissionLedger,
+  type LedgerError,
 } from "@effect-agent/thread/SubmissionLedger";
 import { type SubmissionStatus } from "@effect-agent/thread/SubmissionStatus";
 import type { ThreadStore } from "@effect-agent/thread/ThreadStore";
@@ -22,8 +24,10 @@ import { expectTypeOf, it } from "@effect/vitest";
 import { Context, Effect, Layer, Option, type Crypto, type DateTime } from "effect";
 
 import type { DurableRuntimeFailpoint } from "../src/DurableFailpoint.ts";
+import type { makeAgentUpdateRuntime } from "../src/internal/agent-updates.ts";
 import type { makeMessagingRuntime } from "../src/internal/messaging-host.ts";
 import type { makeWorkerRuntime, WorkerInputControl } from "../src/internal/worker-host.ts";
+import type { WorkerRuntime } from "../src/internal/worker-runtime.ts";
 import {
   WorkerConcurrencyResolver,
   type WorkerConcurrencyLimit,
@@ -75,6 +79,12 @@ it("keeps bounded worker operations and status reads typed without hidden requir
   >();
   expectTypeOf<Effect.Services<ReturnType<typeof makeWorkerRuntime>>>().toEqualTypeOf<
     ThreadStore | SubmissionLedger | Crypto.Crypto | DurableRuntimeFailpoint | WorkerInputControl
+  >();
+  expectTypeOf<Effect.Services<ReturnType<typeof makeAgentUpdateRuntime>>>().toEqualTypeOf<
+    ThreadStore | Crypto.Crypto | DurableRuntimeFailpoint | WorkerRuntime
+  >();
+  expectTypeOf<Effect.Error<ReturnType<WorkerRuntime["Service"]["prepareUpdate"]>>>().toEqualTypeOf<
+    UpdateError | LedgerError
   >();
   expectTypeOf<Effect.Services<ReturnType<typeof makeMessagingRuntime>>>().toEqualTypeOf<
     ThreadStore | Crypto.Crypto

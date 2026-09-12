@@ -34,6 +34,7 @@ import {
   ThreadTailRequest,
 } from "../ThreadStore.ts";
 import { utf8ByteLength } from "./utf8.ts";
+import { WorkerRuntime } from "./worker-runtime.ts";
 
 export const lastWorkerReportMessageId = (records: ReadonlyArray<CanonicalRecordEnvelope>) => {
   for (let index = records.length - 1; index >= 0; index--) {
@@ -58,13 +59,9 @@ const rejected = (reason: UpdateError["reason"]) => UpdateError.make({ reason })
 export const makeAgentUpdateRuntime = Effect.fn("AgentUpdates.makeDurable")(function* (options: {
   readonly deploymentId: DeploymentId;
   readonly producerId: ProducerId;
-  readonly prepare: (
-    update: Update,
-    submission: SubmissionSnapshot,
-    messageId: IdempotencyKey,
-  ) => Effect.Effect<Omit<Delivery, "predecessor"> | undefined, UpdateError | LedgerError>;
 }) {
   const store = yield* ThreadStore;
+  const workers = yield* WorkerRuntime;
   const deliveries = yield* Effect.serviceOption(MessageDeliveryStore);
   const crypto = yield* Crypto.Crypto;
   const failpoint = yield* DurableRuntimeFailpoint;
@@ -205,7 +202,7 @@ export const makeAgentUpdateRuntime = Effect.fn("AgentUpdates.makeDurable")(func
         value,
       });
 
-      const prepared = yield* options.prepare(update, request.submission, messageId);
+      const prepared = yield* workers.prepareUpdate(update, request.submission, messageId);
       let delivery: Delivery | undefined;
 
       if (prepared !== undefined) {

@@ -46,6 +46,7 @@ import {
 } from "../src/DurableFailpoint.ts";
 import { makeAgentUpdateRuntime } from "../src/internal/agent-updates.ts";
 import { makeWorkerRuntime, WorkerInputControl } from "../src/internal/worker-host.ts";
+import { WorkerRuntime } from "../src/internal/worker-runtime.ts";
 import {
   MessageDeliveryStore,
   defaultMessageDeliveryStoreLimits,
@@ -268,8 +269,10 @@ const harness = Effect.fn("workerHostHarness")(function* (
       makeAgentUpdateRuntime({
         deploymentId: Schema.decodeSync(DeploymentId)("test"),
         producerId: Schema.decodeSync(ProducerId)("test"),
-        prepare: runtime.prepareUpdate,
-      }).pipe(Effect.map((updates) => ({ runtime, updates }))),
+      }).pipe(
+        Effect.provideService(WorkerRuntime, runtime),
+        Effect.map((updates) => ({ runtime, updates })),
+      ),
     ),
     Effect.provideService(WorkerBudgetAuthorizer, {
       authorize: () =>

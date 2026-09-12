@@ -158,6 +158,7 @@ import {
 import { makeJournalMetadata, type JournalMetadata } from "./internal/journal-metadata.ts";
 import { makeMessagingRuntime } from "./internal/messaging-host.ts";
 import { makeWorkerRuntime, WorkerInputControl } from "./internal/worker-host.ts";
+import { WorkerRuntime } from "./internal/worker-runtime.ts";
 import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
@@ -9977,8 +9978,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const updateRuntime = yield* makeAgentUpdateRuntime({
     deploymentId: config.deploymentId,
     producerId: config.producerId,
-    prepare: workerRuntime.prepareUpdate,
-  });
+  }).pipe(Effect.provideService(WorkerRuntime, workerRuntime));
 
   return DurableAgentRuntime.of({
     workerHost: workerRuntime.acquire,
