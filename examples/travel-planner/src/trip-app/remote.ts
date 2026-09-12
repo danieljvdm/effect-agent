@@ -25,9 +25,9 @@ const unavailable = () =>
 
 /** An owner-only native RPC, never exposed as an app-controlled service binding. */
 export const serveAppRepository = Effect.fn("serveAppRepository")(function* (encoded: string) {
-  const request = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(AppCommand))(
-    encoded,
-  ).pipe(Effect.mapError(unavailable));
+  const request = yield* Schema.decodeEffect(Schema.fromJsonString(AppCommand))(encoded).pipe(
+    Effect.mapError(unavailable),
+  );
 
   const repository = yield* AppRepository;
 
@@ -95,9 +95,7 @@ export const callAppRepository = <A, I>(
       catch: unavailable,
     });
 
-    const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(reply(schema)))(
-      response,
-    );
+    const result = yield* Schema.decodeEffect(Schema.fromJsonString(reply(schema)))(response);
 
     if (result._tag === "Failure") return yield* result.error;
 

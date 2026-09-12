@@ -24,7 +24,7 @@ const legacy = {
 it("decodes legacy usage conservatively and separates actual models sharing a binding", () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const old = Schema.decodeUnknownSync(ModelCallUsage)(legacy);
+      const old = Schema.decodeSync(ModelCallUsage)(legacy);
 
       expect(old.response).toBeUndefined();
       const oldSummary = yield* summarizeModelUsage([old]);
@@ -47,7 +47,7 @@ it("decodes legacy usage conservatively and separates actual models sharing a bi
       expect(summary.costMicrousd).toBe(10);
       expect(summary.byModel.map((group) => group.responseModel)).toEqual(["actual-a", "actual-b"]);
       expect(
-        Schema.decodeUnknownExit(RunUsageSummary)(Schema.encodeSync(RunUsageSummary)(summary))._tag,
+        Schema.decodeExit(RunUsageSummary)(Schema.encodeSync(RunUsageSummary)(summary))._tag,
       ).toBe("Success");
     }),
   ));
@@ -202,7 +202,7 @@ it("combines disjoint Run totals without converting unknown or legacy evidence i
         costMicrousd: 17,
       });
 
-      const legacy = Schema.decodeUnknownSync(RunTotals)({
+      const legacy = Schema.decodeSync(RunTotals)({
         modelCalls: 1,
         inputTokens: 0,
         outputTokens: 0,

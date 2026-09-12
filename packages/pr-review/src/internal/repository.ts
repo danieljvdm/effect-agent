@@ -30,7 +30,7 @@ export class ReviewSource extends Schema.Class<ReviewSource>(
     input: typeof ReadFileInput.Type,
     text: string,
   ) {
-    const request = yield* Schema.decodeUnknownEffect(ReadFileInput)(input).pipe(
+    const request = yield* Schema.decodeEffect(ReadFileInput)(input).pipe(
       Effect.mapError(() => ReviewContextError.make({ message: "Invalid source range." })),
     );
 

@@ -595,7 +595,7 @@ describe("DC Travel Planner — admission limits", () => {
   it("admission refuses over-limit input before any ledger row exists", async () => {
     const thread = lane("limit-input");
 
-    const oversizedTrip = Schema.decodeUnknownSync(TripRequest)({
+    const oversizedTrip = Schema.decodeSync(TripRequest)({
       request: `An itinerary brief far beyond the quota: ${"x".repeat(2_048)}`,
       origin: "SFO",
       destination: "LHR",

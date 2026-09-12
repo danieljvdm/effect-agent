@@ -46,12 +46,12 @@ class IntegrityViolation extends Schema.TaggedError<IntegrityViolation>()("Integ
 }
 
 const decodeThreadId = (value: string) =>
-  Schema.decodeUnknownEffect(ThreadId)(value).pipe(
+  Schema.decodeEffect(ThreadId)(value).pipe(
     Effect.mapError(() => InvalidIdentifier.make({ kind: "ThreadId", value })),
   );
 
 const decodeSubmissionId = (value: string) =>
-  Schema.decodeUnknownEffect(SubmissionId)(value).pipe(
+  Schema.decodeEffect(SubmissionId)(value).pipe(
     Effect.mapError(() => InvalidIdentifier.make({ kind: "SubmissionId", value })),
   );
 
@@ -220,7 +220,7 @@ const retryCommand = CliCommand.make(
         const runtime = yield* DurableAgentRuntime;
         const submissionId = yield* decodeSubmissionId(submission);
 
-        const command = yield* Schema.decodeUnknownEffect(RetryCommand)({
+        const command = yield* Schema.decodeEffect(RetryCommand)({
           submissionId,
           author,
           reason,
@@ -286,7 +286,7 @@ const obligationsCommand = CliCommand.make(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
 
-        const thresholds = yield* Schema.decodeUnknownEffect(ObligationThresholds)({
+        const thresholds = yield* Schema.decodeEffect(ObligationThresholds)({
           agingSeconds,
           overdueSeconds,
         }).pipe(

@@ -40,7 +40,7 @@ export const seedCheckpoint = Effect.fn("CheckpointFixture.seed")(function* (his
   yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch: epoch }));
   const ledger = yield* SubmissionLedger;
 
-  const pending = yield* Schema.decodeUnknownEffect(AdmissionRequest)({
+  const pending = yield* Schema.decodeEffect(AdmissionRequest)({
     threadId,
     principal: "checkpoint-principal",
     idempotencyKey: "checkpoint-pending",
@@ -55,7 +55,7 @@ export const seedCheckpoint = Effect.fn("CheckpointFixture.seed")(function* (his
   let tail = { lastSequence: zero, tailDigest: EMPTY_TAIL_DIGEST };
 
   for (const index of [1, 2]) {
-    const batch = yield* Schema.decodeUnknownEffect(CanonicalBatch)({
+    const batch = yield* Schema.decodeEffect(CanonicalBatch)({
       batchId: `checkpoint-batch-${index}`,
       producerId: "checkpoint-producer",
       records: [

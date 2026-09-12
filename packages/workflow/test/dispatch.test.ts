@@ -276,9 +276,9 @@ const makeFixture = Effect.fn("dispatch-test.makeFixture")(function* (ordinaryTo
 
         if (Option.isNone(override)) return yield* native.poll(workflow, executionId);
 
-        const value = yield* Schema.decodeUnknownEffect(workflow.successSchema)(
-          override.value,
-        ).pipe(Effect.orDie);
+        const value = yield* Schema.decodeEffect(workflow.successSchema)(override.value).pipe(
+          Effect.orDie,
+        );
 
         return Option.some(new Workflow.Complete({ exit: Exit.succeed(value) }));
       }),

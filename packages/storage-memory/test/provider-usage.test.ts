@@ -188,11 +188,9 @@ for (const failure of ["open-part", "missing-usage", "continuation", "invalid-es
         } = Schema.encodeSync(SubmissionSettled)(settlement);
 
         // A retained accounting suffix requires a Run identity and its aggregate summary.
-        expect(Schema.decodeUnknownExit(SubmissionSettled)(withoutRunAccounting)._tag).toBe(
-          "Success",
-        );
+        expect(Schema.decodeExit(SubmissionSettled)(withoutRunAccounting)._tag).toBe("Success");
         expect(
-          Schema.decodeUnknownExit(SubmissionSettled)({
+          Schema.decodeExit(SubmissionSettled)({
             ...withoutRunAccounting,
             uncommittedModelUsage: retainedCalls,
           })._tag,

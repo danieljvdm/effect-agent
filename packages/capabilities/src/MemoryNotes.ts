@@ -93,7 +93,7 @@ const snapshot = Effect.fn("MemoryNotes.snapshot")(function* (document: MemoryDo
     });
   }
 
-  return yield* Schema.decodeUnknownEffect(NotesSnapshot)({
+  return yield* Schema.decodeEffect(NotesSnapshot)({
     revision: document?.source.revision ?? null,
     text: document?.content.text ?? "",
   }).pipe(
@@ -115,7 +115,7 @@ const snapshot = Effect.fn("MemoryNotes.snapshot")(function* (document: MemoryDo
  * Supply Effect AI's IdGenerator service to select operation identities.
  */
 export const layer = (options: Options) => {
-  const config = Schema.decodeUnknownSync(OptionsSchema)(options);
+  const config = Schema.decodeSync(OptionsSchema)(options);
 
   return toolkit.toLayer(
     Effect.gen(function* () {

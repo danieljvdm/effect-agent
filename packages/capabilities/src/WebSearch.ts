@@ -121,7 +121,7 @@ export const layer = (options: Options) => {
 
       return {
         WebSearch: Effect.fn("WebSearch.search")(function* (input) {
-          const { query } = yield* Schema.decodeUnknownEffect(Parameters)(input).pipe(
+          const { query } = yield* Schema.decodeEffect(Parameters)(input).pipe(
             Effect.mapError(() => new Failure({ reason: "invalid-query" })),
           );
 
@@ -174,7 +174,7 @@ export const layer = (options: Options) => {
             return yield* new Failure({ reason: "output-limit" });
           }
 
-          return yield* Schema.decodeUnknownEffect(Result)(result).pipe(
+          return yield* Schema.decodeEffect(Result)(result).pipe(
             Effect.mapError(() => new Failure({ reason: "invalid-response" })),
           );
         }),

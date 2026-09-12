@@ -244,7 +244,7 @@ it("registers and signs in new and returning email and GitHub accounts through d
 
     expect(response.status, body).toBe(200);
 
-    return Schema.decodeUnknownSync(
+    return Schema.decodeSync(
       Schema.fromJsonString(
         Schema.Struct({
           exit: Schema.Struct({ _tag: Schema.Literal("Success"), value: Schema.Unknown }),

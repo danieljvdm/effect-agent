@@ -95,7 +95,7 @@ export const preparePerformanceTarget = Effect.fn("Performance.prepareTarget")(f
   const path = yield* Path.Path;
   const name = `effect-agent-perf-${options.run}-${options.label}`;
 
-  const target = yield* Schema.decodeUnknownEffect(PerformanceTarget)({
+  const target = yield* Schema.decodeEffect(PerformanceTarget)({
     label: options.label,
     name,
     url: `https://${name}.${options.subdomain}.workers.dev`,

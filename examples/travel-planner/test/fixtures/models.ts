@@ -48,7 +48,7 @@ export const fixtureScript = (prompt: Prompt.Prompt): ReadonlyArray<Response.Str
     if (message.role !== "user") continue;
     for (const part of message.content) {
       if (part.type !== "text") continue;
-      const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(PlannerInput))(part.text);
+      const parsed = Schema.decodeOption(Schema.fromJsonString(PlannerInput))(part.text);
 
       if (parsed._tag === "Some") {
         userInputs++;

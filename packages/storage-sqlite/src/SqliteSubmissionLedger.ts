@@ -1,4 +1,4 @@
-import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { InputMessage } from "@effect-agent/core/Messaging";
 import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
 import {
   ApprovalDecision,
@@ -514,9 +514,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     if (Option.isNone(ownership) || ownership.value.ownership_token !== ownershipToken) {
       const actualEpoch = yield* threadEpoch(operation, submission.thread_id);
 
-      const submissionId = yield* Schema.decodeUnknownEffect(
-        SubmissionSnapshot.fields.submissionId,
-      )(submission.submission_id).pipe(Effect.mapError(internalFailure(operation)));
+      const submissionId = yield* Schema.decodeEffect(SubmissionSnapshot.fields.submissionId)(
+        submission.submission_id,
+      ).pipe(Effect.mapError(internalFailure(operation)));
 
       return yield* OwnershipLost.make({ submissionId, actualEpoch });
     }
@@ -995,9 +995,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     function* (request: AdmissionRequest) {
       const operation = "ledger admit";
 
-      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(AdmissionRequest))(
-        request,
-      ).pipe(Effect.mapError(internalFailure(operation)));
+      const validated = yield* Schema.decodeEffect(Schema.toType(AdmissionRequest))(request).pipe(
+        Effect.mapError(internalFailure(operation)),
+      );
 
       const inputJson = yield* encodePersistedJsonText(validated.inputPayload).pipe(
         Effect.mapError(internalFailure(operation)),
@@ -1023,7 +1023,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       const messageAdmissionJson =
         validated.messageAdmission === undefined
           ? null
-          : yield* Schema.encodeEffect(Schema.fromJsonString(MessageAdmission))(
+          : yield* Schema.encodeEffect(Schema.fromJsonString(InputMessage))(
               validated.messageAdmission,
             ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -1096,10 +1096,10 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
                     existing[0].worker_admission_json,
                   ).pipe(Effect.mapError(internalFailure(operation)));
 
-            const retainedMessageAdmission =
+            const retainedInputMessage =
               existing[0].message_admission_json === null
                 ? undefined
-                : yield* Schema.decodeEffect(Schema.fromJsonString(MessageAdmission))(
+                : yield* Schema.decodeEffect(Schema.fromJsonString(InputMessage))(
                     existing[0].message_admission_json,
                   ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -1116,8 +1116,8 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
                 retainedWorkerAdmission,
                 validated.workerAdmission,
               ) ||
-              !Schema.toEquivalence(Schema.optional(MessageAdmission))(
-                retainedMessageAdmission,
+              !Schema.toEquivalence(Schema.optional(InputMessage))(
+                retainedInputMessage,
                 validated.messageAdmission,
               ) ||
               !Schema.toEquivalence(Schema.optional(AdmissionFence))(
@@ -1275,9 +1275,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: MarkReadyRequest) {
     const operation = "ledger mark ready";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(MarkReadyRequest))(
-      request,
-    ).pipe(Effect.mapError(internalFailure(operation)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(MarkReadyRequest))(request).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
 
     yield* hitFailpoint("ledger:mark-ready:before", operation);
     yield* inWriteTransaction(
@@ -1302,9 +1302,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     function* (request: SubmissionLookup) {
       const operation = "ledger lookup";
 
-      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SubmissionLookup))(
-        request,
-      ).pipe(Effect.mapError(internalFailure(operation)));
+      const validated = yield* Schema.decodeEffect(Schema.toType(SubmissionLookup))(request).pipe(
+        Effect.mapError(internalFailure(operation)),
+      );
 
       if (validated._tag === "SubmissionLookupById") {
         const row = yield* readSubmission(operation, validated.submissionId);
@@ -1350,7 +1350,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: SubmissionLookupByKey) {
     const operation = "ledger resolve admission";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SubmissionLookupByKey))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(SubmissionLookupByKey))(
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -1387,9 +1387,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     function* (request: ClaimRequest) {
       const operation = "ledger claim";
 
-      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ClaimRequest))(
-        request,
-      ).pipe(Effect.mapError(internalFailure(operation)));
+      const validated = yield* Schema.decodeEffect(Schema.toType(ClaimRequest))(request).pipe(
+        Effect.mapError(internalFailure(operation)),
+      );
 
       const attemptId = yield* mintIdentifier("attempt", operation);
       const ownershipToken = yield* mintIdentifier("owner", operation);
@@ -1563,7 +1563,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: RenewOwnershipRequest) {
     const operation = "ledger renew ownership";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(RenewOwnershipRequest))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(RenewOwnershipRequest))(
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -1601,7 +1601,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: ReleaseOwnershipRequest) {
     const operation = "ledger release ownership";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ReleaseOwnershipRequest))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(ReleaseOwnershipRequest))(
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -1633,7 +1633,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: MarkInputAppliedRequest) {
     const operation = "ledger mark input applied";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(MarkInputAppliedRequest))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(MarkInputAppliedRequest))(
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -1680,7 +1680,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: SettlementReservation) {
     const operation = "ledger reserve settlement";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SettlementReservation))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(SettlementReservation))(
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -1891,7 +1891,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: SettlementFinalization) {
     const operation = "ledger finalize settlement";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SettlementFinalization))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(SettlementFinalization))(
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -1998,7 +1998,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: AbortCommand) {
     const operation = "ledger request abort";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(AbortCommand))(request).pipe(
+    const validated = yield* Schema.decodeEffect(Schema.toType(AbortCommand))(request).pipe(
       Effect.mapError(internalFailure(operation)),
     );
 
@@ -2098,9 +2098,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: ClaimJoiningRequest) {
     const operation = "ledger claim joining";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ClaimJoiningRequest))(
-      request,
-    ).pipe(Effect.mapError(internalFailure(operation)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(ClaimJoiningRequest))(request).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
 
     yield* hitFailpoint("ledger:claim-joining:before", operation);
 
@@ -2186,9 +2186,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: MarkJoinedRequest) {
     const operation = "ledger mark joined";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(MarkJoinedRequest))(
-      request,
-    ).pipe(Effect.mapError(internalFailure(operation)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(MarkJoinedRequest))(request).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
 
     yield* hitFailpoint("ledger:mark-joined:before", operation);
     yield* inWriteTransaction(
@@ -2246,9 +2246,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: RevertJoiningRequest) {
     const operation = "ledger revert joining";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(RevertJoiningRequest))(
-      request,
-    ).pipe(Effect.mapError(internalFailure(operation)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(RevertJoiningRequest))(request).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
 
     yield* hitFailpoint("ledger:revert-joining:before", operation);
     yield* inWriteTransaction(
@@ -2274,9 +2274,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: SuspendRequest) {
     const operation = "ledger suspend";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SuspendRequest))(
-      request,
-    ).pipe(Effect.mapError(internalFailure(operation)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(SuspendRequest))(request).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
 
     const reasonJson = yield* encodeSuspensionReasonText(validated.reason).pipe(
       Effect.mapError(internalFailure(operation)),
@@ -2410,7 +2410,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (command: ApprovalDecisionCommand) {
     const operation = "ledger record approval decision";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ApprovalDecisionCommand))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(ApprovalDecisionCommand))(
       command,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -2494,9 +2494,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: MarkUnknownRequest) {
     const operation = "ledger mark unknown";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(MarkUnknownRequest))(
-      request,
-    ).pipe(Effect.mapError(internalFailure(operation)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(MarkUnknownRequest))(request).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
 
     yield* hitFailpoint("ledger:mark-unknown:before", operation);
     yield* inWriteTransaction(
@@ -2561,7 +2561,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (command: UnknownResolutionCommand) {
     const operation = "ledger record unknown resolution";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(UnknownResolutionCommand))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(UnknownResolutionCommand))(
       command,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -2682,7 +2682,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: ChildSettledNotification) {
     const operation = "ledger record child settled";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ChildSettledNotification))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(ChildSettledNotification))(
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -2772,9 +2772,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: ChildBudgetReservationRequest) {
     const operation = "ledger reserve child budget";
 
-    const validated = yield* Schema.decodeUnknownEffect(
-      Schema.toType(ChildBudgetReservationRequest),
-    )(request).pipe(Effect.mapError(internalFailure(operation)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(ChildBudgetReservationRequest))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
 
     const allocationJson = yield* encodePersistedJsonText(validated.allocation).pipe(
       Effect.mapError(internalFailure(operation)),
@@ -2884,9 +2884,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     ) {
       const operation = "ledger attach child to reservation";
 
-      const validated = yield* Schema.decodeUnknownEffect(
-        Schema.toType(AttachChildToReservationRequest),
-      )(request).pipe(Effect.mapError(internalFailure(operation)));
+      const validated = yield* Schema.decodeEffect(Schema.toType(AttachChildToReservationRequest))(
+        request,
+      ).pipe(Effect.mapError(internalFailure(operation)));
 
       yield* hitFailpoint("ledger:child-attach:before", operation);
 
@@ -2963,9 +2963,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: BeginChildBudgetReleaseRequest) {
     const operation = "ledger begin child budget release";
 
-    const validated = yield* Schema.decodeUnknownEffect(
-      Schema.toType(BeginChildBudgetReleaseRequest),
-    )(request).pipe(Effect.mapError(internalFailure(operation)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(BeginChildBudgetReleaseRequest))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
 
     const accountingJson = yield* encodePersistedJsonText(validated.accounting).pipe(
       Effect.mapError(internalFailure(operation)),
@@ -3040,7 +3040,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: ReleaseChildBudgetRequest) {
     const operation = "ledger release child budget";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ReleaseChildBudgetRequest))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(ReleaseChildBudgetRequest))(
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -3158,9 +3158,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request) {
     const operation = "ledger read abort intent";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(AbortIntentRequest))(
-      request,
-    ).pipe(Effect.mapError(internalFailure(operation)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(AbortIntentRequest))(request).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
 
     const recordId = submissionAbortRecordId(validated.submissionId);
 
@@ -3229,7 +3229,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   )(function* (request: RecoverySnapshotRequest) {
     const operation = "ledger load recovery snapshot";
 
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(RecoverySnapshotRequest))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(RecoverySnapshotRequest))(
       request,
     ).pipe(Effect.mapError(internalFailure(operation)));
 
@@ -3278,7 +3278,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               ),
             );
 
-            const settlementId = yield* Schema.decodeUnknownEffect(
+            const settlementId = yield* Schema.decodeEffect(
               SettlementReservationSnapshot.fields.settlementId,
             )(reservationRow.value.settlement_id).pipe(Effect.mapError(internalFailure(operation)));
 

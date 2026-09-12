@@ -58,7 +58,7 @@ export const createVoiceSession = Effect.fn("createVoiceSession")(
       offset += chunk.length;
     }
 
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(VoiceAnswer))(
+    return yield* Schema.decodeEffect(Schema.fromJsonString(VoiceAnswer))(
       new TextDecoder().decode(body),
     );
   },
@@ -71,7 +71,7 @@ export const createVoiceSession = Effect.fn("createVoiceSession")(
 export const serveVoice = Effect.fn("serveVoice")(
   function* (request: Request, session: AccountSession) {
     const body = yield* Effect.tryPromise({ try: () => request.text(), catch: unavailable });
-    const offer = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(VoiceOffer))(body);
+    const offer = yield* Schema.decodeEffect(Schema.fromJsonString(VoiceOffer))(body);
     const answer = yield* createVoiceSession(offer, session);
 
     return Response.json(answer, { status: 201, headers: { "cache-control": "no-store" } });

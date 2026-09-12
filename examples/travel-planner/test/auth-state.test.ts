@@ -70,7 +70,7 @@ it("retires app registries and pending requests on signout/account switch while 
       const path = new URL(request.url).pathname;
 
       if (path === "/api/rpc/" || path === "/api/rpc") {
-        const body = Schema.decodeUnknownSync(Schema.fromJsonString(packet))(
+        const body = Schema.decodeSync(Schema.fromJsonString(packet))(
           (await request.text()).trim(),
         );
 

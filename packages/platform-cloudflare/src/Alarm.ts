@@ -545,12 +545,12 @@ export class ThreadMaintenance extends Context.Service<
 
       // A broken disposable index still needs a retry alarm and must not prevent startup.
       const projectionDeadline = projection.pendingDeadline.pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterrupts(cause)
-            ? Effect.failCause(cause)
-            : Effect.logError("Thread projection deadline unavailable", cause).pipe(
-                Effect.as(Option.some(0)),
-              ),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterrupts(cause),
+          (cause) =>
+            Effect.logError("Thread projection deadline unavailable", cause).pipe(
+              Effect.as(Option.some(0)),
+            ),
         ),
       );
 

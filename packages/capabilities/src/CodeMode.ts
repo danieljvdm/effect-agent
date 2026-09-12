@@ -635,7 +635,7 @@ const make = <
     selected: ReadonlyArray<string>,
     options?: { readonly maxBytes?: number | undefined },
   ) {
-    const paths = yield* Schema.decodeUnknownEffect(DescriptionMethods)(selected).pipe(
+    const paths = yield* Schema.decodeEffect(DescriptionMethods)(selected).pipe(
       Effect.mapError(() =>
         CodeModeDescriptionError.make({
           reason: "invalid-selection",
@@ -645,7 +645,7 @@ const make = <
       ),
     );
 
-    const maxBytes = yield* Schema.decodeUnknownEffect(DescriptionByteLimit)(
+    const maxBytes = yield* Schema.decodeEffect(DescriptionByteLimit)(
       options?.maxBytes ?? 16 * 1024,
     ).pipe(
       Effect.mapError(() =>

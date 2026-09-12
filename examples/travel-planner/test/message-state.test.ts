@@ -33,7 +33,7 @@ const snapshot = (
   messages: PlannerSnapshot["messages"] = [],
   queuedMessages: NonNullable<PlannerSnapshot["queuedMessages"]> = [],
 ) =>
-  Schema.decodeUnknownSync(PlannerSnapshot)({
+  Schema.decodeSync(PlannerSnapshot)({
     conversationId,
     messages,
     queuedMessages,
@@ -73,7 +73,7 @@ const setup = () => {
         init,
       );
 
-      const packet = Schema.decodeUnknownSync(Schema.fromJsonString(Packet))(
+      const packet = Schema.decodeSync(Schema.fromJsonString(Packet))(
         (await request.text()).trim(),
       );
 

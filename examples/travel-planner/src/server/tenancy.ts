@@ -8,21 +8,21 @@ export const StorageOwner = Schema.String.check(
 );
 
 export const plannerOwner = (subjectId: string) =>
-  Schema.decodeUnknownEffect(AccountId)(subjectId).pipe(
+  Schema.decodeEffect(AccountId)(subjectId).pipe(
     Effect.map((id) => `account-${id}`),
     Effect.mapError(() => new PlannerError({ code: "invalid", message: "Invalid account." })),
   );
 
 /** Internal object addresses must have a server-assigned owner; corrupt addresses fail closed. */
 export const ownerOfThread = (threadId: string): string =>
-  Schema.decodeUnknownSync(StorageOwner)(threadId.split("--", 1)[0]);
+  Schema.decodeSync(StorageOwner)(threadId.split("--", 1)[0]);
 
 export const privateConversation = (owner: string, conversationId: string) =>
-  Schema.decodeUnknownEffect(StorageOwner)(owner).pipe(
+  Schema.decodeEffect(StorageOwner)(owner).pipe(
     Effect.flatMap((owner) =>
-      Schema.decodeUnknownEffect(
-        Schema.String.check(Schema.makeFilter((id) => !id.includes("--"))),
-      )(conversationId).pipe(Effect.map((id) => `${owner}--${id}`)),
+      Schema.decodeEffect(Schema.String.check(Schema.makeFilter((id) => !id.includes("--"))))(
+        conversationId,
+      ).pipe(Effect.map((id) => `${owner}--${id}`)),
     ),
     Effect.mapError(() => new PlannerError({ code: "invalid", message: "Invalid conversation." })),
   );

@@ -51,7 +51,7 @@ export const PlannerSettingsStoreLive = Layer.effect(
 
       if (rows[0] === undefined) return defaultPlannerSettings;
 
-      const stored = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(StoredSettings))(
+      const stored = yield* Schema.decodeEffect(Schema.fromJsonString(StoredSettings))(
         rows[0].value,
       ).pipe(Effect.mapError(storageError));
 
@@ -59,7 +59,7 @@ export const PlannerSettingsStoreLive = Layer.effect(
     });
 
     const save = Effect.fn("PlannerSettingsStore.save")(function* (candidate: PlannerSettings) {
-      const settings = yield* Schema.decodeUnknownEffect(PlannerSettings)(candidate).pipe(
+      const settings = yield* Schema.decodeEffect(PlannerSettings)(candidate).pipe(
         Effect.mapError(
           () => new PlannerError({ code: "invalid", message: "Invalid model preferences." }),
         ),

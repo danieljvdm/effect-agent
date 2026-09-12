@@ -247,7 +247,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
 }) {
   const native = yield* OpenAiClient.OpenAiClient;
 
-  const costLimitMicrousd = yield* Schema.decodeUnknownEffect(ReviewCostLimitMicrousd)(
+  const costLimitMicrousd = yield* Schema.decodeEffect(ReviewCostLimitMicrousd)(
     options.costLimitMicrousd,
   ).pipe(
     Effect.mapError(() =>

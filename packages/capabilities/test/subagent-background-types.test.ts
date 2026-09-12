@@ -1,5 +1,7 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import * as Agent from "@effect-agent/core/Agent";
+import type { AgentRunDispositionError } from "@effect-agent/core/AgentError";
+import type { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { IdempotencyKey, type JoinedToHost, Receipt } from "@effect-agent/core/Receipt";
 import { SubagentGrant } from "@effect-agent/core/SubagentContract";
 import type { WorkerError } from "@effect-agent/core/Worker";
@@ -8,6 +10,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { Context, type Crypto, Effect, type Layer, Schema, SchemaGetter } from "effect";
 import type { Tool } from "effect/unstable/ai";
 import { Toolkit } from "effect/unstable/ai";
+
+import type { SubagentReservations } from "../src/SubagentReservations.ts";
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
@@ -38,6 +42,143 @@ const target = Agent.make("typed-background-child", {
   instructions: () => ChildInstructions,
   toolkit: Toolkit.empty,
 });
+
+const updateTarget = Agent.make("updating-child", {
+  input: Schema.String,
+  output: Schema.String,
+  updates: Schema.Struct({ finding: text }),
+  instructions: "Report findings.",
+  toolkit: Toolkit.empty,
+});
+
+const updateBackground = Subagent.background(updateTarget, { start: true });
+const updateDeclaration = Subagent.make("updating", { target: updateTarget });
+
+const updateLayerProofs = (model: Layer.Layer<Agent.ModelServices>) => {
+  const modelLayer = Subagent.SubagentRuntime.layer(updateDeclaration, model);
+
+  const bindingLayer = Subagent.SubagentRuntime.layer(
+    updateDeclaration,
+    Agent.withModel(updateTarget, model),
+  );
+
+  const proofs: [
+    Assert<
+      Equal<
+        Layer.Services<typeof modelLayer>,
+        Encoder | Decoder | IdGenerator | SubagentReservations
+      >
+    >,
+    Assert<
+      Equal<
+        Layer.Services<typeof bindingLayer>,
+        Encoder | Decoder | IdGenerator | SubagentReservations
+      >
+    >,
+    Assert<Equal<Layer.Error<typeof modelLayer>, never>>,
+    Assert<Equal<Layer.Error<typeof bindingLayer>, never>>,
+  ] = [true, true, true, true];
+
+  return proofs;
+};
+
+const updateTypes: [
+  Assert<Equal<keyof typeof updateBackground.tools, "updating-child_start">>,
+  Assert<typeof updateDeclaration.target extends typeof updateTarget ? true : false>,
+] = [true, true];
+
+const dispositionTarget = Agent.make("disposition-child", {
+  input: Schema.String,
+  output: Schema.String,
+  instructions: "Work and report completion.",
+  toolkit: Toolkit.empty,
+  runDisposition: { schema: text, fromOutput: (output) => output },
+});
+
+const dispositionBackground = Subagent.background(dispositionTarget, {
+  start: true,
+  reportToParent: true,
+});
+
+const dispositionDeclaration = Subagent.make("disposition", {
+  target: dispositionTarget,
+  failure: Schema.String,
+});
+
+const dispositionTypes: [
+  Assert<Equal<keyof typeof dispositionBackground.tools, "disposition-child_start">>,
+  Assert<typeof dispositionDeclaration.target extends typeof dispositionTarget ? true : false>,
+  Assert<Equal<Layer.Services<typeof dispositionBackground.layer>, never>>,
+] = [true, true, true];
+
+const dispositionLayerProofs = (model: Layer.Layer<Agent.ModelServices>) => {
+  const modelLayer = Subagent.SubagentRuntime.layer(dispositionDeclaration, model, {
+    mapChildFailure: (error) => {
+      const dispositionFailure: Assert<
+        Equal<Extract<typeof error, AgentRunDispositionError>, AgentRunDispositionError>
+      > = true;
+
+      return String(dispositionFailure);
+    },
+  });
+
+  const bindingLayer = Subagent.SubagentRuntime.layer(
+    dispositionDeclaration,
+    Agent.withModel(dispositionTarget, model),
+  );
+
+  const proofs: [
+    Assert<
+      Equal<
+        Layer.Services<typeof modelLayer>,
+        Encoder | Decoder | IdGenerator | SubagentReservations
+      >
+    >,
+    Assert<
+      Equal<
+        Layer.Services<typeof bindingLayer>,
+        Encoder | Decoder | IdGenerator | SubagentReservations
+      >
+    >,
+    Assert<Equal<Layer.Error<typeof modelLayer>, never>>,
+    Assert<Equal<Layer.Error<typeof bindingLayer>, never>>,
+  ] = [true, true, true, true];
+
+  return proofs;
+};
+
+const direct = Subagent.background(target, {
+  start: true,
+  followUp: true,
+  inspect: true,
+  reportToParent: true,
+});
+
+const directTypes: [
+  Assert<
+    Equal<
+      keyof typeof direct.tools,
+      | "typed-background-child_start"
+      | "typed-background-child_follow_up"
+      | "typed-background-child_inspect"
+    >
+  >,
+  Assert<Equal<Tool.Parameters<(typeof direct.tools)["typed-background-child_start"]>, string>>,
+  Assert<
+    Equal<
+      Tool.Success<(typeof direct.tools)["typed-background-child_inspect"]>,
+      Subagent.WorkerObservation<Subagent.SubagentResult<typeof text>>
+    >
+  >,
+  Assert<Equal<Layer.Services<typeof direct.layer>, Encoder | Decoder>>,
+  Assert<Equal<Layer.Error<typeof direct.layer>, never>>,
+  Assert<
+    Equal<
+      Tool.Failure<(typeof direct.tools)["typed-background-child_start"]>,
+      Subagent.SubagentProjectionFailure | Subagent.SubagentPrestartDenied | WorkerError
+    >
+  >,
+] = [true, true, true, true, true, true];
 
 const declaration = Subagent.make("research", {
   target,
@@ -89,6 +230,93 @@ const selected = Subagent.background(declaration, { start: true, inspect: true, 
 const onlyList = Subagent.background(declaration, { list: true });
 const onlyStart = Subagent.background(declaration, { start: true });
 const onlyInspect = Subagent.background(declaration, { inspect: true });
+const automatic = Subagent.background(declaration, { start: true, reportToParent: true });
+
+const mapped = Subagent.background(declaration, {
+  start: true,
+  reportToParent: Subagent.reporting(declaration, {
+    input: text,
+    prepare: (report) =>
+      Effect.as(Project, report.outcome === "completed" ? report.result : "failed"),
+  }),
+});
+
+const conditionalReporting = (enabled: boolean) => ({
+  automatic: Subagent.background(declaration, {
+    list: true,
+    reportToParent: enabled ? true : undefined,
+  }),
+  mapped: Subagent.background(declaration, {
+    list: true,
+    reportToParent: enabled
+      ? Subagent.reporting(declaration, {
+          input: text,
+          prepare: (report) =>
+            Effect.as(Project, report.outcome === "completed" ? report.result : "failed"),
+        })
+      : undefined,
+  }),
+});
+
+const conditionalServices: [
+  Assert<
+    Equal<
+      Layer.Services<ReturnType<typeof conditionalReporting>["automatic"]["layer"]>,
+      Project | Encoder | Decoder
+    >
+  >,
+  Assert<
+    Equal<
+      Layer.Services<ReturnType<typeof conditionalReporting>["mapped"]["layer"]>,
+      Project | Encoder | Decoder
+    >
+  >,
+] = [true, true];
+
+const conditionalOperations = (prepare: boolean, project: boolean) => ({
+  start: Subagent.background(declaration, { start: prepare ? true : undefined }),
+  followUp: Subagent.background(declaration, { followUp: prepare ? true : undefined }),
+  inspect: Subagent.background(declaration, { inspect: project ? true : undefined }),
+  mixed: Subagent.background(declaration, {
+    list: true,
+    start: prepare ? true : undefined,
+    inspect: project ? true : undefined,
+  }),
+  disabled: Subagent.background(declaration, {
+    start: undefined,
+    followUp: undefined,
+    inspect: undefined,
+  }),
+});
+
+type ConditionalOperations = ReturnType<typeof conditionalOperations>;
+
+const conditionalOperationServices: [
+  Assert<Equal<Layer.Services<ConditionalOperations["start"]["layer"]>, Prepare | Encoder>>,
+  Assert<Equal<Layer.Services<ConditionalOperations["followUp"]["layer"]>, Prepare | Encoder>>,
+  Assert<
+    Equal<Layer.Services<ConditionalOperations["inspect"]["layer"]>, Project | Encoder | Decoder>
+  >,
+  Assert<
+    Equal<
+      Layer.Services<ConditionalOperations["mixed"]["layer"]>,
+      Prepare | Project | Encoder | Decoder
+    >
+  >,
+  Assert<Equal<Layer.Services<ConditionalOperations["disabled"]["layer"]>, never>>,
+  Assert<Equal<keyof ConditionalOperations["mixed"]["tools"], "research_list">>,
+] = [true, true, true, true, true, true];
+
+const automaticServices: Assert<
+  Equal<Layer.Services<typeof automatic.layer>, Prepare | Project | Encoder | Decoder>
+> = true;
+
+const mappedServices: Assert<
+  Equal<Layer.Services<typeof mapped.layer>, Prepare | Project | Encoder | Decoder>
+> = true;
+
+const automaticErrors: Assert<Equal<Layer.Error<typeof automatic.layer>, never>> = true;
+const automaticKeys: Assert<Equal<keyof typeof automatic.tools, "research_start">> = true;
 const onlySummary = Subagent.background(declaration, { summary: true });
 
 type StartErrors =
@@ -194,13 +422,29 @@ const rejectInvalidCalls = () => {
   void Subagent.cancel(declaration, otherWorker, receipt);
   // @ts-expect-error Unselected operations are not in the Tool record.
   void selected.tools.research_follow_up;
+  // @ts-expect-error Direct definitions expose only selected operations.
+  void direct.tools["typed-background-child_cancel"];
+
+  // @ts-expect-error Direct input parameters retain the target schema.
+  const wrongDirectInput: Tool.Parameters<(typeof direct.tools)["typed-background-child_start"]> =
+    42;
+
+  void wrongDirectInput;
   // @ts-expect-error Models cannot wait through a background tool.
   Subagent.background(declaration, { await: true });
 };
 
 describe("background authoring types", () => {
   it("preserves operation errors, schema services, and selected native Tool names", () => {
+    expect(typeof updateLayerProofs).toBe("function");
+    expect(typeof dispositionLayerProofs).toBe("function");
     expect(proofs.every(Boolean)).toBe(true);
+    expect(directTypes.every(Boolean)).toBe(true);
+    expect(updateTypes.every(Boolean)).toBe(true);
+    expect(dispositionTypes.every(Boolean)).toBe(true);
+    expect(automaticServices && mappedServices && automaticErrors && automaticKeys).toBe(true);
+    expect(conditionalServices.every(Boolean)).toBe(true);
+    expect(conditionalOperationServices.every(Boolean)).toBe(true);
     expect(nestedParameterProof && nestedSuccessProof).toBe(true);
     expect(typeof rejectInvalidCalls).toBe("function");
   });

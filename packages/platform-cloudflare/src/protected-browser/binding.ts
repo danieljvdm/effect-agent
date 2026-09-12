@@ -112,7 +112,7 @@ export const browserRunProtectedBindingLayer = (options: {
             });
 
             sessionId = Redacted.make(
-              Schema.decodeUnknownSync(Schema.String.check(Schema.isUUID()))(acquired.sessionId),
+              Schema.decodeSync(Schema.String.check(Schema.isUUID()))(acquired.sessionId),
             );
             if (!recordingDisabled || signal.aborted || invalid) {
               await runCleanup(terminate);

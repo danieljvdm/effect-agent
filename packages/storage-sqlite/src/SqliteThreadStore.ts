@@ -120,9 +120,9 @@ const makeOffset = Effect.fn("SqliteThreadStore.makeOffset")(function* (
   threadId: ThreadMaterialization["threadId"],
   sequence: number,
 ): Effect.fn.Return<ObservationOffset, ThreadStoreError> {
-  return yield* Schema.decodeUnknownEffect(CanonicalSequence)(sequence).pipe(
+  return yield* Schema.decodeEffect(CanonicalSequence)(sequence).pipe(
     Effect.flatMap((validatedSequence) =>
-      Schema.decodeUnknownEffect(ObservationOffset)(
+      Schema.decodeEffect(ObservationOffset)(
         `${SQLITE_OFFSET_PREFIX}${encodeURIComponent(threadId)}:${validatedSequence}`,
       ),
     ),
@@ -136,7 +136,7 @@ const parseOffset = Effect.fn("SqliteThreadStore.parseOffset")(function* (
 ): Effect.fn.Return<CanonicalSequence, ThreadStoreError> {
   if (offset === undefined) return ZERO_CANONICAL_SEQUENCE;
 
-  const text = yield* Schema.decodeUnknownEffect(OffsetText)(offset).pipe(
+  const text = yield* Schema.decodeEffect(OffsetText)(offset).pipe(
     Effect.mapError((error) => schemaStoreError("decode observation offset", error)),
   );
 
@@ -157,7 +157,7 @@ const parseOffset = Effect.fn("SqliteThreadStore.parseOffset")(function* (
     });
   }
 
-  return yield* Schema.decodeUnknownEffect(CanonicalSequence)(Number(sequenceText)).pipe(
+  return yield* Schema.decodeEffect(CanonicalSequence)(Number(sequenceText)).pipe(
     Effect.mapError((error) => schemaStoreError("decode observation offset", error)),
   );
 });
@@ -210,13 +210,13 @@ const decodeEnvelope = Effect.fn("SqliteThreadStore.decodeEnvelope")(function* (
     ),
   );
 
-  const threadId = yield* Schema.decodeUnknownEffect(CanonicalRecordEnvelope.fields.threadId)(
+  const threadId = yield* Schema.decodeEffect(CanonicalRecordEnvelope.fields.threadId)(
     row.thread_id,
   ).pipe(Effect.mapError((error) => schemaStoreError("decode thread identity", error)));
 
   const offset = yield* makeOffset(threadId, row.sequence);
 
-  const batchId = yield* Schema.decodeUnknownEffect(CanonicalRecordEnvelope.fields.batchId)(
+  const batchId = yield* Schema.decodeEffect(CanonicalRecordEnvelope.fields.batchId)(
     row.batch_id,
   ).pipe(Effect.mapError((error) => schemaStoreError("decode batch identity", error)));
 
@@ -270,7 +270,7 @@ const tailDigestAt = Effect.fn("SqliteThreadStore.tailDigestAt")(function* (
     });
   }
 
-  return yield* Schema.decodeUnknownEffect(Digest)(digests[0]).pipe(
+  return yield* Schema.decodeEffect(Digest)(digests[0]).pipe(
     Effect.mapError((error) => schemaStoreError("decode checkpoint digest", error)),
   );
 });
@@ -511,7 +511,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   const materialize: ThreadStore["Service"]["materialize"] = Effect.fn(
     "SqliteThreadStore.materialize",
   )(function* (request: ThreadMaterialization) {
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ThreadMaterialization))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(ThreadMaterialization))(
       request,
     ).pipe(Effect.mapError((error) => schemaStoreError("validate materialization", error)));
 
@@ -538,9 +538,9 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   const append: ThreadStore["Service"]["append"] = Effect.fn("SqliteThreadStore.append")(function* (
     request: FencedAppendRequest,
   ) {
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(FencedAppendRequest))(
-      request,
-    ).pipe(Effect.mapError((error) => schemaStoreError("validate canonical append", error)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(FencedAppendRequest))(request).pipe(
+      Effect.mapError((error) => schemaStoreError("validate canonical append", error)),
+    );
 
     yield* requireThread(journal, validated.threadId);
 
@@ -559,7 +559,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
       ),
     );
 
-    const rawRequest = yield* Schema.decodeUnknownEffect(RawAppendRequest)({
+    const rawRequest = yield* Schema.decodeEffect(RawAppendRequest)({
       threadId: validated.threadId,
       batchId: validated.batch.batchId,
       batchDigest: tailDigest,
@@ -597,7 +597,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
         return storeError("append canonical batch", error);
       }),
       Effect.flatMap((result) =>
-        Schema.decodeUnknownEffect(AppendResult)(result).pipe(
+        Schema.decodeEffect(AppendResult)(result).pipe(
           Effect.mapError((error) => schemaStoreError("decode append result", error)),
         ),
       ),
@@ -619,7 +619,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   });
 
   const readEffect = Effect.fn("SqliteThreadStore.read")(function* (request: ThreadRead) {
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ThreadRead))(request).pipe(
+    const validated = yield* Schema.decodeEffect(Schema.toType(ThreadRead))(request).pipe(
       Effect.mapError((error) => schemaStoreError("validate thread read", error)),
     );
 
@@ -641,9 +641,9 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   const observeEffect = Effect.fn("SqliteThreadStore.observe")(function* (
     request: ThreadObservation,
   ) {
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ThreadObservation))(
-      request,
-    ).pipe(Effect.mapError((error) => schemaStoreError("validate thread observation", error)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(ThreadObservation))(request).pipe(
+      Effect.mapError((error) => schemaStoreError("validate thread observation", error)),
+    );
 
     yield* requireThread(journal, validated.threadId);
     const initialSequence = yield* parseOffset(validated.threadId, validated.afterOffset);
@@ -678,7 +678,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
 
   const exportThread: ThreadStore["Service"]["export"] = Effect.fn("SqliteThreadStore.export")(
     function* (request: ThreadExportRequest) {
-      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ThreadExportRequest))(
+      const validated = yield* Schema.decodeEffect(Schema.toType(ThreadExportRequest))(
         request,
       ).pipe(Effect.mapError((error) => schemaStoreError("validate thread export", error)));
 
@@ -697,9 +697,9 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
         });
       }
 
-      const tailDigest = yield* Schema.decodeUnknownEffect(Digest)(
-        exported.thread.tail_digest,
-      ).pipe(Effect.mapError((error) => schemaStoreError("decode export tail digest", error)));
+      const tailDigest = yield* Schema.decodeEffect(Digest)(exported.thread.tail_digest).pipe(
+        Effect.mapError((error) => schemaStoreError("decode export tail digest", error)),
+      );
 
       return ThreadExport.make({
         format: "effect-agent/thread@1",
@@ -714,13 +714,13 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   const inspectTail: ThreadStore["Service"]["inspectTail"] = Effect.fn(
     "SqliteThreadStore.inspectTail",
   )(function* (request: ThreadTailRequest) {
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ThreadTailRequest))(
-      request,
-    ).pipe(Effect.mapError((error) => schemaStoreError("validate tail inspection", error)));
+    const validated = yield* Schema.decodeEffect(Schema.toType(ThreadTailRequest))(request).pipe(
+      Effect.mapError((error) => schemaStoreError("validate tail inspection", error)),
+    );
 
     const thread = yield* requireThread(journal, validated.threadId);
 
-    const tailDigest = yield* Schema.decodeUnknownEffect(Digest)(thread.tail_digest).pipe(
+    const tailDigest = yield* Schema.decodeEffect(Digest)(thread.tail_digest).pipe(
       Effect.mapError((error) => schemaStoreError("decode tail digest", error)),
     );
 
@@ -734,7 +734,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
 
   const saveCheckpoint: ThreadCheckpoints["save"] = Effect.fn("SqliteThreadStore.saveCheckpoint")(
     function* (request: SaveCheckpointRequest) {
-      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SaveCheckpointRequest))(
+      const validated = yield* Schema.decodeEffect(Schema.toType(SaveCheckpointRequest))(
         request,
       ).pipe(Effect.mapError((error) => schemaStoreError("validate checkpoint", error)));
 
@@ -785,7 +785,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
 
   const loadCheckpoint: ThreadCheckpoints["load"] = Effect.fn("SqliteThreadStore.loadCheckpoint")(
     function* (request: LoadCheckpointRequest) {
-      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(LoadCheckpointRequest))(
+      const validated = yield* Schema.decodeEffect(Schema.toType(LoadCheckpointRequest))(
         request,
       ).pipe(Effect.mapError((error) => schemaStoreError("validate checkpoint lookup", error)));
 
@@ -837,11 +837,9 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   const saveRecoveryCheckpoint: ThreadRecoveryCheckpoints["save"] = Effect.fn(
     "SqliteThreadStore.saveRecoveryCheckpoint",
   )(function* (request) {
-    const validated = yield* Schema.decodeUnknownEffect(
-      Schema.toType(SaveRecoveryCheckpointRequest),
-    )(request).pipe(
-      Effect.mapError((error) => schemaStoreError("validate recovery checkpoint", error)),
-    );
+    const validated = yield* Schema.decodeEffect(Schema.toType(SaveRecoveryCheckpointRequest))(
+      request,
+    ).pipe(Effect.mapError((error) => schemaStoreError("validate recovery checkpoint", error)));
 
     const checkpointJson = yield* encodeCheckpoint(validated.checkpoint);
 
@@ -861,7 +859,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   const loadRecoveryCheckpoint: ThreadRecoveryCheckpoints["load"] = Effect.fn(
     "SqliteThreadStore.loadRecoveryCheckpoint",
   )(function* (request) {
-    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(LoadCheckpointRequest))(
+    const validated = yield* Schema.decodeEffect(Schema.toType(LoadCheckpointRequest))(
       request,
     ).pipe(
       Effect.mapError((error) => schemaStoreError("validate recovery checkpoint lookup", error)),
@@ -953,7 +951,7 @@ export const storageConfigLayer = (
   options: SqliteStorageOptions,
 ): Layer.Layer<SqliteStorageConfig, SqliteStorageError> =>
   Layer.effect(SqliteStorageConfig)(
-    Schema.decodeUnknownEffect(SqliteStorageConfigValue)({
+    Schema.decodeEffect(SqliteStorageConfigValue)({
       observationPollInterval: options.observationPollInterval ?? 25,
       busyTimeout: options.busyTimeout ?? 5_000,
       ownershipLeaseDuration:

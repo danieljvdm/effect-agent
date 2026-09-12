@@ -319,7 +319,7 @@ const makeCrawl =
             );
           }
 
-          return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(bodyText).pipe(
+          return yield* Schema.decodeEffect(Schema.fromJsonString(schema))(bodyText).pipe(
             Effect.mapError((cause) =>
               protocolError(
                 "Browser Run returned a malformed crawl response",

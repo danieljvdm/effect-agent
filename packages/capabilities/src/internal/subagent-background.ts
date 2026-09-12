@@ -19,9 +19,13 @@ import {
 } from "@effect-agent/core/Worker";
 import {
   SubagentHost,
+  BackgroundReporting,
+  WorkerReportPreparationFailure,
+  type WorkerReporting,
   type WorkerObservation as HostObservation,
 } from "@effect-agent/engine/SubagentHost";
-import { Crypto, Effect, Encoding, type Layer, Option, Schema, Stream } from "effect";
+import type { Scope } from "effect";
+import { Context, Crypto, Effect, Encoding, Layer, Option, Schema, Stream } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import type { SubagentDefineOptions, SubagentPrepareContext } from "../Subagent.ts";
@@ -31,6 +35,7 @@ import {
   SubagentProjectionFailure,
 } from "./subagent-contract.ts";
 import { resolveSubagentPolicy, resolveToolCallAllowance } from "./subagent-policy.ts";
+import { automaticReporting } from "./subagent-reporting.ts";
 import { utf8ByteLength, utf8Bytes } from "./utf8.ts";
 
 export type Declaration<
@@ -163,7 +168,7 @@ const operations = <
     receipt: Receipt,
     operation: WorkerError["operation"],
   ) =>
-    Schema.decodeUnknownEffect(
+    Schema.decodeEffect(
       Receipt.check(Schema.makeFilter((value) => value.threadId === worker.threadId)),
     )(receipt).pipe(
       Effect.mapError(() => WorkerError.make({ operation, reason: "receipt-mismatch" })),
@@ -213,7 +218,7 @@ const operations = <
   });
 
   const validateKey = (key: IdempotencyKey, operation: "start" | "followUp") =>
-    Schema.decodeUnknownEffect(IdempotencyKey)(key).pipe(
+    Schema.decodeEffect(IdempotencyKey)(key).pipe(
       Effect.mapError(() => WorkerError.make({ operation, reason: "idempotency-conflict" })),
     );
 
@@ -290,7 +295,7 @@ const operations = <
       ),
     });
 
-    const validated = yield* Schema.decodeUnknownEffect(WorkerStarted)(started).pipe(
+    const validated = yield* Schema.decodeEffect(WorkerStarted)(started).pipe(
       Effect.mapError(() => WorkerError.make({ operation: "start", reason: "corrupt" })),
     );
 
@@ -359,11 +364,11 @@ const operations = <
       ...(observed.runId === undefined
         ? {}
         : {
-            runId: yield* Schema.decodeUnknownEffect(RunId)(observed.runId).pipe(
+            runId: yield* Schema.decodeEffect(RunId)(observed.runId).pipe(
               Effect.mapError(() => WorkerError.make({ operation, reason: "corrupt" })),
             ),
           }),
-      settlementId: yield* Schema.decodeUnknownEffect(SettlementId)(observed.settlementId).pipe(
+      settlementId: yield* Schema.decodeEffect(SettlementId)(observed.settlementId).pipe(
         Effect.mapError(() => WorkerError.make({ operation, reason: "corrupt" })),
       ),
     };
@@ -434,7 +439,7 @@ const operations = <
   ) {
     const service = yield* host;
 
-    const limit = yield* Schema.decodeUnknownEffect(
+    const limit = yield* Schema.decodeEffect(
       Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100)),
     )(options.limit ?? 20).pipe(
       Effect.mapError(() => WorkerError.make({ operation: "list", reason: "capacity" })),
@@ -447,7 +452,7 @@ const operations = <
       ...(options.after === undefined ? {} : { after: options.after }),
     });
 
-    const validated = yield* Schema.decodeUnknownEffect(WorkerPage)(page).pipe(
+    const validated = yield* Schema.decodeEffect(WorkerPage)(page).pipe(
       Effect.mapError(() => WorkerError.make({ operation: "list", reason: "corrupt" })),
     );
 
@@ -521,13 +526,13 @@ export const summary = <const Name extends string>(
   Effect.gen(function* () {
     const service = yield* host;
 
-    const validated = yield* Schema.decodeUnknownEffect(Worker(declaration))(worker).pipe(
+    const validated = yield* Schema.decodeEffect(Worker(declaration))(worker).pipe(
       Effect.mapError(() => WorkerError.make({ operation: "inspect", reason: "worker-mismatch" })),
     );
 
     const result = yield* service.summary({ worker: validated, target: declaration.target });
 
-    const value = yield* Schema.decodeUnknownEffect(WorkerSummary)(result).pipe(
+    const value = yield* Schema.decodeEffect(WorkerSummary)(result).pipe(
       Effect.mapError(() => WorkerError.make({ operation: "inspect", reason: "corrupt" })),
     );
 
@@ -605,7 +610,7 @@ export const observe = <const Name extends string>(
     Effect.gen(function* () {
       const service = yield* host;
 
-      const validated = yield* Schema.decodeUnknownEffect(Worker(declaration))(worker).pipe(
+      const validated = yield* Schema.decodeEffect(Worker(declaration))(worker).pipe(
         Effect.mapError(() =>
           WorkerError.make({ operation: "observe", reason: "worker-mismatch" }),
         ),
@@ -614,7 +619,7 @@ export const observe = <const Name extends string>(
       const after =
         options.after === undefined
           ? undefined
-          : yield* Schema.decodeUnknownEffect(Schema.Natural)(options.after).pipe(
+          : yield* Schema.decodeEffect(Schema.Natural)(options.after).pipe(
               Effect.mapError(() => WorkerError.make({ operation: "observe", reason: "corrupt" })),
             );
 
@@ -675,6 +680,8 @@ export const cancel = <
 
 /** Opt in to each model-facing operation. Waiting remains programmatic only. */
 export interface BackgroundOptions {
+  /** Deliver a standard completion, or use an optional application input mapper. */
+  readonly reportToParent?: true | WorkerReporting<unknown, unknown>;
   readonly start?: true;
   readonly followUp?: true;
   readonly inspect?: true;
@@ -685,7 +692,7 @@ export interface BackgroundOptions {
   readonly budgetScope?: WorkerBudgetScope;
 }
 
-type Operation = Exclude<keyof BackgroundOptions, "budgetScope">;
+type Operation = Exclude<keyof BackgroundOptions, "budgetScope" | "reportToParent">;
 type Suffix = {
   start: "start";
   followUp: "follow_up";
@@ -821,7 +828,10 @@ type BackgroundToolMap<
   >;
 };
 
-/** Native Tool names and schemas contain precisely the explicitly selected operations. */
+/**
+ * Native Tool names and schemas expose statically guaranteed selections. The handler Layer also
+ * requires services for operations whose conditional flags may enable them at runtime.
+ */
 export type BackgroundTools<
   Name extends string,
   Parameters extends Schema.Top,
@@ -858,10 +868,14 @@ const modelKey = Effect.fn("Subagent.workerToolKey")(function* (operation: "star
     .digest("SHA-256", bytes)
     .pipe(Effect.mapError(() => WorkerError.make({ operation, reason: "unavailable" })));
 
-  return yield* Schema.decodeUnknownEffect(IdempotencyKey)(
-    `worker:${Encoding.encodeHex(digest)}`,
-  ).pipe(Effect.mapError(() => WorkerError.make({ operation, reason: "unavailable" })));
+  return yield* Schema.decodeEffect(IdempotencyKey)(`worker:${Encoding.encodeHex(digest)}`).pipe(
+    Effect.mapError(() => WorkerError.make({ operation, reason: "unavailable" })),
+  );
 });
+
+// Construction-local service keys distinguish projections for co-registered parent versions.
+// These keys are never persisted; worker/run identity and registration digests remain canonical.
+let reportingServiceId = 0;
 
 /**
  * Derive optional native AI Tools and their handler Layer from one immutable declaration.
@@ -882,6 +896,32 @@ export const background = <
   declaration: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
   selected: Selected,
 ) => {
+  const report =
+    selected.reportToParent === true ? automaticReporting(declaration) : selected.reportToParent;
+
+  if (
+    report !== undefined &&
+    (report.delegationId !== declaration.delegationId || report.target !== declaration.target)
+  )
+    throw new TypeError("Background reporting must use the same subagent declaration and target");
+
+  const reportService = Context.Service<WorkerReporting<WorkerReportPreparationFailure>>(
+    `@effect-agent/capabilities/BackgroundReport/${declaration.name}/${reportingServiceId++}`,
+  );
+
+  const descriptor: WorkerReporting<WorkerReportPreparationFailure> | undefined =
+    report === undefined
+      ? undefined
+      : {
+          ...report,
+          prepare: (value) =>
+            Effect.flatMap(Effect.serviceOption(reportService), (service) =>
+              Option.isSome(service)
+                ? service.value.prepare(value)
+                : WorkerReportPreparationFailure.make({ stage: "preparation" }),
+            ),
+        };
+
   const ops = operations(declaration);
   const failure = preparationFailure(declaration.failure);
   const receiptParameters = ReceiptParameters(declaration);
@@ -954,7 +994,7 @@ export const background = <
 
   const chosen = Object.entries(available)
     .filter(([operation]) => selected[operation as Operation] === true)
-    .map(([, tool]) => tool);
+    .map(([, tool]) => tool.annotate(BackgroundReporting, descriptor));
 
   type Tools = BackgroundTools<Name, Parameters, Success, Failure, Selected>;
   // The mapped keys depend on literal selection flags; the runtime filter applies exactly those flags.
@@ -966,7 +1006,13 @@ export const background = <
     | Parameters["DecodingServices"]
     | Output["DecodingServices"]
     | Success["EncodingServices"];
+  type ReportServices<Report> = Report extends true
+    ? Exclude<ProjectServices, Scope.Scope>
+    : Report extends WorkerReporting<infer _E, infer R>
+      ? Exclude<R, Scope.Scope>
+      : never;
   type Services = PrepareServices | ProjectServices;
+  type SelectionServices<Flag, Requirements> = Flag extends true ? Requirements : never;
 
   const build = Effect.gen(function* () {
     const captured = yield* Effect.context<Services>();
@@ -1021,12 +1067,35 @@ export const background = <
   });
 
   type SelectedServices =
-    | (Selected["start"] extends true ? PrepareServices : never)
-    | (Selected["followUp"] extends true ? PrepareServices : never)
-    | (Selected["inspect"] extends true ? ProjectServices : never);
+    | SelectionServices<Selected["start"], PrepareServices>
+    | SelectionServices<Selected["followUp"], PrepareServices>
+    | SelectionServices<Selected["inspect"], ProjectServices>
+    | ReportServices<Selected["reportToParent"]>;
 
   // Unselected handlers are never installed. Only selected operations consume projection services.
-  const layer = toolkit.toLayer(build) as Layer.Layer<
+  const reportingLayer =
+    report === undefined
+      ? Layer.empty
+      : Layer.effect(
+          reportService,
+          Effect.map(
+            Effect.context<Effect.Services<ReturnType<typeof report.prepare>>>(),
+            (context): WorkerReporting<WorkerReportPreparationFailure> => ({
+              ...report,
+              prepare: (value) =>
+                Effect.scoped(Effect.suspend(() => report.prepare(value))).pipe(
+                  Effect.provide(context),
+                  Effect.mapError((error) =>
+                    Schema.is(WorkerReportPreparationFailure)(error)
+                      ? error
+                      : WorkerReportPreparationFailure.make({ stage: "preparation" }),
+                  ),
+                ),
+            }),
+          ),
+        );
+
+  const layer = Layer.merge(toolkit.toLayer(build), reportingLayer) as Layer.Layer<
     Tool.HandlersFor<Tools>,
     never,
     SelectedServices

@@ -1,5 +1,6 @@
 import { PolicyLimit } from "@effect-agent/core/AgentError";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { Update } from "@effect-agent/core/AgentUpdates";
 import {
   AgentId,
   AttemptId,
@@ -12,7 +13,7 @@ import {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core/Identifiers";
-import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { InputMessage } from "@effect-agent/core/Messaging";
 import { IdempotencyKey, Principal } from "@effect-agent/core/Receipt";
 import { ExhaustedLimit } from "@effect-agent/core/RunEvent";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
@@ -224,7 +225,7 @@ export class UserInputRecorded extends Schema.TaggedClass<UserInputRecorded>(
   kind: Schema.Literals(["user", "steering", "follow-up"]),
   runId: Schema.optionalKey(RunId),
   input: PersistedJson,
-  messageAdmission: Schema.optionalKey(MessageAdmission),
+  messageAdmission: Schema.optionalKey(InputMessage),
 }) {}
 
 /** Immutable clock and duration allowance for one logical Run, before any agent execution. */
@@ -766,6 +767,8 @@ export class SubagentLineageRecorded extends Schema.TaggedClass<SubagentLineageR
 }) {}
 
 export const WorkerReportingIntent = Schema.Struct({
+  /** Omitted preserves existing application-mapped reports. */
+  mode: Schema.optionalKey(Schema.Literal("standard")),
   sourceDigests: DefinitionDigests,
   destinationDelegationId: Schema.optionalKey(DelegationId),
 });
@@ -801,6 +804,8 @@ export const WorkerAdmission = Schema.Struct({
   sourceSubmissionId: Schema.optionalKey(SubmissionId),
   /** Enables routed receipt lookup when the delivery is owned by a reporting child. */
   deliveryPrincipal: Schema.optionalKey(Principal),
+  /** Proven framework updates use a separate bounded input-capacity partition. */
+  reportKind: Schema.optionalKey(Schema.Literal("update")),
 });
 
 export type WorkerAdmission = typeof WorkerAdmission.Type;
@@ -843,6 +848,25 @@ export class WorkerReportPrepared extends Schema.TaggedClass<WorkerReportPrepare
     envelope: PersistedJson,
     createdAtMillis: Schema.Natural,
     deadlineAtMillis: Schema.Natural,
+    predecessor: Schema.optionalKey(IdempotencyKey),
+  },
+) {}
+
+/** Accepted update and its optional frozen parent delivery are one atomic canonical fact. */
+export class AgentUpdateEmitted extends Schema.TaggedClass<AgentUpdateEmitted>()(
+  "AgentUpdateEmitted",
+  {
+    update: Update,
+    definitions: DefinitionDigests,
+    delivery: Schema.optionalKey(
+      Schema.Struct({
+        messageId: IdempotencyKey,
+        envelope: PersistedJson,
+        createdAtMillis: Schema.Natural,
+        deadlineAtMillis: Schema.Natural,
+        predecessor: Schema.optionalKey(IdempotencyKey),
+      }),
+    ),
   },
 ) {}
 
@@ -933,6 +957,7 @@ export const CanonicalRecordPayload = Schema.Union([
   WorkerOriginRecorded,
   WorkerInputCompleted,
   WorkerReportPrepared,
+  AgentUpdateEmitted,
   WorkerReportRefused,
   PeerMessagePrepared,
   SubtreeBudgetReserved,

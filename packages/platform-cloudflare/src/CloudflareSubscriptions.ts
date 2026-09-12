@@ -140,7 +140,7 @@ export const makeSubscriptionPartitionAlarmHandler = Effect.fn(
             message: "Ancillary alarm tag mismatch",
           });
 
-        const payload = yield* Schema.decodeUnknownEffect(options.payload)(event.payload).pipe(
+        const payload = yield* Schema.decodeEffect(options.payload)(event.payload).pipe(
           Effect.mapError(() =>
             SubscriptionAlarmProtocolError.make({ message: "Invalid ancillary alarm payload" }),
           ),
@@ -149,10 +149,10 @@ export const makeSubscriptionPartitionAlarmHandler = Effect.fn(
         yield* options.handle({ ...event, payload });
       }).pipe(
         Effect.scoped,
-        Effect.timeout(options.timeoutMillis),
-        Effect.catchTag("TimeoutError", () =>
-          SubscriptionAlarmExtensionError.make({ code: "timeout" }),
-        ),
+        Effect.timeoutOrElse({
+          duration: options.timeoutMillis,
+          orElse: () => SubscriptionAlarmExtensionError.make({ code: "timeout" }),
+        }),
         Effect.provideContext(services),
       ),
   };
@@ -629,7 +629,7 @@ const decodePartitionName = Effect.fn("decodeSubscriptionPartitionName")(functio
     });
   }
 
-  const tuple = yield* Schema.decodeUnknownEffect(
+  const tuple = yield* Schema.decodeEffect(
     Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String])),
   )(name).pipe(
     Effect.mapError(() =>
@@ -639,7 +639,7 @@ const decodePartitionName = Effect.fn("decodeSubscriptionPartitionName")(functio
     ),
   );
 
-  return yield* Schema.decodeUnknownEffect(SourcePartition)({
+  return yield* Schema.decodeEffect(SourcePartition)({
     tenantId: tuple[0],
     address: tuple[1],
   }).pipe(
@@ -860,10 +860,10 @@ const alarmHandler = (limits: SubscriptionLimits) =>
 
           return yield* handler.handle(event).pipe(
             Effect.scoped,
-            Effect.timeout(MAX_ANCILLARY_ALARM_MILLIS),
-            Effect.catchTag("TimeoutError", () =>
-              SubscriptionAlarmExtensionError.make({ code: "timeout" }),
-            ),
+            Effect.timeoutOrElse({
+              duration: MAX_ANCILLARY_ALARM_MILLIS,
+              orElse: () => SubscriptionAlarmExtensionError.make({ code: "timeout" }),
+            }),
           );
         }
         if (event.id !== SUBSCRIPTION_ALARM_ID) {
@@ -884,13 +884,13 @@ const alarmHandler = (limits: SubscriptionLimits) =>
         yield* alarmControl.prearm((yield* Clock.currentTimeMillis) + limits.retryMillis);
 
         const pass = yield* driver.runDue.pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterrupts(cause)
-              ? Effect.failCause(cause)
-              : Clock.currentTimeMillis.pipe(
-                  Effect.flatMap((time) => alarmControl.prearm(time + limits.retryMillis)),
-                  Effect.andThen(Effect.failCause(cause)),
-                ),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterrupts(cause),
+            (cause) =>
+              Clock.currentTimeMillis.pipe(
+                Effect.flatMap((time) => alarmControl.prearm(time + limits.retryMillis)),
+                Effect.andThen(Effect.failCause(cause)),
+              ),
           ),
         );
 

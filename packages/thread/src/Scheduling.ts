@@ -205,7 +205,7 @@ const makeManagement = (limits: SchedulingLimits) =>
   Effect.gen(function* () {
     const nowMillis = yield* currentMillis;
 
-    yield* Schema.decodeUnknownEffect(ScheduleInstant)(nowMillis + limits.recoveryPollMillis).pipe(
+    yield* Schema.decodeEffect(ScheduleInstant)(nowMillis + limits.recoveryPollMillis).pipe(
       Effect.mapError(() =>
         ScheduleValidationError.make({
           message: "Scheduling recovery deadline exceeds the supported instant range",
@@ -971,7 +971,7 @@ const corrupt = (operation: string): ScheduleStorageError =>
   ScheduleStorageError.make({ operation, reason: "corrupt" });
 
 const validateLimits = (limits: SchedulingLimits) =>
-  Schema.decodeUnknownEffect(SchedulingLimits)(limits).pipe(
+  Schema.decodeEffect(SchedulingLimits)(limits).pipe(
     Effect.mapError((error) =>
       ScheduleValidationError.make({ message: `Invalid Scheduling limits: ${error.message}` }),
     ),

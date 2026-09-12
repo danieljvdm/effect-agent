@@ -27,7 +27,7 @@ const inspector = Effect.fn("heap.inspector")(function* (url: string, method: st
     .runString(
       (text) =>
         Effect.gen(function* () {
-          const message = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Message))(text);
+          const message = yield* Schema.decodeEffect(Schema.fromJsonString(Message))(text);
 
           if (message.id !== 1) return;
           if (message.error)

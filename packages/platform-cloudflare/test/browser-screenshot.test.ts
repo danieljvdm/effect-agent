@@ -399,10 +399,9 @@ describe("Browser Run PNG screenshot adapter", () => {
 
     const beforeDefect = trackedChunks([new Uint8Array([137, 80, 78, 71])]);
 
-    const defect = await Effect.runPromise(
+    const defect = await Effect.runPromiseExit(
       captureEffect(makeClient(() => Effect.succeed(pngResponse(beforeDefect.stream)))).pipe(
         Effect.andThen(Effect.die("defect after capture")),
-        Effect.exit,
       ),
     );
 

@@ -243,7 +243,10 @@ const makeHarness = Effect.fn(function* (
   const deliveries = Context.get(shared, MessageDeliveryStore);
   const ledger = Context.get(shared, SubmissionLedger);
 
-  const seed = Effect.fn(function* (threadId: ThreadId, definition: typeof source) {
+  const seed = Effect.fn(function* (
+    threadId: ThreadId,
+    definition: typeof source | typeof destination,
+  ) {
     const receipt = yield* runtime.submit(
       { definition },
       { text: "seed" },

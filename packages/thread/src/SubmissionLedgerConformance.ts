@@ -7,12 +7,13 @@ import {
   ToolCallId,
   DelegationId,
 } from "@effect-agent/core/Identifiers";
-import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { InputMessage, MessageAdmission } from "@effect-agent/core/Messaging";
 import {
   SubagentDelegationCaps,
   SubagentGrant,
   SubagentReservationAmounts,
 } from "@effect-agent/core/SubagentContract";
+import { WorkerCompletion, WorkerUpdate } from "@effect-agent/core/Worker";
 import type { Crypto } from "effect";
 import { Clock, DateTime, Duration, Effect, Option, Result, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
@@ -244,7 +245,7 @@ const settlementReservation = Effect.fn("SubmissionLedgerConformance.settlementR
   function* (options: ReservationOptions) {
     const settlementId = submissionSettlementId(options.submissionId);
 
-    const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+    const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)(
       SubmissionSettled.make({
         submissionId: options.submissionId,
         settlementId,
@@ -343,14 +344,12 @@ const conformanceCase = (
         ),
       ),
     expectSome: (description, option) =>
-      Option.isSome(option)
-        ? Effect.succeed(option.value)
-        : Effect.fail(
-            SubmissionLedgerConformanceViolation.make({
-              caseName: name,
-              message: `Expected a value but found none: ${description}`,
-            }),
-          ),
+      Effect.fromOption(option, () =>
+        SubmissionLedgerConformanceViolation.make({
+          caseName: name,
+          message: `Expected a value but found none: ${description}`,
+        }),
+      ),
   }).pipe(Effect.withSpan(`SubmissionLedgerConformance.${name}`)),
 });
 
@@ -777,7 +776,7 @@ const messageAdmissionIdentity = conformanceCase(
         { text: "hello" },
       );
 
-      const metadata = Schema.decodeUnknownSync(MessageAdmission)({
+      const metadata = Schema.decodeSync(MessageAdmission)({
         schemaVersion: 1,
         message: { ownerThreadId: "peer-source", messageId: "peer-message" },
         peerName: "reviewer",
@@ -796,14 +795,14 @@ const messageAdmissionIdentity = conformanceCase(
 
       yield* ensure(
         saved.messageAdmission !== undefined &&
-          Schema.toEquivalence(MessageAdmission)(saved.messageAdmission, metadata),
+          Schema.toEquivalence(InputMessage)(saved.messageAdmission, metadata),
         "Peer sender and return address must survive lookup without becoming application input",
       );
       const recovery = yield* recoverySnapshot(admitted.submissionId);
 
       yield* ensure(
         recovery.submission.messageAdmission !== undefined &&
-          Schema.toEquivalence(MessageAdmission)(recovery.submission.messageAdmission, metadata),
+          Schema.toEquivalence(InputMessage)(recovery.submission.messageAdmission, metadata),
         "Recovery must retain peer provenance",
       );
 
@@ -833,6 +832,187 @@ const messageAdmissionIdentity = conformanceCase(
         yield* ensure(
           isAdmissionConflict(conflict),
           "Peer provenance changes must produce AdmissionConflict",
+        );
+      }
+    }),
+);
+
+const workerUpdateIdentity = conformanceCase(
+  "retains framework updates separately and rejects changed same-key metadata",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      const base = yield* admissionRequest(
+        decodeThreadId("ledger-conformance-update"),
+        "update-message",
+        { text: "original application input" },
+      );
+
+      const metadata = Schema.decodeSync(WorkerUpdate)({
+        _tag: "WorkerUpdate",
+        schemaVersion: 1,
+        worker: {
+          schemaVersion: 1,
+          delegationId: "research",
+          targetAgentId: "child",
+          threadId: "child-thread",
+        },
+        update: {
+          schemaVersion: 1,
+          agentId: "child",
+          threadId: "child-thread",
+          runId: "child-run",
+          updateId: "finding",
+          sequence: 1,
+          value: { finding: "partial" },
+        },
+      });
+
+      const admitted = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, messageAdmission: metadata }),
+      );
+
+      const saved = yield* expectSome(
+        "update admission lookup",
+        yield* lookupById(admitted.submissionId),
+      );
+
+      yield* ensure(
+        saved.messageAdmission !== undefined &&
+          Schema.toEquivalence(InputMessage)(saved.messageAdmission, metadata),
+        "Update identity and value must survive lookup",
+      );
+      yield* ensure(
+        Schema.toEquivalence(PersistedJson)(saved.inputPayload, base.inputPayload),
+        "Framework update must not replace application input",
+      );
+      const recovery = yield* recoverySnapshot(admitted.submissionId);
+
+      yield* ensure(
+        recovery.submission.messageAdmission !== undefined &&
+          Schema.toEquivalence(InputMessage)(recovery.submission.messageAdmission, metadata),
+        "Recovery must retain update provenance",
+      );
+
+      const replay = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, messageAdmission: metadata }),
+      );
+
+      yield* ensure(
+        replay.replayed && replay.receiptId === admitted.receiptId,
+        "Identical update retries must reuse the original receipt",
+      );
+      for (const changed of [
+        undefined,
+        WorkerUpdate.make({ ...metadata, update: { ...metadata.update, sequence: 2 } }),
+        WorkerUpdate.make({
+          ...metadata,
+          update: { ...metadata.update, value: { finding: "changed" } },
+        }),
+      ]) {
+        const conflict = yield* expectFailure(
+          "changed update metadata",
+          ledger.admit(
+            AdmissionRequest.make({
+              ...base,
+              ...(changed === undefined ? {} : { messageAdmission: changed }),
+            }),
+          ),
+        );
+
+        yield* ensure(
+          isAdmissionConflict(conflict),
+          "Changed update identity or value must conflict",
+        );
+      }
+    }),
+);
+
+const workerCompletionIdentity = conformanceCase(
+  "retains framework completions and rejects same-key changes or omission",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      const base = yield* admissionRequest(
+        decodeThreadId("ledger-conformance-completion"),
+        "completion-message",
+        { text: "hello" },
+      );
+
+      const metadata = Schema.decodeSync(WorkerCompletion)({
+        _tag: "WorkerCompletion",
+        schemaVersion: 1,
+        budgetExhausted: false,
+        report: {
+          _tag: "Settled",
+          worker: {
+            schemaVersion: 1,
+            delegationId: "research",
+            targetAgentId: "child",
+            threadId: "child-thread",
+          },
+          receipt: {
+            threadId: "child-thread",
+            submissionId: "child-input",
+            receiptId: "child-receipt",
+            queueSequence: 1,
+          },
+          runId: "child-run",
+          settlementId: "child-settlement",
+          outcome: "completed",
+          result: { answer: "done" },
+        },
+      });
+
+      const admitted = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, messageAdmission: metadata }),
+      );
+
+      const saved = yield* expectSome(
+        "completion admission lookup",
+        yield* lookupById(admitted.submissionId),
+      );
+
+      yield* ensure(
+        saved.messageAdmission !== undefined &&
+          Schema.toEquivalence(InputMessage)(saved.messageAdmission, metadata),
+        "Completion identity and projected result must survive lookup without becoming application input",
+      );
+      const recovery = yield* recoverySnapshot(admitted.submissionId);
+
+      yield* ensure(
+        recovery.submission.messageAdmission !== undefined &&
+          Schema.toEquivalence(InputMessage)(recovery.submission.messageAdmission, metadata),
+        "Recovery must retain completion provenance",
+      );
+
+      const replayed = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, messageAdmission: metadata }),
+      );
+
+      yield* ensure(
+        replayed.replayed && replayed.receiptId === admitted.receiptId,
+        "Identical completion metadata must replay its receipt",
+      );
+      for (const changed of [
+        undefined,
+        WorkerCompletion.make({ ...metadata, budgetExhausted: true }),
+      ]) {
+        const conflict = yield* expectFailure(
+          "different or omitted completion metadata",
+          ledger.admit(
+            AdmissionRequest.make({
+              ...base,
+              ...(changed === undefined ? {} : { messageAdmission: changed }),
+            }),
+          ),
+        );
+
+        yield* ensure(
+          isAdmissionConflict(conflict),
+          "Completion metadata changes must produce AdmissionConflict",
         );
       }
     }),
@@ -994,10 +1174,9 @@ const concurrentAdmissionFifo = conformanceCase(
         yield* admissionRequest(threadId, "fifo-key-2", { step: 2 }),
       ];
 
-      const admitted = yield* Effect.all(
-        requests.map((request) => ledger.admit(request)),
-        { concurrency: "unbounded" },
-      );
+      const admitted = yield* Effect.forEach(requests, (request) => ledger.admit(request), {
+        concurrency: "unbounded",
+      });
 
       const duplicate = yield* admissionRequest(threadId, "fifo-key-dup", { step: 3 });
 
@@ -4366,6 +4545,8 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   admissionIdempotency,
   workerAdmissionIdentity,
   messageAdmissionIdentity,
+  workerCompletionIdentity,
+  workerUpdateIdentity,
   admissionGroupRace,
   admissionGroupSettlement,
   crossPrincipalAdmissionScoping,

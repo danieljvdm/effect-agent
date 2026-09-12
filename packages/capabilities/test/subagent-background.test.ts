@@ -1,7 +1,14 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { AgentId, RunId, SettlementId, ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
+import {
+  AgentId,
+  DelegationId,
+  RunId,
+  SettlementId,
+  ThreadId,
+  ToolCallId,
+} from "@effect-agent/core/Identifiers";
 import { IdempotencyKey, JoinedToHost, Receipt } from "@effect-agent/core/Receipt";
 import {
   BackgroundSpawnTool,
@@ -15,14 +22,27 @@ import {
   WorkerStarted,
 } from "@effect-agent/core/Worker";
 import {
+  BackgroundReporting,
   SubagentHost,
   type StartWorkerRequest,
   type FollowUpWorkerRequest,
-  type WorkerObservation,
+  type WorkerRunReport,
 } from "@effect-agent/engine/SubagentHost";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { Toolkit } from "effect/unstable/ai";
 
@@ -90,7 +110,7 @@ const started = Schema.decodeSync(WorkerStarted)({
 const worker = Schema.decodeSync(Subagent.Worker(delegation))(started.worker);
 const key = Schema.decodeSync(IdempotencyKey)("explicit-start");
 
-const settled: WorkerObservation = {
+const settled: WorkerRunReport["observation"] = {
   _tag: "Settled",
   receipt,
   runId: Schema.decodeSync(RunId)("child-run"),
@@ -121,6 +141,220 @@ const host = (overrides: Partial<SubagentHost["Service"]> = {}): SubagentHost["S
 class ProjectionDenied extends Schema.TaggedError<ProjectionDenied>()("ProjectionDenied", {}) {}
 
 describe("Subagent background authoring", () => {
+  it.effect("derives default background contracts directly from the exact Agent target", () =>
+    Effect.gen(function* () {
+      const background = Subagent.background(target, {
+        start: true,
+        followUp: true,
+        inspect: true,
+        reportToParent: true,
+      });
+
+      const directStarted = WorkerStarted.make({
+        ...started,
+        worker: { ...started.worker, delegationId: Schema.decodeSync(DelegationId)(target.id) },
+      });
+
+      const requests: Array<StartWorkerRequest | FollowUpWorkerRequest> = [];
+
+      const service = host({
+        context: Effect.succeed({
+          ...caller,
+          source: {
+            ...caller.source,
+            _tag: "tool",
+            runId: Schema.decodeSync(RunId)("parent-run"),
+            toolCallId: Schema.decodeSync(ToolCallId)("direct-call"),
+          },
+        }),
+        start: (request) =>
+          Effect.sync(() => {
+            requests.push(request);
+
+            return directStarted;
+          }),
+        followUp: (request) =>
+          Effect.sync(() => {
+            requests.push(request);
+
+            return nextReceipt;
+          }),
+      });
+
+      const toolkit = yield* background.toolkit.pipe(Effect.provide(background.layer));
+
+      const invoke = toolkit
+        .handle("worker-target_start", { amount: "7" })
+        .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(SubagentHost, service));
+
+      expect((yield* invoke)[0]?.result).toEqual(directStarted);
+      yield* toolkit
+        .handle("worker-target_follow_up", {
+          worker: directStarted.worker,
+          parameters: { amount: "9" },
+        })
+        .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(SubagentHost, service));
+
+      const observed = yield* toolkit
+        .handle("worker-target_inspect", {
+          worker: directStarted.worker,
+          receipt,
+        })
+        .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(SubagentHost, service));
+
+      expect(observed[0]?.result).toMatchObject({
+        outcome: "completed",
+        result: { output: { answer: 14 }, budgetExhausted: true },
+      });
+      expect(requests.map((request) => request.encodedInput)).toEqual([
+        { amount: "7" },
+        { amount: "9" },
+      ]);
+      expect(requests.every((request) => request.target === target)).toBe(true);
+
+      const descriptor = Context.get(
+        background.tools["worker-target_start"].annotations,
+        BackgroundReporting,
+      );
+
+      if (descriptor === undefined) return yield* Effect.die("Missing reporting descriptor");
+      expect(descriptor.target).toBe(target);
+
+      const prepared = yield* descriptor
+        .prepare({
+          worker: directStarted.worker,
+          context: caller,
+          observation: settled,
+        })
+        .pipe(Effect.provide(background.layer));
+
+      expect(prepared.message?.report).toMatchObject({
+        outcome: "completed",
+        result: { output: { answer: "14" }, budgetExhausted: true },
+      });
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it("rejects reporting from another version of the same direct Agent identity", () => {
+    const otherVersion = Agent.make("worker-target", {
+      input: target.input,
+      output: target.output,
+      toolkit: Toolkit.empty,
+      instructions: "A different version.",
+    });
+
+    const reporting = Subagent.reporting(Subagent.make("worker-target", { target: otherVersion }), {
+      input: Schema.String,
+      prepare: () => Effect.succeed("done"),
+    });
+
+    expect(() => Subagent.background(target, { start: true, reportToParent: reporting })).toThrow(
+      "same subagent declaration and target",
+    );
+  });
+
+  it.effect("isolates versioned report projections and closes their scoped resources", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let released = 0;
+
+        const version = (label: string) =>
+          Subagent.background(
+            Subagent.make("research", {
+              target,
+              success: Schema.String,
+              projectResult: () =>
+                Effect.acquireRelease(Effect.succeed(label), () =>
+                  Effect.sync(() => {
+                    released++;
+                  }),
+                ),
+            }),
+            { start: true, reportToParent: true },
+          );
+
+        const first = version("first");
+        const second = version("second");
+        const services = yield* Layer.build(Layer.merge(first.layer, second.layer));
+
+        for (const [background, label] of [
+          [first, "first"],
+          [second, "second"],
+        ] as const) {
+          const descriptor = Context.get(
+            background.tools.research_start.annotations,
+            BackgroundReporting,
+          );
+
+          if (descriptor === undefined) return yield* Effect.die("Missing reporting descriptor");
+
+          const prepared = yield* descriptor
+            .prepare({ worker, context: caller, observation: settled })
+            .pipe(Effect.provide(services));
+
+          expect(prepared.message?.report).toMatchObject({ outcome: "completed", result: label });
+        }
+        expect(released).toBe(2);
+        expect(
+          Context.get(
+            Subagent.background(delegation, { start: true }).tools.research_start.annotations,
+            BackgroundReporting,
+          ),
+        ).toBeUndefined();
+      }),
+    ),
+  );
+
+  it.effect("bounds the encoded automatic projection before creating a completion", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const background = Subagent.background(
+          Subagent.make("research", {
+            ...delegation,
+            policy: Subagent.SubagentPolicy.make({
+              maxChildren: 1,
+              maxConcurrency: 1,
+              maxTurns: 1,
+              maxToolCalls: 1,
+              maxDuration: "1 second",
+              maxResultBytes: 1,
+            }),
+          }),
+          { start: true, reportToParent: true },
+        );
+
+        const descriptor = Context.get(
+          background.tools.research_start.annotations,
+          BackgroundReporting,
+        );
+
+        if (descriptor === undefined) return yield* Effect.die("Missing reporting descriptor");
+
+        const refused = yield* descriptor
+          .prepare({ worker, context: caller, observation: settled })
+          .pipe(Effect.provide(background.layer), Effect.flip);
+
+        expect(refused).toMatchObject({
+          _tag: "WorkerReportPreparationFailure",
+          stage: "projection",
+        });
+      }),
+    ),
+  );
+
+  it("rejects an optional mapper belonging to another declaration", () => {
+    const other = Subagent.make("other", { target });
+
+    const reporting = Subagent.reporting(other, {
+      input: Schema.String,
+      prepare: () => Effect.succeed("done"),
+    });
+
+    expect(() =>
+      Subagent.background(delegation, { start: true, reportToParent: reporting }),
+    ).toThrow("same subagent declaration and target");
+  });
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
   it.effect(
     "resolves captured target policy after preparation and applies only explicit declaration narrowing",

@@ -91,7 +91,7 @@ export const TripRepositoryLive = Layer.effect(
     yield* failpoint.hit("schema:after");
 
     const decodeConversation = (value: string) =>
-      Schema.decodeUnknownEffect(Schema.fromJsonString(StoredConversation))(value).pipe(
+      Schema.decodeEffect(Schema.fromJsonString(StoredConversation))(value).pipe(
         Effect.map((stored) => stored.conversation),
         Effect.mapError(storageError),
       );
@@ -138,7 +138,7 @@ export const TripRepositoryLive = Layer.effect(
     });
 
     const decodeTrip = (value: string) =>
-      Schema.decodeUnknownEffect(Schema.fromJsonString(StoredTrip))(value).pipe(
+      Schema.decodeEffect(Schema.fromJsonString(StoredTrip))(value).pipe(
         Effect.map((stored) => stored.trip),
         Effect.mapError(storageError),
       );
@@ -152,7 +152,7 @@ export const TripRepositoryLive = Layer.effect(
 
       if (rows[0] === undefined) return null;
 
-      return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(StoredPublication))(
+      return yield* Schema.decodeEffect(Schema.fromJsonString(StoredPublication))(
         rows[0].value,
       ).pipe(
         Effect.map((stored) => stored.site),
@@ -200,7 +200,7 @@ export const TripRepositoryLive = Layer.effect(
         );
 
       // Older trips get their own conversation without rewriting the original shared log.
-      return yield* Schema.decodeUnknownEffect(ConversationId)(rows[0]?.value ?? `trip-${id}`).pipe(
+      return yield* Schema.decodeEffect(ConversationId)(rows[0]?.value ?? `trip-${id}`).pipe(
         Effect.mapError(storageError),
       );
     });
@@ -228,7 +228,7 @@ export const TripRepositoryLive = Layer.effect(
             )
               return yield* conflict();
 
-            const next = yield* Schema.decodeUnknownEffect(Trip)({
+            const next = yield* Schema.decodeEffect(Trip)({
               title: request.title,
               destination: request.destination,
               summary: request.summary,
@@ -286,9 +286,9 @@ export const TripRepositoryLive = Layer.effect(
               );
 
             if (previous[0] !== undefined) {
-              const stored = yield* Schema.decodeUnknownEffect(
-                Schema.fromJsonString(StoredPublication),
-              )(previous[0].value).pipe(Effect.mapError(storageError));
+              const stored = yield* Schema.decodeEffect(Schema.fromJsonString(StoredPublication))(
+                previous[0].value,
+              ).pipe(Effect.mapError(storageError));
 
               if (stored.site.commitId !== site.commitId) return yield* conflict();
 

@@ -37,7 +37,7 @@ export const doMemoryStoreLayerWithFailpoints = (
   limits: DoMemoryStorageLimits = defaultDoMemoryStorageLimits,
 ) =>
   Layer.unwrap(
-    Schema.decodeUnknownEffect(DoMemoryStorageLimits)(limits).pipe(
+    Schema.decodeEffect(DoMemoryStorageLimits)(limits).pipe(
       Effect.mapError(() =>
         MemoryStorageError.make({ operation: "memory storage limits", reason: "invalid-input" }),
       ),

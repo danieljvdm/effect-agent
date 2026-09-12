@@ -12,6 +12,7 @@ import {
 import type { AgentInputError, AgentOutputError, AgentRunDispositionError } from "./AgentError.ts";
 import { AgentPolicy, type AgentPolicyInput } from "./AgentPolicy.ts";
 import { AgentId } from "./Identifiers.ts";
+import { type UpdateToolkit, withUpdateTool } from "./internal/agent-updates.ts";
 import type { Configuration } from "./ToolExposure.ts";
 
 /** Prompt input produced directly or by an Effect that preserves its failure and requirements. */
@@ -113,9 +114,12 @@ export interface Definition<
   ToolkitValue extends Toolkit.Any,
   RunDispositionValue = undefined,
   InputPromptValue = undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 > {
   /** Stable agent identity; changing it creates a distinct definition identity. */
   readonly id: AgentId;
+  /** Canonical Schema for intermediate updates emitted by this Agent. */
+  readonly updates?: UpdatesSchema;
   /** Canonical schema used to decode and encode run input. */
   readonly input: InputSchema;
   /** Canonical schema used to decode the final model output. */
@@ -150,7 +154,9 @@ export interface DefinitionOptions<
     | undefined = undefined,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 > {
+  readonly updates?: UpdatesSchema;
   readonly input: InputSchema;
   readonly output: OutputSchema;
   readonly instructions: Instructions;
@@ -173,7 +179,8 @@ type AnyDefinitionShape = Definition<
   unknown,
   Toolkit.Any,
   RunDispositionDeclaration<never, Schema.Top> | undefined,
-  unknown
+  unknown,
+  Schema.Top | undefined
 >;
 
 /** Immutable pairing of an agent definition with its native model Layer. */
@@ -256,6 +263,21 @@ type RunDispositionSchemaOf<DefinitionValue extends AnyDefinition> = [
     ? DispositionSchema
     : never;
 
+/** Literal Agent ID, retained by Agent.make. */
+export type Name<A extends AnyDefinition | Any> = DefinitionOf<A>["id"] extends AgentId &
+  (infer N extends string)
+  ? N
+  : string;
+
+/** Declared update Schema, or never for Agents without updates. */
+export type UpdatesSchema<A extends AnyDefinition | Any> = Exclude<
+  DefinitionOf<A>["updates"],
+  undefined
+>;
+
+/** Decoded intermediate update value. */
+export type Update<A extends AnyDefinition | Any> = UpdatesSchema<A>["Type"];
+
 /** Decoded input type of a definition or binding. */
 export type Input<AgentValue extends AnyDefinition | Any> =
   DefinitionOf<AgentValue>["input"]["Type"];
@@ -299,6 +321,10 @@ export type Tools<AgentValue extends AnyDefinition | Any> = Toolkit.Tools<
   DefinitionOf<AgentValue>["toolkit"]
 >;
 
+type ApplicationTools<A extends AnyDefinition> = [UpdatesSchema<A>] extends [never]
+  ? Tools<A>
+  : Omit<Tools<A>, "emit_update">;
+
 type ToolMapValues<ToolMap extends Record<string, Tool.Any>> = ToolMap extends unknown
   ? ToolMap[keyof ToolMap]
   : never;
@@ -312,8 +338,8 @@ export type DefinitionRequirements<DefinitionValue extends AnyDefinition> =
     ?
         | EffectServices<InstructionEffect<DefinitionValue["instructions"], Input<DefinitionValue>>>
         | EffectServices<InputPromptEffect<DefinitionValue["inputPrompt"], Input<DefinitionValue>>>
-        | Tool.HandlersFor<Tools<DefinitionValue>>
-        | Tool.HandlerServices<ToolUnion<DefinitionValue>>
+        | Tool.HandlersFor<ApplicationTools<DefinitionValue>>
+        | Tool.HandlerServices<ToolMapValues<ApplicationTools<DefinitionValue>>>
         // The interpreter canonically re-encodes decoded Tool parameters before recording them.
         | Tool.ParametersSchema<ToolUnion<DefinitionValue>>["EncodingServices"]
         | Tool.SuccessSchema<ToolUnion<DefinitionValue>>["DecodingServices"]
@@ -321,6 +347,8 @@ export type DefinitionRequirements<DefinitionValue extends AnyDefinition> =
         | DefinitionValue["input"]["EncodingServices"]
         | DefinitionValue["output"]["DecodingServices"]
         | DefinitionValue["output"]["EncodingServices"]
+        | UpdatesSchema<DefinitionValue>["DecodingServices"]
+        | UpdatesSchema<DefinitionValue>["EncodingServices"]
         | RunDispositionSchemaOf<DefinitionValue>["DecodingServices"]
         | RunDispositionSchemaOf<DefinitionValue>["EncodingServices"]
     : never;
@@ -350,21 +378,24 @@ export type Failure<AgentValue extends AnyDefinition | Any> =
 
 /** Validate an agent ID and return a shallowly frozen, model-agnostic definition. */
 export function make<
+  const Name extends string,
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
   Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
   ToolkitValue extends Toolkit.Any,
   DispositionSchema extends Schema.Top,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 >(
-  id: string,
+  id: Name,
   options: DefinitionOptions<
     InputSchema,
     OutputSchema,
     Instructions,
     ToolkitValue,
     RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>,
-    InputPromptValue
+    InputPromptValue,
+    UpdatesSchema
   > & {
     readonly runDisposition: RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>;
     readonly inputPrompt: InputPromptValue;
@@ -373,25 +404,30 @@ export function make<
   InputSchema,
   OutputSchema,
   Instructions,
-  ToolkitValue,
+  UpdateToolkit<ToolkitValue, NoInfer<UpdatesSchema>>,
   RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>,
-  InputPromptValue
->;
+  InputPromptValue,
+  NoInfer<UpdatesSchema>
+> & { readonly id: AgentId & Name };
 
 export function make<
+  const Name extends string,
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
   Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
   ToolkitValue extends Toolkit.Any,
   DispositionSchema extends Schema.Top,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 >(
-  id: string,
+  id: Name,
   options: DefinitionOptions<
     InputSchema,
     OutputSchema,
     Instructions,
     ToolkitValue,
-    RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>
+    RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>,
+    undefined,
+    UpdatesSchema
   > & {
     readonly runDisposition: RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>;
     readonly inputPrompt?: undefined;
@@ -400,47 +436,79 @@ export function make<
   InputSchema,
   OutputSchema,
   Instructions,
-  ToolkitValue,
-  RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>
->;
+  UpdateToolkit<ToolkitValue, NoInfer<UpdatesSchema>>,
+  RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>,
+  undefined,
+  NoInfer<UpdatesSchema>
+> & { readonly id: AgentId & Name };
 
 export function make<
+  const Name extends string,
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
   Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
   ToolkitValue extends Toolkit.Any,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 >(
-  id: string,
+  id: Name,
   options: DefinitionOptions<
     InputSchema,
     OutputSchema,
     Instructions,
     ToolkitValue,
     undefined,
-    InputPromptValue
+    InputPromptValue,
+    UpdatesSchema
   > & {
     readonly inputPrompt: InputPromptValue;
     readonly runDisposition?: undefined;
   },
-): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue, undefined, InputPromptValue>;
+): Definition<
+  InputSchema,
+  OutputSchema,
+  Instructions,
+  UpdateToolkit<ToolkitValue, NoInfer<UpdatesSchema>>,
+  undefined,
+  InputPromptValue,
+  NoInfer<UpdatesSchema>
+> & { readonly id: AgentId & Name };
 
 export function make<
+  const Name extends string,
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
   Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
   ToolkitValue extends Toolkit.Any,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 >(
-  id: string,
-  options: DefinitionOptions<InputSchema, OutputSchema, Instructions, ToolkitValue> & {
+  id: Name,
+  options: DefinitionOptions<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    ToolkitValue,
+    undefined,
+    undefined,
+    UpdatesSchema
+  > & {
     readonly inputPrompt?: undefined;
     readonly runDisposition?: undefined;
   },
-): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue>;
+): Definition<
+  InputSchema,
+  OutputSchema,
+  Instructions,
+  UpdateToolkit<ToolkitValue, NoInfer<UpdatesSchema>>,
+  undefined,
+  undefined,
+  NoInfer<UpdatesSchema>
+> & { readonly id: AgentId & Name };
 
 export function make(
   id: string,
   options: {
+    readonly updates?: Schema.Top | undefined;
     readonly input: Schema.Top;
     readonly output: Schema.Top;
     readonly instructions: unknown;
@@ -469,6 +537,7 @@ export function make(
 
   return Object.freeze({
     ...options,
+    toolkit: withUpdateTool(options.toolkit, options.updates),
     policy: AgentPolicy.resolve(options.policy),
     policyOverrides: Object.freeze({ ...options.policy }),
     toolExposure:

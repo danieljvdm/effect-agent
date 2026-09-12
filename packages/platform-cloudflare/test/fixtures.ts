@@ -475,7 +475,7 @@ export const scheduleFailpoint = (ctx: DurableObjectState) => ({
 
             const decodedRows = Schema.decodeUnknownSync(Schema.Array(ScheduleRecordJsonRow))(rows);
 
-            const record = Schema.decodeUnknownSync(Schema.fromJsonString(ScheduleRecord))(
+            const record = Schema.decodeSync(Schema.fromJsonString(ScheduleRecord))(
               decodedRows[0]?.record_json,
             );
 

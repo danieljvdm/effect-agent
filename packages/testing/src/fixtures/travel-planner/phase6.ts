@@ -282,7 +282,7 @@ const gateMarkerFromPrompt = (promptJson: string): string =>
 
 /** A trip whose request text carries the gate marker the gated model waits on. */
 export const phase6GatedTrip = (marker: string): TripRequest =>
-  Schema.decodeUnknownSync(TripRequest)({
+  Schema.decodeSync(TripRequest)({
     request: `Plan a review-only London trip, but wait for the concierge. [gate:${marker}]`,
     origin: "SFO",
     destination: "LHR",
@@ -365,7 +365,7 @@ export const phase6BookingRef = (marker: string): string =>
 
 /** A trip whose request text carries the per-lane booking case marker. */
 export const phase6BookingTrip = (marker: string): TripRequest =>
-  Schema.decodeUnknownSync(TripRequest)({
+  Schema.decodeSync(TripRequest)({
     request: `Book the approved London flight for the traveler. [case:${marker}]`,
     origin: "SFO",
     destination: "LHR",
@@ -444,7 +444,7 @@ const countingGuideLayer = Layer.succeed(
 );
 
 /** The one-candidate research mission of the DC delegation slice. */
-export const phase6ResearchMission = Schema.decodeUnknownSync(ResearchMission)({
+export const phase6ResearchMission = Schema.decodeSync(ResearchMission)({
   request: "Shortlist one September culture city for the DC delegation slice.",
   candidates: ["LHR"],
 });

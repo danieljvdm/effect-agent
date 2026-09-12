@@ -71,7 +71,7 @@ it.each([
   >();
   expectTypeOf<Effect.Error<typeof deployment>>().toEqualTypeOf<EvaluationError>();
 
-  const exit = await Effect.runPromise(
+  const exit = await Effect.runPromiseExit(
     deployment.pipe(
       Effect.provideService(PerformanceOwnership, {
         saveTarget: (saved) =>
@@ -96,7 +96,6 @@ it.each([
             Effect.andThen(mode === "cleanup-failure" ? Effect.fail(fail) : Effect.void),
           ),
       }),
-      Effect.exit,
     ),
   );
 
@@ -123,7 +122,7 @@ it("refuses existing Workers without deployment or deletion", async () => {
     cleanupComplete: false,
   };
 
-  const exit = await Effect.runPromise(
+  const exit = await Effect.runPromiseExit(
     withPerformanceDeployment(target, Effect.void).pipe(
       Effect.provideService(PerformanceOwnership, {
         saveTarget: () =>
@@ -142,7 +141,6 @@ it("refuses existing Workers without deployment or deletion", async () => {
             actions.push("remove");
           }),
       }),
-      Effect.exit,
     ),
   );
 
@@ -413,7 +411,7 @@ it("verifies tool consumption, fresh/warm/recovery, exact identity, timing and f
           audits: final.audits.map((audit) => {
             if (audit !== firstRequest) return audit;
 
-            const request = Schema.decodeUnknownSync(
+            const request = Schema.decodeSync(
               Schema.fromJsonString(
                 Schema.Struct({ input: Schema.Array(Schema.Record(Schema.String, Schema.Json)) }),
               ),

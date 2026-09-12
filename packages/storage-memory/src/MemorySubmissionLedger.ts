@@ -7,7 +7,7 @@ import {
   type ThreadId,
   type SettlementId,
 } from "@effect-agent/core/Identifiers";
-import { MessageAdmission } from "@effect-agent/core/Messaging";
+import { InputMessage } from "@effect-agent/core/Messaging";
 import {
   PersistedJson,
   WorkerAdmission,
@@ -304,7 +304,7 @@ const toSnapshot = (row: SubmissionRow): SubmissionSnapshot =>
     ...(row.messageAdmissionJson === undefined
       ? {}
       : {
-          messageAdmission: Schema.decodeSync(Schema.fromJsonString(MessageAdmission))(
+          messageAdmission: Schema.decodeSync(Schema.fromJsonString(InputMessage))(
             row.messageAdmissionJson,
           ),
         }),
@@ -444,7 +444,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           const messageAdmissionJson =
             request.messageAdmission === undefined
               ? undefined
-              : yield* Schema.encodeEffect(Schema.fromJsonString(MessageAdmission))(
+              : yield* Schema.encodeEffect(Schema.fromJsonString(InputMessage))(
                   request.messageAdmission,
                 ).pipe(
                   Effect.mapError(() => ledgerError("admit", "Invalid message admission metadata")),
@@ -492,10 +492,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                         ),
                     request.workerAdmission,
                   ) ||
-                  !Schema.toEquivalence(Schema.optional(MessageAdmission))(
+                  !Schema.toEquivalence(Schema.optional(InputMessage))(
                     existing.row.messageAdmissionJson === undefined
                       ? undefined
-                      : Schema.decodeSync(Schema.fromJsonString(MessageAdmission))(
+                      : Schema.decodeSync(Schema.fromJsonString(InputMessage))(
                           existing.row.messageAdmissionJson,
                         ),
                     request.messageAdmission,

@@ -62,12 +62,12 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
               ? ProgressResearchScout
               : ResearchScout;
 
-        const worker = yield* Schema.decodeUnknownEffect(Subagent.Worker(declaration))(reference);
+        const worker = yield* Schema.decodeEffect(Subagent.Worker(declaration))(reference);
         const runtime = yield* DurableAgentRuntime;
-        const sourceThreadId = yield* Schema.decodeUnknownEffect(ThreadId)(conversationId);
+        const sourceThreadId = yield* Schema.decodeEffect(ThreadId)(conversationId);
         const owner = ownerOfThread(conversationId);
 
-        const principal = yield* Schema.decodeUnknownEffect(Principal)(owner);
+        const principal = yield* Schema.decodeEffect(Principal)(owner);
 
         const host = yield* runtime.workerHost({ sourceThreadId, principal });
 

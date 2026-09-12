@@ -92,7 +92,7 @@ export class BenchmarkThread extends ThreadObject.make(ThreadObject.layer([]), {
   seed(name: BenchmarkCase) {
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {
-        name = yield* Schema.decodeUnknownEffect(BenchmarkCase)(name);
+        name = yield* Schema.decodeEffect(BenchmarkCase)(name);
         const client = yield* memoryClient(name);
 
         for (let i = 0; i < sourceCount(name); i++) yield* client.change(command(name, i));
@@ -105,7 +105,7 @@ export class BenchmarkThread extends ThreadObject.make(ThreadObject.layer([]), {
   sample(name: BenchmarkCase) {
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {
-        name = yield* Schema.decodeUnknownEffect(BenchmarkCase)(name);
+        name = yield* Schema.decodeEffect(BenchmarkCase)(name);
         const client = yield* memoryClient(name);
         const lookup = name === "get" ? null : candidates(name);
         const key = command(name, 0).key;

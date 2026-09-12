@@ -11,7 +11,7 @@ import {
 const invalid = (message: string) => Result.fail(ScheduleValidationError.make({ message }));
 
 const checkedInstant = (millis: number, label: string) =>
-  Schema.decodeUnknownResult(ScheduleInstant)(millis).pipe(
+  Schema.decodeResult(ScheduleInstant)(millis).pipe(
     Result.mapError(() =>
       ScheduleValidationError.make({
         message: `${label} is outside the supported ScheduleInstant range`,

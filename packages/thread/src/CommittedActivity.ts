@@ -123,11 +123,11 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
   | ThreadNotMaterialized,
   ActivityProcessorStore | ThreadStore | Crypto.Crypto | Exclude<R | RApply, Scope.Scope>
 > {
-  const key = yield* Schema.decodeUnknownEffect(ActivityProcessorKey)(processor.key).pipe(
+  const key = yield* Schema.decodeEffect(ActivityProcessorKey)(processor.key).pipe(
     Effect.mapError(() => invalid("Invalid activity processor key")),
   );
 
-  const limits = yield* Schema.decodeUnknownEffect(ActivityPassLimits)(processor.limits).pipe(
+  const limits = yield* Schema.decodeEffect(ActivityPassLimits)(processor.limits).pipe(
     Effect.mapError(() => invalid("Invalid activity pass limits")),
   );
 
@@ -154,7 +154,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
             .pipe(Effect.interruptible, Effect.timeoutOption(500), Effect.ignore),
       );
 
-      let claim = yield* Schema.decodeUnknownEffect(ActivityClaim)(acquired).pipe(
+      let claim = yield* Schema.decodeEffect(ActivityClaim)(acquired).pipe(
         Effect.mapError(() => invalid("Malformed activity claim")),
       );
 
@@ -169,7 +169,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
         .inspectTail(ThreadTailRequest.make({ threadId: key.threadId }))
         .pipe(
           Effect.flatMap((value) =>
-            Schema.decodeUnknownEffect(ThreadTail)(value).pipe(Effect.mapError(contiguous)),
+            Schema.decodeEffect(ThreadTail)(value).pipe(Effect.mapError(contiguous)),
           ),
         );
 
@@ -198,7 +198,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
 
         if (page.length !== limit) return yield* contiguous();
         for (const rawRecord of page) {
-          const record = yield* Schema.decodeUnknownEffect(Schema.toType(CanonicalRecordEnvelope))(
+          const record = yield* Schema.decodeEffect(Schema.toType(CanonicalRecordEnvelope))(
             rawRecord,
           ).pipe(Effect.mapError(contiguous));
 
@@ -217,7 +217,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
           if (work === null) {
             const output = yield* Effect.scoped(processor.extract(record)).pipe(
               Effect.flatMap((value) =>
-                Schema.decodeUnknownEffect(PersistedJson)(value).pipe(
+                Schema.decodeEffect(PersistedJson)(value).pipe(
                   Effect.mapError(() => invalid("Malformed activity output")),
                 ),
               ),
@@ -237,7 +237,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
             });
           }
 
-          const prepared = yield* Schema.decodeUnknownEffect(PreparedActivity)(work).pipe(
+          const prepared = yield* Schema.decodeEffect(PreparedActivity)(work).pipe(
             Effect.mapError(() => invalid("Malformed prepared activity")),
           );
 
@@ -255,7 +255,7 @@ export const processCommittedActivity = Effect.fn("processCommittedActivity")(fu
             .advance({ claim, workId })
             .pipe(
               Effect.flatMap((value) =>
-                Schema.decodeUnknownEffect(ActivityClaim)(value).pipe(
+                Schema.decodeEffect(ActivityClaim)(value).pipe(
                   Effect.mapError(() => invalid("Malformed activity progress")),
                 ),
               ),

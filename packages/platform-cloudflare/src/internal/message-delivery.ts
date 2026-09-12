@@ -57,6 +57,8 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
     );
 
     return MessageDeliveryStore.of({
+      limits: store.limits,
+      maxStoredValueBytes: store.maxStoredValueBytes,
       insert: (record) =>
         local(
           record.key.ownerThreadId,
@@ -71,12 +73,9 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
       // pass placement validation before the driver may dispatch any of the wave.
       due: (nowMillis, limit, owner) =>
         local(owner, store.due(nowMillis, limit, owner)).pipe(
-          Effect.flatMap((keys) =>
-            keys.every((key) => ownsThread(key.ownerThreadId))
-              ? Effect.succeed(keys)
-              : Effect.fail(
-                  MessageDeliveryError.make({ reason: "validation", operation: "message owner" }),
-                ),
+          Effect.filterOrFail(
+            (keys) => keys.every((key) => ownsThread(key.ownerThreadId)),
+            () => MessageDeliveryError.make({ reason: "validation", operation: "message owner" }),
           ),
         ),
       nextDeadline: (owner) =>

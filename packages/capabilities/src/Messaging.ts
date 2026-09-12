@@ -56,9 +56,9 @@ const dispatch = <Name extends string, Input extends Schema.Top>(
     const service = yield* host;
     const invalid = () => MessagingError.make({ operation, reason: "invalid-input" });
 
-    const idempotencyKey = yield* Schema.decodeUnknownEffect(IdempotencyKey)(
-      options.idempotencyKey,
-    ).pipe(Effect.mapError(invalid));
+    const idempotencyKey = yield* Schema.decodeEffect(IdempotencyKey)(options.idempotencyKey).pipe(
+      Effect.mapError(invalid),
+    );
 
     const encodedInput = yield* Schema.encodeEffect(declaration.target.input)(input).pipe(
       Effect.mapError(invalid),
@@ -67,9 +67,7 @@ const dispatch = <Name extends string, Input extends Schema.Top>(
     const inReplyTo =
       options.inReplyTo === undefined
         ? undefined
-        : yield* Schema.decodeUnknownEffect(MessageRef)(options.inReplyTo).pipe(
-            Effect.mapError(invalid),
-          );
+        : yield* Schema.decodeEffect(MessageRef)(options.inReplyTo).pipe(Effect.mapError(invalid));
 
     const request = {
       ...declaration,
@@ -85,7 +83,7 @@ const dispatch = <Name extends string, Input extends Schema.Top>(
           : yield* service.reply({ ...request, inReplyTo })
         : yield* service.send(request);
 
-    return yield* Schema.decodeUnknownEffect(MessageStatus)(result).pipe(
+    return yield* Schema.decodeEffect(MessageStatus)(result).pipe(
       Effect.mapError(() => MessagingError.make({ operation, reason: "corrupt" })),
     );
   });

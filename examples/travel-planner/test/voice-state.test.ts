@@ -31,9 +31,7 @@ it("starts a fresh conversation, retains stop controls, and clears captions acro
       init,
     );
 
-    const packet = Schema.decodeUnknownSync(Schema.fromJsonString(Packet))(
-      (await request.text()).trim(),
-    );
+    const packet = Schema.decodeSync(Schema.fromJsonString(Packet))((await request.text()).trim());
 
     const exit = {
       _tag: "Failure",

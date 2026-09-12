@@ -16,6 +16,8 @@ import {
   MessageDeliveryStore,
   MessageDeliveryStoreLimits,
   messageDeliveryDeadline,
+  isWorkerUpdateDelivery,
+  messageDeliveryCapacity,
   sameMessageDeliveryIdentity,
   validateMessageDelivery,
 } from "./MessageDelivery.ts";
@@ -179,9 +181,12 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
           return existing;
         }
 
+        const update = isWorkerUpdateDelivery(input);
+        const capacity = messageDeliveryCapacity(config, update);
+
         const counts = yield* query(
           "count",
-          sql`SELECT COUNT(*) AS retained, COALESCE(SUM(CASE WHEN state IN ('pending', 'accepted', 'parked') THEN 1 ELSE 0 END), 0) AS pending FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.key.ownerThreadId}`,
+          sql`SELECT COUNT(*) AS retained, COALESCE(SUM(CASE WHEN state IN ('pending', 'accepted', 'parked') THEN 1 ELSE 0 END), 0) AS pending FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.key.ownerThreadId} AND COALESCE(json_extract(record_json, '$.envelope.messageAdmission._tag'), '') ${update ? sql`= 'WorkerUpdate'` : sql`<> 'WorkerUpdate'`}`,
         );
 
         const count = (yield* Schema.decodeUnknownEffect(Schema.Array(Count))(counts).pipe(
@@ -189,10 +194,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
         ))[0];
 
         if (count === undefined) return yield* corrupt("count");
-        if (
-          count.retained >= config.maxRetainedPerOwner ||
-          count.pending >= config.maxPendingPerOwner
-        )
+        if (count.retained >= capacity.retained || count.pending >= capacity.pending)
           return yield* MessageDeliveryError.make({ reason: "capacity", operation: "insert" });
         yield* query(
           "insert",
@@ -246,6 +248,8 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
   });
 
   return MessageDeliveryStore.of({
+    limits: config,
+    maxStoredValueBytes,
     insert,
     get,
     change,

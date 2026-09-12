@@ -72,7 +72,7 @@ export const runDiagnosticWorker = Effect.fn("diagnostic.runWorker")(function* (
 
   yield* Effect.gen(function* () {
     yield* persist;
-    yield* Schema.decodeUnknownEffect(Schema.Array(DiagnosticCase).check(Schema.isMaxLength(64)))(
+    yield* Schema.decodeEffect(Schema.Array(DiagnosticCase).check(Schema.isMaxLength(64)))(
       diagnosticCases,
     );
     yield* check(
@@ -121,7 +121,7 @@ export const runDiagnosticWorker = Effect.fn("diagnostic.runWorker")(function* (
                   "Diagnostic phase mark limit exceeded",
                 );
 
-                const validated = yield* Schema.decodeUnknownEffect(DiagnosticMark)(mark).pipe(
+                const validated = yield* Schema.decodeEffect(DiagnosticMark)(mark).pipe(
                   Effect.mapError((cause) =>
                     BenchmarkError.make({ message: "Invalid diagnostic mark", cause }),
                   ),
@@ -180,9 +180,9 @@ export const runDiagnosticWorker = Effect.fn("diagnostic.runWorker")(function* (
 if (import.meta.main)
   NodeRuntime.runMain(
     Effect.gen(function* () {
-      const options = yield* Schema.decodeUnknownEffect(
-        Schema.fromJsonString(DiagnosticWorkerOptions),
-      )(yield* Config.string("RUNTIME_DIAGNOSTIC_OPTIONS"));
+      const options = yield* Schema.decodeEffect(Schema.fromJsonString(DiagnosticWorkerOptions))(
+        yield* Config.string("RUNTIME_DIAGNOSTIC_OPTIONS"),
+      );
 
       yield* runDiagnosticWorker(options);
     }).pipe(

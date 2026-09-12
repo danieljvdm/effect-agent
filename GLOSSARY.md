@@ -5,7 +5,7 @@ Use these terms consistently in code, telemetry, and user documentation.
 ## Product concepts
 
 **Agent Definition**  
-An immutable, schema-defined description of an agent: identity, input and output schemas,
+An immutable, schema-defined description of an agent: identity, input, optional update, and output schemas,
 instructions, optional model-visible input projection, toolkit, and execution policy. It contains no mutable thread state, owns no
 live resources. Execution requires native model services supplied through Effect Layers.
 
@@ -217,9 +217,14 @@ A continuing durable child Thread established through a Subagent capability. Its
 identifies the Thread; a separate Receipt identifies each accepted input. Ownership, grants,
 reservations, and reporting persist independently of the launching Run.
 
+**Agent Update**
+An intentional Schema-defined intermediate finding emitted by an Agent, independent of its final
+output. Durable acceptance retains its identity and encoded value before acknowledgement.
+The invocation determines routing; a payload never grants authority or selects its recipient.
+
 **Worker Report**
-One declaration-projected canonical child Run outcome converted to coordinator input by the
-coordinator's existing registration. Joined Receipts do not duplicate reports. Preparation and
+One declaration-projected canonical child Run outcome delivered to its parent as a typed
+framework completion message, or optionally mapped to application input. Joined Receipts do not duplicate reports. Preparation and
 delivery can refuse independently of the child's terminal outcome.
 
 **Peer Message**

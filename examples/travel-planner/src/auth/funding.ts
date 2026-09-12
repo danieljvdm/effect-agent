@@ -196,7 +196,7 @@ export const makeFundingStore = Effect.fn("Funding.store")(function* (
   ) {
     yield* requireAdmin(actor);
 
-    const candidate = yield* Schema.decodeUnknownEffect(GrantFunding)(input).pipe(
+    const candidate = yield* Schema.decodeEffect(GrantFunding)(input).pipe(
       Effect.mapError(() => new FundingError({ message: "Enter a valid funding recipient." })),
     );
 
@@ -204,12 +204,12 @@ export const makeFundingStore = Effect.fn("Funding.store")(function* (
     let label = target;
 
     if (candidate.kind === "email") {
-      target = yield* Schema.decodeUnknownEffect(Email)(target.toLowerCase()).pipe(
+      target = yield* Schema.decodeEffect(Email)(target.toLowerCase()).pipe(
         Effect.mapError(() => new FundingError({ message: "Enter a valid email address." })),
       );
       label = target;
     } else if (candidate.kind === "github") {
-      const login = yield* Schema.decodeUnknownEffect(GithubLogin)(target.replace(/^@/, "")).pipe(
+      const login = yield* Schema.decodeEffect(GithubLogin)(target.replace(/^@/, "")).pipe(
         Effect.mapError(() => new FundingError({ message: "Enter a GitHub username." })),
       );
 
@@ -246,13 +246,11 @@ export const makeFundingStore = Effect.fn("Funding.store")(function* (
       target = String(user.id);
       label = user.login;
     } else {
-      target = yield* Schema.decodeUnknownEffect(AccountId)(target).pipe(
-        Effect.mapError(unavailable),
-      );
+      target = yield* Schema.decodeEffect(AccountId)(target).pipe(Effect.mapError(unavailable));
       label = (yield* read(() => identities(target))).displayName;
     }
 
-    const entry = yield* Schema.decodeUnknownEffect(FundingGrant)({
+    const entry = yield* Schema.decodeEffect(FundingGrant)({
       version: 1,
       kind: candidate.kind,
       target,
@@ -294,7 +292,7 @@ export const makeFundingStore = Effect.fn("Funding.store")(function* (
   ) {
     yield* requireAdmin(actor);
 
-    const entry = yield* Schema.decodeUnknownEffect(RevokeFunding)(input).pipe(
+    const entry = yield* Schema.decodeEffect(RevokeFunding)(input).pipe(
       Effect.mapError(unavailable),
     );
 

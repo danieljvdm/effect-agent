@@ -21,7 +21,7 @@ const PublicUrl = Schema.URLFromString.check(
 /** Model-supplied links never become HTML or server-side fetch targets. */
 export const TravelUrl = Schema.String.check(
   Schema.isMaxLength(2_048),
-  Schema.makeFilter((value) => Option.isSome(Schema.decodeUnknownOption(PublicUrl)(value)), {
+  Schema.makeFilter((value) => Option.isSome(Schema.decodeOption(PublicUrl)(value)), {
     title: "a public HTTPS URL",
   }),
 );

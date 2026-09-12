@@ -65,7 +65,7 @@ const publishedResponse = Effect.fn("publishedResponse")(
       return new Response("Not found", { status: 404 });
     }
 
-    const path = yield* Schema.decodeUnknownEffect(sitePath)({
+    const path = yield* Schema.decodeEffect(sitePath)({
       tripId: parts[2],
       revision: parts[3],
     });

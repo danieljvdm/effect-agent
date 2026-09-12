@@ -17,7 +17,7 @@ export class PlannerAuth extends DurableObject<Cloudflare.Env> {
         const url = new URL(request.url);
 
         if (url.pathname.startsWith("/_internal/funding/")) {
-          const id = yield* Schema.decodeUnknownEffect(AccountId)(
+          const id = yield* Schema.decodeEffect(AccountId)(
             url.pathname.slice("/_internal/funding/".length),
           );
 
@@ -26,7 +26,7 @@ export class PlannerAuth extends DurableObject<Cloudflare.Env> {
 
           return Response.json(yield* store.status(id));
         }
-        const config = yield* Schema.decodeUnknownEffect(AuthConfiguration)(this.env);
+        const config = yield* Schema.decodeEffect(AuthConfiguration)(this.env);
 
         return yield* serveAuth(
           request,

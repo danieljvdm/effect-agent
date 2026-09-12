@@ -605,7 +605,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
 ) => {
   const review = Effect.fn("Reviewer.review")(
     function* (request: ReviewRequest) {
-      const configuration = yield* Schema.decodeUnknownEffect(ReviewContextOptions)({
+      const configuration = yield* Schema.decodeEffect(ReviewContextOptions)({
         compaction: options.compaction ?? "rollover",
         contextTokenLimit: options.contextTokenLimit ?? 48_000,
         researchConcurrency: options.research?.concurrency ?? 2,

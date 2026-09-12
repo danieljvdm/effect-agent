@@ -78,7 +78,7 @@ export class SqlWorkflowDispatchStore {
 
       const put = Effect.fn("SqlWorkflowDispatchStore.put")(
         function* (input: WorkflowDispatchIntent) {
-          const intent = yield* Schema.decodeUnknownEffect(WorkflowDispatchIntent)(input);
+          const intent = yield* Schema.decodeEffect(WorkflowDispatchIntent)(input);
           const encoded = yield* encodeIntent(intent);
 
           yield* sql`
@@ -148,7 +148,7 @@ export class SqlWorkflowDispatchStore {
 
       const scan = Effect.fn("SqlWorkflowDispatchStore.scan")(
         function* (input: WorkflowDispatchScan) {
-          const request = yield* Schema.decodeUnknownEffect(WorkflowDispatchScan)(input);
+          const request = yield* Schema.decodeEffect(WorkflowDispatchScan)(input);
 
           const rows = yield* sql`
             SELECT deployment_id, workflow_name, execution_id, intent_json
@@ -167,7 +167,7 @@ export class SqlWorkflowDispatchStore {
 
       const remove = Effect.fn("SqlWorkflowDispatchStore.remove")(
         function* (input: WorkflowDispatchIntent) {
-          const intent = yield* Schema.decodeUnknownEffect(WorkflowDispatchIntent)(input);
+          const intent = yield* Schema.decodeEffect(WorkflowDispatchIntent)(input);
 
           const rows = yield* sql`
             SELECT deployment_id, workflow_name, execution_id, intent_json
@@ -236,10 +236,10 @@ export class NodeWorkflowRepairTrigger {
         return WorkflowRepairTrigger.of({
           register: Effect.fn("NodeWorkflowRepairTrigger.register")(function* (repair) {
             const attempt = repair.pipe(
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.failCause(cause)
-                  : Effect.logError("Workflow repair trigger failed; next poll will retry", cause),
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterruptsOnly(cause),
+                (cause) =>
+                  Effect.logError("Workflow repair trigger failed; next poll will retry", cause),
               ),
             );
 

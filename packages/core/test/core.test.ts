@@ -63,18 +63,18 @@ const utf8Bytes = (value: string): number => Encoding.encodeHex(value).length / 
 describe("core schemas", () => {
   it("RUN-035: rejects non-additive canonical token breakdowns", () => {
     expect(
-      Schema.decodeUnknownExit(InputTokenUsage)({
+      Schema.decodeExit(InputTokenUsage)({
         total: 0,
         uncached: 0,
         cacheRead: 100,
         cacheWrite: 0,
       })._tag,
     ).toBe("Failure");
+    expect(Schema.decodeExit(OutputTokenUsage)({ total: 1, text: 1, reasoning: 1 })._tag).toBe(
+      "Failure",
+    );
     expect(
-      Schema.decodeUnknownExit(OutputTokenUsage)({ total: 1, text: 1, reasoning: 1 })._tag,
-    ).toBe("Failure");
-    expect(
-      Schema.decodeUnknownExit(ModelCallUsage)({
+      Schema.decodeExit(ModelCallUsage)({
         provider: "test",
         model: "test-model",
         inputTokens: { total: 3, uncached: 1, cacheRead: 1, cacheWrite: 1 },
@@ -100,30 +100,28 @@ describe("core schemas", () => {
       byModel: [group],
     } as const;
 
-    expect(Schema.decodeUnknownExit(RunUsageSummary)(summary)._tag).toBe("Success");
-    expect(Schema.decodeUnknownExit(RunUsageSummary)({ ...summary, modelCalls: 0 })._tag).toBe(
-      "Failure",
-    );
+    expect(Schema.decodeExit(RunUsageSummary)(summary)._tag).toBe("Success");
+    expect(Schema.decodeExit(RunUsageSummary)({ ...summary, modelCalls: 0 })._tag).toBe("Failure");
     expect(
-      Schema.decodeUnknownExit(RunUsageSummary)({
+      Schema.decodeExit(RunUsageSummary)({
         ...summary,
         inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
       })._tag,
     ).toBe("Failure");
     expect(
-      Schema.decodeUnknownExit(RunUsageSummary)({
+      Schema.decodeExit(RunUsageSummary)({
         ...summary,
         outputTokens: { total: 0, text: 0, reasoning: 0 },
       })._tag,
     ).toBe("Failure");
-    expect(Schema.decodeUnknownExit(RunUsageSummary)({ ...summary, costMicrousd: 0 })._tag).toBe(
+    expect(Schema.decodeExit(RunUsageSummary)({ ...summary, costMicrousd: 0 })._tag).toBe(
+      "Failure",
+    );
+    expect(Schema.decodeExit(RunUsageSummary)({ ...summary, byModel: [group, group] })._tag).toBe(
       "Failure",
     );
     expect(
-      Schema.decodeUnknownExit(RunUsageSummary)({ ...summary, byModel: [group, group] })._tag,
-    ).toBe("Failure");
-    expect(
-      Schema.decodeUnknownExit(RunUsageSummary)({
+      Schema.decodeExit(RunUsageSummary)({
         ...summary,
         byModel: [
           { ...group, costMicrousd: 0 },
@@ -138,7 +136,7 @@ describe("core schemas", () => {
       })._tag,
     ).toBe("Failure");
     expect(
-      Schema.decodeUnknownExit(RunUsageSummary)({
+      Schema.decodeExit(RunUsageSummary)({
         modelCalls: 2,
         inputTokens: { total: 0, uncached: 0, cacheRead: 0, cacheWrite: 0 },
         outputTokens: { total: 0, text: 0, reasoning: 0 },
@@ -215,8 +213,8 @@ describe("core schemas", () => {
 
     expect(Schema.encodeSync(ReceiptId)(receiptId)).toBe("receipt-1");
     expect(Schema.encodeSync(SettlementId)(settlementId)).toBe("settlement:submission-1");
-    expect(Schema.decodeUnknownExit(ReceiptId)("")._tag).toBe("Failure");
-    expect(Schema.decodeUnknownExit(SettlementId)("")._tag).toBe("Failure");
+    expect(Schema.decodeExit(ReceiptId)("")._tag).toBe("Failure");
+    expect(Schema.decodeExit(SettlementId)("")._tag).toBe("Failure");
     expect(Schema.decodeUnknownExit(ReceiptId)(7)._tag).toBe("Failure");
     expect(Schema.decodeUnknownExit(SettlementId)(null)._tag).toBe("Failure");
   });
@@ -416,13 +414,13 @@ describe("core schemas", () => {
       Schema.decodeUnknownSync(RunEvent)({ ...event, failureHandling: "recoverable" }),
     ).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(RunEvent)({
+      Schema.decodeSync(RunEvent)({
         ...event,
         sequence: -1,
       }),
     ).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(RunEvent)({
+      Schema.decodeSync(RunEvent)({
         ...event,
         toolCallId: "",
       }),
@@ -442,17 +440,13 @@ describe("core schemas", () => {
     const link = Schema.decodeSync(SubagentParentLink)(encodedLink);
 
     expect(Schema.encodeSync(SubagentParentLink)(link)).toEqual(encodedLink);
+    expect(() => Schema.decodeSync(SubagentParentLink)({ ...encodedLink, depth: 0 })).toThrow();
+    expect(() => Schema.decodeSync(SubagentParentLink)({ ...encodedLink, depth: 1.5 })).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(SubagentParentLink)({ ...encodedLink, depth: 0 }),
+      Schema.decodeSync(SubagentParentLink)({ ...encodedLink, delegationId: "" }),
     ).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(SubagentParentLink)({ ...encodedLink, depth: 1.5 }),
-    ).toThrow();
-    expect(() =>
-      Schema.decodeUnknownSync(SubagentParentLink)({ ...encodedLink, delegationId: "" }),
-    ).toThrow();
-    expect(() =>
-      Schema.decodeUnknownSync(SubagentParentLink)({ ...encodedLink, parentRunId: "" }),
+      Schema.decodeSync(SubagentParentLink)({ ...encodedLink, parentRunId: "" }),
     ).toThrow();
   });
 
@@ -535,15 +529,15 @@ describe("core schemas", () => {
     const { delegationId: _delegationId, ...withoutDelegationId } = progress;
 
     expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, eventVersion: 2 })).toThrow();
-    expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, depth: 0 })).toThrow();
-    expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, childRunId: "" })).toThrow();
-    expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, childThreadId: "" })).toThrow();
+    expect(() => Schema.decodeSync(RunEvent)({ ...progress, depth: 0 })).toThrow();
+    expect(() => Schema.decodeSync(RunEvent)({ ...progress, childRunId: "" })).toThrow();
+    expect(() => Schema.decodeSync(RunEvent)({ ...progress, childThreadId: "" })).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(RunEvent)({ ...progress, summary: "x".repeat(4 * 1024 + 1) }),
+      Schema.decodeSync(RunEvent)({ ...progress, summary: "x".repeat(4 * 1024 + 1) }),
     ).toThrow();
     expect(() => Schema.decodeUnknownSync(RunEvent)(withoutDelegationId)).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(RunEvent)({
+      Schema.decodeSync(RunEvent)({
         _tag: "SubagentCompleted",
         ...base,
         turns: 0,
@@ -559,7 +553,7 @@ describe("core schemas", () => {
       }),
     ).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(RunEvent)({
+      Schema.decodeSync(RunEvent)({
         _tag: "SubagentFailed",
         ...base,
         errorTag: "",
@@ -567,7 +561,7 @@ describe("core schemas", () => {
       }),
     ).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(RunEvent)({
+      Schema.decodeSync(RunEvent)({
         _tag: "SubagentInterrupted",
         ...base,
         reason: "x".repeat(4 * 1024 + 1),
@@ -620,10 +614,10 @@ describe("context-economics policy", () => {
     expect(Schema.decodeSync(jsonCodec)(encoded)).toEqual(policy);
     expect(() => AgentPolicy.make(invalid)).toThrow("Schema validation failed");
     expect(() => new AgentPolicy(invalid)).toThrow("Schema validation failed");
-    expect(Schema.decodeUnknownExit(AgentPolicy)(invalid)._tag).toBe("Failure");
-    expect(
-      Schema.decodeUnknownExit(jsonCodec)({ ...encoded, completionReserveTokens: 101 })._tag,
-    ).toBe("Failure");
+    expect(Schema.decodeExit(AgentPolicy)(invalid)._tag).toBe("Failure");
+    expect(Schema.decodeExit(jsonCodec)({ ...encoded, completionReserveTokens: 101 })._tag).toBe(
+      "Failure",
+    );
 
     Reflect.set(policy, "completionReserveTokens", 101);
     expect(Schema.encodeExit(AgentPolicy)(policy)._tag).toBe("Failure");
@@ -748,7 +742,7 @@ describe("tool result bounds", () => {
   it("RUN-022: rejects bounds below the guaranteed envelope floor at construction", () => {
     expect(() => ToolResultBounds.make({ maxBytes: 255 })).toThrow();
     expect(() => ToolResultBounds.make({ maxBytes: 8 })).toThrow();
-    expect(() => Schema.decodeUnknownSync(ToolResultBounds)({ maxBytes: 128 })).toThrow();
+    expect(() => Schema.decodeSync(ToolResultBounds)({ maxBytes: 128 })).toThrow();
     expect(ToolResultBounds.make({ maxBytes: 256 }).maxBytes).toBe(256);
   });
 
@@ -847,7 +841,7 @@ describe("context-economics errors and events", () => {
       Schema.decodeUnknownSync(RunEvent)({ ...compaction, kind: "delete-history" }),
     ).toThrow();
     expect(() =>
-      Schema.decodeUnknownSync(RunEvent)({ ...compaction, tokensBeforeEstimate: -1 }),
+      Schema.decodeSync(RunEvent)({ ...compaction, tokensBeforeEstimate: -1 }),
     ).toThrow();
   });
 
@@ -866,17 +860,17 @@ describe("context-economics errors and events", () => {
     } satisfies typeof RunCompleted.Encoded;
 
     expect(Schema.decodeSync(RunCompleted)(encodedRun).exhausted).toBeUndefined();
-    expect(Schema.decodeUnknownExit(RunEvent)({ ...encodedRun, exhausted: "tokens" })._tag).toBe(
+    expect(Schema.decodeExit(RunEvent)({ ...encodedRun, exhausted: "tokens" })._tag).toBe(
       "Failure",
     );
     expect(
-      Schema.decodeUnknownExit(RunEvent)({
+      Schema.decodeExit(RunEvent)({
         ...encodedRun,
         finishReason: "budget-exhausted",
       })._tag,
     ).toBe("Failure");
     expect(
-      Schema.decodeUnknownExit(RunEvent)({
+      Schema.decodeExit(RunEvent)({
         ...encodedRun,
         finishReason: "budget-exhausted",
         exhausted: "tokens",
@@ -884,7 +878,7 @@ describe("context-economics errors and events", () => {
       })._tag,
     ).toBe("Failure");
     expect(
-      Schema.decodeUnknownSync(RunEvent)({
+      Schema.decodeSync(RunEvent)({
         ...encodedRun,
         finishReason: "budget-exhausted",
         exhausted: "tokens",
@@ -911,15 +905,15 @@ describe("context-economics errors and events", () => {
       exhausted: "turns",
     } satisfies typeof SubagentCompleted.Encoded;
 
-    expect(Schema.decodeUnknownSync(RunEvent)(encodedChild)).toMatchObject({
+    expect(Schema.decodeSync(RunEvent)(encodedChild)).toMatchObject({
       _tag: "SubagentCompleted",
       exhausted: "turns",
     });
+    expect(Schema.decodeExit(RunEvent)({ ...encodedChild, finishReason: "completed" })._tag).toBe(
+      "Failure",
+    );
     expect(
-      Schema.decodeUnknownExit(RunEvent)({ ...encodedChild, finishReason: "completed" })._tag,
-    ).toBe("Failure");
-    expect(
-      Schema.decodeUnknownExit(RunEvent)({
+      Schema.decodeExit(RunEvent)({
         ...encodedChild,
         exhausted: undefined,
       })._tag,

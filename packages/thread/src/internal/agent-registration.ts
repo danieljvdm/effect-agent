@@ -15,13 +15,14 @@ import {
 } from "@effect-agent/core/ToolExposure";
 import { type RuntimeBinding } from "@effect-agent/engine/AgentRuntime";
 import {
+  BackgroundReporting,
   WorkerReportPreparationFailure,
   type WorkerReporting,
 } from "@effect-agent/engine/SubagentHost";
 import { type Crypto, type Option, type Scope, Context, Effect, Layer, Schema } from "effect";
-import type { Tool } from "effect/unstable/ai";
+import { Tool } from "effect/unstable/ai";
 
-import { digestDefinitions, type DigestError } from "../Digest.ts";
+import { digestDefinitions, DigestError } from "../Digest.ts";
 import type { DurableWorkerFailure, DurableWorkerRequirements } from "../DurableAgentRuntime.ts";
 import type { DefinitionDigestInput, DefinitionDigests } from "../Records.ts";
 import type { Claim, Settlement } from "../SubmissionLedger.ts";
@@ -92,6 +93,7 @@ type ResolvedAttemptDriver = <
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined,
+  UpdatesSchema extends Schema.Top | undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -104,7 +106,8 @@ type ResolvedAttemptDriver = <
     InstructionError,
     InstructionRequirements,
     RunDispositionValue,
-    InputPromptValue
+    InputPromptValue,
+    UpdatesSchema
   >,
   threadId: ThreadId,
   claim: Claim,
@@ -123,7 +126,8 @@ type ResolvedAttemptDriver = <
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
     InstructionRequirements
   >
@@ -152,12 +156,13 @@ interface CapturedBinding {
   ) => Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure>;
 }
 
-type ReportRequirements<Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>>> = [
-  Reports[number],
-] extends [never]
-  ? never
-  : Reports[number] extends WorkerReporting<unknown, infer R>
-    ? Exclude<R, Scope.Scope>
+type ReportRequirements<Reports> =
+  Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>>
+    ? [Reports[number]] extends [never]
+      ? never
+      : Reports[number] extends WorkerReporting<unknown, infer R>
+        ? Exclude<R, Scope.Scope>
+        : never
     : never;
 
 const captureReporting = <R>(reports: ReadonlyArray<WorkerReporting<unknown, R>>) =>
@@ -175,6 +180,16 @@ const captureReporting = <R>(reports: ReadonlyArray<WorkerReporting<unknown, R>>
         ),
     })),
   );
+
+const backgroundReports = (definition: Agent.AnyDefinition) => [
+  ...new Set(
+    Object.values(definition.toolkit.tools).flatMap((tool) => {
+      const report = Context.get(tool.annotations, BackgroundReporting);
+
+      return report === undefined ? [] : [report];
+    }),
+  ),
+];
 
 /** One exact executable registration used by durable claim-time resolution. */
 export interface ResolvedBinding extends CapturedBinding {
@@ -255,7 +270,11 @@ export const DurableWorkerBinding = {
   > =>
     Effect.gen(function* () {
       const binding = yield* capture(agent);
-      const reports = yield* captureReporting(reporting ?? []);
+
+      const reports = yield* captureReporting([
+        ...(reporting ?? []),
+        ...backgroundReports(agent.definition),
+      ]);
 
       return { ...binding, digests, reporting: reports };
     }) as Effect.Effect<
@@ -361,21 +380,22 @@ type EntryWorkerRequirements<Entry> = Entry extends {
     ? DurableWorkerRequirements<{ readonly definition: D; readonly model: M }>
     : never;
 
-type EntryAttemptRequirements<Entry> = Entry extends {
-  readonly attemptLayer: (
-    context: AgentAttemptContext,
-  ) => Layer.Layer<infer Provides, never, infer Requires>;
-}
-  ? Exclude<EntryWorkerRequirements<Entry>, Provides> | Requires
-  : EntryWorkerRequirements<Entry>;
+type AttemptLayerRequirements<Requirements, AttemptLayer> = AttemptLayer extends (
+  context: AgentAttemptContext,
+) => Layer.Layer<infer Provides, never, infer Requires>
+  ? Exclude<Requirements, Provides> | Requires
+  : Requirements;
 
-type EntryRequirements<Entry> =
-  | EntryAttemptRequirements<Entry>
-  | (Entry extends {
-      readonly reporting: infer Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>>;
-    }
-      ? ReportRequirements<Reports>
-      : never);
+// Conditional options retain every service they may consume. An absent attempt Layer
+// still needs the original worker services; only a definite Layer can remove them.
+type EntryRequirements<Entry> = Entry extends unknown
+  ?
+      | AttemptLayerRequirements<
+          EntryWorkerRequirements<Entry>,
+          "attemptLayer" extends keyof Entry ? Entry["attemptLayer"] : undefined
+        >
+      | ("reporting" extends keyof Entry ? ReportRequirements<Entry["reporting"]> : never)
+  : never;
 
 type RegistrationRequirements<Entries extends ReadonlyArray<AgentRegistration>> = [
   Entries[number],
@@ -385,6 +405,38 @@ type RegistrationRequirements<Entries extends ReadonlyArray<AgentRegistration>> 
 
 const registrationDefinitions = (entry: AgentRegistration): DefinitionDigestInput => {
   const definition = entry.model === undefined ? entry.agent.definition : entry.agent;
+  const automatic = backgroundReports(definition);
+
+  const declaredDefinitions =
+    definition.updates === undefined
+      ? entry.definitions
+      : {
+          ...entry.definitions,
+          agent: {
+            declaration: entry.definitions.agent,
+            updates: Schema.decodeUnknownSync(Schema.Json)(
+              Tool.getJsonSchemaFromSchema(definition.updates),
+            ),
+            updateProtocol: { schemaVersion: 1, tool: "emit_update" },
+          },
+        };
+
+  const definitions =
+    automatic.length === 0
+      ? declaredDefinitions
+      : {
+          ...declaredDefinitions,
+          agent: {
+            declaration: declaredDefinitions.agent,
+            backgroundReporting: automatic.map((report) => ({
+              delegationId: report.delegationId,
+              targetAgentId: report.target.id,
+              mode: report.mode ?? "custom",
+              destinationDelegationId: report.destination?.delegationId ?? null,
+            })),
+          },
+        };
+
   const exposure = definition.toolExposure;
 
   if (
@@ -394,12 +446,12 @@ const registrationDefinitions = (entry: AgentRegistration): DefinitionDigestInpu
         Context.get(tool.annotations, DiscoveryTool) || Context.get(tool.annotations, PinnedTool),
     )
   )
-    return entry.definitions;
+    return definitions;
 
   return {
-    ...entry.definitions,
+    ...definitions,
     agent: {
-      declaration: entry.definitions.agent,
+      declaration: definitions.agent,
       toolExposure: {
         initialToolNames: exposure === undefined ? null : [...(exposure.initialToolNames ?? [])],
         maxTools: exposure?.maxTools ?? 64,
@@ -427,7 +479,11 @@ const compileRegistration = <Entry extends AgentRegistration>(
   entry: Entry,
 ): Effect.Effect<ResolvedBinding, DigestError, Crypto.Crypto | EntryRequirements<Entry>> =>
   Effect.flatMap(
-    digestDefinitions(registrationDefinitions(entry)),
+    Effect.try({
+      try: () => registrationDefinitions(entry),
+      catch: () =>
+        DigestError.make({ message: "Agent update schema has no serializable wire contract" }),
+    }).pipe(Effect.flatMap(digestDefinitions)),
     (digests) =>
       Effect.gen(function* () {
         const binding = yield* capture(
@@ -435,7 +491,10 @@ const compileRegistration = <Entry extends AgentRegistration>(
           entry.attemptLayer,
         );
 
-        const reporting = yield* captureReporting(entry.reporting ?? []);
+        const reporting = yield* captureReporting([
+          ...(entry.reporting ?? []),
+          ...backgroundReports(binding.definition),
+        ]);
 
         return { ...binding, digests, reporting };
       }),

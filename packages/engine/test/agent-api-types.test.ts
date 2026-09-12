@@ -10,6 +10,7 @@ import {
 } from "@effect-agent/engine/AgentRuntime";
 import { ModelCallContext } from "@effect-agent/engine/ContextWindow";
 import {
+  AgentUpdateAcceptance,
   ModelUsageAccounting,
   type RunBufferLimits,
   type RunContextHook,
@@ -182,11 +183,12 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
   const accounted = AgentRuntime.streamWithUsageAccountingUnknown(planner, input);
 
   expectTypeOf<Stream.Services<typeof accounted>>().toEqualTypeOf<
-    Stream.Services<typeof stream> | ModelUsageAccounting
+    Stream.Services<typeof stream> | ModelUsageAccounting | AgentUpdateAcceptance
   >();
   expectTypeOf<Stream.Error<typeof accounted>>().toEqualTypeOf<Stream.Error<typeof stream>>();
 
   const accountedProvided = accounted.pipe(
+    Stream.provide(AgentUpdateAcceptance.layerEphemeral),
     Stream.provide(
       Layer.effect(
         ModelUsageAccounting,

@@ -5,6 +5,7 @@ import { type IdempotencyKey, type JoinedToHost, type Receipt } from "@effect-ag
 import type { SubagentBudgetReservation } from "@effect-agent/core/SubagentContract";
 import {
   WorkerError,
+  type WorkerCompletion,
   type WorkerHistoryEntry,
   type WorkerContext,
   type WorkerBudgetScope,
@@ -80,15 +81,17 @@ export class WorkerReportPreparationFailure extends Schema.TaggedError<WorkerRep
 ) {}
 
 /**
- * Source-registration-owned conversion from a child's outcome to new source input.
+ * Source-owned projection discovered from background tools or supplied by a custom registration.
  * The concrete descriptor retains its E/R; durable registration captures R and records
  * bounded preparation failure rather than serializing arbitrary application errors.
  */
 export interface WorkerReporting<E = never, R = never> {
   readonly delegationId: DelegationId;
   readonly target: Agent.AnyDefinition;
-  readonly input: Schema.Top;
-  /** Required when the receiving coordinator is itself an established worker. */
+  /** Standard messages retain the parent's original application input. */
+  readonly mode?: "standard";
+  readonly input?: Schema.Top;
+  /** Required for custom mapping when the receiving coordinator is itself an established worker. */
   readonly destination?: {
     readonly delegationId: DelegationId;
     readonly target: Agent.AnyDefinition;
@@ -97,11 +100,17 @@ export interface WorkerReporting<E = never, R = never> {
     {
       readonly encodedInput: Schema.Json;
       readonly encodedParameters?: Schema.Json;
+      readonly message?: WorkerCompletion;
     },
     E | WorkerReportPreparationFailure,
     R
   >;
 }
+
+/** Descriptor carried by background tools; registration discovers it without an app handoff. */
+export const BackgroundReporting = Context.Reference<
+  WorkerReporting<WorkerReportPreparationFailure> | undefined
+>("@effect-agent/engine/BackgroundReporting", { defaultValue: () => undefined });
 
 /**
  * Trusted, caller-bound host port. The interpreter supplies a fresh facet for each Tool Call;

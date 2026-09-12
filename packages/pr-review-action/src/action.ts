@@ -29,7 +29,6 @@ import {
   Effect,
   Exit,
   FileSystem,
-  Layer,
   Option,
   Result,
   Schema,
@@ -904,12 +903,10 @@ export const reviewActionProgram = Effect.gen(function* () {
       head: comparison.head,
       ignore,
     }).pipe(
-      Effect.provide(
-        Layer.succeed(GeneratedFileClassification, {
-          isGenerated: (path) =>
-            generatedAt.pipe(Effect.flatMap((snapshot) => github.isGenerated(snapshot, path))),
-        }),
-      ),
+      Effect.provideService(GeneratedFileClassification, {
+        isGenerated: (path) =>
+          generatedAt.pipe(Effect.flatMap((snapshot) => github.isGenerated(snapshot, path))),
+      }),
     );
 
     for (const omission of surface.generatedContent) {

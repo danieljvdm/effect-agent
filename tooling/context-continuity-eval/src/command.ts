@@ -94,7 +94,7 @@ export const command = Command.make(
   },
   Effect.fn("ContextContinuity.command")(function* (options) {
     if (options.validate) {
-      const phases = yield* Schema.decodeUnknownEffect(Schema.Array(ScenarioPhase))(
+      const phases = yield* Schema.decodeEffect(Schema.Array(ScenarioPhase))(
         options.profile === DEFAULT_PROFILE
           ? makeScenario(options.seed)
           : pressureScenario(options.seed),

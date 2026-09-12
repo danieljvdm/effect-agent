@@ -106,7 +106,7 @@ it.effect(
           },
         },
       ].map((event, sequence_number) =>
-        Schema.decodeUnknownSync(OpenAiSchema.ResponseStreamEvent)({ ...event, sequence_number }),
+        Schema.decodeSync(OpenAiSchema.ResponseStreamEvent)({ ...event, sequence_number }),
       );
 
       const frames: PlannerProgress[] = [];

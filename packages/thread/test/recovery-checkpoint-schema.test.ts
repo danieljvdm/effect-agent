@@ -142,7 +142,7 @@ describe("recovery checkpoint compatibility", () => {
   it("round-trips the fenced request and versioned state as JSON", () => {
     const codec = Schema.fromJsonString(SaveRecoveryCheckpointRequest);
     const encoded = JSON.stringify({ checkpoint, producerEpoch: 7 });
-    const decoded = Schema.decodeUnknownSync(codec)(encoded);
+    const decoded = Schema.decodeSync(codec)(encoded);
 
     expect(JSON.parse(Schema.encodeSync(codec)(decoded))).toEqual(JSON.parse(encoded));
     const saved = Schema.decodeUnknownSync(RecoveryCheckpointContents)(decoded.checkpoint.state);

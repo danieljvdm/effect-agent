@@ -41,8 +41,8 @@ it.each(["unsupported", "missing", "rejected", "storage-failure"] as const)(
           }),
     });
 
-    const result = await Effect.runPromise(
-      readRecoveryCheckpoint(threadId).pipe(Effect.provideService(ThreadStore, store), Effect.exit),
+    const result = await Effect.runPromiseExit(
+      readRecoveryCheckpoint(threadId).pipe(Effect.provideService(ThreadStore, store)),
     );
 
     const observed = Exit.isFailure(result)

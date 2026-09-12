@@ -392,7 +392,7 @@ const makeActivityStore = Effect.fn("SqliteActivityStore.make")(function* () {
               });
             }
 
-            const next = yield* Schema.decodeUnknownEffect(ActivityProgress)({
+            const next = yield* Schema.decodeEffect(ActivityProgress)({
               version: STORAGE_VERSION,
               key: decoded.key,
               throughSequence: current?.throughSequence ?? 0,

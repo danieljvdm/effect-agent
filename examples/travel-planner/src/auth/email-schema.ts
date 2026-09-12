@@ -82,7 +82,7 @@ export const emailSignInMapping: EmailSignInMapping<
   credential: {
     ...emailCredentialMapping,
     decode: ({ moduleId, subject: account, identifier: address, credential: factor }) =>
-      Schema.decodeUnknownEffect(EmailCredentialSnapshot)({
+      Schema.decodeEffect(EmailCredentialSnapshot)({
         moduleId,
         identifier: { namespace: address.namespace, value: address.value },
         identifierRevision: address.revision,

@@ -11,6 +11,26 @@ Start with the [subagent overview](../guide/subagents) to choose a lifecycle, th
 [background worker](../guide/subagents/background) guide. This reference covers advanced configuration
 shared by those guides.
 
+## Pass the Agent directly
+
+For the default input and result contract, the declaration is optional:
+
+```ts twoslash
+import { Subagent } from "effect-agent";
+import { HotelResearcher } from "./background-updates.ts";
+
+// Before: an explicit declaration, with the default name and mappings.
+const declaration = Subagent.make("hotel-researcher", { target: HotelResearcher });
+const before = Subagent.background(declaration, { start: true, reportToParent: true });
+
+// After: the same generated hotel-researcher_start Tool and exact target.
+const after = Subagent.background(HotelResearcher, { start: true, reportToParent: true });
+```
+
+Use `Subagent.make` when you need another name, input/result projections, grants, or budgets.
+The host registers the original Agent definition; background configuration does not derive a
+replacement Agent. Existing explicit declarations and custom completion reporting remain supported.
+
 ## Input and result mappings
 
 `Subagent.make("research", { target: researcher })` is enough to declare delegation.
@@ -351,31 +371,103 @@ concurrency. Idle workers own no execution resources.
 
 ## Completion report guarantees
 
-Configure the mapping with `Subagent.reporting` as shown in the
-[background walkthrough](../guide/subagents/background#turn-the-findings-into-parent-input).
+Use `Subagent.background(Research, { start: true, reportToParent: true })` for a standard
+`WorkerCompletion` message, as shown in the [background walkthrough](../guide/subagents/background).
+Its `report` has the same typed projected success or bounded failure as `Subagent.WorkerReport`;
+`budgetExhausted` also preserves exhaustion when an application projection omits it.
+The admitted parent input stays available to instructions and policy. The model receives the
+completion as a user message, so child output never becomes trusted instructions.
+Canonical `UserInputRecorded.messageAdmission` distinguishes framework completions from peer
+provenance through the `InputMessage` Schema. Inspect `WorkerCompletion` with its Schema before
+reading a completion; use `MessageAdmission` for peer messages.
 
-The Schema must be the coordinator Definition's exact input Schema. Registration captures the
-projection's required services separately from per-Attempt services. Declare an expected mapper
-failure with the optional `failure` Schema. Change the existing registration versions when changing
-report behavior; recovery never substitutes another source binding or target Definition.
+For an application-specific format, pass a `Subagent.reporting(Research, { input, prepare })`
+descriptor as `reportToParent`. Its input Schema must be the parent's exact input Schema.
+The existing registration `reporting` array remains supported for stored custom-report intents;
+do not register the same descriptor twice. Projection services are captured separately from
+per-Attempt services. Declare expected mapper failures with its optional `failure` Schema.
+Change registration versions when changing projection behavior. Automatic discovery pins its
+mode and target in the registration digest; recovery never substitutes another source or target.
+
+Application-driven starts with standard reports must acquire the host facet with the exact
+`sourceSubmissionId` whose application input supplies parent context. Model tool calls already
+carry that identity. No current or latest input is guessed for a programmatic caller.
 
 Launch intent pins reporting before acceptance. Each actual child Run has one logical report,
 even when several steering Receipts join it; an input cancelled before any Run starts has no Run
-report. The declaration's result projection and mapper produce a frozen `PreparedInput` before
+report. The declaration's result projection and optional mapper produce a frozen `PreparedInput` before
 delivery insertion. They should be deterministic and free of external side effects: a crash before
 the canonical preparation decision commits can rerun them. Delivery retries never reproject a
 committed decision. Expected failure, defect, invalid output, or preparation timeout records a
 bounded refusal without replacing the child's outcome. Preparation has its own Scope and a
 5-second default timeout, configurable up to 30 seconds in `WorkerHostConfig`.
 
-For a receiving coordinator that is itself a background worker, express the report in its incoming
-declaration's Parameters Schema and wrap it with
-`Subagent.reportingToWorker(report, receivingDeclaration)`. This explicitly maps parameters into
-Agent input and charges the additional input to the original ancestor allocation. It cannot reuse
-old parameters or obtain a fresh budget. An attached destination has no independent continuing
-input lifetime; delivery to it is refused. An attached scout returns directly through its waiting
-parent's tool result.
+A standard report to a parent that is itself a background worker retains that parent's
+original application input and declaration parameters. Its additional run is charged to the
+original ancestor allocation, with the same grants, lifetime, and resource ceilings. No extra
+nested-worker adapter is required. For **custom** report inputs, use
+`Subagent.reportingToWorker(report, receivingDeclaration)` to convert the receiving declaration's
+Parameters into its Agent input. A custom input cannot pretend to be the old parameters or
+obtain a fresh budget. An attached destination has no independent continuing input lifetime;
+delivery to it is refused. An attached scout returns through its waiting parent's tool result.
 
 Report preparation decisions appear in authorized canonical worker history. Retained delivery
 records expose pending, accepted, processed, parked, and refused states through the host-owned
 `MessageDeliveryStore`. A child's completion and its report's processing remain separate facts.
+
+## Update delivery guarantees
+
+`Agent.make(name, { updates: schema, ... })` declares intentional intermediate output independently of
+final output. Objects and tagged unions work, including transformed Schemas. The framework adds
+one native `emit_update` Tool with `{ value: schema }` parameters. Its expected refusal is returned
+as a typed tool result, so the Agent can continue toward completion. The name is reserved when
+updates are declared; inherited tool grants still apply.
+
+Application tool code can use `AgentUpdates.emit(agent, value, { idempotencyKey })` instead.
+Declare `AgentUpdates.Emitter` as a dependency of that Tool. The key identifies one intended
+update within the Run: equal retries reuse it, and changed payloads fail with `conflict`.
+The emitter is available during an active tool batch and closes with its Scope.
+Native calls derive their keys from the actual Run and Tool Call.
+
+Observe the same definition at the top level:
+
+<<< @/snippets/travel-planner/observe-updates.ts{ts twoslash}
+
+`AgentUpdates.decode` and `observe` decode through the Agent's update Schema and preserve its
+required decoding services. Runtime events contain encoded values; they never assert encoded
+payloads into application types. Durable canonical history retains `AgentUpdateEmitted` records,
+including the exact source definition versions. Authorized `Subagent.observe` readers can decode
+those records and their updates with the same APIs.
+
+With `reportToParent: true`, acceptance commits the finding and a frozen parent delivery envelope
+before acknowledging it. The child continues without waiting for destination admission, parent
+processing, or a user decision. The parent receives a `WorkerUpdate` as untrusted user-message
+content, retaining its original application input for instructions and policy. Custom
+`reportToParent` mappings keep their existing terminal-completion behavior; they are optional.
+
+Each worker Thread orders update deliveries and completion reports across its Runs. A successor
+waits until the predecessor has a destination Receipt or a conclusive refusal. A parked predecessor
+without a Receipt blocks later delivery until recovery; a refusal remains observable instead of
+silently discarding the finding. Waiting for a predecessor does not spend admission attempts.
+Destination admission and processing remain separate states, and no external side effect is
+promised to execute exactly once.
+
+The runtime defaults to 32 updates and 16 KiB of total encoded update payload per Run. `RunOptions.updates`
+configures these limits. Durable acceptance rechecks canonical counts after a restart. The delivery
+store separately bounds update retention and pending work per worker (defaults: 256 retained and
+32 pending). `maxRetainedUpdatesPerOwner` and `maxPendingUpdatesPerOwner` configure that partition;
+updates cannot consume the ordinary capacity used for terminal reports. Capacity refusal happens
+before a new update is accepted. A parent that is itself a worker has separate update input quotas:
+`WorkerHostLimits.maxUpdateInputsPerWorker` defaults to 256 and
+`maxPendingUpdateInputsPerWorker` defaults to 32. Temporary pending or active-worker limits retry
+delivery; permanent retention or budget exhaustion refuses it. Parent admissions still obey
+inherited budgets, grants, lifetime, and host limits.
+
+Retained findings and pending delivery survive parent completion or abort, dropped wake hints,
+restart, and eviction. Recovery inserts missing outbox rows from canonical envelopes and retries
+the same logical delivery without rebuilding its payload. A lost acknowledgement can therefore
+leave a retained finding even when the caller did not see success. Reuse its key when reconciling.
+If ownership is lost before the native Tool result is recorded, the Tool call remains unresolved
+under the ordinary recovery rules. Recovery delivers the retained update without replaying the
+Tool; explicit cancellation can then settle the worker and deliver its separate aborted report.
+Accepted updates remain distinct from the eventual completed, failed, or aborted outcome.

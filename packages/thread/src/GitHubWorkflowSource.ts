@@ -144,7 +144,7 @@ export const githubWorkflowRunsHttpLayer = (
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
 
-      const permittedRepository = yield* Schema.decodeUnknownEffect(GitHubRepository)(
+      const permittedRepository = yield* Schema.decodeEffect(GitHubRepository)(
         options.repository,
       ).pipe(Effect.mapError(() => httpFailure("invalid-response", false)));
 
@@ -153,9 +153,9 @@ export const githubWorkflowRunsHttpLayer = (
       const getAttempt = Effect.fn("GitHubWorkflowRuns.getAttempt")(function* (
         request: GitHubWorkflowRunAttemptRequest,
       ) {
-        const repository = yield* Schema.decodeUnknownEffect(GitHubRepository)(
-          request.repository,
-        ).pipe(Effect.mapError(() => httpFailure("invalid-response", false)));
+        const repository = yield* Schema.decodeEffect(GitHubRepository)(request.repository).pipe(
+          Effect.mapError(() => httpFailure("invalid-response", false)),
+        );
 
         if (
           repository.id !== permittedRepository.id ||
@@ -165,7 +165,7 @@ export const githubWorkflowRunsHttpLayer = (
           return yield* httpFailure("unauthorized", false);
         }
 
-        const watch = yield* Schema.decodeUnknownEffect(GitHubWorkflowRunWatch)({
+        const watch = yield* Schema.decodeEffect(GitHubWorkflowRunWatch)({
           runId: request.runId,
           attempt: request.attempt,
           expectedHeadSha: "0".repeat(40),
@@ -261,7 +261,7 @@ export interface GitHubWorkflowRunSourceOptions {
 export const makeGitHubWorkflowRunSource = Effect.fn("makeGitHubWorkflowRunSource")(function* (
   options: GitHubWorkflowRunSourceOptions,
 ): Effect.fn.Return<EventSource, SubscriptionSourceError, GitHubWorkflowRuns> {
-  const repository = yield* Schema.decodeUnknownEffect(GitHubRepository)(options.repository).pipe(
+  const repository = yield* Schema.decodeEffect(GitHubRepository)(options.repository).pipe(
     Effect.mapError(() => sourceError("github-repository-configuration", false)),
   );
 
@@ -428,11 +428,9 @@ export const acceptVerifiedGitHubWorkflowRunWebhook = Effect.fn(
     catch: () => GitHubWebhookVerificationError.make({ reason: "invalid-payload" }),
   });
 
-  const webhook = yield* Schema.decodeUnknownEffect(
-    Schema.fromJsonString(GitHubWorkflowRunWebhook),
-  )(text).pipe(
-    Effect.mapError(() => GitHubWebhookVerificationError.make({ reason: "invalid-payload" })),
-  );
+  const webhook = yield* Schema.decodeEffect(Schema.fromJsonString(GitHubWorkflowRunWebhook))(
+    text,
+  ).pipe(Effect.mapError(() => GitHubWebhookVerificationError.make({ reason: "invalid-payload" })));
 
   if (webhook.repository.id !== webhook.workflow_run.repository.id) {
     return yield* GitHubWebhookVerificationError.make({ reason: "invalid-payload" });

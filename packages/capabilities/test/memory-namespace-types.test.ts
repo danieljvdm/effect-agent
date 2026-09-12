@@ -253,11 +253,11 @@ it("retains namespace types through public construction and operations", () => {
   expect(proofs.every(Boolean)).toBe(true);
   expect(typeof negativeCases).toBe("function");
   for (const value of ["private", "x".repeat(1_024)]) {
-    const decodedAccess = Schema.decodeUnknownSync(MemoryAccess.Wire)({ ...access, scope: value });
+    const decodedAccess = Schema.decodeSync(MemoryAccess.Wire)({ ...access, scope: value });
 
     expect(Schema.encodeSync(MemoryAccess.Wire)(decodedAccess).scope).toBe(value);
 
-    const decodedDocument = Schema.decodeUnknownSync(ActiveMemoryDocument.Wire)({
+    const decodedDocument = Schema.decodeSync(ActiveMemoryDocument.Wire)({
       ...document,
       scopes: [value],
     });
@@ -265,11 +265,11 @@ it("retains namespace types through public construction and operations", () => {
     expect(Schema.encodeSync(ActiveMemoryDocument.Wire)(decodedDocument).scopes).toEqual([value]);
   }
   for (const value of ["", "x".repeat(1_025)]) {
-    expect(() => Schema.decodeUnknownSync(MemoryAccess.Wire)({ ...access, scope: value })).toThrow(
+    expect(() => Schema.decodeSync(MemoryAccess.Wire)({ ...access, scope: value })).toThrow(
       /Expected/,
     );
     expect(() =>
-      Schema.decodeUnknownSync(ActiveMemoryDocument.Wire)({ ...document, scopes: [value] }),
+      Schema.decodeSync(ActiveMemoryDocument.Wire)({ ...document, scopes: [value] }),
     ).toThrow(/Expected/);
     expect(() => Schema.decodeUnknownSync(MemoryWrite.Wire)({ ...write, scopes: [value] })).toThrow(
       /Expected/,

@@ -41,7 +41,7 @@ export const admitReadFixture = Effect.fn("LedgerReadFixture.admit")(function* (
   const ledger = yield* SubmissionLedger;
 
   return yield* ledger.admit(
-    yield* Schema.decodeUnknownEffect(AdmissionRequest)({
+    yield* Schema.decodeEffect(AdmissionRequest)({
       threadId,
       principal: "ledger-read-test",
       idempotencyKey: key,
@@ -62,7 +62,7 @@ const reserve = Effect.fn("LedgerReadFixture.reserve")(function* (
   const ledger = yield* SubmissionLedger;
   const settlementId = submissionSettlementId(submission.submissionId);
 
-  const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)({
+  const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)({
     _tag: "SubmissionSettled",
     submissionId: submission.submissionId,
     settlementId,

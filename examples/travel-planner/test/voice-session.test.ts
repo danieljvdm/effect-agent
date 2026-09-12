@@ -47,7 +47,7 @@ const observation = (
 });
 
 const caption = (id: string, text: string, start = 0) =>
-  Schema.decodeUnknownSync(LiveEvent)({
+  Schema.decodeSync(LiveEvent)({
     type: "session.input_transcript.delta",
     event_id: id,
     delta: text,
@@ -56,7 +56,7 @@ const caption = (id: string, text: string, start = 0) =>
   });
 
 const delegation = (id: string, offset = 1000) =>
-  Schema.decodeUnknownSync(LiveEvent)({
+  Schema.decodeSync(LiveEvent)({
     type: "session.delegation.created",
     event_id: `event-${id}`,
     offset_ms: offset,

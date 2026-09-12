@@ -65,7 +65,7 @@ type HttpRequest = Parameters<typeof HttpClientResponse.fromWeb>[0];
 const decodeWire = (request: HttpRequest) => {
   if (request.body._tag !== "Uint8Array") throw new Error("Expected encoded JSON request");
 
-  return Schema.decodeUnknownSync(Schema.fromJsonString(WireRequest))(
+  return Schema.decodeSync(Schema.fromJsonString(WireRequest))(
     new TextDecoder().decode(request.body.body),
   );
 };
@@ -1305,7 +1305,7 @@ describe("review provider boundary", () => {
                   ? new TextDecoder().decode(httpRequest.body.body)
                   : "";
 
-              const body = Schema.decodeUnknownSync(
+              const body = Schema.decodeSync(
                 Schema.fromJsonString(Schema.Struct({ body: Schema.String })),
               )(encoded);
 
@@ -1538,7 +1538,7 @@ describe("review provider boundary", () => {
             if (httpRequest.method === "POST" && url.pathname.endsWith("/pulls/12/reviews")) {
               if (httpRequest.body._tag !== "Uint8Array") throw new Error("Expected review JSON");
               published.push(
-                Schema.decodeUnknownSync(
+                Schema.decodeSync(
                   Schema.fromJsonString(
                     Schema.Struct({
                       commit_id: Schema.String,

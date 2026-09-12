@@ -30,7 +30,7 @@ export const CheckedFinishResearch = Tool.make("finish_research", {
 
 export const CheckedFinishResearchLive = Toolkit.make(CheckedFinishResearch).toLayer({
   finish_research: (draft) =>
-    Schema.decodeUnknownEffect(ScoutFindings)(draft).pipe(
+    Schema.decodeEffect(ScoutFindings)(draft).pipe(
       Effect.mapError(
         () =>
           new PlannerError({

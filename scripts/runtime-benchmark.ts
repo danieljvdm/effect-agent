@@ -178,7 +178,7 @@ export const stageCheckout = Effect.fn("benchmark.stageCheckout")(function* (
 
   yield* check(status.exitCode === 0, `Cannot inspect ${role} checkout state`);
 
-  const effect = yield* Schema.decodeUnknownEffect(
+  const effect = yield* Schema.decodeEffect(
     Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
   )(yield* fs.readFileString(path.join(resolved, "node_modules/effect/package.json")));
 
@@ -199,7 +199,7 @@ export const stageCheckout = Effect.fn("benchmark.stageCheckout")(function* (
     if (directory.startsWith(".")) continue;
     const source = path.join(resolved, "packages", directory);
 
-    const manifest = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(PublishManifest))(
+    const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(PublishManifest))(
       yield* fs.readFileString(path.join(source, "package.json")),
     );
 
@@ -564,7 +564,7 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
                   };
 
               const decodedReport = (yield* fs.exists(outputFile))
-                ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WorkerReport))(
+                ? yield* Schema.decodeEffect(Schema.fromJsonString(WorkerReport))(
                     yield* fs.readFileString(outputFile),
                   ).pipe(Effect.exit)
                 : null;

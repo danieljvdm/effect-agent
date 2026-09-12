@@ -1,9 +1,10 @@
 import { Schema } from "effect";
 
 import { AgentPolicy } from "./AgentPolicy.ts";
-import { AgentId, DelegationId, RunId, ThreadId, ToolCallId } from "./Identifiers.ts";
+import { Update } from "./AgentUpdates.ts";
+import { AgentId, DelegationId, RunId, SettlementId, ThreadId, ToolCallId } from "./Identifiers.ts";
 import { Receipt } from "./Receipt.ts";
-import { SubagentGrant } from "./SubagentContract.ts";
+import { SubagentExecutionFailure, SubagentGrant } from "./SubagentContract.ts";
 
 /** A reusable child Thread, correlated with its declaration. This value grants no authority. */
 export const WorkerRef = Schema.Struct({
@@ -86,6 +87,8 @@ export type WorkerHistoryEntry = typeof WorkerHistoryEntry.Type;
  * Keep the same idempotency key and parameters when reconciling; never launch a replacement.
  */
 export class WorkerError extends Schema.TaggedError<WorkerError>()("WorkerError", {
+  /** Pending input or concurrency pressure may clear without changing the request. */
+  retryable: Schema.optionalKey(Schema.Literal(true)),
   operation: Schema.Literals([
     "context",
     "start",
@@ -112,3 +115,59 @@ export class WorkerError extends Schema.TaggedError<WorkerError>()("WorkerError"
 }) {}
 
 export { WorkerOperationTool } from "./SubagentContract.ts";
+
+/** One projected canonical Run outcome. Joined receipts share this identity. */
+export const WorkerReport = <Success extends Schema.Top>(success: Success) => {
+  const identity = {
+    _tag: Schema.Literal("Settled"),
+    worker: WorkerRef,
+    receipt: Receipt,
+    runId: RunId,
+    settlementId: SettlementId,
+  };
+
+  return Schema.Union([
+    // Union preserves the Success codec while making the result field required.
+    Schema.Struct({
+      ...identity,
+      outcome: Schema.Literal("completed"),
+      result: Schema.Union([success]),
+    }),
+    Schema.Struct({
+      ...identity,
+      outcome: Schema.Literals(["failed", "aborted"]),
+      failure: SubagentExecutionFailure,
+    }),
+  ]);
+};
+
+export type WorkerReport<Success extends Schema.Top> = ReturnType<
+  typeof WorkerReport<Success>
+>["Type"];
+
+/** Framework message stored separately from the parent's application input. */
+export const WorkerCompletion = Schema.Struct({
+  _tag: Schema.Literal("WorkerCompletion"),
+  budgetExhausted: Schema.Boolean,
+  schemaVersion: Schema.Literal(1),
+  report: WorkerReport(Schema.Json),
+}).check(Schema.makeFilter(({ report }) => report.worker.threadId === report.receipt.threadId));
+
+export type WorkerCompletion = typeof WorkerCompletion.Type;
+
+/** Source-worker intermediate output, kept separate from application input. */
+export const WorkerUpdate = Schema.Struct({
+  _tag: Schema.Literal("WorkerUpdate"),
+  schemaVersion: Schema.Literal(1),
+  worker: WorkerRef,
+  update: Update,
+}).check(
+  Schema.makeFilter(
+    ({ worker, update }) =>
+      worker.threadId === update.threadId && worker.targetAgentId === update.agentId,
+  ),
+);
+
+export type WorkerUpdate = typeof WorkerUpdate.Type;
+export const FrameworkMessage = Schema.Union([WorkerCompletion, WorkerUpdate]);
+export type FrameworkMessage = typeof FrameworkMessage.Type;

@@ -71,7 +71,7 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
   principal: Principal,
   rpcLimits: MemoryRpcLimits = defaultMemoryRpcLimits,
 ) {
-  const validated = yield* Schema.decodeUnknownEffect(MemoryRpcLimits)(rpcLimits).pipe(
+  const validated = yield* Schema.decodeEffect(MemoryRpcLimits)(rpcLimits).pipe(
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
 
@@ -79,13 +79,13 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
 
-  principal = yield* Schema.decodeUnknownEffect(Principal)(principal).pipe(
+  principal = yield* Schema.decodeEffect(Principal)(principal).pipe(
     Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
   );
   const { namespace } = yield* MemoryObjectNamespace;
 
   const call = Effect.fn("CloudflareMemoryClient.call")(function* (request: MemoryOwnerRequest) {
-    const decoded = yield* Schema.decodeUnknownEffect(MemoryOwnerRequest)(request).pipe(
+    const decoded = yield* Schema.decodeEffect(MemoryOwnerRequest)(request).pipe(
       Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
     );
 
@@ -134,7 +134,7 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
     lookup: MemoryLookup,
     limits: MemoryRecallLimits,
   ) {
-    limits = yield* Schema.decodeUnknownEffect(MemoryRecallLimits)(limits).pipe(
+    limits = yield* Schema.decodeEffect(MemoryRecallLimits)(limits).pipe(
       Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
     );
     const timeoutMillis = Math.min(validated.timeoutMillis, limits.timeoutMillis);
@@ -395,9 +395,9 @@ const makeMemoryObject = <E>(
       const state = yield* DurableObjectState.DurableObjectState;
       const scope = yield* Effect.scope;
 
-      yield* Schema.decodeUnknownEffect(MemoryRpcLimits)(
-        options.rpcLimits ?? defaultMemoryRpcLimits,
-      ).pipe(Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })));
+      yield* Schema.decodeEffect(MemoryRpcLimits)(options.rpcLimits ?? defaultMemoryRpcLimits).pipe(
+        Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
+      );
 
       return yield* state.blockConcurrencyWhile(Layer.buildWithScope(application, scope));
     }),

@@ -92,7 +92,7 @@ const operation = <A>(run: (signal: AbortSignal) => Promise<A>) =>
   Effect.tryPromise({ try: run, catch: failed });
 
 const normalize = Effect.fn("AppSource.normalize")(function* (files: ReadonlyArray<AppFile>) {
-  return (yield* Schema.decodeUnknownEffect(Files)(files).pipe(Effect.mapError(invalid))).toSorted(
+  return (yield* Schema.decodeEffect(Files)(files).pipe(Effect.mapError(invalid))).toSorted(
     (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
   );
 });
@@ -261,9 +261,7 @@ export const appSourceLayer = (
     repoName: string,
     scope: "read" | "write",
   ) {
-    const remote = yield* Schema.decodeUnknownEffect(base)(remoteBase).pipe(
-      Effect.mapError(invalid),
-    );
+    const remote = yield* Schema.decodeEffect(base)(remoteBase).pipe(Effect.mapError(invalid));
 
     const work = yield* workspace;
     const token = yield* operation(() => repo.createToken(scope, 60));
@@ -455,14 +453,14 @@ export const appSourceLayer = (
     readonly repoName: string;
     readonly files: ReadonlyArray<AppFile>;
   }) {
-    const repoName = yield* Schema.decodeUnknownEffect(RepoName)(input.repoName).pipe(
+    const repoName = yield* Schema.decodeEffect(RepoName)(input.repoName).pipe(
       Effect.mapError(invalid),
     );
 
     if (repoName === TEMPLATE) return yield* invalid();
     const files = yield* normalize(input.files);
 
-    yield* Schema.decodeUnknownEffect(base)(remoteBase).pipe(Effect.mapError(invalid));
+    yield* Schema.decodeEffect(base)(remoteBase).pipe(Effect.mapError(invalid));
     const failpoint = yield* TripFailpoint;
     let template = yield* getRepo(TEMPLATE);
 
@@ -530,11 +528,11 @@ export const appSourceLayer = (
     readonly repoName: string;
     readonly commitId: string;
   }) {
-    const repoName = yield* Schema.decodeUnknownEffect(RepoName)(input.repoName).pipe(
+    const repoName = yield* Schema.decodeEffect(RepoName)(input.repoName).pipe(
       Effect.mapError(invalid),
     );
 
-    const commitId = yield* Schema.decodeUnknownEffect(AppCommit)(input.commitId).pipe(
+    const commitId = yield* Schema.decodeEffect(AppCommit)(input.commitId).pipe(
       Effect.mapError(invalid),
     );
 
@@ -555,17 +553,17 @@ export const appSourceLayer = (
     readonly files: ReadonlyArray<AppFile>;
     readonly message: string;
   }) {
-    const repoName = yield* Schema.decodeUnknownEffect(RepoName)(input.repoName).pipe(
+    const repoName = yield* Schema.decodeEffect(RepoName)(input.repoName).pipe(
       Effect.mapError(invalid),
     );
 
     if (repoName === TEMPLATE) return yield* invalid();
 
-    const parent = yield* Schema.decodeUnknownEffect(AppCommit)(input.parentCommit).pipe(
+    const parent = yield* Schema.decodeEffect(AppCommit)(input.parentCommit).pipe(
       Effect.mapError(invalid),
     );
 
-    const message = yield* Schema.decodeUnknownEffect(
+    const message = yield* Schema.decodeEffect(
       Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240)),
     )(input.message).pipe(Effect.mapError(invalid));
 

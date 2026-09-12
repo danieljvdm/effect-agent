@@ -34,7 +34,6 @@ import {
   Crypto,
   Effect,
   Layer,
-  Option,
   Redacted,
   Schema,
   Semaphore,
@@ -165,9 +164,9 @@ export const browserRunProtectedLayer = () =>
             cleanup: "not-requested",
           });
 
-        const decodedPolicy = yield* Schema.decodeUnknownEffect(InteractiveBrowserPolicy)(
-          input,
-        ).pipe(Effect.mapError(() => initialError("denied")));
+        const decodedPolicy = yield* Schema.decodeEffect(InteractiveBrowserPolicy)(input).pipe(
+          Effect.mapError(() => initialError("denied")),
+        );
 
         if (decodedPolicy.network._tag === "PublicWeb") return yield* initialError("unsupported");
 
@@ -260,7 +259,7 @@ export const browserRunProtectedLayer = () =>
             if (Redacted.value(yield* caller) !== Redacted.value(principal))
               return yield* fail("denied");
 
-            const decision = yield* Schema.decodeUnknownEffect(CredentialObservationDecision)(
+            const decision = yield* Schema.decodeEffect(CredentialObservationDecision)(
               rawDecision,
             ).pipe(Effect.mapError(() => fail("observation-blocked")));
 
@@ -378,18 +377,17 @@ export const browserRunProtectedLayer = () =>
               }),
             )
             .pipe(
-              Effect.flatMap((result) =>
-                Option.isSome(result)
-                  ? Effect.succeed(result.value)
-                  : Effect.fail(
-                      new ProtectedBrowserError({
-                        reason: "busy",
-                        dispatch: "not-dispatched",
-                        milestone: "none",
-                        observation,
-                        cleanup,
-                      }),
-                    ),
+              Effect.flatMap(
+                Effect.fromOption(
+                  () =>
+                    new ProtectedBrowserError({
+                      reason: "busy",
+                      dispatch: "not-dispatched",
+                      milestone: "none",
+                      observation,
+                      cleanup,
+                    }),
+                ),
               ),
             );
 
@@ -398,9 +396,9 @@ export const browserRunProtectedLayer = () =>
           navigate: (request) =>
             run(
               Effect.gen(function* () {
-                const decoded = yield* Schema.decodeUnknownEffect(ProtectedBrowserNavigate)(
-                  request,
-                ).pipe(Effect.mapError(() => fail("denied")));
+                const decoded = yield* Schema.decodeEffect(ProtectedBrowserNavigate)(request).pipe(
+                  Effect.mapError(() => fail("denied")),
+                );
 
                 let url: URL;
 
@@ -452,9 +450,9 @@ export const browserRunProtectedLayer = () =>
           click: (request) =>
             run(
               Effect.gen(function* () {
-                const decoded = yield* Schema.decodeUnknownEffect(ProtectedBrowserClick)(
-                  request,
-                ).pipe(Effect.mapError(() => fail("denied")));
+                const decoded = yield* Schema.decodeEffect(ProtectedBrowserClick)(request).pipe(
+                  Effect.mapError(() => fail("denied")),
+                );
 
                 yield* permitObservation;
                 const control = yield* target(decoded.ref);
@@ -505,9 +503,9 @@ export const browserRunProtectedLayer = () =>
           fill: (request) =>
             run(
               Effect.gen(function* () {
-                const decoded = yield* Schema.decodeUnknownEffect(ProtectedBrowserFill)(
-                  request,
-                ).pipe(Effect.mapError(() => fail("denied")));
+                const decoded = yield* Schema.decodeEffect(ProtectedBrowserFill)(request).pipe(
+                  Effect.mapError(() => fail("denied")),
+                );
 
                 yield* permitObservation;
                 const control = yield* target(decoded.ref);
@@ -537,9 +535,9 @@ export const browserRunProtectedLayer = () =>
           listCredentialOffers: (request) =>
             run(
               Effect.gen(function* () {
-                const decoded = yield* Schema.decodeUnknownEffect(ListCredentialOffers)(
-                  request,
-                ).pipe(Effect.mapError(() => fail("denied")));
+                const decoded = yield* Schema.decodeEffect(ListCredentialOffers)(request).pipe(
+                  Effect.mapError(() => fail("denied")),
+                );
 
                 yield* permitObservation;
                 const control = yield* target(decoded.target);
@@ -588,7 +586,7 @@ export const browserRunProtectedLayer = () =>
           useCredential: (request) =>
             run(
               Effect.gen(function* () {
-                const decoded = yield* Schema.decodeUnknownEffect(UseCredential)(request).pipe(
+                const decoded = yield* Schema.decodeEffect(UseCredential)(request).pipe(
                   Effect.mapError(() => fail("denied")),
                 );
 
@@ -656,7 +654,7 @@ export const browserRunProtectedLayer = () =>
                   .resolve(authorization)
                   .pipe(Effect.mapError((error) => fail(error.reason)));
 
-                const material = yield* Schema.decodeUnknownEffect(
+                const material = yield* Schema.decodeEffect(
                   offer.kind === "login" ? LoginCredential : CardCredential,
                 )(raw).pipe(Effect.mapError(() => fail("resolver")));
 

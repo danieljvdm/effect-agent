@@ -90,7 +90,7 @@ export const revalidateSemanticMemoryCandidates = Effect.fn("revalidateSemanticM
     profile: SemanticMemoryProfile,
     limits: SemanticCandidateLimits,
   ) {
-    const input = yield* Schema.decodeUnknownEffect(
+    const input = yield* Schema.decodeEffect(
       Schema.Struct({
         found: MemoryIndexSearch.Wire,
         access: MemoryAccess.Wire,

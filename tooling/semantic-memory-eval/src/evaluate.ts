@@ -227,21 +227,15 @@ const appendDocument = Effect.fn("SemanticMemoryEvaluation.appendDocument")(func
   const store = yield* ThreadStore;
   const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId: THREAD_ID }));
 
-  const recordId = yield* Schema.decodeUnknownEffect(RecordId)(
-    `eval-record-${ordinal}-${document.id}`,
-  );
+  const recordId = yield* Schema.decodeEffect(RecordId)(`eval-record-${ordinal}-${document.id}`);
 
-  const deploymentId = yield* Schema.decodeUnknownEffect(DeploymentId)(
-    "semantic-memory-evaluation",
-  );
+  const deploymentId = yield* Schema.decodeEffect(DeploymentId)("semantic-memory-evaluation");
 
-  const producerEpoch = yield* Schema.decodeUnknownEffect(ProducerEpoch)(1);
+  const producerEpoch = yield* Schema.decodeEffect(ProducerEpoch)(1);
 
-  const batchId = yield* Schema.decodeUnknownEffect(BatchId)(
-    `eval-batch-${ordinal}-${document.id}`,
-  );
+  const batchId = yield* Schema.decodeEffect(BatchId)(`eval-batch-${ordinal}-${document.id}`);
 
-  const producerId = yield* Schema.decodeUnknownEffect(ProducerId)("semantic-memory-evaluation");
+  const producerId = yield* Schema.decodeEffect(ProducerId)("semantic-memory-evaluation");
 
   const record = RecordEnvelope.make({
     recordId,
@@ -275,7 +269,7 @@ const applyActivity = Effect.fn("SemanticMemoryEvaluation.applyActivity")(functi
   const writer = yield* MemoryWriter;
 
   yield* writer.change(
-    yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
+    yield* Schema.decodeEffect(MemoryWrite.Wire)({
       _tag: "Put",
       key: key(document.id),
       operationId: work.workId,
@@ -602,7 +596,7 @@ const loadCorpus = Effect.fn("SemanticMemoryEvaluation.loadCorpus")(function* ()
 
   if (digest !== CORPUS_SHA256) return yield* evalError("verify corpus", `SHA-256 ${digest}`);
 
-  return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(EvaluationCorpus))(raw).pipe(
+  return yield* Schema.decodeEffect(Schema.fromJsonString(EvaluationCorpus))(raw).pipe(
     Effect.mapError((cause) => evalError("decode corpus", cause)),
   );
 });
@@ -657,7 +651,7 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
     yield* threads.materialize(
       ThreadMaterialization.make({
         threadId: THREAD_ID,
-        producerEpoch: yield* Schema.decodeUnknownEffect(ProducerEpoch)(1),
+        producerEpoch: yield* Schema.decodeEffect(ProducerEpoch)(1),
       }),
     );
     // Download/model initialization is complete before commit-lag measurements begin.
@@ -712,7 +706,7 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
     for (const document of corpus.documents) {
       if (document.previousText !== undefined) {
         yield* writer.change(
-          yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
+          yield* Schema.decodeEffect(MemoryWrite.Wire)({
             _tag: "Put",
             key: key(document.id),
             operationId: `fixture-correction-${document.id}`,
@@ -739,7 +733,7 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
         );
       } else if (document.state === "withdrawn") {
         yield* writer.change(
-          yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
+          yield* Schema.decodeEffect(MemoryWrite.Wire)({
             _tag: "Withdraw",
             key: key(document.id),
             operationId: `fixture-withdrawal-${document.id}`,
@@ -862,7 +856,7 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
   const semanticRows = result.measurements.filter((row) => row.method === "semantic");
   const generatedAt = DateTime.makeUnsafe(yield* Clock.currentTimeMillis);
 
-  return yield* Schema.decodeUnknownEffect(Schema.toType(EvaluationReport))({
+  return yield* Schema.decodeEffect(Schema.toType(EvaluationReport))({
     version: 1,
     metadata: {
       generatedAt,

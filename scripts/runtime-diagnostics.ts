@@ -232,7 +232,7 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
     const stages = [base, head];
 
     report.revisions = yield* Effect.forEach(stages, (stage) =>
-      Schema.decodeUnknownEffect(Revision)(stage.revision),
+      Schema.decodeEffect(Revision)(stage.revision),
     );
     yield* check(
       report.revisions.every((revision) => !revision.dirty),
@@ -248,7 +248,7 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
       yield* persist;
       for (let cohort = 0; cohort < DIAGNOSTIC_SIZES.cohorts; cohort++)
         for (const stage of cohort === 0 ? stages : [...stages].reverse()) {
-          const role = yield* Schema.decodeUnknownEffect(Role)(stage.revision.role);
+          const role = yield* Schema.decodeEffect(Role)(stage.revision.role);
           const name = `${cohort}-${role}`;
           const filename = path.join(output, `${name}.json`);
 
@@ -297,9 +297,9 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
                   "Diagnostic worker report exceeds 16 MiB",
                 );
 
-                return yield* Schema.decodeUnknownEffect(
-                  Schema.fromJsonString(DiagnosticWorkerReport),
-                )(yield* fs.readFileString(filename));
+                return yield* Schema.decodeEffect(Schema.fromJsonString(DiagnosticWorkerReport))(
+                  yield* fs.readFileString(filename),
+                );
               }).pipe(Effect.exit);
 
               const worker = Exit.isSuccess(decoded) ? decoded.value : null;

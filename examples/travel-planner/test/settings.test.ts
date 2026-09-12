@@ -88,7 +88,7 @@ const rpcExit = async (tag: string, payload?: unknown, email = ownerEmail) => {
   expect(response.status).toBe(200);
   expect(response.headers.get("cache-control")).toBe("no-store");
 
-  return Schema.decodeUnknownSync(Schema.fromJsonString(RpcExit))(body.trim().split("\n")[0]).exit;
+  return Schema.decodeSync(Schema.fromJsonString(RpcExit))(body.trim().split("\n")[0]).exit;
 };
 
 const rpc = async (tag: string, payload?: unknown, email = ownerEmail) => {

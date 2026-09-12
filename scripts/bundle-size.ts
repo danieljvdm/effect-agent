@@ -351,7 +351,7 @@ const measureCheckout = Effect.fn("bundleSize.measureCheckout")(function* (
     ),
   );
 
-  const effect = yield* Schema.decodeUnknownEffect(
+  const effect = yield* Schema.decodeEffect(
     Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
   )(yield* fs.readFileString(path.join(root, "node_modules", "effect", "package.json")));
 

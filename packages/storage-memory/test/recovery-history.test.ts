@@ -1,4 +1,10 @@
-import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
+import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { AgentId, DelegationId, ThreadId } from "@effect-agent/core/Identifiers";
+import {
+  SubagentDelegationCaps,
+  SubagentGrant,
+  SubagentReservationAmounts,
+} from "@effect-agent/core/SubagentContract";
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import { EMPTY_TAIL_DIGEST, digestJson } from "@effect-agent/thread/Digest";
@@ -19,6 +25,9 @@ import {
   ProducerId,
   RepairAnnotated,
   UserInputRecorded,
+  WorkerAdmission,
+  WorkerOrigin,
+  WorkerOriginRecorded,
 } from "@effect-agent/thread/Records";
 import { type RecoveryDecision } from "@effect-agent/thread/Recovery";
 import { runIdForSubmission } from "@effect-agent/thread/RunJournal";
@@ -51,6 +60,7 @@ class RecoveryReadProbe extends Context.Service<
   {
     readonly failReadAfter: (sequence: CanonicalSequence) => Effect.Effect<void>;
     readonly requests: Effect.Effect<ReadonlyArray<ThreadRead>>;
+    readonly exportedThreads: Effect.Effect<ReadonlyArray<ThreadId>>;
     readonly reset: Effect.Effect<void>;
   }
 >()("@effect-agent/storage-memory/test/RecoveryReadProbe") {}
@@ -59,6 +69,7 @@ const countingThreadStoreLayer = Layer.effectContext(
   Effect.gen(function* () {
     const store = yield* ThreadStore;
     const requests = yield* Ref.make<ReadonlyArray<ThreadRead>>([]);
+    const exportedThreads = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
     const failingAfter = yield* Ref.make<Option.Option<CanonicalSequence>>(Option.none());
 
     const counted = ThreadStore.of({
@@ -80,7 +91,10 @@ const countingThreadStoreLayer = Layer.effectContext(
           }),
         ),
       observe: store.observe,
-      export: store.export,
+      export: (request) =>
+        Ref.update(exportedThreads, (current) => [...current, request.threadId]).pipe(
+          Effect.andThen(store.export(request)),
+        ),
       inspectTail: store.inspectTail,
       checkpoints: store.checkpoints,
     });
@@ -91,7 +105,8 @@ const countingThreadStoreLayer = Layer.effectContext(
         RecoveryReadProbe.of({
           failReadAfter: (sequence) => Ref.set(failingAfter, Option.some(sequence)),
           requests: Ref.get(requests),
-          reset: Ref.set(requests, []),
+          exportedThreads: Ref.get(exportedThreads),
+          reset: Ref.set(requests, []).pipe(Effect.andThen(Ref.set(exportedThreads, []))),
         }),
       ),
     );
@@ -137,7 +152,9 @@ const runtimeLayer = DurableAgentRuntime.layer.pipe(
   ),
 );
 
-const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* () {
+const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* (
+  workerOrigin?: WorkerOrigin,
+) {
   const store = yield* ThreadStore;
 
   yield* store.materialize(
@@ -165,7 +182,9 @@ const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* () {
         payload:
           sequence === 0
             ? ThreadCreated.make({ agentId: AGENT_ID, definitions: DEFINITIONS })
-            : RepairAnnotated.make({ reason: "history seed", details: { sequence } }),
+            : sequence === 1 && workerOrigin !== undefined
+              ? WorkerOriginRecorded.make({ origin: workerOrigin })
+              : RepairAnnotated.make({ reason: "history seed", details: { sequence } }),
       });
     });
 
@@ -195,6 +214,98 @@ const seedHistory = Effect.fn("RecoveryHistoryTest.seedHistory")(function* () {
 });
 
 describe("DurableAgentRuntime recovery history", () => {
+  it.effect(
+    "repairs standard worker updates once per recovery Thread, including direct recovery",
+    () =>
+      Effect.gen(function* () {
+        const firstMessageId = decodeIdempotencyKey("worker-recovery-0");
+
+        const origin = WorkerOrigin.make({
+          worker: {
+            schemaVersion: 1,
+            threadId: THREAD_ID,
+            targetAgentId: AGENT_ID,
+            delegationId: Schema.decodeSync(DelegationId)("reporting-worker"),
+          },
+          source: {
+            _tag: "programmatic",
+            threadId: decodeThreadId("worker-recovery-source"),
+            agentId: AGENT_ID,
+          },
+          targetDigests: DEFINITIONS,
+          policy: AgentPolicy.resolve(),
+          budget: {
+            caps: SubagentDelegationCaps.make({
+              maxConcurrentChildren: 1,
+              maxTotalChildInvocations: 4,
+            }),
+            allocation: SubagentReservationAmounts.make({
+              turns: 12,
+              toolCalls: 24,
+              durationMillis: 300_000,
+              inputTokens: 0,
+              outputTokens: 0,
+              costMicrousd: 0,
+              resultBytes: 1_000,
+            }),
+          },
+          grant: SubagentGrant.make({ maxDepth: 1, allowedToolNames: [] }),
+          depth: 1,
+          firstMessageId,
+          createdAtMillis: 1,
+          expiresAtMillis: 1_000_000,
+          reporting: { mode: "standard", sourceDigests: DEFINITIONS },
+        });
+
+        yield* seedHistory(origin);
+        const ledger = yield* SubmissionLedger;
+        const runtime = yield* DurableAgentRuntime;
+        const probe = yield* RecoveryReadProbe;
+
+        for (let index = 0; index < 4; index++) {
+          const input = { work: `worker-submission-${index}` };
+          const messageId = decodeIdempotencyKey(`worker-recovery-${index}`);
+
+          const admitted = yield* ledger.admit(
+            AdmissionRequest.make({
+              threadId: THREAD_ID,
+              principal: PRINCIPAL,
+              idempotencyKey: messageId,
+              agentId: AGENT_ID,
+              agentDigests: DEFINITIONS,
+              deploymentId: DEPLOYMENT_ID,
+              inputPayload: input,
+              inputDigest: yield* digestJson(input),
+              workerAdmission: WorkerAdmission.make({
+                origin,
+                messageId,
+                parameters: input,
+                createdAtMillis: index + 1,
+              }),
+            }),
+          );
+
+          yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+        }
+        yield* probe.reset;
+        const reports = yield* runtime.runRecovery;
+
+        expect(reports.map((report) => report.disposition)).toEqual([
+          "deferred",
+          "deferred",
+          "deferred",
+          "deferred",
+        ]);
+        expect(yield* probe.exportedThreads).toEqual([THREAD_ID]);
+        const first = reports[0];
+
+        if (first === undefined) return yield* Effect.die("Expected a pending worker submission");
+        yield* probe.reset;
+        expect((yield* runtime.recoverSubmission(first.submissionId)).disposition).toBe("deferred");
+        expect(yield* probe.exportedThreads).toEqual([THREAD_ID]);
+      }).pipe(Effect.provide(runtimeLayer)),
+  );
+
   it.effect("STORE-015 issue #96: reads canonical pages once for mixed recovery decisions", () =>
     Effect.gen(function* () {
       yield* seedHistory();

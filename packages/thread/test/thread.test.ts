@@ -141,9 +141,9 @@ describe("thread canonical contracts", () => {
       ["toolDigest", ["", 1, null, undefined, "not-a-digest"]],
     ] as const) {
       for (const invalid of invalidValues) {
-        expect(
-          Schema.decodeUnknownExit(ThreadCheckpoint)({ ...encoded, [field]: invalid })._tag,
-        ).toBe("Failure");
+        expect(Schema.decodeExit(ThreadCheckpoint)({ ...encoded, [field]: invalid })._tag).toBe(
+          "Failure",
+        );
       }
     }
   });
@@ -178,7 +178,7 @@ describe("thread canonical contracts", () => {
     it.effect("round-trips the current canonical record version", () =>
       Effect.gen(function* () {
         const encoded = yield* Schema.encodeEffect(CanonicalRecordEnvelope)(createdEnvelope);
-        const decoded = yield* Schema.decodeUnknownEffect(CanonicalRecordEnvelope)(encoded);
+        const decoded = yield* Schema.decodeEffect(CanonicalRecordEnvelope)(encoded);
 
         expect(decoded).toEqual(createdEnvelope);
         expect(decoded.record.schemaVersion).toBe(1);
@@ -228,7 +228,7 @@ describe("thread canonical contracts", () => {
 
         Object.setPrototypeOf(sources, null);
         Object.freeze(sources);
-        const decoded = Schema.decodeUnknownSync(PersistedJson)({ action: { sources } });
+        const decoded = Schema.decodeSync(PersistedJson)({ action: { sources } });
 
         expect(yield* digestJson(decoded)).toBe(
           yield* digestJson({
@@ -299,7 +299,7 @@ describe("thread canonical contracts", () => {
       preferences: { quiet: true, budget: 2_000 },
     };
 
-    const decoded = Schema.decodeUnknownSync(PersistedJson)(valid);
+    const decoded = Schema.decodeSync(PersistedJson)(valid);
 
     expect(Schema.encodeSync(PersistedJson)(decoded)).toEqual(valid);
 
@@ -309,14 +309,14 @@ describe("thread canonical contracts", () => {
       tooDeep = { next: tooDeep };
     }
     expect(Schema.decodeUnknownExit(PersistedJson)(tooDeep)._tag).toBe("Failure");
-    expect(
-      Schema.decodeUnknownExit(PersistedJson)("x".repeat(MAX_PERSISTED_JSON_BYTES + 1))._tag,
-    ).toBe("Failure");
+    expect(Schema.decodeExit(PersistedJson)("x".repeat(MAX_PERSISTED_JSON_BYTES + 1))._tag).toBe(
+      "Failure",
+    );
     // JSON quotes consume two bytes; astral code points consume four rather than UTF-16's two.
     const utf8Boundary = "😀".repeat(Math.floor((MAX_PERSISTED_JSON_BYTES - 2) / 4));
 
-    expect(Schema.decodeUnknownExit(PersistedJson)(utf8Boundary)._tag).toBe("Success");
-    expect(Schema.decodeUnknownExit(PersistedJson)(`${utf8Boundary}😀`)._tag).toBe("Failure");
+    expect(Schema.decodeExit(PersistedJson)(utf8Boundary)._tag).toBe("Success");
+    expect(Schema.decodeExit(PersistedJson)(`${utf8Boundary}😀`)._tag).toBe("Failure");
 
     const cyclic: Record<string, unknown> = {};
 
@@ -386,7 +386,7 @@ describe("thread canonical contracts", () => {
     const shared = { amenities: ["hot tub", "kitchen"] };
     const dag = { first: shared, nested: { second: shared }, list: [shared, shared.amenities] };
 
-    expect(Schema.decodeUnknownSync(PersistedJson)(dag)).toEqual(dag);
+    expect(Schema.decodeSync(PersistedJson)(dag)).toEqual(dag);
     const cycle: unknown[] = [];
     const parent = { shared, cycle };
 
@@ -400,24 +400,19 @@ describe("thread canonical contracts", () => {
     let sharedTree: Schema.Json = null;
 
     for (let level = 0; level < 15; level++) sharedTree = [sharedTree, sharedTree];
-    expect(Schema.decodeUnknownExit(PersistedJson)([sharedTree])._tag).toBe("Success");
-    expect(Schema.decodeUnknownExit(PersistedJson)([sharedTree, null])._tag).toBe("Failure");
+    expect(Schema.decodeExit(PersistedJson)([sharedTree])._tag).toBe("Success");
+    expect(Schema.decodeExit(PersistedJson)([sharedTree, null])._tag).toBe("Failure");
 
     const largeShared = { text: "x".repeat(MAX_PERSISTED_JSON_BYTES / 2) };
 
-    expect(Schema.decodeUnknownExit(PersistedJson)(largeShared)._tag).toBe("Success");
-    expect(Schema.decodeUnknownExit(PersistedJson)([largeShared, largeShared])._tag).toBe(
-      "Failure",
-    );
+    expect(Schema.decodeExit(PersistedJson)(largeShared)._tag).toBe("Success");
+    expect(Schema.decodeExit(PersistedJson)([largeShared, largeShared])._tag).toBe("Failure");
     expect(
-      Schema.decodeUnknownExit(PersistedJson)(
-        Array(MAX_PERSISTED_JSON_COLLECTION_LENGTH).fill(null),
-      )._tag,
+      Schema.decodeExit(PersistedJson)(Array(MAX_PERSISTED_JSON_COLLECTION_LENGTH).fill(null))._tag,
     ).toBe("Success");
     expect(
-      Schema.decodeUnknownExit(PersistedJson)(
-        Array(MAX_PERSISTED_JSON_COLLECTION_LENGTH + 1).fill(null),
-      )._tag,
+      Schema.decodeExit(PersistedJson)(Array(MAX_PERSISTED_JSON_COLLECTION_LENGTH + 1).fill(null))
+        ._tag,
     ).toBe("Failure");
   });
 
@@ -515,7 +510,7 @@ describe("phase 4 durable canonical payloads", () => {
       const encoded = Schema.encodeSync(RecordEnvelope)(record);
 
       expect(encoded.payload).toEqual(payload);
-      expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
+      expect(Schema.decodeSync(RecordEnvelope)(encoded)).toEqual(record);
     }
   });
 
@@ -732,7 +727,7 @@ describe("phase 4 durable canonical payloads", () => {
       const encoded = Schema.encodeSync(RecordEnvelope)(record);
 
       expect(encoded.payload).toEqual(payload);
-      expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
+      expect(Schema.decodeSync(RecordEnvelope)(encoded)).toEqual(record);
     }
   });
 
@@ -793,9 +788,9 @@ describe("phase 4 durable canonical payloads", () => {
     const record = decodeRecord("record-run029", payload);
 
     expect(Schema.encodeSync(RecordEnvelope)(record).payload).toEqual(payload);
-    expect(
-      Schema.decodeUnknownSync(RecordEnvelope)(Schema.encodeSync(RecordEnvelope)(record)),
-    ).toEqual(record);
+    expect(Schema.decodeSync(RecordEnvelope)(Schema.encodeSync(RecordEnvelope)(record))).toEqual(
+      record,
+    );
   });
 
   it("RUN-029: rejects run disposition outside an ordinary completed Run", () => {
@@ -929,10 +924,10 @@ describe("SubmissionLedger port schemas", () => {
   } as const;
 
   it("round-trips admission values and rejects malformed ones", () => {
-    const request = Schema.decodeUnknownSync(AdmissionRequest)(encodedAdmissionRequest);
+    const request = Schema.decodeSync(AdmissionRequest)(encodedAdmissionRequest);
 
     expect(Schema.encodeSync(AdmissionRequest)(request)).toEqual(encodedAdmissionRequest);
-    const result = Schema.decodeUnknownSync(AdmissionResult)(encodedAdmissionResult);
+    const result = Schema.decodeSync(AdmissionResult)(encodedAdmissionResult);
 
     expect(Schema.encodeSync(AdmissionResult)(result)).toEqual(encodedAdmissionResult);
 
@@ -957,12 +952,12 @@ describe("SubmissionLedger port schemas", () => {
   });
 
   it("round-trips lookups, claims, and recovery snapshots", () => {
-    const byId = Schema.decodeUnknownSync(SubmissionLookup)({
+    const byId = Schema.decodeSync(SubmissionLookup)({
       _tag: "SubmissionLookupById",
       submissionId: "submission-1",
     });
 
-    const byKey = Schema.decodeUnknownSync(SubmissionLookup)({
+    const byKey = Schema.decodeSync(SubmissionLookup)({
       _tag: "SubmissionLookupByKey",
       threadId: "travel-thread",
       principal: "tenant-a",
@@ -984,12 +979,12 @@ describe("SubmissionLedger port schemas", () => {
       inputPayload: { destination: "Kyoto" },
     } as const;
 
-    const claim = Schema.decodeUnknownSync(Claim)(encodedClaim);
+    const claim = Schema.decodeSync(Claim)(encodedClaim);
 
     expect(Schema.encodeSync(Claim)(claim)).toEqual(encodedClaim);
     expect(Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION)).toBe(30_000);
 
-    const snapshot = Schema.decodeUnknownSync(SubmissionSnapshot)(encodedSubmissionSnapshot);
+    const snapshot = Schema.decodeSync(SubmissionSnapshot)(encodedSubmissionSnapshot);
 
     expect(Schema.encodeSync(SubmissionSnapshot)(snapshot)).toEqual(encodedSubmissionSnapshot);
 
@@ -1059,7 +1054,7 @@ describe("SubmissionLedger port schemas", () => {
 
     expect(Schema.encodeSync(RecoverySnapshot)(recovery)).toEqual(encodedRecovery);
 
-    const minimalRecovery = Schema.decodeUnknownSync(RecoverySnapshot)({
+    const minimalRecovery = Schema.decodeSync(RecoverySnapshot)({
       submission: encodedSubmissionSnapshot,
       joins: [],
       approvalDecisions: [],
@@ -1129,7 +1124,7 @@ describe("SubmissionLedger port schemas", () => {
     expect(Schema.encodeSync(SettlementReservation)(reservation)).toEqual(encodedReservation);
     expect(reservation.record).toEqual(settledRecord);
 
-    const reserved = Schema.decodeUnknownSync(ReservedSettlement)({
+    const reserved = Schema.decodeSync(ReservedSettlement)({
       submissionId: "submission-1",
       settlementId: "settlement:submission-1",
       outcome: "completed",
@@ -1140,7 +1135,7 @@ describe("SubmissionLedger port schemas", () => {
 
     expect(reserved.replayed).toBe(true);
 
-    const settlement = Schema.decodeUnknownSync(Settlement)({
+    const settlement = Schema.decodeSync(Settlement)({
       submissionId: "submission-1",
       settlementId: "settlement:submission-1",
       receiptId: "receipt-1",
@@ -1152,7 +1147,7 @@ describe("SubmissionLedger port schemas", () => {
     expect(settlement.outcome).toBe("completed");
     expect(settlement.runDisposition).toBe("application-complete");
     expect(
-      Schema.decodeUnknownExit(Settlement)({
+      Schema.decodeExit(Settlement)({
         submissionId: "submission-1",
         settlementId: "settlement:submission-1",
         receiptId: "receipt-1",
@@ -1183,7 +1178,7 @@ describe("SubmissionLedger port schemas", () => {
   });
 
   it("round-trips abort commands, intents, capabilities, and typed errors", () => {
-    const command = Schema.decodeUnknownSync(AbortCommand)({
+    const command = Schema.decodeSync(AbortCommand)({
       submissionId: "submission-1",
       author: "operator",
       reason: "user cancelled the trip",
@@ -1191,7 +1186,7 @@ describe("SubmissionLedger port schemas", () => {
 
     expect(command.author).toBe("operator");
     expect(
-      Schema.decodeUnknownExit(AbortCommand)({
+      Schema.decodeExit(AbortCommand)({
         submissionId: "submission-1",
         author: "",
         reason: "user cancelled the trip",
@@ -1206,16 +1201,16 @@ describe("SubmissionLedger port schemas", () => {
       canonicalRecordId: "abort:submission-1",
     };
 
-    const intent = Schema.decodeUnknownSync(AbortIntent)(encodedIntent);
+    const intent = Schema.decodeSync(AbortIntent)(encodedIntent);
 
     expect(Schema.encodeSync(AbortIntent)(intent)).toEqual(encodedIntent);
 
-    expect(Schema.decodeUnknownSync(LedgerCapabilities)({ durability: "durable-node" })).toEqual({
+    expect(Schema.decodeSync(LedgerCapabilities)({ durability: "durable-node" })).toEqual({
       durability: "durable-node",
     });
-    expect(
-      Schema.decodeUnknownSync(LedgerCapabilities)({ durability: "durable-cloudflare" }),
-    ).toEqual({ durability: "durable-cloudflare" });
+    expect(Schema.decodeSync(LedgerCapabilities)({ durability: "durable-cloudflare" })).toEqual({
+      durability: "durable-cloudflare",
+    });
     expect(
       Schema.decodeUnknownExit(LedgerCapabilities)({ durability: "durable-sqlite" })._tag,
     ).toBe("Failure");
@@ -1230,7 +1225,7 @@ describe("SubmissionLedger port schemas", () => {
 
     const encodedConflict = Schema.encodeSync(AdmissionConflict)(conflict);
 
-    expect(Schema.decodeUnknownSync(AdmissionConflict)(encodedConflict)).toEqual(conflict);
+    expect(Schema.decodeSync(AdmissionConflict)(encodedConflict)).toEqual(conflict);
 
     const lost = OwnershipLost.make({
       submissionId,
@@ -1354,7 +1349,7 @@ describe("phase 5 durable canonical payloads", () => {
       const encoded = Schema.encodeSync(RecordEnvelope)(record);
 
       expect(encoded.payload).toEqual(payload);
-      expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
+      expect(Schema.decodeSync(RecordEnvelope)(encoded)).toEqual(record);
     }
   });
 
@@ -1628,7 +1623,7 @@ describe("S2 durable subagent canonical payloads", () => {
       const encoded = Schema.encodeSync(RecordEnvelope)(record);
 
       expect(encoded.payload).toEqual(payload);
-      expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
+      expect(Schema.decodeSync(RecordEnvelope)(encoded)).toEqual(record);
     }
   });
 
@@ -1826,14 +1821,14 @@ describe("phase 5 ledger port schemas", () => {
       maxCount: 1,
     } as const;
 
-    const request = Schema.decodeUnknownSync(ClaimJoiningRequest)(encodedClaimJoining);
+    const request = Schema.decodeSync(ClaimJoiningRequest)(encodedClaimJoining);
 
     expect(Schema.encodeSync(ClaimJoiningRequest)(request)).toEqual(encodedClaimJoining);
     expect(
-      Schema.decodeUnknownExit(ClaimJoiningRequest)({ ...encodedClaimJoining, maxCount: 0 })._tag,
+      Schema.decodeExit(ClaimJoiningRequest)({ ...encodedClaimJoining, maxCount: 0 })._tag,
     ).toBe("Failure");
 
-    const claim = Schema.decodeUnknownSync(JoiningClaim)({
+    const claim = Schema.decodeSync(JoiningClaim)({
       submissionId: "submission-2",
       queueSequence: 2,
       inputPayload: { note: "also add a museum day" },
@@ -1841,7 +1836,7 @@ describe("phase 5 ledger port schemas", () => {
 
     expect(claim.queueSequence).toBe(2);
 
-    const marked = Schema.decodeUnknownSync(MarkJoinedRequest)({
+    const marked = Schema.decodeSync(MarkJoinedRequest)({
       submissionId: "submission-2",
       ownershipToken: "token-1",
       recordId: "input:submission-2",
@@ -1850,7 +1845,7 @@ describe("phase 5 ledger port schemas", () => {
 
     expect(marked.recordId).toBe("input:submission-2");
     expect(
-      Schema.decodeUnknownSync(RevertJoiningRequest)({ submissionId: "submission-2" }).submissionId,
+      Schema.decodeSync(RevertJoiningRequest)({ submissionId: "submission-2" }).submissionId,
     ).toBe("submission-2");
   });
 
@@ -1861,7 +1856,7 @@ describe("phase 5 ledger port schemas", () => {
       reason: { _tag: "ApprovalPending", toolCallIds: ["call-1", "call-2"] },
     } as const;
 
-    const suspend = Schema.decodeUnknownSync(SuspendRequest)(encodedSuspend);
+    const suspend = Schema.decodeSync(SuspendRequest)(encodedSuspend);
 
     expect(Schema.encodeSync(SuspendRequest)(suspend)).toEqual(encodedSuspend);
     expect(
@@ -1879,7 +1874,7 @@ describe("phase 5 ledger port schemas", () => {
       reason: "reviewed",
     } as const;
 
-    const command = Schema.decodeUnknownSync(ApprovalDecisionCommand)(encodedCommand);
+    const command = Schema.decodeSync(ApprovalDecisionCommand)(encodedCommand);
 
     expect(Schema.encodeSync(ApprovalDecisionCommand)(command)).toEqual(encodedCommand);
     expect(
@@ -1895,7 +1890,7 @@ describe("phase 5 ledger port schemas", () => {
       canonicalRecordId: "approval-decision:run-1:2:call-1",
     };
 
-    const intent = Schema.decodeUnknownSync(ApprovalDecisionIntent)(encodedIntent);
+    const intent = Schema.decodeSync(ApprovalDecisionIntent)(encodedIntent);
 
     expect(Schema.encodeSync(ApprovalDecisionIntent)(intent)).toEqual(encodedIntent);
 
@@ -1909,7 +1904,7 @@ describe("phase 5 ledger port schemas", () => {
   });
 
   it("round-trips unknown marking, resolutions, and the joined-abort conflict", () => {
-    const marked = Schema.decodeUnknownSync(MarkUnknownRequest)({
+    const marked = Schema.decodeSync(MarkUnknownRequest)({
       submissionId: "submission-1",
       toolCallIds: ["call-1"],
       reason: "prepared without a canonical outcome",
@@ -1950,11 +1945,11 @@ describe("phase 5 ledger port schemas", () => {
       },
     } as const;
 
-    const command = Schema.decodeUnknownSync(UnknownResolutionCommand)(encodedCommand);
+    const command = Schema.decodeSync(UnknownResolutionCommand)(encodedCommand);
 
     expect(Schema.encodeSync(UnknownResolutionCommand)(command)).toEqual(encodedCommand);
 
-    const intent = Schema.decodeUnknownSync(UnknownResolutionIntent)({
+    const intent = Schema.decodeSync(UnknownResolutionIntent)({
       ...encodedCommand,
       resolvedAt: "2026-08-12T00:00:30.000Z",
     });
@@ -2016,7 +2011,7 @@ describe("phase 5 ledger port schemas", () => {
 });
 
 describe("ToolReconciler", () => {
-  const preparedEvidence = Schema.decodeUnknownSync(PreparedToolCallEvidence)({
+  const preparedEvidence = Schema.decodeSync(PreparedToolCallEvidence)({
     threadId: "travel-thread",
     submissionId: "submission-1",
     runId: "run:submission-1",

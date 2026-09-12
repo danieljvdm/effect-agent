@@ -396,7 +396,7 @@ const makeWorkerName = Effect.fn("BrowserRunWorkerProof.makeWorkerName")(functio
     ),
   );
 
-  return yield* Schema.decodeUnknownEffect(WorkerName)(
+  return yield* Schema.decodeEffect(WorkerName)(
     `effect-agent-browser-proof-${uuid.replaceAll("-", "")}`,
   ).pipe(
     Effect.mapError((cause) =>

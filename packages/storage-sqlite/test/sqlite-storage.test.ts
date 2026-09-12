@@ -859,7 +859,7 @@ describe("SqliteThreadStore", () => {
           expect(Exit.isFailure(foreignExit)).toBe(true);
 
           const malformedOffset =
-            yield* Schema.decodeUnknownEffect(ObservationOffset)("foreign-adapter:1");
+            yield* Schema.decodeEffect(ObservationOffset)("foreign-adapter:1");
 
           const malformedExit = yield* store
             .observe(

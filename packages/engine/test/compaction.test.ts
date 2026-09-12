@@ -887,7 +887,7 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
               Effect.sync(() => {
                 commits.push(commit);
               }),
-          }).pipe(Effect.provide(Layer.succeed(ContextCompactor, compactor)));
+          }).pipe(Effect.provideService(ContextCompactor, compactor));
 
           expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
           expect(result.requests.length).toBeLessThanOrEqual(2);
@@ -903,23 +903,19 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         const expected = CompactionError.make({ message: "summary refused" });
 
         const typed = yield* driveRun(replacementSetup).pipe(
-          Effect.provide(
-            Layer.succeed(ContextCompactor, {
-              estimate: estimatePromptTokens,
-              compact: () => Stream.fail(expected),
-            }),
-          ),
+          Effect.provideService(ContextCompactor, {
+            estimate: estimatePromptTokens,
+            compact: () => Stream.fail(expected),
+          }),
         );
 
         expect(failureFrom(typed.exit)).toBe(expected);
 
         const defect = yield* driveRun(replacementSetup).pipe(
-          Effect.provide(
-            Layer.succeed(ContextCompactor, {
-              estimate: estimatePromptTokens,
-              compact: () => Stream.die("strategy defect"),
-            }),
-          ),
+          Effect.provideService(ContextCompactor, {
+            estimate: estimatePromptTokens,
+            compact: () => Stream.die("strategy defect"),
+          }),
         );
 
         expect(Exit.isFailure(defect.exit) && Cause.hasDies(defect.exit.cause)).toBe(true);
@@ -1738,41 +1734,36 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
                 commits.push(commit);
               }),
           }).pipe(
-            Effect.provide(
-              Layer.succeed(ContextCompactor, {
-                // Three active results trigger pressure; clearing or summarizing one fits the target.
-                estimate: (messages) =>
-                  300 *
-                  messages.filter(
-                    (message) =>
-                      message.role === "tool" &&
-                      message.content.some(
-                        (part) =>
-                          part.type === "tool-result" && part.result !== CLEARED_TOOL_RESULT,
-                      ),
-                  ).length,
-                compact: (request) =>
-                  Stream.suspend(() => {
-                    passes.push(request.trigger === "overflow");
-                    const kind = request.trigger === "overflow" ? scenario.retry : scenario.first;
-                    const through = request.trigger === "overflow" ? 6 : 4;
+            Effect.provideService(ContextCompactor, {
+              // Three active results trigger pressure; clearing or summarizing one fits the target.
+              estimate: (messages) =>
+                300 *
+                messages.filter(
+                  (message) =>
+                    message.role === "tool" &&
+                    message.content.some(
+                      (part) => part.type === "tool-result" && part.result !== CLEARED_TOOL_RESULT,
+                    ),
+                ).length,
+              compact: (request) =>
+                Stream.suspend(() => {
+                  passes.push(request.trigger === "overflow");
+                  const kind = request.trigger === "overflow" ? scenario.retry : scenario.first;
+                  const through = request.trigger === "overflow" ? 6 : 4;
 
-                    if (kind === "clear-tool-results") return Stream.succeed({ kind, through });
+                  if (kind === "clear-tool-results") return Stream.succeed({ kind, through });
 
-                    return Stream.fromEffect(
-                      request.summarize(
-                        Prompt.fromMessages([
-                          Prompt.userMessage({
-                            content: [Prompt.textPart({ text: "Summarize requested coverage." })],
-                          }),
-                        ]),
-                      ),
-                    ).pipe(
-                      Stream.map((summary): CompactionDecision => ({ kind, through, summary })),
-                    );
-                  }),
-              }),
-            ),
+                  return Stream.fromEffect(
+                    request.summarize(
+                      Prompt.fromMessages([
+                        Prompt.userMessage({
+                          content: [Prompt.textPart({ text: "Summarize requested coverage." })],
+                        }),
+                      ]),
+                    ),
+                  ).pipe(Stream.map((summary): CompactionDecision => ({ kind, through, summary })));
+                }),
+            }),
           );
 
           const canRetry =

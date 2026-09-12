@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 
+import { Update } from "./AgentUpdates.ts";
 import { AgentId, ThreadId, DelegationId, RunId, ToolCallId, TurnId } from "./Identifiers.ts";
 import { DelegationDepth } from "./SubagentContract.ts";
 import { Selection } from "./ToolExposure.ts";
@@ -15,6 +16,12 @@ const RunEventBase = {
   turnId: Schema.optionalKey(TurnId),
   toolCallId: Schema.optionalKey(ToolCallId),
 };
+
+/** A schema-encoded Agent update accepted by the owning Run. */
+export class AgentUpdateEmitted extends Schema.TaggedClass<AgentUpdateEmitted>()(
+  "AgentUpdateEmitted",
+  { ...RunEventBase, update: Update },
+) {}
 
 /** Signals that the runtime has created a run and assigned its identities. */
 export class RunStarted extends Schema.TaggedClass<RunStarted>()("RunStarted", RunEventBase) {}
@@ -328,6 +335,7 @@ export class SubagentJoined extends Schema.TaggedClass<SubagentJoined>()("Subage
 
 /** Versioned union of stable semantic run events, excluding raw provider chunks. */
 export const RunEvent = Schema.Union([
+  AgentUpdateEmitted,
   RunStarted,
   TurnStarted,
   ModelStarted,

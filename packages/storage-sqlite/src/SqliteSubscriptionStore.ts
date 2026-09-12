@@ -36,7 +36,7 @@ const transactionLayer = Layer.effect(
 const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function* (
   owned: SourcePartition,
 ) {
-  const partition = yield* Schema.decodeUnknownEffect(SourcePartition)(owned).pipe(
+  const partition = yield* Schema.decodeEffect(SourcePartition)(owned).pipe(
     Effect.mapError(() => SubscriptionError.make({ reason: "validation", code: "partition" })),
   );
 

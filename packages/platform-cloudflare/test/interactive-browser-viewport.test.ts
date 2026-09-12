@@ -73,14 +73,14 @@ describe("Browser Run viewport boundary", () => {
     { width: 1_280, height: 720, deviceScaleFactor: 1.5 },
   ])("round-trips bounded presentation state (%#)", (input) =>
     Effect.gen(function* () {
-      const viewport = yield* Schema.decodeUnknownEffect(BrowserRunViewport)(input);
+      const viewport = yield* Schema.decodeEffect(BrowserRunViewport)(input);
 
       const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(BrowserRunViewport))(
         viewport,
       );
 
       expect(
-        yield* Schema.decodeUnknownEffect(Schema.fromJsonString(BrowserRunViewport))(encoded),
+        yield* Schema.decodeEffect(Schema.fromJsonString(BrowserRunViewport))(encoded),
       ).toEqual(viewport);
       expect(JSON.parse(encoded)).toEqual(input);
     }),

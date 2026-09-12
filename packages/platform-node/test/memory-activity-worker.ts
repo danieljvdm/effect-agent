@@ -43,12 +43,12 @@ const encodedMarker = Schema.encodeSync(Schema.fromJsonString(MemoryActivityMark
 
 const extractionOutput = (record: CanonicalRecordEnvelope, divergent: boolean) => {
   if (record.record.payload._tag !== "UserInputRecorded") {
-    return Schema.decodeUnknownEffect(ActivityMemoryOutput)({ _tag: "Skip" });
+    return Schema.decodeEffect(ActivityMemoryOutput)({ _tag: "Skip" });
   }
 
   return Schema.decodeUnknownEffect(DanStatement)(record.record.payload.input).pipe(
     Effect.flatMap((statement) =>
-      Schema.decodeUnknownEffect(ActivityMemoryOutput)({
+      Schema.decodeEffect(ActivityMemoryOutput)({
         _tag: "Remember",
         key: memoryKey,
         locator: statement.locator,
@@ -88,7 +88,7 @@ const applyPrepared = Effect.fn("MemoryActivityWorker.applyPrepared")(function* 
   const writer = yield* MemoryWriter;
 
   yield* writer.change(
-    yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
+    yield* Schema.decodeEffect(MemoryWrite.Wire)({
       _tag: "Put",
       key: output.key,
       operationId: work.workId,

@@ -1,4 +1,5 @@
 export * as Agent from "./Agent.ts";
+export * as AgentUpdates from "./AgentUpdates.ts";
 export * as AgentError from "./AgentError.ts";
 export * as AgentPolicy from "./AgentPolicy.ts";
 export * as AgentRuntime from "./AgentRuntime.ts";

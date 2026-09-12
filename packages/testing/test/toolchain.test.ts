@@ -543,7 +543,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
   it.effect("validates package manifest fields before publishing", () =>
     Effect.gen(function* () {
-      const decoded = yield* Schema.decodeUnknownEffect(PublishManifest)({
+      const decoded = yield* Schema.decodeEffect(PublishManifest)({
         name: "@effect-agent/fixture",
         version: "0.0.1-beta.7",
         description: "preserved package metadata",
@@ -1036,7 +1036,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             ]);
 
             expect(
-              yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(packed),
+              yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(packed),
             ).toMatchObject({
               version: "1.0.0-beta.17",
               dependencies: { "@fixture/core": "1.0.0-beta.17" },

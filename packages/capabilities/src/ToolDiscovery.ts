@@ -141,7 +141,7 @@ const defaultSearch = (
 export const make = <Failure extends Schema.Top = typeof Schema.Never, Requirements = never>(
   options: Options<Failure, Requirements> = {},
 ) => {
-  const bounds = Schema.decodeUnknownSync(Bounds)({
+  const bounds = Schema.decodeSync(Bounds)({
     maxResults: options.maxResults ?? 8,
     maxResultBytes: options.maxResultBytes ?? 32 * 1024,
     namespaceDescriptions: options.namespaceDescriptions ?? {},
@@ -211,7 +211,7 @@ export const make = <Failure extends Schema.Top = typeof Schema.Never, Requireme
                 ? undefined
                 : bounds.namespaceDescriptions[entry.namespace];
 
-            const descriptor = yield* Schema.decodeUnknownEffect(Descriptor)({
+            const descriptor = yield* Schema.decodeEffect(Descriptor)({
               id,
               kind: entry.kind,
               name: entry.tool.name,
@@ -245,7 +245,7 @@ export const make = <Failure extends Schema.Top = typeof Schema.Never, Requireme
                   Effect.provideContext(searchServices),
                 );
 
-          const checkedIds = yield* Schema.decodeUnknownEffect(MatchIds)(ids).pipe(
+          const checkedIds = yield* Schema.decodeEffect(MatchIds)(ids).pipe(
             Effect.mapError(() =>
               ToolDiscoveryError.make({
                 reason: "invalid-matches",

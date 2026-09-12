@@ -17,11 +17,11 @@ This defines the agents. Choose how to run them below.
 
 ## Choose an execution kind
 
-| Kind                                                 | Parent behavior                                                        | Use it when                                                    |
-| ---------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------- |
-| [Ephemeral attached](./subagents/ephemeral-attached) | Waits for a tool result; child shares its Scope                        | Restarting the task after a process crash is acceptable        |
-| [Durable attached](./subagents/durable-attached)     | Suspends, then resumes with the child's result                         | The parent needs the answer and progress must survive restarts |
-| [Durable background](./subagents/background)         | Continues; receives findings through inspection or a completion report | The user should keep chatting while work runs                  |
+| Kind                                                 | Parent behavior                                              | Use it when                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------- |
+| [Ephemeral attached](./subagents/ephemeral-attached) | Waits for a tool result; child shares its Scope              | Restarting the task after a process crash is acceptable        |
+| [Durable attached](./subagents/durable-attached)     | Suspends, then resumes with the child's result               | The parent needs the answer and progress must survive restarts |
+| [Durable background](./subagents/background)         | Continues; receives declared updates and a completion report | The user should keep chatting while work runs                  |
 
 Both attached forms use `Summarize.tool`. Durable execution comes from the host you run them on.
 For background work, expose start and follow-up tools instead:
@@ -30,11 +30,10 @@ For background work, expose start and follow-up tools instead:
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import { Summarize } from "./subagent-basics.ts";
 // ---cut---
-const background = Subagent.background(Summarize, {
+const background = Subagent.background(Summarize.target, {
   start: true,
   followUp: true,
-  inspect: true,
-  cancel: true,
+  reportToParent: true,
 });
 ```
 

@@ -566,7 +566,7 @@ layer(testLayer)("resolved model context", (it) => {
             ? new Uint8Array(8_000).fill(255)
             : scenario === "compressed"
               ? "data:image/png;base64,AAAA"
-              : Schema.decodeUnknownSync(Schema.URLFromString)(
+              : Schema.decodeSync(Schema.URLFromString)(
                   `data:image/png;base64,${"A".repeat(20_000)}`,
                 );
 

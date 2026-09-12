@@ -10,6 +10,7 @@ export default defineConfig({
       "src/Worker.ts",
       "src/Messaging.ts",
       "src/Agent.ts",
+      "src/AgentUpdates.ts",
       "src/AgentError.ts",
       "src/AgentPolicy.ts",
       "src/Identifiers.ts",

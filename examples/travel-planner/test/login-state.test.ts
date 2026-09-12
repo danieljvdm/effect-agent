@@ -71,7 +71,7 @@ const fixture = () => {
 
       return success(state.authenticated ? session : null);
     }
-    const { payload } = Schema.decodeUnknownSync(envelope)(await request.text());
+    const { payload } = Schema.decodeSync(envelope)(await request.text());
 
     if (name === "signIn")
       return success({

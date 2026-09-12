@@ -302,9 +302,9 @@ describe("run journal batch split (plan §2.1)", () => {
           }
           const batch = yield* turnResponseBatch(turnInput(history.content));
 
-          const plainBatch = yield* Schema.decodeUnknownEffect(
-            Schema.fromJsonString(CanonicalBatch),
-          )(JSON.stringify(Schema.encodeSync(CanonicalBatch)(batch)));
+          const plainBatch = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalBatch))(
+            JSON.stringify(Schema.encodeSync(CanonicalBatch)(batch)),
+          );
 
           expect(yield* digestCanonicalBatch(EMPTY_TAIL_DIGEST, batch)).toBe(
             yield* digestCanonicalBatch(EMPTY_TAIL_DIGEST, plainBatch),
@@ -1059,7 +1059,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
     const encoded = Schema.encodeSync(RecordEnvelope)(record);
 
     expect(encoded.payload).toEqual(compactionPayload({}));
-    expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
+    expect(Schema.decodeSync(RecordEnvelope)(encoded)).toEqual(record);
 
     const clear = auditRecord(
       "compaction-clear",

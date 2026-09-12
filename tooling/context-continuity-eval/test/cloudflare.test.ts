@@ -118,9 +118,9 @@ it("runs the same pressure and evidence gate through the public Cloudflare host 
           "https://eval.test",
         );
 
-        const snapshot = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(CloudflareSnapshot),
-        )(yield* fs.readFileString(`${outputDirectory}/host-snapshot.json`));
+        const snapshot = yield* Schema.decodeEffect(Schema.fromJsonString(CloudflareSnapshot))(
+          yield* fs.readFileString(`${outputDirectory}/host-snapshot.json`),
+        );
 
         return { report, snapshot };
       }).pipe(

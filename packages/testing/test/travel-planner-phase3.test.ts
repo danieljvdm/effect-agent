@@ -169,7 +169,7 @@ const withTemporaryDatabase = <A, E>(use: (filename: string) => Effect.Effect<A,
 
 describe("TEST-014 P3 persistent Travel Planner profile (P)", () => {
   it("keeps a redacted, current-version canonical fixture", () => {
-    const decoded = Schema.decodeUnknownSync(Schema.Array(CanonicalBatch))(
+    const decoded = Schema.decodeSync(Schema.Array(CanonicalBatch))(
       phase3TravelPlannerEncodedFixture,
     );
 

@@ -261,9 +261,9 @@ export const credentialStoreLayer = (env: CredentialEnvironment, threadId: strin
 
         return rows[0] === undefined
           ? null
-          : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SealedCredential))(
-              rows[0].value,
-            ).pipe(Effect.mapError(storageError));
+          : yield* Schema.decodeEffect(Schema.fromJsonString(SealedCredential))(rows[0].value).pipe(
+              Effect.mapError(storageError),
+            );
       });
 
       const status = sealed.pipe(

@@ -74,7 +74,7 @@ export const digestText = Effect.fn("PrReviewEval.digestText")(function* (text: 
     .digest("SHA-256", bytes)
     .pipe(Effect.mapError((cause) => dataError("digest text", "SHA-256 failed", { cause })));
 
-  return yield* Schema.decodeUnknownEffect(EvalInputDigest)(Encoding.encodeHex(digest)).pipe(
+  return yield* Schema.decodeEffect(EvalInputDigest)(Encoding.encodeHex(digest)).pipe(
     Effect.mapError((cause) =>
       dataError("digest text", "SHA-256 returned an invalid digest", { cause }),
     ),
@@ -204,7 +204,7 @@ export const decodeObservationLines = Effect.fn("PrReviewEval.decodeObservationL
   const lines = contents.split("\n").filter((line) => line.trim().length > 0);
 
   return yield* Effect.forEach(lines, (line, index) =>
-    Schema.decodeUnknownEffect(Schema.fromJsonString(EvalObservation))(line).pipe(
+    Schema.decodeEffect(Schema.fromJsonString(EvalObservation))(line).pipe(
       Effect.mapError((cause) =>
         dataError("decode observations", `Observation line ${index + 1} is invalid`, { cause }),
       ),

@@ -8,6 +8,7 @@ import {
   PolicyLimit,
 } from "@effect-agent/core/AgentError";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { UpdateError } from "@effect-agent/core/AgentUpdates";
 import {
   type ReceiptId,
   ThreadId,
@@ -19,7 +20,11 @@ import {
   type TurnId,
 } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import { type MessageAdmission, type MessagingError } from "@effect-agent/core/Messaging";
+import {
+  type InputMessage,
+  MessageAdmission,
+  type MessagingError,
+} from "@effect-agent/core/Messaging";
 import { Receipt } from "@effect-agent/core/Receipt";
 import { type ExhaustedLimit, type RunEvent } from "@effect-agent/core/RunEvent";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
@@ -46,6 +51,7 @@ import {
   summarizeModelUsage,
   OutputTokenUsage,
 } from "@effect-agent/core/Usage";
+import { FrameworkMessage } from "@effect-agent/core/Worker";
 import type { WorkerError } from "@effect-agent/core/Worker";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
@@ -63,6 +69,7 @@ import {
 import { MessagingHost } from "@effect-agent/engine/MessagingHost";
 import {
   CurrentToolFailureObserver,
+  AgentUpdateAcceptance,
   ModelUsageAccounting,
   RunContextPreparation,
   RunToolAuthorization,
@@ -141,6 +148,7 @@ import {
   resolveDefinitionBinding,
   resolveWorkerBinding,
 } from "./internal/agent-registration.ts";
+import { makeAgentUpdateRuntime } from "./internal/agent-updates.ts";
 import { inspectForeignDiagnostic, safeUnknownString } from "./internal/foreign-diagnostic.ts";
 import {
   JournalCheckpointSeed,
@@ -152,6 +160,7 @@ import {
 import { makeJournalMetadata, type JournalMetadata } from "./internal/journal-metadata.ts";
 import { makeMessagingRuntime } from "./internal/messaging-host.ts";
 import { makeWorkerRuntime, WorkerInputControl } from "./internal/worker-host.ts";
+import { WorkerRuntime } from "./internal/worker-runtime.ts";
 import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
@@ -448,7 +457,7 @@ const SUBAGENT_ABORT_REASON =
  * reservation exactly once"). Constant so every repair pass freezes the SAME
  * decision — an identical `beginChildBudgetRelease` replay is a no-op.
  */
-const ORPHAN_ZERO_CONSUMED_ACCOUNTING = Schema.decodeUnknownSync(PersistedJson)({
+const ORPHAN_ZERO_CONSUMED_ACCOUNTING = Schema.decodeSync(PersistedJson)({
   basis: "orphan-zero-consumed",
 });
 
@@ -562,8 +571,8 @@ export interface DurableSubmitOptions {
   readonly admissionFence?: AdmissionFence;
   /** Host-prepared worker input; immutable origin and per-input projection parameters. */
   readonly workerAdmission?: WorkerAdmission;
-  /** Authenticated peer provenance, verified against the source's frozen canonical proof. */
-  readonly messageAdmission?: MessageAdmission;
+  /** Peer provenance or a worker completion, verified against frozen canonical delivery proof. */
+  readonly messageAdmission?: InputMessage;
   /** Application-computed digests of the Agent/Model/Toolkit definitions (see `digestDefinitions`). */
   readonly definitions: DefinitionDigests;
 }
@@ -1978,16 +1987,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           }),
         )
         .pipe(
-          Effect.catch((error) =>
-            error._tag === "AppendConflict" || error._tag === "FenceRejected"
-              ? store
-                  .inspectTail(ThreadTailRequest.make({ threadId }))
-                  .pipe(
-                    Effect.flatMap((current) =>
-                      current.tailSequence > 0 ? Effect.void : Effect.fail(error),
-                    ),
-                  )
-              : Effect.fail(error),
+          Effect.catchTag(["AppendConflict", "FenceRejected"], (error) =>
+            store
+              .inspectTail(ThreadTailRequest.make({ threadId }))
+              .pipe(
+                Effect.flatMap((current) =>
+                  current.tailSequence > 0 ? Effect.void : Effect.fail(error),
+                ),
+              ),
           ),
           Effect.andThen(wake.notify(threadId)),
           Effect.asVoid,
@@ -2108,7 +2115,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         records: [envelope],
       }),
     ).pipe(
-      Effect.catch((error) => (error._tag === "AppendConflict" ? Effect.void : Effect.fail(error))),
+      Effect.catchTag("AppendConflict", () => Effect.void),
       Effect.asVoid,
     );
   });
@@ -2171,9 +2178,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           records: [head, ...envelopes.slice(1)],
         }),
       ).pipe(
-        Effect.catch((error) =>
-          error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-        ),
+        Effect.catchTag("AppendConflict", () => Effect.void),
         Effect.asVoid,
       );
       for (const call of missing) {
@@ -2205,9 +2210,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     const swallowIdentityConflict = (effect: ReturnType<typeof appendBatch>) =>
       effect.pipe(
-        Effect.catch((error) =>
-          error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-        ),
+        Effect.catchTag("AppendConflict", () => Effect.void),
         Effect.asVoid,
       );
 
@@ -2609,6 +2612,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const notifyParentOfChildSettlement = Effect.fn(
     "DurableAgentRuntime.notifyParentOfChildSettlement",
   )(function* (submission: SubmissionSnapshot): Effect.fn.Return<void, LedgerError> {
+    if (submission.workerAdmission?.origin.reporting?.mode === "standard")
+      yield* updateRuntime.repair(submission.threadId).pipe(
+        Effect.mapError(() =>
+          LedgerError.make({
+            operation: "update-delivery",
+            message: "Update delivery remains pending",
+          }),
+        ),
+      );
     yield* workerRuntime
       .completeInput(submission)
       .pipe(
@@ -2652,7 +2664,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       // batch replay is byte-identical (DUR-011).
       record = joined.reservation.record;
     } else {
-      const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+      const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)(
         SubmissionSettled.make({
           submissionId,
           settlementId,
@@ -2710,7 +2722,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         records: [record],
       }),
     ).pipe(
-      Effect.catch((error) => (error._tag === "AppendConflict" ? Effect.void : Effect.fail(error))),
+      Effect.catchTag("AppendConflict", () => Effect.void),
       Effect.asVoid,
     );
     yield* hit("terminalize:after-canonical-append");
@@ -2774,7 +2786,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const submissionId = submission.submissionId;
     const settlementId = submissionSettlementId(submissionId);
 
-    const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+    const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)(
       SubmissionSettled.make({
         submissionId,
         settlementId,
@@ -2832,7 +2844,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         records: [reserved.record],
       }),
     ).pipe(
-      Effect.catch((error) => (error._tag === "AppendConflict" ? Effect.void : Effect.fail(error))),
+      Effect.catchTag("AppendConflict", () => Effect.void),
       Effect.asVoid,
     );
     yield* hit("terminalize:after-canonical-append");
@@ -2867,9 +2879,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           records: [reservation.record],
         }),
       ).pipe(
-        Effect.catch((error) =>
-          error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-        ),
+        Effect.catchTag("AppendConflict", () => Effect.void),
         Effect.asVoid,
       );
       yield* hit("terminalize:after-canonical-append");
@@ -3026,19 +3036,17 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           }),
         )
         .pipe(
-          Effect.catch((error) =>
-            error._tag === "AppendConflict" || error._tag === "FenceRejected"
-              ? // A racing establishment pass (or the child's own claimed worker) advanced the
-                // log; the deterministic identity means the record either exists or the next
-                // pass re-proves it — verify instead of trusting the race blindly.
-                readControl(request.childThreadId, []).pipe(
-                  Effect.flatMap((current) =>
-                    current.some((candidate) => candidate.record.recordId === recordId)
-                      ? Effect.void
-                      : Effect.fail(error),
-                  ),
-                )
-              : Effect.fail(error),
+          Effect.catchTag(["AppendConflict", "FenceRejected"], (error) =>
+            // A racing establishment pass (or the child's own claimed worker) advanced the
+            // log; the deterministic identity means the record either exists or the next
+            // pass re-proves it — verify instead of trusting the race blindly.
+            readControl(request.childThreadId, []).pipe(
+              Effect.flatMap((current) =>
+                current.some((candidate) => candidate.record.recordId === recordId)
+                  ? Effect.void
+                  : Effect.fail(error),
+              ),
+            ),
           ),
           Effect.andThen(wake.notify(request.childThreadId)),
           Effect.asVoid,
@@ -3518,9 +3526,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             records: [joinedEnvelope, settledEnvelope],
           }),
         ).pipe(
-          Effect.catch((error) =>
-            error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-          ),
+          Effect.catchTag("AppendConflict", () => Effect.void),
           Effect.asVoid,
         );
         knownIds.add(joinedRecordId);
@@ -3857,7 +3863,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   });
 
   const failureOutcome = (error: unknown): Effect.Effect<AttemptOutcome> =>
-    Schema.decodeUnknownEffect(SettlementFailureDiagnostic)({
+    Schema.decodeEffect(SettlementFailureDiagnostic)({
       errorTag: errorTagOf(error).slice(0, 256) || "UnknownError",
       message: errorMessageOf(error).slice(0, MAX_FAILURE_MESSAGE_LENGTH),
     }).pipe(
@@ -3916,7 +3922,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         records: [envelope],
       }),
     ).pipe(
-      Effect.catch((error) => (error._tag === "AppendConflict" ? Effect.void : Effect.fail(error))),
+      Effect.catchTag("AppendConflict", () => Effect.void),
       Effect.asVoid,
     );
     knownIds.add(recordId);
@@ -3953,6 +3959,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       | undefined = undefined,
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
+    UpdatesSchema extends Schema.Top | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -3965,7 +3972,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
     ctx: AttemptAppendContext,
     submission: SubmissionSnapshot,
@@ -4198,13 +4206,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           )
             return;
 
-          const summaries = yield* Effect.all(
-            [current, candidate].map((projection) =>
-              summarizeModelUsage(
-                projection.usage.modelUsage,
-                projection.usage.summarizedModelUsage,
-              ),
-            ),
+          const summaries = yield* Effect.forEach([current, candidate], (projection) =>
+            summarizeModelUsage(projection.usage.modelUsage, projection.usage.summarizedModelUsage),
           ).pipe(Effect.option);
 
           if (
@@ -4431,7 +4434,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         field: string,
         value: number,
       ): Effect.Effect<number, RunJournalError> =>
-        Schema.decodeUnknownEffect(Schema.Natural)(value).pipe(
+        Schema.decodeEffect(Schema.Natural)(value).pipe(
           Effect.mapError((cause) =>
             RunJournalError.make({
               message: `Run usage summary exceeds safe-integer bounds at ${field}`,
@@ -5369,7 +5372,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               });
             }
 
-            const payload = yield* Schema.decodeUnknownEffect(CompactionCreated)({
+            const payload = yield* Schema.decodeEffect(CompactionCreated)({
               _tag: "CompactionCreated",
               runId,
               turn: canonicalTurn,
@@ -5509,9 +5512,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 records: [head, ...envelopes.slice(1)],
               }),
             ).pipe(
-              Effect.catch((error) =>
-                error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-              ),
+              Effect.catchTag("AppendConflict", () => Effect.void),
               Effect.asVoid,
             );
             for (const record of envelopes) knownIds.add(record.recordId);
@@ -5617,15 +5618,26 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
        * so the next Turn's response commit makes it model-visible canonically — exactly the
        * prompt-coverage rule recovery relies on.
        */
-      const renderJoinedInput = (encodedInput: PersistedJson) =>
+      const renderJoinedInput = ({
+        input: encodedInput,
+        messageAdmission,
+      }: Pick<UserInputRecorded, "input" | "messageAdmission">) =>
         Effect.gen(function* () {
+          if (Schema.is(FrameworkMessage)(messageAdmission))
+            return yield* Schema.encodeEffect(Schema.fromJsonString(FrameworkMessage))(
+              messageAdmission,
+            ).pipe(
+              Effect.mapError(() =>
+                AgentInputError.make({ message: "Invalid worker completion message" }),
+              ),
+            );
           const inputPrompt = agent.definition.inputPrompt;
 
           if (inputPrompt === undefined) {
             return yield* renderInputPrompt(undefined, encodedInput, encodedInput);
           }
 
-          const decodedInput = yield* Schema.decodeUnknownEffect(agent.definition.input)(
+          const decodedInput = yield* Schema.decodeEffect(agent.definition.input)(
             encodedInput,
           ).pipe(
             Effect.mapError((cause) =>
@@ -5647,7 +5659,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             const joinedInputs = yield* recordHalt(
               Effect.gen(function* () {
                 const limit = policy === "one" ? 1 : MAX_JOIN_DRAIN;
-                const joinedInputs: Array<PersistedJson> = [];
+
+                const joinedInputs: Array<Pick<UserInputRecorded, "input" | "messageAdmission">> =
+                  [];
 
                 if (joinBacklog === undefined) {
                   const hostSnapshot = yield* ledger.loadRecoverySnapshot(
@@ -5689,7 +5703,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   const payload = existing.record.payload;
 
                   if (payload._tag !== "UserInputRecorded") continue;
-                  joinedInputs.push(payload.input);
+                  joinedInputs.push(payload);
                 }
                 if (joinedInputs.length < limit) {
                   const ownershipToken = yield* Ref.get(tokenRef);
@@ -5767,7 +5781,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                       }),
                     );
                     deliveredJoinInputs.add(claim.submissionId);
-                    joinedInputs.push(claim.inputPayload);
+                    joinedInputs.push({
+                      input: claim.inputPayload,
+                      ...(claimSnapshot.submission.messageAdmission === undefined
+                        ? {}
+                        : { messageAdmission: claimSnapshot.submission.messageAdmission }),
+                    });
                   }
                 }
 
@@ -6108,9 +6127,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                     records: [envelope],
                   }),
                 ).pipe(
-                  Effect.catch((error) =>
-                    error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-                  ),
+                  Effect.catchTag("AppendConflict", () => Effect.void),
                   Effect.asVoid,
                 );
                 knownIds.add(requestRecordId);
@@ -6156,9 +6173,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                     records: [envelope],
                   }),
                 ).pipe(
-                  Effect.catch((error) =>
-                    error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-                  ),
+                  Effect.catchTag("AppendConflict", () => Effect.void),
                   Effect.asVoid,
                 );
                 knownIds.add(startRecordId);
@@ -6350,9 +6365,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   records: [joinedEnvelope, settledEnvelope],
                 }),
               ).pipe(
-                Effect.catch((error) =>
-                  error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-                ),
+                Effect.catchTag("AppendConflict", () => Effect.void),
                 Effect.asVoid,
               );
               knownIds.add(joinedRecordId);
@@ -6383,6 +6396,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 // Preserve the admitted wire value even when an Agent Schema's decode/encode
                 // pair normalizes differently on a second pass.
                 input: submission.inputPayload,
+                ...(Schema.is(FrameworkMessage)(submission.messageAdmission)
+                  ? { frameworkMessage: submission.messageAdmission }
+                  : {}),
               }),
       };
 
@@ -6398,6 +6414,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         history: pending === undefined ? journal.historyBefore : resumeProjection.historyBefore,
         onHistory,
         input,
+        ...(Schema.is(FrameworkMessage)(submission.messageAdmission)
+          ? { frameworkMessage: submission.messageAdmission }
+          : {}),
         approval,
         toolAuthorization,
         ...(journal.toolSelection === undefined ? {} : { toolSelection: journal.toolSelection }),
@@ -6852,9 +6871,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 records: [envelope],
               }),
             ).pipe(
-              Effect.catch((error) =>
-                error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-              ),
+              Effect.catchTag("AppendConflict", () => Effect.void),
               Effect.asVoid,
             );
             knownIds.add(recordId);
@@ -6876,6 +6893,27 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       const consume = Stream.runForEach(
         AgentRuntime.streamWithUsageAccountingUnknown(agent, submission.inputPayload, options).pipe(
+          Stream.provideService(AgentUpdateAcceptance, {
+            accept: (update) =>
+              updateRuntime
+                .emit({
+                  updateId: update.updateId,
+                  value: update.value,
+                  submission,
+                  runId,
+                  producerEpoch: ctx.producerEpoch,
+                  definitions: submission.agentDigests,
+                })
+                .pipe(
+                  Effect.catchTag(["LedgerError", "DurableRuntimeFailpointError"], (failure) =>
+                    // Preserve the original infrastructure failure at the coordinator boundary;
+                    // the engine's next event must not commit this Tool's failure as an outcome.
+                    Ref.set(haltRef, failure).pipe(
+                      Effect.andThen(Effect.fail(UpdateError.make({ reason: "storage" }))),
+                    ),
+                  ),
+                ),
+          }),
           Stream.provideService(ModelUsageAccounting, {
             noteIncompleteUsage: (turn) =>
               Effect.sync(() => {
@@ -7116,6 +7154,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       | undefined = undefined,
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
+    UpdatesSchema extends Schema.Top | undefined = undefined,
   >(
     registeredAgent: RuntimeBinding<
       InputSchema,
@@ -7128,7 +7167,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
     threadId: ThreadId,
     claim: Claim,
@@ -7157,6 +7197,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const submission = snapshot.submission;
 
       yield* ensureThreadCreated(threadId, submission.agentId, submission.agentDigests);
+      if (submission.workerAdmission?.origin.reporting?.mode === "standard")
+        yield* updateRuntime.repair(threadId);
       if (submission.workerAdmission !== undefined) {
         yield* workerRuntime
           .ensureOrigin(submission.workerAdmission.origin)
@@ -7581,7 +7623,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         return yield* completeReservation(ctx, submission, snapshot.reservation, recorded);
       }
 
-      const result = yield* Schema.decodeUnknownEffect(SettlementFailureDiagnostic)({
+      const result = yield* Schema.decodeEffect(SettlementFailureDiagnostic)({
         errorTag: "ChildCompatibilityFailure",
         message: boundedText(failure.message),
       }).pipe(Effect.orDie);
@@ -7771,6 +7813,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       | undefined = undefined,
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
+    UpdatesSchema extends Schema.Top | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -7783,7 +7826,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
     threadId: ThreadId,
   ) =>
@@ -7872,9 +7916,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         Effect.orDie,
       );
 
-      const details = yield* Schema.decodeUnknownEffect(PersistedJson)(encodedDecision).pipe(
-        Effect.orDie,
-      );
+      const details = yield* Schema.decodeEffect(PersistedJson)(encodedDecision).pipe(Effect.orDie);
 
       const envelope = yield* makeEnvelope(
         recoveryRepairRecordId(submissionId, decision._tag),
@@ -7959,9 +8001,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 }),
               )
               .pipe(
-                Effect.catch((error) =>
-                  error._tag === "ApprovalConflict" ? Effect.void : Effect.fail(error),
-                ),
+                Effect.catchTag("ApprovalConflict", () => Effect.void),
                 Effect.asVoid,
               );
           }
@@ -8612,9 +8652,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 records: [envelope],
               }),
             ).pipe(
-              Effect.catch((error) =>
-                error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-              ),
+              Effect.catchTag("AppendConflict", () => Effect.void),
               Effect.asVoid,
             );
             yield* hit("subagent:after-start-append");
@@ -8902,10 +8940,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       });
     }
 
-    return yield* recoverSnapshot(
-      found.value,
-      yield* readRecoveryHistory(found.value.threadId, [submissionId]),
-    );
+    const history = yield* readRecoveryHistory(found.value.threadId, [submissionId]);
+
+    if (history.materialized && found.value.workerAdmission?.origin.reporting?.mode === "standard")
+      yield* updateRuntime.repair(found.value.threadId);
+
+    return yield* recoverSnapshot(found.value, history);
   });
 
   const runRecoveryImpl = Effect.fn("DurableAgentRuntime.runRecovery")(
@@ -8924,14 +8964,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
         if (first === undefined) break;
         const submissionIds: Array<SubmissionId> = [];
+        let hasStandardReporting = false;
 
         for (let offset = index; offset < nonterminal.length; offset += 1) {
           const entry = nonterminal[offset];
 
           if (entry === undefined || entry.threadId !== first.threadId) break;
           submissionIds.push(entry.submissionId);
+          hasStandardReporting ||= entry.workerAdmission?.origin.reporting?.mode === "standard";
         }
         const history = yield* readRecoveryHistory(first.threadId, submissionIds);
+
+        if (history.materialized && hasStandardReporting)
+          yield* updateRuntime.repair(first.threadId);
 
         while (index < nonterminal.length) {
           const submission = nonterminal[index];
@@ -8986,31 +9031,49 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   reason:
                     cause.reason === "storage" || cause.reason === "unavailable"
                       ? "unavailable"
-                      : "refused",
+                      : cause.reason === "capacity" &&
+                          cause.retryable === true &&
+                          Schema.is(FrameworkMessage)(options.messageAdmission)
+                        ? "occupied"
+                        : "refused",
                   code: `worker-${cause.reason}`,
                 }),
               ),
             );
 
+    const pendingMessage = options.messageAdmission;
+
     const messageAdmission =
-      options.messageAdmission === undefined
+      pendingMessage === undefined
         ? undefined
-        : yield* messagingRuntime
-            .validateAdmission(options.messageAdmission, options, agent.definition.id, inputDigest)
-            .pipe(
-              Effect.mapError((cause) =>
-                AdmissionPolicyError.make({
-                  reason:
-                    cause.reason === "storage" || cause.reason === "unavailable"
-                      ? "unavailable"
-                      : "refused",
-                  code: `message-${cause.reason}`,
-                }),
-              ),
-            );
+        : yield* Effect.suspend((): Effect.Effect<InputMessage, MessagingError | WorkerError> =>
+            Schema.is(MessageAdmission)(pendingMessage)
+              ? messagingRuntime.validateAdmission(
+                  pendingMessage,
+                  options,
+                  agent.definition.id,
+                  inputDigest,
+                )
+              : workerRuntime.validateCompletion(
+                  pendingMessage,
+                  options,
+                  agent.definition.id,
+                  inputDigest,
+                ),
+          ).pipe(
+            Effect.mapError((cause) =>
+              AdmissionPolicyError.make({
+                reason:
+                  cause.reason === "storage" || cause.reason === "unavailable"
+                    ? "unavailable"
+                    : "refused",
+                code: `message-${cause.reason}`,
+              }),
+            ),
+          );
 
     const admitted = yield* ledger.admit(
-      yield* Schema.decodeUnknownEffect(AdmissionRequest)({
+      yield* Schema.decodeEffect(AdmissionRequest)({
         threadId: options.threadId,
         principal: options.principal,
         idempotencyKey: options.idempotencyKey,
@@ -9807,6 +9870,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       | undefined = undefined,
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
+    UpdatesSchema extends Schema.Top | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -9819,7 +9883,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
   ) =>
     Effect.gen(function* () {
@@ -9880,6 +9945,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         }),
     }),
   );
+
+  const updateRuntime = yield* makeAgentUpdateRuntime({
+    deploymentId: config.deploymentId,
+    producerId: config.producerId,
+  }).pipe(Effect.provideService(WorkerRuntime, workerRuntime));
 
   return DurableAgentRuntime.of({
     workerHost: workerRuntime.acquire,
@@ -10097,6 +10167,7 @@ export class DurableAgentRuntime extends Context.Service<
       InputPromptValue extends
         | InputPromptSource<InputSchema["Type"], unknown, unknown>
         | undefined = undefined,
+      UpdatesSchema extends Schema.Top | undefined = undefined,
     >(
       agent: RuntimeBinding<
         InputSchema,
@@ -10109,7 +10180,8 @@ export class DurableAgentRuntime extends Context.Service<
         InstructionError,
         InstructionRequirements,
         RunDispositionValue,
-        InputPromptValue
+        InputPromptValue,
+        UpdatesSchema
       >,
       threadId: ThreadId,
     ) => Effect.Effect<
@@ -10127,7 +10199,8 @@ export class DurableAgentRuntime extends Context.Service<
           InstructionError,
           InstructionRequirements,
           RunDispositionValue,
-          InputPromptValue
+          InputPromptValue,
+          UpdatesSchema
         >,
         InstructionRequirements
       >
@@ -10164,6 +10237,7 @@ export class DurableAgentRuntime extends Context.Service<
       InputPromptValue extends
         | InputPromptSource<InputSchema["Type"], unknown, unknown>
         | undefined = undefined,
+      UpdatesSchema extends Schema.Top | undefined = undefined,
     >(
       agent: RuntimeBinding<
         InputSchema,
@@ -10176,7 +10250,8 @@ export class DurableAgentRuntime extends Context.Service<
         InstructionError,
         InstructionRequirements,
         RunDispositionValue,
-        InputPromptValue
+        InputPromptValue,
+        UpdatesSchema
       >,
     ) => Effect.Effect<
       void,
@@ -10193,7 +10268,8 @@ export class DurableAgentRuntime extends Context.Service<
           InstructionError,
           InstructionRequirements,
           RunDispositionValue,
-          InputPromptValue
+          InputPromptValue,
+          UpdatesSchema
         >,
         InstructionRequirements
       >

@@ -235,7 +235,7 @@ for (const completion of ["released", "interrupted"] as const) {
           const clockStart = yield* Clock.currentTimeMillis;
           const wallStart = performance.now();
 
-          const competing = yield* Effect.all([start, start, start].map(Effect.result), {
+          const competing = yield* Effect.forEach([start, start, start], Effect.result, {
             concurrency: 3,
           });
 

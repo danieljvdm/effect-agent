@@ -219,6 +219,7 @@ const proveRegistrationRequirements = (
     never,
     SecondProviderInfrastructure
   >,
+  enabled: boolean,
 ) => {
   const first = Agent.withModel(definition, firstModel);
   const second = Agent.withModel(secondDefinition, secondModel);
@@ -269,6 +270,69 @@ const proveRegistrationRequirements = (
 
   void reportRequirements;
   void reportErrors;
+
+  const conditionalEntry = {
+    agent: first,
+    definitions: DefinitionDigestInput.make({ agent: "conditional", model: "first", tools: [] }),
+  };
+
+  const reporting = [
+    {
+      delegationId: Schema.decodeSync(DelegationId)("conditional-report"),
+      target: definition,
+      input: definition.input,
+      prepare: () => Effect.map(ReportDependency, (encodedInput) => ({ encodedInput })),
+    },
+  ];
+
+  const attemptLayer = () =>
+    Layer.effect(InstructionContext)(Effect.map(ReportDependency, (text) => ({ text })));
+
+  const conditionalReporting = compileRegistrations([
+    { ...conditionalEntry, reporting: enabled ? reporting : undefined },
+  ]);
+
+  const conditionalAttempt = compileRegistrations([
+    { ...conditionalEntry, attemptLayer: enabled ? attemptLayer : undefined },
+  ]);
+
+  const optionalOptions = (options: {
+    readonly reporting?: typeof reporting;
+    readonly attemptLayer?: typeof attemptLayer;
+  }) =>
+    compileRegistrations([
+      { ...conditionalEntry, ...options },
+      {
+        agent: second,
+        definitions: DefinitionDigestInput.make({ agent: "second", model: "second", tools: [] }),
+      },
+    ]);
+
+  const conditionalRequirements: readonly [
+    Assert<
+      Equal<
+        Effect.Services<typeof conditionalReporting>,
+        Crypto.Crypto | DurableWorkerRequirements<typeof first> | ReportDependency
+      >
+    >,
+    Assert<
+      Equal<
+        Effect.Services<typeof conditionalAttempt>,
+        Crypto.Crypto | DurableWorkerRequirements<typeof first> | ReportDependency
+      >
+    >,
+    Assert<
+      Equal<
+        Effect.Services<ReturnType<typeof optionalOptions>>,
+        | Crypto.Crypto
+        | DurableWorkerRequirements<typeof first>
+        | DurableWorkerRequirements<typeof second>
+        | ReportDependency
+      >
+    >,
+  ] = [true, true, true];
+
+  void conditionalRequirements;
 
   const rejectedMixedModel = compileRegistrations([
     // @ts-expect-error An existing Binding cannot also select a different model.

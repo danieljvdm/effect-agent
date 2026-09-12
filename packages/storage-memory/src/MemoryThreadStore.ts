@@ -132,7 +132,7 @@ const offsetSequence = Effect.fn("MemoryThreadStore.offsetSequence")((
   const sequence = Number(encodedSequence);
 
   return Number.isSafeInteger(sequence)
-    ? Schema.decodeUnknownEffect(CanonicalSequence)(sequence).pipe(
+    ? Schema.decodeEffect(CanonicalSequence)(sequence).pipe(
         Effect.mapError(() => storeError("observe", "Malformed observation offset")),
       )
     : Effect.fail(storeError("observe", "Malformed observation offset"));

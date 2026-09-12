@@ -13,6 +13,8 @@ import {
   messageDeliveryDeadline,
   messageDeliveryKeyString,
   messageDeliveryUsesCapacity,
+  isWorkerUpdateDelivery,
+  messageDeliveryCapacity,
   sameMessageDeliveryIdentity,
   validateMessageDelivery,
 } from "@effect-agent/thread/MessageDelivery";
@@ -134,12 +136,16 @@ export const memoryMessageDeliveryStoreLayer = (
               }
 
               const owned = (yield* all()).filter(
-                (record) => record.key.ownerThreadId === input.key.ownerThreadId,
+                (record) =>
+                  record.key.ownerThreadId === input.key.ownerThreadId &&
+                  isWorkerUpdateDelivery(record) === isWorkerUpdateDelivery(input),
               );
 
+              const capacity = messageDeliveryCapacity(config, isWorkerUpdateDelivery(input));
+
               if (
-                owned.length >= config.maxRetainedPerOwner ||
-                owned.filter(messageDeliveryUsesCapacity).length >= config.maxPendingPerOwner
+                owned.length >= capacity.retained ||
+                owned.filter(messageDeliveryUsesCapacity).length >= capacity.pending
               ) {
                 return yield* MessageDeliveryError.make({
                   reason: "capacity",
@@ -204,6 +210,8 @@ export const memoryMessageDeliveryStoreLayer = (
       });
 
       return MessageDeliveryStore.of({
+        limits: config,
+        maxStoredValueBytes,
         insert,
         get,
         change,

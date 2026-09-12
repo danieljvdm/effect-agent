@@ -97,6 +97,21 @@ export const progressBufferLimits: RunBufferLimits = {
 };
 ```
 
+### Observe typed findings
+
+Declare `updates` on an Agent to give it an `emit_update` tool for structured intermediate findings:
+
+<<< @/snippets/travel-planner/observe-updates.ts{ts twoslash}
+
+The [researcher definition](./subagents/background#send-intermediate-findings) declares the finding
+Schema separately from its final output. `AgentUpdateEmitted` contains an accepted, encoded update;
+`AgentUpdates.observe` decodes it through that Schema, including any required decoding services.
+Emitting a finding lets the Agent continue working and does not complete the run.
+
+Application tools can also emit findings with `AgentUpdates.emit`. See
+[update delivery guarantees](../reference/subagents#update-delivery-guarantees) for stable keys,
+limits, and automatic delivery from a background worker to its parent.
+
 ### Connect a voice conversation
 
 A voice adapter can delegate to the same agent and Thread as a text interface. Keep its media
@@ -305,10 +320,10 @@ Response records also retain each Turn's missing-call count, so approval and chi
 preserve incomplete accounting when a fresh runtime resumes the Run.
 
 Runtime hosts use `AgentRuntime.streamWithUsageAccountingUnknown` with the inward
-`ModelUsageAccounting` service from `RunOptions` to stage missing usage for each Attempt.
-The host entry exposes this dependency in `R`; ordinary `stream`, `run`, and `start` entry
-points provide ephemeral accounting themselves. The native durable runtime supplies its
-canonical Turn accumulator at composition, without adding a callback to durability options.
+`ModelUsageAccounting` and `AgentUpdateAcceptance` services from `RunOptions`. These dependencies
+remain visible in `R`. The native durable runtime supplies its canonical Turn accumulator and
+Attempt-bound update acceptance at composition, retaining updates before acknowledging them.
+Ordinary `stream`, `run`, and `start` calls provide ephemeral accounting and update acceptance.
 
 Canonical response records own committed per-call usage. Terminal settlement
 `uncommittedModelUsage` retains only staged calls not already present in a response record;

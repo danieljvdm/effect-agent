@@ -36,7 +36,7 @@ const SelectedCaseIds = Schema.Array(EvalCaseId).check(
 );
 
 const decodeSelectedCases = (values: ReadonlyArray<string>) =>
-  Schema.decodeUnknownEffect(SelectedCaseIds)(values).pipe(
+  Schema.decodeEffect(SelectedCaseIds)(values).pipe(
     Effect.mapError(() =>
       EvalConfigurationError.make({
         message:

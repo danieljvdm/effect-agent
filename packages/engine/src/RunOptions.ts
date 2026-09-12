@@ -1,6 +1,7 @@
 import { type AnyDefinition } from "@effect-agent/core/Agent";
 import { type AgentInputError } from "@effect-agent/core/AgentError";
 import { type AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import type { Update, UpdateError } from "@effect-agent/core/AgentUpdates";
 import {
   type AgentId,
   type ThreadId,
@@ -28,7 +29,7 @@ import {
   type RunTotals,
   type ModelCallUsage,
 } from "@effect-agent/core/Usage";
-import type { WorkerBudgetScope } from "@effect-agent/core/Worker";
+import type { WorkerBudgetScope, FrameworkMessage } from "@effect-agent/core/Worker";
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai";
 
@@ -405,6 +406,7 @@ export type RunToolAuthorizationDecision =
  * reauthorized because no Handler can start for them.
  */
 export interface RunToolAuthorizationRequest {
+  readonly frameworkMessage?: FrameworkMessage;
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly turnId: TurnId;
@@ -524,6 +526,21 @@ export class ModelUsageAccounting extends Context.Service<
 >()("@effect-agent/engine/ModelUsageAccounting") {
   static readonly layerEphemeral = Layer.succeed(ModelUsageAccounting, {
     noteIncompleteUsage: () => Effect.void,
+  });
+}
+
+/**
+ * Accepts an interpreter-validated update before semantic publication. Durable hosts bind this
+ * port to the emitting Attempt and return its canonical identity and sequence. Infrastructure
+ * failures must also halt that Attempt before any subsequent event is committed.
+ * Ephemeral entry points explicitly accept only into their Run-local event stream.
+ */
+export class AgentUpdateAcceptance extends Context.Service<
+  AgentUpdateAcceptance,
+  { readonly accept: (update: Update) => Effect.Effect<Update, UpdateError> }
+>()("@effect-agent/engine/AgentUpdateAcceptance") {
+  static readonly layerEphemeral = Layer.succeed(AgentUpdateAcceptance, {
+    accept: (update) => Effect.succeed(update),
   });
 }
 
@@ -889,6 +906,12 @@ export interface RunBufferLimits {
  * through the generic parameters.
  */
 export interface RunOptions<HookError = never, HookRequirements = never> {
+  /** Finite per-Run limits: accepted update count and cumulative UTF-8 JSON value bytes. Defaults: 32 and 16384. */
+  readonly updates?: { readonly maxCount?: number; readonly maxBytes?: number };
+
+  /** Host-validated worker message; application input still supplies instructions and policy context. */
+  readonly frameworkMessage?: FrameworkMessage;
+
   /** Initial or canonically restored run-scoped native selection. */
   readonly toolSelection?: Selection | undefined;
   /**

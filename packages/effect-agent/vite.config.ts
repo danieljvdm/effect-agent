@@ -9,6 +9,7 @@ export default defineConfig({
       "src/ContextTools.ts",
       "src/MemoryNotes.ts",
       "src/Agent.ts",
+      "src/AgentUpdates.ts",
       "src/AgentError.ts",
       "src/AgentPolicy.ts",
       "src/AgentRuntime.ts",

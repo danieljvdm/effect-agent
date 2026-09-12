@@ -215,10 +215,10 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
 
         const next = yield* final(toolkit.handle("protected_observe", {})).pipe(
           Effect.map(Option.some),
-          Effect.catch((error) =>
-            Schema.is(ProtectedBrowserError)(error) && error.reason === "stale-reference"
-              ? Effect.succeed(Option.none())
-              : Effect.fail(error),
+          Effect.catchIf(
+            (error) =>
+              Schema.is(ProtectedBrowserError)(error) && error.reason === "stale-reference",
+            () => Effect.succeed(Option.none()),
           ),
         );
 
@@ -266,7 +266,7 @@ export const runProtectedProof = Effect.fn("runProtectedProof")(function* (origi
 
     yield* requireProof((yield* handle.close) === "confirmed");
 
-    return Schema.decodeUnknownSync(BrowserRunWorkerProofResult.fields.protectedBrowser)({
+    return Schema.decodeSync(BrowserRunWorkerProofResult.fields.protectedBrowser)({
       loginLayouts: 2,
       authenticatedContinuation: true,
       revokedOfferRefused: true,

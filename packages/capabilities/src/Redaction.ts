@@ -144,7 +144,7 @@ export const StructuralRedactorLive = Layer.succeed(Redactor)({
             }),
     }).pipe(
       Effect.flatMap((preview) =>
-        Schema.decodeUnknownEffect(RedactedPreview)(preview).pipe(
+        Schema.decodeEffect(RedactedPreview)(preview).pipe(
           Effect.mapError(() =>
             RedactionError.make({
               reason: "encoding-failed",

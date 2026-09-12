@@ -49,7 +49,7 @@ export const digestJson = Effect.fn("Thread.digestJson")(function* (
       ),
     );
 
-  return yield* Schema.decodeUnknownEffect(Digest)(Encoding.encodeHex(digest)).pipe(
+  return yield* Schema.decodeEffect(Digest)(Encoding.encodeHex(digest)).pipe(
     Effect.mapError(() => DigestError.make({ message: "SHA-256 returned an invalid digest" })),
   );
 });

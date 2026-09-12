@@ -172,7 +172,7 @@ export class OwnerStore implements Remembering.Store<HostFailure> {
 
     return row === undefined
       ? null
-      : Schema.decodeUnknownSync(sourceCodec)(Schema.decodeUnknownSync(JsonRow)(row).value);
+      : Schema.decodeSync(sourceCodec)(Schema.decodeUnknownSync(JsonRow)(row).value);
   }
 
   visible(id: string, revision: string): boolean {
@@ -182,7 +182,7 @@ export class OwnerStore implements Remembering.Store<HostFailure> {
     const raw = this.value("remembering_suppression", id);
 
     if (raw === null) return true;
-    const event = Schema.decodeUnknownSync(eventCodec)(raw);
+    const event = Schema.decodeSync(eventCodec)(raw);
 
     return event.reason === "source-edit" && source.sequence >= event.position.sequence;
   }
@@ -207,7 +207,7 @@ export class OwnerStore implements Remembering.Store<HostFailure> {
       .exec("SELECT value FROM remembering_references ORDER BY id")
       .toArray()
       .map((row) =>
-        Schema.decodeUnknownSync(referenceCodec)(Schema.decodeUnknownSync(JsonRow)(row).value),
+        Schema.decodeSync(referenceCodec)(Schema.decodeUnknownSync(JsonRow)(row).value),
       );
   }
 
@@ -218,8 +218,7 @@ export class OwnerStore implements Remembering.Store<HostFailure> {
       .toArray()
       .map(
         (row) =>
-          Schema.decodeUnknownSync(referenceCodec)(Schema.decodeUnknownSync(JsonRow)(row).value)
-            .intent,
+          Schema.decodeSync(referenceCodec)(Schema.decodeUnknownSync(JsonRow)(row).value).intent,
       );
   }
 
@@ -227,16 +226,14 @@ export class OwnerStore implements Remembering.Store<HostFailure> {
     return this.storage.sql
       .exec("SELECT value FROM remembering_outbox ORDER BY rowid LIMIT 2")
       .toArray()
-      .map((row) =>
-        Schema.decodeUnknownSync(intentCodec)(Schema.decodeUnknownSync(JsonRow)(row).value),
-      );
+      .map((row) => Schema.decodeSync(intentCodec)(Schema.decodeUnknownSync(JsonRow)(row).value));
   }
 
   private checkpoint(intent: Remembering.Intent): Remembering.Checkpoint {
     const value = this.value("remembering_references", intent.id);
 
     if (value === null) throw Remembering.CheckpointError.make({ reason: "missing" });
-    const checkpoint = Schema.decodeUnknownSync(referenceCodec)(value);
+    const checkpoint = Schema.decodeSync(referenceCodec)(value);
 
     if (
       Schema.encodeSync(intentCodec)(checkpoint.intent) !== Schema.encodeSync(intentCodec)(intent)
@@ -274,12 +271,12 @@ export class OwnerStore implements Remembering.Store<HostFailure> {
   }
 
   private admitted(intent: Remembering.Intent): Remembering.Admission {
-    intent = Schema.decodeUnknownSync(Remembering.Intent.Wire)(intent);
+    intent = Schema.decodeSync(Remembering.Intent.Wire)(intent);
     const encoded = Schema.encodeSync(intentCodec)(intent);
     const existing = this.value("remembering_references", intent.id);
 
     if (existing !== null) {
-      const checkpoint = Schema.decodeUnknownSync(referenceCodec)(existing);
+      const checkpoint = Schema.decodeSync(referenceCodec)(existing);
 
       if (Schema.encodeSync(intentCodec)(checkpoint.intent) !== encoded)
         throw Remembering.AdmissionError.make({ reason: "conflict" });
@@ -288,7 +285,7 @@ export class OwnerStore implements Remembering.Store<HostFailure> {
     }
     const source = this.source(intent.source.key.id);
     const suppression = this.value("remembering_suppression", intent.source.key.id);
-    const event = suppression === null ? null : Schema.decodeUnknownSync(eventCodec)(suppression);
+    const event = suppression === null ? null : Schema.decodeSync(eventCodec)(suppression);
 
     if (
       !source ||
@@ -354,7 +351,7 @@ export class OwnerStore implements Remembering.Store<HostFailure> {
     );
 
   private invalidated(event: Remembering.Invalidation): Remembering.InvalidationReceipt {
-    event = Schema.decodeUnknownSync(Remembering.Invalidation)(event);
+    event = Schema.decodeSync(Remembering.Invalidation)(event);
     if (
       event.source.namespace.address !== namespace.address ||
       event.position.authorityGeneration !== this.configuredLineage ||
@@ -387,7 +384,7 @@ export class OwnerStore implements Remembering.Store<HostFailure> {
     const previous = this.value("remembering_suppression", event.source.id);
 
     if (previous !== null) {
-      const prior = Schema.decodeUnknownSync(eventCodec)(previous);
+      const prior = Schema.decodeSync(eventCodec)(previous);
 
       if (
         prior.reason === "forget" ||
@@ -442,7 +439,7 @@ export class OwnerStore implements Remembering.Store<HostFailure> {
 
   commit = (source: Source, automatic: boolean) =>
     this.transaction("source", () => {
-      source = Schema.decodeUnknownSync(Source)(source);
+      source = Schema.decodeSync(Source)(source);
       const previous = this.source(source.id);
 
       if (

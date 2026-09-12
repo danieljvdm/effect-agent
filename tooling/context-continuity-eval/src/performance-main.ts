@@ -95,9 +95,9 @@ const command = Command.make(
     if (options.cleanup) {
       if (!(yield* fs.exists(resourcesPath))) return;
 
-      let resources = yield* Schema.decodeUnknownEffect(
-        Schema.fromJsonString(PerformanceResources),
-      )(yield* fs.readFileString(resourcesPath));
+      let resources = yield* Schema.decodeEffect(Schema.fromJsonString(PerformanceResources))(
+        yield* fs.readFileString(resourcesPath),
+      );
 
       resources = {
         ...resources,

@@ -116,7 +116,7 @@ const recall = Effect.fn("Memory.recall")(function* <E = never, R = never>(
   limits: MemoryRecallLimits,
   estimateTokens: (text: string) => number = bytes,
 ): Effect.fn.Return<RecalledMemory, E | MemoryRecallError, Exclude<R, Scope.Scope>> {
-  const validated = yield* Schema.decodeUnknownEffect(MemoryRecallLimits)(limits).pipe(
+  const validated = yield* Schema.decodeEffect(MemoryRecallLimits)(limits).pipe(
     Effect.mapError(() =>
       MemoryRecallError.make({ reason: "invalid-input", message: "Invalid recall limits" }),
     ),
@@ -126,7 +126,7 @@ const recall = Effect.fn("Memory.recall")(function* <E = never, R = never>(
     return yield* MemoryRecallError.make({ reason: "budget", message: "Too many recall sources" });
   }
 
-  const sourceIds = yield* Schema.decodeUnknownEffect(
+  const sourceIds = yield* Schema.decodeEffect(
     Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(1_024))),
   )(sources.map((source) => source.id)).pipe(
     Effect.mapError(() =>
@@ -157,7 +157,7 @@ const recall = Effect.fn("Memory.recall")(function* <E = never, R = never>(
     for (const source of sources) {
       const raw = yield* source.read;
 
-      const result = yield* Schema.decodeUnknownEffect(MemoryLookup)(raw).pipe(
+      const result = yield* Schema.decodeEffect(MemoryLookup)(raw).pipe(
         Effect.mapError(() =>
           MemoryRecallError.make({
             reason: "invalid-input",

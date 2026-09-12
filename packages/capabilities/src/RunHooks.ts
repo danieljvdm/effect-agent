@@ -83,7 +83,7 @@ export const toRunApprovalHook = (
 > => ({
   request: (engineRequest) =>
     Effect.gen(function* () {
-      const validatedPolicy = yield* Schema.decodeUnknownEffect(RunApprovalAdapterPolicySchema)(
+      const validatedPolicy = yield* Schema.decodeEffect(RunApprovalAdapterPolicySchema)(
         policy,
       ).pipe(
         Effect.mapError((error) =>
@@ -106,7 +106,7 @@ export const toRunApprovalHook = (
           }),
       });
 
-      const draft = yield* Schema.decodeUnknownEffect(ApprovalRequestDraft)({
+      const draft = yield* Schema.decodeEffect(ApprovalRequestDraft)({
         requestId: engineRequest.request.approvalId,
         runId: engineRequest.runId,
         threadId: engineRequest.threadId,
@@ -192,7 +192,7 @@ export const toRunBudgetHook = (
 ): RunBudgetHook<BudgetExceeded | BudgetAdapterError, never> => ({
   guard: budget.guard,
   consume: (delta) =>
-    Schema.decodeUnknownEffect(UsageDelta)({
+    Schema.decodeEffect(UsageDelta)({
       modelCalls: delta.modelCalls,
       inputTokens: delta.inputTokens,
       outputTokens: delta.outputTokens,

@@ -85,9 +85,7 @@ const rpc = async (tag: string, payload: unknown, email = member) => {
 
   expect(response.status).toBe(200);
 
-  const result = Schema.decodeUnknownSync(Schema.fromJsonString(RpcExit))(
-    text.trim().split("\n")[0],
-  ).exit;
+  const result = Schema.decodeSync(Schema.fromJsonString(RpcExit))(text.trim().split("\n")[0]).exit;
 
   if (result._tag !== "Success") throw new Error(JSON.stringify(result.cause));
 

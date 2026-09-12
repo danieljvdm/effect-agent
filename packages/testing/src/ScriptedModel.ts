@@ -169,10 +169,9 @@ const takeTurn = Effect.fn("ScriptedModel.takeTurn")(
         },
       ] as const;
     }).pipe(
-      Effect.flatMap((turn) =>
-        turn === undefined
-          ? Effect.fail(scriptedError(kind, `Script exhausted before the ${kind} request`))
-          : Effect.succeed(turn),
+      Effect.filterOrFail(
+        (turn) => turn !== undefined,
+        () => scriptedError(kind, `Script exhausted before the ${kind} request`),
       ),
     ),
 );

@@ -35,7 +35,7 @@ const unavailable = () =>
 
 /** Private native RPC preserves the owner catalogue while each conversation gets its own DO. */
 export const serveTripRepository = Effect.fn("serveTripRepository")(function* (encoded: string) {
-  const request = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Request))(encoded).pipe(
+  const request = yield* Schema.decodeEffect(Schema.fromJsonString(Request))(encoded).pipe(
     Effect.mapError(unavailable),
   );
 
@@ -122,9 +122,7 @@ export const tripRepositoryForOwner = (
         catch: unavailable,
       });
 
-      const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(response(schema)))(
-        reply,
-      );
+      const result = yield* Schema.decodeEffect(Schema.fromJsonString(response(schema)))(reply);
 
       if (result._tag === "Failure") return yield* result.error;
 

@@ -192,7 +192,7 @@ const decodeFirstLine = <A, I>(
   child.stdout.pipe(
     Stream.decodeText(),
     Stream.splitLines,
-    Stream.mapEffect((line) => Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(line)),
+    Stream.mapEffect((line) => Schema.decodeEffect(Schema.fromJsonString(schema))(line)),
     Stream.runHead,
     Effect.timeout(Duration.seconds(15)),
     Effect.flatMap(
@@ -292,7 +292,7 @@ const originalWriteFrom = Effect.fn("MemoryActivityTest.originalWriteFrom")(func
 
   if (output._tag !== "Remember") return yield* Effect.die("Expected remembered activity");
 
-  return yield* Schema.decodeUnknownEffect(MemoryWrite.Wire)({
+  return yield* Schema.decodeEffect(MemoryWrite.Wire)({
     _tag: "Put",
     key: output.key,
     operationId: pending.workId,

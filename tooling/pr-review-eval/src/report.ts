@@ -335,7 +335,7 @@ export const digestObservationSet = Effect.fn("PrReviewEval.digestObservationSet
 
   const digest = yield* digestText(encoded);
 
-  return yield* Schema.decodeUnknownEffect(EvalObservationSetDigest)(digest).pipe(
+  return yield* Schema.decodeEffect(EvalObservationSetDigest)(digest).pipe(
     Effect.mapError(() =>
       EvalReportError.make({ message: "Observation set digest failed validation" }),
     ),
@@ -566,7 +566,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
   expectedTrialCount: number,
   judgmentSet: EvalJudgmentSet | undefined,
 ) {
-  const trialCount = yield* Schema.decodeUnknownEffect(EvalTrialCount)(expectedTrialCount).pipe(
+  const trialCount = yield* Schema.decodeEffect(EvalTrialCount)(expectedTrialCount).pipe(
     Effect.mapError(() =>
       EvalReportError.make({ message: "Declare the expected trial count between 1 and 20" }),
     ),

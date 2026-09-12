@@ -281,7 +281,7 @@ const seedLedger = Effect.fn("benchmark.seedLedger")(function* (count: number) {
     if (Option.isNone(claim)) return yield* check(false, "Ledger seed could not claim its row");
     const settlementId = submissionSettlementId(admitted.submissionId);
 
-    const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+    const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)(
       SubmissionSettled.make({
         submissionId: admitted.submissionId,
         settlementId,

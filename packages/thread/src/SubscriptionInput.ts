@@ -125,15 +125,15 @@ export const makeSubscriptionInputBinding = Effect.fn("Thread.makeSubscriptionIn
         ),
       prepare: (event, subscription) =>
         Effect.gen(function* () {
-          const e = yield* Schema.decodeUnknownEffect(options.event)(event.payload).pipe(
+          const e = yield* Schema.decodeEffect(options.event)(event.payload).pipe(
             Effect.mapError(invalid),
           );
 
-          const p = yield* Schema.decodeUnknownEffect(options.parameters)(
+          const p = yield* Schema.decodeEffect(options.parameters)(
             subscription.configuration.parameters,
           ).pipe(Effect.mapError(invalid));
 
-          const c = yield* Schema.decodeUnknownEffect(options.context)(
+          const c = yield* Schema.decodeEffect(options.context)(
             subscription.configuration.context,
           ).pipe(Effect.mapError(invalid));
 
