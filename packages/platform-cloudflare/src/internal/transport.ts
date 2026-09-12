@@ -30,11 +30,11 @@ export const threadPortTransportLayer: Layer.Layer<
     return ThreadPortTransport.of({
       call: (threadId, request) =>
         callThreadObject(
-          namespace,
           threadId,
           (target) => target.portCall(request),
           (cause) => portTransportFailure(threadId, cause),
         ).pipe(
+          Effect.provideService(ThreadObjectNamespace, namespace),
           Effect.withSpan("CloudflarePortTransport.call", {
             attributes: { threadId },
           }),

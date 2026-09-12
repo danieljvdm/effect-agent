@@ -464,7 +464,6 @@ export class CloudflareThreadClient extends Context.Service<
             rpcTracing === undefined ? [] : yield* RpcTracing.withRpcTraceContext([]);
 
           const raw = yield* callThreadObject(
-            namespace,
             threadId,
             (stub) => stub[hostRpcMethods[operation]](encoded, ...traceArgs),
             (cause) =>
@@ -479,7 +478,7 @@ export class CloudflareThreadClient extends Context.Service<
                 cause,
                 ...cloudflareFailureSignals(cause),
               }),
-          );
+          ).pipe(Effect.provideService(ThreadObjectNamespace, namespace));
 
           return yield* decodeHostResponse(raw).pipe(
             Effect.mapError((error): HostProtocolError =>

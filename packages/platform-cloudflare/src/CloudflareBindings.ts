@@ -82,20 +82,21 @@ export class ThreadObjectNamespace extends Context.Service<
 }
 
 /** Invoke a placed Thread using the current invocation's native RPC channel. */
-export const callThreadObject = <A, E>(
-  namespace: ThreadObjectNamespace["Service"],
+export const callThreadObject = Effect.fn("callThreadObject")(function* <A, E>(
   threadId: ThreadId,
   invoke: (target: ThreadObjectClient) => Promise<A>,
   onError: (cause: unknown) => E,
-): Effect.Effect<A, E> =>
-  RpcTargets.get(namespace, threadId, () => namespace.get(threadId)).pipe(
+): Effect.fn.Return<A, E, ThreadObjectNamespace> {
+  const namespace = yield* ThreadObjectNamespace;
+
+  const target = yield* RpcTargets.get(namespace, threadId, () => namespace.get(threadId)).pipe(
     Effect.mapError(onError),
-    Effect.flatMap((target) =>
-      Effect.tryPromise({ try: () => invoke(target), catch: onError }).pipe(
-        Effect.tapCause(() => RpcTargets.invalidate(target)),
-      ),
-    ),
   );
+
+  return yield* Effect.tryPromise({ try: () => invoke(target), catch: onError }).pipe(
+    Effect.tapCause(() => RpcTargets.invalidate(target)),
+  );
+});
 
 /**
  * Narrow one `env` member to a `DurableObjectNamespace`. `env` is an untyped platform value,

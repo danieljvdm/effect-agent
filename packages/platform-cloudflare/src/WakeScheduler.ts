@@ -65,7 +65,6 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
 
     const notifyRemote = (threadId: ThreadId) =>
       callThreadObject(
-        namespace,
         threadId,
         (target) => target.wake(),
         (cause) =>
@@ -75,6 +74,7 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
             cause,
           }),
       ).pipe(
+        Effect.provideService(ThreadObjectNamespace, namespace),
         Effect.catch((error) =>
           Effect.logWarning(`CloudflareWakeScheduler: remote wake of ${threadId} dropped`, error),
         ),
