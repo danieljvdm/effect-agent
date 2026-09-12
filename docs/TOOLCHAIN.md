@@ -99,7 +99,11 @@ Use `vp run <task>` for other scripts. Do not use `bun run`, `npm run`, `pnpm ru
 `yarn run`, or invoke the wrapped compiler, formatter, linter, or test runner directly.
 Include `vp env doctor` output when asking for toolchain help.
 
-Tests run with at most four workspace tasks at once and without dependency ordering.
+Local tests run with at most four workspace tasks at once and without dependency ordering.
+CI gives the travel planner, context-continuity evaluation, runtime benchmark, Node platform,
+testing package, and both Cloudflare packages separate runners. The remaining workspace suites
+share one runner and run sequentially. Each suite keeps its own Vitest/workerd worker limits;
+running more heavy suites on one runner can starve ownership-lease renewals in crash tests.
 Builds follow dependency order. Process-kill, soak, and adapter contract suites are part of
 the ordinary test command.
 
@@ -448,8 +452,10 @@ existing maintainer authorization and do not require a second approval. Never ch
 out, install dependencies from, or execute the PR head in this secret-bearing workflow;
 the reviewer reads untrusted source through GitHub's API instead.
 
-Each test-matrix job has its own task-cache key. Successful task results are saved even when
-another task fails. Main pushes run static checks, tests, and builds to populate shared caches
+Each test-matrix job has its own task-cache key. The three suites split from the workspace job
+also fall back to its earlier cache, so splitting the matrix does not discard reusable results.
+Static checks, tests, and builds save successful task results even when another task fails.
+Main pushes run static checks, tests, and builds to populate shared caches
 and validate Action releases. The `ready` fan-in runs only on PRs. Main runs are not cancelled
 by newer pushes. GitHub scopes PR caches to each PR's merge ref, so another PR cannot reuse them.
 A new release PR can restore the latest main results only after those jobs finish saving their

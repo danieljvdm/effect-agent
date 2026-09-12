@@ -57,10 +57,11 @@ jobs:
             vite-task-checks-${{ runner.os }}-
 
       - name: Format, lint, and type checks
+        id: checks
         run: ./node_modules/.bin/vp run check
 
       - name: Save Vite Task cache
-        if: success()
+        if: ${{ !cancelled() && (steps.checks.outcome == 'success' || steps.checks.outcome == 'failure') }}
         uses: actions/cache/save@v4
         with:
           path: node_modules/.vite/task-cache
@@ -86,6 +87,18 @@ jobs:
               -F '!@effect-agent/testing'
               -F '!@effect-agent/platform-cloudflare'
               -F '!@effect-agent/storage-cloudflare'
+              -F '!@effect-agent/example-travel-planner'
+              -F '!@effect-agent/example-context-continuity-eval'
+              -F '!@effect-agent/example-runtime-benchmark'
+          - suite: travel-planner
+            filters: -F @effect-agent/example-travel-planner
+            cache-seed: workspace
+          - suite: context-continuity
+            filters: -F @effect-agent/example-context-continuity-eval
+            cache-seed: workspace
+          - suite: runtime-benchmark
+            filters: -F @effect-agent/example-runtime-benchmark
+            cache-seed: workspace
           - suite: platform-node
             filters: -F @effect-agent/platform-node
           - suite: testing
@@ -115,9 +128,13 @@ jobs:
         with:
           path: node_modules/.vite/task-cache
           key: vite-task-test-v2-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # New suites can reuse results from before the split. Vite Task
+          # still fingerprints every task before replaying any restored entry.
           restore-keys: |
             vite-task-test-v2-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-
             vite-task-test-v2-${{ matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-
+            vite-task-test-v2-${{ matrix.cache-seed || matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-
+            vite-task-test-v2-${{ matrix.cache-seed || matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Run workspace test suites
         id: tests
@@ -164,6 +181,7 @@ jobs:
             vite-task-build-${{ runner.os }}-
 
       - name: Build packages, examples, and docs
+        id: build
         run: ./node_modules/.bin/vp run -v build
 
       - name: Upload the Action bundle
@@ -176,7 +194,7 @@ jobs:
           retention-days: 7
 
       - name: Save Vite Task cache
-        if: success()
+        if: ${{ !cancelled() && (steps.build.outcome == 'success' || steps.build.outcome == 'failure') }}
         uses: actions/cache/save@v4
         with:
           path: node_modules/.vite/task-cache
