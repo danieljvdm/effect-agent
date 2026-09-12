@@ -40,6 +40,7 @@ import { Clock, Context, DateTime, Effect, Layer, Schema } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectAlarm,
+  RpcTargets,
   DurableObjectState as EffectCfDurableObjectState,
   type WorkerEnvironment,
 } from "effect-cf";
@@ -198,14 +199,27 @@ export class CloudflareSchedulingClient {
           ),
         );
 
+        const unavailable = (cause: unknown) => {
+          const error = ScheduleStorageError.make({
+            operation: "call Schedule Owner",
+            reason: "unavailable",
+          });
+
+          error.cause = cause;
+
+          return error;
+        };
+
+        const address = scheduleOwnerKey(owner);
+
+        const target = yield* RpcTargets.get(namespace, address, () =>
+          namespace.get(namespace.idFromName(address)),
+        ).pipe(Effect.mapError(unavailable));
+
         const raw = yield* Effect.tryPromise({
-          try: () => namespace.get(namespace.idFromName(scheduleOwnerKey(owner))).schedule(encoded),
-          catch: () =>
-            ScheduleStorageError.make({
-              operation: "call Schedule Owner",
-              reason: "unavailable",
-            }),
-        });
+          try: () => target.schedule(encoded),
+          catch: unavailable,
+        }).pipe(Effect.tapCause(() => RpcTargets.invalidate(target)));
 
         const response = yield* decodeScheduleOwnerResponse(raw).pipe(
           Effect.mapError(() =>
