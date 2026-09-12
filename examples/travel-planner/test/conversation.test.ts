@@ -6,7 +6,7 @@ import { mergeSpeech, speechContext } from "../src/conversation.ts";
 import { SavedTrip, Trip, type PlannerSnapshot, type SpokenMessage } from "../src/domain.ts";
 import { draftAtom, selectionAtom, selectTripAtom } from "../src/state.ts";
 
-const trip = Schema.decodeUnknownSync(Trip)({
+const trip = Schema.decodeSync(Trip)({
   id: "tahoe-trip",
   revision: 1,
   title: "Tahoe",
@@ -32,7 +32,7 @@ it("clears the draft when switching conversations and preserves it when reselect
     registry.set(selectTripAtom, { conversationId: "new-conversation", id: null });
     expect(registry.get(draftAtom)).toBe("Still writing");
 
-    const saved = Schema.decodeUnknownSync(SavedTrip)({
+    const saved = Schema.decodeSync(SavedTrip)({
       ...trip,
       conversationId: "saved-conversation",
     });

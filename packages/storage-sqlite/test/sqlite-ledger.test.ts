@@ -190,7 +190,7 @@ const settlementReservation = Effect.fn("SqliteLedgerTest.settlementReservation"
 ) {
   const settlementId = submissionSettlementId(admitted.submissionId);
 
-  const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+  const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)(
     SubmissionSettled.make({
       submissionId: admitted.submissionId,
       settlementId,

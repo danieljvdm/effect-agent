@@ -14,7 +14,7 @@ export const emailDeliveryLayer = (binding: SendEmail, from: string) =>
   EmailProofDelivery.layer(
     { vendorId: "cloudflare-email-sending", idempotencyMillis: 0 },
     Effect.fn("Auth.deliverEmail")(function* (message) {
-      const code = yield* Schema.decodeUnknownEffect(Code)(Redacted.value(message.secret));
+      const code = yield* Schema.decodeEffect(Code)(Redacted.value(message.secret));
       const now = DateTime.toEpochMillis(yield* DateTime.now);
       const minutes = Math.max(1, Math.ceil((message.expiresAtMillis - now) / 60_000));
 

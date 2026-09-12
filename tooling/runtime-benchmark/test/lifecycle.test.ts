@@ -136,7 +136,7 @@ it("retains a failed sample and later successes while rejecting the worker", asy
 
       expect(Exit.isFailure(result)).toBe(true);
 
-      const report = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WorkerReport))(
+      const report = yield* Schema.decodeEffect(Schema.fromJsonString(WorkerReport))(
         yield* fs.readFileString(options.output),
       );
 
@@ -173,7 +173,7 @@ it("preserves a worker report when its seed cache cannot be acquired", async () 
 
       expect(Exit.isFailure(result)).toBe(true);
 
-      const report = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WorkerReport))(
+      const report = yield* Schema.decodeEffect(Schema.fromJsonString(WorkerReport))(
         yield* fs.readFileString(options.output),
       );
 
@@ -415,7 +415,7 @@ it("persists the active phase and completed samples when the worker is interrupt
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(fiber);
 
-      const report = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WorkerReport))(
+      const report = yield* Schema.decodeEffect(Schema.fromJsonString(WorkerReport))(
         yield* fs.readFileString(options.output),
       );
 
@@ -454,7 +454,7 @@ it("writes child output before completion and kills an interrupted child", async
           yield* Effect.sleep("10 millis");
       }).pipe(Effect.timeout("5 seconds"));
 
-      const child = yield* Schema.decodeUnknownEffect(
+      const child = yield* Schema.decodeEffect(
         Schema.fromJsonString(Schema.Struct({ pid: Schema.Int })),
       )(yield* fs.readFileString(log));
 
@@ -503,7 +503,7 @@ it("caps combined stdout and stderr, retains their prefix, and terminates a chat
       expect(text).toContain("oooo");
       expect(text).toContain("eeee");
 
-      const child = yield* Schema.decodeUnknownEffect(
+      const child = yield* Schema.decodeEffect(
         Schema.fromJsonString(Schema.Struct({ pid: Schema.Int })),
       )(yield* fs.readFileString(`${directory}/child.json`));
 

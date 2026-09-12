@@ -261,7 +261,7 @@ export const runVoiceSession = Effect.fn("runVoiceSession")(function* (
       if (message !== null) {
         pending = undefined;
 
-        const request = yield* Schema.decodeUnknownEffect(SendMessageRequest)({
+        const request = yield* Schema.decodeEffect(SendMessageRequest)({
           ...envelope,
           message,
           voice: { input: true, messages: backend.speech() },

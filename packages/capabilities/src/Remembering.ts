@@ -72,7 +72,7 @@ const validateSource = Effect.fn("Remembering.validateSource")(function* (
   snapshot: SourceSnapshot,
   limits: Limits,
 ) {
-  const source = yield* Schema.decodeUnknownEffect(SourceSnapshot)(snapshot).pipe(
+  const source = yield* Schema.decodeEffect(SourceSnapshot)(snapshot).pipe(
     Effect.mapError(() => Protocol.ProcessingError.make({ reason: "invalid-input" })),
   );
 
@@ -116,7 +116,7 @@ const validateCheckpoint = Effect.fn("Remembering.validateCheckpoint")(function*
   intent: Protocol.Intent<S, T>,
   input: Protocol.Checkpoint,
 ): Effect.fn.Return<Protocol.BoundCheckpoint<S, T>, Protocol.CheckpointError> {
-  const checkpoint = yield* Schema.decodeUnknownEffect(Protocol.Checkpoint)(input).pipe(
+  const checkpoint = yield* Schema.decodeEffect(Protocol.Checkpoint)(input).pipe(
     Effect.mapError(() => Protocol.CheckpointError.make({ reason: "corrupt" })),
   );
 
@@ -198,7 +198,7 @@ export const admit = Effect.fn("Remembering.admit")(function* <E, R>(
   store: Protocol.Store<E, R>,
   intent: Protocol.Intent,
 ) {
-  const checked = yield* Schema.decodeUnknownEffect(Protocol.Intent.Wire)(intent).pipe(
+  const checked = yield* Schema.decodeEffect(Protocol.Intent.Wire)(intent).pipe(
     Effect.mapError(() => Protocol.AdmissionError.make({ reason: "invalid-input" })),
   );
 
@@ -219,7 +219,7 @@ export const invalidate = Effect.fn("Remembering.invalidate")(function* <E, R>(
   store: Protocol.Store<E, R>,
   event: Protocol.Invalidation,
 ) {
-  const checked = yield* Schema.decodeUnknownEffect(Protocol.Invalidation)(event).pipe(
+  const checked = yield* Schema.decodeEffect(Protocol.Invalidation)(event).pipe(
     Effect.mapError(() => Protocol.AdmissionError.make({ reason: "invalid-input" })),
   );
 
@@ -290,7 +290,7 @@ export const make = <
     /** Stops new extraction only. Saved commands, rebase and suppression cleanup still run. */
     readonly extractionEnabled: boolean;
   }) {
-    const limits = yield* Schema.decodeUnknownEffect(Limits)(input.limits).pipe(
+    const limits = yield* Schema.decodeEffect(Limits)(input.limits).pipe(
       Effect.mapError(() => Protocol.ProcessingError.make({ reason: "invalid-input" })),
     );
 
@@ -499,7 +499,7 @@ export const make = <
         ? yield* options.cleanup({ ...mergeInput, suppression, applied })
         : yield* options.merge(mergeInput);
 
-      const decision = yield* Schema.decodeUnknownEffect(Decision)(candidate);
+      const decision = yield* Schema.decodeEffect(Decision)(candidate);
 
       if (cleanup && decision._tag === "Reject")
         return yield* Protocol.ProcessingError.make({ reason: "cleanup-rejected" });

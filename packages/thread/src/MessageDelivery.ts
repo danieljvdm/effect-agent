@@ -669,13 +669,12 @@ export class MessageDeliveryDriver extends Context.Service<
             .pipe(
               Effect.catchTag("MessageDeliveryError", (failure) =>
                 failure.reason === "conflict"
-                  ? store
-                      .get(key)
-                      .pipe(
-                        Effect.flatMap((record) =>
-                          record === null ? Effect.fail(failure) : Effect.succeed(record),
-                        ),
-                      )
+                  ? store.get(key).pipe(
+                      Effect.filterOrFail(
+                        (record) => record !== null,
+                        () => failure,
+                      ),
+                    )
                   : Effect.fail(failure),
               ),
             ),

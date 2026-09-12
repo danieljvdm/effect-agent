@@ -457,7 +457,7 @@ const SUBAGENT_ABORT_REASON =
  * reservation exactly once"). Constant so every repair pass freezes the SAME
  * decision — an identical `beginChildBudgetRelease` replay is a no-op.
  */
-const ORPHAN_ZERO_CONSUMED_ACCOUNTING = Schema.decodeUnknownSync(PersistedJson)({
+const ORPHAN_ZERO_CONSUMED_ACCOUNTING = Schema.decodeSync(PersistedJson)({
   basis: "orphan-zero-consumed",
 });
 
@@ -1987,16 +1987,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           }),
         )
         .pipe(
-          Effect.catch((error) =>
-            error._tag === "AppendConflict" || error._tag === "FenceRejected"
-              ? store
-                  .inspectTail(ThreadTailRequest.make({ threadId }))
-                  .pipe(
-                    Effect.flatMap((current) =>
-                      current.tailSequence > 0 ? Effect.void : Effect.fail(error),
-                    ),
-                  )
-              : Effect.fail(error),
+          Effect.catchTag(["AppendConflict", "FenceRejected"], (error) =>
+            store
+              .inspectTail(ThreadTailRequest.make({ threadId }))
+              .pipe(
+                Effect.flatMap((current) =>
+                  current.tailSequence > 0 ? Effect.void : Effect.fail(error),
+                ),
+              ),
           ),
           Effect.andThen(wake.notify(threadId)),
           Effect.asVoid,
@@ -2117,7 +2115,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         records: [envelope],
       }),
     ).pipe(
-      Effect.catch((error) => (error._tag === "AppendConflict" ? Effect.void : Effect.fail(error))),
+      Effect.catchTag("AppendConflict", () => Effect.void),
       Effect.asVoid,
     );
   });
@@ -2180,9 +2178,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           records: [head, ...envelopes.slice(1)],
         }),
       ).pipe(
-        Effect.catch((error) =>
-          error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-        ),
+        Effect.catchTag("AppendConflict", () => Effect.void),
         Effect.asVoid,
       );
       for (const call of missing) {
@@ -2214,9 +2210,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     const swallowIdentityConflict = (effect: ReturnType<typeof appendBatch>) =>
       effect.pipe(
-        Effect.catch((error) =>
-          error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-        ),
+        Effect.catchTag("AppendConflict", () => Effect.void),
         Effect.asVoid,
       );
 
@@ -2670,7 +2664,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       // batch replay is byte-identical (DUR-011).
       record = joined.reservation.record;
     } else {
-      const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+      const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)(
         SubmissionSettled.make({
           submissionId,
           settlementId,
@@ -2728,7 +2722,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         records: [record],
       }),
     ).pipe(
-      Effect.catch((error) => (error._tag === "AppendConflict" ? Effect.void : Effect.fail(error))),
+      Effect.catchTag("AppendConflict", () => Effect.void),
       Effect.asVoid,
     );
     yield* hit("terminalize:after-canonical-append");
@@ -2792,7 +2786,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const submissionId = submission.submissionId;
     const settlementId = submissionSettlementId(submissionId);
 
-    const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+    const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)(
       SubmissionSettled.make({
         submissionId,
         settlementId,
@@ -2850,7 +2844,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         records: [reserved.record],
       }),
     ).pipe(
-      Effect.catch((error) => (error._tag === "AppendConflict" ? Effect.void : Effect.fail(error))),
+      Effect.catchTag("AppendConflict", () => Effect.void),
       Effect.asVoid,
     );
     yield* hit("terminalize:after-canonical-append");
@@ -2885,9 +2879,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           records: [reservation.record],
         }),
       ).pipe(
-        Effect.catch((error) =>
-          error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-        ),
+        Effect.catchTag("AppendConflict", () => Effect.void),
         Effect.asVoid,
       );
       yield* hit("terminalize:after-canonical-append");
@@ -3044,19 +3036,17 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           }),
         )
         .pipe(
-          Effect.catch((error) =>
-            error._tag === "AppendConflict" || error._tag === "FenceRejected"
-              ? // A racing establishment pass (or the child's own claimed worker) advanced the
-                // log; the deterministic identity means the record either exists or the next
-                // pass re-proves it — verify instead of trusting the race blindly.
-                readControl(request.childThreadId, []).pipe(
-                  Effect.flatMap((current) =>
-                    current.some((candidate) => candidate.record.recordId === recordId)
-                      ? Effect.void
-                      : Effect.fail(error),
-                  ),
-                )
-              : Effect.fail(error),
+          Effect.catchTag(["AppendConflict", "FenceRejected"], (error) =>
+            // A racing establishment pass (or the child's own claimed worker) advanced the
+            // log; the deterministic identity means the record either exists or the next
+            // pass re-proves it — verify instead of trusting the race blindly.
+            readControl(request.childThreadId, []).pipe(
+              Effect.flatMap((current) =>
+                current.some((candidate) => candidate.record.recordId === recordId)
+                  ? Effect.void
+                  : Effect.fail(error),
+              ),
+            ),
           ),
           Effect.andThen(wake.notify(request.childThreadId)),
           Effect.asVoid,
@@ -3536,9 +3526,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             records: [joinedEnvelope, settledEnvelope],
           }),
         ).pipe(
-          Effect.catch((error) =>
-            error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-          ),
+          Effect.catchTag("AppendConflict", () => Effect.void),
           Effect.asVoid,
         );
         knownIds.add(joinedRecordId);
@@ -3875,7 +3863,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   });
 
   const failureOutcome = (error: unknown): Effect.Effect<AttemptOutcome> =>
-    Schema.decodeUnknownEffect(SettlementFailureDiagnostic)({
+    Schema.decodeEffect(SettlementFailureDiagnostic)({
       errorTag: errorTagOf(error).slice(0, 256) || "UnknownError",
       message: errorMessageOf(error).slice(0, MAX_FAILURE_MESSAGE_LENGTH),
     }).pipe(
@@ -3934,7 +3922,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         records: [envelope],
       }),
     ).pipe(
-      Effect.catch((error) => (error._tag === "AppendConflict" ? Effect.void : Effect.fail(error))),
+      Effect.catchTag("AppendConflict", () => Effect.void),
       Effect.asVoid,
     );
     knownIds.add(recordId);
@@ -4218,13 +4206,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           )
             return;
 
-          const summaries = yield* Effect.all(
-            [current, candidate].map((projection) =>
-              summarizeModelUsage(
-                projection.usage.modelUsage,
-                projection.usage.summarizedModelUsage,
-              ),
-            ),
+          const summaries = yield* Effect.forEach([current, candidate], (projection) =>
+            summarizeModelUsage(projection.usage.modelUsage, projection.usage.summarizedModelUsage),
           ).pipe(Effect.option);
 
           if (
@@ -4451,7 +4434,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         field: string,
         value: number,
       ): Effect.Effect<number, RunJournalError> =>
-        Schema.decodeUnknownEffect(Schema.Natural)(value).pipe(
+        Schema.decodeEffect(Schema.Natural)(value).pipe(
           Effect.mapError((cause) =>
             RunJournalError.make({
               message: `Run usage summary exceeds safe-integer bounds at ${field}`,
@@ -5389,7 +5372,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               });
             }
 
-            const payload = yield* Schema.decodeUnknownEffect(CompactionCreated)({
+            const payload = yield* Schema.decodeEffect(CompactionCreated)({
               _tag: "CompactionCreated",
               runId,
               turn: canonicalTurn,
@@ -5529,9 +5512,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 records: [head, ...envelopes.slice(1)],
               }),
             ).pipe(
-              Effect.catch((error) =>
-                error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-              ),
+              Effect.catchTag("AppendConflict", () => Effect.void),
               Effect.asVoid,
             );
             for (const record of envelopes) knownIds.add(record.recordId);
@@ -5656,7 +5637,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             return yield* renderInputPrompt(undefined, encodedInput, encodedInput);
           }
 
-          const decodedInput = yield* Schema.decodeUnknownEffect(agent.definition.input)(
+          const decodedInput = yield* Schema.decodeEffect(agent.definition.input)(
             encodedInput,
           ).pipe(
             Effect.mapError((cause) =>
@@ -6146,9 +6127,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                     records: [envelope],
                   }),
                 ).pipe(
-                  Effect.catch((error) =>
-                    error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-                  ),
+                  Effect.catchTag("AppendConflict", () => Effect.void),
                   Effect.asVoid,
                 );
                 knownIds.add(requestRecordId);
@@ -6194,9 +6173,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                     records: [envelope],
                   }),
                 ).pipe(
-                  Effect.catch((error) =>
-                    error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-                  ),
+                  Effect.catchTag("AppendConflict", () => Effect.void),
                   Effect.asVoid,
                 );
                 knownIds.add(startRecordId);
@@ -6388,9 +6365,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   records: [joinedEnvelope, settledEnvelope],
                 }),
               ).pipe(
-                Effect.catch((error) =>
-                  error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-                ),
+                Effect.catchTag("AppendConflict", () => Effect.void),
                 Effect.asVoid,
               );
               knownIds.add(joinedRecordId);
@@ -6896,9 +6871,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 records: [envelope],
               }),
             ).pipe(
-              Effect.catch((error) =>
-                error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-              ),
+              Effect.catchTag("AppendConflict", () => Effect.void),
               Effect.asVoid,
             );
             knownIds.add(recordId);
@@ -7650,7 +7623,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         return yield* completeReservation(ctx, submission, snapshot.reservation, recorded);
       }
 
-      const result = yield* Schema.decodeUnknownEffect(SettlementFailureDiagnostic)({
+      const result = yield* Schema.decodeEffect(SettlementFailureDiagnostic)({
         errorTag: "ChildCompatibilityFailure",
         message: boundedText(failure.message),
       }).pipe(Effect.orDie);
@@ -7943,9 +7916,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         Effect.orDie,
       );
 
-      const details = yield* Schema.decodeUnknownEffect(PersistedJson)(encodedDecision).pipe(
-        Effect.orDie,
-      );
+      const details = yield* Schema.decodeEffect(PersistedJson)(encodedDecision).pipe(Effect.orDie);
 
       const envelope = yield* makeEnvelope(
         recoveryRepairRecordId(submissionId, decision._tag),
@@ -8030,9 +8001,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 }),
               )
               .pipe(
-                Effect.catch((error) =>
-                  error._tag === "ApprovalConflict" ? Effect.void : Effect.fail(error),
-                ),
+                Effect.catchTag("ApprovalConflict", () => Effect.void),
                 Effect.asVoid,
               );
           }
@@ -8683,9 +8652,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 records: [envelope],
               }),
             ).pipe(
-              Effect.catch((error) =>
-                error._tag === "AppendConflict" ? Effect.void : Effect.fail(error),
-              ),
+              Effect.catchTag("AppendConflict", () => Effect.void),
               Effect.asVoid,
             );
             yield* hit("subagent:after-start-append");
@@ -8904,9 +8871,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     submission: SubmissionSnapshot,
     history: RecoveryHistorySnapshot,
   ): Effect.fn.Return<RecoveryReport, DurableWorkerFailure> {
-    if (history.materialized && submission.workerAdmission?.origin.reporting?.mode === "standard")
-      yield* updateRuntime.repair(submission.threadId);
-
     const snapshot = yield* ledger.loadRecoverySnapshot(
       RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
     );
@@ -8976,10 +8940,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       });
     }
 
-    return yield* recoverSnapshot(
-      found.value,
-      yield* readRecoveryHistory(found.value.threadId, [submissionId]),
-    );
+    const history = yield* readRecoveryHistory(found.value.threadId, [submissionId]);
+
+    if (history.materialized && found.value.workerAdmission?.origin.reporting?.mode === "standard")
+      yield* updateRuntime.repair(found.value.threadId);
+
+    return yield* recoverSnapshot(found.value, history);
   });
 
   const runRecoveryImpl = Effect.fn("DurableAgentRuntime.runRecovery")(
@@ -8998,14 +8964,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
         if (first === undefined) break;
         const submissionIds: Array<SubmissionId> = [];
+        let hasStandardReporting = false;
 
         for (let offset = index; offset < nonterminal.length; offset += 1) {
           const entry = nonterminal[offset];
 
           if (entry === undefined || entry.threadId !== first.threadId) break;
           submissionIds.push(entry.submissionId);
+          hasStandardReporting ||= entry.workerAdmission?.origin.reporting?.mode === "standard";
         }
         const history = yield* readRecoveryHistory(first.threadId, submissionIds);
+
+        if (history.materialized && hasStandardReporting)
+          yield* updateRuntime.repair(first.threadId);
 
         while (index < nonterminal.length) {
           const submission = nonterminal[index];
@@ -9102,7 +9073,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           );
 
     const admitted = yield* ledger.admit(
-      yield* Schema.decodeUnknownEffect(AdmissionRequest)({
+      yield* Schema.decodeEffect(AdmissionRequest)({
         threadId: options.threadId,
         principal: options.principal,
         idempotencyKey: options.idempotencyKey,

@@ -117,7 +117,7 @@ export const runWriter = Effect.fn("diagnostic.writer")(function* (
 if (import.meta.main)
   NodeRuntime.runMain(
     Effect.gen(function* () {
-      const options = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WriterOptions))(
+      const options = yield* Schema.decodeEffect(Schema.fromJsonString(WriterOptions))(
         yield* Config.string("RUNTIME_DIAGNOSTIC_WRITER"),
       );
 

@@ -57,7 +57,7 @@ export const emit = Effect.fn("AgentUpdates.emit")(function* <S extends Schema.T
 
   if (target.updates === undefined) return yield* new UpdateError({ reason: "unavailable" });
 
-  const updateId = yield* Schema.decodeUnknownEffect(IdempotencyKey)(options.idempotencyKey).pipe(
+  const updateId = yield* Schema.decodeEffect(IdempotencyKey)(options.idempotencyKey).pipe(
     Effect.mapError(() => new UpdateError({ reason: "validation" })),
   );
 
@@ -82,13 +82,13 @@ export const decode = Effect.fn("AgentUpdates.decode")(function* <S extends Sche
 
   if (definition.updates === undefined) return yield* new UpdateError({ reason: "unavailable" });
 
-  const decoded = yield* Schema.decodeUnknownEffect(Update)(update).pipe(
+  const decoded = yield* Schema.decodeEffect(Update)(update).pipe(
     Effect.mapError(() => new UpdateError({ reason: "validation" })),
   );
 
   if (decoded.agentId !== definition.id) return yield* new UpdateError({ reason: "identity" });
 
-  return yield* Schema.decodeUnknownEffect(definition.updates)(decoded.value).pipe(
+  return yield* Schema.decodeEffect(definition.updates)(decoded.value).pipe(
     Effect.mapError(() => new UpdateError({ reason: "validation" })),
   );
 });

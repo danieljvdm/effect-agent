@@ -78,7 +78,7 @@ export const loadObservationFiles = Effect.fn("PrReviewEval.loadObservationFiles
 export const loadJudgmentSet = Effect.fn("PrReviewEval.loadJudgmentSet")(function* (path: string) {
   const contents = yield* readBoundedFile(path, MAX_JUDGMENT_BYTES, "read judgments");
 
-  return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(EvalJudgmentSet))(contents).pipe(
+  return yield* Schema.decodeEffect(Schema.fromJsonString(EvalJudgmentSet))(contents).pipe(
     Effect.mapError((cause) =>
       dataError("decode judgments", `Judgment set at ${path} is invalid`, path, cause),
     ),

@@ -216,7 +216,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
 
   const checkpoint =
     hardRestart && (yield* fs.exists(checkpointPath))
-      ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ResumeCheckpoint))(
+      ? yield* Schema.decodeEffect(Schema.fromJsonString(ResumeCheckpoint))(
           yield* fs.readFileString(checkpointPath),
         )
       : undefined;
@@ -510,7 +510,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
         };
 
         if (hardRestart) {
-          const witness = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(KillWitness))(
+          const witness = yield* Schema.decodeEffect(Schema.fromJsonString(KillWitness))(
             yield* fs.readFileString(
               path.join(options.outputDirectory, `kill-${phase.index}.json`),
             ),
@@ -637,7 +637,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
 
       const requestEvidence = yield* Effect.forEach(
         (yield* fs.readFileString(auditPath)).trim().split("\n"),
-        (line) => Schema.decodeUnknownEffect(Schema.fromJsonString(RequestAudit))(line),
+        (line) => Schema.decodeEffect(Schema.fromJsonString(RequestAudit))(line),
       );
 
       const firstRequest = requestEvidence.find(

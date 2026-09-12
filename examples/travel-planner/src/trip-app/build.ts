@@ -144,15 +144,15 @@ export const AppBuilderLive = Layer.effect(
 
     const compile = Effect.fn("AppBuilder.compile")(
       function* (input: AppBuildRequest, source: ReadonlyArray<AppFile>) {
-        const request = yield* Schema.decodeUnknownEffect(AppBuildRequest)(input).pipe(
+        const request = yield* Schema.decodeEffect(AppBuildRequest)(input).pipe(
           Effect.mapError(() => failed("Invalid app build request.")),
         );
 
-        const files = yield* Schema.decodeUnknownEffect(SourceFiles)(source).pipe(
+        const files = yield* Schema.decodeEffect(SourceFiles)(source).pipe(
           Effect.mapError(() => failed("Invalid app source.")),
         );
 
-        const prefix = yield* Schema.decodeUnknownEffect(
+        const prefix = yield* Schema.decodeEffect(
           Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9-]{1,100}$/)),
         )(`${request.appId}-${request.commitId}`).pipe(
           Effect.mapError(() => failed("Invalid build identity.")),
@@ -287,7 +287,7 @@ export const AppBuilderLive = Layer.effect(
                 output.push({ path, body });
               }
 
-              return yield* Schema.decodeUnknownEffect(OutputFiles)(output).pipe(
+              return yield* Schema.decodeEffect(OutputFiles)(output).pipe(
                 Effect.mapError(() =>
                   failed(
                     "The app must build web/index.html and server/index.js within the output limits.",
@@ -328,7 +328,7 @@ export const readBuild = Effect.fn("readAppBuildManifest")(
   function* (appId: string, commitId: string) {
     const bucket = yield* AppBuildBucket;
 
-    yield* Schema.decodeUnknownEffect(buildIdentity)({ appId, commitId }).pipe(
+    yield* Schema.decodeEffect(buildIdentity)({ appId, commitId }).pipe(
       Effect.mapError(badManifest),
     );
     const found = yield* bucket.get(`${buildPrefix(appId, commitId)}manifest.json`);
@@ -346,9 +346,9 @@ export const readBuild = Effect.fn("readAppBuildManifest")(
     if (object.size > 64 * 1024) return yield* badManifest();
     const text = yield* object.text;
 
-    const manifest = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(BuildManifest))(
-      text,
-    ).pipe(Effect.mapError(badManifest));
+    const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(BuildManifest))(text).pipe(
+      Effect.mapError(badManifest),
+    );
 
     if (manifest.appId !== appId || manifest.commitId !== commitId) return yield* badManifest();
 
@@ -396,7 +396,7 @@ export const recordBuildProgress = Effect.fn("recordTripAppBuildProgress")(funct
 ) {
   const apps = yield* AppRepository;
 
-  const event = yield* Schema.decodeUnknownEffect(TripAppBuildEvent)({
+  const event = yield* Schema.decodeEffect(TripAppBuildEvent)({
     ...update,
     at: DateTime.formatIso(yield* DateTime.now),
   }).pipe(Effect.mapError(() => failed("Invalid app build progress.")));
@@ -441,7 +441,7 @@ export const recordBuildProgress = Effect.fn("recordTripAppBuildProgress")(funct
 /** Manifest-last publication; immutable asset writes make interrupted retries safe. */
 export const buildTripApp = Effect.fn("buildTripApp")(
   function* (input: AppBuildRequest) {
-    const request = yield* Schema.decodeUnknownEffect(AppBuildRequest)(input).pipe(
+    const request = yield* Schema.decodeEffect(AppBuildRequest)(input).pipe(
       Effect.mapError(() => failed("Invalid app build request.")),
     );
 
@@ -473,7 +473,7 @@ export const buildTripApp = Effect.fn("buildTripApp")(
         ),
       );
 
-      const manifest = yield* Schema.decodeUnknownEffect(BuildManifest)({
+      const manifest = yield* Schema.decodeEffect(BuildManifest)({
         version: 1,
         appId: request.appId,
         commitId: request.commitId,
@@ -527,7 +527,7 @@ export const settleBuild = Effect.fn("settleTripAppBuild")(function* (
   input: AppBuildRequest,
   error: string | null,
 ) {
-  const request = yield* Schema.decodeUnknownEffect(AppBuildRequest)(input).pipe(
+  const request = yield* Schema.decodeEffect(AppBuildRequest)(input).pipe(
     Effect.mapError(() => failed("Invalid app build request.")),
   );
 

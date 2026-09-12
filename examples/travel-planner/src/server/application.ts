@@ -53,9 +53,7 @@ const unavailable = () =>
   });
 
 const readThread = Effect.fn("readPlannerThread")(function* (id: string) {
-  const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(id).pipe(
-    Effect.mapError(unavailable),
-  );
+  const threadId = yield* Schema.decodeEffect(ThreadId)(id).pipe(Effect.mapError(unavailable));
 
   const store = yield* ThreadStore;
 
@@ -70,7 +68,7 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
   const repository = yield* TripRepository;
   const identity = yield* ThreadObjectIdentity;
 
-  const settings = yield* Schema.decodeUnknownEffect(PlannerSettings)(
+  const settings = yield* Schema.decodeEffect(PlannerSettings)(
     request.settings ?? defaultPlannerSettings,
   ).pipe(
     Effect.mapError(
@@ -78,15 +76,15 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
     ),
   );
 
-  const principal = yield* Schema.decodeUnknownEffect(Principal)(
-    ownerOfThread(identity.threadId),
-  ).pipe(Effect.mapError(unavailable));
-
-  const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(request.conversationId).pipe(
+  const principal = yield* Schema.decodeEffect(Principal)(ownerOfThread(identity.threadId)).pipe(
     Effect.mapError(unavailable),
   );
 
-  const idempotencyKey = yield* Schema.decodeUnknownEffect(IdempotencyKey)(request.requestId).pipe(
+  const threadId = yield* Schema.decodeEffect(ThreadId)(request.conversationId).pipe(
+    Effect.mapError(unavailable),
+  );
+
+  const idempotencyKey = yield* Schema.decodeEffect(IdempotencyKey)(request.requestId).pipe(
     Effect.mapError(
       () => new PlannerError({ code: "invalid", message: "Invalid request identifier." }),
     ),
@@ -349,9 +347,9 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
     Effect.fn("plannerMessageIdentity")(function* (message) {
       if (message.role !== "user" || message.submissionId === undefined) return message;
 
-      const submissionId = yield* Schema.decodeUnknownEffect(
-        SubmissionLookupById.fields.submissionId,
-      )(message.submissionId).pipe(Effect.mapError(unavailable));
+      const submissionId = yield* Schema.decodeEffect(SubmissionLookupById.fields.submissionId)(
+        message.submissionId,
+      ).pipe(Effect.mapError(unavailable));
 
       const submission = yield* ledger
         .lookup(SubmissionLookupById.make({ submissionId }))
@@ -401,7 +399,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
 export const voiceWork = Effect.fn("voiceWork")(function* (request: typeof VoiceWorkRequest.Type) {
   const identity = yield* ThreadObjectIdentity;
 
-  const lookup = yield* Schema.decodeUnknownEffect(SubmissionLookupByKey)({
+  const lookup = yield* Schema.decodeEffect(SubmissionLookupByKey)({
     _tag: "SubmissionLookupByKey",
     threadId: request.conversationId,
     principal: ownerOfThread(identity.threadId),

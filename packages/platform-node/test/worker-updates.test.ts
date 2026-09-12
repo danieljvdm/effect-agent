@@ -382,7 +382,7 @@ it.live(
         const completions = finalLog.records.flatMap(({ record }) =>
           record.payload._tag === "UserInputRecorded" &&
           Schema.is(WorkerCompletion)(record.payload.messageAdmission)
-            ? [Schema.decodeUnknownSync(WorkerCompletion)(record.payload.messageAdmission)]
+            ? [Schema.decodeSync(WorkerCompletion)(record.payload.messageAdmission)]
             : [],
         );
 

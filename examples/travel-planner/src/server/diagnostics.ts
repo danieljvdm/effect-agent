@@ -57,7 +57,7 @@ export const diagnosticDetail = (value: unknown, limit = diagnosticTextLimit) =>
     if (typeof input === "string") {
       // Provider bodies frequently contain JSON inside an Error.message or a body field.
       if (input.length < diagnosticTextLimit && /^[\s]*[[{]/.test(input)) {
-        const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(input);
+        const decoded = Schema.decodeOption(Schema.fromJsonString(Schema.Json))(input);
 
         if (Option.isSome(decoded)) return visit(decoded.value, depth + 1);
       }
@@ -208,7 +208,7 @@ export const FailureDiagnosticsLive = Layer.effect(
         ),
         Effect.flatMap((rows) =>
           Effect.forEach(rows, (row) =>
-            Schema.decodeUnknownEffect(Schema.fromJsonString(FailureDiagnostic))(row.value).pipe(
+            Schema.decodeEffect(Schema.fromJsonString(FailureDiagnostic))(row.value).pipe(
               Effect.map((value) => ({ id: row.id, ...value })),
             ),
           ),

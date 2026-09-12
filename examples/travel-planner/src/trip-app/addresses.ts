@@ -49,7 +49,7 @@ export const readTripAppAddress = Effect.fn("readTripAppAddress")(
     );
     if (object.size > 4096) return yield* unavailable();
 
-    const entry = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(AppSiteRegistration))(
+    const entry = yield* Schema.decodeEffect(Schema.fromJsonString(AppSiteRegistration))(
       yield* object.text,
     ).pipe(Effect.mapError(unavailable));
 
@@ -88,7 +88,7 @@ export const publishTripAppAddress = Effect.fn("publishTripAppAddress")(
     const failpoint = yield* TripFailpoint;
 
     for (const hostname of new Set([canonical.hostname, `${app.id}-trip.${domain}`])) {
-      const entry = yield* Schema.decodeUnknownEffect(AppSiteRegistration)({
+      const entry = yield* Schema.decodeEffect(AppSiteRegistration)({
         version: 1,
         owner,
         appId: app.id,

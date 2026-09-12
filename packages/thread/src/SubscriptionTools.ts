@@ -196,7 +196,7 @@ export const subscriptionToolsLayer = (
 
     const catalog = yield* Effect.forEach(options.permittedSources, (candidate) =>
       Effect.gen(function* () {
-        const description = yield* Schema.decodeUnknownEffect(
+        const description = yield* Schema.decodeEffect(
           SubscriptionToolSourceCatalogEntry.fields.description,
         )(candidate.description).pipe(
           Effect.mapError(() => toolFailure("validation", "source-catalog-description")),

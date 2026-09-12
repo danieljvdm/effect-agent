@@ -57,9 +57,7 @@ it.live.each(WorkflowCrashBoundary.literals)(
       const marker = yield* child.stdout.pipe(
         Stream.decodeText(),
         Stream.splitLines,
-        Stream.map((line) =>
-          Schema.decodeUnknownOption(Schema.fromJsonString(WorkflowCrashMarker))(line),
-        ),
+        Stream.map((line) => Schema.decodeOption(Schema.fromJsonString(WorkflowCrashMarker))(line)),
         Stream.filter(Option.isSome),
         Stream.map((value) => value.value),
         Stream.runHead,

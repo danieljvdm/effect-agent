@@ -107,7 +107,7 @@ export class BrowserRunSessionLifecycle extends Context.Service<
           });
 
           if (response.status === 404) {
-            const absent = Schema.decodeUnknownOption(Schema.fromJsonString(Absent))(body, {
+            const absent = Schema.decodeOption(Schema.fromJsonString(Absent))(body, {
               onExcessProperty: "error",
             });
 
@@ -116,16 +116,16 @@ export class BrowserRunSessionLifecycle extends Context.Service<
             return yield* new BrowserRunCleanupError({ reason: "malformed" });
           }
           if (method === "DELETE") {
-            const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Closed))(
-              body,
-            ).pipe(Effect.mapError(() => new BrowserRunCleanupError({ reason: "malformed" })));
+            const result = yield* Schema.decodeEffect(Schema.fromJsonString(Closed))(body).pipe(
+              Effect.mapError(() => new BrowserRunCleanupError({ reason: "malformed" })),
+            );
 
             return result.status === "closed";
           }
 
-          const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Metadata))(
-            body,
-          ).pipe(Effect.mapError(() => new BrowserRunCleanupError({ reason: "malformed" })));
+          const result = yield* Schema.decodeEffect(Schema.fromJsonString(Metadata))(body).pipe(
+            Effect.mapError(() => new BrowserRunCleanupError({ reason: "malformed" })),
+          );
 
           if (result.sessionId !== sessionId)
             return yield* new BrowserRunCleanupError({ reason: "malformed" });
@@ -135,7 +135,7 @@ export class BrowserRunSessionLifecycle extends Context.Service<
 
         const close = Effect.fn("BrowserRunSessionLifecycle.close")(
           function* (sessionId: Redacted.Redacted<string>) {
-            const id = yield* Schema.decodeUnknownEffect(Identity)(Redacted.value(sessionId)).pipe(
+            const id = yield* Schema.decodeEffect(Identity)(Redacted.value(sessionId)).pipe(
               Effect.mapError(() => new BrowserRunCleanupError({ reason: "configuration" })),
             );
 

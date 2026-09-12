@@ -55,7 +55,7 @@ export const supervise = Effect.fn("ContextContinuity.supervise")(
           yield* Effect.sleep("50 millis");
         }
 
-        const barrier = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ResumeCheckpoint))(
+        const barrier = yield* Schema.decodeEffect(Schema.fromJsonString(ResumeCheckpoint))(
           yield* fs.readFileString(barrierPath),
         );
 
@@ -98,7 +98,7 @@ export const supervise = Effect.fn("ContextContinuity.supervise")(
       } else {
         const exitCode = yield* child.exitCode;
 
-        const report = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(EvaluationReport))(
+        const report = yield* Schema.decodeEffect(Schema.fromJsonString(EvaluationReport))(
           yield* fs.readFileString(path.join(options.outputDirectory, "report.json")),
         );
 

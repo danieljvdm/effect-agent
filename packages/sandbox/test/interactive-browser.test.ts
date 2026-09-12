@@ -50,14 +50,14 @@ describe("InteractiveBrowser schemas", () => {
   it("bounds non-secret fill, authorized address metadata, and hour-long policies", () => {
     const ref = "12345678-1234-4234-9234-123456789abc";
 
-    expect(Schema.decodeUnknownSync(ProtectedBrowserFill)({ ref, value: "" }).value).toBe("");
+    expect(Schema.decodeSync(ProtectedBrowserFill)({ ref, value: "" }).value).toBe("");
     for (const request of [
       { ref: "#address", value: "text" },
       { ref, value: "x".repeat(8193) },
       { ref, value: "text", selector: "input" },
       { ref, value: "text", script: "document.body" },
     ])
-      expect(Schema.decodeUnknownExit(ProtectedBrowserFill)(request)._tag).toBe("Failure");
+      expect(Schema.decodeExit(ProtectedBrowserFill)(request)._tag).toBe("Failure");
 
     const metadata = CredentialOfferMetadata.make({
       label: "Personal card",
@@ -70,14 +70,14 @@ describe("InteractiveBrowser schemas", () => {
       ),
     ).toEqual(metadata);
     expect(
-      Schema.decodeUnknownExit(CredentialOfferMetadata)({
+      Schema.decodeExit(CredentialOfferMetadata)({
         label: "Card",
         billingAddress: { line1: "x".repeat(201) },
       })._tag,
     ).toBe("Failure");
     for (const maxElapsedMillis of [600_001, 3_600_000])
       expect(
-        Schema.decodeUnknownExit(InteractiveBrowserPolicy)({
+        Schema.decodeExit(InteractiveBrowserPolicy)({
           network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
           maxActions: 10,
           maxElapsedMillis,
@@ -115,7 +115,7 @@ describe("InteractiveBrowser schemas", () => {
       "https://EXAMPLE.com",
       "https://u:p@example.com",
     ]) {
-      expect(Schema.decodeUnknownExit(CredentialOrigin)(origin)._tag).toBe("Failure");
+      expect(Schema.decodeExit(CredentialOrigin)(origin)._tag).toBe("Failure");
     }
     expect(
       Schema.decodeUnknownExit(CardCredential)({
@@ -226,7 +226,7 @@ describe("InteractiveBrowser schemas", () => {
       "*.example.com",
       "example.*",
     ])
-      expect(Schema.decodeUnknownExit(InteractiveBrowserHost)(host)._tag).toBe("Failure");
+      expect(Schema.decodeExit(InteractiveBrowserHost)(host)._tag).toBe("Failure");
 
     const valid = {
       network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
@@ -272,20 +272,19 @@ describe("InteractiveBrowser schemas", () => {
       "/relative",
       `https://example.com/${"a".repeat(8192)}`,
     ]) {
-      expect(Schema.decodeUnknownExit(BrowserNavigateRequest)({ url })._tag).toBe("Failure");
-      expect(Schema.decodeUnknownExit(BrowserNavigationResult)({ url })._tag).toBe("Failure");
-      expect(Schema.decodeUnknownExit(BrowserActionResult)({ url })._tag).toBe("Failure");
+      expect(Schema.decodeExit(BrowserNavigateRequest)({ url })._tag).toBe("Failure");
+      expect(Schema.decodeExit(BrowserNavigationResult)({ url })._tag).toBe("Failure");
+      expect(Schema.decodeExit(BrowserActionResult)({ url })._tag).toBe("Failure");
     }
     for (const value of [{ selector: "" }, { selector: "x".repeat(1_025) }])
-      expect(Schema.decodeUnknownExit(BrowserClickRequest)(value)._tag).toBe("Failure");
+      expect(Schema.decodeExit(BrowserClickRequest)(value)._tag).toBe("Failure");
     for (const value of [{ selector: "" }, { selector: "x".repeat(1_025) }])
-      expect(Schema.decodeUnknownExit(BrowserReadTextRequest)(value)._tag).toBe("Failure");
+      expect(Schema.decodeExit(BrowserReadTextRequest)(value)._tag).toBe("Failure");
     expect(
-      Schema.decodeUnknownExit(BrowserFillRequest)({ selector: "#q", value: "x".repeat(65_537) })
-        ._tag,
+      Schema.decodeExit(BrowserFillRequest)({ selector: "#q", value: "x".repeat(65_537) })._tag,
     ).toBe("Failure");
     expect(
-      Schema.decodeUnknownExit(BrowserTextResult)({ text: "x".repeat(8 * 1024 * 1024 + 1) })._tag,
+      Schema.decodeExit(BrowserTextResult)({ text: "x".repeat(8 * 1024 * 1024 + 1) })._tag,
     ).toBe("Failure");
     for (const value of [{}, { fullPage: "true" }]) {
       expect(Schema.decodeUnknownExit(BrowserScreenshotRequest)(value)._tag).toBe("Failure");

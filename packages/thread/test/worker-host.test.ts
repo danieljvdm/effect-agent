@@ -1097,13 +1097,13 @@ layer(NodeCrypto.layer)((it) => {
 
         const start = (key: string) => h.host.start({ ...request(key), budgetScope: "worker-run" });
 
-        const raced = yield* Effect.all(
-          [start("slot-a"), start("slot-b")].map((effect) =>
+        const raced = yield* Effect.forEach(
+          [start("slot-a"), start("slot-b")],
+          (effect) =>
             effect.pipe(
               Effect.map(Option.some),
               Effect.catchTag("WorkerError", () => Effect.succeed(Option.none())),
             ),
-          ),
           { concurrency: "unbounded" },
         );
 

@@ -118,7 +118,6 @@ export interface Definition<
 > {
   /** Stable agent identity; changing it creates a distinct definition identity. */
   readonly id: AgentId;
-  readonly name?: string;
   /** Canonical Schema for intermediate updates emitted by this Agent. */
   readonly updates?: UpdatesSchema;
   /** Canonical schema used to decode and encode run input. */
@@ -264,9 +263,11 @@ type RunDispositionSchemaOf<DefinitionValue extends AnyDefinition> = [
     ? DispositionSchema
     : never;
 
-/** Literal authoring name, retained by Agent.make. */
-export type Name<A extends AnyDefinition | Any> =
-  DefinitionOf<A> extends { readonly name: infer N extends string } ? N : string;
+/** Literal Agent ID, retained by Agent.make. */
+export type Name<A extends AnyDefinition | Any> = DefinitionOf<A>["id"] extends AgentId &
+  (infer N extends string)
+  ? N
+  : string;
 
 /** Declared update Schema, or never for Agents without updates. */
 export type UpdatesSchema<A extends AnyDefinition | Any> = Exclude<
@@ -407,7 +408,7 @@ export function make<
   RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>,
   InputPromptValue,
   NoInfer<UpdatesSchema>
-> & { readonly name: Name };
+> & { readonly id: AgentId & Name };
 
 export function make<
   const Name extends string,
@@ -439,7 +440,7 @@ export function make<
   RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>,
   undefined,
   NoInfer<UpdatesSchema>
-> & { readonly name: Name };
+> & { readonly id: AgentId & Name };
 
 export function make<
   const Name extends string,
@@ -471,7 +472,7 @@ export function make<
   undefined,
   InputPromptValue,
   NoInfer<UpdatesSchema>
-> & { readonly name: Name };
+> & { readonly id: AgentId & Name };
 
 export function make<
   const Name extends string,
@@ -502,7 +503,7 @@ export function make<
   undefined,
   undefined,
   NoInfer<UpdatesSchema>
-> & { readonly name: Name };
+> & { readonly id: AgentId & Name };
 
 export function make(
   id: string,
@@ -547,7 +548,6 @@ export function make(
             initialToolNames: Object.freeze([...(options.toolExposure.initialToolNames ?? [])]),
           }),
     id: S.decodeSync(AgentId)(id),
-    name: id,
     metadata: options.metadata === undefined ? undefined : Object.freeze({ ...options.metadata }),
     completion:
       options.completion === undefined ? undefined : Object.freeze({ ...options.completion }),

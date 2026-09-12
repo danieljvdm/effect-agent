@@ -34,7 +34,7 @@ const status = ContextWindowStatus.make({
 
 // Isolated beta62 serialization from 903a6dba169f46b69ce01c59c7c5f4943746c7ca;
 // it does not import either current toolkit as its expected contract.
-const beta62Contract = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(
+const beta62Contract = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(
   readFileSync(new URL("./fixtures/context-tools-beta62.json", import.meta.url), "utf8"),
 );
 
@@ -179,7 +179,7 @@ describe("context window tools", () => {
       };
 
       for (const tool of Object.values(toolkit.tools)) {
-        expect(Schema.decodeUnknownSync(tool.parametersSchema)({})).toEqual({});
+        expect(Schema.decodeSync(tool.parametersSchema)({})).toEqual({});
         expect(Schema.encodeSync(tool.parametersSchema)({})).toEqual({});
         expect(
           Tool.getJsonSchema(tool.setParameters(Schema.toEncoded(tool.parametersSchema)), {
@@ -196,7 +196,7 @@ describe("context window tools", () => {
           expect(request.body._tag).toBe("Uint8Array");
           if (request.body._tag !== "Uint8Array") throw new Error("Expected JSON request body");
 
-          const body = Schema.decodeUnknownSync(
+          const body = Schema.decodeSync(
             Schema.fromJsonString(
               Schema.Struct({
                 tools: Schema.Array(

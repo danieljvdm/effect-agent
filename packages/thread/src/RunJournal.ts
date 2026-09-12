@@ -446,7 +446,7 @@ const addProjectedUsage = (
   left: number,
   right: number,
 ): Effect.Effect<number, RunJournalError> =>
-  Schema.decodeUnknownEffect(Schema.Natural)(left + right).pipe(
+  Schema.decodeEffect(Schema.Natural)(left + right).pipe(
     Effect.mapError((cause) =>
       journalError(`Canonical projected usage exceeds safe-integer bounds at ${field}`, cause),
     ),
@@ -657,7 +657,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         const declared = declaredApplicationToolCallIds(messages);
 
         for (const id of declared) {
-          const callId = yield* Schema.decodeUnknownEffect(ToolCallId)(id).pipe(
+          const callId = yield* Schema.decodeEffect(ToolCallId)(id).pipe(
             Effect.mapError((cause) =>
               journalError("Failed to decode a declared Tool Call ID", cause),
             ),
@@ -1103,7 +1103,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   emitSummary();
   state = yield* flushTools(state);
 
-  const validatedPolicyUsage = yield* Schema.decodeUnknownEffect(RunPolicyUsage)(policyUsage).pipe(
+  const validatedPolicyUsage = yield* Schema.decodeEffect(RunPolicyUsage)(policyUsage).pipe(
     Effect.mapError((cause) =>
       journalError("Run policy accounting exceeds its Schema bounds", cause),
     ),

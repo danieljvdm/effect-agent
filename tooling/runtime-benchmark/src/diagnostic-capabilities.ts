@@ -414,7 +414,7 @@ const memoryRunCase = Effect.fn("diagnostic.memoryRun")(function* (workload: Dia
     readerIoMs += yield* elapsed(ioStart);
     yield* progress.mark({ name: "memory.readerIO.complete", elapsedMs: yield* elapsed(start) });
 
-    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(MemoryLookup))(json);
+    return yield* Schema.decodeEffect(Schema.fromJsonString(MemoryLookup))(json);
   });
 
   const load = Effect.gen(function* () {
@@ -583,7 +583,7 @@ const mcpCase = Effect.fn("diagnostic.mcp")(function* (workload: DiagnosticCase)
       });
 
       yield* check(body.length <= 16_384, "MCP fixture request exceeded its fixed bound");
-      const message = yield* Schema.decodeUnknownEffect(rpcRequest)(body);
+      const message = yield* Schema.decodeEffect(rpcRequest)(body);
       let result: Schema.Json = {};
 
       if (message.method === "initialize") {

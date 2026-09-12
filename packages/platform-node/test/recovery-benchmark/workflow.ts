@@ -173,7 +173,7 @@ const verifyPublicContract = Effect.fn("RecoveryBenchmark.verifyPublicContract")
   const runtime = yield* DurableAgentRuntime;
   const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
   const encoded = yield* Schema.encodeEffect(ThreadExport)(exported);
-  const decoded = yield* Schema.decodeUnknownEffect(ThreadExport)(encoded);
+  const decoded = yield* Schema.decodeEffect(ThreadExport)(encoded);
   const integrity = yield* runtime.verify(threadId);
 
   if (
@@ -233,7 +233,7 @@ export const benchmark = Effect.gen(function* () {
   ])
     sourceHashes[path] = sha256(yield* fs.readFileString(path));
 
-  const packageInfo = yield* Schema.decodeUnknownEffect(
+  const packageInfo = yield* Schema.decodeEffect(
     Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
   )(yield* fs.readFileString("packages/platform-node/package.json"));
 

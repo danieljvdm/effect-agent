@@ -17,7 +17,7 @@ const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const file = yield* Config.string("CONTEXT_EVAL_WORKER_OPTIONS");
 
-  const options = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WorkerOptions))(
+  const options = yield* Schema.decodeEffect(Schema.fromJsonString(WorkerOptions))(
     yield* fs.readFileString(file),
   );
 

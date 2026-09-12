@@ -275,7 +275,7 @@ export const sumRunTotals = Effect.fn("sumRunTotals")(function* (
   const pricingStatuses: Array<typeof UsageCompleteness.Type> = [];
 
   for (const contribution of contributions) {
-    const value = yield* Schema.decodeUnknownEffect(RunTotals)(contribution).pipe(
+    const value = yield* Schema.decodeEffect(RunTotals)(contribution).pipe(
       Effect.mapError(
         () => new UsageAggregationError({ field: "totals", message: "Invalid Run totals" }),
       ),
@@ -349,7 +349,7 @@ export const summarizeModelUsage = Effect.fn("summarizeModelUsage")(function* (
   const initial =
     seed === undefined
       ? undefined
-      : yield* Schema.decodeUnknownEffect(RunUsageSummary)(seed).pipe(
+      : yield* Schema.decodeEffect(RunUsageSummary)(seed).pipe(
           Effect.mapError(
             () =>
               new UsageAggregationError({

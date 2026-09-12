@@ -2983,11 +2983,11 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       exhausted: budgetExhausted.exhausted,
     } as const;
 
-    expect(Schema.decodeUnknownSync(Result)(ordinary).runDisposition).toBe("application-complete");
-    expect(Schema.decodeUnknownSync(Result)(budgetWithoutDisposition).finishReason).toBe(
+    expect(Schema.decodeSync(Result)(ordinary).runDisposition).toBe("application-complete");
+    expect(Schema.decodeSync(Result)(budgetWithoutDisposition).finishReason).toBe(
       "budget-exhausted",
     );
-    expect(() => Schema.decodeUnknownSync(Result)(budgetExhausted)).toThrow(
+    expect(() => Schema.decodeSync(Result)(budgetExhausted)).toThrow(
       /runDisposition only when finishReason is not budget-exhausted/,
     );
   });

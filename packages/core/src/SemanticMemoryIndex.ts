@@ -221,7 +221,7 @@ export class SemanticMemoryIndex extends Context.Service<
       >(query: MemoryIndexQuery<Namespace>) {
         const result = yield* adapter.search(query);
 
-        const checked = yield* Schema.decodeUnknownEffect(MemoryIndexSearch.Wire)(result).pipe(
+        const checked = yield* Schema.decodeEffect(MemoryIndexSearch.Wire)(result).pipe(
           Effect.mapError(() =>
             MemoryIndexError.make({ operation: "restore index search", reason: "corrupt" }),
           ),

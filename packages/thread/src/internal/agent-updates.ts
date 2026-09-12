@@ -124,7 +124,7 @@ export const makeAgentUpdateRuntime = Effect.fn("AgentUpdates.makeDurable")(func
       Effect.mapError(() => rejected("validation")),
     );
 
-    const updateId = yield* Schema.decodeUnknownEffect(IdempotencyKey)(request.updateId).pipe(
+    const updateId = yield* Schema.decodeEffect(IdempotencyKey)(request.updateId).pipe(
       Effect.mapError(() => rejected("validation")),
     );
 

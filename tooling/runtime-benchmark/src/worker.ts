@@ -99,7 +99,7 @@ export const runWorker = Effect.fn("benchmark.runWorker")(function* (
 if (import.meta.main)
   NodeRuntime.runMain(
     Effect.gen(function* () {
-      const options = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WorkerOptions))(
+      const options = yield* Schema.decodeEffect(Schema.fromJsonString(WorkerOptions))(
         yield* Config.string("RUNTIME_BENCHMARK_OPTIONS"),
       );
 

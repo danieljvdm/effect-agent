@@ -469,7 +469,7 @@ describe("PR-review model eval", () => {
           }
           if (httpRequest.body._tag !== "Uint8Array") return Effect.die("Expected JSON body");
           sent.push(
-            Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
+            Schema.decodeSync(Schema.fromJsonString(Schema.Json))(
               new TextDecoder().decode(httpRequest.body.body),
             ),
           );

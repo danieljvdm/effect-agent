@@ -62,19 +62,19 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
   access: MemoryAccess,
   limits: Pick<MemoryRecallLimits, "maxInputBytes"> & { readonly maxSourceBytes?: number } = {},
 ) {
-  const decodedLimits = yield* Schema.decodeUnknownEffect(RevalidationLimits)(limits).pipe(
+  const decodedLimits = yield* Schema.decodeEffect(RevalidationLimits)(limits).pipe(
     Effect.mapError(() =>
       MemoryRecallError.make({ reason: "invalid-input", message: "Invalid revalidation limits" }),
     ),
   );
 
-  const decodedAccess = yield* Schema.decodeUnknownEffect(MemoryAccess.Wire)(access).pipe(
+  const decodedAccess = yield* Schema.decodeEffect(MemoryAccess.Wire)(access).pipe(
     Effect.mapError(() =>
       MemoryRecallError.make({ reason: "invalid-input", message: "Invalid host memory access" }),
     ),
   );
 
-  const decoded = yield* Schema.decodeUnknownEffect(MemoryLookup)(lookup).pipe(
+  const decoded = yield* Schema.decodeEffect(MemoryLookup)(lookup).pipe(
     Effect.mapError(() =>
       MemoryRecallError.make({ reason: "invalid-input", message: "Malformed memory candidates" }),
     ),
@@ -107,7 +107,7 @@ export const revalidateMemoryLookup = Effect.fn("revalidateMemoryLookup")(functi
       .get(key)
       .pipe(
         Effect.flatMap((value) =>
-          Schema.decodeUnknownEffect(Schema.NullOr(MemoryDocument.Wire))(value).pipe(
+          Schema.decodeEffect(Schema.NullOr(MemoryDocument.Wire))(value).pipe(
             Effect.mapError(() =>
               MemoryStorageError.make({ operation: "validate source view", reason: "corrupt" }),
             ),

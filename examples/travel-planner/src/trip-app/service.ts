@@ -99,7 +99,7 @@ export const createTripApp = Effect.fn("createTripApp")(function* (tripId: strin
     ),
   );
 
-  const id = yield* Schema.decodeUnknownEffect(AppId)(
+  const id = yield* Schema.decodeEffect(AppId)(
     Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
       .join("")
       .slice(0, 32),
@@ -250,7 +250,7 @@ export const restoreTripApp = Effect.fn("restoreTripApp")(function* (
 ) {
   const app = yield* requireApp(tripId);
 
-  const target = yield* Schema.decodeUnknownEffect(AppCommit)(commitId).pipe(
+  const target = yield* Schema.decodeEffect(AppCommit)(commitId).pipe(
     Effect.mapError(() => failed("Invalid app version.")),
   );
 

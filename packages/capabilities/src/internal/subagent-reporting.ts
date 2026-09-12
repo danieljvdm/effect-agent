@@ -39,7 +39,7 @@ const projectReport = <
     const base = {
       _tag: "Settled" as const,
       worker,
-      receipt: yield* Schema.decodeUnknownEffect(Receipt)(observation.receipt).pipe(
+      receipt: yield* Schema.decodeEffect(Receipt)(observation.receipt).pipe(
         Effect.mapError(invalid),
       ),
       runId: observation.runId,
@@ -129,7 +129,7 @@ export const automaticReporting = <
             ),
           };
 
-    const message = yield* Schema.decodeUnknownEffect(WorkerCompletion)({
+    const message = yield* Schema.decodeEffect(WorkerCompletion)({
       _tag: "WorkerCompletion",
       schemaVersion: 1,
       report: encoded,
@@ -237,9 +237,9 @@ export const reportingToWorker = <
       const encodedParameters = (yield* report.prepare(run)).encodedInput;
       const invalid = () => WorkerReportPreparationFailure.make({ stage: "input" });
 
-      const parameters = yield* Schema.decodeUnknownEffect(destination.parameters)(
-        encodedParameters,
-      ).pipe(Effect.mapError(invalid));
+      const parameters = yield* Schema.decodeEffect(destination.parameters)(encodedParameters).pipe(
+        Effect.mapError(invalid),
+      );
 
       const input = yield* destination.prepareInput(parameters, {
         source: "programmatic",

@@ -65,7 +65,7 @@ const FixtureSource = Layer.effect(
 
       if (object === null) return yield* sourceError();
 
-      return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SourceFiles))(
+      return yield* Schema.decodeEffect(Schema.fromJsonString(SourceFiles))(
         yield* storage(() => object.text()),
       ).pipe(Effect.mapError(sourceError));
     });
@@ -98,7 +98,7 @@ const FixtureSource = Layer.effect(
 
         if (existing !== null)
           return {
-            commitId: yield* Schema.decodeUnknownEffect(AppCommit)(
+            commitId: yield* Schema.decodeEffect(AppCommit)(
               yield* storage(() => existing.text()),
             ).pipe(Effect.mapError(sourceError)),
           };
@@ -110,9 +110,9 @@ const FixtureSource = Layer.effect(
         if (stored === null) return yield* sourceError();
 
         return {
-          commitId: yield* Schema.decodeUnknownEffect(AppCommit)(
-            yield* storage(() => stored.text()),
-          ).pipe(Effect.mapError(sourceError)),
+          commitId: yield* Schema.decodeEffect(AppCommit)(yield* storage(() => stored.text())).pipe(
+            Effect.mapError(sourceError),
+          ),
         };
       }),
       commit: Effect.fn("FixtureSource.commit")(function* ({ repoName, parentCommit, files }) {
@@ -160,7 +160,7 @@ const inputs = <A, I>(prompt: Prompt.Prompt, schema: Schema.Codec<A, I>) =>
     message.role === "user"
       ? message.content.flatMap((part) => {
           if (part.type !== "text") return [];
-          const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(schema))(part.text);
+          const decoded = Schema.decodeOption(Schema.fromJsonString(schema))(part.text);
 
           return Option.isSome(decoded) ? [{ index, input: decoded.value }] : [];
         })
@@ -349,7 +349,7 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
       Effect.gen(function* () {
         const identity = yield* ThreadObjectIdentity;
         const store = yield* ThreadStore;
-        const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(identity.threadId);
+        const threadId = yield* Schema.decodeEffect(ThreadId)(identity.threadId);
 
         return new Response(
           yield* Schema.encodeEffect(Schema.fromJsonString(ThreadExport))(

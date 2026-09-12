@@ -330,7 +330,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       );
 
       if (Result.isSuccess(result)) {
-        return yield* Schema.decodeUnknownEffect(schema)(result.success).pipe(
+        return yield* Schema.decodeEffect(schema)(result.success).pipe(
           Effect.mapError(() =>
             GitHubApiFailure.make({
               operation,
@@ -506,7 +506,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
         if (batch.length < 100) break;
       }
 
-      const candidate = Schema.decodeUnknownOption(ReviewFollowUp)({
+      const candidate = Schema.decodeOption(ReviewFollowUp)({
         id: String(review.id),
         description: JSON.stringify({
           reviewedCommit: review.commitId,
@@ -817,15 +817,16 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     );
 
     const result = yield* readJson("classify generated file", query, GeneratedFileWire).pipe(
-      Effect.timeout("10 seconds"),
-      Effect.catchTag("TimeoutError", () =>
-        Effect.fail(
-          GitHubApiFailure.make({
-            operation: "classify generated file",
-            reason: "Generated-file classification timed out",
-          }),
-        ),
-      ),
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () =>
+          Effect.fail(
+            GitHubApiFailure.make({
+              operation: "classify generated file",
+              reason: "Generated-file classification timed out",
+            }),
+          ),
+      }),
     );
 
     const commit = result.data.repository.object;

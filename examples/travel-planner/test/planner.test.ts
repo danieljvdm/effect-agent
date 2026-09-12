@@ -93,7 +93,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
     expect(response.status, body).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
     const lines = body.trim().split("\n");
-    const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(RpcExit))(lines[0]);
+    const decoded = Schema.decodeOption(Schema.fromJsonString(RpcExit))(lines[0]);
 
     if (decoded._tag === "None") throw new Error(body);
 
@@ -574,7 +574,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
               const line = buffer.slice(0, newline);
 
               buffer = buffer.slice(newline + 1);
-              const packet = Schema.decodeUnknownSync(Schema.fromJsonString(progressPacket))(line);
+              const packet = Schema.decodeSync(Schema.fromJsonString(progressPacket))(line);
 
               queued.push(...packet.values);
               newline = buffer.indexOf("\n");

@@ -164,7 +164,7 @@ it.live(
         yield* handle.navigate(BrowserNavigateRequest.make({ url }));
         const read = handle.readText(BrowserReadTextRequest.make({}));
         const initial = yield* read;
-        const observed = yield* Schema.decodeUnknownEffect(Observation)(initial.text);
+        const observed = yield* Schema.decodeEffect(Observation)(initial.text);
 
         expect(observed.controlsTruncated).toBe(true);
         expect(observed.controls).toHaveLength(64);
@@ -214,7 +214,7 @@ it.live(
         yield* handle.fill(
           BrowserFillRequest.make({ selector: "#roast", value: "private-roast-value" }),
         );
-        const selected = yield* Schema.decodeUnknownEffect(Observation)((yield* read).text);
+        const selected = yield* Schema.decodeEffect(Observation)((yield* read).text);
 
         expect(selected.controls.find((c) => c.label === "12oz")).toMatchObject({
           checked: true,

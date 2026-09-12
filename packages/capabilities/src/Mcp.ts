@@ -355,7 +355,7 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
     ),
   );
 
-  const discoveryJson = yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
+  const discoveryJson = yield* Schema.decodeEffect(Schema.Json)(encoded).pipe(
     Effect.mapError((error) =>
       McpConnectionError.make({
         cause: error,

@@ -86,7 +86,7 @@ export const eligibleCatalog = Effect.fn("ToolExposure.eligibleCatalog")(functio
   const checked =
     visibility === undefined
       ? visible
-      : yield* Schema.decodeUnknownEffect(ToolNames)(visible).pipe(
+      : yield* Schema.decodeEffect(ToolNames)(visible).pipe(
           Effect.mapError(() => invalid("Host Tool visibility returned invalid names")),
         );
 
@@ -183,7 +183,7 @@ export const exposureSnapshot = Effect.fn("ToolExposure.exposureSnapshot")(funct
     .filter((name) => only === undefined || only.includes(name));
 
   if (progressive) {
-    const limits = yield* Schema.decodeUnknownEffect(Limits)({
+    const limits = yield* Schema.decodeEffect(Limits)({
       maxTools: definition.toolExposure?.maxTools ?? 64,
       maxSchemaBytes: definition.toolExposure?.maxSchemaBytes ?? 262_144,
     }).pipe(Effect.mapError(() => invalid("Invalid Tool exposure bounds")));

@@ -401,7 +401,7 @@ const decodeOwnerName = Effect.fn("decodeScheduleOwnerName")(function* (
     });
   }
 
-  const tuple = yield* Schema.decodeUnknownEffect(
+  const tuple = yield* Schema.decodeEffect(
     Schema.fromJsonString(Schema.Tuple([Schema.String, Schema.String])),
   )(name).pipe(
     Effect.mapError(() =>
@@ -409,7 +409,7 @@ const decodeOwnerName = Effect.fn("decodeScheduleOwnerName")(function* (
     ),
   );
 
-  return yield* Schema.decodeUnknownEffect(ScheduleOwner)({
+  return yield* Schema.decodeEffect(ScheduleOwner)({
     tenantId: tuple[0],
     ownerId: tuple[1],
   }).pipe(

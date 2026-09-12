@@ -193,7 +193,7 @@ describe("addressed review verification", () => {
           const encoded =
             request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
 
-          const body = Schema.decodeUnknownSync(
+          const body = Schema.decodeSync(
             Schema.fromJsonString(Schema.Struct({ message: Schema.String })),
           )(encoded);
 
@@ -751,7 +751,7 @@ describe("GitHub tree comparison", () => {
           expect(request.method).toBe("POST");
           if (request.body._tag !== "Uint8Array") throw new Error("Expected GraphQL JSON");
 
-          const query = Schema.decodeUnknownSync(
+          const query = Schema.decodeSync(
             Schema.fromJsonString(
               Schema.Struct({
                 variables: Schema.Struct({

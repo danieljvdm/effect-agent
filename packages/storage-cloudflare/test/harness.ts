@@ -118,7 +118,7 @@ export const settlementReservation = Effect.fn("DoLedgerTest.settlementReservati
 ) {
   const settlementId = submissionSettlementId(admitted.submissionId);
 
-  const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+  const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)(
     SubmissionSettled.make({
       submissionId: admitted.submissionId,
       settlementId,

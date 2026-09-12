@@ -285,7 +285,7 @@ export const scoutAttemptLayer = (
                 Effect.mapError(() => MessagingError.make({ operation: "send", reason: "denied" })),
               );
 
-              const key = yield* Schema.decodeUnknownEffect(IdempotencyKey)(
+              const key = yield* Schema.decodeEffect(IdempotencyKey)(
                 `progress:${context.submissionId}:${tool.toolCallId}`,
               ).pipe(
                 Effect.mapError(() =>

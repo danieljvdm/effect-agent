@@ -82,8 +82,7 @@ export const encodeInstant = (millis: number) => millis;
 
 export const subjectId = {
   toNative: (id: SubjectId) => Effect.succeed(id),
-  toSubject: (id: string) =>
-    Schema.decodeUnknownEffect(SubjectId)(id).pipe(Effect.mapError(mappingError)),
+  toSubject: (id: string) => Schema.decodeEffect(SubjectId)(id).pipe(Effect.mapError(mappingError)),
   equals: (a: string, b: string) => a === b,
 };
 

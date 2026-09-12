@@ -123,7 +123,7 @@ const reserve = Effect.fn("diagnostic.ledger.reserve")(function* (index: number)
     schemaVersion: 1,
     createdAt: DateTime.makeUnsafe(1),
     deploymentId,
-    payload: yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)({
+    payload: yield* Schema.decodeEffect(SubmissionSettledRecord)({
       _tag: "SubmissionSettled",
       submissionId: admitted.submissionId,
       receiptId: admitted.receiptId,
@@ -517,7 +517,7 @@ const settledCase = Effect.fn("diagnostic.ledger.settled")(function* (
 
     yield* check((yield* writer.exitCode) === 0, `External SQLite writer failed: ${stderr}`);
 
-    const result = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(WriterResult))(
+    const result = yield* Schema.decodeEffect(Schema.fromJsonString(WriterResult))(
       yield* fs.readFileString(`${directory}/result.json`),
     );
 

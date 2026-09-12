@@ -50,7 +50,7 @@ it("durably appends request/response evidence and fails when its path is unavail
 
       const events = yield* Effect.forEach(
         (yield* fs.readFileString(path)).trim().split("\n"),
-        (line) => Schema.decodeUnknownEffect(Schema.fromJsonString(RequestAudit))(line),
+        (line) => Schema.decodeEffect(Schema.fromJsonString(RequestAudit))(line),
       );
 
       const failure = yield* RequestAuditSink.use((sink) => sink.write(event)).pipe(

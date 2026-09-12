@@ -165,7 +165,7 @@ const photosFor = (markdown: string, pageUrl: string): TravelPhoto[] => {
     )
       continue;
 
-    const photo = Schema.decodeUnknownOption(TravelPhoto)({
+    const photo = Schema.decodeOption(TravelPhoto)({
       url: url.href,
       caption: caption || "Photo from listing",
     });
@@ -387,7 +387,7 @@ const inspect = Effect.fn("TravelResearch.inspect")(function* (
   }
   selected.sort((left, right) => left.start - right.start);
 
-  return yield* Schema.decodeUnknownEffect(ReadTravelPageResult)({
+  return yield* Schema.decodeEffect(ReadTravelPageResult)({
     url,
     title,
     photos,

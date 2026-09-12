@@ -255,9 +255,7 @@ export const artifactsLayer = (
       catch: failed,
     });
 
-    const { trip } = yield* Schema.decodeUnknownEffect(tripJson)(json).pipe(
-      Effect.mapError(failed),
-    );
+    const { trip } = yield* Schema.decodeEffect(tripJson)(json).pipe(Effect.mapError(failed));
 
     if (trip.id !== tripId || trip.revision !== revision) return yield* failed();
 
@@ -294,7 +292,7 @@ export const artifactsLayer = (
 
   const publish = Effect.fn("Artifacts.publish")(
     function* ({ trip: input }: { readonly trip: Trip }) {
-      const trip = yield* Schema.decodeUnknownEffect(Trip)(input).pipe(Effect.mapError(failed));
+      const trip = yield* Schema.decodeEffect(Trip)(input).pipe(Effect.mapError(failed));
       const json = encodeTrip(trip);
       const html = renderTripSite(trip);
 
@@ -371,7 +369,7 @@ export const artifactsLayer = (
 
   const load = Effect.fn("Artifacts.load")(
     function* (input: { readonly tripId: string; readonly revision: number }) {
-      const { tripId, revision } = yield* Schema.decodeUnknownEffect(identity)(input).pipe(
+      const { tripId, revision } = yield* Schema.decodeEffect(identity)(input).pipe(
         Effect.mapError(failed),
       );
 

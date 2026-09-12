@@ -299,7 +299,7 @@ const makeSubscriptionStore = Effect.fn("DoSubscriptionStore.make")(function* (
 
   const store = yield* makeSqlSubscriptionStore(partition, {
     maxStoredJsonLength: 1_900_000,
-  }).pipe(Effect.provide(Layer.succeed(SqlSubscriptionTransaction)({ run: transact })));
+  }).pipe(Effect.provideService(SqlSubscriptionTransaction, { run: transact }));
 
   const prearm = Effect.fn("DoSubscriptionStore.prearm")(function* (deadlineAtMillis: number) {
     yield* transactions.run((replace) => replaceAlarm(replace, deadlineAtMillis));

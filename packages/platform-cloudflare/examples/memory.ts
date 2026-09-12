@@ -58,7 +58,7 @@ export const correctProjectMemory = Effect.fn("example.correctProjectMemory")(fu
 ) {
   const client = yield* CloudflareMemoryClient.make(
     MemoryAccess.make({ namespace, scope: MemoryScope.make("project") }),
-    yield* Schema.decodeUnknownEffect(Principal)(`tenant:${namespace.identity.tenantId}`),
+    yield* Schema.decodeEffect(Principal)(`tenant:${namespace.identity.tenantId}`),
   );
 
   return yield* client.change(write);
@@ -72,7 +72,7 @@ export const recallProjectMemory = Effect.fn("example.recallProjectMemory")(func
 ) {
   const memory = yield* CloudflareMemoryClient.make(
     MemoryAccess.make({ namespace, scope: MemoryScope.make("project") }),
-    yield* Schema.decodeUnknownEffect(Principal)(`tenant:${namespace.identity.tenantId}`),
+    yield* Schema.decodeEffect(Principal)(`tenant:${namespace.identity.tenantId}`),
   );
 
   return yield* memory.recall(candidates, limits);

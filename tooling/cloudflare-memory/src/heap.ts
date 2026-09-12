@@ -105,7 +105,7 @@ const buildBundle = Effect.fn("heap.buildBundle")(function* (options: {
 
   yield* fs.writeFileString(path.join(directory, "build.log"), built.stdout + built.stderr);
 
-  const meta = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Metafile))(
+  const meta = yield* Schema.decodeEffect(Schema.fromJsonString(Metafile))(
     yield* fs.readFileString(path.join(directory, "meta.json")),
   );
 
@@ -137,7 +137,7 @@ const buildBundle = Effect.fn("heap.buildBundle")(function* (options: {
 
       yield* fs.writeFileString(path.join(directory, `node-${i + 1}.json`), sample.stdout);
 
-      return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(NodeSample))(sample.stdout);
+      return yield* Schema.decodeEffect(Schema.fromJsonString(NodeSample))(sample.stdout);
     }),
   );
 
@@ -154,7 +154,7 @@ const buildBundle = Effect.fn("heap.buildBundle")(function* (options: {
 const version = Effect.fn("heap.version")(function* (filename: string) {
   const fs = yield* FileSystem.FileSystem;
 
-  return (yield* Schema.decodeUnknownEffect(
+  return (yield* Schema.decodeEffect(
     Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
   )(yield* fs.readFileString(filename))).version;
 });

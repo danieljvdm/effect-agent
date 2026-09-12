@@ -253,7 +253,7 @@ export const indexMemorySource = Effect.fn("indexMemorySource")(function* <
   );
   const checkedKey = MemoryKey.make(key);
 
-  const checkedLimits = yield* Schema.decodeUnknownEffect(SemanticIndexLimits)(limits).pipe(
+  const checkedLimits = yield* Schema.decodeEffect(SemanticIndexLimits)(limits).pipe(
     Effect.mapError(() => invalid("index limits")),
   );
 
@@ -261,7 +261,7 @@ export const indexMemorySource = Effect.fn("indexMemorySource")(function* <
     const startedAt = yield* Clock.currentTimeMillis;
     const index = yield* SemanticMemoryIndex;
 
-    const profile = yield* Schema.decodeUnknownEffect(SemanticMemoryProfile)(index.profile).pipe(
+    const profile = yield* Schema.decodeEffect(SemanticMemoryProfile)(index.profile).pipe(
       Effect.mapError(() => invalid("index profile")),
     );
 
@@ -369,15 +369,15 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
   access: MemoryAccess,
   limits: SemanticQueryLimits,
 ) {
-  const checkedQuery = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(query).pipe(
+  const checkedQuery = yield* Schema.decodeEffect(Schema.NonEmptyString)(query).pipe(
     Effect.mapError(() => invalid("query text")),
   );
 
-  const checkedAccess = yield* Schema.decodeUnknownEffect(MemoryAccess.Wire)(access).pipe(
+  const checkedAccess = yield* Schema.decodeEffect(MemoryAccess.Wire)(access).pipe(
     Effect.mapError(() => invalid("query access")),
   );
 
-  const checkedLimits = yield* Schema.decodeUnknownEffect(SemanticQueryLimits)(limits).pipe(
+  const checkedLimits = yield* Schema.decodeEffect(SemanticQueryLimits)(limits).pipe(
     Effect.mapError(() => invalid("query limits")),
   );
 
@@ -390,7 +390,7 @@ export const querySemanticMemory = Effect.fn("querySemanticMemory")(function* (
     const startedAt = yield* Clock.currentTimeMillis;
     const index = yield* SemanticMemoryIndex;
 
-    const profile = yield* Schema.decodeUnknownEffect(SemanticMemoryProfile)(index.profile).pipe(
+    const profile = yield* Schema.decodeEffect(SemanticMemoryProfile)(index.profile).pipe(
       Effect.mapError(() => invalid("query profile")),
     );
 

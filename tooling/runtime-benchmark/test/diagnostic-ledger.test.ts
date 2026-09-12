@@ -129,7 +129,7 @@ it.each([
 ])(
   "classifies the complete observer interval $started–$finished without requiring release before completion",
   (sample) => {
-    const writer = Schema.decodeUnknownSync(WriterResult)({
+    const writer = Schema.decodeSync(WriterResult)({
       clock: "node-hrtime-same-host",
       acquiredNanos: "10000000",
       releaseStartedNanos: "20000000",

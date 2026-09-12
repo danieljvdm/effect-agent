@@ -20,14 +20,14 @@ const identity = {
   },
   runId: "run-1",
   settlementId: "settlement-1",
-};
+} satisfies Omit<typeof WorkerCompletion.Encoded.report, "outcome" | "result" | "failure">;
 
 const completed = {
   _tag: "WorkerCompletion",
   schemaVersion: 1,
   budgetExhausted: true,
   report: { ...identity, outcome: "completed", result: { activities: ["walk"], partial: true } },
-};
+} satisfies typeof WorkerCompletion.Encoded;
 
 const failed = {
   ...completed,
@@ -47,19 +47,19 @@ const failed = {
       message: "Worker input failed",
     },
   },
-};
+} satisfies typeof WorkerCompletion.Encoded;
 
 describe("worker completion wire schema", () => {
   it.each([completed, failed])(
     "round-trips a standard completion through stored input metadata",
     (encoded) => {
-      const decoded = Schema.decodeUnknownSync(InputMessage)(encoded);
+      const decoded = Schema.decodeSync(InputMessage)(encoded);
 
       expect(Schema.encodeSync(InputMessage)(decoded)).toEqual(encoded);
     },
   );
   it("decodes the declaration's projected success with its exact inferred type", () => {
-    const report = Schema.decodeUnknownSync(
+    const report = Schema.decodeSync(
       WorkerReport(
         Schema.Struct({ activities: Schema.Array(Schema.String), partial: Schema.Boolean }),
       ),

@@ -2,9 +2,10 @@ import {
   type Definition,
   type InputPromptSource,
   type InstructionSource,
+  type RunDispositionDeclaration,
 } from "@effect-agent/core/Agent";
 import type { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { DelegationId, ToolCallId } from "@effect-agent/core/Identifiers";
+import { type AgentId, DelegationId, ToolCallId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import type { SubagentDelegationCaps } from "@effect-agent/core/SubagentContract";
 import {
@@ -278,7 +279,7 @@ export interface SubagentDefineOptions<
     TargetOutput,
     TargetInstructions,
     Toolkit.Toolkit<TargetTools>,
-    undefined,
+    RunDispositionDeclaration<TargetOutput["Type"], Schema.Top> | undefined,
     unknown,
     Schema.Top | undefined
   >;
@@ -610,7 +611,7 @@ function make<
     Output,
     Instructions,
     Toolkit.Toolkit<Tools>,
-    undefined,
+    RunDispositionDeclaration<Output["Type"], Schema.Top> | undefined,
     unknown,
     Schema.Top | undefined
   > = Definition<
@@ -618,7 +619,7 @@ function make<
     Output,
     Instructions,
     Toolkit.Toolkit<Tools>,
-    undefined,
+    RunDispositionDeclaration<Output["Type"], Schema.Top> | undefined,
     unknown,
     Schema.Top | undefined
   >,
@@ -665,7 +666,7 @@ function make<
     Output,
     Instructions,
     Toolkit.Toolkit<Tools>,
-    undefined,
+    RunDispositionDeclaration<Output["Type"], Schema.Top> | undefined,
     unknown,
     Schema.Top | undefined
   > = Definition<
@@ -673,7 +674,7 @@ function make<
     Output,
     Instructions,
     Toolkit.Toolkit<Tools>,
-    undefined,
+    RunDispositionDeclaration<Output["Type"], Schema.Top> | undefined,
     unknown,
     Schema.Top | undefined
   >,
@@ -862,6 +863,9 @@ export type SubagentChildRunFailure<
   InputPromptValue extends InputPromptSource<TargetInput["Type"], unknown, unknown> | undefined =
     undefined,
   UpdatesSchema extends Schema.Top | undefined = undefined,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<TargetOutput["Type"], Schema.Top>
+    | undefined = undefined,
 > = AgentRuntimeFailure<
   RuntimeBinding<
     TargetInput,
@@ -873,7 +877,7 @@ export type SubagentChildRunFailure<
     ModelRequires,
     InstructionError,
     InstructionRequirements,
-    undefined,
+    RunDispositionValue,
     InputPromptValue,
     UpdatesSchema
   >,
@@ -905,6 +909,9 @@ export type SubagentLayerRequirements<
   InputPromptValue extends InputPromptSource<TargetInput["Type"], unknown, unknown> | undefined =
     undefined,
   UpdatesSchema extends Schema.Top | undefined = undefined,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<TargetOutput["Type"], Schema.Top>
+    | undefined = undefined,
 > =
   | Exclude<
       AgentRuntimeRequirements<
@@ -918,7 +925,7 @@ export type SubagentLayerRequirements<
           ModelRequires,
           InstructionError,
           InstructionRequirements,
-          undefined,
+          RunDispositionValue,
           InputPromptValue,
           UpdatesSchema
         >,
@@ -1226,6 +1233,9 @@ const layer = <
   InputPromptValue extends InputPromptSource<TargetInput["Type"], unknown, unknown> | undefined =
     undefined,
   UpdatesSchema extends Schema.Top | undefined = undefined,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<TargetOutput["Type"], Schema.Top>
+    | undefined = undefined,
 >(
   delegation: SubagentDelegation<
     Name,
@@ -1248,6 +1258,7 @@ const layer = <
       >;
       readonly inputPrompt?: InputPromptValue | undefined;
       readonly updates?: UpdatesSchema | undefined;
+      readonly runDisposition?: RunDispositionValue | undefined;
     };
   },
   modelOrBinding:
@@ -1261,7 +1272,7 @@ const layer = <
         ModelRequires,
         InstructionError,
         InstructionRequirements,
-        undefined,
+        RunDispositionValue,
         InputPromptValue,
         UpdatesSchema
       >
@@ -1275,7 +1286,7 @@ const layer = <
         ModelRequires,
         InstructionError,
         InstructionRequirements,
-        undefined,
+        RunDispositionValue,
         InputPromptValue,
         UpdatesSchema
       >["model"],
@@ -1292,7 +1303,8 @@ const layer = <
       InstructionError,
       InstructionRequirements,
       InputPromptValue,
-      UpdatesSchema
+      UpdatesSchema,
+      RunDispositionValue
     >,
     HookRequirements
   > = {},
@@ -1313,7 +1325,8 @@ const layer = <
     InstructionError,
     InstructionRequirements,
     InputPromptValue,
-    UpdatesSchema
+    UpdatesSchema,
+    RunDispositionValue
   >
 > => {
   const childBinding =
@@ -1422,7 +1435,8 @@ const layer = <
           InstructionError,
           InstructionRequirements,
           InputPromptValue,
-          UpdatesSchema
+          UpdatesSchema,
+          RunDispositionValue
         >
       >();
 
@@ -1604,7 +1618,7 @@ const layer = <
           HookRequirements,
           InstructionError,
           InstructionRequirements,
-          undefined,
+          RunDispositionValue,
           InputPromptValue,
           UpdatesSchema
         >(
@@ -2189,11 +2203,11 @@ export function background<
     Output,
     Instructions,
     Toolkit.Toolkit<Tools>,
-    undefined,
+    RunDispositionDeclaration<Output["Type"], Schema.Top> | undefined,
     unknown,
     Schema.Top | undefined
   > & {
-    readonly name?: Name;
+    readonly id: AgentId & Name;
   },
   selected: Selected,
 ): ReturnType<
@@ -2244,7 +2258,7 @@ export function background(
         Schema.Top,
         unknown,
         Toolkit.Toolkit<Record<string, Tool.Any>>,
-        undefined,
+        RunDispositionDeclaration<unknown, Schema.Top> | undefined,
         unknown,
         Schema.Top | undefined
       >

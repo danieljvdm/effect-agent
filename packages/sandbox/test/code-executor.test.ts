@@ -121,12 +121,12 @@ describe("CAP-015 CodeExecutor schemas", () => {
   });
 
   it("rejects reserved words, invalid identifiers, and oversized collections at the boundary", () => {
-    expect(() => Schema.decodeUnknownSync(JsIdentifier)("await")).toThrow(/not a reserved word/);
-    expect(() => Schema.decodeUnknownSync(JsIdentifier)("not-an-identifier")).toThrow(
+    expect(() => Schema.decodeSync(JsIdentifier)("await")).toThrow(/not a reserved word/);
+    expect(() => Schema.decodeSync(JsIdentifier)("not-an-identifier")).toThrow(
       /matching the RegExp/,
     );
-    expect(() => Schema.decodeUnknownSync(JsIdentifier)("1leading")).toThrow(/matching the RegExp/);
-    expect(() => Schema.decodeUnknownSync(JsIdentifier)("valid_$Name")).not.toThrow();
+    expect(() => Schema.decodeSync(JsIdentifier)("1leading")).toThrow(/matching the RegExp/);
+    expect(() => Schema.decodeSync(JsIdentifier)("valid_$Name")).not.toThrow();
 
     expect(() =>
       CodeExecutionRequest.make({

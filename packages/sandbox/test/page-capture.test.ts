@@ -49,7 +49,7 @@ describe("Page capture and screenshot schemas", () => {
       Schema.decodeSync(PageScreenshotResult)(Schema.encodeSync(PageScreenshotResult)(result)),
     ).toEqual(result);
     expect(
-      Schema.decodeUnknownOption(PageScreenshotError)({
+      Schema.decodeOption(PageScreenshotError)({
         _tag: "PageScreenshotOutputLimitError",
         implementation,
         limit: 1,
@@ -57,7 +57,7 @@ describe("Page capture and screenshot schemas", () => {
       })._tag,
     ).toBe("Some");
     expect(
-      Schema.decodeUnknownOption(PageScreenshotRequest)({
+      Schema.decodeOption(PageScreenshotRequest)({
         ...request,
         limits: { maxOutputBytes: 0 },
       })._tag,
@@ -151,7 +151,7 @@ describe("Page capture and screenshot schemas", () => {
   it("rejects unbounded selector scrape collections and non-finite geometry", () => {
     for (const selectors of [[], Array.from({ length: 65 }, () => ".item")]) {
       expect(
-        Schema.decodeUnknownExit(CapturePageScrape)({
+        Schema.decodeExit(CapturePageScrape)({
           _tag: "CapturePageScrape",
           selectors,
         })._tag,
@@ -184,7 +184,7 @@ describe("Page capture and screenshot schemas", () => {
       [{ selector: ".item", results: [{ ...element, width: Number.POSITIVE_INFINITY }] }],
     ]) {
       expect(
-        Schema.decodeUnknownExit(PageScrapeCaptured)({
+        Schema.decodeExit(PageScrapeCaptured)({
           _tag: "PageScrapeCaptured",
           groups,
         })._tag,
@@ -261,9 +261,7 @@ describe("Page capture and screenshot schemas", () => {
       "https://user:secret@docs.example.com/pricing",
       "https://user@docs.example.com/pricing",
     ]) {
-      expect(Schema.decodeUnknownExit(PageUrlTarget)({ _tag: "PageUrlTarget", url })._tag).toBe(
-        "Failure",
-      );
+      expect(Schema.decodeExit(PageUrlTarget)({ _tag: "PageUrlTarget", url })._tag).toBe("Failure");
     }
 
     expect(
@@ -284,7 +282,7 @@ describe("Page capture and screenshot schemas", () => {
       "https://user:secret@docs.example.com/pricing",
     ]) {
       expect(
-        Schema.decodeUnknownExit(PageCaptureOutput)({
+        Schema.decodeExit(PageCaptureOutput)({
           _tag: "PageLinksCaptured",
           links: [link],
         })._tag,

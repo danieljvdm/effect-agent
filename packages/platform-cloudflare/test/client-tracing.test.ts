@@ -27,7 +27,7 @@ import { decodeThreadId, plannerDefinition, submitOptions } from "./fixtures.ts"
 const binding = "TASK_ORCHESTRATORS";
 const threadId = decodeThreadId("private-thread-not-a-span-name");
 
-const receipt = Schema.decodeUnknownSync(Receipt)({
+const receipt = Schema.decodeSync(Receipt)({
   receiptId: "receipt-tracing",
   submissionId: "submission-tracing",
   threadId,
@@ -153,7 +153,7 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
         ),
         client.resolveApproval(
           threadId,
-          Schema.decodeUnknownSync(ApprovalDecisionCommand)({
+          Schema.decodeSync(ApprovalDecisionCommand)({
             submissionId: receipt.submissionId,
             toolCallId: "tool-tracing",
             decision: "approved",
@@ -163,7 +163,7 @@ describe("DEPLOY-016 opt-in native Thread RPC tracing", () => {
         ),
         client.resolveUnknown(
           threadId,
-          Schema.decodeUnknownSync(UnknownResolutionCommand)({
+          Schema.decodeSync(UnknownResolutionCommand)({
             submissionId: receipt.submissionId,
             toolCallId: "tool-tracing",
             author: "operator",

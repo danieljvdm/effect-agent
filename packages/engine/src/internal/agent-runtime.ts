@@ -2643,11 +2643,11 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
               )
                 return yield* new UpdateError({ reason: "identity" });
 
-              const updateId = yield* Schema.decodeUnknownEffect(IdempotencyKey)(
-                request.updateId,
-              ).pipe(Effect.mapError(() => new UpdateError({ reason: "validation" })));
+              const updateId = yield* Schema.decodeEffect(IdempotencyKey)(request.updateId).pipe(
+                Effect.mapError(() => new UpdateError({ reason: "validation" })),
+              );
 
-              const value = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
+              const value = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(
                 JSON.stringify(request.value),
               ).pipe(Effect.mapError(() => new UpdateError({ reason: "validation" })));
 
@@ -2674,19 +2674,25 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
               )
                 return yield* new UpdateError({ reason: "capacity" });
 
+              const snapshot = boundedCanonicalJsonSnapshot(value, bytes);
+
+              if (snapshot === undefined) return yield* new UpdateError({ reason: "validation" });
+
               const accepted = yield* updateAcceptance.accept(
-                Update.make({
-                  schemaVersion: 1,
-                  agentId: context.agentId,
-                  threadId: context.threadId,
-                  runId: context.runId,
-                  updateId,
-                  sequence: context.updates.size + 1,
-                  value,
-                }),
+                Object.freeze(
+                  Update.make({
+                    schemaVersion: 1,
+                    agentId: context.agentId,
+                    threadId: context.threadId,
+                    runId: context.runId,
+                    updateId,
+                    sequence: context.updates.size + 1,
+                    value: snapshot.value,
+                  }),
+                ),
               );
 
-              const validated = yield* Schema.decodeUnknownEffect(Update)(accepted).pipe(
+              const validated = yield* Schema.decodeEffect(Update)(accepted).pipe(
                 Effect.mapError(() => new UpdateError({ reason: "validation" })),
               );
 
@@ -2698,17 +2704,22 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                 !Schema.toEquivalence(Schema.Json)(validated.value, value)
               )
                 return yield* new UpdateError({ reason: "identity" });
-              context.updates.set(request.updateId, validated);
+
+              // Keep acknowledgements, replay, and retries on the same owned value even when
+              // the accepting host retains its own mutable Update instance.
+              const update = Object.freeze(Update.make({ ...validated, value: snapshot.value }));
+
+              context.updates.set(request.updateId, update);
               context.updateBytes += bytes;
 
               const published = yield* Queue.offer(sinkQueue, {
                 _tag: "AgentUpdateEmitted",
-                update: validated,
+                update,
               });
 
               if (!published) return yield* new UpdateError({ reason: "unavailable" });
 
-              return validated;
+              return update;
             }),
           ),
       };
@@ -2914,7 +2925,7 @@ const transientInputToPrompt = (
       }),
   }).pipe(
     Effect.flatMap((prompt) =>
-      Schema.decodeUnknownEffect(Prompt.Prompt)({ content: prompt.content }).pipe(
+      Schema.decodeEffect(Prompt.Prompt)({ content: prompt.content }).pipe(
         Effect.mapError((cause) =>
           AgentInputError.make({
             message: `Unable to materialize transient Run context: ${errorMessage(cause)}`,
@@ -3141,9 +3152,7 @@ const invalidProviderUsage = () =>
   });
 
 const decodeProviderUsageTotal = (value: number): Effect.Effect<number, ModelProtocolError> =>
-  Schema.decodeUnknownEffect(Schema.Natural)(value).pipe(
-    Effect.mapError(() => invalidProviderUsage()),
-  );
+  Schema.decodeEffect(Schema.Natural)(value).pipe(Effect.mapError(() => invalidProviderUsage()));
 
 const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>(
   agent: AgentValue,
@@ -3166,7 +3175,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
       });
     }
 
-    const providerUsage = yield* Schema.decodeUnknownEffect(ProviderUsage)(usage).pipe(
+    const providerUsage = yield* Schema.decodeEffect(ProviderUsage)(usage).pipe(
       Effect.mapError(() => invalidProviderUsage()),
     );
 
@@ -3699,7 +3708,7 @@ const estimateContextTokens = Effect.fn("AgentRuntime.estimateContextTokens")(fu
     });
   }
 
-  return yield* Schema.decodeUnknownEffect(Schema.Natural)(estimate.value).pipe(
+  return yield* Schema.decodeEffect(Schema.Natural)(estimate.value).pipe(
     Effect.mapError((cause) =>
       CompactionError.make({ message: "Compactor returned an invalid token estimate", cause }),
     ),
@@ -4100,7 +4109,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
       .pipe(
         Stream.runForEach((candidate) =>
           Effect.gen(function* () {
-            const decision = yield* Schema.decodeUnknownEffect(CompactionDecision)(candidate).pipe(
+            const decision = yield* Schema.decodeEffect(CompactionDecision)(candidate).pipe(
               Effect.mapError((cause) =>
                 CompactionError.make({ message: "Invalid compaction decision", cause }),
               ),
@@ -4429,7 +4438,7 @@ const validateProviderPartIdentifiers = Effect.fnUntraced(function* (part: Respo
 });
 
 const responseIdentity = (part: Response.ResponseMetadataPart, previous?: ModelResponseIdentity) =>
-  Schema.decodeUnknownEffect(ModelResponseIdentity)({
+  Schema.decodeEffect(ModelResponseIdentity)({
     ...previous,
     ...(part.id === undefined ? {} : { id: part.id }),
     ...(part.modelId === undefined ? {} : { model: part.modelId }),
@@ -4437,17 +4446,18 @@ const responseIdentity = (part: Response.ResponseMetadataPart, previous?: ModelR
     Effect.mapError(() =>
       ModelProtocolError.make({ message: "Invalid provider response identity" }),
     ),
-    Effect.flatMap((identity) =>
-      (previous?.id !== undefined && part.id !== undefined && previous.id !== part.id) ||
-      (previous?.model !== undefined &&
-        part.modelId !== undefined &&
-        previous.model !== part.modelId)
-        ? Effect.fail(
-            ModelProtocolError.make({
-              message: "Provider response identity changed within one call",
-            }),
-          )
-        : Effect.succeed(identity),
+    Effect.filterOrFail(
+      () =>
+        !(
+          (previous?.id !== undefined && part.id !== undefined && previous.id !== part.id) ||
+          (previous?.model !== undefined &&
+            part.modelId !== undefined &&
+            previous.model !== part.modelId)
+        ),
+      () =>
+        ModelProtocolError.make({
+          message: "Provider response identity changed within one call",
+        }),
     ),
   );
 
@@ -4864,7 +4874,7 @@ const decodeFinalOutput = Effect.fn("AgentRuntime.decodeFinalOutput")(function* 
 > {
   const eventJson = isTextOutput(agent.definition.output)
     ? text
-    : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(text).pipe(
+    : yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(text).pipe(
         Effect.mapError((cause) =>
           AgentOutputError.make({
             message: `Agent output is not valid JSON: ${cause.message}`,
@@ -5073,7 +5083,7 @@ const decodeRunDispositionCandidate = Effect.fn("AgentRuntime.decodeRunDispositi
   AgentRunDispositionError,
   DispositionSchema["DecodingServices"]
 > {
-  return yield* Schema.decodeUnknownEffect(declaration.schema)(encoded).pipe(
+  return yield* Schema.decodeEffect(declaration.schema)(encoded).pipe(
     Effect.mapError((cause) =>
       AgentRunDispositionError.make({
         cause,
@@ -5234,9 +5244,7 @@ const makeTurn = <
       const callContext =
         modelContext.modelCall === undefined
           ? undefined
-          : yield* Schema.decodeUnknownEffect(ModelCallContext)(
-              modelContext.modelCall.context,
-            ).pipe(
+          : yield* Schema.decodeEffect(ModelCallContext)(modelContext.modelCall.context).pipe(
               Effect.mapError((cause) =>
                 CompactionError.make({ message: "Invalid resolved model context bounds", cause }),
               ),
@@ -5552,7 +5560,7 @@ const makeTurn = <
           });
         }
 
-        const requested = yield* Schema.decodeUnknownEffect(ContextRolloverSelection)(
+        const requested = yield* Schema.decodeEffect(ContextRolloverSelection)(
           modelContext.rollover,
         ).pipe(
           Effect.mapError((cause) =>
@@ -7704,7 +7712,7 @@ function streamWithCompletion<
             updateSchema === undefined
               ? () => Effect.fail(new UpdateError({ reason: "unavailable" }))
               : (value: Schema.Json) =>
-                  Schema.decodeUnknownEffect(updateSchema)(value).pipe(
+                  Schema.decodeEffect(updateSchema)(value).pipe(
                     Effect.provide(updateContext),
                     Effect.asVoid,
                     Effect.mapError(() => new UpdateError({ reason: "validation" })),
@@ -7877,17 +7885,17 @@ function streamWithCompletion<
               if (retained !== undefined) yield* retained.stageInput(encodedInput);
 
               const inputPrompt =
-                (options.frameworkMessage ?? options.workerCompletion) === undefined
+                options.frameworkMessage === undefined
                   ? yield* renderInputPrompt(
                       agent.definition.inputPrompt,
                       decodedInput,
                       encodedInput,
                     )
                   : yield* Schema.encodeEffect(Schema.fromJsonString(FrameworkMessage))(
-                      (options.frameworkMessage ?? options.workerCompletion)!,
+                      options.frameworkMessage,
                     ).pipe(
                       Effect.mapError(() =>
-                        AgentInputError.make({ message: "Invalid worker completion message" }),
+                        AgentInputError.make({ message: "Invalid worker message" }),
                       ),
                     );
 
@@ -8026,7 +8034,7 @@ function streamWithCompletion<
                         Effect.mapError(() => new UpdateError({ reason: "validation" })),
                       );
 
-                      const updateId = yield* Schema.decodeUnknownEffect(IdempotencyKey)(
+                      const updateId = yield* Schema.decodeEffect(IdempotencyKey)(
                         `tool:${context.runId}:${call.toolCallId}`,
                       ).pipe(Effect.mapError(() => new UpdateError({ reason: "validation" })));
 
@@ -9280,7 +9288,7 @@ const makeToolBrokerService = Effect.fnUntraced(function* <HookError, HookRequir
 
                 // Retain the exact representation admitted above. Reusing the handler or redactor
                 // value would let later mutation or stateful getters escape the byte bound.
-                const owned = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json))(
+                const owned = Schema.decodeOption(Schema.fromJsonString(Schema.Json))(
                   snapshot.text,
                 );
 

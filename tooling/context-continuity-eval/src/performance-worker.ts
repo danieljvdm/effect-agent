@@ -113,7 +113,7 @@ const application = Layer.unwrap(
             aborted: false,
             closed: false,
           }
-        : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(PerformanceState))(stored);
+        : yield* Schema.decodeEffect(Schema.fromJsonString(PerformanceState))(stored);
 
     if (JSON.stringify(identity) !== JSON.stringify(state.identity))
       return yield* EvaluationError.make({
@@ -311,11 +311,11 @@ const application = Layer.unwrap(
               phase: state.phase,
               incarnation: state.incarnation,
               events: yield* Effect.forEach(read("event-%"), (r) =>
-                Schema.decodeUnknownEffect(Schema.fromJsonString(PerformanceEvent))(r.value),
+                Schema.decodeEffect(Schema.fromJsonString(PerformanceEvent))(r.value),
               ),
               records,
               audits: yield* Effect.forEach(read("audit-%"), (r) =>
-                Schema.decodeUnknownEffect(Schema.fromJsonString(RequestAudit))(r.value),
+                Schema.decodeEffect(Schema.fromJsonString(RequestAudit))(r.value),
               ),
               usage: yield* usage,
               failure: yield* live.failure,
@@ -401,7 +401,7 @@ export default {
           ),
         )(url.searchParams.get("sample"));
 
-        const samples = yield* Schema.decodeUnknownEffect(
+        const samples = yield* Schema.decodeEffect(
           Schema.FiniteFromString.check(
             Schema.isBetween({ minimum: 1, maximum: 3 }),
             Schema.isInt(),

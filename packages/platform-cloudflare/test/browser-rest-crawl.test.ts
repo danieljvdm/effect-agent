@@ -118,7 +118,7 @@ const record = (
 const bodyValue = (request: Parameters<Parameters<typeof HttpClient.make>[0]>[0]): unknown => {
   if (request.body._tag !== "Uint8Array") return undefined;
 
-  return Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(
+  return Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(
     new TextDecoder().decode(request.body.body),
   );
 };

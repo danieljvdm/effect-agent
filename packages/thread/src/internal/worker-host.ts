@@ -772,9 +772,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       if (sourceBinding === undefined || targetBinding === undefined)
         return yield* failure("start", "declaration-unavailable");
-      yield* Schema.decodeUnknownEffect(Schema.toEncoded(targetBinding.definition.input))(
-        input,
-      ).pipe(Effect.mapError(() => failure("start", "corrupt")));
+      yield* Schema.decodeEffect(Schema.toEncoded(targetBinding.definition.input))(input).pipe(
+        Effect.mapError(() => failure("start", "corrupt")),
+      );
 
       const targetRequest = {
         definition: targetBinding.definition,
@@ -1105,12 +1105,10 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (now >= deadlineAtMillis) return yield* failure("followUp", "denied");
       const sourceSubmission = source.submission;
 
-      const input = yield* Schema.decodeUnknownEffect(
-        Schema.toEncoded(sourceBinding.definition.input),
-      )(source.submission.inputPayload).pipe(
-        Effect.flatMap(() =>
-          Schema.decodeUnknownEffect(PersistedJson)(sourceSubmission.inputPayload),
-        ),
+      const input = yield* Schema.decodeEffect(Schema.toEncoded(sourceBinding.definition.input))(
+        source.submission.inputPayload,
+      ).pipe(
+        Effect.flatMap(() => Schema.decodeEffect(PersistedJson)(sourceSubmission.inputPayload)),
         Effect.mapError(() => failure("followUp", "corrupt")),
       );
 
@@ -1177,7 +1175,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       return {
         messageId,
         envelope: yield* Schema.encodeEffect(PreparedInput)(envelope).pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(PersistedJson)),
+          Effect.flatMap(Schema.decodeEffect(PersistedJson)),
           Effect.mapError(storageFailure("followUp")),
         ),
         createdAtMillis: now,
@@ -1367,8 +1365,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           Effect.succeed(refused(error.stage)),
         ),
         Effect.catchTag("TimeoutError", () => Effect.succeed(refused("timeout"))),
-        Effect.catchCause((cause) =>
-          Cause.hasInterrupts(cause) ? Effect.failCause(cause) : Effect.succeed(refused("defect")),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterrupts(cause),
+          () => Effect.succeed(refused("defect")),
         ),
       );
 
@@ -1395,7 +1394,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           ? source.submission?.inputPayload
           : projection.value.encodedInput;
 
-      const validated = yield* Schema.decodeUnknownEffect(
+      const validated = yield* Schema.decodeEffect(
         Schema.toEncoded(sourceBinding.definition.input),
       )(reportInput).pipe(
         Effect.flatMap(() => Schema.decodeUnknownEffect(PersistedJson)(reportInput)),
@@ -2206,7 +2205,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                 const entries = yield* Effect.forEach(page, (entry) =>
                   Schema.encodeEffect(RecordEnvelope)(entry.record).pipe(
                     Effect.flatMap((record) =>
-                      Schema.decodeUnknownEffect(WorkerHistoryEntry)({
+                      Schema.decodeEffect(WorkerHistoryEntry)({
                         sequence: entry.sequence,
                         recordId: entry.record.recordId,
                         record,
@@ -2301,7 +2300,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     agentId: AgentId,
     inputDigest: Digest,
   ) {
-    const message = yield* Schema.decodeUnknownEffect(FrameworkMessage)(unvalidated).pipe(
+    const message = yield* Schema.decodeEffect(FrameworkMessage)(unvalidated).pipe(
       Effect.mapError(() => failure("followUp", "corrupt")),
     );
 

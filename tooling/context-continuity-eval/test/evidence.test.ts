@@ -10,7 +10,7 @@ const citation = "tool-settled:run:earlier:10:read-archive";
 const code = "harbor-665786a8";
 
 const settled = (sequence: number, toolName: string, result: PersistedJson, isFailure = false) =>
-  Schema.decodeUnknownSync(CanonicalRecordEnvelope)({
+  Schema.decodeSync(CanonicalRecordEnvelope)({
     threadId: "thread-1",
     batchId: `batch:${sequence}`,
     sequence,

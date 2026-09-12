@@ -26,7 +26,7 @@ it("renders existing photo replies as Markdown without admitting HTML or executa
 });
 
 it("renders structured travel options with sources and unknown-price states, escaping model text", () => {
-  const content = Schema.decodeUnknownSync(TravelContent)({
+  const content = Schema.decodeSync(TravelContent)({
     title: "A few possibilities",
     items: [
       {

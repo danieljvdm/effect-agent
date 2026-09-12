@@ -144,7 +144,7 @@ const application = Layer.unwrap(
             restarts: [],
             pendingRestart: null,
           }
-        : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(State))(stored);
+        : yield* Schema.decodeEffect(Schema.fromJsonString(State))(stored);
 
     if (JSON.stringify(state.identity) !== JSON.stringify(identity))
       return yield* EvaluationError.make({
@@ -344,7 +344,7 @@ const application = Layer.unwrap(
                   "SELECT value FROM context_eval_artifacts WHERE path LIKE 'audit-%' ORDER BY path",
                 )
                 .toArray(),
-              (row) => Schema.decodeUnknownEffect(Schema.fromJsonString(RequestAudit))(row.value),
+              (row) => Schema.decodeEffect(Schema.fromJsonString(RequestAudit))(row.value),
             );
 
             return {

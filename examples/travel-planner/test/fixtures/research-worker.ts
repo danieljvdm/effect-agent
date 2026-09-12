@@ -70,7 +70,7 @@ const inputs = <A, I>(prompt: Prompt.Prompt, schema: Schema.Codec<A, I>) =>
     message.role === "user"
       ? message.content.flatMap((part) => {
           if (part.type !== "text") return [];
-          const input = Schema.decodeUnknownOption(Schema.fromJsonString(schema))(part.text);
+          const input = Schema.decodeOption(Schema.fromJsonString(schema))(part.text);
 
           return Option.isSome(input) ? [{ input: input.value, index }] : [];
         })
@@ -494,7 +494,7 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
         const store = yield* ThreadStore;
         const url = new URL(request.url);
 
-        const threadId = yield* Schema.decodeUnknownEffect(ThreadId)(
+        const threadId = yield* Schema.decodeEffect(ThreadId)(
           url.searchParams.get("thread") ?? identity.threadId,
         );
 

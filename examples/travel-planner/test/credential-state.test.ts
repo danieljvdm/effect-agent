@@ -34,7 +34,7 @@ const setup = () => {
         init,
       );
 
-      const packet = Schema.decodeUnknownSync(Schema.fromJsonString(Packet))(
+      const packet = Schema.decodeSync(Schema.fromJsonString(Packet))(
         (await request.text()).trim(),
       );
 

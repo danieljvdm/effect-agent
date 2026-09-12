@@ -221,9 +221,9 @@ const makeScheduleStore = Effect.gen(function* () {
                 let count = 0;
 
                 for (const text of current.records.values()) {
-                  const candidate = Schema.decodeUnknownResult(
-                    Schema.fromJsonString(ScheduleRecord),
-                  )(text);
+                  const candidate = Schema.decodeResult(Schema.fromJsonString(ScheduleRecord))(
+                    text,
+                  );
 
                   if (Result.isFailure(candidate))
                     return [Result.fail(storageError("change", "corrupt")), current];

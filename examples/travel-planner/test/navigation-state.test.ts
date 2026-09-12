@@ -16,7 +16,7 @@ import {
 } from "../src/state.ts";
 
 const trip = (id: string) =>
-  Schema.decodeUnknownSync(SavedTrip)({
+  Schema.decodeSync(SavedTrip)({
     id,
     conversationId: id,
     title: id,
@@ -34,7 +34,7 @@ const trip = (id: string) =>
 const trips = [trip("lisbon"), trip("kyoto")];
 
 const snapshot = (id: string, pending = 0) =>
-  Schema.decodeUnknownSync(PlannerSnapshot)({
+  Schema.decodeSync(PlannerSnapshot)({
     conversationId: id,
     messages: [{ id: `${id}-answer`, role: "assistant", text: `${id} history`, tripId: id }],
     trips,
@@ -79,7 +79,7 @@ const setup = () => {
         init,
       );
 
-      const packet = Schema.decodeUnknownSync(Schema.fromJsonString(Packet))(
+      const packet = Schema.decodeSync(Schema.fromJsonString(Packet))(
         (await request.text()).trim(),
       );
 

@@ -101,7 +101,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
       Effect.gen(function* () {
         const report = yield* certified;
         const encoded = yield* Schema.encodeEffect(CertificationReport)(report);
-        const decoded = yield* Schema.decodeUnknownEffect(CertificationReport)(encoded);
+        const decoded = yield* Schema.decodeEffect(CertificationReport)(encoded);
 
         expect(decoded.format).toBe("effect-agent/certification@2");
         expect(decoded.fullyCertified).toBe(false);

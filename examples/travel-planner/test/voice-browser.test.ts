@@ -66,11 +66,8 @@ it("owns and releases media and the peer on normal scope exit and malformed sess
   expect(test.peer.setRemoteDescription).toHaveBeenCalledWith({ type: "answer", sdp: "answer" });
   vi.stubGlobal("fetch", async () => Response.json({ credential: "never accepted" }));
 
-  const failed = await Effect.runPromise(
-    connectBrowserVoice([], test.audio, "00000000-0000-0000-0000-000000000001").pipe(
-      Effect.scoped,
-      Effect.exit,
-    ),
+  const failed = await Effect.runPromiseExit(
+    connectBrowserVoice([], test.audio, "00000000-0000-0000-0000-000000000001").pipe(Effect.scoped),
   );
 
   expect(failed._tag).toBe("Failure");

@@ -222,6 +222,81 @@ layer(base)("Agent updates", (it) => {
       ).toEqual(new AgentUpdates.UpdateError({ reason: "unavailable" }));
     }),
   );
+
+  it.effect("retains accepted values when callers and hosts mutate their references", () =>
+    Effect.gen(function* () {
+      const tools = Toolkit.make(
+        Tool.make("job", {
+          parameters: Schema.Struct({}),
+          success: Schema.Void,
+          failure: AgentUpdates.UpdateError,
+          dependencies: [AgentUpdates.Emitter],
+        }),
+      );
+
+      const agent = Agent.make("owned-updates", {
+        input: Schema.String,
+        output: Schema.String,
+        updates: Schema.Struct({ finding: Schema.String }),
+        instructions: "Report findings then finish",
+        toolkit: tools,
+      });
+
+      const key = Schema.decodeSync(IdempotencyKey)("stable");
+      const hostValue = { finding: "accepted" };
+
+      const handlers = tools.toLayer({
+        job: () =>
+          Effect.gen(function* () {
+            const input = { finding: "accepted" };
+            const first = yield* AgentUpdates.emit(agent, input, { idempotencyKey: key });
+
+            input.finding = "changed input";
+            hostValue.finding = "changed host value";
+            Reflect.set(first, "sequence", 99);
+            if (typeof first.value === "object" && first.value !== null)
+              Reflect.set(first.value, "finding", "changed acknowledgement");
+            Reflect.set(first, "value", { finding: "replacement acknowledgement" });
+
+            const retry = yield* AgentUpdates.emit(
+              agent,
+              { finding: "accepted" },
+              { idempotencyKey: key },
+            );
+
+            expect(retry.sequence).toBe(42);
+            expect(yield* AgentUpdates.decode(agent, retry)).toEqual({ finding: "accepted" });
+          }),
+      });
+
+      const events = yield* AgentRuntime.streamWithUsageAccountingUnknown(
+        Agent.withModel(agent, model("job", {})),
+        "go",
+      ).pipe(
+        Stream.runCollect,
+        Effect.provide(Layer.mergeAll(ModelUsageAccounting.layerEphemeral, handlers)),
+        Effect.provideService(AgentUpdateAcceptance, {
+          accept: (update) =>
+            Effect.sync(() => {
+              if (typeof update.value === "object" && update.value !== null)
+                Reflect.set(update.value, "finding", "changed acceptance request");
+
+              return AgentUpdates.Update.make({ ...update, sequence: 42, value: hostValue });
+            }),
+        }),
+      );
+
+      const updates = events.filter((event) => event._tag === "AgentUpdateEmitted");
+
+      expect(updates).toHaveLength(1);
+      expect(updates[0]!.update.sequence).toBe(42);
+      expect(yield* AgentUpdates.decode(agent, updates[0]!.update)).toEqual({
+        finding: "accepted",
+      });
+      expect(events.at(-1)?._tag).toBe("RunCompleted");
+    }),
+  );
+
   it.effect(
     "validates decoded constraints and retains emission across effective policy copies",
     () =>

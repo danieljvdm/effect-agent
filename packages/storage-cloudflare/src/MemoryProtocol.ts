@@ -214,7 +214,7 @@ export const handleMemoryOwnerRequest = Effect.fn("MemoryOwner.handleRequest")(f
     MemoryOwnerFailure,
     MemoryOwnerIdentity | MemoryOwnerAuthorizer | MemoryReader | MemoryWriter
   > {
-    limits = yield* Schema.decodeUnknownEffect(MemoryRpcLimits)(limits).pipe(
+    limits = yield* Schema.decodeEffect(MemoryRpcLimits)(limits).pipe(
       Effect.mapError(() => MemoryRpcError.make({ reason: "protocol" })),
     );
     const request = yield* decodeMemoryWire(MemoryOwnerRequest, raw, limits.maxRequestBytes);

@@ -587,10 +587,9 @@ describe("capability contracts", () => {
         expect(yield* threads.snapshot(otherId)).toEqual(otherBase);
         const history = Prompt.fromMessages([sized(mib)]);
 
-        const outcomes = yield* Effect.all(
-          [threadId, otherId].map((id) =>
-            threads.recordHistory(id, runId, history).pipe(Effect.exit),
-          ),
+        const outcomes = yield* Effect.forEach(
+          [threadId, otherId],
+          (id) => threads.recordHistory(id, runId, history).pipe(Effect.exit),
           { concurrency: 2 },
         );
 

@@ -317,7 +317,7 @@ const fixture = Effect.fn("remembering.fixture")(function* () {
 
   const entries = (value: MemoryDocument | null) =>
     value?._tag === "ActiveMemoryDocument"
-      ? Schema.decodeUnknownEffect(ProfileJson)(value.content.text)
+      ? Schema.decodeEffect(ProfileJson)(value.content.text)
       : Effect.succeed([]);
 
   const processor = Remembering.make({
@@ -573,7 +573,7 @@ describe("background remembering", () => {
         ]);
         yield* f.invalidate(invalidation(a, "source-edit"));
 
-        const checkpoint = Schema.decodeUnknownSync(Schema.fromJsonString(Protocol.Checkpoint))(
+        const checkpoint = Schema.decodeSync(Schema.fromJsonString(Protocol.Checkpoint))(
           Schema.encodeSync(Schema.fromJsonString(Protocol.Checkpoint))(yield* f.store.read(a)),
         );
 

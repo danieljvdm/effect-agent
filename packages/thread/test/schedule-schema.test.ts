@@ -262,7 +262,7 @@ describe("Schedule persisted schemas", () => {
       Schema.decodeUnknownSync(ScheduleChange)({ _tag: "Unknown", nowMillis: 1 }),
     ).toThrow(/./);
     expect(() =>
-      Schema.decodeUnknownSync(SchedulingLimits)({
+      Schema.decodeSync(SchedulingLimits)({
         ...defaultSchedulingLimits,
         maxInputBytes: 65_537,
       }),

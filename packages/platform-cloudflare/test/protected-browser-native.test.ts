@@ -326,10 +326,9 @@ it.live(
 
             const observed = yield* handle.observe.pipe(
               Effect.map(Option.some),
-              Effect.catch((error) =>
-                error.reason === "stale-reference"
-                  ? Effect.succeed(Option.none())
-                  : Effect.fail(error),
+              Effect.catchIf(
+                (error) => error.reason === "stale-reference",
+                () => Effect.succeed(Option.none()),
               ),
             );
 

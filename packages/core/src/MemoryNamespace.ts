@@ -69,7 +69,7 @@ const BoundedAddress = Schema.String.check(
 export const MemoryNamespaceAddress = BoundedAddress.check(
   Schema.makeFilter(
     (address) => {
-      const decoded = Schema.decodeUnknownOption(EnvelopeJson)(address);
+      const decoded = Schema.decodeOption(EnvelopeJson)(address);
 
       return decoded._tag === "Some" && canonicalJson(decoded.value) === address;
     },
@@ -128,9 +128,7 @@ export const define = <
       if (canonicalJson(stable) !== canonicalJson(repeated))
         return yield* MemoryNamespaceError.make({ reason: "invalid-identity" });
 
-      const address = yield* Schema.decodeUnknownEffect(MemoryNamespaceAddress)(
-        canonicalJson(envelope),
-      );
+      const address = yield* Schema.decodeEffect(MemoryNamespaceAddress)(canonicalJson(envelope));
 
       const value: Value<Name, Version, Identity> = Object.assign(Any.make({ address }), {
         name,
@@ -164,11 +162,9 @@ export const define = <
       Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-address" })),
     );
 
-    const header = yield* Schema.decodeUnknownEffect(
-      Schema.fromJsonString(Schema.Array(Schema.Json)),
-    )(bounded).pipe(
-      Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-address" })),
-    );
+    const header = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Array(Schema.Json)))(
+      bounded,
+    ).pipe(Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-address" })));
 
     if (header[0] !== 1) return yield* MemoryNamespaceError.make({ reason: "unsupported-format" });
 
@@ -176,7 +172,7 @@ export const define = <
       Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-address" })),
     );
 
-    const envelope = yield* Schema.decodeUnknownEffect(EnvelopeJson)(address).pipe(
+    const envelope = yield* Schema.decodeEffect(EnvelopeJson)(address).pipe(
       Effect.mapError(() => MemoryNamespaceError.make({ reason: "invalid-address" })),
     );
 

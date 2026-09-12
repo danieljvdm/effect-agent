@@ -19,12 +19,20 @@
       {
         "name": "@effect/language-service",
         "diagnosticSeverity": {
+          "allOfMapToForEach": "warning",
           "anyUnknownInErrorContext": "suggestion",
+          "catchAllTagDispatchToCatchTag": "warning",
+          "catchConditionalRefailToCatchIf": "warning",
+          "flatMapConditionalToFilterOrFail": "warning",
           "instanceOfSchema": "suggestion",
           "nestedEffectGenYield": "suggestion",
           "newSchemaClass": "suggestion",
+          "optionMatchToFromOption": "warning",
           "preferSchemaTypeProperty": "suggestion",
-          "preferTypedSchemaDecoder": "off",
+          "preferTypedSchemaDecoder": "warning",
+          "provideLayerSucceedToProvideService": "warning",
+          "runOfExitToRunExit": "warning",
+          "timeoutCatchTagToTimeoutOrElse": "warning",
           "unsafeEffectTypeAssertion": "suggestion"
         },
         "overrides": [

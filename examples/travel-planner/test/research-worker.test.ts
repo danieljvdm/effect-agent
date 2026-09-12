@@ -90,7 +90,7 @@ const rpc = async (tag: string, payload: unknown, email = "research@example.com"
 
   expect(response.status).toBe(200);
 
-  const result = Schema.decodeUnknownSync(Schema.fromJsonString(RpcExit))(
+  const result = Schema.decodeSync(Schema.fromJsonString(RpcExit))(
     (await response.text()).trim().split("\n")[0],
   ).exit;
 
@@ -329,7 +329,7 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
       ({ record }) =>
         record.payload._tag === "SubmissionSettled" &&
         record.payload.outcome === "failed" &&
-        Schema.decodeUnknownOption(SettlementFailureDiagnostic)(record.payload.result).pipe(
+        Schema.decodeOption(SettlementFailureDiagnostic)(record.payload.result).pipe(
           (diagnostic) =>
             diagnostic._tag === "Some" &&
             diagnostic.value.errorTag === "AgentToolAuthorizationDenied",

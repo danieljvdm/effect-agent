@@ -61,7 +61,7 @@ export const connectBrowserVoice = Effect.fn("connectBrowserVoice")(function* (
 
       return;
     }
-    const event = Schema.decodeUnknownOption(Schema.fromJsonString(LiveEvent))(message.data);
+    const event = Schema.decodeOption(Schema.fromJsonString(LiveEvent))(message.data);
 
     // Forward-compatible events are ignored; never interpreted as task instructions.
     if (event._tag === "Some" && !Queue.offerUnsafe(queue, event.value))

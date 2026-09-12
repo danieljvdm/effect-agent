@@ -193,14 +193,12 @@ describe("DUR-002/DUR-004/DUR-017 P7 chaos (memory adapters)", () => {
       expect(plan).toBeDefined();
       if (plan === undefined) return;
       const encoded = yield* Schema.encodeEffect(ChaosPlan)(plan);
-      const decoded = yield* Schema.decodeUnknownEffect(ChaosPlan)(encoded);
+      const decoded = yield* Schema.decodeEffect(ChaosPlan)(encoded);
 
       expect(JSON.stringify(decoded)).toBe(JSON.stringify(plan));
 
       // Invalid shapes fail typed instead of decoding incorrectly (TEST-001).
-      const invalid = yield* Effect.exit(
-        Schema.decodeUnknownEffect(ChaosPlan)({ ...encoded, lanes: 0 }),
-      );
+      const invalid = yield* Effect.exit(Schema.decodeEffect(ChaosPlan)({ ...encoded, lanes: 0 }));
 
       expect(Exit.isFailure(invalid)).toBe(true);
     }),

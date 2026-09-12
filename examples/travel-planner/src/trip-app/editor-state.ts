@@ -47,12 +47,12 @@ export const editorSnapshot = Effect.fn("editorSnapshot")(function* (
   };
 
   return yield* Effect.gen(function* () {
-    const worker = yield* Schema.decodeUnknownEffect(Subagent.Worker(AppEditor))(origin.worker);
+    const worker = yield* Schema.decodeEffect(Subagent.Worker(AppEditor))(origin.worker);
     const runtime = yield* DurableAgentRuntime;
-    const sourceThreadId = yield* Schema.decodeUnknownEffect(ThreadId)(conversationId);
+    const sourceThreadId = yield* Schema.decodeEffect(ThreadId)(conversationId);
     const owner = ownerOfThread(conversationId);
 
-    const principal = yield* Schema.decodeUnknownEffect(Principal)(owner);
+    const principal = yield* Schema.decodeEffect(Principal)(owner);
 
     const host = yield* runtime.workerHost({ sourceThreadId, principal });
 

@@ -62,7 +62,7 @@ export const layer = (
   Layer.effect(
     ContextHistory,
     Effect.gen(function* () {
-      const decoded = yield* Schema.decodeUnknownEffect(ThreadContextHistoryOptions)(options).pipe(
+      const decoded = yield* Schema.decodeEffect(ThreadContextHistoryOptions)(options).pipe(
         Effect.mapError(() => invalid("Invalid context history limits")),
       );
 
@@ -77,7 +77,7 @@ export const layer = (
         const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId })).pipe(
           Effect.mapError(unavailable),
           Effect.flatMap((value) =>
-            Schema.decodeUnknownEffect(Schema.toType(ThreadTail))(value).pipe(
+            Schema.decodeEffect(Schema.toType(ThreadTail))(value).pipe(
               Effect.mapError(unavailable),
             ),
           ),
@@ -101,9 +101,9 @@ export const layer = (
 
           if (page.length !== limit) return yield* unavailable();
           for (const raw of page) {
-            const record = yield* Schema.decodeUnknownEffect(
-              Schema.toType(CanonicalRecordEnvelope),
-            )(raw).pipe(Effect.mapError(unavailable));
+            const record = yield* Schema.decodeEffect(Schema.toType(CanonicalRecordEnvelope))(
+              raw,
+            ).pipe(Effect.mapError(unavailable));
 
             if (record.threadId !== threadId || record.sequence !== cursor + 1)
               return yield* unavailable();
@@ -126,7 +126,7 @@ export const layer = (
 
       const search = Effect.fn("ThreadContextHistory.search")(
         function* (input: ContextHistorySearch) {
-          const request = yield* Schema.decodeUnknownEffect(Schema.toType(ContextHistorySearch))(
+          const request = yield* Schema.decodeEffect(Schema.toType(ContextHistorySearch))(
             input,
           ).pipe(Effect.mapError(() => invalid("Invalid context history search")));
 
@@ -180,9 +180,9 @@ export const layer = (
 
       const read = Effect.fn("ThreadContextHistory.read")(
         function* (input: ContextHistoryRead) {
-          const request = yield* Schema.decodeUnknownEffect(Schema.toType(ContextHistoryRead))(
-            input,
-          ).pipe(Effect.mapError(() => invalid("Invalid context history read")));
+          const request = yield* Schema.decodeEffect(Schema.toType(ContextHistoryRead))(input).pipe(
+            Effect.mapError(() => invalid("Invalid context history read")),
+          );
 
           let selected: ContextHistoryEvidence | undefined;
 

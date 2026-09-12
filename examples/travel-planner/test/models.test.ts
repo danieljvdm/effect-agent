@@ -181,7 +181,7 @@ it.effect(
         const getCalls = yield* Ref.make(0);
 
         const fetch: typeof globalThis.fetch = async (_url, init) => {
-          const request = Schema.decodeUnknownSync(Schema.fromJsonString(RequestWithTools))(
+          const request = Schema.decodeSync(Schema.fromJsonString(RequestWithTools))(
             await new Response(init?.body).text(),
           );
 
@@ -293,7 +293,7 @@ it.effect(
       const requests: Array<typeof RequestBody.Type> = [];
 
       const fetch: typeof globalThis.fetch = async (_url, init) => {
-        const body = Schema.decodeUnknownSync(Schema.fromJsonString(RequestBody))(
+        const body = Schema.decodeSync(Schema.fromJsonString(RequestBody))(
           await new Response(init?.body).text(),
         );
 
@@ -376,7 +376,7 @@ it.effect(
       const models: string[] = [];
 
       const fetch: typeof globalThis.fetch = async (_url, init) => {
-        const body = Schema.decodeUnknownSync(Schema.fromJsonString(RequestBody))(
+        const body = Schema.decodeSync(Schema.fromJsonString(RequestBody))(
           await new Response(init?.body).text(),
         );
 

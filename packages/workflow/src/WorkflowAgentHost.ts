@@ -102,7 +102,7 @@ const nativeOperation = <A, E, R>(operation: string, effect: Effect.Effect<A, E,
   );
 
 const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: WorkflowAgentHostOptions) {
-  const config = yield* Schema.decodeUnknownEffect(WorkflowHostConfig)({
+  const config = yield* Schema.decodeEffect(WorkflowHostConfig)({
     deploymentId: options.deploymentId,
     principal: options.principal,
     workflowName: options.workflowName ?? "effect-agent/Submission/v1",
@@ -456,7 +456,7 @@ const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: Workflo
       });
     }
 
-    const name = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(options.name).pipe(
+    const name = yield* Schema.decodeEffect(Schema.NonEmptyString)(options.name).pipe(
       Effect.mapError(
         () =>
           new WorkflowExecutionFailure({
@@ -535,7 +535,7 @@ const makeHost = Effect.fn("WorkflowAgentHost.make")(function* (options: Workflo
       });
     }
 
-    return yield* Schema.decodeUnknownEffect(agent.output)(record.result).pipe(
+    return yield* Schema.decodeEffect(agent.output)(record.result).pipe(
       Effect.mapError(
         (cause) =>
           new AgentOutputError({

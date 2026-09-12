@@ -966,7 +966,7 @@ const makeJournal = (
           });
         }
 
-        const firstSequence = yield* Schema.decodeUnknownEffect(CanonicalSequence)(
+        const firstSequence = yield* Schema.decodeEffect(CanonicalSequence)(
           thread.tail_sequence + 1,
         ).pipe(
           Effect.mapError((error) =>
@@ -978,7 +978,7 @@ const makeJournal = (
           ),
         );
 
-        const lastSequence = yield* Schema.decodeUnknownEffect(CanonicalSequence)(
+        const lastSequence = yield* Schema.decodeEffect(CanonicalSequence)(
           firstSequence + request.records.length - 1,
         ).pipe(
           Effect.mapError((error) =>

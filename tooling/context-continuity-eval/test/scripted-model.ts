@@ -28,7 +28,7 @@ export const scriptedResponse = Effect.fn("fixture.scriptedResponse")(function* 
     ),
   });
 
-  const payload = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Payload))(json);
+  const payload = yield* Schema.decodeEffect(Schema.fromJsonString(Payload))(json);
   const expected = scenario[phase];
 
   if (expected === undefined) return yield* Effect.die("No scripted phase");
@@ -45,14 +45,14 @@ export const scriptedResponse = Effect.fn("fixture.scriptedResponse")(function* 
   const Notes = Schema.Struct({ revision: Schema.NullOr(Schema.String), text: Schema.String });
 
   const notes = results
-    .map((value) => Schema.decodeUnknownOption(Schema.fromJsonString(Notes))(value))
+    .map((value) => Schema.decodeOption(Schema.fromJsonString(Notes))(value))
     .filter(Option.isSome)
     .at(-1)?.value;
 
   const Hit = Schema.Struct({ recordId: Schema.String, text: Schema.String });
 
   const hits = results.flatMap((value) => {
-    const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(Hit)))(value);
+    const decoded = Schema.decodeOption(Schema.fromJsonString(Schema.Array(Hit)))(value);
 
     return Option.isSome(decoded) ? decoded.value : [];
   });

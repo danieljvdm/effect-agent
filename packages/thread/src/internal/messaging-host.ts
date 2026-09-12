@@ -206,11 +206,11 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
             : "storage",
       );
 
-  const lifetime = Schema.decodeUnknownEffect(
+  const lifetime = Schema.decodeEffect(
     Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(604_800_000)),
   )(deps.lifetimeMillis).pipe(Effect.mapError(() => failure("send", "capacity")));
 
-  const capacity = Schema.decodeUnknownEffect(
+  const capacity = Schema.decodeEffect(
     Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1_000)),
   )(deps.maxMessagesPerSource ?? 256).pipe(Effect.mapError(() => failure("send", "capacity")));
 
@@ -233,7 +233,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
       )
         return yield* failure(operation, "denied");
       if (peer !== undefined)
-        yield* Schema.decodeUnknownEffect(PeerName)(peer.name).pipe(
+        yield* Schema.decodeEffect(PeerName)(peer.name).pipe(
           Effect.mapError(() => failure(operation, "invalid-input")),
         );
 
@@ -269,14 +269,14 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
         Effect.mapError(() => failure(operation, "invalid-input")),
       );
 
-      const key = yield* Schema.decodeUnknownEffect(IdempotencyKey)(request.idempotencyKey).pipe(
+      const key = yield* Schema.decodeEffect(IdempotencyKey)(request.idempotencyKey).pipe(
         Effect.mapError(() => failure(operation, "invalid-input")),
       );
 
       const inReplyTo =
         request.inReplyTo === undefined
           ? undefined
-          : yield* Schema.decodeUnknownEffect(MessageRef)(request.inReplyTo).pipe(
+          : yield* Schema.decodeEffect(MessageRef)(request.inReplyTo).pipe(
               Effect.mapError(() => failure(operation, "invalid-reference")),
             );
 
@@ -473,7 +473,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
     ) {
       yield* authorize(operation, operation === "inspect" ? "read" : "control", request);
 
-      const message = yield* Schema.decodeUnknownEffect(MessageRef)(request.message).pipe(
+      const message = yield* Schema.decodeEffect(MessageRef)(request.message).pipe(
         Effect.mapError(() => failure(operation, "invalid-reference")),
       );
 
@@ -525,11 +525,11 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
       inbox: Effect.fn("MessagingHost.inbox")(function* (request) {
         const current = yield* authorize("inbox", "read", request);
 
-        const limit = yield* Schema.decodeUnknownEffect(
+        const limit = yield* Schema.decodeEffect(
           Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100)),
         )(request.limit).pipe(Effect.mapError(() => failure("inbox", "capacity")));
 
-        let after = yield* Schema.decodeUnknownEffect(CanonicalSequence)(request.after ?? 0).pipe(
+        let after = yield* Schema.decodeEffect(CanonicalSequence)(request.after ?? 0).pipe(
           Effect.mapError(() => failure("inbox", "invalid-reference")),
         );
 
@@ -582,7 +582,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
       agentId: AgentId,
       inputDigest: Digest,
     ) {
-      const admission = yield* Schema.decodeUnknownEffect(MessageAdmission)(unvalidated).pipe(
+      const admission = yield* Schema.decodeEffect(MessageAdmission)(unvalidated).pipe(
         Effect.mapError(() => failure("send", "invalid-input")),
       );
 

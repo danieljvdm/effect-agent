@@ -1,4 +1,4 @@
-import { Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { Deferred, Effect, Exit, Fiber, Schema } from "effect";
 import { expect, expectTypeOf, it } from "vite-plus/test";
 
 import { BenchmarkError } from "../src/contracts.ts";
@@ -16,18 +16,16 @@ it.each(policyCases)("validates the public policy workload $name", async (worklo
 
   const result = await Effect.runPromise(
     runPolicyCase(workload).pipe(
-      Effect.provide(
-        Layer.succeed(DiagnosticProgress, {
-          phase: (phase) =>
-            Effect.sync(() => {
-              phases.push(phase);
-            }),
-          mark: (mark) =>
-            Effect.sync(() => {
-              marks.push(mark);
-            }),
-        }),
-      ),
+      Effect.provideService(DiagnosticProgress, {
+        phase: (phase) =>
+          Effect.sync(() => {
+            phases.push(phase);
+          }),
+        mark: (mark) =>
+          Effect.sync(() => {
+            marks.push(mark);
+          }),
+      }),
     ),
   );
 

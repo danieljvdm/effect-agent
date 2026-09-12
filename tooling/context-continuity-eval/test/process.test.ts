@@ -37,7 +37,7 @@ it("recovers the real SQLite runtime after two SIGKILLs with pressure and cumula
         yield* path.fromFileUrl(new URL("./scripted-worker.ts", import.meta.url)),
       );
 
-      const checkpoint = yield* Schema.decodeUnknownEffect(
+      const checkpoint = yield* Schema.decodeEffect(
         Schema.fromJsonString(RecoveryCheckpointEvidence),
       )(yield* fs.readFileString(path.join(outputDirectory, "recovery-checkpoint.json")));
 

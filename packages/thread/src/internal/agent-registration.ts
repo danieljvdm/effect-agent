@@ -156,12 +156,13 @@ interface CapturedBinding {
   ) => Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure>;
 }
 
-type ReportRequirements<Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>>> = [
-  Reports[number],
-] extends [never]
-  ? never
-  : Reports[number] extends WorkerReporting<unknown, infer R>
-    ? Exclude<R, Scope.Scope>
+type ReportRequirements<Reports> =
+  Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>>
+    ? [Reports[number]] extends [never]
+      ? never
+      : Reports[number] extends WorkerReporting<unknown, infer R>
+        ? Exclude<R, Scope.Scope>
+        : never
     : never;
 
 const captureReporting = <R>(reports: ReadonlyArray<WorkerReporting<unknown, R>>) =>
@@ -379,21 +380,22 @@ type EntryWorkerRequirements<Entry> = Entry extends {
     ? DurableWorkerRequirements<{ readonly definition: D; readonly model: M }>
     : never;
 
-type EntryAttemptRequirements<Entry> = Entry extends {
-  readonly attemptLayer: (
-    context: AgentAttemptContext,
-  ) => Layer.Layer<infer Provides, never, infer Requires>;
-}
-  ? Exclude<EntryWorkerRequirements<Entry>, Provides> | Requires
-  : EntryWorkerRequirements<Entry>;
+type AttemptLayerRequirements<Requirements, AttemptLayer> = AttemptLayer extends (
+  context: AgentAttemptContext,
+) => Layer.Layer<infer Provides, never, infer Requires>
+  ? Exclude<Requirements, Provides> | Requires
+  : Requirements;
 
-type EntryRequirements<Entry> =
-  | EntryAttemptRequirements<Entry>
-  | (Entry extends {
-      readonly reporting: infer Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>>;
-    }
-      ? ReportRequirements<Reports>
-      : never);
+// Conditional options retain every service they may consume. An absent attempt Layer
+// still needs the original worker services; only a definite Layer can remove them.
+type EntryRequirements<Entry> = Entry extends unknown
+  ?
+      | AttemptLayerRequirements<
+          EntryWorkerRequirements<Entry>,
+          "attemptLayer" extends keyof Entry ? Entry["attemptLayer"] : undefined
+        >
+      | ("reporting" extends keyof Entry ? ReportRequirements<Entry["reporting"]> : never)
+  : never;
 
 type RegistrationRequirements<Entries extends ReadonlyArray<AgentRegistration>> = [
   Entries[number],

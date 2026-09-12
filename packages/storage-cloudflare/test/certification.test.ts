@@ -133,7 +133,7 @@ describe("TEST-004 STORE-010 STORE-013 adapter certification — storage-cloudfl
       );
 
       const decoded = await Effect.runPromise(
-        Schema.decodeUnknownEffect(CertificationReport)(encoded).pipe(Effect.orDie),
+        Schema.decodeEffect(CertificationReport)(encoded).pipe(Effect.orDie),
       );
 
       expect(decoded.format).toBe("effect-agent/certification@2");

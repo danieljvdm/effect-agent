@@ -60,7 +60,7 @@ export const AppRepositoryLive = Layer.effect(
       );
 
       return yield* Effect.forEach(rows, (row) =>
-        Schema.decodeUnknownEffect(StoredApp)(row.value).pipe(
+        Schema.decodeEffect(StoredApp)(row.value).pipe(
           Effect.flatMap(({ app }) =>
             app.id === row.app_id && app.tripId === row.trip_id && app.revision === row.revision
               ? Effect.succeed(app)
@@ -72,9 +72,7 @@ export const AppRepositoryLive = Layer.effect(
     });
 
     const get = Effect.fn("AppRepository.get")(function* (input: string) {
-      const tripId = yield* Schema.decodeUnknownEffect(TripId)(input).pipe(
-        Effect.mapError(invalid),
-      );
+      const tripId = yield* Schema.decodeEffect(TripId)(input).pipe(Effect.mapError(invalid));
 
       const rows =
         yield* sql`SELECT * FROM travel_app_revisions WHERE trip_id = ${tripId} ORDER BY revision DESC LIMIT 1`.pipe(
@@ -86,7 +84,7 @@ export const AppRepositoryLive = Layer.effect(
     });
 
     const getById = Effect.fn("AppRepository.getById")(function* (input: string) {
-      const appId = yield* Schema.decodeUnknownEffect(AppId)(input).pipe(Effect.mapError(invalid));
+      const appId = yield* Schema.decodeEffect(AppId)(input).pipe(Effect.mapError(invalid));
 
       const rows =
         yield* sql`SELECT * FROM travel_app_revisions WHERE app_id = ${appId} ORDER BY revision DESC LIMIT 1`.pipe(
@@ -101,13 +99,11 @@ export const AppRepositoryLive = Layer.effect(
       candidate: TripApp,
       expected: number | null,
     ) {
-      const app = yield* Schema.decodeUnknownEffect(TripApp)(candidate).pipe(
+      const app = yield* Schema.decodeEffect(TripApp)(candidate).pipe(Effect.mapError(invalid));
+
+      const expectedRevision = yield* Schema.decodeEffect(Schema.NullOr(Revision))(expected).pipe(
         Effect.mapError(invalid),
       );
-
-      const expectedRevision = yield* Schema.decodeUnknownEffect(Schema.NullOr(Revision))(
-        expected,
-      ).pipe(Effect.mapError(invalid));
 
       const value = yield* Schema.encodeEffect(StoredApp)({ version: 1, app }).pipe(
         Effect.mapError(invalid),

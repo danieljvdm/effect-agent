@@ -758,7 +758,7 @@ describe("subagent budget reservations", () => {
           }
         };
 
-        yield* Effect.all(operations.map(execute), { concurrency: "unbounded" });
+        yield* Effect.forEach(operations, execute, { concurrency: "unbounded" });
 
         const openSnapshot = yield* reservations.parentSnapshot(runId);
 

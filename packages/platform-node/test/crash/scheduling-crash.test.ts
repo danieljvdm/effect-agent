@@ -163,7 +163,7 @@ const awaitMarker = (
     Stream.decodeText(),
     Stream.splitLines,
     Stream.mapEffect((line) =>
-      Schema.decodeUnknownEffect(Schema.fromJsonString(SchedulingCrashMarker))(line),
+      Schema.decodeEffect(Schema.fromJsonString(SchedulingCrashMarker))(line),
     ),
     Stream.runHead,
     Effect.timeout(Duration.seconds(10)),

@@ -29,7 +29,7 @@ const worker = makeWorker(
         message: "Missing fixture authentication.",
       });
 
-    const email = yield* Schema.decodeUnknownEffect(Email)(
+    const email = yield* Schema.decodeEffect(Email)(
       request.headers.get("x-test-email") ?? ownerEmail,
     ).pipe(
       Effect.mapError(

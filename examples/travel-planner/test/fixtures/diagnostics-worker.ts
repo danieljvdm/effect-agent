@@ -37,7 +37,7 @@ export class Diagnostics extends DurableObject {
       ),
     );
 
-    const result = await Effect.runPromise(
+    const result = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const diagnostics = yield* FailureDiagnostics;
         const sql = yield* SqlClient;
@@ -64,7 +64,7 @@ export class Diagnostics extends DurableObject {
           yield* sql`INSERT INTO travel_failure_diagnostics (value) VALUES ('{"version":999}')`;
 
         return yield* sql`SELECT value FROM travel_failure_diagnostics ORDER BY id`;
-      }).pipe(Effect.provide(store), Effect.exit),
+      }).pipe(Effect.provide(store)),
     );
 
     return Response.json(

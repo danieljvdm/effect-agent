@@ -203,7 +203,7 @@ export const plannerHandlers = PlannerRpcs.toLayer({
             }),
         });
 
-        const snapshot = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(PlannerSnapshot))(
+        const snapshot = yield* Schema.decodeEffect(Schema.fromJsonString(PlannerSnapshot))(
           reply,
         ).pipe(
           Effect.mapError(

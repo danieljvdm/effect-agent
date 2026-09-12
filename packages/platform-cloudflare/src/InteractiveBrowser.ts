@@ -36,7 +36,6 @@ import {
   Duration,
   Effect,
   Layer,
-  Option,
   Redacted,
   Ref,
   Schema,
@@ -231,7 +230,7 @@ export class BrowserRunViewport extends Schema.Class<BrowserRunViewport>("Browse
 ) {}
 
 const decodeViewport = (input: BrowserRunViewport) =>
-  Schema.decodeUnknownEffect(BrowserRunViewport)(input, { onExcessProperty: "error" }).pipe(
+  Schema.decodeEffect(BrowserRunViewport)(input, { onExcessProperty: "error" }).pipe(
     Effect.mapError(() => policyError("The browser viewport is malformed")),
     // Copy only presentation fields, including for Schema class instances.
     Effect.map((viewport) => ({
@@ -1043,7 +1042,7 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
         ),
       );
 
-      if (observation._tag === "Text") Schema.decodeUnknownSync(PageObservation)(observation.text);
+      if (observation._tag === "Text") Schema.decodeSync(PageObservation)(observation.text);
 
       return observation;
     },
@@ -1177,7 +1176,7 @@ const snapshotPolicy = Effect.fn("BrowserRunInteractive.snapshotPolicy")(functio
   InteractiveBrowserPolicySnapshot,
   InteractiveBrowserPolicyDeniedError | InteractiveBrowserUnsupportedError
 > {
-  const decoded = yield* Schema.decodeUnknownEffect(InteractiveBrowserPolicy)(input).pipe(
+  const decoded = yield* Schema.decodeEffect(InteractiveBrowserPolicy)(input).pipe(
     Effect.mapError(() => policyError("The interactive browser policy is malformed")),
   );
 
@@ -1651,15 +1650,13 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
         }),
       )
       .pipe(
-        Effect.flatMap((result) =>
-          Option.isSome(result)
-            ? Effect.succeed(result.value)
-            : Effect.fail(
-                InteractiveBrowserBusyError.make({
-                  implementation: browserRunInteractiveImplementation,
-                  message: "The browser handle already has an operation in flight",
-                }),
-              ),
+        Effect.flatMap(
+          Effect.fromOption(() =>
+            InteractiveBrowserBusyError.make({
+              implementation: browserRunInteractiveImplementation,
+              message: "The browser handle already has an operation in flight",
+            }),
+          ),
         ),
       );
 
@@ -1714,7 +1711,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
             });
           }
 
-          return yield* Schema.decodeUnknownEffect(BrowserTextResult)({
+          return yield* Schema.decodeEffect(BrowserTextResult)({
             text: observation.text,
           }).pipe(
             Effect.mapError((cause) =>
@@ -1748,7 +1745,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
         }),
       ),
     screenshot: (request) =>
-      Schema.decodeUnknownEffect(BrowserScreenshotRequest)(request).pipe(
+      Schema.decodeEffect(BrowserScreenshotRequest)(request).pipe(
         Effect.mapError(() => policyError("The browser screenshot request is malformed")),
         Effect.flatMap((decoded) =>
           run(
@@ -1771,7 +1768,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
                 });
               }
 
-              return yield* Schema.decodeUnknownEffect(PageScreenshotResult)({
+              return yield* Schema.decodeEffect(PageScreenshotResult)({
                 implementation: browserRunInteractiveImplementation,
                 mediaType: "image/png",
                 bytes: new Uint8Array(bytes),
@@ -1786,7 +1783,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
         ),
       ),
     scroll: (request) =>
-      Schema.decodeUnknownEffect(BrowserScrollRequest)(request).pipe(
+      Schema.decodeEffect(BrowserScrollRequest)(request).pipe(
         Effect.mapError(() => policyError("The browser scroll request is malformed")),
         Effect.flatMap((decoded) =>
           run(
@@ -2209,7 +2206,7 @@ const makeHostService = (
           ),
         ),
       getLiveView: (request) =>
-        Schema.decodeUnknownEffect(BrowserRunLiveViewRequest)(request).pipe(
+        Schema.decodeEffect(BrowserRunLiveViewRequest)(request).pipe(
           Effect.mapError(() => policyError("The Live View request is malformed")),
           Effect.flatMap((decoded) =>
             runtime.run(
@@ -2222,7 +2219,7 @@ const makeHostService = (
                 "Cloudflare returned a malformed Live View response",
               ).pipe(
                 Effect.flatMap((observation) =>
-                  Schema.decodeUnknownEffect(BrowserRunLiveViewResult)({
+                  Schema.decodeEffect(BrowserRunLiveViewResult)({
                     devtoolsFrontendUrl: Redacted.make(observation.devtoolsFrontendUrl),
                   }).pipe(
                     Effect.mapError(() =>
@@ -2236,7 +2233,7 @@ const makeHostService = (
           ),
         ),
       handoff: (request) =>
-        Schema.decodeUnknownEffect(BrowserRunHandoffRequest)(request).pipe(
+        Schema.decodeEffect(BrowserRunHandoffRequest)(request).pipe(
           Effect.mapError(() => policyError("The browser handoff request is malformed")),
           Effect.flatMap((decoded) =>
             runtime.run(
@@ -2249,7 +2246,7 @@ const makeHostService = (
                 "Cloudflare returned a malformed browser handoff response",
               ).pipe(
                 Effect.flatMap((observation) =>
-                  Schema.decodeUnknownEffect(BrowserRunHandoffResult)({
+                  Schema.decodeEffect(BrowserRunHandoffResult)({
                     handoffId: Redacted.make(observation.handoffId),
                   }).pipe(
                     Effect.mapError(() =>
@@ -2272,7 +2269,7 @@ const makeHostService = (
           "Cloudflare returned a malformed browser handoff state",
         ).pipe(
           Effect.flatMap((observation) =>
-            Schema.decodeUnknownEffect(BrowserRunHandoffState)({
+            Schema.decodeEffect(BrowserRunHandoffState)({
               active: observation.active,
               ...(observation.handoffId === undefined
                 ? {}

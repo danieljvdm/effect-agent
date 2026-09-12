@@ -65,8 +65,7 @@ export const sessionsMapping: StatefulSessionMapping<
   subjectId,
   sessionId: {
     toNative: (id) => Effect.succeed(id),
-    toSession: (id) =>
-      Schema.decodeUnknownEffect(SessionId)(id).pipe(Effect.mapError(mappingError)),
+    toSession: (id) => Schema.decodeEffect(SessionId)(id).pipe(Effect.mapError(mappingError)),
     equals: (a, b) => a === b,
   },
   constraints: requiredSessionConstraints,

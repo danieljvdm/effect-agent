@@ -744,6 +744,7 @@ describe("direct message delivery", () => {
       "Retry",
       "Park",
       "Recover",
+      "Defer",
     ] as const) {
       it.effect(`${tag} ${phase} failpoint leaves an atomic, recoverable mutation`, () => {
         let selected = "";
@@ -809,7 +810,9 @@ describe("direct message delivery", () => {
                         ? { _tag: tag, ...fence, reason: "deadline" }
                         : tag === "Recover"
                           ? { _tag: tag, ...fence, deadlineAtMillis: 2_000 }
-                          : { _tag: "Claim", ...fence };
+                          : tag === "Defer"
+                            ? { _tag: tag, ...fence, untilMillis: 100 }
+                            : { _tag: "Claim", ...fence };
 
           expect(
             yield* (

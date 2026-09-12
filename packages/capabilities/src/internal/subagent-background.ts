@@ -168,7 +168,7 @@ const operations = <
     receipt: Receipt,
     operation: WorkerError["operation"],
   ) =>
-    Schema.decodeUnknownEffect(
+    Schema.decodeEffect(
       Receipt.check(Schema.makeFilter((value) => value.threadId === worker.threadId)),
     )(receipt).pipe(
       Effect.mapError(() => WorkerError.make({ operation, reason: "receipt-mismatch" })),
@@ -218,7 +218,7 @@ const operations = <
   });
 
   const validateKey = (key: IdempotencyKey, operation: "start" | "followUp") =>
-    Schema.decodeUnknownEffect(IdempotencyKey)(key).pipe(
+    Schema.decodeEffect(IdempotencyKey)(key).pipe(
       Effect.mapError(() => WorkerError.make({ operation, reason: "idempotency-conflict" })),
     );
 
@@ -295,7 +295,7 @@ const operations = <
       ),
     });
 
-    const validated = yield* Schema.decodeUnknownEffect(WorkerStarted)(started).pipe(
+    const validated = yield* Schema.decodeEffect(WorkerStarted)(started).pipe(
       Effect.mapError(() => WorkerError.make({ operation: "start", reason: "corrupt" })),
     );
 
@@ -364,11 +364,11 @@ const operations = <
       ...(observed.runId === undefined
         ? {}
         : {
-            runId: yield* Schema.decodeUnknownEffect(RunId)(observed.runId).pipe(
+            runId: yield* Schema.decodeEffect(RunId)(observed.runId).pipe(
               Effect.mapError(() => WorkerError.make({ operation, reason: "corrupt" })),
             ),
           }),
-      settlementId: yield* Schema.decodeUnknownEffect(SettlementId)(observed.settlementId).pipe(
+      settlementId: yield* Schema.decodeEffect(SettlementId)(observed.settlementId).pipe(
         Effect.mapError(() => WorkerError.make({ operation, reason: "corrupt" })),
       ),
     };
@@ -439,7 +439,7 @@ const operations = <
   ) {
     const service = yield* host;
 
-    const limit = yield* Schema.decodeUnknownEffect(
+    const limit = yield* Schema.decodeEffect(
       Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100)),
     )(options.limit ?? 20).pipe(
       Effect.mapError(() => WorkerError.make({ operation: "list", reason: "capacity" })),
@@ -452,7 +452,7 @@ const operations = <
       ...(options.after === undefined ? {} : { after: options.after }),
     });
 
-    const validated = yield* Schema.decodeUnknownEffect(WorkerPage)(page).pipe(
+    const validated = yield* Schema.decodeEffect(WorkerPage)(page).pipe(
       Effect.mapError(() => WorkerError.make({ operation: "list", reason: "corrupt" })),
     );
 
@@ -526,13 +526,13 @@ export const summary = <const Name extends string>(
   Effect.gen(function* () {
     const service = yield* host;
 
-    const validated = yield* Schema.decodeUnknownEffect(Worker(declaration))(worker).pipe(
+    const validated = yield* Schema.decodeEffect(Worker(declaration))(worker).pipe(
       Effect.mapError(() => WorkerError.make({ operation: "inspect", reason: "worker-mismatch" })),
     );
 
     const result = yield* service.summary({ worker: validated, target: declaration.target });
 
-    const value = yield* Schema.decodeUnknownEffect(WorkerSummary)(result).pipe(
+    const value = yield* Schema.decodeEffect(WorkerSummary)(result).pipe(
       Effect.mapError(() => WorkerError.make({ operation: "inspect", reason: "corrupt" })),
     );
 
@@ -610,7 +610,7 @@ export const observe = <const Name extends string>(
     Effect.gen(function* () {
       const service = yield* host;
 
-      const validated = yield* Schema.decodeUnknownEffect(Worker(declaration))(worker).pipe(
+      const validated = yield* Schema.decodeEffect(Worker(declaration))(worker).pipe(
         Effect.mapError(() =>
           WorkerError.make({ operation: "observe", reason: "worker-mismatch" }),
         ),
@@ -619,7 +619,7 @@ export const observe = <const Name extends string>(
       const after =
         options.after === undefined
           ? undefined
-          : yield* Schema.decodeUnknownEffect(Schema.Natural)(options.after).pipe(
+          : yield* Schema.decodeEffect(Schema.Natural)(options.after).pipe(
               Effect.mapError(() => WorkerError.make({ operation: "observe", reason: "corrupt" })),
             );
 
@@ -828,7 +828,10 @@ type BackgroundToolMap<
   >;
 };
 
-/** Native Tool names and schemas contain precisely the explicitly selected operations. */
+/**
+ * Native Tool names and schemas expose statically guaranteed selections. The handler Layer also
+ * requires services for operations whose conditional flags may enable them at runtime.
+ */
 export type BackgroundTools<
   Name extends string,
   Parameters extends Schema.Top,
@@ -865,9 +868,9 @@ const modelKey = Effect.fn("Subagent.workerToolKey")(function* (operation: "star
     .digest("SHA-256", bytes)
     .pipe(Effect.mapError(() => WorkerError.make({ operation, reason: "unavailable" })));
 
-  return yield* Schema.decodeUnknownEffect(IdempotencyKey)(
-    `worker:${Encoding.encodeHex(digest)}`,
-  ).pipe(Effect.mapError(() => WorkerError.make({ operation, reason: "unavailable" })));
+  return yield* Schema.decodeEffect(IdempotencyKey)(`worker:${Encoding.encodeHex(digest)}`).pipe(
+    Effect.mapError(() => WorkerError.make({ operation, reason: "unavailable" })),
+  );
 });
 
 // Construction-local service keys distinguish projections for co-registered parent versions.
@@ -1003,12 +1006,13 @@ export const background = <
     | Parameters["DecodingServices"]
     | Output["DecodingServices"]
     | Success["EncodingServices"];
-  type ReportServices = Selected["reportToParent"] extends true
+  type ReportServices<Report> = Report extends true
     ? Exclude<ProjectServices, Scope.Scope>
-    : Selected["reportToParent"] extends WorkerReporting<infer _E, infer R>
+    : Report extends WorkerReporting<infer _E, infer R>
       ? Exclude<R, Scope.Scope>
       : never;
   type Services = PrepareServices | ProjectServices;
+  type SelectionServices<Flag, Requirements> = Flag extends true ? Requirements : never;
 
   const build = Effect.gen(function* () {
     const captured = yield* Effect.context<Services>();
@@ -1063,10 +1067,10 @@ export const background = <
   });
 
   type SelectedServices =
-    | (Selected["start"] extends true ? PrepareServices : never)
-    | (Selected["followUp"] extends true ? PrepareServices : never)
-    | (Selected["inspect"] extends true ? ProjectServices : never)
-    | ReportServices;
+    | SelectionServices<Selected["start"], PrepareServices>
+    | SelectionServices<Selected["followUp"], PrepareServices>
+    | SelectionServices<Selected["inspect"], ProjectServices>
+    | ReportServices<Selected["reportToParent"]>;
 
   // Unselected handlers are never installed. Only selected operations consume projection services.
   const reportingLayer =

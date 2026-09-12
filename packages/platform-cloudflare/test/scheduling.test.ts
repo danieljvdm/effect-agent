@@ -104,11 +104,11 @@ const snapshotFor = (data: ReturnType<typeof fixture>) =>
 
 const runAlarmDirectExit = (owner: ScheduleOwner) =>
   runInDurableObject(scheduleStubFor(owner), (instance) =>
-    Effect.runPromise(
+    Effect.runPromiseExit(
       Effect.tryPromise({
         try: () => Promise.resolve(instance.alarm()),
         catch: () => "alarm-failed" as const,
-      }).pipe(Effect.exit),
+      }),
     ),
   );
 

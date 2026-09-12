@@ -39,7 +39,7 @@ it.live("preserves immutable dispatch identities with application SQL result tra
     expect(yield* store.scan(scan)).toEqual([intent]);
     expect(yield* sql`SELECT 1 AS application_value`).toEqual([{ applicationValue: 1 }]);
 
-    const divergent = yield* Schema.decodeUnknownEffect(WorkflowDispatchIntent)({
+    const divergent = yield* Schema.decodeEffect(WorkflowDispatchIntent)({
       ...intent,
       receipt: { ...intent.receipt, queueSequence: 2 },
     });

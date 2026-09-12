@@ -135,11 +135,11 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
 
   const matches: EventSource["matches"] = (event, subscription) =>
     Effect.gen(function* () {
-      const e = yield* Schema.decodeUnknownEffect(options.event)(event.payload).pipe(
+      const e = yield* Schema.decodeEffect(options.event)(event.payload).pipe(
         Effect.mapError(invalid),
       );
 
-      const p = yield* Schema.decodeUnknownEffect(options.parameters)(
+      const p = yield* Schema.decodeEffect(options.parameters)(
         subscription.configuration.parameters,
       ).pipe(Effect.mapError(invalid));
 
@@ -159,7 +159,7 @@ export const makeEventSource = Effect.fn("Thread.makeEventSource")(function* <
       : {
           reconcile: (subscription: SubscriptionRecord) =>
             Effect.gen(function* () {
-              const p = yield* Schema.decodeUnknownEffect(options.parameters)(
+              const p = yield* Schema.decodeEffect(options.parameters)(
                 subscription.configuration.parameters,
               ).pipe(Effect.mapError(invalid));
 

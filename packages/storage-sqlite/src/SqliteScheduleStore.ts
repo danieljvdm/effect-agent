@@ -324,7 +324,7 @@ const makeScheduleStore = Effect.gen(function* () {
     const cursor =
       after === undefined
         ? undefined
-        : yield* Schema.decodeUnknownEffect(ScheduleDueCursor)(after).pipe(
+        : yield* Schema.decodeEffect(ScheduleDueCursor)(after).pipe(
             Effect.mapError(() => corrupt(operation)),
           );
 

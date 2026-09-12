@@ -81,9 +81,9 @@ export const startVoiceAtom = PlannerClient.runtime
       const stored =
         persisted === null
           ? { requests: [] }
-          : yield* Schema.decodeUnknownEffect(Schema.fromJsonString(StoredRequests))(
-              persisted,
-            ).pipe(Effect.mapError(unavailable));
+          : yield* Schema.decodeEffect(Schema.fromJsonString(StoredRequests))(persisted).pipe(
+              Effect.mapError(unavailable),
+            );
 
       const existing = get(spokenConversationAtom);
       const before = get(messagesAtom);

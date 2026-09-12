@@ -247,8 +247,16 @@ fails if that replacement is unavailable. Dependency versions live in the root c
 CI suppresses lifecycle scripts, then explicitly patches the compiler in jobs that check, test,
 or build TypeScript. Read installed Effect sources in `node_modules/effect`.
 
-`preferTypedSchemaDecoder` is disabled in `tsconfig.base.json` because `@effect/tsgo@0.33.0`
-panics in that rule while checking thread. Re-enable it after the upstream fix.
+`preferTypedSchemaDecoder` is enabled as a warning in `tsconfig.base.json` and fails
+typechecks when an unknown-input decoder discards a known encoded type. Use the typed
+decoder when the input matches the Schema's `Encoded` type; keep unknown-input decoders
+at untyped boundaries. Both forms perform the same runtime validation.
+
+The config also enforces direct Effect combinators for selective error recovery,
+collection traversal, conditional validation, Option conversion, single-service provision,
+timeout recovery, and Exit runners. Prefer these built-in operations when they preserve
+the existing error channels, concurrency, interruption, and resource lifetime. Other style
+suggestions remain advisory; synchronous Schema codecs are not prohibited globally.
 
 To upgrade Effect:
 

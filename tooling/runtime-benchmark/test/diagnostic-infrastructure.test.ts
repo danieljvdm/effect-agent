@@ -55,9 +55,9 @@ it("runs every case, alternates case order, and rejects incomplete result matric
         Effect.provideService(DiagnosticRunner, { run: () => passed }),
       );
 
-      const report = yield* Schema.decodeUnknownEffect(
-        Schema.fromJsonString(DiagnosticWorkerReport),
-      )(yield* fs.readFileString(options.output));
+      const report = yield* Schema.decodeEffect(Schema.fromJsonString(DiagnosticWorkerReport))(
+        yield* fs.readFileString(options.output),
+      );
 
       expect(DIAGNOSTIC_SIZES).toEqual({ cohorts: 2, warmups: 2, samples: 5 });
       expect(completeDiagnosticBatch(report, options, diagnosticCases)).toBe(true);
@@ -150,9 +150,9 @@ it.each(["failure", "defect", "timeout"] as const)(
         if (kind === "timeout") yield* TestClock.adjust(options.timeoutMs);
         const result = yield* Fiber.await(fiber);
 
-        const report = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(DiagnosticWorkerReport),
-        )(yield* fs.readFileString(options.output));
+        const report = yield* Schema.decodeEffect(Schema.fromJsonString(DiagnosticWorkerReport))(
+          yield* fs.readFileString(options.output),
+        );
 
         expect(Exit.isFailure(result)).toBe(true);
         expect(closed).toBe(true);
@@ -220,9 +220,9 @@ it("retains interrupted sample evidence and closes resources", async () => {
       yield* Deferred.await(entered);
       yield* Fiber.interrupt(fiber);
 
-      const report = yield* Schema.decodeUnknownEffect(
-        Schema.fromJsonString(DiagnosticWorkerReport),
-      )(yield* fs.readFileString(options.output));
+      const report = yield* Schema.decodeEffect(Schema.fromJsonString(DiagnosticWorkerReport))(
+        yield* fs.readFileString(options.output),
+      );
 
       expect(closed).toBe(true);
       expect(report.failure).not.toBeNull();
@@ -263,9 +263,9 @@ it("bounds phase marks and preserves the accepted prefix", async () => {
         Effect.exit,
       );
 
-      const report = yield* Schema.decodeUnknownEffect(
-        Schema.fromJsonString(DiagnosticWorkerReport),
-      )(yield* fs.readFileString(options.output));
+      const report = yield* Schema.decodeEffect(Schema.fromJsonString(DiagnosticWorkerReport))(
+        yield* fs.readFileString(options.output),
+      );
 
       expect(report.samples[0]?.status).toBe("failed");
       expect(report.samples[0]?.marks).toHaveLength(MAX_DIAGNOSTIC_MARKS);
@@ -291,9 +291,7 @@ it("retains controller setup failure and refuses to overwrite the evidence", asy
       yield* compareDiagnostics(options).pipe(Effect.exit);
       const text = yield* fs.readFileString(`${options.output}/report.json`);
 
-      const report = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(DiagnosticReport))(
-        text,
-      );
+      const report = yield* Schema.decodeEffect(Schema.fromJsonString(DiagnosticReport))(text);
 
       expect(report.phase).toBe("setup");
       expect(report.failure).toContain("require clean");

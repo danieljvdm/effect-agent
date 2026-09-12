@@ -939,8 +939,9 @@ describe("SQLite memory store", () => {
             return yield* writer.change(command);
           }).pipe(Effect.provide(storeLayer(filename)), Effect.result);
 
-        const outcomes = yield* Effect.all(
-          [put("race-a", "1", "edit a"), put("race-b", "1", "edit b")].map(edit),
+        const outcomes = yield* Effect.forEach(
+          [put("race-a", "1", "edit a"), put("race-b", "1", "edit b")],
+          edit,
           { concurrency: "unbounded" },
         );
 

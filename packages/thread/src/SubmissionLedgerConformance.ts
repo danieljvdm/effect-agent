@@ -245,7 +245,7 @@ const settlementReservation = Effect.fn("SubmissionLedgerConformance.settlementR
   function* (options: ReservationOptions) {
     const settlementId = submissionSettlementId(options.submissionId);
 
-    const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+    const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)(
       SubmissionSettled.make({
         submissionId: options.submissionId,
         settlementId,
@@ -344,14 +344,12 @@ const conformanceCase = (
         ),
       ),
     expectSome: (description, option) =>
-      Option.isSome(option)
-        ? Effect.succeed(option.value)
-        : Effect.fail(
-            SubmissionLedgerConformanceViolation.make({
-              caseName: name,
-              message: `Expected a value but found none: ${description}`,
-            }),
-          ),
+      Effect.fromOption(option, () =>
+        SubmissionLedgerConformanceViolation.make({
+          caseName: name,
+          message: `Expected a value but found none: ${description}`,
+        }),
+      ),
   }).pipe(Effect.withSpan(`SubmissionLedgerConformance.${name}`)),
 });
 
@@ -778,7 +776,7 @@ const messageAdmissionIdentity = conformanceCase(
         { text: "hello" },
       );
 
-      const metadata = Schema.decodeUnknownSync(MessageAdmission)({
+      const metadata = Schema.decodeSync(MessageAdmission)({
         schemaVersion: 1,
         message: { ownerThreadId: "peer-source", messageId: "peer-message" },
         peerName: "reviewer",
@@ -851,7 +849,7 @@ const workerUpdateIdentity = conformanceCase(
         { text: "original application input" },
       );
 
-      const metadata = Schema.decodeUnknownSync(WorkerUpdate)({
+      const metadata = Schema.decodeSync(WorkerUpdate)({
         _tag: "WorkerUpdate",
         schemaVersion: 1,
         worker: {
@@ -943,7 +941,7 @@ const workerCompletionIdentity = conformanceCase(
         { text: "hello" },
       );
 
-      const metadata = Schema.decodeUnknownSync(WorkerCompletion)({
+      const metadata = Schema.decodeSync(WorkerCompletion)({
         _tag: "WorkerCompletion",
         schemaVersion: 1,
         budgetExhausted: false,
@@ -1176,10 +1174,9 @@ const concurrentAdmissionFifo = conformanceCase(
         yield* admissionRequest(threadId, "fifo-key-2", { step: 2 }),
       ];
 
-      const admitted = yield* Effect.all(
-        requests.map((request) => ledger.admit(request)),
-        { concurrency: "unbounded" },
-      );
+      const admitted = yield* Effect.forEach(requests, (request) => ledger.admit(request), {
+        concurrency: "unbounded",
+      });
 
       const duplicate = yield* admissionRequest(threadId, "fifo-key-dup", { step: 3 });
 

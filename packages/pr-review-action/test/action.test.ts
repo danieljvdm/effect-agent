@@ -737,7 +737,7 @@ describe("Incremental review scope", () => {
           } else if (url.pathname === "/graphql") {
             if (request.body._tag !== "Uint8Array") throw new Error("Expected GraphQL JSON");
 
-            const query = Schema.decodeUnknownSync(
+            const query = Schema.decodeSync(
               Schema.fromJsonString(
                 Schema.Struct({
                   variables: Schema.Struct({ revision: Schema.String, path: Schema.String }),

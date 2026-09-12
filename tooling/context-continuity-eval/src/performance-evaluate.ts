@@ -33,7 +33,7 @@ const AuditedRequest = Schema.Struct({
 });
 
 const requestParts = (json: string) => {
-  const request = Schema.decodeUnknownOption(Schema.fromJsonString(AuditedRequest))(json);
+  const request = Schema.decodeOption(Schema.fromJsonString(AuditedRequest))(json);
 
   return request._tag === "Some" ? request.value.input : [];
 };
@@ -237,7 +237,7 @@ export const gradePerformancePhase = Effect.fn("Performance.grade")(function* (
     const preserved =
       previousOutput?._tag === "Some" &&
       initialAssistantOutputs.some((text) => {
-        const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(PerformanceOutput))(text);
+        const decoded = Schema.decodeOption(Schema.fromJsonString(PerformanceOutput))(text);
 
         return (
           decoded._tag === "Some" &&
@@ -260,7 +260,7 @@ export const gradePerformancePhase = Effect.fn("Performance.grade")(function* (
     return (
       outputs.some(
         (output) =>
-          Schema.decodeUnknownOption(
+          Schema.decodeOption(
             Schema.fromJsonString(
               Schema.Struct({
                 unitPriceCents: Schema.Literal(3_700),
@@ -271,7 +271,7 @@ export const gradePerformancePhase = Effect.fn("Performance.grade")(function* (
       ) &&
       outputs.some(
         (output) =>
-          Schema.decodeUnknownOption(
+          Schema.decodeOption(
             Schema.fromJsonString(
               Schema.Struct({
                 availableUnits: Schema.Literal(12),
