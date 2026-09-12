@@ -109,9 +109,11 @@ the ordinary test command.
 
 Vite Task caches successful results against their inputs. Vitest's mutable result cache is
 disabled so it does not invalidate task caching. CI transfers `node_modules/.vite/task-cache`.
-Direct Vitest tasks and the Node platform and travel-planner test tasks exclude generated Vite files
-and dependency directory listings, but track imported dependency files and the lockfile. Failed tasks are never
-cached. Vite Task fingerprints whole files, including package manifests: a version-only change
+Direct Vitest tasks, Node platform and Cloudflare-memory tests, and travel-planner tests and builds
+exclude generated Vite files and dependency directory listings, but track imported dependency files
+and the lockfile. Wrangler dry-run builds exclude their temporary `.wrangler` bundles; the Action
+build excludes its generated bundle from inputs and restores `action/dist/index.mjs` on a cache hit.
+Failed tasks are never cached. Vite Task fingerprints whole files, including package manifests: a version-only change
 can invalidate tests even when their source is unchanged. Keep manifests tracked because exports,
 module type, and dependency declarations also affect execution.
 

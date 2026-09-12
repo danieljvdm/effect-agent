@@ -4,11 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "wrangler deploy --dry-run",
     "check": "tsc --noEmit -p tsconfig.json",
     "measure": "node --experimental-transform-types src/measure-main.ts",
-    "measure:heap": "node --experimental-transform-types src/heap-main.ts",
-    "test": "vp test --passWithNoTests"
+    "measure:heap": "node --experimental-transform-types src/heap-main.ts"
   },
   "dependencies": {
     "@effect-agent/capabilities": "workspace:*",

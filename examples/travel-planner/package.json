@@ -4,7 +4,6 @@
   "type": "module",
   "scripts": {
     "dev": "vp exec alchemy dev alchemy.run.ts",
-    "build": "vp build",
     "deploy": "vp exec alchemy deploy alchemy.run.ts --stage production"
   },
   "dependencies": {

@@ -23,6 +23,16 @@ export default defineConfig({
   test: { cache: false, silent: "passed-only" },
   run: {
     tasks: {
+      build: {
+        command: "vp build",
+        input: [
+          { auto: true },
+          { pattern: "bun.lock", base: "workspace" },
+          { pattern: "!**/node_modules", base: "workspace" },
+          { pattern: "!**/node_modules/.vite*", base: "workspace" },
+          { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
+        ],
+      },
       test: {
         command: "vp test",
         // Fresh runners do not have Vite's generated directories. Keep
