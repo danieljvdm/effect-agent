@@ -285,6 +285,7 @@ import {
 } from "../RunEventSink.ts";
 import {
   CurrentToolFailureObserver,
+  AgentUpdateAcceptance,
   ModelUsageAccounting,
   type ModelToolFailure,
   type ProgrammaticToolFailure,
@@ -502,6 +503,7 @@ type InterpreterRequirements<
   | IdGenerator
   | ThreadHistory
   | ContextCompactor
+  | AgentUpdateAcceptance
   | ModelUsageAccounting
   | ProgrammaticToolAuthorization
   | HookRequirements
@@ -2327,6 +2329,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
   | AiError.AiError
   | Tool.HandlerError<ToolUnion<Tools>>,
   | HookRequirements
+  | AgentUpdateAcceptance
   | ToolSpanTelemetry
   | ProgrammaticToolAuthorization
   | Tool.HandlerServices<ToolUnion<Tools>>
@@ -2625,9 +2628,8 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
               ),
       };
 
-      const updateServices = yield* Effect.context<HookRequirements>();
+      const updateAcceptance = yield* AgentUpdateAcceptance;
       let updatesOpen = true;
-      let updateHookFailure: Option.Option<HookError> = Option.none();
 
       const updateEmitter: Emitter["Service"] = {
         emit: (request) =>
@@ -2672,26 +2674,17 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
               )
                 return yield* new UpdateError({ reason: "capacity" });
 
-              const accepted =
-                options.emitUpdate === undefined
-                  ? Update.make({
-                      schemaVersion: 1,
-                      agentId: context.agentId,
-                      threadId: context.threadId,
-                      runId: context.runId,
-                      updateId: request.updateId,
-                      sequence: context.updates.size + 1,
-                      value: value,
-                    })
-                  : yield* options.emitUpdate({ updateId: request.updateId, value: value }).pipe(
-                      Effect.provide(updateServices),
-                      Effect.catch((error) => {
-                        if (Schema.is(UpdateError)(error)) return Effect.fail(error);
-                        updateHookFailure = Option.some(error as HookError);
-
-                        return Effect.fail(new UpdateError({ reason: "storage" }));
-                      }),
-                    );
+              const accepted = yield* updateAcceptance.accept(
+                Update.make({
+                  schemaVersion: 1,
+                  agentId: context.agentId,
+                  threadId: context.threadId,
+                  runId: context.runId,
+                  updateId,
+                  sequence: context.updates.size + 1,
+                  value,
+                }),
+              );
 
               const validated = yield* Schema.decodeUnknownEffect(Update)(accepted).pipe(
                 Effect.mapError(() => new UpdateError({ reason: "validation" })),
@@ -2767,7 +2760,6 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                 | AiError.AiError
                 | Tool.HandlerError<ToolUnion<Tools>>
               > => {
-                if (Option.isSome(updateHookFailure)) return Effect.fail(updateHookFailure.value);
                 if (settledCause !== undefined) {
                   // A real sibling failure keeps the existing batch failure
                   // policy even when another call is waiting: the Run fails
@@ -7482,7 +7474,10 @@ function streamWithCompletion<
 ): Stream.Stream<
   RunEvent,
   AgentRuntimeFailure<A, H> | CompletionError,
-  AgentRuntimeRequirements<A, R> | CompletionRequirements | ModelUsageAccounting
+  | AgentRuntimeRequirements<A, R>
+  | CompletionRequirements
+  | ModelUsageAccounting
+  | AgentUpdateAcceptance
 >;
 function streamWithCompletion<
   InputSchema extends Schema.Top,
@@ -7564,6 +7559,7 @@ function streamWithCompletion<
         | CompletionRequirements
         | ModelRequires
         | ModelUsageAccounting
+        | AgentUpdateAcceptance
       >,
       ThreadHistoryError,
       ThreadHistory | IdGenerator
@@ -8155,6 +8151,7 @@ function streamWithCompletion<
         | ProgrammaticToolAuthorization
         | ModelRequires
         | ModelUsageAccounting
+        | AgentUpdateAcceptance
       > = model === undefined ? finalized : finalized.pipe(Stream.provide(model, { local: true }));
 
       const events = modeled.pipe(
@@ -8445,13 +8442,15 @@ const streamUnknown = <A extends ExecutableAgent, H = never, R = never>(
   options?: RunOptions<H, R>,
 ): Stream.Stream<RunEvent, AgentRuntimeFailure<A, H>, AgentRuntimeRequirements<A, R>> =>
   streamWithCompletion(agent, input, options).pipe(
-    Stream.provide(ModelUsageAccounting.layerEphemeral),
+    Stream.provide(
+      Layer.mergeAll(ModelUsageAccounting.layerEphemeral, AgentUpdateAcceptance.layerEphemeral),
+    ),
   );
 
 /**
- * Host interpreter entry point with explicit Attempt-local usage accounting in R.
- * Durable coordinators provide this service alongside their recovery hooks;
- * ordinary callers use streamUnknown's ephemeral accounting composition.
+ * Host interpreter entry point with Attempt-local usage accounting and update acceptance in R.
+ * Durable coordinators provide these services alongside their recovery hooks;
+ * ordinary callers use streamUnknown's explicit ephemeral composition.
  */
 const streamWithUsageAccountingUnknown = <A extends ExecutableAgent, H = never, R = never>(
   agent: A,
@@ -8460,7 +8459,7 @@ const streamWithUsageAccountingUnknown = <A extends ExecutableAgent, H = never, 
 ): Stream.Stream<
   RunEvent,
   AgentRuntimeFailure<A, H>,
-  AgentRuntimeRequirements<A, R> | ModelUsageAccounting
+  AgentRuntimeRequirements<A, R> | ModelUsageAccounting | AgentUpdateAcceptance
 > => streamWithCompletion(agent, input, options);
 
 /** Accept schema-encoded input, retaining runtime validation. Use streamUnknown for external data. */
@@ -8490,7 +8489,9 @@ function runUnknown<H = never, R = never>(
 
   return runProgram(program, (onCompleted) =>
     streamWithCompletion(agent, input, options, onCompleted).pipe(
-      Stream.provide(ModelUsageAccounting.layerEphemeral),
+      Stream.provide(
+        Layer.mergeAll(ModelUsageAccounting.layerEphemeral, AgentUpdateAcceptance.layerEphemeral),
+      ),
     ),
   );
 }
@@ -8527,7 +8528,9 @@ function startUnknown<H = never, R = never>(
     program,
     (executionOptions, onCompleted, onUsage) =>
       streamWithCompletion(agent, input, executionOptions, onCompleted, onUsage).pipe(
-        Stream.provide(ModelUsageAccounting.layerEphemeral),
+        Stream.provide(
+          Layer.mergeAll(ModelUsageAccounting.layerEphemeral, AgentUpdateAcceptance.layerEphemeral),
+        ),
       ),
     options,
   );

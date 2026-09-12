@@ -486,6 +486,65 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 };
 
 layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknown)", (it) => {
+  for (const location of [
+    "update:before-canonical-append",
+    "update:after-canonical-append",
+  ] as const) {
+    it.effect(`preserves the infrastructure halt after ${location} without settling the Run`, () =>
+      Effect.gen(function* () {
+        yield* clearFailpoint;
+        const runtime = yield* DurableAgentRuntime;
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? toolTurn(toolCall("finding", "emit_update", { value: { finding: "area concern" } }))
+            : finalParts('"done"'),
+        );
+
+        const agent = Agent.withModel(
+          Agent.make("durable-updates", {
+            input: Schema.String,
+            output: Schema.String,
+            updates: Schema.Struct({ finding: Schema.String }),
+            instructions: "Report intermediate findings, then finish.",
+            toolkit: Toolkit.empty,
+            policy,
+          }),
+          scripted.model,
+        );
+
+        const thread = `thread-${location}`;
+        const receipt = yield* runtime.submit(agent, "go", submitOptions(thread, location));
+
+        yield* armFailpoint(location);
+
+        const result = yield* runtime
+          .processThread(agent, decodeThreadId(thread))
+          .pipe(Effect.result, Effect.ensuring(clearFailpoint));
+
+        expect(result).toMatchObject({
+          _tag: "Failure",
+          failure: { _tag: "DurableRuntimeFailpointError", location },
+        });
+        expect(scripted.prompts).toHaveLength(1);
+        const records = yield* readLog(thread);
+        const tags = logTags(records);
+
+        expect(tags).not.toContain("ToolCallSettled");
+        expect(tags).not.toContain("RunCompleted");
+        expect(tags).not.toContain("SubmissionSettled");
+        expect(yield* lookupState(receipt.submissionId)).not.toBe("settled");
+        expect(
+          records.flatMap(({ record }) =>
+            record.payload._tag === "AgentUpdateEmitted" ? [record.payload.update.value] : [],
+          ),
+        ).toEqual(
+          location === "update:before-canonical-append" ? [] : [{ finding: "area concern" }],
+        );
+      }),
+    );
+  }
+
   for (const location of ["turn:after-response-append", "turn:after-results-append"] as const) {
     it.effect(`does not inherit a prior Turn's reused call ID after ${location}`, () =>
       Effect.gen(function* () {

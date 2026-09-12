@@ -13,7 +13,6 @@ import {
   type TurnId,
 } from "@effect-agent/core/Identifiers";
 import { type MemoryRecallError } from "@effect-agent/core/MemoryReference";
-import type { IdempotencyKey } from "@effect-agent/core/Receipt";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
 import {
   type SubagentBudgetReservation,
@@ -536,6 +535,21 @@ export class ModelUsageAccounting extends Context.Service<
 }
 
 /**
+ * Accepts an interpreter-validated update before semantic publication. Durable hosts bind this
+ * port to the emitting Attempt and return its canonical identity and sequence. Infrastructure
+ * failures must also halt that Attempt before any subsequent event is committed.
+ * Ephemeral entry points explicitly accept only into their Run-local event stream.
+ */
+export class AgentUpdateAcceptance extends Context.Service<
+  AgentUpdateAcceptance,
+  { readonly accept: (update: Update) => Effect.Effect<Update, UpdateError> }
+>()("@effect-agent/engine/AgentUpdateAcceptance") {
+  static readonly layerEphemeral = Layer.succeed(AgentUpdateAcceptance, {
+    accept: (update) => Effect.succeed(update),
+  });
+}
+
+/**
  * Dependency-neutral durability seam implemented by a durable coordinator.
  *
  * Invocation ordering inside one Tool-declaring Turn is normative:
@@ -897,11 +911,6 @@ export interface RunBufferLimits {
  * through the generic parameters.
  */
 export interface RunOptions<HookError = never, HookRequirements = never> {
-  /** Acknowledges durable update acceptance before semantic publication. */
-  readonly emitUpdate?: (request: {
-    readonly updateId: IdempotencyKey;
-    readonly value: Schema.Json;
-  }) => Effect.Effect<Update, UpdateError | HookError, HookRequirements>;
   /** Finite per-Run limits: accepted update count and cumulative UTF-8 JSON value bytes. Defaults: 32 and 16384. */
   readonly updates?: { readonly maxCount?: number; readonly maxBytes?: number };
 

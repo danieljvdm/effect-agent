@@ -83,7 +83,7 @@ const proofs: [
 
 const wrongValue = () => {
   // @ts-expect-error The update has its own schema, independent of final output.
-  AgentUpdates.emit(researcher, "final answer", {
+  return AgentUpdates.emit(researcher, "final answer", {
     idempotencyKey: Schema.decodeSync(IdempotencyKey)("wrong"),
   });
 };

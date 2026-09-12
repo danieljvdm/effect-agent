@@ -7,6 +7,7 @@ import { Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effec
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import * as AgentRuntime from "../src/AgentRuntime.ts";
+import { AgentUpdateAcceptance, ModelUsageAccounting } from "../src/RunOptions.ts";
 import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 const usage = { inputTokens: {}, outputTokens: {} };
@@ -86,38 +87,56 @@ layer(base)("Agent updates", (it) => {
 
   it.effect("publishes only acknowledged durable updates", () =>
     Effect.gen(function* () {
-      const events = yield* AgentRuntime.stream(
+      const events = yield* AgentRuntime.streamWithUsageAccountingUnknown(
         Agent.withModel(definition, model("emit_update", { value: { candidateCount: "2" } })),
         "go",
-        { emitUpdate: () => Effect.fail(new AgentUpdates.UpdateError({ reason: "storage" })) },
-      ).pipe(Stream.runCollect);
+      ).pipe(
+        Stream.runCollect,
+        Effect.provide(ModelUsageAccounting.layerEphemeral),
+        Effect.provideService(AgentUpdateAcceptance, {
+          accept: () => Effect.fail(new AgentUpdates.UpdateError({ reason: "storage" })),
+        }),
+      );
 
       expect(events.some((event) => event._tag === "AgentUpdateEmitted")).toBe(false);
       expect(events.at(-1)?._tag).toBe("RunCompleted");
     }),
   );
 
-  it.effect("propagates coordinator hook failures outside the native Tool failure return", () =>
+  it.effect("waits for host acceptance and publishes the canonical sequence", () =>
     Effect.gen(function* () {
-      class Halt extends Schema.TaggedError<Halt>()("UpdateHalt", {}) {}
-      const halt = new Halt({});
+      const entered = yield* Deferred.make<void>();
+      const accepted = yield* Deferred.make<void>();
       const observed = yield* Ref.make<ReadonlyArray<string>>([]);
 
-      const failure = yield* AgentRuntime.stream(
+      const fiber = yield* AgentRuntime.streamWithUsageAccountingUnknown(
         Agent.withModel(definition, model("emit_update", { value: { candidateCount: "2" } })),
         "go",
-        { emitUpdate: () => Effect.fail(halt) },
       ).pipe(
         Stream.tap((event) => Ref.update(observed, (tags) => [...tags, event._tag])),
-        Stream.runDrain,
-        Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }),
+        Stream.runCollect,
+        Effect.provide(ModelUsageAccounting.layerEphemeral),
+        Effect.provideService(AgentUpdateAcceptance, {
+          accept: (update) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(accepted);
+
+              return AgentUpdates.Update.make({ ...update, sequence: 42 });
+            }),
+        }),
+        Effect.forkChild,
       );
 
-      expect(failure).toBe(halt);
-      const tags = yield* Ref.get(observed);
+      yield* Deferred.await(entered);
+      expect(yield* Ref.get(observed)).not.toContain("AgentUpdateEmitted");
+      yield* Deferred.succeed(accepted, undefined);
+      const events = yield* Fiber.join(fiber);
+      const updates = events.filter((event) => event._tag === "AgentUpdateEmitted");
 
-      expect(tags).not.toContain("AgentUpdateEmitted");
-      expect(tags).not.toContain("RunCompleted");
+      expect(updates).toHaveLength(1);
+      expect(updates[0]!.update.sequence).toBe(42);
+      expect(events.at(-1)?._tag).toBe("RunCompleted");
     }),
   );
 

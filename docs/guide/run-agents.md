@@ -305,10 +305,10 @@ Response records also retain each Turn's missing-call count, so approval and chi
 preserve incomplete accounting when a fresh runtime resumes the Run.
 
 Runtime hosts use `AgentRuntime.streamWithUsageAccountingUnknown` with the inward
-`ModelUsageAccounting` service from `RunOptions` to stage missing usage for each Attempt.
-The host entry exposes this dependency in `R`; ordinary `stream`, `run`, and `start` entry
-points provide ephemeral accounting themselves. The native durable runtime supplies its
-canonical Turn accumulator at composition, without adding a callback to durability options.
+`ModelUsageAccounting` and `AgentUpdateAcceptance` services from `RunOptions`. These dependencies
+remain visible in `R`. The native durable runtime supplies its canonical Turn accumulator and
+Attempt-bound update acceptance at composition, retaining updates before acknowledging them.
+Ordinary `stream`, `run`, and `start` calls provide ephemeral accounting and update acceptance.
 
 Canonical response records own committed per-call usage. Terminal settlement
 `uncommittedModelUsage` retains only staged calls not already present in a response record;

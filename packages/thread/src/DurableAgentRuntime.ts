@@ -8,6 +8,7 @@ import {
   PolicyLimit,
 } from "@effect-agent/core/AgentError";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { UpdateError } from "@effect-agent/core/AgentUpdates";
 import {
   type ReceiptId,
   ThreadId,
@@ -68,6 +69,7 @@ import {
 import { MessagingHost } from "@effect-agent/engine/MessagingHost";
 import {
   CurrentToolFailureObserver,
+  AgentUpdateAcceptance,
   ModelUsageAccounting,
   RunContextPreparation,
   RunToolAuthorization,
@@ -6440,29 +6442,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         ...(Schema.is(FrameworkMessage)(submission.messageAdmission)
           ? { frameworkMessage: submission.messageAdmission }
           : {}),
-        emitUpdate: (request) =>
-          recordHalt(
-            updateRuntime
-              .emit({
-                ...request,
-                submission,
-                runId,
-                producerEpoch: ctx.producerEpoch,
-                definitions: submission.agentDigests,
-              })
-              .pipe(
-                Effect.map((update) => ({ _tag: "Accepted" as const, update })),
-                Effect.catchTag("AgentUpdateError", (error) =>
-                  Effect.succeed({ _tag: "Rejected" as const, error }),
-                ),
-              ),
-          ).pipe(
-            Effect.flatMap((result) =>
-              result._tag === "Accepted"
-                ? Effect.succeed(result.update)
-                : Effect.fail(result.error),
-            ),
-          ),
         approval,
         toolAuthorization,
         ...(journal.toolSelection === undefined ? {} : { toolSelection: journal.toolSelection }),
@@ -6941,6 +6920,27 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       const consume = Stream.runForEach(
         AgentRuntime.streamWithUsageAccountingUnknown(agent, submission.inputPayload, options).pipe(
+          Stream.provideService(AgentUpdateAcceptance, {
+            accept: (update) =>
+              updateRuntime
+                .emit({
+                  updateId: update.updateId,
+                  value: update.value,
+                  submission,
+                  runId,
+                  producerEpoch: ctx.producerEpoch,
+                  definitions: submission.agentDigests,
+                })
+                .pipe(
+                  Effect.catchTag(["LedgerError", "DurableRuntimeFailpointError"], (failure) =>
+                    // Preserve the original infrastructure failure at the coordinator boundary;
+                    // the engine's next event must not commit this Tool's failure as an outcome.
+                    Ref.set(haltRef, failure).pipe(
+                      Effect.andThen(Effect.fail(UpdateError.make({ reason: "storage" }))),
+                    ),
+                  ),
+                ),
+          }),
           Stream.provideService(ModelUsageAccounting, {
             noteIncompleteUsage: (turn) =>
               Effect.sync(() => {
