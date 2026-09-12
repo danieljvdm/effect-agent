@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "wrangler deploy --dry-run",
     "check": "tsc --noEmit -p tsconfig.json",
     "prove:live": "node --experimental-transform-types src/live-main.ts",
     "test": "vp test --passWithNoTests"
