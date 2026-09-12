@@ -1,5 +1,22 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.85
+
+### Minor Changes
+
+- [#459](https://github.com/danieljvdm/effect-agent/pull/459) [`eab5b7c`](https://github.com/danieljvdm/effect-agent/commit/eab5b7c0ea2c52bf81e947253a8387a4b1e78c9d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Opt into durable typed parent completion messages with `Subagent.background(Research, { start: true, followUp: true, reportToParent: true })`, without an application input union, mapper, or reporting registration. Pass a custom reporting descriptor as `reportToParent` when an application-specific input format is needed.
+
+- [#459](https://github.com/danieljvdm/effect-agent/pull/459) [`eab5b7c`](https://github.com/danieljvdm/effect-agent/commit/eab5b7c0ea2c52bf81e947253a8387a4b1e78c9d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Accept Agent definitions directly in background subagent tools and declare typed intermediate updates on Agents. Deliver opted-in worker findings to the parent before completion, with durable retention, ordering, and bounded backpressure.
+
+### Patch Changes
+
+- Updated dependencies [[`eab5b7c`](https://github.com/danieljvdm/effect-agent/commit/eab5b7c0ea2c52bf81e947253a8387a4b1e78c9d), [`eab5b7c`](https://github.com/danieljvdm/effect-agent/commit/eab5b7c0ea2c52bf81e947253a8387a4b1e78c9d)]:
+  - @effect-agent/core@0.1.0-beta.85
+  - @effect-agent/engine@0.1.0-beta.85
+  - @effect-agent/thread@0.1.0-beta.85
+  - @effect-agent/storage-cloudflare@0.1.0-beta.85
+  - @effect-agent/sandbox@0.1.0-beta.85
+
 ## 0.1.0-beta.84
 
 ### Patch Changes

@@ -1,5 +1,18 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.85
+
+### Patch Changes
+
+- [#459](https://github.com/danieljvdm/effect-agent/pull/459) [`eab5b7c`](https://github.com/danieljvdm/effect-agent/commit/eab5b7c0ea2c52bf81e947253a8387a4b1e78c9d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Accept Agent definitions directly in background subagent tools and declare typed intermediate updates on Agents. Deliver opted-in worker findings to the parent before completion, with durable retention, ordering, and bounded backpressure.
+
+- Updated dependencies [[`eab5b7c`](https://github.com/danieljvdm/effect-agent/commit/eab5b7c0ea2c52bf81e947253a8387a4b1e78c9d), [`eab5b7c`](https://github.com/danieljvdm/effect-agent/commit/eab5b7c0ea2c52bf81e947253a8387a4b1e78c9d)]:
+  - @effect-agent/capabilities@0.1.0-beta.85
+  - @effect-agent/core@0.1.0-beta.85
+  - @effect-agent/engine@0.1.0-beta.85
+  - @effect-agent/thread@0.1.0-beta.85
+  - @effect-agent/sandbox@0.1.0-beta.85
+
 ## 0.1.0-beta.84
 
 ### Patch Changes
