@@ -121,6 +121,14 @@ const heapAfterGc = (): number => {
   return process.memoryUsage().heapUsed;
 };
 
+// Let the completed wave's execution stack unwind before measuring retained heap.
+// Further synchronous collections in the same turn still retain temporary references.
+const sampleHeap = Effect.callback<number>((resume) => {
+  const pending = setImmediate(() => resume(Effect.sync(heapAfterGc)));
+
+  return Effect.sync(() => clearImmediate(pending));
+});
+
 /** One soak wave: submit every lane's queue, drain each lane once, assert full settlement. */
 const runWave = (wave: number) =>
   Effect.gen(function* () {
@@ -163,12 +171,12 @@ describe("DUR-016 P7 pure-memory soak (coordinator map cleanup)", () => {
     `SOAK: ${WAVES * LANES * SUBMISSIONS_PER_LANE} submissions across ${WAVES * LANES} join-heavy lanes settle and the heap returns to baseline after each wave's scope closes`,
     () =>
       Effect.gen(function* () {
-        const baseline = yield* Effect.sync(heapAfterGc);
+        const baseline = yield* sampleHeap;
         const waveHeaps: Array<number> = [];
 
         for (let wave = 0; wave < WAVES; wave++) {
           yield* runWave(wave);
-          waveHeaps.push(yield* Effect.sync(heapAfterGc));
+          waveHeaps.push(yield* sampleHeap);
         }
         const first = waveHeaps[0] ?? Number.NaN;
         const last = waveHeaps.at(-1) ?? Number.NaN;
