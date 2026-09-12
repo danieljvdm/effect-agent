@@ -112,6 +112,45 @@ const layer = (
 ) => MessageDeliveryDriver.layer().pipe(Layer.provideMerge(dependencies(admission, limits)));
 
 describe("direct message delivery", () => {
+  it.effect("admits predecessor before successor after a lost acknowledgement", () => {
+    const delivered: string[] = [];
+    let firstAttempts = 0;
+
+    return Effect.gen(function* () {
+      const store = yield* MessageDeliveryStore;
+      const driver = yield* MessageDeliveryDriver;
+      const first = yield* initial("first");
+      const second = { ...(yield* initial("second")), predecessor: first.key.messageId };
+
+      yield* store.insert(first);
+      yield* store.insert(second);
+      expect((yield* driver.process(second.key)).retry.automaticAttempts).toBe(0);
+      expect(delivered).toEqual([]);
+      yield* driver.process(first.key);
+      yield* TestClock.adjust(10);
+      yield* driver.process(second.key);
+      expect(delivered).toEqual(["admit:first"]);
+      yield* driver.process(first.key);
+      yield* TestClock.adjust(10);
+      yield* driver.process(second.key);
+      expect(delivered).toEqual(["admit:first", "admit:first", "admit:second"]);
+      expect((yield* store.get(second.key))?.retry.attempts).toBe(1);
+    }).pipe(
+      Effect.provide(
+        layer({
+          submit: (envelope) =>
+            Effect.suspend(() => {
+              delivered.push(envelope.admissionKey);
+              if (envelope.admissionKey === "admit:first" && firstAttempts++ === 0)
+                return ScheduledInputRetryable.make({ reason: "ambiguous" });
+
+              return Effect.succeed(receipt(envelope));
+            }),
+        }),
+      ),
+    );
+  });
+
   it.effect(
     "snapshots every preparation choice before asynchronous hashing can observe caller mutation",
     () =>

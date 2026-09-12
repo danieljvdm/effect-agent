@@ -1,15 +1,23 @@
+import { Update } from "@effect-agent/core/AgentUpdates";
 import {
   AgentId,
   ReceiptId,
   SettlementId,
   SubmissionId,
   ThreadId,
+  RunId,
+  DelegationId,
 } from "@effect-agent/core/Identifiers";
+import { WorkerUpdate } from "@effect-agent/core/Worker";
 import { DateTime, Effect, Equal, Result, Schema } from "effect";
 
 import { digestJson } from "./Digest.ts";
 import { Receipt } from "./DurableAgentRuntime.ts";
-import { MessageDeliveryStore, prepareMessageDelivery } from "./MessageDelivery.ts";
+import {
+  MessageDeliveryStore,
+  messageDeliveryCapacity,
+  prepareMessageDelivery,
+} from "./MessageDelivery.ts";
 import { DefinitionDigests, Digest } from "./Records.ts";
 import { IdempotencyKey, Principal, QueueSequence, Settlement } from "./SubmissionLedger.ts";
 
@@ -63,8 +71,119 @@ export const messageDeliveryFixtureReceipt = Receipt.make({
   queueSequence: Schema.decodeSync(QueueSequence)(0),
 });
 
+export const makeWorkerUpdateDeliveryFixture = Effect.fn(
+  "MessageDeliveryConformance.updateFixture",
+)(function* (id: string) {
+  const base = yield* makeMessageDeliveryFixture(id);
+
+  return yield* prepareMessageDelivery({
+    key: base.key,
+    createdAtMillis: base.createdAtMillis,
+    deadlineAtMillis: base.deadlineAtMillis,
+    policy: base.policy,
+    envelope: {
+      ...base.envelope,
+      messageAdmission: WorkerUpdate.make({
+        _tag: "WorkerUpdate",
+        schemaVersion: 1,
+        worker: {
+          schemaVersion: 1,
+          delegationId: Schema.decodeSync(DelegationId)("worker"),
+          targetAgentId: Schema.decodeSync(AgentId)("child"),
+          threadId: base.key.ownerThreadId,
+        },
+        update: Update.make({
+          schemaVersion: 1,
+          agentId: Schema.decodeSync(AgentId)("child"),
+          threadId: base.key.ownerThreadId,
+          runId: Schema.decodeSync(RunId)("run"),
+          updateId: base.key.messageId,
+          sequence: 1,
+          value: { finding: id },
+        }),
+      }),
+    },
+  });
+});
+
 /** Every case starts with an empty store; all clocks and expected values are explicit. */
 export const messageDeliveryStoreConformanceCases = [
+  {
+    name: "reserves ordinary delivery capacity when worker updates saturate their separate bound",
+    run: Effect.gen(function* () {
+      const store = yield* MessageDeliveryStore;
+      const capacity = messageDeliveryCapacity(store.limits, true);
+
+      for (let index = 0; index < capacity.pending; index++)
+        yield* store.insert(yield* makeWorkerUpdateDeliveryFixture(`update-${index}`));
+
+      const refused = yield* store
+        .insert(yield* makeWorkerUpdateDeliveryFixture("overflow"))
+        .pipe(Effect.result);
+
+      yield* verify(
+        Result.isFailure(refused) &&
+          refused.failure._tag === "MessageDeliveryError" &&
+          refused.failure.reason === "capacity",
+        "Updates must stop at their independent pending bound",
+      );
+      const terminal = yield* makeMessageDeliveryFixture("terminal");
+
+      yield* verify(
+        (yield* store.insert(terminal)).status === "pending",
+        "Update pressure must preserve ordinary terminal capacity",
+      );
+      yield* verify(
+        (yield* store.get({
+          ...terminal.key,
+          messageId: Schema.decodeSync(IdempotencyKey)("overflow"),
+        })) === null,
+        "Rejected update must not mutate delivery storage",
+      );
+    }),
+  },
+  {
+    name: "retains predecessor identity and defers ordering waits without spending attempts",
+    run: Effect.gen(function* () {
+      const store = yield* MessageDeliveryStore;
+
+      const initial = {
+        ...(yield* makeMessageDeliveryFixture("later")),
+        predecessor: Schema.decodeSync(IdempotencyKey)("earlier"),
+      };
+
+      yield* store.insert(initial);
+
+      const deferred = yield* store.change(initial.key, {
+        _tag: "Defer",
+        expectedVersion: 1,
+        nowMillis: 0,
+        untilMillis: 100,
+      });
+
+      yield* verify(
+        deferred.retry.attempts === 0 &&
+          deferred.retry.automaticAttempts === 0 &&
+          deferred.retry.nextAttemptAtMillis === 100,
+        "Ordering waits must remain bounded without exhausting transport retries",
+      );
+      yield* verify(
+        (yield* store.due(99, 10)).length === 0 && (yield* store.due(100, 10)).length === 1,
+        "Deferral must advance the persisted wake deadline",
+      );
+
+      const changed = yield* store
+        .insert({ ...initial, predecessor: Schema.decodeSync(IdempotencyKey)("different") })
+        .pipe(Effect.result);
+
+      yield* verify(
+        Result.isFailure(changed) &&
+          changed.failure._tag === "MessageDeliveryError" &&
+          changed.failure.reason === "conflict",
+        "A retry cannot replace its ordering predecessor",
+      );
+    }),
+  },
   {
     name: "retains pending, accepted and processed facts with stable duplicate admission",
     run: Effect.gen(function* () {

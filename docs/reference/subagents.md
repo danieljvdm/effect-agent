@@ -11,6 +11,26 @@ Start with the [subagent overview](../guide/subagents) to choose a lifecycle, th
 [background worker](../guide/subagents/background) guide. This reference covers advanced configuration
 shared by those guides.
 
+## Pass the Agent directly
+
+For the default input and result contract, the declaration is optional:
+
+```ts twoslash
+import { Subagent } from "effect-agent";
+import { HotelResearcher } from "./background-updates.ts";
+
+// Before: an explicit declaration, with the default name and mappings.
+const declaration = Subagent.make("hotel-researcher", { target: HotelResearcher });
+const before = Subagent.background(declaration, { start: true, reportToParent: true });
+
+// After: the same generated hotel-researcher_start Tool and exact target.
+const after = Subagent.background(HotelResearcher, { start: true, reportToParent: true });
+```
+
+Use `Subagent.make` when you need another name, input/result projections, grants, or budgets.
+The host registers the original Agent definition; background configuration does not derive a
+replacement Agent. Existing explicit declarations and custom completion reporting remain supported.
+
 ## Input and result mappings
 
 `Subagent.make("research", { target: researcher })` is enough to declare delegation.
@@ -394,3 +414,60 @@ delivery to it is refused. An attached scout returns through its waiting parent'
 Report preparation decisions appear in authorized canonical worker history. Retained delivery
 records expose pending, accepted, processed, parked, and refused states through the host-owned
 `MessageDeliveryStore`. A child's completion and its report's processing remain separate facts.
+
+## Update delivery guarantees
+
+`Agent.make(name, { updates: schema, ... })` declares intentional intermediate output independently of
+final output. Objects and tagged unions work, including transformed Schemas. The framework adds
+one native `emit_update` Tool with `{ value: schema }` parameters. Its expected refusal is returned
+as a typed tool result, so the Agent can continue toward completion. The name is reserved when
+updates are declared; inherited tool grants still apply.
+
+Application tool code can use `AgentUpdates.emit(agent, value, { idempotencyKey })` instead.
+Declare `AgentUpdates.Emitter` as a dependency of that Tool. The key identifies one intended
+update within the Run: equal retries reuse it, and changed payloads fail with `conflict`.
+The emitter is available during an active tool batch and closes with its Scope.
+Native calls derive their keys from the actual Run and Tool Call.
+
+Observe the same definition at the top level:
+
+<<< @/snippets/travel-planner/observe-updates.ts{ts twoslash}
+
+`AgentUpdates.decode` and `observe` decode through the Agent's update Schema and preserve its
+required decoding services. Runtime events contain encoded values; they never assert encoded
+payloads into application types. Durable canonical history retains `AgentUpdateEmitted` records,
+including the exact source definition versions. Authorized `Subagent.observe` readers can decode
+those records and their updates with the same APIs.
+
+With `reportToParent: true`, acceptance commits the finding and a frozen parent delivery envelope
+before acknowledging it. The child continues without waiting for destination admission, parent
+processing, or a user decision. The parent receives a `WorkerUpdate` as untrusted user-message
+content, retaining its original application input for instructions and policy. Custom
+`reportToParent` mappings keep their existing terminal-completion behavior; they are optional.
+
+Each worker Thread orders update deliveries and completion reports across its Runs. A successor
+waits until the predecessor has a destination Receipt or a conclusive refusal. A parked predecessor
+without a Receipt blocks later delivery until recovery; a refusal remains observable instead of
+silently discarding the finding. Waiting for a predecessor does not spend admission attempts.
+Destination admission and processing remain separate states, and no external side effect is
+promised to execute exactly once.
+
+The runtime defaults to 32 updates and 16 KiB of total encoded update payload per Run. `RunOptions.updates`
+configures these limits. Durable acceptance rechecks canonical counts after a restart. The delivery
+store separately bounds update retention and pending work per worker (defaults: 256 retained and
+32 pending). `maxRetainedUpdatesPerOwner` and `maxPendingUpdatesPerOwner` configure that partition;
+updates cannot consume the ordinary capacity used for terminal reports. Capacity refusal happens
+before a new update is accepted. A parent that is itself a worker has separate update input quotas:
+`WorkerHostLimits.maxUpdateInputsPerWorker` defaults to 256 and
+`maxPendingUpdateInputsPerWorker` defaults to 32. Temporary pending or active-worker limits retry
+delivery; permanent retention or budget exhaustion refuses it. Parent admissions still obey
+inherited budgets, grants, lifetime, and host limits.
+
+Retained findings and pending delivery survive parent completion or abort, dropped wake hints,
+restart, and eviction. Recovery inserts missing outbox rows from canonical envelopes and retries
+the same logical delivery without rebuilding its payload. A lost acknowledgement can therefore
+leave a retained finding even when the caller did not see success. Reuse its key when reconciling.
+If ownership is lost before the native Tool result is recorded, the Tool call remains unresolved
+under the ordinary recovery rules. Recovery delivers the retained update without replaying the
+Tool; explicit cancellation can then settle the worker and deliver its separate aborted report.
+Accepted updates remain distinct from the eventual completed, failed, or aborted outcome.

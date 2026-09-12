@@ -96,6 +96,10 @@ export const WorkerHostLimits = Schema.Struct({
   maxActiveWorkersPerSource: Schema.optionalKey(Positive.check(Schema.isLessThanOrEqualTo(100))),
   maxInputsPerWorker: Positive.check(Schema.isLessThanOrEqualTo(1_000)),
   maxPendingInputsPerWorker: Positive.check(Schema.isLessThanOrEqualTo(100)),
+  maxUpdateInputsPerWorker: Schema.optionalKey(Positive.check(Schema.isLessThanOrEqualTo(1_000))),
+  maxPendingUpdateInputsPerWorker: Schema.optionalKey(
+    Positive.check(Schema.isLessThanOrEqualTo(100)),
+  ),
   lifetimeMillis: Positive.check(Schema.isLessThanOrEqualTo(604_800_000)),
   /** Preparation may repeat after loss before its decision commits; keep callbacks side-effect free. */
   reportPreparationTimeoutMillis: Schema.optionalKey(

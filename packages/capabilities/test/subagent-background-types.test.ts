@@ -1,5 +1,6 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import * as Agent from "@effect-agent/core/Agent";
+import type { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { IdempotencyKey, type JoinedToHost, Receipt } from "@effect-agent/core/Receipt";
 import { SubagentGrant } from "@effect-agent/core/SubagentContract";
 import type { WorkerError } from "@effect-agent/core/Worker";
@@ -8,6 +9,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { Context, type Crypto, Effect, type Layer, Schema, SchemaGetter } from "effect";
 import type { Tool } from "effect/unstable/ai";
 import { Toolkit } from "effect/unstable/ai";
+
+import type { SubagentReservations } from "../src/SubagentReservations.ts";
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
@@ -38,6 +41,83 @@ const target = Agent.make("typed-background-child", {
   instructions: () => ChildInstructions,
   toolkit: Toolkit.empty,
 });
+
+const updateTarget = Agent.make("updating-child", {
+  input: Schema.String,
+  output: Schema.String,
+  updates: Schema.Struct({ finding: text }),
+  instructions: "Report findings.",
+  toolkit: Toolkit.empty,
+});
+
+const updateBackground = Subagent.background(updateTarget, { start: true });
+const updateDeclaration = Subagent.make("updating", { target: updateTarget });
+
+const updateLayerProofs = (model: Layer.Layer<Agent.ModelServices>) => {
+  const modelLayer = Subagent.SubagentRuntime.layer(updateDeclaration, model);
+
+  const bindingLayer = Subagent.SubagentRuntime.layer(
+    updateDeclaration,
+    Agent.withModel(updateTarget, model),
+  );
+
+  const proofs: [
+    Assert<
+      Equal<
+        Layer.Services<typeof modelLayer>,
+        Encoder | Decoder | IdGenerator | SubagentReservations
+      >
+    >,
+    Assert<
+      Equal<
+        Layer.Services<typeof bindingLayer>,
+        Encoder | Decoder | IdGenerator | SubagentReservations
+      >
+    >,
+    Assert<Equal<Layer.Error<typeof modelLayer>, never>>,
+    Assert<Equal<Layer.Error<typeof bindingLayer>, never>>,
+  ] = [true, true, true, true];
+
+  return proofs;
+};
+
+const updateTypes: [
+  Assert<Equal<keyof typeof updateBackground.tools, "updating-child_start">>,
+  Assert<typeof updateDeclaration.target extends typeof updateTarget ? true : false>,
+] = [true, true];
+
+const direct = Subagent.background(target, {
+  start: true,
+  followUp: true,
+  inspect: true,
+  reportToParent: true,
+});
+
+const directTypes: [
+  Assert<
+    Equal<
+      keyof typeof direct.tools,
+      | "typed-background-child_start"
+      | "typed-background-child_follow_up"
+      | "typed-background-child_inspect"
+    >
+  >,
+  Assert<Equal<Tool.Parameters<(typeof direct.tools)["typed-background-child_start"]>, string>>,
+  Assert<
+    Equal<
+      Tool.Success<(typeof direct.tools)["typed-background-child_inspect"]>,
+      Subagent.WorkerObservation<Subagent.SubagentResult<typeof text>>
+    >
+  >,
+  Assert<Equal<Layer.Services<typeof direct.layer>, Encoder | Decoder>>,
+  Assert<Equal<Layer.Error<typeof direct.layer>, never>>,
+  Assert<
+    Equal<
+      Tool.Failure<(typeof direct.tools)["typed-background-child_start"]>,
+      Subagent.SubagentProjectionFailure | Subagent.SubagentPrestartDenied | WorkerError
+    >
+  >,
+] = [true, true, true, true, true, true];
 
 const declaration = Subagent.make("research", {
   target,
@@ -215,13 +295,24 @@ const rejectInvalidCalls = () => {
   void Subagent.cancel(declaration, otherWorker, receipt);
   // @ts-expect-error Unselected operations are not in the Tool record.
   void selected.tools.research_follow_up;
+  // @ts-expect-error Direct definitions expose only selected operations.
+  void direct.tools["typed-background-child_cancel"];
+
+  // @ts-expect-error Direct input parameters retain the target schema.
+  const wrongDirectInput: Tool.Parameters<(typeof direct.tools)["typed-background-child_start"]> =
+    42;
+
+  void wrongDirectInput;
   // @ts-expect-error Models cannot wait through a background tool.
   Subagent.background(declaration, { await: true });
 };
 
 describe("background authoring types", () => {
   it("preserves operation errors, schema services, and selected native Tool names", () => {
+    expect(typeof updateLayerProofs).toBe("function");
     expect(proofs.every(Boolean)).toBe(true);
+    expect(directTypes.every(Boolean)).toBe(true);
+    expect(updateTypes.every(Boolean)).toBe(true);
     expect(automaticServices && mappedServices && automaticErrors && automaticKeys).toBe(true);
     expect(nestedParameterProof && nestedSuccessProof).toBe(true);
     expect(typeof rejectInvalidCalls).toBe("function");

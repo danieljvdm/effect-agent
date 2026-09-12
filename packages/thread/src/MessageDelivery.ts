@@ -1,5 +1,6 @@
 import { ThreadId } from "@effect-agent/core/Identifiers";
 import { Receipt } from "@effect-agent/core/Receipt";
+import { WorkerUpdate } from "@effect-agent/core/Worker";
 import { Clock, Context, Crypto, Effect, Layer, Result, Schema, Semaphore } from "effect";
 
 import { digestJson } from "./Digest.ts";
@@ -42,7 +43,16 @@ export const MessageDeliveryStoreLimits = Schema.Struct({
   maxPendingPerOwner: Positive,
   maxRetainedPerOwner: Positive,
   maxEnvelopeBytes: Positive,
-}).check(Schema.makeFilter((value) => value.maxPendingPerOwner <= value.maxRetainedPerOwner));
+  /** Separate update capacity preserves the full ordinary allowance for terminal reports. */
+  maxPendingUpdatesPerOwner: Schema.optionalKey(Positive),
+  maxRetainedUpdatesPerOwner: Schema.optionalKey(Positive),
+}).check(
+  Schema.makeFilter(
+    (value) =>
+      value.maxPendingPerOwner <= value.maxRetainedPerOwner &&
+      (value.maxPendingUpdatesPerOwner ?? 32) <= (value.maxRetainedUpdatesPerOwner ?? 256),
+  ),
+);
 
 export type MessageDeliveryStoreLimits = typeof MessageDeliveryStoreLimits.Type;
 
@@ -50,6 +60,8 @@ export const defaultMessageDeliveryStoreLimits: MessageDeliveryStoreLimits = {
   maxPendingPerOwner: 100,
   maxRetainedPerOwner: 1_000,
   maxEnvelopeBytes: 262_144,
+  maxPendingUpdatesPerOwner: 32,
+  maxRetainedUpdatesPerOwner: 256,
 };
 
 const ParkReason = Schema.Literals(["exhausted", "deadline", "status-unavailable"]);
@@ -59,6 +71,8 @@ export const MessageDeliveryRecord = Schema.Struct({
   key: MessageDeliveryKey,
   envelope: PreparedInput,
   envelopeDigest: Digest,
+  /** Same-owner predecessor whose admission must be known before this message is submitted. */
+  predecessor: Schema.optionalKey(IdempotencyKey),
   createdAtMillis: ScheduleInstant,
   /** Immutable creation identity; explicit recovery only renews deadlineAtMillis. */
   initialDeadlineAtMillis: ScheduleInstant,
@@ -77,6 +91,7 @@ export const MessageDeliveryRecord = Schema.Struct({
     (record) =>
       record.deadlineAtMillis > record.createdAtMillis &&
       record.initialDeadlineAtMillis > record.createdAtMillis &&
+      record.predecessor !== record.key.messageId &&
       (record.status === "processed") === (record.settlement !== null) &&
       (record.status === "refused") === (record.refusal !== null) &&
       (record.status === "parked") === (record.parkReason !== null) &&
@@ -140,6 +155,8 @@ export const MessageDeliveryChange = Schema.Union([
   Schema.Struct({ _tag: Schema.Literal("Retry"), ...fence, reason: ScheduleRetryReason }),
   Schema.Struct({ _tag: Schema.Literal("Park"), ...fence, reason: ParkReason }),
   Schema.Struct({ _tag: Schema.Literal("Recover"), ...fence, deadlineAtMillis: ScheduleInstant }),
+  /** Waiting for earlier admission never spends an automatic transport attempt. */
+  Schema.Struct({ _tag: Schema.Literal("Defer"), ...fence, untilMillis: ScheduleInstant }),
 ]);
 
 export type MessageDeliveryChange = typeof MessageDeliveryChange.Type;
@@ -166,6 +183,8 @@ export interface MessageDeliveryPage {
 export class MessageDeliveryStore extends Context.Service<
   MessageDeliveryStore,
   {
+    readonly limits: MessageDeliveryStoreLimits;
+    readonly maxStoredValueBytes: number;
     readonly insert: (
       record: MessageDeliveryRecord,
     ) => Effect.Effect<MessageDeliveryRecord, MessageDeliveryFailure>;
@@ -196,6 +215,14 @@ export const messageDeliveryKeyString = (key: MessageDeliveryKey): string =>
 export const messageDeliveryUsesCapacity = (record: MessageDeliveryRecord): boolean =>
   record.status !== "processed" && record.status !== "refused";
 
+export const isWorkerUpdateDelivery = (record: MessageDeliveryRecord): boolean =>
+  Schema.is(WorkerUpdate)(record.envelope.messageAdmission);
+
+export const messageDeliveryCapacity = (limits: MessageDeliveryStoreLimits, update: boolean) => ({
+  pending: update ? (limits.maxPendingUpdatesPerOwner ?? 32) : limits.maxPendingPerOwner,
+  retained: update ? (limits.maxRetainedUpdatesPerOwner ?? 256) : limits.maxRetainedPerOwner,
+});
+
 export const messageDeliveryDeadline = (record: MessageDeliveryRecord): number | null =>
   record.status === "pending" || record.status === "accepted"
     ? Math.min(record.deadlineAtMillis, record.leaseUntilMillis ?? record.retry.nextAttemptAtMillis)
@@ -208,6 +235,7 @@ export const sameMessageDeliveryIdentity = (
 ): boolean =>
   messageDeliveryKeyString(left.key) === messageDeliveryKeyString(right.key) &&
   left.envelopeDigest === right.envelopeDigest &&
+  left.predecessor === right.predecessor &&
   Schema.toEquivalence(PreparedInput)(left.envelope, right.envelope) &&
   Schema.toEquivalence(MessageDeliveryPolicy)(left.policy, right.policy) &&
   left.createdAtMillis === right.createdAtMillis &&
@@ -231,6 +259,7 @@ const MessageDeliveryPreparation = Schema.Struct({
   createdAtMillis: ScheduleInstant,
   deadlineAtMillis: ScheduleInstant,
   policy: MessageDeliveryPolicy,
+  predecessor: Schema.optionalKey(IdempotencyKey),
 });
 
 /** Freeze and digest the complete admission envelope before publishing the obligation. */
@@ -240,6 +269,7 @@ export const prepareMessageDelivery = Effect.fn("MessageDelivery.prepare")(funct
   readonly createdAtMillis: number;
   readonly deadlineAtMillis: number;
   readonly policy?: MessageDeliveryPolicy;
+  readonly predecessor?: IdempotencyKey;
 }): Effect.fn.Return<MessageDeliveryRecord, MessageDeliveryError, Crypto.Crypto> {
   // JSON detaches every caller-owned value before Crypto can suspend preparation.
   const snapshot = yield* Schema.encodeEffect(Schema.fromJsonString(MessageDeliveryPreparation))({
@@ -273,6 +303,7 @@ export const prepareMessageDelivery = Effect.fn("MessageDelivery.prepare")(funct
       key: snapshot.key,
       envelope,
       envelopeDigest,
+      ...(snapshot.predecessor === undefined ? {} : { predecessor: snapshot.predecessor }),
       createdAtMillis: snapshot.createdAtMillis,
       initialDeadlineAtMillis: snapshot.deadlineAtMillis,
       deadlineAtMillis: snapshot.deadlineAtMillis,
@@ -317,6 +348,25 @@ export const applyMessageDeliveryChange = (
     leaseUntilMillis: null,
     retry: { ...record.retry, parked: true },
   });
+
+  if (change._tag === "Defer") {
+    if (
+      record.status !== "pending" ||
+      (record.leaseUntilMillis !== null && record.leaseUntilMillis > now)
+    )
+      return conflict();
+    if (now >= record.deadlineAtMillis) return Result.succeed(parked("deadline"));
+    if (change.untilMillis <= now) return conflict();
+
+    return Result.succeed({
+      ...base,
+      leaseUntilMillis: null,
+      retry: {
+        ...record.retry,
+        nextAttemptAtMillis: Math.min(change.untilMillis, record.deadlineAtMillis),
+      },
+    });
+  }
 
   if (change._tag === "Recover") {
     if (record.status !== "parked" || change.deadlineAtMillis <= now) return conflict();
@@ -506,6 +556,25 @@ export class MessageDeliveryDriver extends Context.Service<
                 const due = messageDeliveryDeadline(current);
 
                 if (due === null || due > nowMillis) return current;
+
+                if (current.status === "pending" && current.predecessor !== undefined) {
+                  const previous = yield* store.get({
+                    ownerThreadId: key.ownerThreadId,
+                    messageId: current.predecessor,
+                  });
+
+                  if (
+                    previous === null ||
+                    (previous.receipt === null && previous.status !== "refused")
+                  ) {
+                    return yield* store.change(key, {
+                      _tag: "Defer",
+                      expectedVersion: current.version,
+                      nowMillis,
+                      untilMillis: nowMillis + current.policy.settlementPollMillis,
+                    });
+                  }
+                }
 
                 const claimed = yield* store.change(key, {
                   _tag: "Claim",

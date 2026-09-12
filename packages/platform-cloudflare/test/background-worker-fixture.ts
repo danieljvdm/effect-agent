@@ -46,6 +46,94 @@ const model = Model.make(
   ),
 );
 
+export const backgroundUpdateStarts = new Set<string>();
+export const backgroundUpdatePrompts: Array<string> = [];
+
+export const backgroundUpdateTarget = Agent.make("cf-update-hotel", {
+  input: backgroundTarget.input,
+  output: backgroundTarget.output,
+  updates: Schema.Struct({ _tag: Schema.Literal("AreaConcern"), area: Schema.String }),
+  instructions: "Report an area concern while hotel research continues.",
+  toolkit: Toolkit.empty,
+  policy: { maxTurns: 4, maxToolCalls: 2, maxDuration: "30 seconds" },
+});
+
+export const backgroundUpdateWorkers = Subagent.make("cf-update-hotel", {
+  target: backgroundUpdateTarget,
+});
+
+const updateBackground = Subagent.background(backgroundUpdateTarget, {
+  start: true,
+  reportToParent: true,
+});
+
+export const backgroundUpdateSource = Agent.make("cf-update-source", {
+  input: backgroundSource.input,
+  output: backgroundSource.output,
+  instructions: "Discuss worker updates and completion reports.",
+  toolkit: updateBackground.toolkit,
+  policy: { maxTurns: 10, maxToolCalls: 10, maxDuration: "1 minute" },
+});
+
+const updateSourceModel = Model.make(
+  "scripted",
+  "cf-update-source",
+  Layer.effect(
+    LanguageModel.LanguageModel,
+    LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: ({ prompt }) => {
+        const text = JSON.stringify(prompt);
+
+        backgroundUpdatePrompts.push(text);
+
+        return Stream.fromIterable(finalParts('{"answer":"Let us discuss the area concern."}'));
+      },
+    }),
+  ),
+);
+
+const updateTargetModel = Model.make(
+  "scripted",
+  "cf-update-hotel",
+  Layer.effect(
+    LanguageModel.LanguageModel,
+    LanguageModel.make({
+      generateText: () => Effect.succeed([]),
+      streamText: ({ prompt }) => {
+        const text = JSON.stringify(prompt);
+
+        if (
+          !prompt.content.some(
+            (message) => message.role === "tool" && JSON.stringify(message).includes("emit_update"),
+          )
+        ) {
+          const parts: ReadonlyArray<Response.StreamPartEncoded> = [
+            {
+              type: "tool-call",
+              id: "area-concern",
+              name: "emit_update",
+              params: { value: { _tag: "AreaConcern", area: "Rosebank" } },
+              providerExecuted: false,
+            },
+            { type: "finish", reason: "tool-calls", usage: { inputTokens: {}, outputTokens: {} } },
+          ];
+
+          const source = /background-cf-update-[a-z0-9-]+/u.exec(text)?.[0] ?? "";
+
+          const wait = Effect.gen(function* () {
+            while (!backgroundUpdateStarts.has(source)) yield* Effect.sleep("10 millis");
+          });
+
+          return Stream.fromEffectDrain(wait).pipe(Stream.concat(Stream.fromIterable(parts)));
+        }
+
+        return Stream.never;
+      },
+    }),
+  ),
+);
+
 export const backgroundWorkers = Subagent.make("research", {
   target: backgroundTarget,
   success: backgroundTarget.output,
@@ -305,6 +393,14 @@ const independentScoutHandlers = Subagent.SubagentRuntime.layer(
 ).pipe(Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]));
 
 export const backgroundWorkerBindings = Effect.all([
+  DurableWorkerBinding.make(
+    Agent.withModel(backgroundUpdateSource, updateSourceModel),
+    TEST_DIGESTS,
+  ).pipe(Effect.provide(updateBackground.layer)),
+  DurableWorkerBinding.make(
+    Agent.withModel(backgroundUpdateTarget, updateTargetModel),
+    TEST_DIGESTS,
+  ),
   DurableWorkerBinding.make(
     Agent.withModel(backgroundStandardReportSource, model),
     TEST_DIGESTS,

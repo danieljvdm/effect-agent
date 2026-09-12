@@ -13,7 +13,7 @@ import {
   SubagentGrant,
   SubagentReservationAmounts,
 } from "@effect-agent/core/SubagentContract";
-import { WorkerCompletion } from "@effect-agent/core/Worker";
+import { WorkerCompletion, WorkerUpdate } from "@effect-agent/core/Worker";
 import type { Crypto } from "effect";
 import { Clock, DateTime, Duration, Effect, Option, Result, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
@@ -834,6 +834,98 @@ const messageAdmissionIdentity = conformanceCase(
         yield* ensure(
           isAdmissionConflict(conflict),
           "Peer provenance changes must produce AdmissionConflict",
+        );
+      }
+    }),
+);
+
+const workerUpdateIdentity = conformanceCase(
+  "retains framework updates separately and rejects changed same-key metadata",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      const base = yield* admissionRequest(
+        decodeThreadId("ledger-conformance-update"),
+        "update-message",
+        { text: "original application input" },
+      );
+
+      const metadata = Schema.decodeUnknownSync(WorkerUpdate)({
+        _tag: "WorkerUpdate",
+        schemaVersion: 1,
+        worker: {
+          schemaVersion: 1,
+          delegationId: "research",
+          targetAgentId: "child",
+          threadId: "child-thread",
+        },
+        update: {
+          schemaVersion: 1,
+          agentId: "child",
+          threadId: "child-thread",
+          runId: "child-run",
+          updateId: "finding",
+          sequence: 1,
+          value: { finding: "partial" },
+        },
+      });
+
+      const admitted = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, messageAdmission: metadata }),
+      );
+
+      const saved = yield* expectSome(
+        "update admission lookup",
+        yield* lookupById(admitted.submissionId),
+      );
+
+      yield* ensure(
+        saved.messageAdmission !== undefined &&
+          Schema.toEquivalence(InputMessage)(saved.messageAdmission, metadata),
+        "Update identity and value must survive lookup",
+      );
+      yield* ensure(
+        Schema.toEquivalence(PersistedJson)(saved.inputPayload, base.inputPayload),
+        "Framework update must not replace application input",
+      );
+      const recovery = yield* recoverySnapshot(admitted.submissionId);
+
+      yield* ensure(
+        recovery.submission.messageAdmission !== undefined &&
+          Schema.toEquivalence(InputMessage)(recovery.submission.messageAdmission, metadata),
+        "Recovery must retain update provenance",
+      );
+
+      const replay = yield* ledger.admit(
+        AdmissionRequest.make({ ...base, messageAdmission: metadata }),
+      );
+
+      yield* ensure(
+        replay.replayed && replay.receiptId === admitted.receiptId,
+        "Identical update retries must reuse the original receipt",
+      );
+      for (const changed of [
+        undefined,
+        WorkerUpdate.make({ ...metadata, update: { ...metadata.update, sequence: 2 } }),
+        WorkerUpdate.make({
+          ...metadata,
+          update: { ...metadata.update, value: { finding: "changed" } },
+        }),
+      ]) {
+        const conflict = yield* expectFailure(
+          "changed update metadata",
+          ledger.admit(
+            AdmissionRequest.make({
+              ...base,
+              ...(changed === undefined ? {} : { messageAdmission: changed }),
+            }),
+          ),
+        );
+
+        yield* ensure(
+          isAdmissionConflict(conflict),
+          "Changed update identity or value must conflict",
         );
       }
     }),
@@ -4457,6 +4549,7 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   workerAdmissionIdentity,
   messageAdmissionIdentity,
   workerCompletionIdentity,
+  workerUpdateIdentity,
   admissionGroupRace,
   admissionGroupSettlement,
   crossPrincipalAdmissionScoping,

@@ -1,10 +1,13 @@
 import type * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { Update, UpdateError } from "@effect-agent/core/AgentUpdates";
 import { ThreadId, type AgentId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import { IdempotencyKey, Receipt } from "@effect-agent/core/Receipt";
 import { SubagentDelegationCaps, SubagentGrant } from "@effect-agent/core/SubagentContract";
 import {
   WorkerCompletion,
+  FrameworkMessage,
+  WorkerUpdate,
   WorkerError,
   WorkerHistoryEntry,
   type WorkerContext,
@@ -73,6 +76,7 @@ import {
 } from "../Schedule.ts";
 import {
   SubmissionLedger,
+  LedgerError,
   AbortCommand,
   type AbortIntent,
   type Principal,
@@ -104,6 +108,7 @@ import {
   resolveDefinitionBinding,
   type ResolvedBinding,
 } from "./agent-registration.ts";
+import { lastWorkerReportMessageId } from "./agent-updates.ts";
 
 const failure = (operation: WorkerError["operation"], reason: WorkerError["reason"]) =>
   WorkerError.make({ operation, reason });
@@ -813,7 +818,10 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (now >= origin.expiresAtMillis) return yield* failure("start", "capacity");
       if (
         (prior === undefined && origins.size >= deps.limits.maxWorkersPerSource) ||
-        own.length >= deps.limits.maxInputsPerWorker
+        own.filter((row) => row.admission.reportKind === admission.reportKind).length >=
+          (admission.reportKind === "update"
+            ? (deps.limits.maxUpdateInputsPerWorker ?? 256)
+            : deps.limits.maxInputsPerWorker)
       )
         return yield* failure("start", "capacity");
       if (
@@ -877,7 +885,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       const activeWorkers = new Set(pendingRows.map((row) => row.admission.origin.worker.threadId));
 
       const pendingOwn = pendingRows.filter(
-        (row) => row.admission.origin.worker.threadId === origin.worker.threadId,
+        (row) =>
+          row.admission.origin.worker.threadId === origin.worker.threadId &&
+          row.admission.reportKind === admission.reportKind,
       ).length;
 
       // Resolve inside the source CAS loop: independently delivered starts must compete
@@ -895,7 +905,10 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         : Infinity;
 
       if (
-        pendingOwn >= deps.limits.maxPendingInputsPerWorker ||
+        pendingOwn >=
+          (admission.reportKind === "update"
+            ? (deps.limits.maxPendingUpdateInputsPerWorker ?? 32)
+            : deps.limits.maxPendingInputsPerWorker) ||
         (!activeWorkers.has(origin.worker.threadId) &&
           activeWorkers.size >=
             Math.min(
@@ -906,7 +919,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                 : Math.min(caps.maxConcurrentChildren ?? Infinity, source.policy.toolConcurrency),
             ))
       )
-        return yield* failure("start", "capacity");
+        return yield* WorkerError.make({ operation: "start", reason: "capacity", retryable: true });
       if (!independent)
         yield* reserveSubtree(
           origin.source.threadId,
@@ -986,6 +999,12 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
   ) {
     const admission = yield* decode(WorkerAdmission, unvalidated, "start");
 
+    if (admission.reportKind === "update") {
+      if (!Schema.is(WorkerUpdate)(options.messageAdmission))
+        return yield* failure("start", "denied");
+      yield* validateCompletion(options.messageAdmission, options, agentId, inputDigest);
+    }
+
     yield* deps.authorizer.authorize({
       sourceThreadId: admission.origin.source.threadId,
       ...(admission.sourceSubmissionId === undefined
@@ -1010,6 +1029,167 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
     return admission;
   });
+
+  const prepareUpdate = Effect.fn("WorkerHost.prepareUpdate")(
+    function* (update: Update, submission: SubmissionSnapshot, messageId: IdempotencyKey) {
+      const origin = submission.workerAdmission?.origin;
+      const intent = origin?.reporting;
+
+      if (origin === undefined || intent?.mode !== "standard") return undefined;
+      if (update.threadId !== submission.threadId || update.agentId !== origin.worker.targetAgentId)
+        return yield* failure("followUp", "worker-mismatch");
+
+      const sourceBinding = deps.bindings.find(
+        (entry) =>
+          entry.agentId === origin.source.agentId &&
+          definitionDigestsEqual(entry.digests, intent.sourceDigests),
+      );
+
+      const targetBinding = deps.bindings.find(
+        (entry) =>
+          entry.agentId === origin.worker.targetAgentId &&
+          definitionDigestsEqual(entry.digests, origin.targetDigests),
+      );
+
+      const reports =
+        sourceBinding?.reporting?.filter(
+          (entry) => entry.delegationId === origin.worker.delegationId,
+        ) ?? [];
+
+      if (
+        sourceBinding === undefined ||
+        targetBinding === undefined ||
+        reports.length !== 1 ||
+        reports[0]?.mode !== "standard" ||
+        reports[0].target !== targetBinding.definition ||
+        !definitionDigestsEqual(submission.agentDigests, origin.targetDigests)
+      )
+        return yield* failure("followUp", "declaration-unavailable");
+      const sourceHistory = yield* read(origin.source.threadId, "followUp");
+
+      const first = requests(sourceHistory.records).find(
+        (row) => row.admission.messageId === origin.firstMessageId,
+      );
+
+      if (first === undefined || !sameOrigin(first.admission.origin, origin))
+        return yield* failure("followUp", "corrupt");
+
+      const source = yield* sourceAuthority(
+        origin.source.threadId,
+        first.admission.sourceSubmissionId,
+      );
+
+      if (
+        source.binding === undefined ||
+        source.submission === undefined ||
+        !definitionDigestsEqual(source.binding.digests, intent.sourceDigests)
+      )
+        return yield* failure("followUp", "declaration-unavailable");
+
+      const recorded = source.current.records.find(
+        ({ record }) => record.payload._tag === "WorkerOriginRecorded",
+      )?.record.payload;
+
+      const receivingOrigin =
+        recorded?._tag === "WorkerOriginRecorded" ? recorded.origin : undefined;
+
+      if (source.depth !== 0 && receivingOrigin === undefined)
+        return yield* failure("followUp", "denied");
+      const now = yield* Clock.currentTimeMillis;
+
+      const deadlineAtMillis = Math.min(
+        origin.expiresAtMillis,
+        receivingOrigin?.expiresAtMillis ?? Infinity,
+      );
+
+      if (now >= deadlineAtMillis) return yield* failure("followUp", "denied");
+      const sourceSubmission = source.submission;
+
+      const input = yield* Schema.decodeUnknownEffect(
+        Schema.toEncoded(sourceBinding.definition.input),
+      )(source.submission.inputPayload).pipe(
+        Effect.flatMap(() =>
+          Schema.decodeUnknownEffect(PersistedJson)(sourceSubmission.inputPayload),
+        ),
+        Effect.mapError(() => failure("followUp", "corrupt")),
+      );
+
+      let workerAdmission: WorkerAdmission | undefined;
+      let principal = submission.principal;
+
+      if (receivingOrigin !== undefined) {
+        const retained = source.submission.workerAdmission;
+
+        if (retained === undefined || !sameOrigin(retained.origin, receivingOrigin))
+          return yield* failure("followUp", "denied");
+        principal = source.submission.principal;
+        workerAdmission = {
+          origin: receivingOrigin,
+          reportKind: "update",
+          messageId,
+          parameters: retained.parameters,
+          createdAtMillis: now,
+          ...(retained.sourceSubmissionId === undefined
+            ? {}
+            : { sourceSubmissionId: retained.sourceSubmissionId }),
+        };
+      }
+
+      const sourceSubmissionId =
+        receivingOrigin === undefined
+          ? first.admission.sourceSubmissionId
+          : workerAdmission?.sourceSubmissionId;
+
+      const authorized = yield* deps.authorizer.authorize({
+        sourceThreadId: receivingOrigin?.source.threadId ?? origin.source.threadId,
+        ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
+        principal,
+        operation: "followUp",
+        access: "send",
+        worker: receivingOrigin?.worker ?? origin.worker,
+      });
+
+      const message = WorkerUpdate.make({
+        _tag: "WorkerUpdate",
+        schemaVersion: 1,
+        worker: origin.worker,
+        update,
+      });
+
+      const envelope: PreparedInput = {
+        schemaVersion: 1,
+        threadId: origin.source.threadId,
+        deliveryPrincipal: authorized,
+        agentId: origin.source.agentId,
+        definitions: intent.sourceDigests,
+        input,
+        inputDigest: yield* withCrypto(digestJson(input)).pipe(
+          Effect.mapError(storageFailure("followUp")),
+        ),
+        admissionKey: messageId,
+        authorization: { policyId: "worker-report", decisionId: messageId },
+        messageAdmission: message,
+        ...(workerAdmission === undefined
+          ? {}
+          : { workerAdmission: { ...workerAdmission, deliveryPrincipal: authorized } }),
+      };
+
+      return {
+        messageId,
+        envelope: yield* Schema.encodeEffect(PreparedInput)(envelope).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(PersistedJson)),
+          Effect.mapError(storageFailure("followUp")),
+        ),
+        createdAtMillis: now,
+        deadlineAtMillis,
+      };
+    },
+    Effect.mapError((error) =>
+      error.reason === "storage" || error.reason === "corrupt"
+        ? LedgerError.make({ operation: "worker-update", message: error.reason })
+        : UpdateError.make({ reason: error.reason === "denied" ? "denied" : "unavailable" }),
+    ),
+  );
 
   const reportRun = Effect.fn("WorkerHost.reportRun")(function* (
     submission: SubmissionSnapshot,
@@ -1329,6 +1509,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         envelope: encoded,
         createdAtMillis: now,
         deadlineAtMillis,
+        ...(lastWorkerReportMessageId(history.records) === undefined
+          ? {}
+          : { predecessor: lastWorkerReportMessageId(history.records) }),
       });
     });
 
@@ -1367,6 +1550,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         envelope,
         createdAtMillis: decision.createdAtMillis,
         deadlineAtMillis: decision.deadlineAtMillis,
+        ...(decision.predecessor === undefined ? {} : { predecessor: decision.predecessor }),
       }),
     ).pipe(Effect.mapError(storageFailure("inspect")));
 
@@ -2112,32 +2296,47 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
   };
 
   const validateCompletion = Effect.fn("WorkerHost.validateCompletion")(function* (
-    unvalidated: WorkerCompletion,
+    unvalidated: FrameworkMessage,
     options: DurableSubmitOptions,
     agentId: AgentId,
     inputDigest: Digest,
   ) {
-    const message = yield* Schema.decodeUnknownEffect(WorkerCompletion)(unvalidated).pipe(
+    const message = yield* Schema.decodeUnknownEffect(FrameworkMessage)(unvalidated).pipe(
       Effect.mapError(() => failure("followUp", "corrupt")),
     );
 
-    const child = yield* read(message.report.worker.threadId, "followUp");
+    const child = yield* read(
+      message._tag === "WorkerCompletion"
+        ? message.report.worker.threadId
+        : message.worker.threadId,
+      "followUp",
+    );
 
-    const decision = child.records.find(
-      ({ record }) =>
-        record.payload._tag === "WorkerReportPrepared" &&
-        record.payload.runId === message.report.runId,
-    )?.record.payload;
+    const frozen =
+      message._tag === "WorkerCompletion"
+        ? child.records.flatMap(({ record }) =>
+            record.payload._tag === "WorkerReportPrepared" &&
+            record.payload.runId === message.report.runId
+              ? [record.payload.envelope]
+              : [],
+          )[0]
+        : child.records.flatMap(({ record }) =>
+            record.payload._tag === "AgentUpdateEmitted" &&
+            Schema.toEquivalence(Update)(record.payload.update, message.update) &&
+            record.payload.delivery !== undefined
+              ? [record.payload.delivery.envelope]
+              : [],
+          )[0];
 
-    if (decision?._tag !== "WorkerReportPrepared") return yield* failure("followUp", "denied");
+    if (frozen === undefined) return yield* failure("followUp", "denied");
 
-    const envelope = yield* Schema.decodeUnknownEffect(PreparedInput)(decision.envelope).pipe(
+    const envelope = yield* Schema.decodeUnknownEffect(PreparedInput)(frozen).pipe(
       Effect.mapError(() => failure("followUp", "corrupt")),
     );
 
     if (
-      !Schema.is(WorkerCompletion)(envelope.messageAdmission) ||
-      !Schema.toEquivalence(WorkerCompletion)(envelope.messageAdmission, message) ||
+      !Schema.is(FrameworkMessage)(envelope.messageAdmission) ||
+      !Schema.toEquivalence(FrameworkMessage)(envelope.messageAdmission, message) ||
       envelope.threadId !== options.threadId ||
       envelope.agentId !== agentId ||
       envelope.inputDigest !== inputDigest ||
@@ -2258,6 +2457,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
   return {
     facet,
+    prepareUpdate,
     acquire,
     validateCompletion,
     validateAdmission,

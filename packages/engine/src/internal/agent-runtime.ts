@@ -20,6 +20,7 @@ import {
   ModelProtocolError,
 } from "@effect-agent/core/AgentError";
 import { type AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { Emitter, Update, UpdateError } from "@effect-agent/core/AgentUpdates";
 import {
   type AgentId,
   ThreadId,
@@ -31,7 +32,9 @@ import {
   type TurnId,
 } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { IdempotencyKey } from "@effect-agent/core/Receipt";
 import {
+  AgentUpdateEmitted,
   ApprovalRequested,
   BudgetWarning,
   CompactionPerformed,
@@ -86,7 +89,7 @@ import {
   sumRunTotals,
   type UsageCompleteness,
 } from "@effect-agent/core/Usage";
-import { WorkerCompletion, type WorkerBudgetScope } from "@effect-agent/core/Worker";
+import { FrameworkMessage, type WorkerBudgetScope } from "@effect-agent/core/Worker";
 import type { Take } from "effect";
 import {
   Cause,
@@ -153,6 +156,7 @@ type RuntimeProgram<
     | undefined = undefined,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 > = {
   readonly definition: Definition<
     InputSchema,
@@ -160,7 +164,8 @@ type RuntimeProgram<
     Instructions,
     Toolkit.Toolkit<Tools>,
     RunDispositionValue,
-    InputPromptValue
+    InputPromptValue,
+    UpdatesSchema
   > & {
     readonly instructions: InstructionSource<
       InputSchema["Type"],
@@ -192,6 +197,7 @@ export type RuntimeBinding<
     | undefined = undefined,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 > = RuntimeProgram<
   InputSchema,
   OutputSchema,
@@ -200,7 +206,8 @@ export type RuntimeBinding<
   InstructionError,
   InstructionRequirements,
   RunDispositionValue,
-  InputPromptValue
+  InputPromptValue,
+  UpdatesSchema
 > & {
   readonly model: Layer.Layer<
     LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName | ModelProvides,
@@ -414,6 +421,7 @@ export type AgentRuntimeFailure<
   InstructionError = never,
 > =
   | Agent.Failure<AgentValue>
+  | ([Agent.UpdatesSchema<AgentValue>] extends [never] ? never : UpdateError)
   | AgentPolicyError
   | ContextBudgetError
   | ContextOverflowError
@@ -437,6 +445,7 @@ export type AgentRuntimeFailure<
  * requirements and MUST NOT be satisfied from an application Layer.
  */
 export type EngineProvidedToolServices =
+  | Emitter
   | AgentSpawner
   | RunEventSink
   | DurableStep
@@ -499,6 +508,11 @@ type InterpreterRequirements<
   | InstructionRequirements;
 
 interface RunContext {
+  readonly updates: Map<string, Update>;
+  readonly validateUpdate: (value: Schema.Json) => Effect.Effect<void, UpdateError>;
+  updateBytes: number;
+  readonly updatePermits: Semaphore.Semaphore;
+
   readonly definition: Agent.AnyDefinition;
   toolSelection: Selection | undefined;
   toolCatalog: ReadonlyArray<CatalogEntry>;
@@ -1470,11 +1484,22 @@ const settleRejectedBatch = Effect.fn("AgentRuntime.settleRejectedBatch")(functi
  * authoritative for the base identity and the emitting batch's `turnId`; a
  * handler cannot forge either.
  */
+type ToolEventPayload =
+  | SubagentEventPayload
+  | { readonly _tag: "AgentUpdateEmitted"; readonly update: Update };
+
 const stampSubagentEvent = Effect.fn("AgentRuntime.stampSubagentEvent")(function* (
   context: RunContext,
   turnId: TurnId,
-  payload: SubagentEventPayload,
+  payload: ToolEventPayload,
 ): Effect.fn.Return<RunEvent, ModelProtocolError> {
+  if (payload._tag === "AgentUpdateEmitted")
+    return AgentUpdateEmitted.make({
+      ...(yield* eventBase(context)),
+      turnId,
+      update: payload.update,
+    });
+
   const shared = {
     ...(yield* eventBase(context)),
     turnId,
@@ -2543,48 +2568,155 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       // it concurrently with handlers, so a burst may suspend its emitting handler but a detached
       // external observer can never backpressure the batch. Emitting after settlement still fails
       // closed with `RunEventSinkClosedError`.
-      const sinkQueue = yield* Queue.bounded<SubagentEventPayload, Cause.Done>(
+      const sinkQueue = yield* Queue.bounded<ToolEventPayload, Cause.Done>(
         context.bufferLimits.maxSubagentEventsPerBatch,
       );
 
       const batchSink: RunEventSinkService = {
         emit: (payload) =>
-          Queue.offer(sinkQueue, payload).pipe(
-            Effect.flatMap((accepted) =>
-              accepted
-                ? Effect.sync(() => {
-                    if (context.liveChildren.has(payload.childRunId)) return;
-                    if ("usage" in payload && payload.usage !== undefined) {
-                      context.childUsage.set(
-                        payload.childRunId,
-                        Effect.succeed(
-                          RunUsageReport.make({
-                            usage: payload.usage,
-                            delegatedUsage: payload.delegatedUsage ?? unknownRunTotals(),
-                          }),
-                        ),
-                      );
-                    } else if (
-                      payload._tag === "SubagentStarted" &&
-                      !context.childUsage.has(payload.childRunId)
-                    ) {
-                      context.childUsage.set(
-                        payload.childRunId,
-                        Effect.succeed(
-                          RunUsageReport.make({
-                            usage: unknownRunTotals(),
-                            delegatedUsage: unknownRunTotals(),
-                          }),
-                        ),
-                      );
-                    }
-                  })
-                : Effect.fail(
-                    RunEventSinkClosedError.make({
-                      message: `Subagent event ${payload._tag} was emitted after its Tool batch settled`,
-                    }),
-                  ),
-            ),
+          ![
+            "SubagentRequested",
+            "SubagentStarted",
+            "SubagentProgress",
+            "SubagentCompleted",
+            "SubagentFailed",
+            "SubagentInterrupted",
+            "SubagentJoined",
+          ].includes(payload._tag)
+            ? Effect.fail(
+                new RunEventSinkClosedError({ message: "Unsupported Tool event payload" }),
+              )
+            : Queue.offer(sinkQueue, payload).pipe(
+                Effect.flatMap((accepted) =>
+                  accepted
+                    ? Effect.sync(() => {
+                        if (context.liveChildren.has(payload.childRunId)) return;
+                        if ("usage" in payload && payload.usage !== undefined) {
+                          context.childUsage.set(
+                            payload.childRunId,
+                            Effect.succeed(
+                              RunUsageReport.make({
+                                usage: payload.usage,
+                                delegatedUsage: payload.delegatedUsage ?? unknownRunTotals(),
+                              }),
+                            ),
+                          );
+                        } else if (
+                          payload._tag === "SubagentStarted" &&
+                          !context.childUsage.has(payload.childRunId)
+                        ) {
+                          context.childUsage.set(
+                            payload.childRunId,
+                            Effect.succeed(
+                              RunUsageReport.make({
+                                usage: unknownRunTotals(),
+                                delegatedUsage: unknownRunTotals(),
+                              }),
+                            ),
+                          );
+                        }
+                      })
+                    : Effect.fail(
+                        RunEventSinkClosedError.make({
+                          message: `Subagent event ${payload._tag} was emitted after its Tool batch settled`,
+                        }),
+                      ),
+                ),
+              ),
+      };
+
+      const updateServices = yield* Effect.context<HookRequirements>();
+      let updatesOpen = true;
+      let updateHookFailure: Option.Option<HookError> = Option.none();
+
+      const updateEmitter: Emitter["Service"] = {
+        emit: (request) =>
+          context.updatePermits.withPermit(
+            Effect.gen(function* () {
+              if (!updatesOpen) return yield* new UpdateError({ reason: "unavailable" });
+              if (
+                request.target.id !== context.agentId ||
+                request.target.updates !== context.definition.updates ||
+                context.definition.updates === undefined
+              )
+                return yield* new UpdateError({ reason: "identity" });
+
+              const updateId = yield* Schema.decodeUnknownEffect(IdempotencyKey)(
+                request.updateId,
+              ).pipe(Effect.mapError(() => new UpdateError({ reason: "validation" })));
+
+              const value = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
+                JSON.stringify(request.value),
+              ).pipe(Effect.mapError(() => new UpdateError({ reason: "validation" })));
+
+              yield* context.validateUpdate(value);
+              const existing = context.updates.get(updateId);
+
+              if (existing !== undefined) {
+                if (!Schema.toEquivalence(Schema.Json)(existing.value, value))
+                  return yield* new UpdateError({ reason: "conflict" });
+
+                return existing;
+              }
+              const bytes = utf8ByteLength(JSON.stringify(value));
+              const maxCount = options.updates?.maxCount ?? 32;
+              const maxBytes = options.updates?.maxBytes ?? 16384;
+
+              if (
+                !Number.isSafeInteger(maxCount) ||
+                maxCount < 1 ||
+                !Number.isSafeInteger(maxBytes) ||
+                maxBytes < 1 ||
+                context.updates.size >= maxCount ||
+                context.updateBytes + bytes > maxBytes
+              )
+                return yield* new UpdateError({ reason: "capacity" });
+
+              const accepted =
+                options.emitUpdate === undefined
+                  ? Update.make({
+                      schemaVersion: 1,
+                      agentId: context.agentId,
+                      threadId: context.threadId,
+                      runId: context.runId,
+                      updateId: request.updateId,
+                      sequence: context.updates.size + 1,
+                      value: value,
+                    })
+                  : yield* options.emitUpdate({ updateId: request.updateId, value: value }).pipe(
+                      Effect.provide(updateServices),
+                      Effect.catch((error) => {
+                        if (Schema.is(UpdateError)(error)) return Effect.fail(error);
+                        updateHookFailure = Option.some(error as HookError);
+
+                        return Effect.fail(new UpdateError({ reason: "storage" }));
+                      }),
+                    );
+
+              const validated = yield* Schema.decodeUnknownEffect(Update)(accepted).pipe(
+                Effect.mapError(() => new UpdateError({ reason: "validation" })),
+              );
+
+              if (
+                validated.agentId !== context.agentId ||
+                validated.threadId !== context.threadId ||
+                validated.runId !== context.runId ||
+                validated.updateId !== request.updateId ||
+                !Schema.toEquivalence(Schema.Json)(validated.value, value)
+              )
+                return yield* new UpdateError({ reason: "identity" });
+              context.updates.set(request.updateId, validated);
+              context.updateBytes += bytes;
+
+              const published = yield* Queue.offer(sinkQueue, {
+                _tag: "AgentUpdateEmitted",
+                update: validated,
+              });
+
+              if (!published) return yield* new UpdateError({ reason: "unavailable" });
+
+              return validated;
+            }),
           ),
       };
 
@@ -2605,13 +2737,18 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         ToolSpanTelemetry | ProgrammaticToolAuthorization | Tool.HandlerServices<ToolUnion<Tools>>
       > = handlers.pipe(
         Stream.provideService(RunEventSink, batchSink),
+        Stream.provideService(Emitter, updateEmitter),
         Stream.provideService(SubagentDurability, batchSubagentDurability),
         Stream.catchCause((cause) => {
           settledCause = cause;
 
           return Stream.empty;
         }),
-        Stream.ensuring(Queue.end(sinkQueue)),
+        Stream.ensuring(
+          Effect.sync(() => {
+            updatesOpen = false;
+          }).pipe(Effect.andThen(Queue.end(sinkQueue))),
+        ),
       );
 
       const sinkEvents = Stream.fromQueue(sinkQueue).pipe(
@@ -2624,11 +2761,13 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
             Effect.suspend(
               (): Effect.Effect<
                 void,
+                | HookError
                 | AgentChildPending
                 | ModelProtocolError
                 | AiError.AiError
                 | Tool.HandlerError<ToolUnion<Tools>>
               > => {
+                if (Option.isSome(updateHookFailure)) return Effect.fail(updateHookFailure.value);
                 if (settledCause !== undefined) {
                   // A real sibling failure keeps the existing batch failure
                   // policy even when another call is waiting: the Run fails
@@ -5013,6 +5152,7 @@ const makeTurn = <
     | undefined = undefined,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 >(
   agent: RuntimeProgram<
     InputSchema,
@@ -5022,7 +5162,8 @@ const makeTurn = <
     InstructionError,
     InstructionRequirements,
     RunDispositionValue,
-    InputPromptValue
+    InputPromptValue,
+    UpdatesSchema
   >,
   context: RunContext,
   prompt: Prompt.Prompt,
@@ -6652,6 +6793,7 @@ const toolBatchContinuation = <
     | undefined = undefined,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 >(
   agent: RuntimeProgram<
     InputSchema,
@@ -6661,7 +6803,8 @@ const toolBatchContinuation = <
     InstructionError,
     InstructionRequirements,
     RunDispositionValue,
-    InputPromptValue
+    InputPromptValue,
+    UpdatesSchema
   >,
   context: RunContext,
   trace: TurnTrace,
@@ -6864,6 +7007,7 @@ const makeResumeTurn = <
     | undefined = undefined,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 >(
   agent: RuntimeProgram<
     InputSchema,
@@ -6873,7 +7017,8 @@ const makeResumeTurn = <
     InstructionError,
     InstructionRequirements,
     RunDispositionValue,
-    InputPromptValue
+    InputPromptValue,
+    UpdatesSchema
   >,
   context: RunContext,
   prompt: Prompt.Prompt,
@@ -7358,6 +7503,7 @@ function streamWithCompletion<
     | undefined = undefined,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
     undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
 >(
   agentValue:
     | RuntimeBinding<
@@ -7371,7 +7517,8 @@ function streamWithCompletion<
         InstructionError,
         InstructionRequirements,
         RunDispositionValue,
-        InputPromptValue
+        InputPromptValue,
+        UpdatesSchema
       >
     | RuntimeBinding<
         InputSchema,
@@ -7384,7 +7531,8 @@ function streamWithCompletion<
         InstructionError,
         InstructionRequirements,
         RunDispositionValue,
-        InputPromptValue
+        InputPromptValue,
+        UpdatesSchema
       >["definition"],
   input: unknown,
   runOptions: RunOptions<HookError, HookRequirements> = {},
@@ -7401,7 +7549,8 @@ function streamWithCompletion<
     InstructionError,
     InstructionRequirements,
     RunDispositionValue,
-    InputPromptValue
+    InputPromptValue,
+    UpdatesSchema
   > = { definition: "definition" in agentValue ? agentValue.definition : agentValue };
 
   const model = "definition" in agentValue ? agentValue.model : undefined;
@@ -7552,7 +7701,24 @@ function streamWithCompletion<
               ? undefined
               : { toolNames: agent.definition.toolExposure.initialToolNames ?? [] });
 
+          const updateSchema = agent.definition.updates;
+          const updateContext = yield* Effect.context<(UpdatesSchema & {})["DecodingServices"]>();
+
+          const validateUpdate =
+            updateSchema === undefined
+              ? () => Effect.fail(new UpdateError({ reason: "unavailable" }))
+              : (value: Schema.Json) =>
+                  Schema.decodeUnknownEffect(updateSchema)(value).pipe(
+                    Effect.provide(updateContext),
+                    Effect.asVoid,
+                    Effect.mapError(() => new UpdateError({ reason: "validation" })),
+                  );
+
           const context: RunContext = {
+            validateUpdate,
+            updates: new Map(),
+            updateBytes: 0,
+            updatePermits: yield* Semaphore.make(1),
             definition: agent.definition,
             toolSelection:
               initialToolSelection === undefined
@@ -7715,14 +7881,14 @@ function streamWithCompletion<
               if (retained !== undefined) yield* retained.stageInput(encodedInput);
 
               const inputPrompt =
-                options.workerCompletion === undefined
+                (options.frameworkMessage ?? options.workerCompletion) === undefined
                   ? yield* renderInputPrompt(
                       agent.definition.inputPrompt,
                       decodedInput,
                       encodedInput,
                     )
-                  : yield* Schema.encodeEffect(Schema.fromJsonString(WorkerCompletion))(
-                      options.workerCompletion,
+                  : yield* Schema.encodeEffect(Schema.fromJsonString(FrameworkMessage))(
+                      (options.frameworkMessage ?? options.workerCompletion)!,
                     ).pipe(
                       Effect.mapError(() =>
                         AgentInputError.make({ message: "Invalid worker completion message" }),
@@ -7840,6 +8006,40 @@ function streamWithCompletion<
           // batch shadows with per-batch / per-call live services. Providing them
           // here is what removes these services from the runtime's public
           // requirements.
+          const nativeUpdateTool = agent.definition.toolkit.tools.emit_update;
+
+          const updateHandlers =
+            agent.definition.updates === undefined || nativeUpdateTool === undefined
+              ? Context.empty()
+              : yield* Toolkit.make(nativeUpdateTool).toHandlers({
+                  emit_update: (parameters: unknown, call: Toolkit.HandlerContext<Tool.Any>) =>
+                    Effect.gen(function* () {
+                      if (call.toolCallId === undefined)
+                        return yield* new UpdateError({ reason: "unavailable" });
+
+                      const decoded = yield* Schema.decodeUnknownEffect(
+                        Schema.Struct({ value: Schema.Unknown }),
+                      )(parameters).pipe(
+                        Effect.mapError(() => new UpdateError({ reason: "validation" })),
+                      );
+
+                      const value = yield* Schema.encodeUnknownEffect(agent.definition.updates!)(
+                        decoded.value,
+                      ).pipe(
+                        Effect.flatMap(Schema.decodeUnknownEffect(Schema.Json)),
+                        Effect.mapError(() => new UpdateError({ reason: "validation" })),
+                      );
+
+                      const updateId = yield* Schema.decodeUnknownEffect(IdempotencyKey)(
+                        `tool:${context.runId}:${call.toolCallId}`,
+                      ).pipe(Effect.mapError(() => new UpdateError({ reason: "validation" })));
+
+                      const emitter = yield* Emitter;
+
+                      yield* emitter.emit({ target: agent.definition, updateId, value });
+                    }),
+                });
+
           const engineToolServices = Context.make(
             AgentSpawner,
             makeAgentSpawner(
@@ -7882,6 +8082,10 @@ function streamWithCompletion<
                       : Math.max(0, contextTokenLimit - estimatedTokens),
                 });
               }),
+            }),
+            Context.merge(updateHandlers),
+            Context.add(Emitter, {
+              emit: () => Effect.fail(new UpdateError({ reason: "unavailable" })),
             }),
             Context.add(CurrentToolCatalog, { entries: [] }),
             Context.add(RunToolVisibility, visibility),
@@ -9596,6 +9800,7 @@ const spawnWithParent = (
       | undefined = undefined,
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
+    UpdatesSchema extends Schema.Top | undefined = undefined,
   >(
     binding: RuntimeBinding<
       InputSchema,
@@ -9608,7 +9813,8 @@ const spawnWithParent = (
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
     input: unknown,
     delegation: SpawnDelegation,
@@ -9692,6 +9898,7 @@ export interface AgentSpawnerService {
       | undefined = undefined,
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
+    UpdatesSchema extends Schema.Top | undefined = undefined,
   >(
     binding: RuntimeBinding<
       InputSchema,
@@ -9704,7 +9911,8 @@ export interface AgentSpawnerService {
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
     input: unknown,
     delegation: SpawnDelegation,
@@ -9724,7 +9932,8 @@ export interface AgentSpawnerService {
           InstructionError,
           InstructionRequirements,
           RunDispositionValue,
-          InputPromptValue
+          InputPromptValue,
+          UpdatesSchema
         >,
         HookError,
         InstructionError
@@ -9745,7 +9954,8 @@ export interface AgentSpawnerService {
             InstructionError,
             InstructionRequirements,
             RunDispositionValue,
-            InputPromptValue
+            InputPromptValue,
+            UpdatesSchema
           >,
           HookRequirements,
           InstructionRequirements

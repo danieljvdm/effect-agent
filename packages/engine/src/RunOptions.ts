@@ -1,6 +1,7 @@
 import { type AnyDefinition } from "@effect-agent/core/Agent";
 import { type AgentInputError } from "@effect-agent/core/AgentError";
 import { type AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import type { Update, UpdateError } from "@effect-agent/core/AgentUpdates";
 import {
   type AgentId,
   type ThreadId,
@@ -12,6 +13,7 @@ import {
   type TurnId,
 } from "@effect-agent/core/Identifiers";
 import { type MemoryRecallError } from "@effect-agent/core/MemoryReference";
+import type { IdempotencyKey } from "@effect-agent/core/Receipt";
 import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
 import {
   type SubagentBudgetReservation,
@@ -28,7 +30,11 @@ import {
   type RunTotals,
   type ModelCallUsage,
 } from "@effect-agent/core/Usage";
-import type { WorkerBudgetScope, WorkerCompletion } from "@effect-agent/core/Worker";
+import type {
+  WorkerBudgetScope,
+  WorkerCompletion,
+  FrameworkMessage,
+} from "@effect-agent/core/Worker";
 import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effect";
 import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai";
 
@@ -406,6 +412,7 @@ export type RunToolAuthorizationDecision =
  */
 export interface RunToolAuthorizationRequest {
   readonly workerCompletion?: WorkerCompletion;
+  readonly frameworkMessage?: FrameworkMessage;
   readonly threadId: ThreadId;
   readonly runId: RunId;
   readonly turnId: TurnId;
@@ -890,8 +897,17 @@ export interface RunBufferLimits {
  * through the generic parameters.
  */
 export interface RunOptions<HookError = never, HookRequirements = never> {
+  /** Acknowledges durable update acceptance before semantic publication. */
+  readonly emitUpdate?: (request: {
+    readonly updateId: IdempotencyKey;
+    readonly value: Schema.Json;
+  }) => Effect.Effect<Update, UpdateError | HookError, HookRequirements>;
+  /** Finite per-Run limits: accepted update count and cumulative UTF-8 JSON value bytes. Defaults: 32 and 16384. */
+  readonly updates?: { readonly maxCount?: number; readonly maxBytes?: number };
+
   /** Host-validated completion; application input still supplies instructions and policy context. */
   readonly workerCompletion?: WorkerCompletion;
+  readonly frameworkMessage?: FrameworkMessage;
 
   /** Initial or canonically restored run-scoped native selection. */
   readonly toolSelection?: Selection | undefined;

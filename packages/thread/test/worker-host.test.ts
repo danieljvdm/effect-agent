@@ -15,7 +15,7 @@ import {
   SubagentReservationAmounts,
 } from "@effect-agent/core/SubagentContract";
 import { ToolResultBounds } from "@effect-agent/core/ToolResult";
-import { WorkerCompletion, WorkerError } from "@effect-agent/core/Worker";
+import { WorkerCompletion, WorkerError, WorkerUpdate } from "@effect-agent/core/Worker";
 import {
   WorkerReportPreparationFailure,
   type StartWorkerRequest,
@@ -44,11 +44,14 @@ import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
 } from "../src/DurableFailpoint.ts";
+import { makeAgentUpdateRuntime } from "../src/internal/agent-updates.ts";
 import { makeWorkerRuntime, WorkerInputControl } from "../src/internal/worker-host.ts";
 import {
   MessageDeliveryStore,
+  defaultMessageDeliveryStoreLimits,
   applyMessageDeliveryChange,
   type MessageDeliveryRecord,
+  type MessageDeliveryStoreLimits,
 } from "../src/MessageDelivery.ts";
 import {
   BatchId,
@@ -61,6 +64,7 @@ import {
   ProducerEpoch,
   ProducerId,
   RecordEnvelope,
+  RunStartedRecord,
   SubmissionSettled,
   SubmissionSettledRecord,
   SubtreeBudgetReserved,
@@ -176,6 +180,8 @@ const harness = Effect.fn("workerHostHarness")(function* (
   options: {
     readonly independentBudget?: boolean;
     readonly limits?: Partial<typeof WorkerHostConfig.Service>;
+    readonly deliveryLimits?: Partial<MessageDeliveryStoreLimits>;
+    readonly maxStoredValueBytes?: number;
     readonly authorize?: (typeof WorkerHostAuthorizer.Service)["authorize"];
     readonly sourceRevisions?: ReadonlyArray<{
       readonly definition: Agent.AnyDefinition;
@@ -234,7 +240,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
 
   let runtime: Effect.Success<ReturnType<typeof makeWorkerRuntime>>;
 
-  runtime = yield* makeWorkerRuntime({
+  const runtimes = yield* makeWorkerRuntime({
     deploymentId: Schema.decodeSync(DeploymentId)("test"),
     producerId: Schema.decodeSync(ProducerId)("test"),
     settlementPollInterval: Duration.millis(5),
@@ -258,6 +264,13 @@ const harness = Effect.fn("workerHostHarness")(function* (
             []),
     })),
   }).pipe(
+    Effect.flatMap((runtime) =>
+      makeAgentUpdateRuntime({
+        deploymentId: Schema.decodeSync(DeploymentId)("test"),
+        producerId: Schema.decodeSync(ProducerId)("test"),
+        prepare: runtime.prepareUpdate,
+      }).pipe(Effect.map((updates) => ({ runtime, updates }))),
+    ),
     Effect.provideService(WorkerBudgetAuthorizer, {
       authorize: () =>
         options.independentBudget === true
@@ -359,6 +372,8 @@ const harness = Effect.fn("workerHostHarness")(function* (
       observe: () => Stream.die("Worker fixture uses finite canonical reads"),
     }),
     Effect.provideService(MessageDeliveryStore, {
+      limits: { ...defaultMessageDeliveryStoreLimits, ...options.deliveryLimits },
+      maxStoredValueBytes: options.maxStoredValueBytes ?? 16 * 1_024 * 1_024,
       get: ({ messageId }) => Effect.sync(() => deliveries.get(messageId) ?? null),
       insert: (record) =>
         Effect.sync(() => {
@@ -528,6 +543,8 @@ const harness = Effect.fn("workerHostHarness")(function* (
         ),
     }),
   );
+
+  runtime = runtimes.runtime;
   const host = yield* runtime.acquire({ sourceThreadId: sourceId, principal });
 
   const settle = Effect.fn("workerHostHarness.settle")(function* (
@@ -587,6 +604,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
 
   return {
     runtime,
+    updates: runtimes.updates,
     host,
     deliveries,
     logs,
@@ -610,6 +628,328 @@ const harness = Effect.fn("workerHostHarness")(function* (
 });
 
 layer(NodeCrypto.layer)((it) => {
+  it.effect("distinguishes transient worker pressure from permanent input exhaustion", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ limits: { maxInputsPerWorker: 1, maxActiveWorkersPerSource: 1 } });
+      const first = yield* h.host.start(request("capacity-first"));
+
+      yield* h.host.start(request("capacity-second")).pipe(Effect.flip);
+
+      const pending = [...h.deliveries.values()].find(
+        (row) =>
+          row.envelope.workerAdmission !== undefined &&
+          row.envelope.workerAdmission.origin.worker.threadId !== first.worker.threadId,
+      )!;
+
+      const metadata = pending.envelope.workerAdmission!;
+
+      expect(
+        yield* h.runtime
+          .validateAdmission(
+            metadata,
+            {
+              threadId: pending.envelope.threadId,
+              principal,
+              idempotencyKey: pending.envelope.admissionKey,
+              definitions,
+            },
+            pending.envelope.agentId,
+            pending.envelope.inputDigest,
+            pending.envelope.input,
+          )
+          .pipe(Effect.flip),
+      ).toMatchObject({ reason: "capacity", retryable: true });
+
+      const permanent = yield* h.host
+        .followUp({
+          worker: first.worker,
+          target,
+          idempotencyKey: Schema.decodeSync(IdempotencyKey)("exhausted"),
+          encodedInput: { text: "extra" },
+          encodedParameters: { note: "extra" },
+        })
+        .pipe(Effect.flip);
+
+      expect(permanent.reason).toBe("capacity");
+      expect(permanent.retryable).toBeUndefined();
+      yield* h.settle(first.receipt);
+      expect((yield* h.host.start(request("capacity-third"))).worker.threadId).not.toBe(
+        first.worker.threadId,
+      );
+    }),
+  );
+
+  for (const point of [
+    "update:before-canonical-append",
+    "update:after-canonical-append",
+    "update:before-delivery-insert",
+    "update:after-delivery-insert",
+    "stored-byte-capacity",
+  ] as const) {
+    it.effect(`repairs an accepted parent update after ${point} without re-emission`, () =>
+      Effect.gen(function* () {
+        const h = yield* harness({
+          deliveryLimits: { maxPendingUpdatesPerOwner: 1 },
+          ...(point === "stored-byte-capacity" ? { maxStoredValueBytes: 64 } : {}),
+          sourceReports: [
+            {
+              delegationId: Schema.decodeSync(DelegationId)("research"),
+              target,
+              mode: "standard",
+              prepare: (report) =>
+                Schema.decodeUnknownEffect(WorkerCompletion)({
+                  _tag: "WorkerCompletion",
+                  schemaVersion: 1,
+                  budgetExhausted: false,
+                  report: {
+                    ...report.observation,
+                    worker: report.worker,
+                    result: report.observation.encodedResult,
+                  },
+                }).pipe(
+                  Effect.map((message) => ({ encodedInput: null, message })),
+                  Effect.mapError(() =>
+                    WorkerReportPreparationFailure.make({ stage: "projection" }),
+                  ),
+                ),
+            },
+          ],
+        });
+
+        const ownerId = Schema.decodeSync(SubmissionId)("owner-input");
+
+        h.submissions.set(
+          ownerId,
+          SubmissionSnapshot.make({
+            submissionId: ownerId,
+            threadId: sourceId,
+            queueSequence: Schema.decodeSync(QueueSequence)(1),
+            principal,
+            idempotencyKey: Schema.decodeSync(IdempotencyKey)("owner-input"),
+            agentId: sourceAgent.id,
+            agentDigests: definitions,
+            deploymentId: Schema.decodeSync(DeploymentId)("test"),
+            inputPayload: "original parent input",
+            inputDigest: digest,
+            receiptId: Schema.decodeSync(ReceiptId)("owner-receipt"),
+            state: "settled",
+            createdAt: DateTime.makeUnsafe(0),
+          }),
+        );
+
+        const host = yield* h.runtime.acquire({
+          sourceThreadId: sourceId,
+          sourceSubmissionId: ownerId,
+          principal,
+        });
+
+        const started = yield* host.start(request("report-updates"));
+        const submission = h.submissions.get(started.receipt.submissionId)!;
+        const runId = Schema.decodeSync(RunId)(`run:${submission.submissionId}`);
+
+        h.push(
+          started.worker.threadId,
+          RunStartedRecord.make({ runId, policyAccountingVersion: 1, maxDurationMillis: 10_000 }),
+          "run-started",
+        );
+
+        const emission = {
+          submission,
+          runId,
+          producerEpoch: Schema.decodeSync(ProducerEpoch)(0),
+          definitions,
+          updateId: Schema.decodeSync(IdempotencyKey)("finding"),
+          value: { finding: "area concern" },
+        };
+
+        if (point === "stored-byte-capacity") {
+          expect(yield* h.updates.emit(emission).pipe(Effect.flip)).toMatchObject({
+            reason: "capacity",
+          });
+          expect(
+            h.logs
+              .get(started.worker.threadId)
+              ?.filter(({ record }) => record.payload._tag === "AgentUpdateEmitted"),
+          ).toHaveLength(0);
+
+          return;
+        }
+        h.fail(point);
+        expect((yield* h.updates.emit(emission).pipe(Effect.exit))._tag).toBe("Failure");
+        h.fail(undefined);
+        if (point !== "update:before-canonical-append") {
+          expect(
+            yield* h.updates
+              .emit({ ...emission, updateId: Schema.decodeSync(IdempotencyKey)("overflow") })
+              .pipe(Effect.flip),
+          ).toMatchObject({ reason: "capacity" });
+          yield* h.updates.repair(started.worker.threadId);
+        }
+        const update = yield* h.updates.emit(emission);
+
+        const rows = [...h.deliveries.values()].filter(
+          (row) => row.key.ownerThreadId === started.worker.threadId,
+        );
+
+        expect(rows).toHaveLength(1);
+        const row = rows[0]!;
+
+        expect(row.envelope.input).toBe("original parent input");
+
+        const message = yield* Schema.decodeUnknownEffect(WorkerUpdate)(
+          row.envelope.messageAdmission,
+        );
+
+        expect(message.update).toEqual(update);
+
+        const options = {
+          threadId: row.envelope.threadId,
+          principal: row.envelope.deliveryPrincipal,
+          idempotencyKey: row.envelope.admissionKey,
+          definitions: row.envelope.definitions,
+        };
+
+        expect(
+          yield* h.runtime.validateCompletion(
+            message,
+            options,
+            row.envelope.agentId,
+            row.envelope.inputDigest,
+          ),
+        ).toEqual(message);
+        expect(
+          yield* h.runtime
+            .validateCompletion(
+              { ...message, update: { ...message.update, value: { finding: "forged" } } },
+              options,
+              row.envelope.agentId,
+              row.envelope.inputDigest,
+            )
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "denied" });
+        h.deny("send");
+        expect(
+          yield* h.runtime
+            .validateCompletion(message, options, row.envelope.agentId, row.envelope.inputDigest)
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "denied" });
+        h.deny(undefined);
+        yield* h.settle(started.receipt);
+
+        const completion = [...h.deliveries.values()].find((entry) =>
+          Schema.is(WorkerCompletion)(entry.envelope.messageAdmission),
+        );
+
+        expect(completion?.predecessor).toBe(row.key.messageId);
+      }),
+    );
+  }
+
+  for (const point of [
+    "update:before-canonical-append",
+    "update:after-canonical-append",
+  ] as const) {
+    it.effect(`retains one update across ${point} and rejects changed replay`, () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        const started = yield* h.host.start(request("updating"));
+        const submission = h.submissions.get(started.receipt.submissionId)!;
+        const runId = Schema.decodeSync(RunId)(`run:${submission.submissionId}`);
+
+        h.push(
+          started.worker.threadId,
+          RunStartedRecord.make({ runId, policyAccountingVersion: 1, maxDurationMillis: 10_000 }),
+          "run-started",
+        );
+
+        const input = {
+          submission,
+          runId,
+          producerEpoch: Schema.decodeSync(ProducerEpoch)(0),
+          definitions,
+          updateId: Schema.decodeSync(IdempotencyKey)("finding"),
+          value: { finding: "first" },
+        };
+
+        h.fail(point);
+        expect((yield* h.updates.emit(input).pipe(Effect.exit))._tag).toBe("Failure");
+        h.fail(undefined);
+        const accepted = yield* h.updates.emit(input);
+
+        expect(accepted).toMatchObject({ sequence: 1, value: { finding: "first" } });
+        expect(yield* h.updates.emit(input)).toEqual(accepted);
+        expect(
+          yield* h.updates.emit({ ...input, value: { finding: "changed" } }).pipe(Effect.flip),
+        ).toMatchObject({ reason: "conflict" });
+        expect(
+          h.logs
+            .get(started.worker.threadId)
+            ?.filter(({ record }) => record.payload._tag === "AgentUpdateEmitted"),
+        ).toHaveLength(1);
+        expect(
+          yield* h.updates
+            .emit({ ...input, updateId: Schema.decodeSync(IdempotencyKey)("second"), maxCount: 1 })
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "capacity" });
+        expect(
+          yield* h.updates
+            .emit({
+              ...input,
+              updateId: Schema.decodeSync(IdempotencyKey)("oversized"),
+              maxBytes: 1,
+            })
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "capacity" });
+        yield* h.settle(started.receipt);
+        expect(
+          yield* h.updates
+            .emit({ ...input, updateId: Schema.decodeSync(IdempotencyKey)("late") })
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "identity" });
+      }),
+    );
+  }
+
+  it.effect("serializes competing durable updates and rejects stale emitting ownership", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const started = yield* h.host.start(request("parallel-updates"));
+      const submission = h.submissions.get(started.receipt.submissionId)!;
+      const runId = Schema.decodeSync(RunId)(`run:${submission.submissionId}`);
+
+      h.push(
+        started.worker.threadId,
+        RunStartedRecord.make({ runId, policyAccountingVersion: 1, maxDurationMillis: 10_000 }),
+        "run-started",
+      );
+
+      const base = {
+        submission,
+        runId,
+        producerEpoch: Schema.decodeSync(ProducerEpoch)(0),
+        definitions,
+        value: { finding: "parallel" },
+      };
+
+      const accepted = yield* Effect.forEach(
+        ["first", "second", "third"],
+        (key) => h.updates.emit({ ...base, updateId: Schema.decodeSync(IdempotencyKey)(key) }),
+        { concurrency: 3 },
+      );
+
+      expect(accepted.map((update) => update.sequence).sort()).toEqual([1, 2, 3]);
+      expect(
+        yield* h.updates
+          .emit({
+            ...base,
+            producerEpoch: Schema.decodeSync(ProducerEpoch)(2),
+            updateId: Schema.decodeSync(IdempotencyKey)("stale"),
+          })
+          .pipe(Effect.flip),
+      ).toMatchObject({ _tag: "LedgerError" });
+    }),
+  );
+
   it.effect("uses an admitted root Agent upgrade for workers without changing child lineage", () =>
     Effect.gen(function* () {
       const upgraded = Agent.make("upgraded-source-agent", {
@@ -2266,6 +2606,11 @@ layer(NodeCrypto.layer)((it) => {
         const scoutId = Schema.decodeSync(DelegationId)("scout");
 
         const h = yield* harness({
+          limits: {
+            maxInputsPerWorker: 2,
+            maxUpdateInputsPerWorker: 1,
+            maxPendingUpdateInputsPerWorker: 1,
+          },
           targetReports: [
             {
               delegationId: scoutId,
@@ -2376,10 +2721,67 @@ layer(NodeCrypto.layer)((it) => {
           },
         });
 
+        if (mode === "standard") {
+          const submission = h.submissions.get(scout.receipt.submissionId)!;
+          const runId = Schema.decodeSync(RunId)(`run:${submission.submissionId}`);
+
+          h.push(
+            scout.worker.threadId,
+            RunStartedRecord.make({ runId, policyAccountingVersion: 1, maxDurationMillis: 10_000 }),
+            "scout-run",
+          );
+          yield* h.updates.emit({
+            submission,
+            runId,
+            producerEpoch: Schema.decodeSync(ProducerEpoch)(0),
+            definitions,
+            updateId: Schema.decodeSync(IdempotencyKey)("scout-finding"),
+            value: { finding: "area concern" },
+          });
+
+          const update = [...h.deliveries.values()].find((row) =>
+            Schema.is(WorkerUpdate)(row.envelope.messageAdmission),
+          )!;
+
+          const metadata = update.envelope.workerAdmission!;
+
+          expect(metadata.reportKind).toBe("update");
+
+          const options = {
+            threadId: update.envelope.threadId,
+            principal: update.envelope.deliveryPrincipal,
+            idempotencyKey: update.envelope.admissionKey,
+            definitions: update.envelope.definitions,
+            workerAdmission: metadata,
+            messageAdmission: update.envelope.messageAdmission,
+          };
+
+          expect(
+            yield* h.runtime
+              .validateAdmission(
+                metadata,
+                { ...options, messageAdmission: undefined },
+                update.envelope.agentId,
+                update.envelope.inputDigest,
+                update.envelope.input,
+              )
+              .pipe(Effect.flip),
+          ).toMatchObject({ reason: "denied" });
+          yield* h.runtime.validateAdmission(
+            metadata,
+            options,
+            update.envelope.agentId,
+            update.envelope.inputDigest,
+            update.envelope.input,
+          );
+        }
+
         yield* h.settle(scout.receipt);
 
         const report = [...h.deliveries.values()].find(
-          (row) => row.key.ownerThreadId === scout.worker.threadId,
+          (row) =>
+            row.key.ownerThreadId === scout.worker.threadId &&
+            !Schema.is(WorkerUpdate)(row.envelope.messageAdmission),
         )!;
 
         expect(report.envelope.threadId).toBe(builder.worker.threadId);
@@ -2474,13 +2876,13 @@ layer(NodeCrypto.layer)((it) => {
           .get(sourceId)!
           .filter(({ record }) => record.payload._tag === "WorkerInputRequested");
 
-        expect(charged).toHaveLength(2);
+        expect(charged).toHaveLength(mode === "standard" ? 3 : 2);
 
         const subtree = h.logs
           .get(sourceId)!
           .filter(({ record }) => record.payload._tag === "SubtreeBudgetReserved");
 
-        expect(subtree).toHaveLength(2);
+        expect(subtree).toHaveLength(mode === "standard" ? 3 : 2);
         // The initial input and report occupy the same worker slot but exhaust its pending-input cap.
         expect(
           (yield* h.host

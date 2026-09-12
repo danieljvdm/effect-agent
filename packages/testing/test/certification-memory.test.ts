@@ -86,7 +86,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
             true,
           );
         }
-        // The never-fired set is EXACTLY the documented abort/operator-path exceptions —
+        // The never-fired set is EXACTLY the documented paths covered by separate suites —
         // scoped coverage stated honestly, and pinned so it cannot silently grow.
         expect(tier2NeverFiredLocations(report.tier2)).toEqual(
           [...TIER2_UNREACHED_LOCATIONS].sort(),

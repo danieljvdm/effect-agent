@@ -161,9 +161,9 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
 
 /**
  * Coordinator failpoint locations that none of the six scenario shapes can reach, recorded
- * honestly instead of silently claimed. These require operator, compaction, reservation, or
- * background-worker paths the shapes do not take. They are pinned in-process by the P5/S2 suites
- * (`packages/testing/test/durable-tools.test.ts` "resolveUnknown is idempotent across the
+ * honestly instead of silently claimed. These require operator, compaction, reservation,
+ * background-worker, or Agent-update paths the shapes do not take. They are pinned in-process
+ * by the P5/S2 suites (`packages/testing/test/durable-tools.test.ts` "resolveUnknown is idempotent across the
  * intent failpoint", `durable-runtime.test.ts` abort rows,
  * `durable-subagents.test.ts` abort propagation) and by the process-kill/eviction crash
  * matrices. Runner tests assert the observed never-fired set equals EXACTLY this list, so a
@@ -204,6 +204,15 @@ export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLoc
   "worker:after-report-append",
   "worker:before-report-delivery",
   "worker:after-report-delivery",
+  // None of the six shapes emits Agent updates. All four boundaries are exercised separately
+  // by packages/thread/test/worker-host.test.ts ("repairs an accepted parent update after ...").
+  // Node restart/lost-ack coverage is in packages/platform-node/test/worker-updates.test.ts;
+  // Cloudflare eviction/alarm recovery is in packages/platform-cloudflare/test/background-workers.test.ts.
+  // These suites are not executed by this certification runner; its update rows remain not-triggered.
+  "update:before-canonical-append",
+  "update:after-canonical-append",
+  "update:before-delivery-insert",
+  "update:after-delivery-insert",
 ];
 
 /** Locations of `tier2` rows whose armed fault never fired in ANY scenario, sorted. */

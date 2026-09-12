@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
 import { AgentPolicy } from "./AgentPolicy.ts";
+import { Update } from "./AgentUpdates.ts";
 import { AgentId, DelegationId, RunId, SettlementId, ThreadId, ToolCallId } from "./Identifiers.ts";
 import { Receipt } from "./Receipt.ts";
 import { SubagentExecutionFailure, SubagentGrant } from "./SubagentContract.ts";
@@ -86,6 +87,8 @@ export type WorkerHistoryEntry = typeof WorkerHistoryEntry.Type;
  * Keep the same idempotency key and parameters when reconciling; never launch a replacement.
  */
 export class WorkerError extends Schema.TaggedError<WorkerError>()("WorkerError", {
+  /** Pending input or concurrency pressure may clear without changing the request. */
+  retryable: Schema.optionalKey(Schema.Literal(true)),
   operation: Schema.Literals([
     "context",
     "start",
@@ -151,3 +154,20 @@ export const WorkerCompletion = Schema.Struct({
 }).check(Schema.makeFilter(({ report }) => report.worker.threadId === report.receipt.threadId));
 
 export type WorkerCompletion = typeof WorkerCompletion.Type;
+
+/** Source-worker intermediate output, kept separate from application input. */
+export const WorkerUpdate = Schema.Struct({
+  _tag: Schema.Literal("WorkerUpdate"),
+  schemaVersion: Schema.Literal(1),
+  worker: WorkerRef,
+  update: Update,
+}).check(
+  Schema.makeFilter(
+    ({ worker, update }) =>
+      worker.threadId === update.threadId && worker.targetAgentId === update.agentId,
+  ),
+);
+
+export type WorkerUpdate = typeof WorkerUpdate.Type;
+export const FrameworkMessage = Schema.Union([WorkerCompletion, WorkerUpdate]);
+export type FrameworkMessage = typeof FrameworkMessage.Type;

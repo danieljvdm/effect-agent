@@ -1,7 +1,14 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { AgentId, RunId, SettlementId, ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
+import {
+  AgentId,
+  DelegationId,
+  RunId,
+  SettlementId,
+  ThreadId,
+  ToolCallId,
+} from "@effect-agent/core/Identifiers";
 import { IdempotencyKey, JoinedToHost, Receipt } from "@effect-agent/core/Receipt";
 import {
   BackgroundSpawnTool,
@@ -134,6 +141,118 @@ const host = (overrides: Partial<SubagentHost["Service"]> = {}): SubagentHost["S
 class ProjectionDenied extends Schema.TaggedError<ProjectionDenied>()("ProjectionDenied", {}) {}
 
 describe("Subagent background authoring", () => {
+  it.effect("derives default background contracts directly from the exact Agent target", () =>
+    Effect.gen(function* () {
+      const background = Subagent.background(target, {
+        start: true,
+        followUp: true,
+        inspect: true,
+        reportToParent: true,
+      });
+
+      const directStarted = WorkerStarted.make({
+        ...started,
+        worker: { ...started.worker, delegationId: Schema.decodeSync(DelegationId)(target.id) },
+      });
+
+      const requests: Array<StartWorkerRequest | FollowUpWorkerRequest> = [];
+
+      const service = host({
+        context: Effect.succeed({
+          ...caller,
+          source: {
+            ...caller.source,
+            _tag: "tool",
+            runId: Schema.decodeSync(RunId)("parent-run"),
+            toolCallId: Schema.decodeSync(ToolCallId)("direct-call"),
+          },
+        }),
+        start: (request) =>
+          Effect.sync(() => {
+            requests.push(request);
+
+            return directStarted;
+          }),
+        followUp: (request) =>
+          Effect.sync(() => {
+            requests.push(request);
+
+            return nextReceipt;
+          }),
+      });
+
+      const toolkit = yield* background.toolkit.pipe(Effect.provide(background.layer));
+
+      const invoke = toolkit
+        .handle("worker-target_start", { amount: "7" })
+        .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(SubagentHost, service));
+
+      expect((yield* invoke)[0]?.result).toEqual(directStarted);
+      yield* toolkit
+        .handle("worker-target_follow_up", {
+          worker: directStarted.worker,
+          parameters: { amount: "9" },
+        })
+        .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(SubagentHost, service));
+
+      const observed = yield* toolkit
+        .handle("worker-target_inspect", {
+          worker: directStarted.worker,
+          receipt,
+        })
+        .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(SubagentHost, service));
+
+      expect(observed[0]?.result).toMatchObject({
+        outcome: "completed",
+        result: { output: { answer: 14 }, budgetExhausted: true },
+      });
+      expect(requests.map((request) => request.encodedInput)).toEqual([
+        { amount: "7" },
+        { amount: "9" },
+      ]);
+      expect(requests.every((request) => request.target === target)).toBe(true);
+
+      const descriptor = Context.get(
+        background.tools["worker-target_start"].annotations,
+        BackgroundReporting,
+      );
+
+      if (descriptor === undefined) return yield* Effect.die("Missing reporting descriptor");
+      expect(descriptor.target).toBe(target);
+
+      const prepared = yield* descriptor
+        .prepare({
+          worker: directStarted.worker,
+          context: caller,
+          observation: settled,
+        })
+        .pipe(Effect.provide(background.layer));
+
+      expect(prepared.message?.report).toMatchObject({
+        outcome: "completed",
+        result: { output: { answer: "14" }, budgetExhausted: true },
+      });
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it("rejects reporting from another version of the same direct Agent identity", () => {
+    const otherVersion = Agent.make("worker-target", {
+      input: target.input,
+      output: target.output,
+      toolkit: Toolkit.empty,
+      instructions: "A different version.",
+    });
+
+    const reporting = Subagent.reporting(Subagent.make("worker-target", { target: otherVersion }), {
+      input: Schema.String,
+      prepare: () => Effect.succeed("done"),
+    });
+
+    expect(() => Subagent.background(target, { start: true, reportToParent: reporting })).toThrow(
+      "same subagent declaration and target",
+    );
+  });
+
   it.effect("isolates versioned report projections and closes their scoped resources", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -50,7 +50,7 @@ import {
   summarizeModelUsage,
   OutputTokenUsage,
 } from "@effect-agent/core/Usage";
-import { WorkerCompletion } from "@effect-agent/core/Worker";
+import { FrameworkMessage } from "@effect-agent/core/Worker";
 import type { WorkerError } from "@effect-agent/core/Worker";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import {
@@ -146,6 +146,7 @@ import {
   resolveDefinitionBinding,
   resolveWorkerBinding,
 } from "./internal/agent-registration.ts";
+import { makeAgentUpdateRuntime } from "./internal/agent-updates.ts";
 import { inspectForeignDiagnostic, safeUnknownString } from "./internal/foreign-diagnostic.ts";
 import {
   JournalCheckpointSeed,
@@ -2614,6 +2615,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const notifyParentOfChildSettlement = Effect.fn(
     "DurableAgentRuntime.notifyParentOfChildSettlement",
   )(function* (submission: SubmissionSnapshot): Effect.fn.Return<void, LedgerError> {
+    if (submission.workerAdmission?.origin.reporting?.mode === "standard")
+      yield* updateRuntime.repair(submission.threadId).pipe(
+        Effect.mapError(() =>
+          LedgerError.make({
+            operation: "update-delivery",
+            message: "Update delivery remains pending",
+          }),
+        ),
+      );
     yield* workerRuntime
       .completeInput(submission)
       .pipe(
@@ -3958,6 +3968,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       | undefined = undefined,
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
+    UpdatesSchema extends Schema.Top | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -3970,7 +3981,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
     ctx: AttemptAppendContext,
     submission: SubmissionSnapshot,
@@ -5627,8 +5639,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         messageAdmission,
       }: Pick<UserInputRecorded, "input" | "messageAdmission">) =>
         Effect.gen(function* () {
-          if (Schema.is(WorkerCompletion)(messageAdmission))
-            return yield* Schema.encodeEffect(Schema.fromJsonString(WorkerCompletion))(
+          if (Schema.is(FrameworkMessage)(messageAdmission))
+            return yield* Schema.encodeEffect(Schema.fromJsonString(FrameworkMessage))(
               messageAdmission,
             ).pipe(
               Effect.mapError(() =>
@@ -6406,8 +6418,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 // Preserve the admitted wire value even when an Agent Schema's decode/encode
                 // pair normalizes differently on a second pass.
                 input: submission.inputPayload,
-                ...(Schema.is(WorkerCompletion)(submission.messageAdmission)
-                  ? { workerCompletion: submission.messageAdmission }
+                ...(Schema.is(FrameworkMessage)(submission.messageAdmission)
+                  ? { frameworkMessage: submission.messageAdmission }
                   : {}),
               }),
       };
@@ -6424,9 +6436,32 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         history: pending === undefined ? journal.historyBefore : resumeProjection.historyBefore,
         onHistory,
         input,
-        ...(Schema.is(WorkerCompletion)(submission.messageAdmission)
-          ? { workerCompletion: submission.messageAdmission }
+        ...(Schema.is(FrameworkMessage)(submission.messageAdmission)
+          ? { frameworkMessage: submission.messageAdmission }
           : {}),
+        emitUpdate: (request) =>
+          recordHalt(
+            updateRuntime
+              .emit({
+                ...request,
+                submission,
+                runId,
+                producerEpoch: ctx.producerEpoch,
+                definitions: submission.agentDigests,
+              })
+              .pipe(
+                Effect.map((update) => ({ _tag: "Accepted" as const, update })),
+                Effect.catchTag("AgentUpdateError", (error) =>
+                  Effect.succeed({ _tag: "Rejected" as const, error }),
+                ),
+              ),
+          ).pipe(
+            Effect.flatMap((result) =>
+              result._tag === "Accepted"
+                ? Effect.succeed(result.update)
+                : Effect.fail(result.error),
+            ),
+          ),
         approval,
         toolAuthorization,
         ...(journal.toolSelection === undefined ? {} : { toolSelection: journal.toolSelection }),
@@ -7145,6 +7180,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       | undefined = undefined,
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
+    UpdatesSchema extends Schema.Top | undefined = undefined,
   >(
     registeredAgent: RuntimeBinding<
       InputSchema,
@@ -7157,7 +7193,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
     threadId: ThreadId,
     claim: Claim,
@@ -7186,6 +7223,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const submission = snapshot.submission;
 
       yield* ensureThreadCreated(threadId, submission.agentId, submission.agentDigests);
+      if (submission.workerAdmission?.origin.reporting?.mode === "standard")
+        yield* updateRuntime.repair(threadId);
       if (submission.workerAdmission !== undefined) {
         yield* workerRuntime
           .ensureOrigin(submission.workerAdmission.origin)
@@ -7800,6 +7839,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       | undefined = undefined,
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
+    UpdatesSchema extends Schema.Top | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -7812,7 +7852,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
     threadId: ThreadId,
   ) =>
@@ -8862,6 +8903,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     submission: SubmissionSnapshot,
     history: RecoveryHistorySnapshot,
   ): Effect.fn.Return<RecoveryReport, DurableWorkerFailure> {
+    if (history.materialized && submission.workerAdmission?.origin.reporting?.mode === "standard")
+      yield* updateRuntime.repair(submission.threadId);
+
     const snapshot = yield* ledger.loadRecoverySnapshot(
       RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
     );
@@ -9015,7 +9059,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   reason:
                     cause.reason === "storage" || cause.reason === "unavailable"
                       ? "unavailable"
-                      : "refused",
+                      : cause.reason === "capacity" &&
+                          cause.retryable === true &&
+                          Schema.is(FrameworkMessage)(options.messageAdmission)
+                        ? "occupied"
+                        : "refused",
                   code: `worker-${cause.reason}`,
                 }),
               ),
@@ -9850,6 +9898,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       | undefined = undefined,
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
+    UpdatesSchema extends Schema.Top | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -9862,7 +9911,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
   ) =>
     Effect.gen(function* () {
@@ -9923,6 +9973,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         }),
     }),
   );
+
+  const updateRuntime = yield* makeAgentUpdateRuntime({
+    deploymentId: config.deploymentId,
+    producerId: config.producerId,
+    prepare: workerRuntime.prepareUpdate,
+  });
 
   return DurableAgentRuntime.of({
     workerHost: workerRuntime.acquire,
@@ -10140,6 +10196,7 @@ export class DurableAgentRuntime extends Context.Service<
       InputPromptValue extends
         | InputPromptSource<InputSchema["Type"], unknown, unknown>
         | undefined = undefined,
+      UpdatesSchema extends Schema.Top | undefined = undefined,
     >(
       agent: RuntimeBinding<
         InputSchema,
@@ -10152,7 +10209,8 @@ export class DurableAgentRuntime extends Context.Service<
         InstructionError,
         InstructionRequirements,
         RunDispositionValue,
-        InputPromptValue
+        InputPromptValue,
+        UpdatesSchema
       >,
       threadId: ThreadId,
     ) => Effect.Effect<
@@ -10170,7 +10228,8 @@ export class DurableAgentRuntime extends Context.Service<
           InstructionError,
           InstructionRequirements,
           RunDispositionValue,
-          InputPromptValue
+          InputPromptValue,
+          UpdatesSchema
         >,
         InstructionRequirements
       >
@@ -10207,6 +10266,7 @@ export class DurableAgentRuntime extends Context.Service<
       InputPromptValue extends
         | InputPromptSource<InputSchema["Type"], unknown, unknown>
         | undefined = undefined,
+      UpdatesSchema extends Schema.Top | undefined = undefined,
     >(
       agent: RuntimeBinding<
         InputSchema,
@@ -10219,7 +10279,8 @@ export class DurableAgentRuntime extends Context.Service<
         InstructionError,
         InstructionRequirements,
         RunDispositionValue,
-        InputPromptValue
+        InputPromptValue,
+        UpdatesSchema
       >,
     ) => Effect.Effect<
       void,
@@ -10236,7 +10297,8 @@ export class DurableAgentRuntime extends Context.Service<
           InstructionError,
           InstructionRequirements,
           RunDispositionValue,
-          InputPromptValue
+          InputPromptValue,
+          UpdatesSchema
         >,
         InstructionRequirements
       >

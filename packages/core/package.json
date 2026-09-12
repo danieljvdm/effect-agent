@@ -37,7 +37,8 @@
     "./Receipt": "./src/Receipt.ts",
     "./Worker": "./src/Worker.ts",
     "./Messaging": "./src/Messaging.ts",
-    "./ToolExposure": "./src/ToolExposure.ts"
+    "./ToolExposure": "./src/ToolExposure.ts",
+    "./AgentUpdates": "./src/AgentUpdates.ts"
   },
   "publishConfig": {
     "access": "public"

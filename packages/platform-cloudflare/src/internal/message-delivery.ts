@@ -57,6 +57,8 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
     );
 
     return MessageDeliveryStore.of({
+      limits: store.limits,
+      maxStoredValueBytes: store.maxStoredValueBytes,
       insert: (record) =>
         local(
           record.key.ownerThreadId,

@@ -68,7 +68,8 @@
     "./ContextHistory": "./src/ContextHistory.ts",
     "./ContextTools": "./src/ContextTools.ts",
     "./MemoryNotes": "./src/MemoryNotes.ts",
-    "./WebSearch": "./src/WebSearch.ts"
+    "./WebSearch": "./src/WebSearch.ts",
+    "./AgentUpdates": "./src/AgentUpdates.ts"
   },
   "publishConfig": {
     "access": "public"

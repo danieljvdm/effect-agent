@@ -1,7 +1,7 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import * as Agent from "@effect-agent/core/Agent";
 import { ThreadId } from "@effect-agent/core/Identifiers";
-import { WorkerCompletion, WorkerError } from "@effect-agent/core/Worker";
+import { WorkerCompletion, WorkerError, WorkerUpdate } from "@effect-agent/core/Worker";
 import { SubagentHost } from "@effect-agent/engine/SubagentHost";
 import * as NodeHost from "@effect-agent/platform-node/NodeDurableHost";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
@@ -43,7 +43,14 @@ const model = (name: string, streamText: Parameters<typeof LanguageModel.make>[0
   );
 
 for (const parentState of ["active", "completed", "aborted"] as const) {
-  for (const childState of ["completed", "failed", "defect", "aborted", "partial"] as const) {
+  for (const childState of [
+    "completed",
+    "failed",
+    "defect",
+    "aborted",
+    "partial",
+    "timeout",
+  ] as const) {
     it.live(
       `${childState} worker reports to ${parentState} parent with an ordinary input Schema`,
       () =>
@@ -57,23 +64,45 @@ for (const parentState of ["active", "completed", "aborted"] as const) {
             const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
             let parentCalls = 0;
             let applicationPrompts = 0;
+            let childCalls = 0;
 
             const child = Agent.withModel(
               Agent.make("automatic-child", {
                 input,
                 output,
+                updates: Schema.Struct({ finding: Schema.String }),
                 instructions: "Research",
                 toolkit: Toolkit.empty,
                 policy: {
-                  maxTurns: 1,
+                  maxTurns: 2,
                   maxToolCalls: 1,
-                  maxDuration: "10 seconds",
+                  maxDuration: childState === "timeout" ? "1 second" : "10 seconds",
                   ...(childState === "partial"
-                    ? { tokenBudget: 1, onExhaustion: "final-answer" }
+                    ? {
+                        tokenBudget: 10_000,
+                        completionReserveTokens: 0,
+                        onExhaustion: "final-answer",
+                      }
                     : {}),
                 },
               }),
               model("child", () => {
+                if (childCalls++ === 0)
+                  return Stream.fromIterable<Response.StreamPartEncoded>([
+                    {
+                      type: "tool-call",
+                      id: "finding",
+                      name: "emit_update",
+                      params: { value: { finding: "Area concern before completion" } },
+                      providerExecuted: false,
+                    },
+                    {
+                      type: "finish",
+                      reason: "tool-calls",
+                      usage: { inputTokens: {}, outputTokens: {} },
+                    },
+                  ]);
+                if (childState === "timeout") return Stream.never;
                 if (childState === "failed")
                   return Stream.fromIterable(
                     finish("finding").map((part) =>
@@ -86,7 +115,16 @@ for (const parentState of ["active", "completed", "aborted"] as const) {
                     Deferred.succeed(childEntered, undefined).pipe(Effect.andThen(Effect.never)),
                   );
 
-                return Stream.fromIterable(finish("finding"));
+                return Stream.fromIterable(
+                  finish("finding").map((part) =>
+                    childState === "partial" && part.type === "finish"
+                      ? {
+                          ...part,
+                          usage: { inputTokens: { total: 20_000 }, outputTokens: { total: 1 } },
+                        }
+                      : part,
+                  ),
+                );
               }),
             );
 
@@ -166,7 +204,7 @@ for (const parentState of ["active", "completed", "aborted"] as const) {
                     definitions: DefinitionDigestInput.make({
                       agent: "child-v1",
                       model: "v1",
-                      tools: [],
+                      tools: ["emit_update"],
                     }),
                   },
                 ],
@@ -276,9 +314,11 @@ for (const parentState of ["active", "completed", "aborted"] as const) {
             expect((yield* runtime.awaitSettlement(workerReceipt)).outcome).toBe(
               childState === "partial"
                 ? "completed"
-                : childState === "defect"
-                  ? "aborted"
-                  : childState,
+                : childState === "timeout"
+                  ? "failed"
+                  : childState === "defect"
+                    ? "aborted"
+                    : childState,
             );
 
             const delivery = yield* Effect.gen(function* () {
@@ -288,8 +328,8 @@ for (const parentState of ["active", "completed", "aborted"] as const) {
                   limit: 100,
                 });
 
-                if (rows.items[0]?.receipt !== null && rows.items[0]?.receipt !== undefined)
-                  return rows.items[0];
+                if (rows.items.length === 2 && rows.items.every((row) => row.receipt !== null))
+                  return rows.items[1];
                 yield* Effect.sleep(10);
               }
             }).pipe(Effect.timeout("3 seconds"));
@@ -306,10 +346,27 @@ for (const parentState of ["active", "completed", "aborted"] as const) {
               record.payload._tag === "UserInputRecorded" ? [record.payload] : [],
             );
 
-            expect(inputs).toHaveLength(2);
+            expect(inputs).toHaveLength(3);
+
+            const update = yield* Schema.decodeUnknownEffect(WorkerUpdate)(
+              inputs[1]?.messageAdmission,
+            );
+
+            expect(update.worker).toEqual(worker.worker);
+            expect(update.update.value).toEqual({ finding: "Area concern before completion" });
+
+            const childLog = yield* store.export(
+              ThreadExportRequest.make({ threadId: worker.worker.threadId }),
+            );
+
+            expect(
+              childLog.records.flatMap(({ record }) =>
+                record.payload._tag === "AgentUpdateEmitted" ? [record.payload.update] : [],
+              ),
+            ).toEqual([update.update]);
 
             const message = yield* Schema.decodeUnknownEffect(WorkerCompletion)(
-              inputs[1]?.messageAdmission,
+              inputs[2]?.messageAdmission,
             );
 
             expect(message.report).toMatchObject({
@@ -318,9 +375,11 @@ for (const parentState of ["active", "completed", "aborted"] as const) {
               outcome:
                 childState === "partial"
                   ? "completed"
-                  : childState === "defect"
-                    ? "aborted"
-                    : childState,
+                  : childState === "timeout"
+                    ? "failed"
+                    : childState === "defect"
+                      ? "aborted"
+                      : childState,
             });
             expect(message.budgetExhausted).toBe(childState === "partial");
             if (message.report.outcome === "completed")
@@ -334,12 +393,12 @@ for (const parentState of ["active", "completed", "aborted"] as const) {
                   ? "child-aborted"
                   : "child-failed",
               );
-            expect(inputs[1]?.input).toEqual({ question: "Lisbon" });
-            expect(inputs[1]?.runId === inputs[0]?.runId).toBe(parentState === "active");
+            expect(inputs[2]?.input).toEqual({ question: "Lisbon" });
+            expect(inputs[2]?.runId === inputs[0]?.runId).toBe(parentState === "active");
             expect(applicationPrompts).toBe(1);
             expect((yield* Ref.get(prompts)).at(-1)).toContain("WorkerCompletion");
             expect(JSON.stringify(message)).not.toContain("private child diagnostic");
-            expect(delivery.envelope.input).toEqual({ question: "Lisbon" });
+            expect(delivery?.envelope.input).toEqual({ question: "Lisbon" });
           }),
         ).pipe(Effect.provide(NodeFileSystem.layer)),
       10_000,

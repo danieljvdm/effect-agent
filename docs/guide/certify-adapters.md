@@ -140,7 +140,8 @@ Each cell reports:
 
 `not-triggered` records the tested scope. It makes no fault-survival claim. The runner also checks
 the expected set of locations that these six scenarios never reach. Dedicated suites and crash
-matrices cover those operator and abort paths.
+matrices cover those operator, abort, compaction, background-worker, and Agent-update paths.
+Those dedicated suites run separately; the certificate runner does not execute them.
 
 The final invariant check recomputes the digest chain from `EMPTY_TAIL_DIGEST` and uses the same
 checker as the administrative `verify` operation.

@@ -3,8 +3,8 @@ import { Layer } from "effect";
 
 import { WorkerAccessLive } from "./background-access.ts";
 import { BackgroundCoordinator, ResearchBackground } from "./background-coordinator.ts";
-import { Research } from "./delegation.ts";
 import { definitions, ModelLive, OpenAiLive } from "./node-agent.ts";
+import { Researcher } from "./researcher.ts";
 import { TravelToolsLive } from "./tools.ts";
 
 export const HostLive = NodeDurableHost.layer(
@@ -14,7 +14,7 @@ export const HostLive = NodeDurableHost.layer(
       model: ModelLive,
       definitions,
     },
-    { agent: Research.target, model: ModelLive, definitions },
+    { agent: Researcher, model: ModelLive, definitions },
   ],
   {
     filename: "./agents.sqlite",

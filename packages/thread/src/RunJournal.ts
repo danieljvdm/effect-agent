@@ -512,6 +512,7 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
   "WorkerOriginRecorded",
   "WorkerInputCompleted",
   "WorkerReportPrepared",
+  "AgentUpdateEmitted",
   "WorkerReportRefused",
   "PeerMessagePrepared",
   "SubtreeBudgetReserved",

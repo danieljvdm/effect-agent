@@ -20,3 +20,5 @@ export * as Receipt from "./Receipt.ts";
 export * as Worker from "./Worker.ts";
 export * as Messaging from "./Messaging.ts";
 export * as ToolExposure from "./ToolExposure.ts";
+
+export * as AgentUpdates from "./AgentUpdates.ts";

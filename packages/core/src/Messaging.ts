@@ -2,7 +2,7 @@ import { Schema } from "effect";
 
 import { AgentId, SettlementId, ThreadId } from "./Identifiers.ts";
 import { IdempotencyKey, Receipt } from "./Receipt.ts";
-import { WorkerCompletion } from "./Worker.ts";
+import { FrameworkMessage } from "./Worker.ts";
 
 /** Application-chosen fixed route name; it never authorizes a destination by itself. */
 export const PeerName = Schema.NonEmptyString.check(
@@ -86,5 +86,5 @@ export class MessagingError extends Schema.TaggedError<MessagingError>()("Messag
 }) {}
 
 /** Canonical input provenance: peer input or a framework-owned completion message. */
-export const InputMessage = Schema.Union([MessageAdmission, WorkerCompletion]);
+export const InputMessage = Schema.Union([MessageAdmission, FrameworkMessage]);
 export type InputMessage = typeof InputMessage.Type;

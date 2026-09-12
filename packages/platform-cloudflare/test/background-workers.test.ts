@@ -2,7 +2,7 @@ import * as Subagent from "@effect-agent/capabilities/Subagent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import type { SubmissionId } from "@effect-agent/core/Identifiers";
 import { MessageAdmission } from "@effect-agent/core/Messaging";
-import { WorkerCompletion } from "@effect-agent/core/Worker";
+import { WorkerCompletion, WorkerUpdate } from "@effect-agent/core/Worker";
 import { SubagentHost } from "@effect-agent/engine/SubagentHost";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { MessageDeliveryStore } from "@effect-agent/thread/MessageDelivery";
@@ -33,6 +33,10 @@ import {
   capturedConcurrency,
   privateProgressRoutes,
   customRuntimeThreads,
+  backgroundUpdateStarts,
+  backgroundUpdatePrompts,
+  backgroundUpdateSource,
+  backgroundUpdateWorkers,
 } from "./background-worker-fixture.ts";
 import {
   decodeIdempotencyKey,
@@ -71,6 +75,162 @@ const withOwner = <A, E>(
       }),
     ),
   );
+
+it("delivers an accepted worker update before completion after eviction with only alarms and no wake hints", async () => {
+  const source = `background-cf-update-${crypto.randomUUID()}`;
+
+  const sourceReceipt = await runClient(
+    Effect.flatMap(CloudflareThreadClient, (client) =>
+      client.submit(
+        { definition: backgroundUpdateSource },
+        { question: source },
+        submitOptions(source, "source"),
+      ),
+    ),
+  );
+
+  await drainAlarmsUntil(source, allSettled(source));
+  backgroundWakeDropPrefixes.add("worker:");
+  droppedMessageWakes.add(source);
+
+  const started = await withOwner(
+    source,
+    (host) =>
+      Subagent.start(
+        backgroundUpdateWorkers,
+        { question: source },
+        { idempotencyKey: decodeIdempotencyKey("hotel") },
+      ).pipe(Effect.provideService(SubagentHost, host)),
+    sourceReceipt.submissionId,
+  );
+
+  droppedMessageWakes.add(started.worker.threadId);
+
+  const deliveries = () =>
+    runInDurableObject(stubFor(started.worker.threadId), (instance) =>
+      instance[DurableObject.RunSymbol](
+        Effect.flatMap(MessageDeliveryStore, (store) =>
+          store.list({ ownerThreadId: started.worker.threadId, limit: 100 }),
+        ),
+      ),
+    );
+
+  try {
+    armRuntimeEviction(started.worker.threadId, "update:after-canonical-append");
+    await evict(source);
+    backgroundUpdateStarts.add(source);
+    await drainAlarmsUntil(
+      started.worker.threadId,
+      async () => armedEvictionsRemaining(started.worker.threadId) === 0,
+    );
+    expect(armedEvictionsRemaining(started.worker.threadId)).toBe(0);
+    const interrupted = await readCanonical(started.worker.threadId);
+
+    const accepted = interrupted.flatMap(({ record }) =>
+      record.payload._tag === "AgentUpdateEmitted" ? [record.payload.update] : [],
+    );
+
+    expect(accepted).toHaveLength(1);
+    expect(interrupted.filter(({ record }) => record.payload._tag === "RunCompleted")).toHaveLength(
+      0,
+    );
+    await evict(started.worker.threadId);
+
+    const recoveredAlarm = runDurableObjectAlarm(stubFor(started.worker.threadId)).catch(
+      () => false,
+    );
+
+    await expect
+      .poll(async () => (await deliveries()).items.some((row) => row.receipt !== null))
+      .toBe(true);
+    await drainAlarmsUntil(
+      source,
+      async () =>
+        (await readCanonical(source)).filter(
+          ({ record }) => record.payload._tag === "SubmissionSettled",
+        ).length === 2,
+    );
+    const parent = await readCanonical(source);
+
+    const inputs = parent.flatMap(({ record }) =>
+      record.payload._tag === "UserInputRecorded" ? [record.payload] : [],
+    );
+
+    const update = Schema.decodeUnknownSync(WorkerUpdate)(inputs[1]?.messageAdmission);
+
+    expect(update.worker).toEqual(started.worker);
+    expect(update.update).toEqual(accepted[0]);
+    expect(update.update.value).toEqual({ _tag: "AreaConcern", area: "Rosebank" });
+    expect(inputs[1]?.runId).not.toBe(inputs[0]?.runId);
+    expect(
+      parent.flatMap(({ record }) =>
+        record.payload._tag === "SubmissionSettled" ? [record.payload] : [],
+      ),
+    ).toMatchObject([{ outcome: "completed" }, { outcome: "completed" }]);
+    expect(backgroundUpdatePrompts.at(-1)).toContain("AreaConcern");
+    expect(backgroundUpdatePrompts.at(-1)).toContain(started.worker.threadId);
+    expect(
+      (await readCanonical(started.worker.threadId)).filter(
+        ({ record }) => record.payload._tag === "RunCompleted",
+      ),
+    ).toHaveLength(0);
+    expect((await deliveries()).items).toHaveLength(1);
+    await recoveredAlarm;
+    await expect
+      .poll(
+        async () =>
+          (await readCanonical(started.worker.threadId)).filter(
+            ({ record }) => record.payload._tag === "ToolCallUnknown",
+          ).length,
+      )
+      .toBe(1);
+    // The native update call lost its acknowledgement; ordinary tool recovery must not replay it.
+    await withOwner(source, (host) =>
+      Subagent.cancel(backgroundUpdateWorkers, started.worker, started.receipt).pipe(
+        Effect.provideService(SubagentHost, host),
+      ),
+    );
+    await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
+    await drainAlarmsUntil(
+      started.worker.threadId,
+      async () =>
+        (await deliveries()).items.length === 2 &&
+        (await deliveries()).items.every((row) => row.receipt !== null),
+    );
+    await drainAlarmsUntil(
+      source,
+      async () =>
+        (await readCanonical(source)).filter(
+          ({ record }) => record.payload._tag === "SubmissionSettled",
+        ).length === 3,
+    );
+    const completed = await readCanonical(source);
+
+    const completions = completed.flatMap(({ record }) =>
+      record.payload._tag === "UserInputRecorded" &&
+      Schema.is(WorkerCompletion)(record.payload.messageAdmission)
+        ? [record.payload.messageAdmission]
+        : [],
+    );
+
+    expect(completions).toHaveLength(1);
+    expect(completions[0]?.report.outcome).toBe("aborted");
+    const child = await readCanonical(started.worker.threadId);
+
+    expect(child.filter(({ record }) => record.payload._tag === "AgentUpdateEmitted")).toHaveLength(
+      1,
+    );
+    expect(
+      child.filter(({ record }) => record.payload._tag === "WorkerReportPrepared"),
+    ).toHaveLength(1);
+  } finally {
+    backgroundUpdateStarts.delete(source);
+    backgroundUpdatePrompts.length = 0;
+    backgroundWakeDropPrefixes.delete("worker:");
+    droppedMessageWakes.delete(source);
+    droppedMessageWakes.delete(started.worker.threadId);
+  }
+}, 20_000);
 
 // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
 // Multiple native evictions and scout Runs need the same budget as the adjacent lifecycle tests.

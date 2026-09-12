@@ -20,9 +20,9 @@ import {
   type WorkerReporting,
 } from "@effect-agent/engine/SubagentHost";
 import { type Crypto, type Option, type Scope, Context, Effect, Layer, Schema } from "effect";
-import type { Tool } from "effect/unstable/ai";
+import { Tool } from "effect/unstable/ai";
 
-import { digestDefinitions, type DigestError } from "../Digest.ts";
+import { digestDefinitions, DigestError } from "../Digest.ts";
 import type { DurableWorkerFailure, DurableWorkerRequirements } from "../DurableAgentRuntime.ts";
 import type { DefinitionDigestInput, DefinitionDigests } from "../Records.ts";
 import type { Claim, Settlement } from "../SubmissionLedger.ts";
@@ -93,6 +93,7 @@ type ResolvedAttemptDriver = <
     | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
     | undefined,
   InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined,
+  UpdatesSchema extends Schema.Top | undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -105,7 +106,8 @@ type ResolvedAttemptDriver = <
     InstructionError,
     InstructionRequirements,
     RunDispositionValue,
-    InputPromptValue
+    InputPromptValue,
+    UpdatesSchema
   >,
   threadId: ThreadId,
   claim: Claim,
@@ -124,7 +126,8 @@ type ResolvedAttemptDriver = <
       InstructionError,
       InstructionRequirements,
       RunDispositionValue,
-      InputPromptValue
+      InputPromptValue,
+      UpdatesSchema
     >,
     InstructionRequirements
   >
@@ -402,13 +405,27 @@ const registrationDefinitions = (entry: AgentRegistration): DefinitionDigestInpu
   const definition = entry.model === undefined ? entry.agent.definition : entry.agent;
   const automatic = backgroundReports(definition);
 
-  const definitions =
-    automatic.length === 0
+  const declaredDefinitions =
+    definition.updates === undefined
       ? entry.definitions
       : {
           ...entry.definitions,
           agent: {
             declaration: entry.definitions.agent,
+            updates: Schema.decodeUnknownSync(Schema.Json)(
+              Tool.getJsonSchemaFromSchema(definition.updates),
+            ),
+            updateProtocol: { schemaVersion: 1, tool: "emit_update" },
+          },
+        };
+
+  const definitions =
+    automatic.length === 0
+      ? declaredDefinitions
+      : {
+          ...declaredDefinitions,
+          agent: {
+            declaration: declaredDefinitions.agent,
             backgroundReporting: automatic.map((report) => ({
               delegationId: report.delegationId,
               targetAgentId: report.target.id,
@@ -460,7 +477,11 @@ const compileRegistration = <Entry extends AgentRegistration>(
   entry: Entry,
 ): Effect.Effect<ResolvedBinding, DigestError, Crypto.Crypto | EntryRequirements<Entry>> =>
   Effect.flatMap(
-    digestDefinitions(registrationDefinitions(entry)),
+    Effect.try({
+      try: () => registrationDefinitions(entry),
+      catch: () =>
+        DigestError.make({ message: "Agent update schema has no serializable wire contract" }),
+    }).pipe(Effect.flatMap(digestDefinitions)),
     (digests) =>
       Effect.gen(function* () {
         const binding = yield* capture(
