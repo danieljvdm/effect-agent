@@ -23,6 +23,19 @@ export default defineConfig({
   test: { cache: false, silent: "passed-only" },
   run: {
     tasks: {
+      test: {
+        command: "vp test",
+        // Fresh runners do not have Vite's generated directories. Keep
+        // dependency file hashes and the lockfile, but ignore directory listings.
+        input: [
+          { auto: true },
+          { pattern: "bun.lock", base: "workspace" },
+          { pattern: "!**/node_modules", base: "workspace" },
+          { pattern: "!**/node_modules/.vite*", base: "workspace" },
+          { pattern: "!**/node_modules/.vite*/**", base: "workspace" },
+        ],
+        output: [],
+      },
       check: {
         command: "tsc --noEmit",
         input: [
