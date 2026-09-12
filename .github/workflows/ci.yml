@@ -136,6 +136,10 @@ jobs:
             vite-task-test-v2-${{ matrix.cache-seed || matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}-
             vite-task-test-v2-${{ matrix.cache-seed || matrix.suite }}-${{ runner.os }}-${{ runner.arch }}-
 
+      # Temporary measurement: remove after the cold CI sample completes.
+      - name: Measure cold test execution
+        run: ./node_modules/.bin/vp cache clean
+
       - name: Run workspace test suites
         id: tests
         run: >-
