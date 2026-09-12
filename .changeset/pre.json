@@ -214,6 +214,7 @@
     "shorter-durable-history-reads",
     "silent-web-capture-errors",
     "simple-platform-layers",
+    "stable-cloudflare-rpc-targets",
     "stable-testing-release-artifacts",
     "subagent-request-bound-projection",
     "subscription-input-bindings",
