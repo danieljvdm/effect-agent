@@ -168,7 +168,15 @@ export default defineConfig({
     tasks: {
       "action:build": {
         command: "bun scripts/build-action.ts",
-        input: [{ auto: true }, "!action/dist", "!action/dist/**"],
+        input: [
+          { auto: true },
+          "!action/dist",
+          "!action/dist/**",
+          "bun.lock",
+          "!**/node_modules",
+          "!**/node_modules/.vite*",
+          "!**/node_modules/.vite*/**",
+        ],
         output: ["action/dist/index.mjs"],
       },
       "perf:compare": {

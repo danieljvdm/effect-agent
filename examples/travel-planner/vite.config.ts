@@ -27,6 +27,12 @@ export default defineConfig({
         command: "vp build",
         input: [
           { auto: true },
+          // Track root inputs individually so a missing generated dist
+          // directory does not invalidate the package directory listing.
+          "*",
+          { pattern: "!examples/travel-planner", base: "workspace" },
+          "!dist",
+          "!dist/**",
           { pattern: "bun.lock", base: "workspace" },
           { pattern: "!**/node_modules", base: "workspace" },
           { pattern: "!**/node_modules/.vite*", base: "workspace" },
