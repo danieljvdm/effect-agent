@@ -40,6 +40,7 @@ import { Clock, Context, Effect, Layer, Schema } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectState,
+  RpcTargets,
   type WorkerEnvironment,
 } from "effect-cf";
 
@@ -90,11 +91,24 @@ const makeMemoryClient = Effect.fn("CloudflareMemoryClient.make")(function* <
 
     const encoded = yield* encodeMemoryWire(MemoryOwnerRequest, decoded, validated.maxRequestBytes);
 
+    const unavailable = (cause: unknown) => {
+      const error = MemoryRpcError.make({ reason: "unavailable" });
+
+      error.cause = cause;
+
+      return error;
+    };
+
+    const address = memoryObjectName(bound.namespace);
+
+    const target = yield* RpcTargets.get(namespace, address, () =>
+      namespace.get(namespace.idFromName(address)),
+    ).pipe(Effect.mapError(unavailable));
+
     const raw = yield* Effect.tryPromise({
-      try: () =>
-        namespace.get(namespace.idFromName(memoryObjectName(bound.namespace))).memory(encoded),
-      catch: () => MemoryRpcError.make({ reason: "unavailable" }),
-    });
+      try: () => target.memory(encoded),
+      catch: unavailable,
+    }).pipe(Effect.tapCause(() => RpcTargets.invalidate(target)));
 
     const response = yield* decodeMemoryWire(MemoryOwnerResponse, raw, validated.maxResponseBytes);
 

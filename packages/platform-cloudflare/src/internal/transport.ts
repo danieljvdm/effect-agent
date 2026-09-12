@@ -4,7 +4,7 @@ import {
 } from "@effect-agent/storage-cloudflare/PortRouting";
 import { Effect, Layer } from "effect";
 
-import { ThreadObjectNamespace } from "../CloudflareBindings.ts";
+import { callThreadObject, ThreadObjectNamespace } from "../CloudflareBindings.ts";
 
 /**
  * `ThreadPortTransport` over native Durable Object JS RPC (decision D-P6-3): one
@@ -25,14 +25,16 @@ export const threadPortTransportLayer: Layer.Layer<
   ThreadObjectNamespace
 > = Layer.effect(ThreadPortTransport)(
   Effect.gen(function* () {
-    const { get } = yield* ThreadObjectNamespace;
+    const namespace = yield* ThreadObjectNamespace;
 
     return ThreadPortTransport.of({
       call: (threadId, request) =>
-        Effect.tryPromise({
-          try: () => get(threadId).portCall(request),
-          catch: (cause) => portTransportFailure(threadId, cause),
-        }).pipe(
+        callThreadObject(
+          threadId,
+          (target) => target.portCall(request),
+          (cause) => portTransportFailure(threadId, cause),
+        ).pipe(
+          Effect.provideService(ThreadObjectNamespace, namespace),
           Effect.withSpan("CloudflarePortTransport.call", {
             attributes: { threadId },
           }),

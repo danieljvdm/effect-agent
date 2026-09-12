@@ -17,7 +17,7 @@ Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 | Bun                                                     | `1.4.0`              |
 | Vite+                                                   | `0.3.0`              |
 | Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.112`       |
-| `effect-cf`                                             | `0.40.0`             |
+| `effect-cf`                                             | `0.41.0`             |
 | TypeScript                                              | `7.0.2`              |
 | `@effect/tsgo`                                          | `0.33.0`             |
 | Node.js                                                 | `22.18+` or `24.11+` |
@@ -27,7 +27,7 @@ development version. Raise the peer minimum when code needs a newer API.
 Private examples declare Effect as a regular dependency. Adapters depend on the platform and
 SQL implementations they use.
 
-`platform-cloudflare` requires `effect-cf@^0.40.0` and `effect@^4.0.0-rc.112` as host peers
+`platform-cloudflare` requires `effect-cf@^0.41.0` and `effect@^4.0.0-rc.112` as host peers
 and uses the exact catalog versions for development. Supply Effect SQL packages compatible with
 rc.112 for `effect-cf`. Consumers provide the shared runtime.
 

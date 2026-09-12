@@ -3,7 +3,11 @@ import { makeWakeSubscriptionHub, WakeScheduler } from "@effect-agent/thread/Wak
 import { Effect, Layer, PubSub, Schema, Stream } from "effect";
 
 import { DurableAlarmService } from "./Alarm.ts";
-import { ThreadObjectPlacement, ThreadObjectNamespace } from "./CloudflareBindings.ts";
+import {
+  callThreadObject,
+  ThreadObjectPlacement,
+  ThreadObjectNamespace,
+} from "./CloudflareBindings.ts";
 import { safeCauseMessage } from "./internal/boundary.ts";
 
 /**
@@ -41,7 +45,7 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
   Effect.gen(function* () {
     const alarm = yield* DurableAlarmService;
     const placement = yield* ThreadObjectPlacement;
-    const { get } = yield* ThreadObjectNamespace;
+    const namespace = yield* ThreadObjectNamespace;
     const hints = yield* PubSub.sliding<ThreadId>(WAKE_BUFFER_CAPACITY);
     const progress = yield* makeWakeSubscriptionHub;
 
@@ -60,15 +64,17 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
       );
 
     const notifyRemote = (threadId: ThreadId) =>
-      Effect.tryPromise({
-        try: () => get(threadId).wake(),
-        catch: (cause) =>
+      callThreadObject(
+        threadId,
+        (target) => target.wake(),
+        (cause) =>
           RemoteWakeDropped.make({
             threadId,
             message: safeCauseMessage(cause, "The remote wake failed without a diagnostic"),
             cause,
           }),
-      }).pipe(
+      ).pipe(
+        Effect.provideService(ThreadObjectNamespace, namespace),
         Effect.catch((error) =>
           Effect.logWarning(`CloudflareWakeScheduler: remote wake of ${threadId} dropped`, error),
         ),

@@ -48,7 +48,11 @@ import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
 import { RpcTracing } from "effect-cf";
 
 import { DurableAlarmError } from "./Alarm.ts";
-import { ThreadObjectNamespace, type ThreadObjectRpc } from "./CloudflareBindings.ts";
+import {
+  callThreadObject,
+  ThreadObjectNamespace,
+  type ThreadObjectRpc,
+} from "./CloudflareBindings.ts";
 import { AdmissionLimitExceeded } from "./CloudflareConfig.ts";
 import { cloudflareFailureSignals, safeCauseMessage } from "./internal/boundary.ts";
 
@@ -445,7 +449,8 @@ export class CloudflareThreadClient extends Context.Service<
     ThreadObjectNamespace | Crypto.Crypto
   > = Layer.effect(CloudflareThreadClient)(
     Effect.gen(function* () {
-      const { get, rpcTracing } = yield* ThreadObjectNamespace;
+      const namespace = yield* ThreadObjectNamespace;
+      const { rpcTracing } = namespace;
       const crypto = yield* Crypto.Crypto;
 
       const call = Effect.fn(
@@ -458,13 +463,10 @@ export class CloudflareThreadClient extends Context.Service<
           const traceArgs =
             rpcTracing === undefined ? [] : yield* RpcTracing.withRpcTraceContext([]);
 
-          const raw = yield* Effect.tryPromise({
-            try: () => {
-              const stub = get(threadId);
-
-              return stub[hostRpcMethods[operation]](encoded, ...traceArgs);
-            },
-            catch: (cause) =>
+          const raw = yield* callThreadObject(
+            threadId,
+            (stub) => stub[hostRpcMethods[operation]](encoded, ...traceArgs),
+            (cause) =>
               ThreadClientError.make({
                 threadId,
                 message: boundHostDiagnostic(
@@ -476,7 +478,7 @@ export class CloudflareThreadClient extends Context.Service<
                 cause,
                 ...cloudflareFailureSignals(cause),
               }),
-          });
+          ).pipe(Effect.provideService(ThreadObjectNamespace, namespace));
 
           return yield* decodeHostResponse(raw).pipe(
             Effect.mapError((error): HostProtocolError =>

@@ -1,6 +1,7 @@
 import { type ThreadId } from "@effect-agent/core/Identifiers";
 import { type ProducerId } from "@effect-agent/thread/Records";
 import { Context, Effect, Layer, Predicate, Schema } from "effect";
+import { RpcTargets } from "effect-cf";
 
 /**
  * Cloudflare platform bindings as Effect services (DEPLOY-010: "Cloudflare platform bindings
@@ -58,7 +59,8 @@ export type ThreadObjectClient = Omit<ThreadObjectRpc, keyof Rpc.DurableObjectBr
 /**
  * Deterministic logical Thread placement. The native adapter uses `idFromName(threadId)`;
  * a shared application owner can bind that logical identity into its RPC adapter instead.
- * Lookup performs no I/O and grants no authority. Every call resolves its target afresh.
+ * Lookup performs no I/O and grants no authority. Calls reuse a native target within
+ * one invocation; incoming requests and durable retries acquire their own targets.
  */
 export class ThreadObjectNamespace extends Context.Service<
   ThreadObjectNamespace,
@@ -78,6 +80,23 @@ export class ThreadObjectNamespace extends Context.Service<
     });
   }
 }
+
+/** Invoke a placed Thread using the current invocation's native RPC channel. */
+export const callThreadObject = Effect.fn("callThreadObject")(function* <A, E>(
+  threadId: ThreadId,
+  invoke: (target: ThreadObjectClient) => Promise<A>,
+  onError: (cause: unknown) => E,
+): Effect.fn.Return<A, E, ThreadObjectNamespace> {
+  const namespace = yield* ThreadObjectNamespace;
+
+  const target = yield* RpcTargets.get(namespace, threadId, () => namespace.get(threadId)).pipe(
+    Effect.mapError(onError),
+  );
+
+  return yield* Effect.tryPromise({ try: () => invoke(target), catch: onError }).pipe(
+    Effect.tapCause(() => RpcTargets.invalidate(target)),
+  );
+});
 
 /**
  * Narrow one `env` member to a `DurableObjectNamespace`. `env` is an untyped platform value,
