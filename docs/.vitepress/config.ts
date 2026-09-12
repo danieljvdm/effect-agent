@@ -104,69 +104,93 @@ export default defineConfig({
     logo: { src: "/mark.svg", alt: "Effect Agent" },
     siteTitle: "Effect Agent",
     nav: [
-      { text: "Guide", link: "/guide/getting-started", activeMatch: "/guide/" },
+      { text: "Guide", link: "/guide/", activeMatch: "/guide/" },
       { text: "Platforms", link: "/platforms/", activeMatch: "/platforms/" },
-      { text: "Architecture", link: "/concepts/effect-native", activeMatch: "/concepts/" },
-      { text: "Reference", link: "/reference/packages", activeMatch: "/reference/" },
+      { text: "Architecture", link: "/concepts/", activeMatch: "/concepts/" },
+      { text: "Reference", link: "/reference/", activeMatch: "/reference/" },
     ],
-    sidebar: [
-      {
-        text: "Start",
-        items: [
-          { text: "Getting started", link: "/guide/getting-started" },
-          { text: "What is Effect Agent?", link: "/guide/introduction" },
-        ],
-      },
-      {
-        text: "Build agents",
-        items: [
-          { text: "Agent definitions", link: "/guide/agents" },
-          { text: "Tools & layers", link: "/guide/tools" },
-          { text: "Run & stream", link: "/guide/run-agents" },
-          { text: "Threads", link: "/guide/threads" },
-          { text: "Context management", link: "/guide/context-management" },
-        ],
-      },
-      {
-        text: "Extensions",
-        items: [
-          { text: "Subagents", link: "/guide/subagents" },
-          { text: "Effect Workflows", link: "/guide/workflows" },
-          { text: "Sandbox execution", link: "/guide/sandbox" },
-          { text: "Code Mode", link: "/guide/code-mode" },
-          { text: "Browser tools", link: "/guide/browser" },
-        ],
-      },
-      {
-        text: "Platforms",
-        items: [
-          { text: "Overview", link: "/platforms/" },
-          { text: "Node.js", link: "/platforms/node" },
-          { text: "Cloudflare", link: "/platforms/cloudflare" },
-        ],
-      },
-      {
-        text: "Test & operate",
-        items: [
-          { text: "Deterministic testing", link: "/guide/testing" },
-          { text: "Operations", link: "/guide/operations" },
-          { text: "Certify storage adapters", link: "/guide/certify-adapters" },
-        ],
-      },
-      {
-        text: "Architecture",
-        items: [
-          { text: "Built on Effect", link: "/concepts/effect-native" },
-          { text: "The runtime model", link: "/concepts/runtime-model" },
-          { text: "Budgets & bounded autonomy", link: "/concepts/budgets" },
-          { text: "Persistence & durability", link: "/concepts/durability" },
-        ],
-      },
-      {
-        text: "Reference",
-        items: [{ text: "Package map", link: "/reference/packages" }],
-      },
-    ],
+    sidebar: {
+      "/guide/": [
+        {
+          text: "Start",
+          items: [
+            { text: "Overview", link: "/guide/" },
+            { text: "Getting started", link: "/guide/getting-started" },
+            { text: "What is Effect Agent?", link: "/guide/introduction" },
+          ],
+        },
+        {
+          text: "Build agents",
+          items: [
+            { text: "Agent definitions", link: "/guide/agents" },
+            { text: "Tools & layers", link: "/guide/tools" },
+            { text: "Run & stream", link: "/guide/run-agents" },
+            { text: "Threads", link: "/guide/threads" },
+            { text: "Context management", link: "/guide/context-management" },
+          ],
+        },
+        {
+          text: "Extensions",
+          items: [
+            {
+              text: "Subagents",
+              link: "/guide/subagents",
+              collapsed: false,
+              items: [
+                { text: "Ephemeral attached", link: "/guide/subagents/ephemeral-attached" },
+                { text: "Durable attached", link: "/guide/subagents/durable-attached" },
+                { text: "Durable background", link: "/guide/subagents/background" },
+              ],
+            },
+            { text: "Agent messaging", link: "/guide/messaging" },
+            { text: "Effect Workflows", link: "/guide/workflows" },
+            { text: "Sandbox execution", link: "/guide/sandbox" },
+            { text: "Code Mode", link: "/guide/code-mode" },
+            { text: "Browser tools", link: "/guide/browser" },
+          ],
+        },
+        {
+          text: "Test & operate",
+          items: [
+            { text: "Deterministic testing", link: "/guide/testing" },
+            { text: "Operations", link: "/guide/operations" },
+            { text: "Certify storage adapters", link: "/guide/certify-adapters" },
+          ],
+        },
+      ],
+      "/platforms/": [
+        {
+          text: "Platforms",
+          items: [
+            { text: "Overview", link: "/platforms/" },
+            { text: "Node.js", link: "/platforms/node" },
+            { text: "Cloudflare", link: "/platforms/cloudflare" },
+          ],
+        },
+      ],
+      "/concepts/": [
+        {
+          text: "Architecture",
+          items: [
+            { text: "Overview", link: "/concepts/" },
+            { text: "Built on Effect", link: "/concepts/effect-native" },
+            { text: "The runtime model", link: "/concepts/runtime-model" },
+            { text: "Budgets & bounded autonomy", link: "/concepts/budgets" },
+            { text: "Persistence & durability", link: "/concepts/durability" },
+          ],
+        },
+      ],
+      "/reference/": [
+        {
+          text: "Reference",
+          items: [
+            { text: "Overview", link: "/reference/" },
+            { text: "Package map", link: "/reference/packages" },
+            { text: "Subagent policies & recovery", link: "/reference/subagents" },
+          ],
+        },
+      ],
+    },
     search: {
       provider: "local",
       options: {

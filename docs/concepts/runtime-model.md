@@ -74,14 +74,18 @@ Agent, tenant, and platform limits may further reduce concurrency.
 
 ## Subagents {#subagents}
 
-Delegation starts a child run in a fresh thread through a tool in the parent's toolkit. The
-child repeats the same model/tool loop under its own policy and a reserved allowance. Its projected
-result returns to the parent as the delegation tool result; its raw transcript stays private.
+Delegation gives a child its own model/tool loop, explicit toolkit, and reserved allowance.
+The parent supplies task input; the child's raw transcript stays in its own thread.
 
-The parent joins the child outcome before settling that tool call. Durable recovery preserves the
-child's identity, allowance, and committed usage across attempts. See the
-[Subagents guide](../guide/subagents) for setup, input and result projections, budgets, authority,
-and child lifecycle.
+Attached children return a projected result through the parent's waiting tool call. Ephemeral
+attached children share the parent's Scope. Durable attached children have persisted threads;
+the parent releases its worker permit while waiting, and recovery preserves the child identity,
+allowance, and committed usage.
+
+Background workers return a reference immediately and keep running independently of the parent
+run. Follow-ups target the same child thread. Configured completion reports deliver the projected
+outcome as new parent input. See the [Subagents overview](../guide/subagents) to choose between
+the three execution forms and follow their setup guides.
 
 <a id="safe-seam-input"></a>
 <a id="when-queued-input-is-applied"></a>

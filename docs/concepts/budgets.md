@@ -136,7 +136,7 @@ lineage still controls Tool grants and depth; accounting belongs to the worker's
 New Runs reuse the configured allowance, while joined input and every recovery Attempt share the
 existing Run's usage. No cumulative token or cost cap is invented when that dimension is omitted.
 Attached descendants remain bounded by the immediate worker Run's reserved subtree. See the
-[subagent guide](../guide/subagents#independently-fund-background-runs) for host configuration.
+[subagent reference](../reference/subagents#independently-fund-background-runs) for host configuration.
 
 ### Request a larger child budget {#containment-and-the-extension-flow}
 

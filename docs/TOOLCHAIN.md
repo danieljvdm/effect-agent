@@ -122,6 +122,11 @@ report. Set `PRINT_REPORT` in the Cloudflare test file to print its workerd repo
 
 ## Documentation examples
 
+Lead implementation guides with a short, concrete code example after at most one introductory
+sentence. Explain behavior after the code it describes. Keep complete setup available and
+type-check examples through their runnable entry points; move advanced contracts and recovery
+details into linked reference pages instead of front-loading them in walkthroughs.
+
 The homepage imports `docs/snippets/travel-planner/*.ts`.
 Edit those files to change its examples. A `twoslash` fence enables type hovers and compiler
 validation during `vp run docs:build`. Relative imports resolve from that snippet directory.

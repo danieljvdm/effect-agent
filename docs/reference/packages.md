@@ -113,8 +113,10 @@ implementations.
 `connectMcp` bounds discovery and returns dynamic tools. Server-initiated sampling, elicitation,
 resources, and prompts are not served.
 
-Nested delegation, subagent handoff, detached subagents, runtime Skills, a framework-owned memory
-extraction or sharing policy, arbitrary Thread metadata, and dynamic Turn Plans have no public APIs.
+[Background subagents](../guide/subagents/background) and
+[bounded nested delegation](./subagents#bound-nested-delegation) have public APIs.
+Subagent handoff, runtime Skills, a framework-owned memory extraction or sharing policy,
+arbitrary Thread metadata, and dynamic Turn Plans have no public APIs.
 Applications own domain state. `Memory.recall` reads bounded passages from sources they select; it
 does not store them. Thread history and compaction summaries do not replace application state.
 

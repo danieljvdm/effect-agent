@@ -155,7 +155,7 @@ See [Operations](../guide/operations).
 
 ## Attached subagents
 
-Use [`Subagent.make`](../guide/subagents#define-a-delegation) to expose a child agent as a tool.
+Use [`Subagent.make`](../guide/subagents/durable-attached#define-the-delegation) to expose a child agent as a tool.
 A durable child owns a separate thread and attempt. While waiting for it, the parent releases
 its worker permit.
 
