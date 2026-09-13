@@ -72,6 +72,8 @@ import {
 import { RunContextPreparationPassthrough } from "../../src/engine/RunOptions.ts";
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 
+let threadSequence = 0;
+
 class ScheduledToolFailure extends Schema.TaggedError<ScheduledToolFailure>()(
   "ScheduledToolFailure",
   { message: Schema.String },
@@ -99,7 +101,7 @@ const usage = {
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),
+  nextThreadId: Effect.sync(() => Schema.decodeSync(ThreadId)(`thread-1-${++threadSequence}`)),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
 });
@@ -279,7 +281,7 @@ const renderedLogMessage = (message: unknown): string =>
 
 const testLayer = Layer.mergeAll(
   identifiers,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 
@@ -882,9 +884,13 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     });
 
     return Effect.gen(function* () {
-      const events = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
-        question: "Which Tools ran?",
-      }).pipe(Stream.runCollect, Effect.provide(toolLayer));
+      const events = yield* AgentRuntime.stream(
+        Agent.withModel(definition, model),
+        {
+          question: "Which Tools ran?",
+        },
+        { threadId: ThreadId.make("thread-1") },
+      ).pipe(Stream.runCollect, Effect.provide(toolLayer));
 
       expect(events.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(1);
       expect(events.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
@@ -2928,18 +2934,28 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     const agent = makeAgent(finalParts('{"answer":"blue"}'));
 
     return Effect.gen(function* () {
-      const events = yield* AgentRuntime.stream(agent, {
-        question: "What color?",
-      }).pipe(Stream.runCollect);
+      const options = { threadId: ThreadId.make("semantic-trace") };
+
+      const events = yield* AgentRuntime.stream(
+        agent,
+        {
+          question: "What color?",
+        },
+        options,
+      ).pipe(Stream.runCollect, Effect.provide(ThreadHistory.layer));
 
       const reduced = events.find(
         (event): event is Extract<RunEvent, { readonly _tag: "RunCompleted" }> =>
           event._tag === "RunCompleted",
       );
 
-      const runResult = yield* AgentRuntime.run(agent, {
-        question: "What color?",
-      });
+      const runResult = yield* AgentRuntime.run(
+        agent,
+        {
+          question: "What color?",
+        },
+        options,
+      ).pipe(Effect.provide(ThreadHistory.layer));
 
       expect(events.map((event) => event._tag)).toEqual([
         "RunStarted",

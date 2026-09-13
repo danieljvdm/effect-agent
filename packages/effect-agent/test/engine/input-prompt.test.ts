@@ -24,8 +24,12 @@ import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/uns
 import { RunContextPreparationPassthrough } from "../../src/engine/RunOptions.ts";
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 
+let threadSequence = 0;
+
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("input-prompt-thread")),
+  nextThreadId: Effect.sync(() =>
+    Schema.decodeSync(ThreadId)(`input-prompt-thread-${++threadSequence}`),
+  ),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("input-prompt-run")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("input-prompt-turn")),
 });
@@ -69,7 +73,7 @@ class InputPromptFailure extends Schema.TaggedError<InputPromptFailure>()(
 
 const testLayer = Layer.mergeAll(
   identifiers,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 

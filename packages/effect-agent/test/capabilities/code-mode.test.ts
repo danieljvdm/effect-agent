@@ -31,6 +31,8 @@ import { ToolBroker } from "effect-agent/tool-broker";
 import { CurrentToolCatalog } from "effect-agent/tool-exposure";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+let threadSequence = 0;
+
 const Query = Tool.make("query_warehouse", {
   description: "Run one read-only SQL query",
   parameters: Schema.Struct({ sql: Schema.String }),
@@ -352,7 +354,9 @@ const scriptedExecutorLayer = Layer.succeed(CodeExecutor)(
 const usage = { inputTokens: {}, outputTokens: {} };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-code-mode")),
+  nextThreadId: Effect.sync(() =>
+    Schema.decodeSync(ThreadId)(`thread-code-mode-${++threadSequence}`),
+  ),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-code-mode")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-code-mode")),
 });
@@ -487,7 +491,7 @@ const runWithCode = <R = never>(
 
 const testLayer = Layer.mergeAll(
   identifiers,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 

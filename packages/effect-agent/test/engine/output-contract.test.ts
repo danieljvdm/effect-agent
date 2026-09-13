@@ -24,6 +24,8 @@ import {
 import { RunContextPreparationPassthrough } from "../../src/engine/RunOptions.ts";
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 
+let threadSequence = 0;
+
 /**
  * The model-visible final-output contract (RUN-028, TEST-016).
  *
@@ -43,7 +45,7 @@ const usage = {
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),
+  nextThreadId: Effect.sync(() => Schema.decodeSync(ThreadId)(`thread-1-${++threadSequence}`)),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
 });
@@ -166,7 +168,7 @@ const policy = AgentPolicy.make({
 
 const testLayer = Layer.mergeAll(
   identifiers,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 

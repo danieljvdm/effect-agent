@@ -61,7 +61,7 @@ const definition = Agent.make("updates", {
   toolkit: Toolkit.empty,
 });
 
-const base = Layer.mergeAll(ThreadHistory.layerTransient);
+const base = Layer.mergeAll(ThreadHistory.layer);
 
 layer(base)("Agent updates", (it) => {
   it.effect(

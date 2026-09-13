@@ -68,12 +68,12 @@ import { Agent, AgentRuntime } from "effect-agent";
 import { ContextCompactor } from "effect-agent/context-compactor";
 import { AgentId, RunId, ThreadId } from "effect-agent/identifiers";
 import { RunContextPreparation } from "effect-agent/run-options";
-import { ThreadHistory } from "effect-agent/thread-history";
 import type { LanguageModel } from "effect/unstable/ai";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 
 import { BenchmarkError, check, type Case, type Sample, type SamplePhase } from "./contracts.js";
 import { BenchmarkProgress } from "./evidence.js";
+import { BenchmarkHistoryLive } from "./history.js";
 import { SeedInitializer, SeedTemplates, type SeedRequest } from "./seeds.js";
 
 const answerSchema = Schema.Struct({ answer: Schema.String });
@@ -595,7 +595,7 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
         yield* markFinish;
         yield* inspectScript;
       }).pipe(
-        Effect.provide(Layer.mergeAll(model(turns), handlers, ThreadHistory.layerTransient)),
+        Effect.provide(Layer.mergeAll(model(turns), handlers, BenchmarkHistoryLive)),
         Effect.scoped,
       );
       yield* check(calls === workload.rounds + 1, "Unexpected provider call count");

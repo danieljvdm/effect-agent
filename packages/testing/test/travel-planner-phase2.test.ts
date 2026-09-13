@@ -88,7 +88,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
 
         const layer = Layer.mergeAll(
           RunContextPreparationPassthrough,
-          ThreadHistory.layerTransient,
+          ThreadHistory.layer,
           controlled.layer,
           FlightCatalogLayer,
           LodgingCatalogLayer,
@@ -277,7 +277,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
 
       const runtimeLayer = Layer.mergeAll(
         RunContextPreparationPassthrough,
-        ThreadHistory.layerTransient,
+        ThreadHistory.layer,
         TravelPlannerPhase2ToolkitLayer,
         FlightCatalogLayer,
         LodgingCatalogLayer,

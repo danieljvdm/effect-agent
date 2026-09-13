@@ -165,9 +165,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
     const plain = Agent.withModel(Agent.make("scope-free", config), model);
 
     const selfContained = AgentRuntime.run(plain, "question").pipe(
-      Effect.provide(
-        Layer.mergeAll(ThreadHistory.layerTransient, RunContextPreparationPassthrough),
-      ),
+      Effect.provide(Layer.mergeAll(ThreadHistory.layer, RunContextPreparationPassthrough)),
     );
 
     const instructionAgent = Agent.withModel(

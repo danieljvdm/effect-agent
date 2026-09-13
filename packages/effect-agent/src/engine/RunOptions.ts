@@ -953,10 +953,10 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   /** Native host funding provenance; never inferred from absent allocation amounts. */
   readonly subagentBudgetScope?: WorkerBudgetScope | undefined;
   /**
-   * Explicit initial Prompt data, not a retention policy. With ThreadHistory.layerTransient,
-   * the engine preserves this exact prefix, then appends this Run's evaluated instructions and
-   * rendered input. Context preparation never mutates this source. Retaining ThreadHistory
-   * adapters load their own prefix and reject this option, even when the Prompt is empty.
+   * Seed or append-only extension for an in-memory Thread. ThreadHistory.layer retains this
+   * prefix before execution and rejects replacement of existing messages. The engine appends
+   * this Run's evaluated instructions and rendered input. PersistentHistory rejects this option;
+   * durable hosts supply the history reconstructed from their journal.
    */
   readonly history?: Prompt.Prompt | undefined;
   readonly commandDrainPolicy?: CommandDrainPolicy | undefined;
@@ -1056,12 +1056,12 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   /** Optional tightening-only overrides for the engine's finite in-memory buffer ceilings. */
   readonly bufferLimits?: RunBufferLimits | undefined;
   /**
-   * Advanced incremental history integration, used with ThreadHistory.layerTransient.
+   * Incremental history observer. ThreadHistory.layer retains each complete update first.
    * Invoked inline with the full Prompt whenever official history advances, including initial
    * instructions/input before the first model call. It can write before the Run succeeds or its
    * resources close. Failure stops execution through HookError; defects and interruption propagate.
    * Earlier callback writes are caller-owned and are not rolled back if this or a later step fails.
-   * Use ThreadHistory for successful-run retention. Retaining adapters reject this hook;
+   * PersistentHistory's on-success adapter rejects this hook;
    * the durable coordinator uses it for live Prompt state while its journal owns durable commits.
    */
   readonly onHistory?:

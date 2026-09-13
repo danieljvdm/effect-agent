@@ -15,7 +15,7 @@ export * as ContextTools from "./capabilities/ContextTools.ts";
 export * as ContextWindow from "./engine/ContextWindow.ts";
 export * as DurableStep from "./engine/DurableStep.ts";
 export * as Ephemeral from "./Ephemeral.ts";
-export * as EphemeralThreads from "./capabilities/EphemeralThreads.ts";
+export * as EphemeralThreads from "./engine/EphemeralThreads.ts";
 export * as IdGenerator from "./core/IdGenerator.ts";
 export * as Identifiers from "./core/Identifiers.ts";
 export * as InteractiveBrowser from "./sandbox/InteractiveBrowser.ts";

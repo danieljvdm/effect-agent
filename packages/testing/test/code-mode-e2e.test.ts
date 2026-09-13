@@ -36,10 +36,12 @@ import {
   warehouseQueryTool,
 } from "./fixtures/warehouse.ts";
 
+let threadSequence = 0;
+
 const usage = { inputTokens: {}, outputTokens: {} };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-cm-e2e")),
+  nextThreadId: Effect.sync(() => Schema.decodeSync(ThreadId)(`thread-cm-e2e-${++threadSequence}`)),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-cm-e2e")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-cm-e2e")),
 });
@@ -176,7 +178,7 @@ const runScenario = (options: { readonly code: string; readonly maxToolCalls: nu
 // suite for the rationale).
 const testLayer = Layer.mergeAll(
   identifiers,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 

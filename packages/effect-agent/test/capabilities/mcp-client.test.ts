@@ -43,6 +43,8 @@ import {
 } from "effect/unstable/http";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
+let threadSequence = 0;
+
 // ---------------------------------------------------------------------------
 // The HTTP suite runs Effect AI's native `McpServer` in-process behind an
 // `HttpClient` whose fetch is the router's web handler, so the client speaks
@@ -312,11 +314,13 @@ describe("MCP client", () => {
           connectorFor(httpTransport(false)),
           NodeCrypto.layer,
           Layer.succeed(IdGenerator, {
-            nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-mcp")),
+            nextThreadId: Effect.sync(() =>
+              Schema.decodeSync(ThreadId)(`thread-mcp-${++threadSequence}`),
+            ),
             nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-mcp")),
             nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-mcp")),
           }),
-          ThreadHistory.layerTransient,
+          ThreadHistory.layer,
           RunContextPreparationPassthrough,
         ),
       ),

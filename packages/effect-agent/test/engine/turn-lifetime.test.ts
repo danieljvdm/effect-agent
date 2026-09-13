@@ -9,15 +9,19 @@ import { RunEvent } from "effect-agent/run-event";
 import { ThreadHistory } from "effect-agent/thread-history";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
+let threadSequence = 0;
+
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("turn-lifetime-thread")),
+  nextThreadId: Effect.sync(() =>
+    Schema.decodeSync(ThreadId)(`turn-lifetime-thread-${++threadSequence}`),
+  ),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("turn-lifetime-run")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-lifetime-turn")),
 });
 
 class PreparationFailed extends Schema.TaggedError<PreparationFailed>()("PreparationFailed", {}) {}
 
-layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("Turn lifetime", (it) => {
+layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("Turn lifetime", (it) => {
   for (const ending of ["complete", "failure", "defect", "interrupt"] as const) {
     it.effect(`releases completed Turn resources before the next Turn and handles ${ending}`, () =>
       Effect.gen(function* () {

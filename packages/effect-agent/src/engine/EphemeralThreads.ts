@@ -2,7 +2,7 @@ import { Clock, Context, DateTime, Effect, Layer, Schema, SynchronizedRef } from
 import { Prompt } from "effect/unstable/ai";
 
 import { ThreadId, RunId } from "../core/Identifiers.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 
 /** Bound applied to one text projection before it can enter a model context. */
 export const ThreadText = Schema.String.check(Schema.isMaxLength(64 * 1024));
@@ -90,9 +90,9 @@ export const threadPrompt = (snapshot: ThreadSnapshot): Prompt.Prompt =>
   Prompt.fromMessages(snapshot.messages.map((entry) => entry.message));
 
 /**
- * Advanced process-local state for incremental interactive history. Updates remain visible even
+ * Process-local state for conversation history. Updates remain visible even
  * when a Run later fails; this service has no successful-Run commit boundary or durable recovery.
- * Use ThreadHistory with a memory store for ordinary successful-run retention.
+ * ThreadHistory.layer uses this store for ordinary Runs and interactive history.
  * Scope closure releases all in-memory state.
  */
 export class EphemeralThreads extends Context.Service<
@@ -214,11 +214,13 @@ const appendEncoded = Effect.fn("EphemeralThreads.appendEncoded")(function* (
   return [next, new Map(threads).set(threadId, next)] as const;
 });
 
-/** Layer whose state is scoped to the consumer; it intentionally has no persistence semantics. */
+/** In-memory storage shared for the consumer's Scope; it does not survive process loss. */
 export const EphemeralThreadsLive = Layer.effect(
   EphemeralThreads,
   Effect.gen(function* () {
     const state = yield* SynchronizedRef.make<ReadonlyMap<ThreadId, ThreadSnapshot>>(new Map());
+
+    yield* Effect.addFinalizer(() => SynchronizedRef.set(state, new Map()));
 
     return EphemeralThreads.of({
       create: (threadId) =>

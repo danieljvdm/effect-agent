@@ -20,8 +20,10 @@ import {
 } from "effect-agent/tool-exposure";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
+let threadSequence = 0;
+
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(ThreadId.make("exposure-thread")),
+  nextThreadId: Effect.sync(() => ThreadId.make(`exposure-thread-${++threadSequence}`)),
   nextRunId: Effect.succeed(RunId.make("exposure-run")),
   nextTurnId: Effect.succeed(TurnId.make("exposure-turn")),
 });
@@ -117,7 +119,7 @@ const definition = Agent.make("exposure", {
 const failure = <E>(exit: Exit.Exit<unknown, E>) =>
   Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined;
 
-layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient))("native Tool exposure", (it) => {
+layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", (it) => {
   for (const authority of ["host", "grant"] as const) {
     it.effect(`keeps eligible pins across replacements while ${authority} hides another pin`, () =>
       Effect.gen(function* () {

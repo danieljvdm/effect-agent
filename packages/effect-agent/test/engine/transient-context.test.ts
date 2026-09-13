@@ -35,13 +35,17 @@ import {
 import { CLEARED_TOOL_RESULT } from "../../src/engine/internal/compaction.ts";
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 
+let threadSequence = 0;
+
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("transient-thread")),
+  nextThreadId: Effect.sync(() =>
+    Schema.decodeSync(ThreadId)(`transient-thread-${++threadSequence}`),
+  ),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("transient-run")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("transient-turn")),
 });
 
-const testLayer = Layer.mergeAll(identifiers, ThreadHistory.layerTransient, ContextCompactor.layer);
+const testLayer = Layer.mergeAll(identifiers, ThreadHistory.layer, ContextCompactor.layer);
 
 const finalParts: ReadonlyArray<Response.StreamPartEncoded> = [
   { type: "text-start", id: "answer" },

@@ -255,7 +255,7 @@ const layer = Layer.effect(
       };
     });
 
-    return ThreadHistory.of({ load, open });
+    return ThreadHistory.of({ retention: "on-success", load, open });
   }),
 );
 

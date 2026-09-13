@@ -168,6 +168,11 @@ and absolute regression threshold. Current hosted runs show substantial machine 
 variance; one small-sample tail estimate or percentage alone is not a release gate. Confirm a
 suspected regression in a fresh matched run and retain both results before changing a baseline.
 
+The history fixture selects the in-memory default on current builds and the historical transient
+Layer on older comparison releases. These comparisons therefore include the cost of newly retained
+conversation history; they do not measure identical retention guarantees. Explicit history hooks
+now run alongside default retention, rather than switching retention on and off.
+
 ## Manual diagnostics
 
 `vp run perf:diagnose` runs the separate `runtime-diagnostic-v1` fixture against clean, built
@@ -197,7 +202,7 @@ The capability cases use these bounded public operations:
 
 | Family      | Work and timing boundary                                                                                                                                                                                                                                                                                                                                      |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| History     | Apply unchanged, one-message, or 64-message suffixes to a native 256-message prefix; include a 64-Thread store and the 768/256-message capacity boundary. A matched two-provider, one-tool Run compares history hooks on/off. Setup and verification are excluded.                                                                                            |
+| History     | Apply unchanged, one-message, or 64-message suffixes to a native 256-message prefix; include a 64-Thread store and the 768/256-message capacity boundary. A matched two-provider, one-tool Run compares default retention with an additional explicit history hook. Setup and verification are excluded.                                                      |
 | Memory      | Compare one-provider Runs with recall off, empty, or populated. Measure recall and actual fixture-file reader I/O separately; verify scoped reader release.                                                                                                                                                                                                   |
 | Remembering | Compare the same two-provider, one-tool foreground Run on/off while a previous extraction is held in another host Scope. Verify no foreground extraction/profile I/O; then release the worker and report admission, background completion, and profile readiness separately. The two-job public-port fixture excludes disk durability and host queue latency. |
 | MCP         | Compare the same two-provider Run and three echo results using local handlers or real MCP HTTP transport with an in-process responder. Report connection, reused calls, foreground work, and owned-Scope closure; a fresh connection verifies credentials and discovery. No network is used.                                                                  |

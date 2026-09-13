@@ -10,11 +10,12 @@ before instructions execute and require native model services. Use `runUnknown`,
 or `startUnknown` for external values typed as `unknown`. See
 [Agent definitions](./agents#typed-and-external-inputs).
 
-Use `Ephemeral.layer` from `effect-agent` for runs without retained history, including attached
-subagents. It supplies the history policy and shared reservation state. IDs are generated
-automatically, and context preparation is optional. Use
-`PersistentHistory.layer` with a store to [retain completed runs](./threads#retain-completed-runs).
-History commits before a successful result or `RunCompleted` event becomes visible.
+Use `Ephemeral.layer` from `effect-agent` for in-memory conversations, including attached
+subagents. Provide it once around the application and reuse a Thread ID for follow-up Runs.
+It retains complete history updates and shares subagent reservation state for that Scope.
+IDs are generated automatically, and context preparation is optional. Use
+`PersistentHistory.layer` with a store to [retain completed runs](./threads#retain-completed-runs),
+or a durable host when execution must recover after process loss.
 
 A valid no-tool answer needs one model call. A designated completion Tool can complete without a
 follow-up model call. Independent application Tools default to four concurrent handlers, behind
@@ -222,7 +223,7 @@ prepare context
 
 ## Add per-run hooks {#operational-hooks}
 
-`RunOptions` accepts per-run capability hooks. This process-local example uses transient history.
+`RunOptions` accepts per-run capability hooks. This process-local example uses in-memory history.
 `history` provides an initial Prompt, and `onHistory` receives incremental updates.
 
 ```ts

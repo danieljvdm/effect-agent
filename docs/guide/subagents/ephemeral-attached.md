@@ -13,9 +13,11 @@ Bind a model to the child, then run the parent:
 `Subagent.layer` supplies the child's model and tool handlers. The parent and child can
 use different models.
 
-`Ephemeral.layer` selects transient history and shares one in-memory reservation ledger across
-the parent’s subagents. Provide it around all child handler Layers, as above. IDs are generated
-automatically; context preparation is optional. This setup keeps no completed history.
+`Ephemeral.layer` keeps parent and child conversations in memory and shares one reservation
+ledger across the parent’s subagents. Provide it once around all child handler Layers, as above.
+Reuse the parent's Thread ID for follow-up Runs within that application Scope. Each child has its
+own Thread. IDs are generated automatically; context preparation is optional. Process loss loses
+this history and active execution.
 
 The files below define `Research`, `Coordinator`, and the sample activity tools. Save them beside
 `delegation-live.ts`.

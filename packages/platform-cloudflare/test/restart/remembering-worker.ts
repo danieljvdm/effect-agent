@@ -51,7 +51,7 @@ const recallLimits = {
   timeoutMillis: 1000,
 };
 
-const foregroundLayer = Layer.mergeAll(ThreadHistory.layerTransient, ContextCompactor.layer);
+const foregroundLayer = Layer.mergeAll(ThreadHistory.layer, ContextCompactor.layer);
 
 const profile = (document: MemoryDocument | null) =>
   document?._tag === "ActiveMemoryDocument"

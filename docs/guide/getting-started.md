@@ -56,7 +56,9 @@ const program = AgentRuntime.run(triage, "All users get a 500 error when signing
 BunRuntime.runMain(program);
 ```
 
-The output schema validates the model's answer. The policy limits the run. This example keeps no history.
+The output schema validates the model's answer. The policy limits the run. `Ephemeral.layer` keeps
+conversation history in memory for the application Scope. To continue a conversation, share that
+Layer and reuse the returned Thread ID; see [in-memory conversations](./threads#in-memory-conversations).
 
 ## Run it
 

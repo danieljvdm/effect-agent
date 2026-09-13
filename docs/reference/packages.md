@@ -59,20 +59,23 @@ import { CommandDrainPolicy, RunSchedulingOverride } from "effect-agent/run-opti
 ```
 
 Operations are available directly on their module namespace: `Subagent.layer`,
-`ThreadHistory.layerTransient`, and `IdGenerator.layer`. Service keys remain inside those modules,
+`ThreadHistory.layer`, and `IdGenerator.layer`. Service keys remain inside those modules,
 for example `IdGenerator.IdGenerator` when supplying a custom generator.
 
 ### Ephemeral defaults
 
-`Ephemeral.layer` supplies transient history and a shared in-memory subagent reservation ledger.
-Provide it once around the parent program and all child handler Layers. Independent builds have
-independent state. It retains no completed history and provides no crash recovery.
+`Ephemeral.layer` supplies in-memory conversation history and a shared subagent reservation ledger.
+Provide it once around the parent program and all child handler Layers. Runs with the same Thread
+ID retain their conversation for that application Scope; independent builds have independent state.
+Complete history updates remain after a failed or interrupted Run. Scope closure or process loss
+releases the state; this layer provides no crash recovery. See [in-memory conversations](../guide/threads#in-memory-conversations)
+for limits and a follow-up example.
 
 Runtime IDs have an overridable default; no ID Layer is required. Context preparation is also
 optional. `Ephemeral.layer` preserves custom IDs and context preparation supplied by the caller.
 Models, tool handlers, credentials, and durable storage remain explicit application choices.
 
-For retained history, provide `PersistentHistory.layer` with a store and, when using subagents,
+For storage-backed history, provide `PersistentHistory.layer` with a store and, when using subagents,
 one shared `SubagentReservationsMemoryLive` instead of `Ephemeral.layer`. Durable hosts select
 their own history and reservation services.
 
@@ -176,8 +179,8 @@ Agent definitions, schemas, execution, streaming, policies, subagents, memory ca
 MCP, and platform-neutral sandbox contracts. It has no storage or platform runtime dependency.
 Start with `Agent`, `AgentRuntime`, and `Ephemeral.layer`.
 
-`Ephemeral.layer` selects transient history and shared attached-subagent reservations.
-For retained history, use `PersistentHistory.layer` from `@effect-agent/thread/persistent-history`.
+`Ephemeral.layer` retains in-memory conversation history and shared attached-subagent reservations.
+For storage-backed history, use `PersistentHistory.layer` from `@effect-agent/thread/persistent-history`.
 Models, provider clients, credentials, tool handlers, and durable hosts remain application choices.
 
 Sandbox contracts including `Sandbox`, `CodeExecutor`, `PageCapture`, and `InteractiveBrowser`

@@ -116,7 +116,7 @@ const identifiers = Layer.effect(IdGenerator)(
 const TestServices = Layer.mergeAll(
   identifiers,
   SubagentReservationsMemoryLive,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 

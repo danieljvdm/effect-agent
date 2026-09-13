@@ -689,7 +689,7 @@ export const DurableApprovalResolver: Context.Reference<RunApprovalHook<never, n
 /**
  * Services a durable worker needs beyond the runtime's own Layer: the Agent Binding's inferred
  * requirements minus its supplied identity and history services. The coordinator provides
- * deterministic Run/Turn identity and transient history policy because its journal owns all
+ * deterministic Run/Turn identity and journal-owned history because its coordinator owns all
  * durable reads and commits across Attempts.
  */
 export type DurableWorkerRequirements<
@@ -6912,7 +6912,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 stagedUnobservedCalls.set(turn, (stagedUnobservedCalls.get(turn) ?? 0) + 1);
               }),
           }),
-          Stream.provide(ThreadHistory.layerTransient),
+          Stream.provide(ThreadHistory.layer),
           Stream.provideService(SubagentHost.forTool, (source) =>
             source.threadId !== submission.threadId ||
             source.agentId !== submission.agentId ||

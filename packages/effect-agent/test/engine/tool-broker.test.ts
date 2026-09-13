@@ -40,6 +40,8 @@ import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unsta
 import { RunContextPreparationPassthrough } from "../../src/engine/RunOptions.ts";
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 
+let threadSequence = 0;
+
 class QueryFailure extends Schema.TaggedError<QueryFailure>()("QueryFailure", {
   message: Schema.String,
 }) {}
@@ -50,7 +52,7 @@ const usage = {
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-broker")),
+  nextThreadId: Effect.sync(() => Schema.decodeSync(ThreadId)(`thread-broker-${++threadSequence}`)),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-broker")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-broker")),
 });
@@ -196,7 +198,7 @@ const runOrchestrated = <
 
 const testLayer = Layer.mergeAll(
   identifiers,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 
@@ -694,7 +696,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
       return Effect.gen(function* () {
         const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
 
-        yield* runOrchestrated({
+        const result = yield* runOrchestrated({
           innerToolkit,
           innerHandlers: innerToolkit.toLayer({
             observed_query: () =>
@@ -753,7 +755,7 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
           "gen_ai.tool.name": "observed_query",
           "gen_ai.tool.call.id": "orchestrate-1#0",
           "gen_ai.agent.name": "broker-host",
-          "gen_ai.conversation.id": "thread-broker",
+          "gen_ai.conversation.id": result.threadId,
           "effect_agent.tool.execution_class": "readonly",
           "effect_agent.tool.invocation_kind": "programmatic",
           "effect_agent.tool.outcome": "success",

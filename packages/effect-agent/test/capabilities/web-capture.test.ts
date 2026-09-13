@@ -32,6 +32,8 @@ import {
 import * as WebCapture from "effect-agent/web-capture";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+let threadSequence = 0;
+
 describe("WebCapture construction", () => {
   it("keeps browser JavaScript uncertain when included in Code Mode", () => {
     const definition = WebCapture.make("read_webpage", {
@@ -312,7 +314,9 @@ const makeScriptedPort = Effect.gen(function* () {
 const usage = { inputTokens: {}, outputTokens: {} };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-web-capture")),
+  nextThreadId: Effect.sync(() =>
+    Schema.decodeSync(ThreadId)(`thread-web-capture-${++threadSequence}`),
+  ),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-web-capture")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-web-capture")),
 });
@@ -497,7 +501,7 @@ const runScrape = (
 
 const testLayer = Layer.mergeAll(
   identifiers,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 

@@ -2,6 +2,14 @@ import { Clock, DateTime, Effect, Schema } from "effect";
 import type { Prompt } from "effect/unstable/ai";
 
 import {
+  type ThreadEncodingError,
+  type ThreadHistoryDiverged,
+  type ThreadLimitExceeded,
+  type ThreadNotFound,
+  threadPrompt,
+  EphemeralThreads,
+} from "../engine/EphemeralThreads.ts";
+import {
   type PreparedRunContext,
   type RunApprovalDecision,
   type RunApprovalHook,
@@ -25,14 +33,6 @@ import {
 } from "./Approval.ts";
 import { type BudgetExceeded, UsageDelta, type UsageBudgetNode } from "./Budget.ts";
 import type { RunCommandQueue } from "./Commands.ts";
-import {
-  type ThreadEncodingError,
-  type ThreadHistoryDiverged,
-  type ThreadLimitExceeded,
-  type ThreadNotFound,
-  threadPrompt,
-  EphemeralThreads,
-} from "./EphemeralThreads.ts";
 import type { RedactionError, Redactor } from "./Redaction.ts";
 
 /** Capability policy could not be normalized into the bounded approval request Schema. */
@@ -218,8 +218,9 @@ export type ThreadAdapterError =
   | ThreadHistoryDiverged;
 
 /**
- * Advanced incremental integration for a process-local EphemeralThreads owner. Supply
- * ThreadHistory.layerTransient; a retaining history adapter rejects these competing hooks.
+ * Advanced integration for an existing EphemeralThreads snapshot. Ordinary Runs automatically
+ * retain history through ThreadHistory.layer; use this helper only for explicit snapshot hooks.
+ * Share that Layer's EphemeralThreads owner. PersistentHistory rejects these competing hooks.
  * The snapshot is explicit initial Prompt data. Each inline onHistory call immediately records
  * its append-only suffix, including updates from Runs that later fail or are interrupted. Writes
  * already made remain in the snapshot. Callback errors stop the Run as ThreadAdapterError;

@@ -1,17 +1,17 @@
 import { Layer } from "effect";
 
 import { SubagentReservationsMemoryLive } from "./capabilities/SubagentReservations.ts";
-import { layerTransient } from "./engine/ThreadHistory.ts";
+import { layer as historyLayer } from "./engine/ThreadHistory.ts";
 
 /**
- * Run agents and attached subagents without retaining completed history.
+ * Run agents and attached subagents with in-memory conversation history.
  * Provide once around the parent program and all child handler Layers so siblings
- * share one reservation ledger. Each independent Layer build owns fresh state;
- * no ledger is allocated at import time or shared globally.
+ * share history and one reservation ledger. Reuse a Thread ID to continue a conversation.
+ * Each independent Layer build owns fresh state; state is released when its Scope closes.
  *
  * Models, tool handlers, and provider clients remain application-supplied. Default
  * IDs need no Layer; enclosing ID and context-preparation overrides are preserved.
- * For retained history, provide PersistentHistory.layer and a shared
+ * For storage-backed history, provide PersistentHistory.layer and a shared
  * SubagentReservationsMemoryLive instead. Durable hosts own their own assembly.
  */
-export const layer = Layer.merge(layerTransient, SubagentReservationsMemoryLive);
+export const layer = Layer.merge(historyLayer, SubagentReservationsMemoryLive);

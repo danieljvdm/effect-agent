@@ -62,7 +62,7 @@ const makeCoordinator = (turns: ReadonlyArray<ScriptedTurnInput>) =>
 
 const TestSupportLayer = Layer.mergeAll(
   RunContextPreparationPassthrough,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   SubagentReservationsMemoryLive,
   CatalogLifecycle.layerNoDeps,
   DeterministicIdGeneratorLayer,

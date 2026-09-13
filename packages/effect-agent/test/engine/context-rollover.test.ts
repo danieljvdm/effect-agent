@@ -38,8 +38,10 @@ import { expectTypeOf, it as typeTest } from "vite-plus/test";
 
 import { initialCompactionState } from "../../src/engine/internal/compaction.ts";
 
+let threadSequence = 0;
+
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(ThreadId.make("rollover-thread")),
+  nextThreadId: Effect.sync(() => ThreadId.make(`rollover-thread-${++threadSequence}`)),
   nextRunId: Effect.succeed(RunId.make("rollover-run")),
   nextTurnId: Effect.succeed(TurnId.make("rollover-turn")),
 });
@@ -246,7 +248,7 @@ const driveRun = Effect.fn("context-rollover.test.driveRun")(function* (setup: R
 const testLayer = Layer.mergeAll(
   identifiers,
   ContextCompactor.layer,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 
@@ -299,7 +301,7 @@ layer(testLayer)("native context windows", (it) => {
         expect(result.statuses[2]?.status.windowId).not.toBe(result.statuses[0]?.status.windowId);
         expect(result.statuses[2]?.status.windowId).toBe(result.statuses[3]?.status.windowId);
         for (const { status } of result.statuses) {
-          expect(status.threadId).toBe("rollover-thread");
+          expect(status.threadId).toBe(result.statuses[0]?.status.threadId);
           expect(status.runId).toBe("rollover-run");
           expect(status.estimatedTokens).toBeGreaterThan(0);
           expect(status.contextTokenLimit).toBeNull();

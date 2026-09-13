@@ -9,6 +9,8 @@ import { RunContextPreparationPassthrough } from "effect-agent/run-options";
 import { ThreadHistory } from "effect-agent/thread-history";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+let threadSequence = 0;
+
 const Progress = Tool.make("report_progress", {
   parameters: Schema.Struct({}),
   success: Schema.Any,
@@ -82,11 +84,13 @@ const makeAgent = (firstTurn: ReadonlyArray<Response.StreamPartEncoded> = [appli
 
 const testLayer = Layer.mergeAll(
   Layer.succeed(IdGenerator, {
-    nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("progress-thread")),
+    nextThreadId: Effect.sync(() =>
+      Schema.decodeSync(ThreadId)(`progress-thread-${++threadSequence}`),
+    ),
     nextRunId: Effect.succeed(Schema.decodeSync(RunId)("progress-run")),
     nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("progress-turn")),
   }),
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 

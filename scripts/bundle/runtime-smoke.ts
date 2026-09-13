@@ -17,7 +17,7 @@ import * as DirectEphemeral from "effect-agent/ephemeral";
 import { IdGenerator as DirectIdGenerator } from "effect-agent/id-generator";
 import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
 import * as DirectSubagent from "effect-agent/subagent";
-import { layerTransient } from "effect-agent/thread-history";
+import { layer as historyLayer } from "effect-agent/thread-history";
 import { Model, Toolkit } from "effect/unstable/ai";
 
 import { loadRuntime } from "./lazy-module.ts";
@@ -53,7 +53,7 @@ export const program = Effect.gen(function* () {
   yield* check(IdGenerator.IdGenerator === DirectIdGenerator, "Service identity changed");
   yield* check(Ephemeral.layer === DirectEphemeral.layer, "Ephemeral.layer identity changed");
   yield* check(Subagent.layer === DirectSubagent.layer, "Subagent.layer identity changed");
-  yield* check(ThreadHistory.layerTransient === layerTransient, "History layer identity changed");
+  yield* check(ThreadHistory.layer === historyLayer, "History layer identity changed");
 
   const ids = yield* DirectIdGenerator;
   const defaultThread = yield* ids.nextThreadId;

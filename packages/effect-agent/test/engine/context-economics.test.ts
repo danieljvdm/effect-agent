@@ -38,8 +38,10 @@ import { formatRunStatus } from "../../src/engine/internal/agent-runtime.ts";
 import { RunContextPreparationPassthrough } from "../../src/engine/RunOptions.ts";
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 
+let threadSequence = 0;
+
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),
+  nextThreadId: Effect.sync(() => Schema.decodeSync(ThreadId)(`thread-1-${++threadSequence}`)),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
 });
@@ -190,7 +192,7 @@ const answerOutput = Schema.Struct({ answer: Schema.String });
 
 const testLayer = Layer.mergeAll(
   identifiers,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 

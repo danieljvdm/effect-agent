@@ -7585,10 +7585,16 @@ function streamWithCompletion<
       const ids = yield* IdGenerator;
       const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
       const runId = runOptions.runId ?? (yield* ids.nextRunId);
-      const retained = yield* history.open({ threadId, runId });
+
+      // Durable hosts retain each turn through their journal. Ordinary execution always has
+      // an in-memory or on-success history owner; there is no discard-history Layer.
+      const retained =
+        history.retention === "incremental" && runOptions.durability !== undefined
+          ? undefined
+          : yield* history.open({ threadId, runId });
 
       if (
-        retained !== undefined &&
+        history.retention === "on-success" &&
         (runOptions.history !== undefined ||
           runOptions.onHistory !== undefined ||
           runOptions.input !== undefined ||
@@ -7605,6 +7611,12 @@ function streamWithCompletion<
         });
       }
 
+      const initialHistory = runOptions.history ?? retained?.prompt;
+
+      if (retained !== undefined && runOptions.history !== undefined) {
+        yield* retained.stageHistory(runOptions.history);
+      }
+
       const options: RunOptions<
         HookError | ThreadHistoryError | RunContextPreparationError,
         HookRequirements
@@ -7617,7 +7629,13 @@ function streamWithCompletion<
         runId,
         ...(retained === undefined
           ? {}
-          : { history: retained.prompt, onHistory: retained.stageHistory }),
+          : {
+              history: initialHistory,
+              onHistory: (next) =>
+                retained
+                  .stageHistory(next)
+                  .pipe(Effect.andThen(() => runOptions.onHistory?.(next) ?? Effect.void)),
+            }),
       };
 
       // Normalize the selected host policy at the Run boundary. Inner calls project typed

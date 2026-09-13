@@ -1044,7 +1044,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       });
     },
     Effect.provide([
-      ThreadHistory.layerTransient,
+      ThreadHistory.layer,
       RunContextPreparationPassthrough,
       reviewToolkitLayer,
       options.compaction === "prune" ? ContextCompactor.layer : ContextCompactor.layerRollover,

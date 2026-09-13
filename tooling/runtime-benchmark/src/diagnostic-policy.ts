@@ -7,7 +7,6 @@ import { Clock, Context, Effect, Layer, Schema } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
 import { ModelCallContext } from "effect-agent/context-window";
 import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
-import { ThreadHistory } from "effect-agent/thread-history";
 import { AiError, type LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 
 import { BenchmarkError, check } from "./contracts.js";
@@ -17,6 +16,7 @@ import {
   type DiagnosticCase,
   type DiagnosticResult,
 } from "./diagnostic-contracts.js";
+import { BenchmarkHistoryLive } from "./history.js";
 
 export { policyCases } from "./diagnostic-cases.js";
 
@@ -317,7 +317,7 @@ export const runPolicyCase = Effect.fn("diagnostic.policy")(function* (workload:
 
   const app = hooks.pipe(
     Layer.provideMerge(modelAndHandlers),
-    Layer.provideMerge(ThreadHistory.layerTransient),
+    Layer.provideMerge(BenchmarkHistoryLive),
   );
 
   return yield* Effect.gen(function* () {

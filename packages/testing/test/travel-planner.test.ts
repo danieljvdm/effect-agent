@@ -35,7 +35,7 @@ const makeScriptedAgent = (turns: ReadonlyArray<ScriptedTurnInput>) =>
 
 const TravelRuntimeLayer = Layer.mergeAll(
   RunContextPreparationPassthrough,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   TravelPlannerToolkitLayer,
   FlightCatalogLayer,
   LodgingCatalogLayer,
@@ -226,7 +226,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
 
     const layer = Layer.mergeAll(
       RunContextPreparationPassthrough,
-      ThreadHistory.layerTransient,
+      ThreadHistory.layer,
       TravelPlannerToolkitLayer,
       FlightCatalogLayer,
       LodgingCatalogLayer,
@@ -262,7 +262,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
 
       const layer = Layer.mergeAll(
         RunContextPreparationPassthrough,
-        ThreadHistory.layerTransient,
+        ThreadHistory.layer,
         TravelPlannerToolkitLayer,
         failingFlightLayer,
         LodgingCatalogLayer,
@@ -319,7 +319,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
 
       const layer = Layer.mergeAll(
         RunContextPreparationPassthrough,
-        ThreadHistory.layerTransient,
+        ThreadHistory.layer,
         controlled.layer,
         FlightCatalogLayer,
         LodgingCatalogLayer,

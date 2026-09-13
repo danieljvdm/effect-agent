@@ -30,6 +30,8 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
+let threadSequence = 0;
+
 const tools = Toolkit.make(
   Tool.make("search", {
     parameters: Schema.Struct({ query: Schema.String }),
@@ -154,12 +156,12 @@ const resumeUsage = {
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(ThreadId.make("correction-thread")),
+  nextThreadId: Effect.sync(() => ThreadId.make(`correction-thread-${++threadSequence}`)),
   nextRunId: Effect.succeed(RunId.make("correction-run")),
   nextTurnId: Effect.succeed(TurnId.make("correction-turn")),
 });
 
-layer(Layer.mergeAll(identifiers, ThreadHistory.layerTransient, RunContextPreparationPassthrough))(
+layer(Layer.mergeAll(identifiers, ThreadHistory.layer, RunContextPreparationPassthrough))(
   "mixed completion correction",
   (it) => {
     for (const kind of ["required", "optional", "action"] as const) {

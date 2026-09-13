@@ -44,7 +44,6 @@ import * as Protocol from "effect-agent/remembering-store";
 import { toRunThreadOptions } from "effect-agent/run-hooks";
 import * as Subagent from "effect-agent/subagent";
 import * as Reservations from "effect-agent/subagent-reservations";
-import { ThreadHistory } from "effect-agent/thread-history";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
@@ -56,6 +55,7 @@ import {
   type DiagnosticMark,
   type DiagnosticResult,
 } from "./diagnostic-contracts.js";
+import { BenchmarkHistoryLive } from "./history.js";
 
 export { capabilityCases } from "./diagnostic-cases.js";
 
@@ -293,7 +293,7 @@ const historyRunCase = Effect.fn("diagnostic.historyRun")(function* (workload: D
             }),
         }),
 
-        ThreadHistory.layerTransient,
+        BenchmarkHistoryLive,
       ),
     ),
   );
@@ -482,7 +482,7 @@ const memoryRunCase = Effect.fn("diagnostic.memoryRun")(function* (workload: Dia
         model,
         toolkit.toLayer({ diagnostic_work: ({ index }) => Effect.succeed(index) }),
 
-        ThreadHistory.layerTransient,
+        BenchmarkHistoryLive,
       ),
     ),
   );
@@ -852,7 +852,7 @@ const mcpCase = Effect.fn("diagnostic.mcp")(function* (workload: DiagnosticCase)
             metrics.push({ name: "foregroundRun", value: yield* elapsed(runStart) });
             yield* check(result.output.answer === "done", "MCP Run output mismatch");
             yield* (yield* ScriptedModel).assertExhausted;
-          }).pipe(Effect.provide(Layer.mergeAll(handlers, model, ThreadHistory.layerTransient)));
+          }).pipe(Effect.provide(Layer.mergeAll(handlers, model, BenchmarkHistoryLive)));
         }
         closeStart = yield* Clock.monotonicTimeNanos;
       }),
@@ -1208,9 +1208,7 @@ const rememberingCase = Effect.fn("diagnostic.remembering")(function* (workload:
       return output;
     }),
   ).pipe(
-    Effect.provide(
-      Layer.mergeAll(handlers, model).pipe(Layer.provideMerge(ThreadHistory.layerTransient)),
-    ),
+    Effect.provide(Layer.mergeAll(handlers, model).pipe(Layer.provideMerge(BenchmarkHistoryLive))),
   );
 
   foregroundMs = yield* elapsed(foregroundStart);
@@ -1565,9 +1563,7 @@ const subagentCase = Effect.fn("diagnostic.subagent")(function* (workload: Diagn
       return output;
     }),
   ).pipe(
-    Effect.provide(
-      Layer.mergeAll(handlers, model).pipe(Layer.provideMerge(ThreadHistory.layerTransient)),
-    ),
+    Effect.provide(Layer.mergeAll(handlers, model).pipe(Layer.provideMerge(BenchmarkHistoryLive))),
     Effect.withTracer(tracer),
     // Flush bounded trace scalars even when the Run fails or is interrupted.
     Effect.ensuring(

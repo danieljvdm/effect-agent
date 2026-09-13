@@ -79,8 +79,8 @@ const RuntimeLive = AnthropicLanguageModel.model("claude-sonnet-5").pipe(
 const program = AgentRuntime.run(TravelPlanner, input).pipe(Effect.provide(RuntimeLive));
 ```
 
-The travel planner's `AppLive` supplies the provider client, tool handlers, IDs, and transient
-history. `Layer.provideMerge` supplies the model's client dependency and keeps those services
+The travel planner's `AppLive` supplies the provider client, tool handlers, and in-memory
+history. IDs have an overridable default. `Layer.provideMerge` supplies the model's client dependency and keeps those services
 available to the run.
 
 ## Scope resources {#scope-is-ownership}

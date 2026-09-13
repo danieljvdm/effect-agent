@@ -276,7 +276,7 @@ describe("run journal batch split (plan §2.1)", () => {
 
           yield* AgentRuntime.run(Agent.withModel(definition, model), "Find a listing", {
             onHistory: (history) => Ref.set(retained, history),
-          }).pipe(Effect.provide([ThreadHistory.layerTransient]));
+          }).pipe(Effect.provide([ThreadHistory.layer]));
           const history = yield* Ref.get(retained);
 
           const providerResult = history.content.flatMap((message) =>
@@ -354,7 +354,7 @@ describe("run journal batch split (plan §2.1)", () => {
             {
               history: projected.prompt,
             },
-          ).pipe(Effect.provide([ThreadHistory.layerTransient]));
+          ).pipe(Effect.provide([ThreadHistory.layer]));
           expect(yield* Ref.get(replayed)).toBe(true);
         }),
     );

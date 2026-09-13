@@ -49,6 +49,8 @@ import { Prompt, LanguageModel, Model, type Response, Tool, Toolkit } from "effe
 
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 
+let threadSequence = 0;
+
 class HookFailure extends Schema.TaggedError<HookFailure>()("HookFailure", {
   message: Schema.String,
 }) {}
@@ -81,7 +83,7 @@ const oneCallResumeUsage = {
 };
 
 const identifiers = Layer.succeed(IdGenerator, {
-  nextThreadId: Effect.succeed(Schema.decodeSync(ThreadId)("thread-1")),
+  nextThreadId: Effect.sync(() => Schema.decodeSync(ThreadId)(`thread-1-${++threadSequence}`)),
   nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
   nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
 });
@@ -174,7 +176,7 @@ const policy = (overrides?: Partial<Parameters<typeof AgentPolicy.make>[0]>) =>
 
 const testLayer = Layer.mergeAll(
   identifiers,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 
@@ -477,6 +479,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         Agent.withModel(definition, model),
         { question: "book" },
         {
+          threadId: ThreadId.make("thread-1"),
           approval: {
             request: (request) =>
               Ref.update(marks, (all) => [...all, `approval:${request.toolCallId}`]).pipe(
@@ -733,6 +736,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         Agent.withModel(definition, model),
         { question: "book" },
         {
+          threadId: ThreadId.make("thread-1"),
           approval: {
             request: (request) =>
               Ref.update(marks, (all) => [...all, `approval:${request.toolCallId}`]).pipe(
@@ -851,6 +855,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         Agent.withModel(definition, model),
         { question: "book" },
         {
+          threadId: ThreadId.make("thread-1"),
           approval: {
             request: () => Effect.succeed({ _tag: "denied" as const, reason: "operator declined" }),
           },

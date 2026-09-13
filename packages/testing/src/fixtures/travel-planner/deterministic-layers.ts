@@ -464,7 +464,7 @@ export const DeterministicIdGeneratorLayer = Layer.effect(
 
 export const TravelPlannerRuntimeLayer = Layer.mergeAll(
   RunContextPreparationPassthrough,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   TravelPlannerToolkitLayer,
   FlightCatalogLayer,
   LodgingCatalogLayer,

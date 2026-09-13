@@ -47,7 +47,8 @@ begins only after the preceding canonical state is committed.
 
 **Thread**
 An addressable durable or ephemeral ordered history shared across Runs. An Agent executes Runs
-within a Thread and retains their history there. A Thread has exactly one canonical transcript
+within a Thread and retains their history there. The baseline in-memory store retains native
+message records for its application Scope. A durable Thread has exactly one canonical transcript
 projection, derived from its records.
 
 **Submission**  

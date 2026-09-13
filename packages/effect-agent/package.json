@@ -33,7 +33,7 @@
     "./context-window": "./src/engine/ContextWindow.ts",
     "./durable-step": "./src/engine/DurableStep.ts",
     "./ephemeral": "./src/Ephemeral.ts",
-    "./ephemeral-threads": "./src/capabilities/EphemeralThreads.ts",
+    "./ephemeral-threads": "./src/engine/EphemeralThreads.ts",
     "./id-generator": "./src/core/IdGenerator.ts",
     "./identifiers": "./src/core/Identifiers.ts",
     "./interactive-browser": "./src/sandbox/InteractiveBrowser.ts",

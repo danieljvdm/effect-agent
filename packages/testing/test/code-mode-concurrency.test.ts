@@ -129,7 +129,7 @@ const scenario = (
   };
 };
 
-layer(Layer.mergeAll(ThreadHistory.layerTransient, RunContextPreparationPassthrough), {
+layer(Layer.mergeAll(ThreadHistory.layer, RunContextPreparationPassthrough), {
   excludeTestServices: true,
 })("Code Mode writes and concurrency", (it) => {
   it.effect(

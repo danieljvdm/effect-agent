@@ -21,7 +21,7 @@ export default defineConfig({
       "src/engine/ContextWindow.ts",
       "src/engine/DurableStep.ts",
       "src/Ephemeral.ts",
-      "src/capabilities/EphemeralThreads.ts",
+      "src/engine/EphemeralThreads.ts",
       "src/core/IdGenerator.ts",
       "src/core/Identifiers.ts",
       "src/sandbox/InteractiveBrowser.ts",

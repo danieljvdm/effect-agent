@@ -419,6 +419,7 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
           "evidence.ts",
           "seeds.ts",
           "ids.ts",
+          "history.ts",
         ].map((file) => path.join(source, file)),
         outdir: fixtures,
         bundle: false,

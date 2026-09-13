@@ -9,7 +9,44 @@ A Thread is addressable ordered history shared across Runs. An Agent executes Ru
 and retains their history there. A Thread is separate from an Agent definition, process lifetime,
 Submission, or model request.
 
+## In-memory conversations
+
+`Ephemeral.layer` is the default setup. It keeps conversation history in memory for the lifetime
+of its application Scope. Runs with the same Thread ID load that conversation automatically:
+
+```ts
+import { AgentRuntime, Ephemeral } from "effect-agent";
+import { Effect } from "effect";
+
+const conversation = Effect.gen(function* () {
+  const first = yield* AgentRuntime.run(agent, "Plan a trip to Lisbon");
+  return yield* AgentRuntime.run(agent, "Make it cheaper", { threadId: first.threadId });
+}).pipe(Effect.provide(Ephemeral.layer));
+```
+
+Supply the model and tool handlers around this program. Provide the application Layer once
+around all conversation Runs, or build one `ManagedRuntime` for a long-lived application.
+Providing a fresh Layer separately to each Run creates separate stores. Omitting `threadId`
+creates a new conversation; reuse the returned ID for follow-ups.
+
+The layer shares one bounded `EphemeralThreads` store and the subagent reservation ledger.
+`ThreadHistory.layer` supplies just the in-memory history services when assembling your own setup.
+History retains complete native messages and Tool batches as execution advances. Recorded updates
+remain after a later failure, defect, timeout, or interruption; incomplete streamed responses and
+unfinished Tool batches are not recorded. Nothing automatically replays failed work. Scope closure
+releases the store, and process loss loses both its history and any active execution.
+
+The store permits 256 Threads, 1,024 messages and 4 MiB of encoded content per Thread, and 64 MiB
+of encoded content overall. Exceeding a bound fails with `ThreadHistoryError` and reason `"limit"`;
+it never silently evicts earlier conversations. Concurrent updates must extend the same recorded
+prefix, or fail with reason `"conflict"` without overwriting history. Authorize thread access and
+serialize same-thread Runs when concurrent external work is unacceptable.
+
 ## Retain completed runs
+
+For history backed by an explicit store, use `PersistentHistory.layer`. It commits whole
+successful Runs; its memory adapter is also useful when you need the canonical ThreadStore APIs.
+Use SQLite when the history must survive a Node process restart.
 
 Provide `PersistentHistory.layer` with a memory or SQLite `ThreadStore` layer. The same agent
 can serve many thread IDs.
@@ -62,8 +99,8 @@ that limit, execution fails before model or tool calls. Start a new thread to co
 
 ### Choose one history owner {#history-policy-and-append-ownership}
 
-Use `ThreadHistory.layerTransient` when you do not want successful-run retention.
-`PersistentHistory.layer` rejects explicit `history`, `onHistory`, `input`, `durability`,
+The default in-memory layer records incremental history and supports input queues and history
+observers. `PersistentHistory.layer` owns an atomic successful-Run commit and rejects explicit `history`, `onHistory`, `input`, `durability`,
 `subagent`, `resume`, and `resumeUsage` options before model or tool execution.
 
 Persistent writers compare the loaded tail before appending. Concurrent callers may both execute,
@@ -74,36 +111,34 @@ restarts.
 Other reasons include `"fenced"`, `"incompatible"`, `"not-found"`, `"limit"`, `"encoding"`, and
 `"storage"`. The adapter error remains available as the diagnostic cause.
 
-Use separate thread IDs for retained interaction and durable admission. Persistent history
+Use separate thread IDs for retained interaction and durable admission. SQLite-backed history
 survives restart, but it does not provide receipts, attempt ownership, recovery, or settlement.
 Authorize tenant and thread access before execution.
 
 ## Use process-local history hooks {#advanced-history-integrations}
 
-These integrations require `ThreadHistory.layerTransient` and keep different commit rules:
-
-| Integration            | Behavior                                                                                 |
-| ---------------------- | ---------------------------------------------------------------------------------------- |
-| `RunOptions.history`   | Supplies an initial Prompt. The runtime does not save it.                                |
-| `RunOptions.onHistory` | Receives incremental Prompt updates inline. Earlier writes remain after a later failure. |
-| `toRunThreadOptions`   | Loads and updates a bounded `EphemeralThreads` snapshot. Partial runs remain visible.    |
-| Durable runtime hooks  | Rebuild context from the journal and commit each turn for recovery.                      |
-
-Use explicit history when the caller supplies context as request data. For interactive local
-history with steering and follow-up queues:
+Ordinary interactive Runs use the same in-memory layer. Steering and follow-up queues do not
+need a separate history adapter:
 
 ```ts
-const program = Effect.gen(function* () {
-  const runOptions = yield* toRunThreadOptions(threadId, runId);
-  return yield* AgentRuntime.run(agent, input, {
-    ...runOptions,
-    input: toRunInputHook(commands),
-  }).pipe(Effect.provide(ThreadHistory.layerTransient));
-});
+const program = AgentRuntime.run(agent, input, {
+  threadId,
+  input: toRunInputHook(commands),
+}).pipe(Effect.provide(Ephemeral.layer));
 ```
 
-Provide an `EphemeralThreads` Layer to this program. `toRunThreadOptions` acquires the owner
-while constructing its hooks, so subsequent history callbacks retain that same owner.
+The advanced hooks have these ownership rules:
+
+| Integration            | Behavior                                                                                        |
+| ---------------------- | ----------------------------------------------------------------------------------------------- |
+| `RunOptions.history`   | Seeds a new in-memory Thread or extends its current history; a divergent prefix is rejected.    |
+| `RunOptions.onHistory` | Observes incremental Prompt updates after in-memory retention. Its own writes are caller-owned. |
+| `toRunThreadOptions`   | Adapts an existing `EphemeralThreads` snapshot when explicit history hooks are needed.          |
+| Durable runtime hooks  | Own history through the journal and commit each turn for recovery.                              |
+
+Use `Ephemeral.layer` or `ThreadHistory.layer` as the shared store for `toRunThreadOptions`.
+The helper captures that store while constructing its hooks. Durable hosts supply their own
+journal-based history; their execution does not also append to the in-memory store.
 
 Snapshot updates append only their new suffix. A stale or rewritten prefix fails with
 `ThreadHistoryDiverged`. A limit error records none of that update, while earlier updates

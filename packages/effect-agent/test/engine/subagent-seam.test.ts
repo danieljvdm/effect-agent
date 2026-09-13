@@ -209,7 +209,7 @@ const isSubagentEvent = (event: RunEvent) => event._tag.startsWith("Subagent");
 
 const testLayer = Layer.mergeAll(
   identifiers,
-  ThreadHistory.layerTransient,
+  ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );
 
