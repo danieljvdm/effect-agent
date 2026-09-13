@@ -42,9 +42,9 @@ rows. The linked warehouse example replaces the fixed data with a brokered SQL q
 ```ts twoslash
 // @types: @cloudflare/workers-types
 import { Ephemeral, CodeMode, Agent, AgentRuntime } from "effect-agent";
-import { AgentPolicy } from "effect-agent/AgentPolicy";
-import { ToolExecutionClass } from "effect-agent/DurableStep";
-import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/CloudflareCodeMode";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { ToolExecutionClass } from "effect-agent/durable-step";
+import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/cloudflare-code-mode";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -151,7 +151,7 @@ tool. Discovery returns only matching, currently eligible methods and their enco
 
 ```ts twoslash
 import { Agent, CodeMode, ToolDiscovery } from "effect-agent";
-import { ToolExecutionClass } from "effect-agent/DurableStep";
+import { ToolExecutionClass } from "effect-agent/durable-step";
 import { Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 

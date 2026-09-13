@@ -1,16 +1,15 @@
-import { type ThreadId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import {
   type IntegrityReport,
   type ObligationReport,
   type ObligationThresholds,
   type RecoveryExplanation,
   type RetryCommand,
-} from "@effect-agent/thread/Admin";
+} from "@effect-agent/thread/admin";
 import {
   type AgentRegistration,
   type ResolvedBinding,
   type DurableBindingFailure,
-} from "@effect-agent/thread/AgentRegistration";
+} from "@effect-agent/thread/agent-registration";
 import {
   DurableAgentRuntime,
   type DurableAbortFailure,
@@ -26,26 +25,27 @@ import {
   type DurableWorkerFailure,
   type Receipt,
   type RecoveryReport,
-} from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/thread/durable-agent-runtime";
 import {
   type MessageDeliveryStore,
   MessageDeliveryDriver,
   type MessageDeliveryError,
-} from "@effect-agent/thread/MessageDelivery";
-import { type OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
-import { PreparedInputAdmission } from "@effect-agent/thread/PreparedInputAdmission";
-import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/message-delivery";
+import { type OperationDenied } from "@effect-agent/thread/operation-authorizer";
+import { PreparedInputAdmission } from "@effect-agent/thread/prepared-input-admission";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import {
   type AbortCommand,
   type AbortIntent,
   type Settlement,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import {
   type ThreadNotMaterialized,
   type ThreadStoreError,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { type Stream, Context, Effect, Fiber, Layer, Ref, Schema } from "effect";
+import { type ThreadId, type SubmissionId } from "effect-agent/identifiers";
 
 import { runNodeMessageDeliveries } from "./internal/message-delivery.ts";
 import { makeNodePreparedInputAdmission, NodeAdmission } from "./internal/prepared-admission.ts";

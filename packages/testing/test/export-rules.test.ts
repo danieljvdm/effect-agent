@@ -36,6 +36,7 @@ tester.run("no-internal-barrel", plugin.rules["no-internal-barrel"], {
 tester.run("public-entrypoint", plugin.rules["public-entrypoint"], {
   valid: [
     { filename: root, code: 'export * as Agent from "./Agent.ts";' },
+    { filename: root, code: 'export * as Agent from "./core/Agent.ts";' },
     {
       filename: root,
       code: 'export { pipe, flow } from "./Function.ts"; export * as Function from "./Function.ts";',

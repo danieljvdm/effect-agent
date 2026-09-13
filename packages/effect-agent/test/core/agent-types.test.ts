@@ -1,0 +1,349 @@
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Agent } from "effect-agent";
+import {
+  type AgentError,
+  type AgentInputError,
+  type AgentOutputError,
+  type AgentRunDispositionError,
+  type ContextOverflowError,
+} from "effect-agent/agent-error";
+import { AgentPolicy, type CompactionPolicy } from "effect-agent/agent-policy";
+import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { describe, expect, it } from "vite-plus/test";
+
+type Equal<Left, Right> =
+  (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
+    ? (<Value>() => Value extends Right ? 1 : 2) extends <Value>() => Value extends Left ? 1 : 2
+      ? true
+      : false
+    : false;
+type Assert<Value extends true> = Value;
+
+class InstructionContext extends Context.Service<InstructionContext, { readonly locale: string }>()(
+  "@effect-agent/core/test/InstructionContext",
+) {}
+
+class ModelConfig extends Context.Service<ModelConfig, { readonly modelName: string }>()(
+  "@effect-agent/core/test/ModelConfig",
+) {}
+
+class AvailabilityCatalog extends Context.Service<
+  AvailabilityCatalog,
+  { readonly search: Effect.Effect<ReadonlyArray<string>> }
+>()("@effect-agent/core/test/AvailabilityCatalog") {}
+
+class InstructionFailure extends Schema.TaggedError<InstructionFailure>()("InstructionFailure", {
+  message: Schema.String,
+}) {}
+
+class InputPromptContext extends Context.Service<InputPromptContext, { readonly prefix: string }>()(
+  "@effect-agent/core/test/InputPromptContext",
+) {}
+
+class InputPromptFailure extends Schema.TaggedError<InputPromptFailure>()("InputPromptFailure", {
+  message: Schema.String,
+}) {}
+
+class AvailabilityFailure extends Schema.TaggedError<AvailabilityFailure>()("AvailabilityFailure", {
+  message: Schema.String,
+}) {}
+
+const SearchAvailability = Tool.make("search_availability", {
+  parameters: Schema.Struct({ destination: Schema.String }),
+  success: Schema.Array(Schema.String),
+  failure: AvailabilityFailure,
+  dependencies: [AvailabilityCatalog],
+});
+
+const TravelTools = Toolkit.make(SearchAvailability);
+
+const PostMessage = Tool.make("post_message", {
+  parameters: Schema.Struct({ message: Schema.String }),
+  success: Schema.Struct({ messageId: Schema.String }),
+});
+
+const DeliveryTools = Toolkit.make(PostMessage);
+
+const model = Model.make(
+  "scripted",
+  "type-proof",
+  Layer.effect(
+    LanguageModel.LanguageModel,
+    Effect.gen(function* () {
+      yield* ModelConfig;
+
+      return yield* LanguageModel.make({
+        generateText: () => Effect.succeed([]),
+        streamText: () => Stream.empty,
+      });
+    }),
+  ),
+);
+
+const definition = Agent.make("type-proof", {
+  input: Schema.Struct({ destination: Schema.String }),
+  output: Schema.Struct({ summary: Schema.String }),
+  instructions: ({ destination }) =>
+    Effect.gen(function* () {
+      const context = yield* InstructionContext;
+
+      if (context.locale.length === 0) {
+        return yield* InstructionFailure.make({
+          message: "locale is required",
+        });
+      }
+
+      return `Search ${destination} using ${context.locale}.`;
+    }),
+  toolkit: TravelTools,
+  policy: AgentPolicy.make({
+    maxTurns: 2,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+});
+
+const agent = Agent.withModel(definition, model);
+
+const inputPromptDefinition = Agent.make("input-prompt-type-proof", {
+  input: Schema.Struct({ destination: Schema.String }),
+  output: Schema.Struct({ summary: Schema.String }),
+  instructions: "Answer as JSON.",
+  inputPrompt: ({ destination }) =>
+    destination === ""
+      ? []
+      : Effect.gen(function* () {
+          const context = yield* InputPromptContext;
+
+          if (context.prefix === "") {
+            return yield* InputPromptFailure.make({ message: "prefix is required" });
+          }
+
+          return `${context.prefix}${destination}`;
+        }),
+  toolkit: Toolkit.empty,
+  policy: AgentPolicy.make({
+    maxTurns: 1,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+});
+
+const RunDisposition = Schema.Literal("application-complete");
+
+const dispositionDefinition = Agent.make("disposition-type-proof", {
+  input: Schema.Struct({ destination: Schema.String }),
+  output: Schema.Struct({
+    summary: Schema.String,
+    runDisposition: Schema.optionalKey(RunDisposition),
+  }),
+  instructions: "Answer with a typed disposition when the run completed the application work.",
+  toolkit: Toolkit.empty,
+  policy: AgentPolicy.make({
+    maxTurns: 1,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+  runDisposition: {
+    schema: RunDisposition,
+    fromOutput: (output) => output.runDisposition,
+  },
+});
+
+const terminalDefinition = Agent.make("terminal-type-proof", {
+  input: Schema.Struct({ destination: Schema.String }),
+  output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+  instructions: "Deliver the final message.",
+  toolkit: DeliveryTools,
+  policy: AgentPolicy.make({
+    maxTurns: 1,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+  completion: {
+    tool: "post_message",
+    required: true,
+    project: ({ parameters, result }) => ({
+      message: parameters.message,
+      messageId: result.messageId,
+    }),
+  },
+});
+
+const actionCompletionDefinition = Agent.make("action-type-proof", {
+  input: Schema.String,
+  output: Schema.Struct({ message: Schema.String, messageId: Schema.String }),
+  instructions: "Deliver one action.",
+  toolkit: DeliveryTools,
+  completionFromTools: [
+    {
+      tool: "post_message",
+      project: ({ parameters, result }) =>
+        Option.some({ message: parameters.message, messageId: result.messageId }),
+    },
+  ],
+});
+
+type ExpectedRequirements =
+  | InstructionContext
+  | ModelConfig
+  | AvailabilityCatalog
+  | Tool.HandlersFor<Toolkit.Tools<typeof TravelTools>>;
+type ExpectedDefinitionRequirements =
+  | InstructionContext
+  | AvailabilityCatalog
+  | Tool.HandlersFor<Toolkit.Tools<typeof TravelTools>>;
+type ExpectedFailure =
+  | InstructionFailure
+  | AvailabilityFailure
+  | AiError.AiError
+  | AgentInputError
+  | AgentOutputError;
+
+type RequirementsProof = Assert<Equal<Agent.Requirements<typeof agent>, ExpectedRequirements>>;
+type DefinitionRequirementsProof = Assert<
+  Equal<Agent.DefinitionRequirements<typeof definition>, ExpectedDefinitionRequirements>
+>;
+type FailureProof = Assert<Equal<Agent.Failure<typeof agent>, ExpectedFailure>>;
+type InputPromptRequirementsProof = Assert<
+  Equal<Agent.DefinitionRequirements<typeof inputPromptDefinition>, InputPromptContext>
+>;
+type InputPromptFailureProof = Assert<
+  Equal<
+    Extract<Agent.Failure<typeof inputPromptDefinition>, InputPromptFailure>,
+    InputPromptFailure
+  >
+>;
+type DefinitionIsNotBindingProof = Assert<
+  Equal<typeof definition extends Agent.Any ? true : false, false>
+>;
+type BindingRetainsNativeModelProof = Assert<Equal<(typeof agent)["model"], typeof model>>;
+type InputProjectionProof = Assert<
+  Equal<Agent.Input<typeof agent>, { readonly destination: string }>
+>;
+type OutputProjectionProof = Assert<
+  Equal<Agent.Output<typeof agent>, { readonly summary: string }>
+>;
+type RunDispositionProjectionProof = Assert<
+  Equal<Agent.RunDisposition<typeof dispositionDefinition>, "application-complete">
+>;
+type RunDispositionRequirementsProof = Assert<
+  Equal<Agent.DefinitionRequirements<typeof dispositionDefinition>, never>
+>;
+type PlainRunDispositionFailureProof = Assert<
+  Equal<Agent.RunDispositionFailure<typeof definition>, never>
+>;
+type DeclaredRunDispositionFailureProof = Assert<
+  Equal<Agent.RunDispositionFailure<typeof dispositionDefinition>, AgentRunDispositionError>
+>;
+type RunDispositionFailureProof = Assert<
+  Equal<
+    Extract<Agent.Failure<typeof dispositionDefinition>, { _tag: "AgentRunDispositionError" }>,
+    AgentRunDispositionError
+  >
+>;
+type PolicyExhaustionModeProof = Assert<
+  Equal<AgentPolicy["onExhaustion"], "final-answer" | "fail">
+>;
+type PolicyRunStatusProof = Assert<Equal<AgentPolicy["runStatus"], "appended" | "off">>;
+type PolicyContextLimitOptionalityProof = Assert<
+  Equal<AgentPolicy["contextTokenLimit"], AgentPolicy["tokenBudget"]>
+>;
+type PolicyCompactionProof = Assert<Equal<AgentPolicy["compaction"], CompactionPolicy>>;
+type ContextOverflowTagProof = Assert<Equal<ContextOverflowError["_tag"], "ContextOverflowError">>;
+// Union MEMBERSHIP, not just the tag: extracting the member by tag from the
+// framework error union must yield exactly the class type (F5, PR #54 review).
+type ContextOverflowInAgentErrorProof = Assert<
+  Equal<Extract<AgentError, { _tag: "ContextOverflowError" }>, ContextOverflowError>
+>;
+
+describe("Agent type inference", () => {
+  it("inspects native failure modes without resolving handlers or the model", () => {
+    const toolkit = Toolkit.make(
+      SearchAvailability,
+      Tool.make("recoverable", { failure: AvailabilityFailure, failureMode: "return" }),
+      Tool.dynamic("dynamic", { failureMode: "return" }),
+      Tool.providerDefined({ id: "test.search", customName: "hosted", providerName: "search" })(
+        undefined,
+      ),
+    );
+
+    const inspected = Agent.make("inspect-tools", {
+      input: Schema.String,
+      output: Schema.String,
+      instructions: "Inspect only.",
+      toolkit,
+      toolExposure: { initialToolNames: ["recoverable"] },
+    });
+
+    const expected = [
+      { name: "search_availability", failureMode: "error", requiresHandler: true },
+      { name: "recoverable", failureMode: "return", requiresHandler: true },
+      { name: "dynamic", failureMode: "return", requiresHandler: true },
+      { name: "hosted", failureMode: "error", requiresHandler: false },
+    ];
+
+    expect(Agent.inspectTools(inspected)).toEqual(expected);
+    expect(Agent.inspectTools(Agent.withModel(inspected, model))).toEqual(expected);
+    expect(
+      Schema.encodeSync(Schema.Array(Agent.ToolInspection))(Agent.inspectTools(inspected)),
+    ).toEqual(expected);
+    expect(inspected.toolkit).toBe(toolkit);
+  });
+
+  it("separates immutable definition from model binding", () => {
+    const requirementsProof: RequirementsProof = true;
+    const definitionRequirementsProof: DefinitionRequirementsProof = true;
+    const failureProof: FailureProof = true;
+    const inputPromptRequirementsProof: InputPromptRequirementsProof = true;
+    const inputPromptFailureProof: InputPromptFailureProof = true;
+    const definitionIsNotBindingProof: DefinitionIsNotBindingProof = true;
+    const bindingRetainsNativeModelProof: BindingRetainsNativeModelProof = true;
+    const inputProjectionProof: InputProjectionProof = true;
+    const outputProjectionProof: OutputProjectionProof = true;
+    const runDispositionProjectionProof: RunDispositionProjectionProof = true;
+    const runDispositionRequirementsProof: RunDispositionRequirementsProof = true;
+    const plainRunDispositionFailureProof: PlainRunDispositionFailureProof = true;
+    const declaredRunDispositionFailureProof: DeclaredRunDispositionFailureProof = true;
+    const runDispositionFailureProof: RunDispositionFailureProof = true;
+    const policyExhaustionModeProof: PolicyExhaustionModeProof = true;
+    const policyRunStatusProof: PolicyRunStatusProof = true;
+    const policyContextLimitOptionalityProof: PolicyContextLimitOptionalityProof = true;
+    const policyCompactionProof: PolicyCompactionProof = true;
+    const contextOverflowTagProof: ContextOverflowTagProof = true;
+    const contextOverflowInAgentErrorProof: ContextOverflowInAgentErrorProof = true;
+
+    expect(policyExhaustionModeProof).toBe(true);
+    expect(policyRunStatusProof).toBe(true);
+    expect(policyContextLimitOptionalityProof).toBe(true);
+    expect(policyCompactionProof).toBe(true);
+    expect(contextOverflowTagProof).toBe(true);
+    expect(contextOverflowInAgentErrorProof).toBe(true);
+    expect(requirementsProof).toBe(true);
+    expect(definitionRequirementsProof).toBe(true);
+    expect(failureProof).toBe(true);
+    expect(inputPromptRequirementsProof).toBe(true);
+    expect(inputPromptFailureProof).toBe(true);
+    expect(definitionIsNotBindingProof).toBe(true);
+    expect(bindingRetainsNativeModelProof).toBe(true);
+    expect(inputProjectionProof).toBe(true);
+    expect(outputProjectionProof).toBe(true);
+    expect(runDispositionProjectionProof).toBe(true);
+    expect(runDispositionRequirementsProof).toBe(true);
+    expect(plainRunDispositionFailureProof).toBe(true);
+    expect(declaredRunDispositionFailureProof).toBe(true);
+    expect(runDispositionFailureProof).toBe(true);
+    expect(Object.isFrozen(dispositionDefinition.runDisposition)).toBe(true);
+    expect(Object.isFrozen(terminalDefinition.completion)).toBe(true);
+    expect(Object.isFrozen(actionCompletionDefinition.completionFromTools)).toBe(true);
+    expect(Object.isFrozen(actionCompletionDefinition.completionFromTools?.[0])).toBe(true);
+    expect(agent.definition).toBe(definition);
+    expect(agent.model).toBe(model);
+    expect(Object.isFrozen(definition)).toBe(true);
+    expect(Object.isFrozen(agent)).toBe(true);
+  });
+});

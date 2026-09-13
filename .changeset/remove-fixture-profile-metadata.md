@@ -5,5 +5,5 @@
 Remove the unused Travel Planner phase-profile schemas and metadata constants.
 
 BEHAVIOR CHANGE: Remove imports of `TravelPlanner*Profile`, `phase3TravelPlannerProfile` through
-`phase7TravelPlannerProfile`, and `s2TravelPlannerProfile` from `@effect-agent/testing/TravelPlanner`;
+`phase7TravelPlannerProfile`, and `s2TravelPlannerProfile` from `@effect-agent/testing/travel-planner`;
 the executable fixtures and live-test gate remain available.

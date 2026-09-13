@@ -1,5 +1,5 @@
-import { type AgentId } from "@effect-agent/core/Identifiers";
 import { Context, Effect, Schema, type Scope } from "effect";
+import { type AgentId } from "effect-agent/identifiers";
 
 import { definitionDigestsEqual } from "./internal/agent-registration.ts";
 import { type DefinitionDigests, PersistedJson } from "./Records.ts";

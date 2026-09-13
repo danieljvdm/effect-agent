@@ -1,21 +1,18 @@
-import { AgentInputError } from "@effect-agent/core/AgentError";
-import { AgentId, type ThreadId } from "@effect-agent/core/Identifiers";
-import { InputMessage } from "@effect-agent/core/Messaging";
-import { DigestError } from "@effect-agent/thread/Digest";
+import { DigestError } from "@effect-agent/thread/digest";
 import {
   Receipt,
   type DurableSubmitAgent,
   type DurableSubmitOptions,
-} from "@effect-agent/thread/DurableAgentRuntime";
-import { DurableRuntimeFailpointError } from "@effect-agent/thread/DurableFailpoint";
-import { OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
+} from "@effect-agent/thread/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@effect-agent/thread/durable-failpoint";
+import { OperationDenied } from "@effect-agent/thread/operation-authorizer";
 import {
   CanonicalRecordEnvelope,
   CanonicalSequence,
   DefinitionDigests,
   PersistedJson,
   WorkerAdmission,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   AdmissionFence,
   AdmissionGroup,
@@ -35,16 +32,19 @@ import {
   UnknownResolutionCommand,
   UnknownResolutionConflict,
   UnknownResolutionIntent,
-} from "@effect-agent/thread/SubmissionLedger";
-import { SubmissionStatus } from "@effect-agent/thread/SubmissionStatus";
+} from "@effect-agent/thread/submission-ledger";
+import { SubmissionStatus } from "@effect-agent/thread/submission-status";
 import {
   AppendConflict,
   ThreadNotMaterialized,
   ThreadStoreError,
   FenceRejected,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
+import { AgentInputError } from "effect-agent/agent-error";
+import { AgentId, type ThreadId } from "effect-agent/identifiers";
+import { InputMessage } from "effect-agent/messaging";
 import { RpcTracing } from "effect-cf";
 
 import { DurableAlarmError } from "./Alarm.ts";

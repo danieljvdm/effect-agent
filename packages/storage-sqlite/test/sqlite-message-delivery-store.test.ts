@@ -1,8 +1,8 @@
-import { MessageDeliveryStore } from "@effect-agent/thread/MessageDelivery";
+import { MessageDeliveryStore } from "@effect-agent/thread/message-delivery";
 import {
   makeMessageDeliveryFixture,
   messageDeliveryStoreConformanceCases,
-} from "@effect-agent/thread/testing/MessageDeliveryStoreConformance";
+} from "@effect-agent/thread/testing/message-delivery-store-conformance";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";

@@ -1,11 +1,11 @@
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import { Schema } from "effect";
+import * as MemoryNamespace from "effect-agent/memory-namespace";
 import {
   MemoryRecallLimits,
   MemoryPassage,
   type MemoryLookup,
-} from "@effect-agent/core/MemoryReference";
-import { MemoryScope, MemoryWrite } from "@effect-agent/core/MemoryStore";
-import { Schema } from "effect";
+} from "effect-agent/memory-reference";
+import { MemoryScope, MemoryWrite } from "effect-agent/memory-store";
 
 export const Projects = MemoryNamespace.define({
   name: "benchmark/projects",

@@ -1,17 +1,17 @@
-import { ThreadObjectNamespace } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { ThreadObjectNamespace } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import {
   CloudflareSchedulingClient,
   ScheduleOwnerNamespace,
   makeScheduleOwnerObjectClass,
-} from "@effect-agent/platform-cloudflare/CloudflareScheduling";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
+} from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
 import {
   ScheduleAuthorizer,
   ScheduleFailpoint,
   ScheduleFailpointError,
   ScheduleId,
-} from "@effect-agent/thread/Schedule";
-import { Scheduling } from "@effect-agent/thread/Scheduling";
+} from "@effect-agent/thread/schedule";
+import { Scheduling } from "@effect-agent/thread/scheduling";
 import { Effect, Layer, Schema } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 

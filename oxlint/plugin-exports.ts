@@ -90,7 +90,10 @@ const publicEntrypoint = {
             node.type === "ExportAllDeclaration" &&
             node.exported?.type === "Identifier" &&
             /^[A-Z][A-Za-z0-9]*$/.test(node.exported.name) &&
-            node.source.value === `./${node.exported.name}.ts`
+            typeof node.source.value === "string" &&
+            node.source.value.startsWith("./") &&
+            !node.source.value.split("/").includes("internal") &&
+            node.source.value.endsWith(`/${node.exported.name}.ts`)
           )
             continue;
           if (

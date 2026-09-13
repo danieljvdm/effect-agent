@@ -91,7 +91,7 @@ Lower the progress allowance with `bufferLimits` on `run`, `stream`, or `start`.
 cannot raise the engine's ceiling:
 
 ```ts twoslash
-import { type RunBufferLimits } from "effect-agent/RunOptions";
+import { type RunBufferLimits } from "effect-agent/run-options";
 
 export const progressBufferLimits: RunBufferLimits = {
   maxToolProgressBytes: 1024 * 1024,
@@ -180,8 +180,8 @@ Use `layerWithServices` to supply your own service layers. It requires
 Here is the default authorization policy; replace it with your application's implementation:
 
 ```ts twoslash
-import { RunToolAuthorization } from "effect-agent/RunOptions";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { RunToolAuthorization } from "effect-agent/run-options";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
 import { Layer } from "effect";
 
 export const RuntimeLive = DurableAgentRuntime.layerWithServices.pipe(
@@ -250,7 +250,7 @@ per-run hooks.
 ## Observe recovered tool failures
 
 A tool may fail and the model may still complete the run. Install `toolFailureObserverLayer` from
-`@effect-agent/engine` to report such failures.
+`effect-agent` to report such failures.
 
 This observer covers failures contained as results, including programmatic broker outcomes. It does
 not duplicate model-declared failures that propagate through the run's Effect error channel, or
@@ -258,7 +258,7 @@ defects and interruptions. Use [`ToolCallFailed.failureHandling` and tool teleme
 to distinguish returned failures from propagated ones, and handle the run's Effect exit separately.
 
 ```ts
-import { toolFailureObserverLayer } from "effect-agent/RunOptions";
+import { toolFailureObserverLayer } from "effect-agent/run-options";
 import { Effect, ErrorReporter } from "effect";
 
 const failureReporting = toolFailureObserverLayer({

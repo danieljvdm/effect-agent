@@ -1,7 +1,7 @@
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
-import { type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
-import { CanonicalSequence } from "@effect-agent/thread/Records";
-import { ApprovalDecisionCommand } from "@effect-agent/thread/SubmissionLedger";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import { type Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { CanonicalSequence } from "@effect-agent/thread/records";
+import { ApprovalDecisionCommand } from "@effect-agent/thread/submission-ledger";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Cause, Effect, Fiber, Option, Schema } from "effect";
 import { describe, expect, it, onTestFinished } from "vite-plus/test";

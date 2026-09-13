@@ -103,7 +103,7 @@ ordinary Layer composition. The Workflow handler passes only a Thread ID to
 `processThreadHead`; it cannot replace captured model or tool services on an execution.
 
 Keep `deploymentId` identical in both runtime and Workflow host options. The optional
-`workflowName` is a stable versioned prefix, defaulting to `effect-agent/Submission/v1`.
+`workflowName` is a stable versioned prefix, defaulting to `effect-agent/submission/v1`.
 The native name appends `/deployment/<length>:<deploymentId>`. Keep one host registration per
 deployment, name, and engine. Changing that identity leaves the old dispatch obligations for
 their original host to repair.
@@ -176,12 +176,12 @@ persist in SQL. The dispatch store shares that SQL connection. Canonical agent h
 submission ledger use a separate SQLite file.
 
 ```ts twoslash
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
 import {
   NodeWorkflowRepairTrigger,
   SqlWorkflowDispatchStore,
-} from "@effect-agent/platform-node/NodeWorkflow";
-import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
+} from "@effect-agent/platform-node/node-workflow";
+import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";

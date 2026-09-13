@@ -1,15 +1,12 @@
-import { AgentId, RunId, ThreadId } from "@effect-agent/core/Identifiers";
-import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
-import { RunContextPreparation } from "@effect-agent/engine/RunOptions";
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
 import {
   ScriptedModel,
   type ScriptedTurnInput,
   type ScriptedStreamPart,
-} from "@effect-agent/testing/ScriptedModel";
-import { digestJson } from "@effect-agent/thread/Digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { DurableRuntimeFailpointError } from "@effect-agent/thread/DurableFailpoint";
+} from "@effect-agent/testing/scripted-model";
+import { digestJson } from "@effect-agent/thread/digest";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@effect-agent/thread/durable-failpoint";
 import {
   BatchId,
   CanonicalBatch,
@@ -28,8 +25,8 @@ import {
   SubmissionSettledRecord,
   ThreadCreated,
   UserInputRecorded,
-} from "@effect-agent/thread/Records";
-import { runIdForSubmission } from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/records";
+import { runIdForSubmission } from "@effect-agent/thread/run-journal";
 import {
   AdmissionRequest,
   ClaimRequest,
@@ -42,7 +39,7 @@ import {
   SubmissionLedger,
   submissionSettlementId,
   submissionSettlementRecordId,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import {
   FencedAppendRequest,
   LoadCheckpointRequest,
@@ -50,7 +47,7 @@ import {
   ThreadMaterialization,
   ThreadStore,
   ThreadTailRequest,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import {
   Cause,
   Clock,
@@ -68,7 +65,10 @@ import {
   Stream,
 } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
-import { ThreadHistory } from "effect-agent/ThreadHistory";
+import { ContextCompactor } from "effect-agent/context-compactor";
+import { AgentId, RunId, ThreadId } from "effect-agent/identifiers";
+import { RunContextPreparation } from "effect-agent/run-options";
+import { ThreadHistory } from "effect-agent/thread-history";
 import type { LanguageModel } from "effect/unstable/ai";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 

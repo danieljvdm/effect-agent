@@ -1,4 +1,4 @@
-import { CertificationReport } from "@effect-agent/thread/testing/Certification";
+import { CertificationReport } from "@effect-agent/thread/testing/certification";
 
 /** Fold executed results without acquiring adapters or claiming coverage from citations. */
 export const makeCertificationReport = (

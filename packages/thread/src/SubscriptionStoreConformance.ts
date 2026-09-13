@@ -1,5 +1,5 @@
-import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@effect-agent/core/Identifiers";
 import { Clock, Effect, Result, Schema } from "effect";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "effect-agent/identifiers";
 import { TestClock } from "effect/testing";
 
 import { Receipt } from "./DurableAgentRuntime.ts";

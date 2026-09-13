@@ -1,6 +1,5 @@
-import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@effect-agent/core/Identifiers";
-import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
+import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
 import {
   defaultSchedulingLimits,
   ScheduleAuthorizationError,
@@ -24,10 +23,11 @@ import {
   ScheduledEnvelope,
   ScheduledInputRefused,
   ScheduledInputRetryable,
-} from "@effect-agent/thread/Schedule";
-import { IdempotencyKey, Principal, QueueSequence } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/schedule";
+import { IdempotencyKey, Principal, QueueSequence } from "@effect-agent/thread/submission-ledger";
 import { describe, expect, it } from "@effect/vitest";
 import { Schema } from "effect";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "effect-agent/identifiers";
 
 const principal = Schema.decodeSync(Principal)("schedule-schema-principal");
 const scheduleId = Schema.decodeSync(ScheduleId)("schedule-schema");

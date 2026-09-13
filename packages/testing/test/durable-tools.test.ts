@@ -1,36 +1,16 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { DiscoveryTool } from "@effect-agent/core/ToolExposure";
-import {
-  DurableStep,
-  DurableStepError,
-  ToolExecutionClass,
-} from "@effect-agent/engine/DurableStep";
-import {
-  RunContextPreparation,
-  RunContextPreparationPassthrough,
-  RunToolAuthorization,
-  RunToolScheduling,
-  toolFailureObserverLayer,
-  type ToolFailureObservation,
-  type RunToolAuthorizationDecision,
-  type RunToolAuthorizationRequest,
-} from "@effect-agent/engine/RunOptions";
-import { RunToolVisibility } from "@effect-agent/engine/ToolExposure";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
-import { compileRegistrations } from "@effect-agent/thread/AgentRegistration";
-import { digestJson } from "@effect-agent/thread/Digest";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
+import { compileRegistrations } from "@effect-agent/thread/agent-registration";
+import { digestJson } from "@effect-agent/thread/digest";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   type DurableSubmitOptions,
-} from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/thread/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/DurableFailpoint";
+} from "@effect-agent/thread/durable-failpoint";
 import {
   CanonicalBatch,
   type CanonicalRecordEnvelope,
@@ -39,7 +19,7 @@ import {
   DeploymentId,
   Digest,
   ProducerId,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   modelResponseInterruptedRecordId,
   modelResponseRecordId,
@@ -47,7 +27,7 @@ import {
   runIdForSubmission,
   toolCallPreparedRecordId,
   toolStepSettledRecordId,
-} from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/run-journal";
 import {
   AbortCommand,
   IdempotencyKey,
@@ -60,14 +40,14 @@ import {
   UnknownResolutionCommand,
   type SettlementConflict,
   type UnknownResolutionConflict,
-} from "@effect-agent/thread/SubmissionLedger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
+} from "@effect-agent/thread/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
 import {
   FencedAppendRequest,
   ThreadRead,
   ThreadStore,
   ThreadTailRequest,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import {
   ReconciliationCompleted,
   ReconciliationSafeToRetry,
@@ -75,8 +55,8 @@ import {
   ToolReconciler,
   type PreparedToolCallEvidence,
   type ReconciliationDecision,
-} from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
@@ -94,6 +74,21 @@ import {
   SchemaGetter,
   Stream,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
+import { ThreadId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
+import {
+  RunContextPreparation,
+  RunContextPreparationPassthrough,
+  RunToolAuthorization,
+  RunToolScheduling,
+  toolFailureObserverLayer,
+  type ToolFailureObservation,
+  type RunToolAuthorizationDecision,
+  type RunToolAuthorizationRequest,
+} from "effect-agent/run-options";
+import { DiscoveryTool, RunToolVisibility } from "effect-agent/tool-exposure";
 import { Prompt, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));

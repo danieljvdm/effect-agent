@@ -1,3 +1,3 @@
-import * as Ephemeral from "effect-agent/Ephemeral";
+import * as Ephemeral from "effect-agent/ephemeral";
 
 export const layer = Ephemeral.layer;

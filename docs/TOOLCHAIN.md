@@ -61,15 +61,19 @@ Framework code stays in `packages/*`. The canonical app and operational harnesse
 Provider integrations come from upstream Effect AI Layers.
 
 ```text
-core <- engine <- capabilities
-core <- sandbox <- sandbox-local
-core <- sandbox <- capabilities
-core <- engine <- thread <- storage adapters
-core + thread <- workflow <- platform-node/workflow
-engine + thread + sandbox + adapters <- platform packages
-core + engine <- testing
-core + engine + capabilities <- effect-agent <- pr-review
+effect-agent <- thread <- storage adapters
+effect-agent + thread <- workflow
+effect-agent + thread + selected adapters <- platform packages
+effect-agent <- sandbox-local
+effect-agent <- testing
+effect-agent <- pr-review
 ```
+
+Within `packages/effect-agent/src`, dependencies point inward:
+`core <- engine <- capabilities` and `core <- sandbox <- capabilities`.
+Public module paths address these implementations directly; source directories are not separate
+packages. Keep core and sandbox contracts platform-neutral. The export check enforces these
+internal boundaries as well as package imports.
 
 Arrows point toward dependencies. An inward package must not import an outward one.
 Shared compiler settings live in `tsconfig.base.json`.
@@ -169,14 +173,14 @@ retain a cached preview after a deployment.
 
 ## Releasing to npm
 
-All fifteen public packages share one Changesets fixed group and publish to `beta`
+All eleven public packages share one Changesets fixed group and publish to `beta`
 as `X.Y.Z-beta.N`. Keep the group in `.changeset/config.json` aligned with public workspaces.
 The travel planner is a private application with no package version. It does not receive
 changesets, version bumps, changelogs, package tags, or npm releases. Private-package versioning
 and tagging remain disabled in the Changesets configuration.
 Changesets updates internal dependency ranges only when they use `workspace:`. Exact registry
 pins, including the travel planner's published Effect Agent dependencies, stay unchanged during
-versioning. Upgrade those consumers separately after publication; otherwise the version task's
+versioning. Upgrade those consumers and their import paths separately after publication; otherwise the version task's
 install would request packages that have not been published yet.
 The project is in prerelease mode. Leaving it requires an explicit release decision and
 `vp run changeset pre exit`.
@@ -303,9 +307,8 @@ defaults, so declare `dts` and `sourcemap` there when needed.
 
 Follow the pinned Effect package's module layout. Package roots and public groups use namespace
 exports such as `export * as Agent from "./Agent.ts"`; explicit named conveniences are also
-allowed, as Effect does for `pipe` and `flow`. Public modules use PascalCase names and direct
-subpaths. `import { Agent } from "effect-agent"` and
-`import * as Agent from "effect-agent/Agent"` select the same module.
+allowed, as Effect does for `pipe` and `flow`. Public namespaces and source filenames use PascalCase; public import subpaths use kebab-case. `import { Agent } from "effect-agent"` and
+`import * as Agent from "effect-agent/agent"` select the same module.
 
 - Keep implementations in named modules. A public module exposes every declaration it exports;
   move sibling-only helpers into private files. A small, explicit public selector may expose
@@ -319,12 +322,12 @@ subpaths. `import { Agent } from "effect-agent"` and
   package's bindings, including with `export *`, as Effect's platform packages do. A namespace
   group such as `/testing` is also a valid public boundary. Review additions for consumer value;
   avoid accumulating overlapping aliases without a reason.
-- Keep test-only groups and modules under `/testing` or `/testing/Module`, excluded from production
+- Keep test-only groups and modules under `/testing` or `/testing/module`, excluded from production
   entry points. Optional browser adapters and fixtures may remain direct-only imports.
-- Keep `package.json` exports explicit, with matching pack entries. The current release publisher
-  requires flat source targets: a group may map `./testing` to `./src/Testing.ts`. Nested physical
-  targets and wildcard export maps would require publisher support first. These are repository
-  tooling constraints, not Effect conventions. Do not publish `internal` or `index` subpaths.
+- Keep `package.json` exports explicit, with matching pack entries. Exports may address nested
+  source modules directly, such as `./agent` mapping to `./src/core/Agent.ts`; no forwarding file
+  is needed. Pack preserves paths relative to `src`, and the publisher maps them to `dist`.
+  Do not publish wildcard, `internal`, or `index` subpaths.
 
 See the [package map](reference/packages.md#public-imports) for API ownership and import changes.
 
@@ -334,7 +337,8 @@ contain namespace and explicit named re-exports, but not bare wildcard exports o
 code. Public forwarding modules need no umbrella-specific exception or file allowlist.
 
 The export check in `vp run check` verifies manifest paths, exact filename casing, namespace
-targets, pack entries, and declared workspace dependencies. The purity check uses declared testing
+targets, pack entries, declared workspace dependencies, and the inward-only source layers within
+`effect-agent`. The purity check uses declared testing
 targets as well as known test-module paths to prevent production entry points from reaching
 test-only code. Choosing supported APIs and useful public groups still requires review.
 
@@ -350,6 +354,8 @@ Pull requests run the **Bundle size** workflow against the exact base and head c
 Like [Effect's bundle check](https://github.com/Effect-TS/effect/tree/main/packages/tools/bundle),
 it bundles small consumer fixtures against built packages. Each checkout installs its own
 lockfile. The comparison uses the PR's esbuild version and the same fixture source for both sides.
+Disposable comparison manifests alias historical PascalCase subpaths to their kebab-case names;
+the published packages retain only their canonical exports. Renamed modules remain comparable.
 
 The fixtures in `scripts/bundle` cover agent construction, importing the runtime's `run` function,
 the ephemeral assembly, and loading the runtime on demand, through both root and direct module imports. The
@@ -359,13 +365,13 @@ not bundle workspace source or externalize Effect. It uses minified ESM, a brows
 
 **Initial** counts the entry and every statically reachable shared chunk. **Deferred** counts
 the remaining output, and **total** counts each chunk once. These are byte measurements, not
-startup timing or a promise about another bundler. Newly introduced export paths show `n/a`
+startup timing or a promise about another bundler. Newly introduced modules show `n/a`
 for the base. Build failures fail the report; size increases are informational.
 
 Use direct module paths at lazy-loading boundaries. With the measured esbuild configuration,
 statically importing `Agent` from the root and dynamically importing `AgentRuntime` from the same
-root pulls the runtime into the initial chunk. Direct `effect-agent/Agent` and
-`effect-agent/AgentRuntime` imports preserve a deferred runtime chunk; shared Effect dependencies
+root pulls the runtime into the initial chunk. Direct `effect-agent/agent` and
+`effect-agent/agent-runtime` imports preserve a deferred runtime chunk; shared Effect dependencies
 still count toward the initial load.
 
 The comparison also bundles and executes `runtime-smoke.ts` against the PR's staged packages.

@@ -68,8 +68,8 @@ of other submissions, approvals, and attached children. Unknown submissions fail
 The read grants no ownership, and `canonicalRecordId` must come from canonical history.
 
 ```ts
-import type { SubmissionId } from "effect-agent/Identifiers";
-import { AbortIntentRequest, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import type { SubmissionId } from "effect-agent/identifiers";
+import { AbortIntentRequest, SubmissionLedger } from "@effect-agent/thread/submission-ledger";
 import { Effect } from "effect";
 
 const readAbort = Effect.fn(function* (submissionId: SubmissionId) {
@@ -85,7 +85,7 @@ still becomes canonical under the append gate before the runtime interrupts exec
 
 ```ts
 import { Effect } from "effect";
-import { certifyDurableAdapters } from "@effect-agent/testing/Certification";
+import { certifyDurableAdapters } from "@effect-agent/testing/certification";
 
 const certificate = Effect.gen(function* () {
   return yield* certifyDurableAdapters({
@@ -164,15 +164,15 @@ checker as the administrative `verify` operation.
 <a id="shipped-adapter-tests"></a>
 
 Import `CertificationReport` and `certifyPorts` from
-`@effect-agent/thread/testing/Certification`. The shared conformance cases live in
-`@effect-agent/thread/testing/ThreadStoreConformance` and
-`@effect-agent/thread/testing/SubmissionLedgerConformance`. Production schemas, ports,
+`@effect-agent/thread/testing/certification`. The shared conformance cases live in
+`@effect-agent/thread/testing/thread-store-conformance` and
+`@effect-agent/thread/testing/submission-ledger-conformance`. Production schemas, ports,
 replay, verification, and runtime APIs have their own public thread modules.
 
 ## Certify subscription stores {#subscription-stores}
 
 An adapter that implements `SubscriptionStore` must also run
-`subscriptionStoreConformanceCases` from `@effect-agent/thread/testing/SubscriptionStoreConformance`. Give each case a fresh
+`subscriptionStoreConformanceCases` from `@effect-agent/thread/testing/subscription-store-conformance`. Give each case a fresh
 partition. The cases cover intake cutoffs, deduplication, once selection, capacity, cancellation,
 prepared recovery, catch-up, scan cursors, and replay after limits tighten.
 

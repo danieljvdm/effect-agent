@@ -8,8 +8,6 @@
     "test": "vp test"
   },
   "dependencies": {
-    "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/testing": "workspace:*",
     "@effect-agent/thread": "workspace:*",

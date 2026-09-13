@@ -1,12 +1,12 @@
 import {
   makeSqlSubscriptionStore,
   SqlSubscriptionTransaction,
-} from "@effect-agent/thread/SqlSubscriptionStore";
+} from "@effect-agent/thread/sql-subscription-store";
 import {
   SourcePartition,
   SubscriptionError,
   SubscriptionStore,
-} from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/subscription";
 import { Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 

@@ -4,13 +4,10 @@ import {
   BrowserRunViewport,
   CloudflareInteractiveBrowser,
   browserRunInteractiveHostLayer,
-} from "@effect-agent/platform-cloudflare/InteractiveBrowser";
-import {
-  InteractiveBrowser,
-  InteractiveBrowserPolicy,
-} from "@effect-agent/sandbox/InteractiveBrowser";
+} from "@effect-agent/platform-cloudflare/interactive-browser";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Redacted, Schema } from "effect";
+import { InteractiveBrowser, InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { expectTypeOf, vi } from "vite-plus/test";
 

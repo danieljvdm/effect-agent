@@ -2,11 +2,11 @@ import {
   MessageDeliveryError,
   MessageDeliveryStore,
   type MessageDeliveryStoreLimits,
-} from "@effect-agent/thread/MessageDelivery";
+} from "@effect-agent/thread/message-delivery";
 import {
   makeSqlMessageDeliveryStore,
   SqlMessageDeliveryTransaction,
-} from "@effect-agent/thread/SqlMessageDeliveryStore";
+} from "@effect-agent/thread/sql-message-delivery-store";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

@@ -1,18 +1,11 @@
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { AgentId, DelegationId, ThreadId } from "@effect-agent/core/Identifiers";
-import {
-  SubagentDelegationCaps,
-  SubagentGrant,
-  SubagentReservationAmounts,
-} from "@effect-agent/core/SubagentContract";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
-import { EMPTY_TAIL_DIGEST, digestJson } from "@effect-agent/thread/Digest";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
+import { EMPTY_TAIL_DIGEST, digestJson } from "@effect-agent/thread/digest";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
-} from "@effect-agent/thread/DurableAgentRuntime";
-import { DurableRuntimeFailpoint } from "@effect-agent/thread/DurableFailpoint";
+} from "@effect-agent/thread/durable-agent-runtime";
+import { DurableRuntimeFailpoint } from "@effect-agent/thread/durable-failpoint";
 import {
   CanonicalBatch,
   CanonicalRecord,
@@ -28,9 +21,9 @@ import {
   WorkerAdmission,
   WorkerOrigin,
   WorkerOriginRecorded,
-} from "@effect-agent/thread/Records";
-import { type RecoveryDecision } from "@effect-agent/thread/Recovery";
-import { runIdForSubmission } from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/records";
+import { type RecoveryDecision } from "@effect-agent/thread/recovery";
+import { runIdForSubmission } from "@effect-agent/thread/run-journal";
 import {
   AbortCommand,
   AdmissionRequest,
@@ -40,20 +33,27 @@ import {
   SubmissionLedger,
   submissionInputBatchId,
   submissionInputRecordId,
-} from "@effect-agent/thread/SubmissionLedger";
-import { type ThreadRead } from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/submission-ledger";
+import { type ThreadRead } from "@effect-agent/thread/thread-store";
 import {
   ThreadMaterialization,
   ThreadNotMaterialized,
   ThreadStore,
   ThreadTailRequest,
   FencedAppendRequest,
-} from "@effect-agent/thread/ThreadStore";
-import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/thread-store";
+import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Context, DateTime, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { AgentId, DelegationId, ThreadId } from "effect-agent/identifiers";
+import {
+  SubagentDelegationCaps,
+  SubagentGrant,
+  SubagentReservationAmounts,
+} from "effect-agent/subagent-contract";
 
 class RecoveryReadProbe extends Context.Service<
   RecoveryReadProbe,

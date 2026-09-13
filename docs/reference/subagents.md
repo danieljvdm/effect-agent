@@ -204,7 +204,7 @@ another child. Handoff remains unsupported.
 
 Background workers normally reserve against their source's subtree. A host may separately
 fund a root's reusable worker by supplying `WorkerBudgetAuthorizer` from
-`@effect-agent/thread/WorkerHost` and allowing the exact source, destination, and allowance.
+`@effect-agent/thread/worker-host` and allowing the exact source, destination, and allowance.
 The default denies this permission. Request it from author-owned code:
 
 ```ts
@@ -237,7 +237,7 @@ Set `WorkerHostConfig.maxActiveWorkersPerSource` to bound concurrent background 
 from the root's Tool execution concurrency; omission retains the prior concurrency ceiling.
 
 When each source has an authorized concurrency preference, provide `WorkerConcurrencyResolver`
-from `@effect-agent/thread/WorkerHost` through an Effect Layer. It receives the immutable source,
+from `@effect-agent/thread/worker-host` through an Effect Layer. It receives the immutable source,
 worker, principal, and explicitly selected canonical owner submission. Return `Option.some({
 maxActiveWorkersPerSource })` to narrow the fixed host ceiling, or `Option.none()` to retain it.
 The runtime resolves this limit inside the source reservation CAS loop, including retries after
@@ -251,7 +251,7 @@ Run allowance.
 
 ### Resolve policies from captured input
 
-Supply `WorkerPolicyResolver` from `@effect-agent/thread/WorkerHost` when immutable application
+Supply `WorkerPolicyResolver` from `@effect-agent/thread/worker-host` when immutable application
 input captures an execution policy separately from a finite, versioned Agent Definition. Provide
 its implementation through an Effect Layer and retain the Layer's construction dependencies.
 The default returns `Option.none()`, preserving registered policy inheritance and overrides.
@@ -305,7 +305,7 @@ Use a new key for a new input. Native model tools derive their keys automaticall
 
 ```ts twoslash
 import { Subagent } from "effect-agent";
-import { IdempotencyKey } from "effect-agent/Receipt";
+import { IdempotencyKey } from "effect-agent/receipt";
 import { Effect, Schema } from "effect";
 
 import { Research } from "./delegation.ts";

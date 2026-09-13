@@ -1,26 +1,26 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { RecalledMemory } from "@effect-agent/core/Memory";
-import { MemoryLookup } from "@effect-agent/core/MemoryReference";
-import { MemoryWrite, MemoryDocument } from "@effect-agent/core/MemoryStore";
 import {
   ThreadObjectNamespace,
   ThreadObjectIdentity,
   type ThreadObjectRpc,
-} from "@effect-agent/platform-cloudflare/CloudflareBindings";
+} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import {
   MemoryObject,
   CloudflareMemoryClient,
-} from "@effect-agent/platform-cloudflare/CloudflareMemory";
+} from "@effect-agent/platform-cloudflare/cloudflare-memory";
 import {
   makeScheduleOwnerObjectClass,
   ScheduleOwnerIdentity,
-} from "@effect-agent/platform-cloudflare/CloudflareScheduling";
-import { makeSubscriptionPartitionObjectClass } from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { OperationDenied } from "@effect-agent/thread/OperationAuthorizer";
-import { ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread/Schedule";
+} from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
+import { makeSubscriptionPartitionObjectClass } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { OperationDenied } from "@effect-agent/thread/operation-authorizer";
+import { ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread/schedule";
 import { Clock, Config, Context, Crypto, Effect, Layer, Schema } from "effect";
+import * as Agent from "effect-agent/agent";
+import { RecalledMemory } from "effect-agent/memory";
+import { MemoryLookup } from "effect-agent/memory-reference";
+import { MemoryWrite, MemoryDocument } from "effect-agent/memory-store";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 

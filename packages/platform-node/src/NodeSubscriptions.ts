@@ -1,6 +1,6 @@
-import { type EventSources } from "@effect-agent/thread/EventSource";
-import { PreparedInputAdmission } from "@effect-agent/thread/PreparedInputAdmission";
-import { type ScheduledEnvelope, ScheduledInputAdmission } from "@effect-agent/thread/Schedule";
+import { type EventSources } from "@effect-agent/thread/event-source";
+import { PreparedInputAdmission } from "@effect-agent/thread/prepared-input-admission";
+import { type ScheduledEnvelope, ScheduledInputAdmission } from "@effect-agent/thread/schedule";
 import {
   type PreparedInput,
   type SubscriptionAuthorizer,
@@ -9,13 +9,13 @@ import {
   type SubscriptionStoreFailure,
   SubscriptionStore,
   defaultSubscriptionLimits,
-} from "@effect-agent/thread/Subscription";
-import { type SubscriptionInputBindings } from "@effect-agent/thread/SubscriptionInput";
+} from "@effect-agent/thread/subscription";
+import { type SubscriptionInputBindings } from "@effect-agent/thread/subscription-input";
 import {
   SubscriptionDriver,
   SubscriptionIntake,
   Subscriptions,
-} from "@effect-agent/thread/Subscriptions";
+} from "@effect-agent/thread/subscriptions";
 import { NodeCrypto } from "@effect/platform-node";
 import { Cause, Duration, Effect, Exit, Layer, Option } from "effect";
 

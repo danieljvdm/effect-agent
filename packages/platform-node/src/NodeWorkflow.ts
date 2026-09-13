@@ -4,7 +4,7 @@ import {
   WorkflowDispatchScan,
   WorkflowDispatchStore,
   WorkflowRepairTrigger,
-} from "@effect-agent/workflow/WorkflowDispatch";
+} from "@effect-agent/workflow/workflow-dispatch";
 import { Cause, Duration, Effect, Layer, Option, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 

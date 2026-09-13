@@ -1,5 +1,4 @@
 ---
-"@effect-agent/core": patch
 "@effect-agent/thread": patch
 "@effect-agent/storage-cloudflare": patch
 ---

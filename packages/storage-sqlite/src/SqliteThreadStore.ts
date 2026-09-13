@@ -1,4 +1,4 @@
-import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
 import {
   CanonicalBatch,
   CanonicalRecord,
@@ -6,8 +6,8 @@ import {
   CanonicalSequence,
   Digest,
   ObservationOffset,
-} from "@effect-agent/thread/Records";
-import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/records";
+import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "@effect-agent/thread/submission-ledger";
 import {
   AppendConflict,
   AppendResult,
@@ -31,7 +31,7 @@ import {
   SaveRecoveryCheckpointRequest,
   MAX_THREAD_EXPORT_RECORDS,
   type ThreadRecoveryCheckpoints,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import {

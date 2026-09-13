@@ -1,5 +1,5 @@
-import { ThreadId, SubmissionId } from "@effect-agent/core/Identifiers";
 import { Context, Effect, Layer, Schema } from "effect";
+import { ThreadId, SubmissionId } from "effect-agent/identifiers";
 
 import { Principal } from "./SubmissionLedger.ts";
 

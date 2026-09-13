@@ -74,7 +74,7 @@ Use `NodeDurableAgentRuntime.layerRegistered` when you own execution, as in the
 
 The service class's existing `NodeDurableHost.layerRegistered`, `layerStack`, and `layer`
 constructors remain available for manually managed hosts. Import the class from
-`@effect-agent/platform-node/NodeDurableHost` when using these APIs; their workers start only
+`@effect-agent/platform-node/node-durable-host` when using these APIs; their workers start only
 when you run `host.runResolvedWorkers`. The module-level `NodeDurableHost.layer` shown above
 owns worker startup and is the default for an application.
 

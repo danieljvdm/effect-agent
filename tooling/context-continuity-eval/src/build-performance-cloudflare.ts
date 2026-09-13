@@ -1,4 +1,4 @@
-import { digestJson } from "@effect-agent/thread/Digest";
+import { digestJson } from "@effect-agent/thread/digest";
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { Command, Flag } from "effect/unstable/cli";

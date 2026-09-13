@@ -1,7 +1,7 @@
-import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
-import { InputMessage } from "@effect-agent/core/Messaging";
-import { Receipt } from "@effect-agent/core/Receipt";
 import { Context, Effect, Schema } from "effect";
+import { AgentId, ThreadId } from "effect-agent/identifiers";
+import { InputMessage } from "effect-agent/messaging";
+import { Receipt } from "effect-agent/receipt";
 
 import { DefinitionDigests, Digest, PersistedJson, WorkerAdmission } from "./Records.ts";
 import {

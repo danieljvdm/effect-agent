@@ -1,5 +1,4 @@
 ---
-"@effect-agent/capabilities": minor
 ---
 
 Delegation containment (D-037, ADR-0019 S2, SUB-033): `Subagent.define` gains

@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import { Subagent } from "effect-agent";
-import { SubagentPolicy } from "effect-agent/Subagent";
+import { SubagentPolicy } from "effect-agent/subagent";
 
 import { Researcher } from "./researcher.ts";
 

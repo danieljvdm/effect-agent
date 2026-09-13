@@ -1,7 +1,7 @@
 import {
   threadNamespaceLayer,
   type ThreadObjectRpc,
-} from "@effect-agent/platform-cloudflare/CloudflareBindings";
+} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import {
   CloudflareThreadClient,
   decodeAwaitProgressRequest,
@@ -9,14 +9,14 @@ import {
   type ClientObserveFailure,
   type ThreadClientError,
   type HostFailure,
-} from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
-import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
-import { CanonicalSequence } from "@effect-agent/thread/Records";
+} from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { CanonicalSequence } from "@effect-agent/thread/records";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Tracer } from "effect";

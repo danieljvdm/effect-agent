@@ -2,15 +2,15 @@ import {
   BrowserRunInteractiveBinding,
   browserRunInteractiveLayer,
   isBrowserRunUndispatchedActionError,
-} from "@effect-agent/platform-cloudflare/InteractiveBrowser";
+} from "@effect-agent/platform-cloudflare/interactive-browser";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Fiber, Layer, Logger } from "effect";
 import {
   BrowserClickRequest,
   BrowserFillRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
-} from "@effect-agent/sandbox/InteractiveBrowser";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Logger } from "effect";
+} from "effect-agent/interactive-browser";
 import { afterEach, beforeEach, vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";

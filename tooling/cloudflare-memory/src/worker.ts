@@ -1,18 +1,18 @@
-import * as Memory from "@effect-agent/core/Memory";
-import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
 import {
   MemoryObject,
   CloudflareMemoryClient,
-} from "@effect-agent/platform-cloudflare/CloudflareMemory";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
+} from "@effect-agent/platform-cloudflare/cloudflare-memory";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
 import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   MemoryRpcError,
   memoryWireBytes,
-} from "@effect-agent/storage-cloudflare/MemoryProtocol";
-import { Principal } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/storage-cloudflare/memory-protocol";
+import { Principal } from "@effect-agent/thread/submission-ledger";
 import { Clock, Effect, Layer, Schema } from "effect";
+import * as Memory from "effect-agent/memory";
+import { MemoryAccess } from "effect-agent/memory-revalidation";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
 
 import {

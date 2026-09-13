@@ -1,8 +1,5 @@
 ---
-"@effect-agent/core": minor
-"@effect-agent/engine": minor
 "@effect-agent/thread": minor
-"@effect-agent/capabilities": minor
 "@effect-agent/testing": minor
 ---
 

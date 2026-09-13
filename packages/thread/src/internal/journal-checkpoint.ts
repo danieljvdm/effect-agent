@@ -1,8 +1,8 @@
-import { RunId, SubmissionId } from "@effect-agent/core/Identifiers";
-import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
-import { Selection } from "@effect-agent/core/ToolExposure";
-import { RunUsageSummary } from "@effect-agent/core/Usage";
 import { Option, Schema } from "effect";
+import { RunId, SubmissionId } from "effect-agent/identifiers";
+import { RunPolicyUsage } from "effect-agent/run-policy-usage";
+import { Selection } from "effect-agent/tool-exposure";
+import { RunUsageSummary } from "effect-agent/usage";
 import { Prompt } from "effect/unstable/ai";
 
 import { CanonicalRecordEnvelope, CanonicalSequence, Digest, PersistedJson } from "../Records.ts";

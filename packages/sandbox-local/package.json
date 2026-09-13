@@ -16,7 +16,7 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./LocalSandbox": "./src/LocalSandbox.ts"
+    "./local-sandbox": "./src/LocalSandbox.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -27,8 +27,8 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/sandbox": "workspace:*",
-    "@effect/platform-node": "catalog:"
+    "@effect/platform-node": "catalog:",
+    "effect-agent": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

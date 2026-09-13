@@ -1,4 +1,4 @@
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
 import { describe, expect, it } from "@effect/vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Option, Tracer } from "effect";

@@ -1,7 +1,7 @@
 import {
   activityProcessorStoreLayer,
   activityProcessorStoreLayerWithFailpoints,
-} from "@effect-agent/storage-sqlite/SqliteActivityStore";
+} from "@effect-agent/storage-sqlite/sqlite-activity-store";
 import {
   ActivityBusy,
   ActivityClaimRequest,
@@ -14,8 +14,8 @@ import {
   ActivityStoreError,
   ActivityWorkConflict,
   PreparedActivity,
-} from "@effect-agent/thread/ActivityStore";
-import { RecordId } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/activity-store";
+import { RecordId } from "@effect-agent/thread/records";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";

@@ -1,10 +1,10 @@
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
 import {
   makePhase6TravelPlannerBindings,
   phase6SupplierReconcilerLayer,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
-} from "@effect-agent/testing/TravelPlanner";
+} from "@effect-agent/testing/travel-planner";
 import { Effect, Layer } from "effect";
 
 import { layerFromBindings } from "../src/internal/layers.ts";

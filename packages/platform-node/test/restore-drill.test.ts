@@ -1,15 +1,14 @@
 import * as fs from "node:fs";
 
-import * as Agent from "@effect-agent/core/Agent";
-import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
-import { ObligationThresholds } from "@effect-agent/thread/Admin";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { ProducerId } from "@effect-agent/thread/Records";
+import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
+import { ObligationThresholds } from "@effect-agent/thread/admin";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { ProducerId } from "@effect-agent/thread/records";
 import {
   runIdForSubmission,
   toolCallPreparedRecordId,
   toolCallSettledRecordId,
-} from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/run-journal";
 import {
   ClaimRequest,
   ReleaseOwnershipRequest,
@@ -18,10 +17,11 @@ import {
   SubmissionLedger,
   SubmissionLookupByKey,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
+import * as Agent from "effect-agent/agent";
 
 import {
   BOOK_CALL_ID,

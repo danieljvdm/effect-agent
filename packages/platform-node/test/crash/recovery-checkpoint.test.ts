@@ -1,10 +1,10 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { LoadCheckpointRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { LoadCheckpointRequest, ThreadStore } from "@effect-agent/thread/thread-store";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Layer, Option, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
 import { LanguageModel, Model, type Prompt } from "effect/unstable/ai";
 
 import {

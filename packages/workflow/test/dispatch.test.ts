@@ -1,17 +1,13 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ReceiptId, SettlementId, ThreadId } from "@effect-agent/core/Identifiers";
-import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
-import { digestDefinitions, digestJson } from "@effect-agent/thread/Digest";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
+import { digestDefinitions, digestJson } from "@effect-agent/thread/digest";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   Receipt,
-} from "@effect-agent/thread/DurableAgentRuntime";
-import { DurableRuntimeFailpoint } from "@effect-agent/thread/DurableFailpoint";
-import { DefinitionDigestInput, DeploymentId, ProducerId } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/durable-agent-runtime";
+import { DurableRuntimeFailpoint } from "@effect-agent/thread/durable-failpoint";
+import { DefinitionDigestInput, DeploymentId, ProducerId } from "@effect-agent/thread/records";
 import {
   AdmissionRequest,
   IdempotencyKey,
@@ -20,11 +16,11 @@ import {
   QueueSequence,
   RecoverySnapshotRequest,
   SubmissionLedger,
-} from "@effect-agent/thread/SubmissionLedger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
-import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
+} from "@effect-agent/thread/submission-ledger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
+import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
+import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
 import {
   WorkflowDispatchError,
   WorkflowDispatchIntent,
@@ -32,7 +28,7 @@ import {
   WorkflowRepairTrigger,
   WorkflowSettlementReference,
   WorkflowSubmission,
-} from "@effect-agent/workflow/WorkflowDispatch";
+} from "@effect-agent/workflow/workflow-dispatch";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
@@ -48,6 +44,10 @@ import {
   Schema,
   Stream,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { ReceiptId, SettlementId, ThreadId } from "effect-agent/identifiers";
+import { RunToolAuthorization } from "effect-agent/run-options";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import { Workflow, WorkflowEngine } from "effect/unstable/workflow";

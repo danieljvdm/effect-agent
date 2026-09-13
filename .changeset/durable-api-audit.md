@@ -1,6 +1,4 @@
 ---
-"@effect-agent/capabilities": patch
-"@effect-agent/engine": patch
 "@effect-agent/thread": minor
 "@effect-agent/platform-node": minor
 "@effect-agent/platform-cloudflare": patch

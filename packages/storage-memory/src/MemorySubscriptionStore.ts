@@ -1,5 +1,5 @@
-import { Digest } from "@effect-agent/thread/Records";
-import { compareScheduleNames } from "@effect-agent/thread/ScheduleTransition";
+import { Digest } from "@effect-agent/thread/records";
+import { compareScheduleNames } from "@effect-agent/thread/schedule-transition";
 import {
   AcceptedEvent,
   DeliveryChange,
@@ -18,7 +18,7 @@ import {
   SubscriptionStore,
   subscriptionDeliveryKeyString,
   subscriptionKeyString,
-} from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/subscription";
 import {
   sameAcceptedEventIdentity,
   applySubscriptionDeliveryChange,
@@ -26,7 +26,7 @@ import {
   validateEventRetention,
   subscriptionCanSelect,
   subscriptionDeliveryCanSelect,
-} from "@effect-agent/thread/SubscriptionTransition";
+} from "@effect-agent/thread/subscription-transition";
 import { Clock, Effect, Layer, Ref, Result, Schema } from "effect";
 
 interface MemorySubscriptionState {

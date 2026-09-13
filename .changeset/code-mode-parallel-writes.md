@@ -1,7 +1,4 @@
 ---
-"@effect-agent/capabilities": patch
-"@effect-agent/engine": patch
-"@effect-agent/sandbox": patch
 "@effect-agent/platform-cloudflare": patch
 "@effect-agent/testing": patch
 ---

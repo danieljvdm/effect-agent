@@ -14,6 +14,7 @@ import {
 } from "./contracts.js";
 import { BenchmarkProgress, writeEvidence } from "./evidence.js";
 import { BenchmarkRunner, SeedInitializerLive } from "./fixture.js";
+import { BenchmarkIdsLive } from "./ids.js";
 import { SeedTemplates } from "./seeds.js";
 
 /** The worker owns report persistence and the lifetime of its shared seed cache. */
@@ -106,5 +107,5 @@ if (import.meta.main)
       yield* runWorker(options).pipe(
         Effect.provide(Layer.merge(BenchmarkRunner.layer, SeedInitializerLive)),
       );
-    }).pipe(Effect.provide(Layer.merge(NodeServices.layer, NodeCrypto.layer))),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, BenchmarkIdsLive))),
   );

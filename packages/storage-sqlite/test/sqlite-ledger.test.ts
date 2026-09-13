@@ -1,22 +1,22 @@
-import { type SqliteStorageConfig } from "@effect-agent/storage-sqlite/SqliteStorageConfig";
+import { type SqliteStorageConfig } from "@effect-agent/storage-sqlite/sqlite-storage-config";
 import {
   SqliteStorageCompatibilityError,
   SqliteStorageFailpointError,
   SqliteWriteContention,
   type SqliteStorageFailpointLocation,
-} from "@effect-agent/storage-sqlite/SqliteStorageError";
-import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
-import { CurrentSqliteStorageVersion } from "@effect-agent/storage-sqlite/SqliteStorageVersion";
+} from "@effect-agent/storage-sqlite/sqlite-storage-error";
+import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
+import { CurrentSqliteStorageVersion } from "@effect-agent/storage-sqlite/sqlite-storage-version";
 import {
   ledgerLayer,
   submissionLedgerLayer,
-} from "@effect-agent/storage-sqlite/SqliteSubmissionLedger";
+} from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
 import {
   threadStoreLayer,
   storageConfigLayer,
   type SqliteStorageInitializationError,
-} from "@effect-agent/storage-sqlite/SqliteThreadStore";
-import { digestJson, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+} from "@effect-agent/storage-sqlite/sqlite-thread-store";
+import { digestJson, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
 import {
   CanonicalBatch,
   CanonicalRecord,
@@ -32,7 +32,7 @@ import {
   UserInputRecorded,
   type PersistedJson,
   type SettlementOutcome,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   AdmissionPolicyError,
   SubmissionAdmissionFence,
@@ -78,8 +78,8 @@ import {
   submissionSettlementRecordId,
   type AdmissionResult,
   type OwnershipToken,
-} from "@effect-agent/thread/SubmissionLedger";
-import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/SubmissionLedgerConformance";
+} from "@effect-agent/thread/submission-ledger";
+import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/submission-ledger-conformance";
 import {
   ThreadMaterialization,
   ThreadStore,
@@ -87,7 +87,7 @@ import {
   FencedAppendRequest,
   FenceRejected,
   type AppendResult,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -2625,4 +2625,4 @@ describe("SqliteSubmissionLedger", () => {
     ),
   );
 });
-import { SubmissionId } from "@effect-agent/core/Identifiers";
+import { SubmissionId } from "effect-agent/identifiers";

@@ -1,2 +1,2 @@
-export * from "@effect-agent/core/ToolExposure";
-export * from "@effect-agent/engine/ToolExposure";
+export * from "./core/ToolExposure.ts";
+export * from "./engine/ToolExposure.ts";

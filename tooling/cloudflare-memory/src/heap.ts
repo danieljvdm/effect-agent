@@ -214,7 +214,7 @@ export const command = Command.make(
     const source = yield* fs.readFileString(path.join(example, "src", "worker.ts"));
 
     const directImport =
-      'import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";';
+      'import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";';
 
     if (!source.includes(directImport))
       return yield* HeapProbeError.make({

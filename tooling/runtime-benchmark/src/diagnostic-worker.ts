@@ -23,6 +23,7 @@ import { runFairnessCase } from "./diagnostic-fairness.js";
 import { DiagnosticLedgerSeeds, runLedgerCase } from "./diagnostic-ledger.js";
 import { runPolicyCase } from "./diagnostic-policy.js";
 import { writeEvidence } from "./evidence.js";
+import { BenchmarkIdsLive } from "./ids.js";
 
 export { diagnosticCases } from "./diagnostic-cases.js";
 
@@ -188,7 +189,9 @@ if (import.meta.main)
     }).pipe(
       Effect.provide(
         Layer.merge(DiagnosticRunner.layer, DiagnosticLedgerSeeds.layer).pipe(
-          Layer.provideMerge(Layer.merge(NodeServices.layer, NodeCrypto.layer)),
+          Layer.provideMerge(
+            Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, BenchmarkIdsLive),
+          ),
         ),
       ),
     ),

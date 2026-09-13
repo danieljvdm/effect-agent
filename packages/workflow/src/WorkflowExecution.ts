@@ -1,7 +1,7 @@
-import type { AgentId } from "@effect-agent/core/Identifiers";
-import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
-import { SettlementFailureDiagnostic } from "@effect-agent/thread/Records";
+import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { SettlementFailureDiagnostic } from "@effect-agent/thread/records";
 import { Schema } from "effect";
+import type { AgentId } from "effect-agent/identifiers";
 
 /** Must be the exact registered Definition instance; its model and tool services belong to registration. */
 export interface WorkflowAgent<Input extends Schema.Top, Output extends Schema.Top> {

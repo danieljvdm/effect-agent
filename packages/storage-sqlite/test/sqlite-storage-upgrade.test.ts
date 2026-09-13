@@ -1,5 +1,5 @@
-import { SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
-import { SubscriptionStore, type SubscriptionError } from "@effect-agent/thread/Subscription";
+import { SubmissionLedger } from "@effect-agent/thread/submission-ledger";
+import { SubscriptionStore, type SubscriptionError } from "@effect-agent/thread/subscription";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";

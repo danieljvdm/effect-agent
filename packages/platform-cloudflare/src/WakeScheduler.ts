@@ -1,6 +1,6 @@
-import { type ThreadId } from "@effect-agent/core/Identifiers";
-import { makeWakeSubscriptionHub, WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+import { makeWakeSubscriptionHub, WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { Effect, Layer, PubSub, Schema, Stream } from "effect";
+import { type ThreadId } from "effect-agent/identifiers";
 
 import { DurableAlarmService } from "./Alarm.ts";
 import {

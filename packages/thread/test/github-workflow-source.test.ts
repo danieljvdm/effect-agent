@@ -1,4 +1,3 @@
-import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
 import {
   acceptVerifiedGitHubWorkflowRunWebhook,
   GitHubRepository,
@@ -7,13 +6,14 @@ import {
   GitHubWorkflowRuns,
   makeGitHubWorkflowRunSource,
   webCryptoGitHubWebhookSignatureVerifierLayer,
-} from "@effect-agent/thread/GitHubWorkflowSource";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
-import { Principal } from "@effect-agent/thread/SubmissionLedger";
-import { SubscriptionRecord } from "@effect-agent/thread/Subscription";
-import { SubscriptionIntake } from "@effect-agent/thread/Subscriptions";
+} from "@effect-agent/thread/git-hub-workflow-source";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
+import { Principal } from "@effect-agent/thread/submission-ledger";
+import { SubscriptionRecord } from "@effect-agent/thread/subscription";
+import { SubscriptionIntake } from "@effect-agent/thread/subscriptions";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Redacted, Schema } from "effect";
+import { AgentId, ThreadId } from "effect-agent/identifiers";
 
 const SHA = "a".repeat(40);
 const DIGEST = Schema.decodeSync(Digest)("b".repeat(64));

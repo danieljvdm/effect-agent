@@ -1,7 +1,7 @@
-import { SettlementId } from "@effect-agent/core/Identifiers";
-import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
-import { DeploymentId } from "@effect-agent/thread/Records";
+import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { DeploymentId } from "@effect-agent/thread/records";
 import { Context, Effect, Schema, type Scope } from "effect";
+import { SettlementId } from "effect-agent/identifiers";
 import { DurableDeferred } from "effect/unstable/workflow";
 
 /** Only identities cross the Workflow boundary; the agent journal owns the outcome. */

@@ -1,9 +1,9 @@
-import type * as Agent from "@effect-agent/core/Agent";
-import type { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import type { SubmissionId, ThreadId } from "@effect-agent/core/Identifiers";
-import type { SubagentBudgetReservation } from "@effect-agent/core/SubagentContract";
-import { WorkerError, type WorkerRef, type WorkerSource } from "@effect-agent/core/Worker";
 import { Context, Effect, Option, Schema } from "effect";
+import type * as Agent from "effect-agent/agent";
+import type { AgentPolicy } from "effect-agent/agent-policy";
+import type { SubmissionId, ThreadId } from "effect-agent/identifiers";
+import type { SubagentBudgetReservation } from "effect-agent/subagent-contract";
+import { WorkerError, type WorkerRef, type WorkerSource } from "effect-agent/worker";
 
 import type { DefinitionDigests, Digest, PersistedJson, WorkerOrigin } from "./Records.ts";
 import type { Principal, SubmissionSnapshot } from "./SubmissionLedger.ts";

@@ -1,7 +1,7 @@
 import { NodeDurableHost } from "@effect-agent/platform-node";
 import { Layer } from "effect";
 import { Subagent } from "effect-agent";
-import { SubagentReservationsMemoryLive } from "effect-agent/SubagentReservations";
+import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 
 import { Coordinator } from "./coordinator.ts";
 import { Research } from "./delegation.ts";

@@ -1,11 +1,8 @@
-import { SubagentDurableAccounting } from "@effect-agent/capabilities/Subagent";
-import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
-import { SubagentReservationAmounts } from "@effect-agent/core/SubagentContract";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
-import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+} from "@effect-agent/platform-node/node-durable-agent-runtime";
+import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
 import {
   DestinationShortlist,
   coordinatorConfidentialMarker,
@@ -23,19 +20,19 @@ import {
   s2TravelPlannerPrincipal,
   s2TravelPlannerProducerId,
   s2TravelPlannerSubmitOptions,
-} from "@effect-agent/testing/TravelPlanner";
-import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/testing/travel-planner";
+import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointHandler,
   type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/DurableFailpoint";
+} from "@effect-agent/thread/durable-failpoint";
 import {
   PersistedJson,
   ProducerId,
   type CanonicalRecordEnvelope,
-} from "@effect-agent/thread/Records";
-import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/records";
+import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/run-journal";
 import {
   AbortCommand,
   AdmissionRequest,
@@ -49,12 +46,15 @@ import {
   SubmissionLookupById,
   SubmissionLookupByKey,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/SubmissionLedger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/submission-ledger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import { Cause, Duration, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
+import { ThreadId, ToolCallId, type SubmissionId } from "effect-agent/identifiers";
+import { SubagentDurableAccounting } from "effect-agent/subagent";
+import { SubagentReservationAmounts } from "effect-agent/subagent-contract";
 import { TestClock } from "effect/testing";
 
 const decodeThreadId = Schema.decodeSync(ThreadId);

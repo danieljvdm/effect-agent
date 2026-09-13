@@ -1,35 +1,35 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
-import { ObligationThresholds, RetryCommand } from "@effect-agent/thread/Admin";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
+import { ObligationThresholds, RetryCommand } from "@effect-agent/thread/admin";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   type DurableSubmitOptions,
-} from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/thread/durable-agent-runtime";
 import {
   OperationAuthorizer,
   OperationDenied,
   type AuthorizedOperation,
   type OperationAuthorizationRequest,
   type OperationAuthorizerService,
-} from "@effect-agent/thread/OperationAuthorizer";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/operation-authorizer";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/records";
 import {
   ApprovalDecisionCommand,
   IdempotencyKey,
   Principal,
   ResolutionNeverHappened,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/SubmissionLedger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
-import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
+import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { ThreadId, ToolCallId } from "effect-agent/identifiers";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 // ---------------------------------------------------------------------------

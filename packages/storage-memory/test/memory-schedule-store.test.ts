@@ -1,5 +1,5 @@
-import { MemoryScheduleStoreLive } from "@effect-agent/storage-memory/MemoryScheduleStore";
-import { scheduleStoreConformanceCases } from "@effect-agent/thread/testing/ScheduleStoreConformance";
+import { MemoryScheduleStoreLive } from "@effect-agent/storage-memory/memory-schedule-store";
+import { scheduleStoreConformanceCases } from "@effect-agent/thread/testing/schedule-store-conformance";
 import { describe, it } from "@effect/vitest";
 import { Effect } from "effect";
 

@@ -270,7 +270,7 @@ export const withPublishManifests = <A, E, R>(
         const exports: Record<string, { types: string; default: string }> = {};
 
         for (const [key, source] of Object.entries(pkg.manifest.exports ?? {})) {
-          const match = /^\.\/src\/([A-Za-z0-9_-]+)\.ts$/.exec(source);
+          const match = /^\.\/src\/((?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+)\.ts$/.exec(source);
 
           if (match === null) {
             return yield* ReleaseError.make({

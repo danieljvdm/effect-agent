@@ -1,27 +1,27 @@
-import * as ContextTools from "@effect-agent/capabilities/ContextTools";
-import * as MemoryNotes from "@effect-agent/capabilities/MemoryNotes";
-import { ThreadId } from "@effect-agent/core/Identifiers";
+import {
+  DurableObjectContext,
+  ThreadObjectIdentity,
+  ThreadObjectNamespace,
+} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { digestDefinitions } from "@effect-agent/thread/digest";
+import { memoryStoreLayer } from "@effect-agent/thread/sql-memory-store";
+import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
+import * as ThreadContextHistory from "@effect-agent/thread/thread-context-history";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { Context, Effect, Layer, Redacted, Ref, Schema } from "effect";
+import { ContextHistory, ContextHistoryError } from "effect-agent/context-history";
+import * as ContextTools from "effect-agent/context-tools";
+import { ThreadId } from "effect-agent/identifiers";
+import * as MemoryNotes from "effect-agent/memory-notes";
 import {
   MemoryKey,
   MemoryReader,
   MemoryStorageError,
   MemoryWriter,
-} from "@effect-agent/core/MemoryStore";
-import { ContextHistory, ContextHistoryError } from "@effect-agent/engine/ContextHistory";
-import {
-  DurableObjectContext,
-  ThreadObjectIdentity,
-  ThreadObjectNamespace,
-} from "@effect-agent/platform-cloudflare/CloudflareBindings";
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
-import { digestDefinitions } from "@effect-agent/thread/Digest";
-import { memoryStoreLayer } from "@effect-agent/thread/SqlMemoryStore";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
-import * as ThreadContextHistory from "@effect-agent/thread/ThreadContextHistory";
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { Context, Effect, Layer, Redacted, Ref, Schema } from "effect";
+} from "effect-agent/memory-store";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
 import { IdGenerator } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";

@@ -1,7 +1,4 @@
 ---
-"@effect-agent/capabilities": minor
-"@effect-agent/core": minor
-"@effect-agent/engine": minor
 "@effect-agent/platform-cloudflare": minor
 "@effect-agent/thread": minor
 ---

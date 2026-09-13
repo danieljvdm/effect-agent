@@ -1,3 +1,5 @@
+import type { Option, Stream } from "effect";
+import { Context, Duration, Effect, Schema } from "effect";
 import {
   AgentId,
   AttemptId,
@@ -6,13 +8,11 @@ import {
   SettlementId,
   SubmissionId,
   ToolCallId,
-} from "@effect-agent/core/Identifiers";
-import { InputMessage } from "@effect-agent/core/Messaging";
-import type { JoinedToHost } from "@effect-agent/core/Receipt";
-import { IdempotencyKey, QueueSequence, Principal } from "@effect-agent/core/Receipt";
-import { RunUsageSummary } from "@effect-agent/core/Usage";
-import type { Option, Stream } from "effect";
-import { Context, Duration, Effect, Schema } from "effect";
+} from "effect-agent/identifiers";
+import { InputMessage } from "effect-agent/messaging";
+import type { JoinedToHost } from "effect-agent/receipt";
+import { IdempotencyKey, QueueSequence, Principal } from "effect-agent/receipt";
+import { RunUsageSummary } from "effect-agent/usage";
 
 import {
   AbortRequested,
@@ -35,7 +35,7 @@ import {
   WorkerAdmission,
 } from "./Records.ts";
 
-export { IdempotencyKey, JoinedToHost, QueueSequence, Principal } from "@effect-agent/core/Receipt";
+export { IdempotencyKey, JoinedToHost, QueueSequence, Principal } from "effect-agent/receipt";
 
 const identifier = <const Name extends string>(name: Name) =>
   Schema.NonEmptyString.check(Schema.isMaxLength(256)).pipe(

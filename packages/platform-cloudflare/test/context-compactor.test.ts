@@ -1,5 +1,5 @@
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
-import { submissionSettlementRecordId } from "@effect-agent/thread/SubmissionLedger";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import { submissionSettlementRecordId } from "@effect-agent/thread/submission-ledger";
 import { runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";

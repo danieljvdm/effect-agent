@@ -1,17 +1,16 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import { type PreparedActivity } from "@effect-agent/thread/ActivityStore";
+import { type PreparedActivity } from "@effect-agent/thread/activity-store";
 import {
   ActivityClaim,
   ActivityMutationFailure,
   ActivityProcessorKey,
   ActivityProcessorStore,
-} from "@effect-agent/thread/ActivityStore";
+} from "@effect-agent/thread/activity-store";
 import {
   ActivityPassLimits,
   ActivityProcessingError,
   processCommittedActivity,
-} from "@effect-agent/thread/CommittedActivity";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+} from "@effect-agent/thread/committed-activity";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
 import {
   BatchId,
   CanonicalRecordEnvelope,
@@ -22,8 +21,8 @@ import {
   RecordEnvelope,
   RecordId,
   UserInputRecorded,
-} from "@effect-agent/thread/Records";
-import { ThreadStore, ThreadTail } from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/records";
+import { ThreadStore, ThreadTail } from "@effect-agent/thread/thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -38,6 +37,7 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 import { TestClock } from "effect/testing";
 
 const threadId = Schema.decodeSync(ThreadId)("dan-chad");

@@ -2,7 +2,7 @@ import {
   MessageDeliveryDriver,
   type MessageDeliveryFailure,
   MessageDeliveryStore,
-} from "@effect-agent/thread/MessageDelivery";
+} from "@effect-agent/thread/message-delivery";
 import { Cause, Clock, Effect, Exit, Option } from "effect";
 
 const reportFailure = (cause: Cause.Cause<MessageDeliveryFailure>): Effect.Effect<void> =>

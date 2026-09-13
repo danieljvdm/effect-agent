@@ -1,13 +1,5 @@
-import type { MemoryDocument } from "@effect-agent/core/MemoryStore";
-import {
-  MemoryKey,
-  MemoryReader,
-  MemoryScope,
-  MemoryStorageError,
-  MemoryWriter,
-} from "@effect-agent/core/MemoryStore";
-import { CloudflareMemoryClient } from "@effect-agent/platform-cloudflare/CloudflareMemory";
-import { doMemoryStoreLayer } from "@effect-agent/storage-cloudflare/DoMemoryStore";
+import { CloudflareMemoryClient } from "@effect-agent/platform-cloudflare/cloudflare-memory";
+import { doMemoryStoreLayer } from "@effect-agent/storage-cloudflare/do-memory-store";
 import {
   defaultMemoryRpcLimits,
   encodeMemoryWire,
@@ -17,10 +9,18 @@ import {
   MemoryOwnerRequest,
   MemoryOwnerResponse,
   type MemoryOwnerFailure,
-} from "@effect-agent/storage-cloudflare/MemoryProtocol";
-import { Principal } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/storage-cloudflare/memory-protocol";
+import { Principal } from "@effect-agent/thread/submission-ledger";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Clock, Deferred, Effect, Fiber, Schema } from "effect";
+import type { MemoryDocument } from "effect-agent/memory-store";
+import {
+  MemoryKey,
+  MemoryReader,
+  MemoryScope,
+  MemoryStorageError,
+  MemoryWriter,
+} from "effect-agent/memory-store";
 import { TestClock } from "effect/testing";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 

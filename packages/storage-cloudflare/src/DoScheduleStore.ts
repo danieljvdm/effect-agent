@@ -16,13 +16,13 @@ import {
   ScheduleRecord,
   ScheduleStorageError,
   ScheduleStore,
-} from "@effect-agent/thread/Schedule";
+} from "@effect-agent/thread/schedule";
 import {
   applyScheduleChange,
   scheduleUsesCapacity,
   scheduleDeadline,
-} from "@effect-agent/thread/ScheduleTransition";
-import { upgradeV2Schedules } from "@effect-agent/thread/SqlStorageV2Upgrade";
+} from "@effect-agent/thread/schedule-transition";
+import { upgradeV2Schedules } from "@effect-agent/thread/sql-storage-v2-upgrade";
 import { Context, Effect, Layer, Result, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 

@@ -1,14 +1,15 @@
-import * as WebCapture from "@effect-agent/capabilities/WebCapture";
 import {
   browserRestCaptureImplementation,
   browserRestCaptureLayer,
   browserRestWorkersAiCaptureLayer,
   CloudflareBrowserRest,
-} from "@effect-agent/platform-cloudflare/BrowserRestCapture";
+} from "@effect-agent/platform-cloudflare/browser-rest-capture";
 import {
   BrowserQuickActionWorkersAi,
   BrowserQuickActionWorkersAiPolicyError,
-} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
+} from "@effect-agent/platform-cloudflare/cloudflare-browser";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Logger, Redacted, Ref, Schema, Stream, type Layer } from "effect";
 import {
   CapturePageMarkdown,
   CapturePageScrape,
@@ -17,9 +18,8 @@ import {
   PageCaptureLimits,
   PageCaptureRequest,
   PageUrlTarget,
-} from "@effect-agent/sandbox/PageCapture";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Logger, Redacted, Ref, Schema, Stream, type Layer } from "effect";
+} from "effect-agent/page-capture";
+import * as WebCapture from "effect-agent/web-capture";
 import { Toolkit } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { expectTypeOf } from "vite-plus/test";
@@ -358,7 +358,7 @@ describe("Browser Run REST PageCapture adapter", () => {
   );
 
   it("loads as a Node-safe subpath", async () => {
-    const module = await import("@effect-agent/platform-cloudflare/BrowserRestCapture");
+    const module = await import("@effect-agent/platform-cloudflare/browser-rest-capture");
 
     expect(module.browserRestCaptureImplementation).toBe(browserRestCaptureImplementation);
   });

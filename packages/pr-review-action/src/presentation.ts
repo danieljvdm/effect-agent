@@ -6,7 +6,7 @@ import {
   type ReviewOutcome,
   type ReviewReport,
   type ReviewSeverity,
-} from "@effect-agent/pr-review/Review";
+} from "@effect-agent/pr-review/review";
 import { Schema } from "effect";
 
 import { type GeneratedContentOmission } from "./generated-content.ts";

@@ -1,12 +1,12 @@
-import { ContextHistoryError } from "@effect-agent/engine/ContextHistory";
 import {
   CanonicalRecordEnvelope,
   PersistedJson,
   type RecordEnvelope,
-} from "@effect-agent/thread/Records";
-import * as Projection from "@effect-agent/thread/ThreadContextHistoryProjection";
+} from "@effect-agent/thread/records";
+import * as Projection from "@effect-agent/thread/thread-context-history-projection";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, Schema } from "effect";
+import { ContextHistoryError } from "effect-agent/context-history";
 import { Prompt } from "effect/unstable/ai";
 
 const record = (sequence: number, payload: typeof RecordEnvelope.Encoded.payload) =>

@@ -1,10 +1,10 @@
 import {
   SqliteStorageConfig,
   SqliteStorageConfigValue,
-} from "@effect-agent/storage-sqlite/SqliteStorageConfig";
-import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
-import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/SqliteSubscriptionStore";
-import { Digest } from "@effect-agent/thread/Records";
+} from "@effect-agent/storage-sqlite/sqlite-storage-config";
+import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
+import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/sqlite-subscription-store";
+import { Digest } from "@effect-agent/thread/records";
 import {
   AcceptedEvent,
   defaultSubscriptionLimits,
@@ -12,11 +12,11 @@ import {
   SubscriptionStore,
   SubscriptionFailpoint,
   SubscriptionFailpointError,
-} from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/subscription";
 import {
   subscriptionConformancePartition,
   subscriptionStoreConformanceCases,
-} from "@effect-agent/thread/testing/SubscriptionStoreConformance";
+} from "@effect-agent/thread/testing/subscription-store-conformance";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";

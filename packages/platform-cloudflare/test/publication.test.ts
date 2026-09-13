@@ -1,6 +1,6 @@
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { ApprovalDecisionCommand, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
-import { ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { ApprovalDecisionCommand, SubmissionLedger } from "@effect-agent/thread/submission-ledger";
+import { ThreadStore } from "@effect-agent/thread/thread-store";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Cause, Clock, Context, Effect, Exit, Layer, Schema } from "effect";
 import { DurableObject } from "effect-cf";

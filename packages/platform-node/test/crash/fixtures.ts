@@ -1,30 +1,29 @@
 import * as fs from "node:fs";
 
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import { SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities/Subagent";
-import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId, RunId, ToolCallId, TurnId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import {
-  DurableStep,
-  DurableStepError,
-  ToolExecutionClass,
-} from "@effect-agent/engine/DurableStep";
-import { RunContextPreparation } from "@effect-agent/engine/RunOptions";
-import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
-import { Receipt, type DurableSubmitOptions } from "@effect-agent/thread/DurableAgentRuntime";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
-import { IdempotencyKey, Principal, Settlement } from "@effect-agent/thread/SubmissionLedger";
+  DurableWorkerBinding,
+  type ResolvedBinding,
+} from "@effect-agent/thread/agent-registration";
+import { Receipt, type DurableSubmitOptions } from "@effect-agent/thread/durable-agent-runtime";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
+import { IdempotencyKey, Principal, Settlement } from "@effect-agent/thread/submission-ledger";
 import {
   ReconciliationCompleted,
   ReconciliationNeverStarted,
   ReconciliationSafeToRetry,
   ReconciliationUncertain,
   ToolReconciler,
-} from "@effect-agent/thread/ToolReconciler";
+} from "@effect-agent/thread/tool-reconciler";
 import { Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
+import { IdGenerator } from "effect-agent/id-generator";
+import { ThreadId, RunId, ToolCallId, TurnId } from "effect-agent/identifiers";
+import { RunContextPreparation } from "effect-agent/run-options";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 /**

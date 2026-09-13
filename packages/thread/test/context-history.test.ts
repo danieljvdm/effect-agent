@@ -1,22 +1,22 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import {
-  ContextHistory,
-  ContextHistoryError,
-  ContextHistoryRead,
-  ContextHistorySearch,
-} from "@effect-agent/engine/ContextHistory";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
-import type { RecordEnvelope } from "@effect-agent/thread/Records";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
+import type { RecordEnvelope } from "@effect-agent/thread/records";
 import {
   CanonicalRecordEnvelope,
   CanonicalSequence,
   ProducerEpoch,
   PersistedJson,
-} from "@effect-agent/thread/Records";
-import * as ThreadContextHistory from "@effect-agent/thread/ThreadContextHistory";
-import { ThreadStore, ThreadStoreError, ThreadTail } from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/records";
+import * as ThreadContextHistory from "@effect-agent/thread/thread-context-history";
+import { ThreadStore, ThreadStoreError, ThreadTail } from "@effect-agent/thread/thread-store";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
+import {
+  ContextHistory,
+  ContextHistoryError,
+  ContextHistoryRead,
+  ContextHistorySearch,
+} from "effect-agent/context-history";
+import { ThreadId } from "effect-agent/identifiers";
 import { TestClock } from "effect/testing";
 import { Prompt } from "effect/unstable/ai";
 

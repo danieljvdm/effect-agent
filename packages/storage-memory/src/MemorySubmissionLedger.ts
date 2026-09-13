@@ -1,14 +1,4 @@
 import {
-  type ToolCallId,
-  AttemptId,
-  ReceiptId,
-  SubmissionId,
-  type AgentId,
-  type ThreadId,
-  type SettlementId,
-} from "@effect-agent/core/Identifiers";
-import { InputMessage } from "@effect-agent/core/Messaging";
-import {
   PersistedJson,
   WorkerAdmission,
   ProducerEpoch,
@@ -18,7 +8,7 @@ import {
   type ProducerId,
   type RecordEnvelope,
   type SettlementOutcome,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   type ParentLinkage,
   AbortCommand,
@@ -93,7 +83,7 @@ import {
   type SubmissionState,
   type SuspensionOutcome,
   type SuspensionReason,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import {
   Clock,
   Cause,
@@ -108,6 +98,16 @@ import {
   Schema,
   Stream,
 } from "effect";
+import {
+  type ToolCallId,
+  AttemptId,
+  ReceiptId,
+  SubmissionId,
+  type AgentId,
+  type ThreadId,
+  type SettlementId,
+} from "effect-agent/identifiers";
+import { InputMessage } from "effect-agent/messaging";
 
 const MAX_SUBMISSIONS = 65_536;
 

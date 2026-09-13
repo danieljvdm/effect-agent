@@ -1,11 +1,11 @@
-import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
-import { NodeScheduling } from "@effect-agent/platform-node/NodeScheduling";
+import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
+import { NodeScheduling } from "@effect-agent/platform-node/node-scheduling";
 import {
   ScheduleAuthorizer,
   ScheduleRecord,
   defaultSchedulingLimits,
-} from "@effect-agent/thread/Schedule";
-import { Scheduling } from "@effect-agent/thread/Scheduling";
+} from "@effect-agent/thread/schedule";
+import { Scheduling } from "@effect-agent/thread/scheduling";
 import { NodeServices } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";

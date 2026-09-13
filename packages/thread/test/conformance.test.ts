@@ -1,10 +1,10 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
-import { BatchId, CanonicalSequence, Digest, ProducerEpoch } from "@effect-agent/thread/Records";
-import { threadStoreConformanceCases } from "@effect-agent/thread/testing/ThreadStoreConformance";
-import { AppendConflict, ThreadTail, ThreadTailRequest } from "@effect-agent/thread/ThreadStore";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
+import { BatchId, CanonicalSequence, Digest, ProducerEpoch } from "@effect-agent/thread/records";
+import { threadStoreConformanceCases } from "@effect-agent/thread/testing/thread-store-conformance";
+import { AppendConflict, ThreadTail, ThreadTailRequest } from "@effect-agent/thread/thread-store";
 import { expect, describe, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 
 const threadId = Schema.decodeSync(ThreadId)("thread-port-1");
 const batchId = Schema.decodeSync(BatchId)("batch-port-1");

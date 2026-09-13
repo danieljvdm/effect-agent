@@ -1,6 +1,4 @@
 ---
-"@effect-agent/core": minor
-"@effect-agent/capabilities": minor
 "@effect-agent/storage-sqlite": minor
 ---
 

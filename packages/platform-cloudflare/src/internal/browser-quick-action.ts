@@ -1,5 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { Context, Effect, Layer, Option, Schema } from "effect";
 import {
   PageCapture,
   PageCaptureInferenceUse,
@@ -21,7 +22,7 @@ import {
   type PageCaptureError,
   type PageCaptureOutput,
   type PageCaptureRequest,
-} from "@effect-agent/sandbox/PageCapture";
+} from "effect-agent/page-capture";
 import {
   PageScreenshot,
   PageScreenshotOutputLimitError,
@@ -29,9 +30,8 @@ import {
   type PageScreenshotCapture,
   type PageScreenshotError,
   type PageScreenshotRequest,
-} from "@effect-agent/sandbox/PageScreenshot";
-import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+} from "effect-agent/page-screenshot";
+import { SandboxImplementation } from "effect-agent/sandbox";
 
 /**
  * The Cloudflare Browser Run Quick Action `PageCapture` adapter (capability

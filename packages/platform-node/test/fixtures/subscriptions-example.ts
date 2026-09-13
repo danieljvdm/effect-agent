@@ -1,8 +1,8 @@
-import { type NodeDurableAgentRuntimeOptions } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
-import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
-import { NodeSubscriptions } from "@effect-agent/platform-node/NodeSubscriptions";
-import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/SqliteSubscriptionStore";
-import { EventSources, type EventSource } from "@effect-agent/thread/EventSource";
+import { type NodeDurableAgentRuntimeOptions } from "@effect-agent/platform-node/node-durable-agent-runtime";
+import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
+import { NodeSubscriptions } from "@effect-agent/platform-node/node-subscriptions";
+import { subscriptionStoreLayer } from "@effect-agent/storage-sqlite/sqlite-subscription-store";
+import { EventSources, type EventSource } from "@effect-agent/thread/event-source";
 import {
   acceptVerifiedGitHubWorkflowRunWebhook,
   githubWorkflowRunsHttpLayer,
@@ -14,14 +14,14 @@ import {
   makeGitHubWorkflowRunSource,
   type VerifiedGitHubWorkflowRunWebhookRequest,
   webCryptoGitHubWebhookSignatureVerifierLayer,
-} from "@effect-agent/thread/GitHubWorkflowSource";
-import { type SourcePartition, SubscriptionAuthorizer } from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/git-hub-workflow-source";
+import { type SourcePartition, SubscriptionAuthorizer } from "@effect-agent/thread/subscription";
 import {
   SubscriptionInputBindings,
   makeSubscriptionInputBinding,
   type SubscriptionInputBinding,
-} from "@effect-agent/thread/SubscriptionInput";
-import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/Subscriptions";
+} from "@effect-agent/thread/subscription-input";
+import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/subscriptions";
 import { NodeHttpClient } from "@effect/platform-node";
 import { Effect, Layer, Schema, type Redacted } from "effect";
 

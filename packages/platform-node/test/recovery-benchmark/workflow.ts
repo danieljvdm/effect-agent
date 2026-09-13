@@ -1,21 +1,15 @@
-import { NewContext } from "@effect-agent/capabilities/ContextTools";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { RunId, ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
-import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
-import { ledgerLayer } from "@effect-agent/storage-sqlite/SqliteSubmissionLedger";
-import { layer as threadLayer } from "@effect-agent/storage-sqlite/SqliteThreadStore";
-import { IntegrityReport } from "@effect-agent/thread/Admin";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import { ledgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
+import { layer as threadLayer } from "@effect-agent/storage-sqlite/sqlite-thread-store";
+import { IntegrityReport } from "@effect-agent/thread/admin";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
-} from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/thread/durable-agent-runtime";
 import {
   DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
-} from "@effect-agent/thread/DurableFailpoint";
+} from "@effect-agent/thread/durable-failpoint";
 import {
   BatchId,
   CanonicalBatch,
@@ -31,13 +25,17 @@ import {
   RecordId,
   ThreadCreated,
   ToolCallSettled,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   modelResponseRecordId,
   toolCallSettledRecordId,
   turnIdForRun,
-} from "@effect-agent/thread/RunJournal";
-import { IdempotencyKey, Principal, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/run-journal";
+import {
+  IdempotencyKey,
+  Principal,
+  SubmissionLedger,
+} from "@effect-agent/thread/submission-ledger";
 import {
   FencedAppendRequest,
   ThreadCheckpoint,
@@ -47,9 +45,9 @@ import {
   ThreadRead,
   ThreadStore,
   ThreadTailRequest,
-} from "@effect-agent/thread/ThreadStore";
-import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/thread-store";
+import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import {
   Array,
@@ -66,6 +64,12 @@ import {
   Schema,
   Stream,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { NewContext } from "effect-agent/context-tools";
+import { ToolExecutionClass } from "effect-agent/durable-step";
+import { RunId, ThreadId, ToolCallId } from "effect-agent/identifiers";
+import { RunToolAuthorization } from "effect-agent/run-options";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import {

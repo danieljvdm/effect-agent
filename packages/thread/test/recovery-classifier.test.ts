@@ -1,12 +1,4 @@
 import {
-  AgentId,
-  AttemptId,
-  ThreadId,
-  ReceiptId,
-  SubmissionId,
-  ToolCallId,
-} from "@effect-agent/core/Identifiers";
-import {
   CanonicalSequence,
   DefinitionDigests,
   DeploymentId,
@@ -15,7 +7,7 @@ import {
   ProducerId,
   RecordEnvelope,
   type SettlementOutcome,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   classifyRecovery,
   DeclaredPendingBatchEvidence,
@@ -24,7 +16,7 @@ import {
   PendingApprovalEvidence,
   RecoveryEvidence,
   type DelegationAdmissionEvidence,
-} from "@effect-agent/thread/Recovery";
+} from "@effect-agent/thread/recovery";
 import {
   AbortIntent,
   ApprovalDecisionIntent,
@@ -52,9 +44,17 @@ import {
   WaitingForChildSuspension,
   type ChildReservationStatus,
   type SubmissionState,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import { describe, expect, it } from "@effect/vitest";
 import { DateTime, Schema } from "effect";
+import {
+  AgentId,
+  AttemptId,
+  ThreadId,
+  ReceiptId,
+  SubmissionId,
+  ToolCallId,
+} from "effect-agent/identifiers";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const SHA_B = Schema.decodeSync(Digest)("b".repeat(64));

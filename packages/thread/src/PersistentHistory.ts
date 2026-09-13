@@ -1,11 +1,11 @@
-import { type ThreadId, type RunId } from "@effect-agent/core/Identifiers";
-import { type RunCompleted as RunCompletedEvent } from "@effect-agent/core/RunEvent";
+import { DateTime, Effect, Layer, Schema } from "effect";
+import { type ThreadId, type RunId } from "effect-agent/identifiers";
+import { type RunCompleted as RunCompletedEvent } from "effect-agent/run-event";
 import {
   ThreadHistory,
   ThreadHistoryError,
   type ThreadHistoryRun,
-} from "@effect-agent/engine/ThreadHistory";
-import { DateTime, Effect, Layer, Schema } from "effect";
+} from "effect-agent/thread-history";
 import { Prompt } from "effect/unstable/ai";
 
 import {

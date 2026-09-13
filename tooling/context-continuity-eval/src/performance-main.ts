@@ -1,4 +1,4 @@
-import { digestJson } from "@effect-agent/thread/Digest";
+import { digestJson } from "@effect-agent/thread/digest";
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import {
   Clock,

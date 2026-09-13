@@ -1,4 +1,4 @@
-import { ScriptedModel } from "@effect-agent/testing/ScriptedModel";
+import { ScriptedModel } from "@effect-agent/testing/scripted-model";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import { Console, Effect, Layer, Ref, Schema } from "effect";
 import {
@@ -10,14 +10,14 @@ import {
   Subagent,
   ThreadHistory,
 } from "effect-agent";
-import * as DirectAgent from "effect-agent/Agent";
-import { AgentInputError } from "effect-agent/AgentError";
-import * as DirectRuntime from "effect-agent/AgentRuntime";
-import * as DirectEphemeral from "effect-agent/Ephemeral";
-import { RunId, ThreadId, TurnId } from "effect-agent/Identifiers";
-import { IdGenerator as DirectIdGenerator } from "effect-agent/IdGenerator";
-import * as DirectSubagent from "effect-agent/Subagent";
-import { layerTransient } from "effect-agent/ThreadHistory";
+import * as DirectAgent from "effect-agent/agent";
+import { AgentInputError } from "effect-agent/agent-error";
+import * as DirectRuntime from "effect-agent/agent-runtime";
+import * as DirectEphemeral from "effect-agent/ephemeral";
+import { IdGenerator as DirectIdGenerator } from "effect-agent/id-generator";
+import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
+import * as DirectSubagent from "effect-agent/subagent";
+import { layerTransient } from "effect-agent/thread-history";
 import { Model, Toolkit } from "effect/unstable/ai";
 
 import { loadRuntime } from "./lazy-module.ts";

@@ -1,10 +1,10 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
 import {
   CheckpointRejected,
   ThreadStore,
   ThreadStoreError,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { Cause, Effect, Exit, Option, Schema, Stream } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 import { expect, it } from "vite-plus/test";
 
 import { readRecoveryCheckpoint } from "../src/host-evidence.ts";

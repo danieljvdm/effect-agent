@@ -1,5 +1,5 @@
-import { RecoverySnapshotRequest, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
-import { ThreadStore, ThreadTailRequest } from "@effect-agent/thread/ThreadStore";
+import { RecoverySnapshotRequest, SubmissionLedger } from "@effect-agent/thread/submission-ledger";
+import { ThreadStore, ThreadTailRequest } from "@effect-agent/thread/thread-store";
 import { Clock, Effect, Layer, Option, Schema, Stream } from "effect";
 
 import { ThreadPublication, DurableAlarmError } from "../src/Alarm.ts";

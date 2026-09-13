@@ -1,4 +1,4 @@
-import { type ThreadObjectNamespace } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { type ThreadObjectNamespace } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import {
   CloudflareSubscriptionsClient,
   makeSubscriptionPartitionAlarmHandler,
@@ -8,15 +8,15 @@ import {
   type SubscriptionPartitionIdentity,
   SubscriptionPartitionNamespace,
   type SubscriptionPartitionObjectRpc,
-} from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
-import { type EventSources } from "@effect-agent/thread/EventSource";
-import { Principal } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
+import { type EventSources } from "@effect-agent/thread/event-source";
+import { Principal } from "@effect-agent/thread/submission-ledger";
 import {
   type SourcePartition,
   type SubscriptionAuthorizer,
-} from "@effect-agent/thread/Subscription";
-import { type SubscriptionInputBindings } from "@effect-agent/thread/SubscriptionInput";
-import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/Subscriptions";
+} from "@effect-agent/thread/subscription";
+import { type SubscriptionInputBindings } from "@effect-agent/thread/subscription-input";
+import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/subscriptions";
 import { Effect, Layer, Schema } from "effect";
 import type { DurableObjectState, WorkerEnvironment } from "effect-cf";
 

@@ -1,9 +1,9 @@
 import {
   DoScheduleTransaction,
   scheduleStoreLayer,
-} from "@effect-agent/storage-cloudflare/DoScheduleStore";
-import { ScheduleStorageError, ScheduleStore } from "@effect-agent/thread/Schedule";
-import { scheduleStoreConformanceCases } from "@effect-agent/thread/testing/ScheduleStoreConformance";
+} from "@effect-agent/storage-cloudflare/do-schedule-store";
+import { ScheduleStorageError, ScheduleStore } from "@effect-agent/thread/schedule";
+import { scheduleStoreConformanceCases } from "@effect-agent/thread/testing/schedule-store-conformance";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";

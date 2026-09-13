@@ -1,4 +1,5 @@
-import { Update } from "@effect-agent/core/AgentUpdates";
+import { DateTime, Effect, Equal, Result, Schema } from "effect";
+import { Update } from "effect-agent/agent-updates";
 import {
   AgentId,
   ReceiptId,
@@ -7,9 +8,8 @@ import {
   ThreadId,
   RunId,
   DelegationId,
-} from "@effect-agent/core/Identifiers";
-import { WorkerUpdate } from "@effect-agent/core/Worker";
-import { DateTime, Effect, Equal, Result, Schema } from "effect";
+} from "effect-agent/identifiers";
+import { WorkerUpdate } from "effect-agent/worker";
 
 import { digestJson } from "./Digest.ts";
 import { Receipt } from "./DurableAgentRuntime.ts";

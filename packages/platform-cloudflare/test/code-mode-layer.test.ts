@@ -1,7 +1,7 @@
-import * as CodeMode from "@effect-agent/capabilities/CodeMode";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
-import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/CloudflareCodeMode";
+import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/cloudflare-code-mode";
 import { Context, Effect, Layer, Schema } from "effect";
+import * as CodeMode from "effect-agent/code-mode";
+import { ToolExecutionClass } from "effect-agent/durable-step";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 

@@ -80,14 +80,19 @@ specifications, planning documents, decision registers, ADRs, roadmaps, or evide
 ## Package dependency direction
 
 ```text
-core <- engine <- capabilities
-core <- sandbox <- sandbox-local
-core <- sandbox <- capabilities
-core <- engine <- thread <- storage adapters
-engine + thread + sandbox + selected adapters <- platform packages
-core + engine <- testing
-core + engine + capabilities <- effect-agent (umbrella) <- pr-review
+effect-agent <- thread <- storage adapters
+effect-agent + thread <- workflow
+effect-agent + thread + selected adapters <- platform packages
+effect-agent <- sandbox-local
+effect-agent <- testing
+effect-agent <- pr-review
 ```
+
+Within `packages/effect-agent/src`, dependencies point inward:
+`core <- engine <- capabilities` and `core <- sandbox <- capabilities`.
+Public module paths address these implementations directly; source directories are not separate
+packages. Keep core and sandbox contracts platform-neutral. The export check enforces these
+internal boundaries as well as package imports.
 
 An inward package must not import an outward package. If a feature appears to require that, define
 or deepen an inward port and implement an outward adapter.

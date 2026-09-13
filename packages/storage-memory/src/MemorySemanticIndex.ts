@@ -1,4 +1,5 @@
-import { MemoryKey } from "@effect-agent/core/MemoryStore";
+import { Clock, Effect, Encoding, Layer, Ref, Schema } from "effect";
+import { MemoryKey } from "effect-agent/memory-store";
 import {
   MemoryIndexCandidate,
   MemoryIndexError,
@@ -9,8 +10,7 @@ import {
   SemanticMemoryChunk,
   SemanticMemoryIndex,
   SemanticMemoryProfile,
-} from "@effect-agent/core/SemanticMemoryIndex";
-import { Clock, Effect, Encoding, Layer, Ref, Schema } from "effect";
+} from "effect-agent/semantic-memory-index";
 
 const PositiveCapacity = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 }));
 const MaxStoredVectorComponents = 16_777_216;

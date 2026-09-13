@@ -1,6 +1,6 @@
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
-import { MemoryScope } from "@effect-agent/core/MemoryStore";
 import { Schema } from "effect";
+import * as MemoryNamespace from "effect-agent/memory-namespace";
+import { MemoryScope } from "effect-agent/memory-store";
 
 export const MODEL_ID = "onnx-community/all-MiniLM-L6-v2-ONNX";
 export const MODEL_REVISION = "aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f";

@@ -1,4 +1,4 @@
-import * as Gateway from "@effect-agent/platform-cloudflare/CloudflareAiGateway";
+import * as Gateway from "@effect-agent/platform-cloudflare/cloudflare-ai-gateway";
 import { expect, it } from "@effect/vitest";
 import { Effect, Redacted } from "effect";
 import { FetchHttpClient, HttpClient } from "effect/unstable/http";

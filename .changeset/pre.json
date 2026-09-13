@@ -2,9 +2,6 @@
   "mode": "pre",
   "tag": "beta",
   "initialVersions": {
-    "@effect-agent/capabilities": "0.0.0",
-    "@effect-agent/core": "0.0.0",
-    "@effect-agent/engine": "0.0.0",
     "@effect-agent/example-demo": "0.0.0",
     "@effect-agent/pr-review-action": "0.0.0",
     "@effect-agent/example-providers": "0.0.0",
@@ -12,7 +9,6 @@
     "@effect-agent/platform-cloudflare": "0.0.0",
     "@effect-agent/platform-node": "0.0.0",
     "@effect-agent/pr-review": "0.0.0",
-    "@effect-agent/sandbox": "0.0.0",
     "@effect-agent/sandbox-local": "0.0.0",
     "@effect-agent/thread": "0.0.0",
     "@effect-agent/storage-cloudflare": "0.0.0",

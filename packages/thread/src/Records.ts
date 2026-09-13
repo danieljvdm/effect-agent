@@ -1,6 +1,8 @@
-import { PolicyLimit } from "@effect-agent/core/AgentError";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { Update } from "@effect-agent/core/AgentUpdates";
+import { Schema } from "effect";
+import { PolicyLimit } from "effect-agent/agent-error";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { Update } from "effect-agent/agent-updates";
+import { ContextHandoff } from "effect-agent/context-window";
 import {
   AgentId,
   AttemptId,
@@ -12,23 +14,21 @@ import {
   SubmissionId,
   ToolCallId,
   TurnId,
-} from "@effect-agent/core/Identifiers";
-import { InputMessage } from "@effect-agent/core/Messaging";
-import { IdempotencyKey, Principal } from "@effect-agent/core/Receipt";
-import { ExhaustedLimit } from "@effect-agent/core/RunEvent";
-import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
+} from "effect-agent/identifiers";
+import { InputMessage } from "effect-agent/messaging";
+import { IdempotencyKey, Principal } from "effect-agent/receipt";
+import { ExhaustedLimit } from "effect-agent/run-event";
+import { RunPolicyUsage } from "effect-agent/run-policy-usage";
 import {
   DelegationDepth,
   SubagentBudgetReservation,
   SubagentGrant,
   SubagentParentLink,
   ToolExecutionKind,
-} from "@effect-agent/core/SubagentContract";
-import { Selection, Snapshot } from "@effect-agent/core/ToolExposure";
-import { ModelCallUsage, RunUsageSummary, RunTotals } from "@effect-agent/core/Usage";
-import { WorkerBudgetScope, WorkerRef, WorkerSource } from "@effect-agent/core/Worker";
-import { ContextHandoff } from "@effect-agent/engine/ContextWindow";
-import { Schema } from "effect";
+} from "effect-agent/subagent-contract";
+import { Selection, Snapshot } from "effect-agent/tool-exposure";
+import { ModelCallUsage, RunUsageSummary, RunTotals } from "effect-agent/usage";
+import { WorkerBudgetScope, WorkerRef, WorkerSource } from "effect-agent/worker";
 import { Prompt } from "effect/unstable/ai";
 
 import { utf8ByteLength } from "./internal/utf8.ts";

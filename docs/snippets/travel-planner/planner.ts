@@ -1,7 +1,7 @@
 import { AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { Effect, Schema } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
-import { AgentPolicy } from "effect-agent/AgentPolicy";
+import { AgentPolicy } from "effect-agent/agent-policy";
 
 import { AppLive } from "./setup";
 import { TravelTools } from "./tools";

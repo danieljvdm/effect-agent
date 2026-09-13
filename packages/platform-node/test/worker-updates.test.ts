@@ -1,16 +1,10 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import * as Agent from "@effect-agent/core/Agent";
-import * as AgentUpdates from "@effect-agent/core/AgentUpdates";
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import { WorkerCompletion, WorkerError, WorkerUpdate } from "@effect-agent/core/Worker";
-import { SubagentHost } from "@effect-agent/engine/SubagentHost";
-import * as NodeHost from "@effect-agent/platform-node/NodeDurableHost";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { MessageDeliveryStore } from "@effect-agent/thread/MessageDelivery";
-import { DefinitionDigestInput } from "@effect-agent/thread/Records";
-import { AbortCommand, IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
-import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { WorkerHostAuthorizer } from "@effect-agent/thread/WorkerHost";
+import * as NodeHost from "@effect-agent/platform-node/node-durable-host";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { MessageDeliveryStore } from "@effect-agent/thread/message-delivery";
+import { DefinitionDigestInput } from "@effect-agent/thread/records";
+import { AbortCommand, IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
+import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/thread-store";
+import { WorkerHostAuthorizer } from "@effect-agent/thread/worker-host";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
@@ -25,6 +19,12 @@ import {
   Scope,
   Stream,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import * as AgentUpdates from "effect-agent/agent-updates";
+import { ThreadId } from "effect-agent/identifiers";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentHost } from "effect-agent/subagent-host";
+import { WorkerCompletion, WorkerError, WorkerUpdate } from "effect-agent/worker";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 const input = Schema.Struct({ question: Schema.String });

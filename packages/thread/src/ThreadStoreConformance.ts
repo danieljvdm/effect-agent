@@ -1,5 +1,5 @@
-import { ThreadId, RunId, SubmissionId } from "@effect-agent/core/Identifiers";
 import { Effect, DateTime, Option, Schema, Stream } from "effect";
+import { ThreadId, RunId, SubmissionId } from "effect-agent/identifiers";
 
 import { EMPTY_TAIL_DIGEST } from "./Digest.ts";
 import type { Digest } from "./Records.ts";

@@ -1,6 +1,6 @@
-import { DEFAULT_MAX_STORED_VALUE_BYTES } from "@effect-agent/storage-cloudflare/DoStorageConfig";
-import { DeploymentId } from "@effect-agent/thread/Records";
-import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "@effect-agent/thread/SubmissionLedger";
+import { DEFAULT_MAX_STORED_VALUE_BYTES } from "@effect-agent/storage-cloudflare/do-storage-config";
+import { DeploymentId } from "@effect-agent/thread/records";
+import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "@effect-agent/thread/submission-ledger";
 import { Context, Duration, Schema } from "effect";
 
 /**

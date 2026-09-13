@@ -1,4 +1,4 @@
-import { type RunId } from "@effect-agent/core/Identifiers";
+import { type RunId } from "effect-agent/identifiers";
 
 import {
   type CanonicalRecordEnvelope,

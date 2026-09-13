@@ -1,15 +1,15 @@
-import { indexMemorySource, querySemanticMemory } from "@effect-agent/capabilities/SemanticMemory";
-import * as Memory from "@effect-agent/core/Memory";
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
-import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
-import { MemoryScope, MemoryKey, MemoryWriter } from "@effect-agent/core/MemoryStore";
-import { SemanticMemoryIndex, SemanticMemoryProfile } from "@effect-agent/core/SemanticMemoryIndex";
-import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory/MemorySemanticIndex";
-import { memoryStoreLayer } from "@effect-agent/thread/SqlMemoryStore";
+import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory/memory-semantic-index";
+import { memoryStoreLayer } from "@effect-agent/thread/sql-memory-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
 import { Schema as NamespaceSchema, Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect";
+import * as Memory from "effect-agent/memory";
+import * as MemoryNamespace from "effect-agent/memory-namespace";
+import { MemoryAccess } from "effect-agent/memory-revalidation";
+import { MemoryScope, MemoryKey, MemoryWriter } from "effect-agent/memory-store";
+import { indexMemorySource, querySemanticMemory } from "effect-agent/semantic-memory";
+import { SemanticMemoryIndex, SemanticMemoryProfile } from "effect-agent/semantic-memory-index";
 import { TestClock } from "effect/testing";
 import { AiError, EmbeddingModel } from "effect/unstable/ai";
 

@@ -1,18 +1,15 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { DelegationId, type ThreadId } from "@effect-agent/core/Identifiers";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { type AgentRuntimeFailure } from "@effect-agent/engine/AgentRuntime";
-import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
-import { type DigestError } from "@effect-agent/thread/Digest";
+import {
+  DurableWorkerBinding,
+  type ResolvedBinding,
+} from "@effect-agent/thread/agent-registration";
+import { type DigestError } from "@effect-agent/thread/digest";
 import {
   type DurableAgentRuntime,
   type DurableWorkerRequirements,
-} from "@effect-agent/thread/DurableAgentRuntime";
-import { PersistentHistory } from "@effect-agent/thread/PersistentHistory";
-import { type DefinitionDigests } from "@effect-agent/thread/Records";
-import { type ThreadStore } from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/durable-agent-runtime";
+import { PersistentHistory } from "@effect-agent/thread/persistent-history";
+import { type DefinitionDigests } from "@effect-agent/thread/records";
+import { type ThreadStore } from "@effect-agent/thread/thread-store";
 import { describe, expect, it } from "@effect/vitest";
 import {
   type Crypto,
@@ -24,6 +21,12 @@ import {
   type Scope,
   Layer,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import { type AgentRuntimeFailure } from "effect-agent/agent-runtime";
+import { DelegationId, type ThreadId } from "effect-agent/identifiers";
+import { type ThreadHistory } from "effect-agent/thread-history";
 import { Toolkit, type LanguageModel, type Model, Tool } from "effect/unstable/ai";
 
 import { compileRegistrations } from "../src/internal/agent-registration.ts";

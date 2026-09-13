@@ -6,12 +6,12 @@ import {
   type ScheduleValidationError,
   ScheduleWake,
   defaultSchedulingLimits,
-} from "@effect-agent/thread/Schedule";
+} from "@effect-agent/thread/schedule";
 import {
   type ScheduleProcessFailure,
   Scheduling,
   ScheduleDriver,
-} from "@effect-agent/thread/Scheduling";
+} from "@effect-agent/thread/scheduling";
 import { NodeCrypto } from "@effect/platform-node";
 import { Cause, Duration, Effect, Layer, Option, PubSub, Result } from "effect";
 

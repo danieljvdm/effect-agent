@@ -1,13 +1,13 @@
-import { ModelCallContext } from "@effect-agent/engine/ContextWindow";
-import { RunContextPreparation, RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import {
   ScriptedModel,
   type ScriptedTurnInput,
   type ScriptedStreamPart,
-} from "@effect-agent/testing/ScriptedModel";
+} from "@effect-agent/testing/scripted-model";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
-import { ThreadHistory } from "effect-agent/ThreadHistory";
+import { ModelCallContext } from "effect-agent/context-window";
+import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
+import { ThreadHistory } from "effect-agent/thread-history";
 import { AiError, type LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 
 import { BenchmarkError, check } from "./contracts.js";

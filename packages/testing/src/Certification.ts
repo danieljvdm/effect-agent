@@ -1,39 +1,26 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import { SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities/Subagent";
-import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import {
-  ThreadId,
-  RunId,
-  ToolCallId,
-  TurnId,
-  type AgentId,
-  type SubmissionId,
-} from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import { DurableStep, DurableStepError } from "@effect-agent/engine/DurableStep";
-import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
-import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
+  DurableWorkerBinding,
+  type ResolvedBinding,
+} from "@effect-agent/thread/agent-registration";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   type DurableSubmitFailure,
   type DurableSubmitOptions,
   type Receipt,
-} from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/thread/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/DurableFailpoint";
+} from "@effect-agent/thread/durable-failpoint";
 import {
   DefinitionDigests,
   DeploymentId,
   Digest,
   ProducerId,
   type BatchId,
-} from "@effect-agent/thread/Records";
-import { childThreadIdFor } from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/records";
+import { childThreadIdFor } from "@effect-agent/thread/run-journal";
 import {
   ApprovalDecisionCommand,
   IdempotencyKey,
@@ -44,7 +31,7 @@ import {
   UnknownResolutionCommand,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   type SubmissionSnapshot,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import {
   type CertificationCaseResult,
   type CertificationReport,
@@ -53,16 +40,16 @@ import {
   CertifiedAdapterIdentity,
   certifyPorts,
   type CertificationScenario,
-} from "@effect-agent/thread/testing/Certification";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
-import { verifyThreadInvariants } from "@effect-agent/thread/ThreadInvariants";
+} from "@effect-agent/thread/testing/certification";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
+import { verifyThreadInvariants } from "@effect-agent/thread/thread-invariants";
 import {
   ThreadExportRequest,
   ThreadStore,
   LoadCheckpointRequest,
-} from "@effect-agent/thread/ThreadStore";
-import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/thread-store";
+import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import type { Crypto } from "effect";
 import {
   Cause,
@@ -77,6 +64,22 @@ import {
   Schema,
   Stream,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableStep, DurableStepError } from "effect-agent/durable-step";
+import { IdGenerator } from "effect-agent/id-generator";
+import {
+  ThreadId,
+  RunId,
+  ToolCallId,
+  TurnId,
+  type AgentId,
+  type SubmissionId,
+} from "effect-agent/identifiers";
+import { RunToolAuthorization } from "effect-agent/run-options";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 

@@ -1,16 +1,16 @@
-import { type AgentId } from "@effect-agent/core/Identifiers";
-import { type DurableSubmitAgent } from "@effect-agent/thread/DurableAgentRuntime";
-import { PreparedInputAdmission } from "@effect-agent/thread/PreparedInputAdmission";
-import { PersistedJson } from "@effect-agent/thread/Records";
+import { type DurableSubmitAgent } from "@effect-agent/thread/durable-agent-runtime";
+import { PreparedInputAdmission } from "@effect-agent/thread/prepared-input-admission";
+import { PersistedJson } from "@effect-agent/thread/records";
 import {
   type ScheduledEnvelope,
   ScheduledInputAdmission,
   ScheduledInputRetryable,
   ScheduledInputRefused,
   ScheduleStorageError,
-} from "@effect-agent/thread/Schedule";
-import { type PreparedInput } from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/schedule";
+import { type PreparedInput } from "@effect-agent/thread/subscription";
 import { Effect, Layer } from "effect";
+import { type AgentId } from "effect-agent/identifiers";
 
 import { CloudflareThreadClient, type ThreadClientError } from "../CloudflareThreadClient.ts";
 

@@ -1,18 +1,15 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import {
-  toolFailureObserverLayer,
-  type ToolFailureObservation,
-} from "@effect-agent/engine/RunOptions";
 import {
   DurableObjectContext,
   threadNamespaceLayer,
-} from "@effect-agent/platform-cloudflare/CloudflareBindings";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { ThreadId } from "effect-agent/identifiers";
+import { toolFailureObserverLayer, type ToolFailureObservation } from "effect-agent/run-options";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import { expect, it } from "vite-plus/test";
 

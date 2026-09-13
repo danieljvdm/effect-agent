@@ -1,11 +1,7 @@
 ---
-"@effect-agent/capabilities": patch
-"@effect-agent/core": patch
-"@effect-agent/engine": patch
 "@effect-agent/platform-cloudflare": patch
 "@effect-agent/platform-node": patch
 "@effect-agent/pr-review": patch
-"@effect-agent/sandbox": patch
 "@effect-agent/sandbox-local": patch
 "@effect-agent/thread": patch
 "@effect-agent/storage-cloudflare": patch

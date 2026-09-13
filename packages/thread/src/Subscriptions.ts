@@ -1,5 +1,5 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
 import { Cause, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 
 import { digestJson } from "./Digest.ts";
 import { EventSources, type NormalizedEvent } from "./EventSource.ts";

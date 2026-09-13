@@ -1,45 +1,23 @@
-import {
-  ApprovalApproved,
-  ApprovalAuditMemoryLive,
-  ApprovalResolver,
-  ApprovalResolverError,
-} from "@effect-agent/capabilities/Approval";
-import { StructuralRedactorLive } from "@effect-agent/capabilities/Redaction";
-import { toDurableRunApprovalHook } from "@effect-agent/capabilities/RunHooks";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import {
-  ThreadId,
-  RunId,
-  ToolCallId,
-  TurnId,
-  type SubmissionId,
-} from "@effect-agent/core/Identifiers";
-import {
-  type RunApprovalDecision,
-  type RunApprovalHook,
-  type RunApprovalRequest,
-} from "@effect-agent/engine/RunOptions";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import {
   DurableAgentRuntime,
   DurableApprovalResolver,
   DurableRuntimeConfig,
   type DurableSubmitOptions,
-} from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/thread/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/DurableFailpoint";
+} from "@effect-agent/thread/durable-failpoint";
 import {
   DefinitionDigests,
   DeploymentId,
   Digest,
   ProducerId,
   type CanonicalRecordEnvelope,
-} from "@effect-agent/thread/Records";
-import { runIdForSubmission } from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/records";
+import { runIdForSubmission } from "@effect-agent/thread/run-journal";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -48,14 +26,30 @@ import {
   SubmissionLedger,
   SubmissionLookupById,
   ClaimRequest,
-} from "@effect-agent/thread/SubmissionLedger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
+import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import {
+  ApprovalApproved,
+  ApprovalAuditMemoryLive,
+  ApprovalResolver,
+  ApprovalResolverError,
+} from "effect-agent/approval";
+import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "effect-agent/identifiers";
+import { StructuralRedactorLive } from "effect-agent/redaction";
+import { toDurableRunApprovalHook } from "effect-agent/run-hooks";
+import {
+  type RunApprovalDecision,
+  type RunApprovalHook,
+  type RunApprovalRequest,
+} from "effect-agent/run-options";
 import { LanguageModel, Model, Response, Tool, Toolkit, type Prompt } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));

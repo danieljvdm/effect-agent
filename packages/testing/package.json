@@ -16,13 +16,13 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./Certification": "./src/Certification.ts",
-    "./Chaos": "./src/Chaos.ts",
-    "./CodeExecutorConformance": "./src/CodeExecutorConformance.ts",
-    "./CodeExecutorSubstitute": "./src/CodeExecutorSubstitute.ts",
-    "./DocsResearcher": "./src/DocsResearcher.ts",
-    "./ScriptedModel": "./src/ScriptedModel.ts",
-    "./TravelPlanner": "./src/TravelPlanner.ts"
+    "./certification": "./src/Certification.ts",
+    "./chaos": "./src/Chaos.ts",
+    "./code-executor-conformance": "./src/CodeExecutorConformance.ts",
+    "./code-executor-substitute": "./src/CodeExecutorSubstitute.ts",
+    "./docs-researcher": "./src/DocsResearcher.ts",
+    "./scripted-model": "./src/ScriptedModel.ts",
+    "./travel-planner": "./src/TravelPlanner.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -33,11 +33,8 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/capabilities": "workspace:*",
-    "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
-    "@effect-agent/sandbox": "workspace:*",
-    "@effect-agent/thread": "workspace:*"
+    "@effect-agent/thread": "workspace:*",
+    "effect-agent": "workspace:*"
   },
   "devDependencies": {
     "@effect-agent/platform-node": "workspace:*",

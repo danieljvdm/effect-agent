@@ -1,7 +1,7 @@
 import {
   SqliteStorageConfig,
   SqliteStorageConfigValue,
-} from "@effect-agent/storage-sqlite/SqliteStorageConfig";
+} from "@effect-agent/storage-sqlite/sqlite-storage-config";
 import {
   SqliteStorageFailpointError,
   type SqliteStorageFailpointLocation,
@@ -9,16 +9,16 @@ import {
   SqliteStorageCorruptionError,
   SqliteStorageError,
   SqliteWriteContention,
-} from "@effect-agent/storage-sqlite/SqliteStorageError";
-import { type SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/SqliteStorageFailpoint";
-import { ledgerLayer } from "@effect-agent/storage-sqlite/SqliteSubmissionLedger";
+} from "@effect-agent/storage-sqlite/sqlite-storage-error";
+import { type SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
+import { ledgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
 import {
   threadStoreLayer,
   layer,
   type SqliteStorageInitializationError,
-} from "@effect-agent/storage-sqlite/SqliteThreadStore";
-import { SqliteStorageFailpointTestControl } from "@effect-agent/storage-sqlite/testing/SqliteStorageFailpointTesting";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+} from "@effect-agent/storage-sqlite/sqlite-thread-store";
+import { SqliteStorageFailpointTestControl } from "@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
 import {
   CanonicalBatch,
   CanonicalRecord,
@@ -28,11 +28,11 @@ import {
   RunCompleted,
   UserInputRecorded,
   type CanonicalRecordPayload,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   threadStoreConformanceCases,
   threadCheckpointConformanceCases,
-} from "@effect-agent/thread/testing/ThreadStoreConformance";
+} from "@effect-agent/thread/testing/thread-store-conformance";
 import {
   ThreadCheckpoint,
   ThreadTailRequest,
@@ -47,7 +47,7 @@ import {
   SaveCheckpointRequest,
   SaveRecoveryCheckpointRequest,
   type AppendResult,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, describe, it } from "@effect/vitest";
@@ -1437,4 +1437,4 @@ describe("SqliteThreadStore", () => {
     ),
   );
 });
-import { SubmissionId } from "@effect-agent/core/Identifiers";
+import { SubmissionId } from "effect-agent/identifiers";

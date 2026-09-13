@@ -1,14 +1,14 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import { SubagentRuntime } from "@effect-agent/capabilities/Subagent";
-import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
-import * as Agent from "@effect-agent/core/Agent";
-import { digestDefinitions } from "@effect-agent/thread/Digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { AbortCommand } from "@effect-agent/thread/SubmissionLedger";
-import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
+import { digestDefinitions } from "@effect-agent/thread/digest";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { AbortCommand } from "@effect-agent/thread/submission-ledger";
+import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Fiber, FileSystem, Layer, Ref, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentRuntime } from "effect-agent/subagent";
+import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { Toolkit, type Response } from "effect/unstable/ai";
 
 import {

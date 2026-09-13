@@ -1,6 +1,7 @@
-import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
-import { layerTransient } from "@effect-agent/engine/ThreadHistory";
 import { Layer } from "effect";
+
+import { SubagentReservationsMemoryLive } from "./capabilities/SubagentReservations.ts";
+import { layerTransient } from "./engine/ThreadHistory.ts";
 
 /**
  * Run agents and attached subagents without retaining completed history.

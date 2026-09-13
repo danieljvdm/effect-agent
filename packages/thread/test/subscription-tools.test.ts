@@ -1,13 +1,13 @@
-import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
-import { DurableStep, DurableStepError } from "@effect-agent/engine/DurableStep";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
-import { Principal } from "@effect-agent/thread/SubmissionLedger";
-import { SubscriptionSnapshot, type SubscriptionScope } from "@effect-agent/thread/Subscription";
-import { Subscriptions, type SubscribeOptions } from "@effect-agent/thread/Subscriptions";
-import { SubscriptionTools, subscriptionToolsLayer } from "@effect-agent/thread/SubscriptionTools";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
+import { Principal } from "@effect-agent/thread/submission-ledger";
+import { SubscriptionSnapshot, type SubscriptionScope } from "@effect-agent/thread/subscription";
+import { SubscriptionTools, subscriptionToolsLayer } from "@effect-agent/thread/subscription-tools";
+import { Subscriptions, type SubscribeOptions } from "@effect-agent/thread/subscriptions";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
+import { DurableStep, DurableStepError } from "effect-agent/durable-step";
+import { AgentId, ThreadId } from "effect-agent/identifiers";
 
 const digest = Schema.decodeSync(Digest)("c".repeat(64));
 const principal = Schema.decodeSync(Principal)("tool-principal");

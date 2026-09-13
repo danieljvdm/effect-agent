@@ -1,21 +1,4 @@
-import { SubagentPrestartDenied } from "@effect-agent/capabilities/Subagent";
-import {
-  SubagentBudgetExhausted,
-  type SubagentParentBudgetView,
-  SubagentReservations,
-  SubagentReservationsMemoryLive,
-  type SubagentReservationView,
-} from "@effect-agent/capabilities/SubagentReservations";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { RunId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import { type RunEvent } from "@effect-agent/core/RunEvent";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { AgentSpawner } from "@effect-agent/engine/AgentRuntime";
-import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/ScriptedModel";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import {
   AirportCode,
   CatalogLifecycle,
@@ -43,9 +26,26 @@ import {
   researcherHappyPathTurns,
   researchMission,
   TravelCoordinator,
-} from "@effect-agent/testing/TravelPlanner";
+} from "@effect-agent/testing/travel-planner";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import { AgentSpawner } from "effect-agent/agent-runtime";
+import { IdGenerator } from "effect-agent/id-generator";
+import { RunId, ToolCallId } from "effect-agent/identifiers";
+import { type RunEvent } from "effect-agent/run-event";
+import { RunContextPreparationPassthrough } from "effect-agent/run-options";
+import { SubagentPrestartDenied } from "effect-agent/subagent";
+import {
+  SubagentBudgetExhausted,
+  type SubagentParentBudgetView,
+  SubagentReservations,
+  SubagentReservationsMemoryLive,
+  type SubagentReservationView,
+} from "effect-agent/subagent-reservations";
+import { ThreadHistory } from "effect-agent/thread-history";
 import { Model, Tool, Toolkit } from "effect/unstable/ai";
 
 const decodeRunId = Schema.decodeSync(RunId);

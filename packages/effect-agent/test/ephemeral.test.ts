@@ -3,16 +3,16 @@ import { Context, Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response, Toolkit } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
 
-import * as Agent from "../src/Agent.ts";
-import * as AgentRuntime from "../src/AgentRuntime.ts";
+import * as Subagent from "../src/capabilities/Subagent.ts";
+import { type SubagentReservations } from "../src/capabilities/SubagentReservations.ts";
+import * as Agent from "../src/core/Agent.ts";
+import { RunId, ThreadId, TurnId } from "../src/core/Identifiers.ts";
+import { IdGenerator } from "../src/core/IdGenerator.ts";
+import { SubagentDelegationCaps } from "../src/core/SubagentContract.ts";
+import * as AgentRuntime from "../src/engine/AgentRuntime.ts";
+import { RunContextPreparation } from "../src/engine/RunOptions.ts";
+import { ThreadHistory } from "../src/engine/ThreadHistory.ts";
 import * as Ephemeral from "../src/Ephemeral.ts";
-import { RunId, ThreadId, TurnId } from "../src/Identifiers.ts";
-import { IdGenerator } from "../src/IdGenerator.ts";
-import { RunContextPreparation } from "../src/RunOptions.ts";
-import * as Subagent from "../src/Subagent.ts";
-import { SubagentDelegationCaps } from "../src/SubagentContract.ts";
-import { type SubagentReservations } from "../src/SubagentReservations.ts";
-import { ThreadHistory } from "../src/ThreadHistory.ts";
 
 const answer: ReadonlyArray<Response.StreamPartEncoded> = [
   { type: "text-start", id: "answer" },

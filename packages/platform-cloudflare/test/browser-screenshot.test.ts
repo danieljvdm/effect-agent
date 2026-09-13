@@ -3,16 +3,16 @@ import {
   BrowserQuickActionRpcError,
   browserQuickActionScreenshotLayer,
   type BrowserQuickActionClient,
-} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
-import { PageHtmlTarget, PageUrlTarget } from "@effect-agent/sandbox/PageCapture";
+} from "@effect-agent/platform-cloudflare/cloudflare-browser";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Logger } from "effect";
+import { PageHtmlTarget, PageUrlTarget } from "effect-agent/page-capture";
 import {
   PageScreenshot,
   PageScreenshotLimits,
   PageScreenshotRequest,
   type PageScreenshotError,
   type PageScreenshotResult,
-} from "@effect-agent/sandbox/PageScreenshot";
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Logger } from "effect";
+} from "effect-agent/page-screenshot";
 import { describe, expect, it } from "vite-plus/test";
 
 type LayerRequirements<Value> =

@@ -12,7 +12,7 @@ import {
   ScheduleRecord,
   ScheduleStorageError,
   ScheduleStore,
-} from "@effect-agent/thread/Schedule";
+} from "@effect-agent/thread/schedule";
 import {
   scheduleUsesCapacity,
   applyScheduleChange,
@@ -22,7 +22,7 @@ import {
   scheduleKeyString,
   scheduleKeyOf,
   scheduleOwnerKey,
-} from "@effect-agent/thread/ScheduleTransition";
+} from "@effect-agent/thread/schedule-transition";
 import { Effect, Layer, Ref, Result, Schema } from "effect";
 
 interface MemoryScheduleState {

@@ -5,7 +5,7 @@ import {
   ReviewSearchMatch,
   ReviewSearchResult,
   ReviewSource,
-} from "@effect-agent/pr-review/ReviewRepository";
+} from "@effect-agent/pr-review/review-repository";
 import { Effect, Layer } from "effect";
 
 import { type EvalRepositorySnapshot } from "./contracts.ts";

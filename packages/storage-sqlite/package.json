@@ -16,17 +16,17 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./SqliteActivityStore": "./src/SqliteActivityStore.ts",
-    "./SqliteScheduleStore": "./src/SqliteScheduleStore.ts",
-    "./SqliteStorageConfig": "./src/SqliteStorageConfig.ts",
-    "./SqliteStorageError": "./src/SqliteStorageError.ts",
-    "./SqliteStorageFailpoint": "./src/SqliteStorageFailpoint.ts",
-    "./SqliteStorageVersion": "./src/SqliteStorageVersion.ts",
-    "./SqliteSubmissionLedger": "./src/SqliteSubmissionLedger.ts",
-    "./SqliteSubscriptionStore": "./src/SqliteSubscriptionStore.ts",
-    "./SqliteThreadStore": "./src/SqliteThreadStore.ts",
-    "./testing/SqliteStorageFailpointTesting": "./src/SqliteStorageFailpointTesting.ts",
-    "./SqliteMessageDeliveryStore": "./src/SqliteMessageDeliveryStore.ts"
+    "./sqlite-activity-store": "./src/SqliteActivityStore.ts",
+    "./sqlite-schedule-store": "./src/SqliteScheduleStore.ts",
+    "./sqlite-storage-config": "./src/SqliteStorageConfig.ts",
+    "./sqlite-storage-error": "./src/SqliteStorageError.ts",
+    "./sqlite-storage-failpoint": "./src/SqliteStorageFailpoint.ts",
+    "./sqlite-storage-version": "./src/SqliteStorageVersion.ts",
+    "./sqlite-submission-ledger": "./src/SqliteSubmissionLedger.ts",
+    "./sqlite-subscription-store": "./src/SqliteSubscriptionStore.ts",
+    "./sqlite-thread-store": "./src/SqliteThreadStore.ts",
+    "./testing/sqlite-storage-failpoint-testing": "./src/SqliteStorageFailpointTesting.ts",
+    "./sqlite-message-delivery-store": "./src/SqliteMessageDeliveryStore.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -37,10 +37,10 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/core": "workspace:*",
     "@effect-agent/thread": "workspace:*",
     "@effect/platform-node": "catalog:",
-    "@effect/sql-sqlite-node": "catalog:"
+    "@effect/sql-sqlite-node": "catalog:",
+    "effect-agent": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

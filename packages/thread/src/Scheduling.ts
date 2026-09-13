@@ -1,4 +1,3 @@
-import { type AgentId, ThreadId } from "@effect-agent/core/Identifiers";
 import {
   Cause,
   Context,
@@ -11,6 +10,7 @@ import {
   Schema,
   Semaphore,
 } from "effect";
+import { type AgentId, ThreadId } from "effect-agent/identifiers";
 
 import { digestJson } from "./Digest.ts";
 import type { DurableSubmitAgent } from "./DurableAgentRuntime.ts";

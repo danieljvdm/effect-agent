@@ -1,5 +1,8 @@
-import { digestJson } from "@effect-agent/thread/Digest";
-import { MessageDeliveryStore, prepareMessageDelivery } from "@effect-agent/thread/MessageDelivery";
+import { digestJson } from "@effect-agent/thread/digest";
+import {
+  MessageDeliveryStore,
+  prepareMessageDelivery,
+} from "@effect-agent/thread/message-delivery";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Clock, Effect } from "effect";
 import { DurableObject } from "effect-cf";

@@ -1,7 +1,7 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import { Receipt } from "@effect-agent/core/Receipt";
-import { WorkerUpdate } from "@effect-agent/core/Worker";
 import { Clock, Context, Crypto, Effect, Layer, Result, Schema, Semaphore } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
+import { Receipt } from "effect-agent/receipt";
+import { WorkerUpdate } from "effect-agent/worker";
 
 import { digestJson } from "./Digest.ts";
 import { admitPreparedInput, PreparedInputAdmission } from "./PreparedInputAdmission.ts";

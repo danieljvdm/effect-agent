@@ -1,14 +1,14 @@
-import { ToolCallId } from "@effect-agent/core/Identifiers";
-import { type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
-import { type CanonicalRecordEnvelope, type SubagentStarted } from "@effect-agent/thread/Records";
+import { type Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { type CanonicalRecordEnvelope, type SubagentStarted } from "@effect-agent/thread/records";
 import {
   childThreadIdFor,
   runIdForSubmission,
   toolCallSettledRecordId,
-} from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/run-journal";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";
+import { ToolCallId } from "effect-agent/identifiers";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { expect } from "vite-plus/test";
 

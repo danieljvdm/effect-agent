@@ -1,4 +1,4 @@
-import { MessageDeliveryFailpoint } from "@effect-agent/thread/MessageDelivery";
+import { MessageDeliveryFailpoint } from "@effect-agent/thread/message-delivery";
 import { Context, Effect, Layer } from "effect";
 import { DurableObjectState } from "effect-cf";
 

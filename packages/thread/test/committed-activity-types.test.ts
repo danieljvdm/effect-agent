@@ -1,24 +1,24 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
 import {
   ActivityProcessorKey,
   type ActivityProcessorStore,
   type ActivityStoreFailure,
   type PreparedActivity,
-} from "@effect-agent/thread/ActivityStore";
+} from "@effect-agent/thread/activity-store";
 import {
   ActivityPassLimits,
   processCommittedActivity,
   type ActivityProcessingError,
-} from "@effect-agent/thread/CommittedActivity";
-import { type DigestError } from "@effect-agent/thread/Digest";
-import { type PersistedJson } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/committed-activity";
+import { type DigestError } from "@effect-agent/thread/digest";
+import { type PersistedJson } from "@effect-agent/thread/records";
 import {
   type ThreadNotMaterialized,
   type ThreadStore,
   type ThreadStoreError,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Schema, type Crypto, type Scope } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 
 type Equal<L, R> =
   (<T>() => T extends L ? 1 : 2) extends <T>() => T extends R ? 1 : 2

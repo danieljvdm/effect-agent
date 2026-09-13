@@ -1,27 +1,27 @@
-import type { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import type { UpdateError } from "@effect-agent/core/AgentUpdates";
-import { type ThreadId, type SubmissionId } from "@effect-agent/core/Identifiers";
-import type { MessagingError } from "@effect-agent/core/Messaging";
-import type { WorkerError } from "@effect-agent/core/Worker";
-import type { MessagingHost } from "@effect-agent/engine/MessagingHost";
-import type { SubagentHost } from "@effect-agent/engine/SubagentHost";
-import { type DurableBindingFailure } from "@effect-agent/thread/AgentRegistration";
+import { type DurableBindingFailure } from "@effect-agent/thread/agent-registration";
 import {
   type DurableAgentRuntime,
   type DurableAwaitFailure,
   type DurableWorkerFailure,
   type RecoveryReport,
-} from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/thread/durable-agent-runtime";
 import {
   type Settlement,
   type Principal,
   type SubmissionLedger,
   type LedgerError,
-} from "@effect-agent/thread/SubmissionLedger";
-import { type SubmissionStatus } from "@effect-agent/thread/SubmissionStatus";
-import type { ThreadStore } from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/submission-ledger";
+import { type SubmissionStatus } from "@effect-agent/thread/submission-status";
+import type { ThreadStore } from "@effect-agent/thread/thread-store";
 import { expectTypeOf, it } from "@effect/vitest";
 import { Context, Effect, Layer, Option, type Crypto, type DateTime } from "effect";
+import type { AgentPolicy } from "effect-agent/agent-policy";
+import type { UpdateError } from "effect-agent/agent-updates";
+import { type ThreadId, type SubmissionId } from "effect-agent/identifiers";
+import type { MessagingError } from "effect-agent/messaging";
+import type { MessagingHost } from "effect-agent/messaging-host";
+import type { SubagentHost } from "effect-agent/subagent-host";
+import type { WorkerError } from "effect-agent/worker";
 
 import type { DurableRuntimeFailpoint } from "../src/DurableFailpoint.ts";
 import type { makeAgentUpdateRuntime } from "../src/internal/agent-updates.ts";

@@ -6,7 +6,7 @@ import {
   SubscriptionDeliverySnapshot,
   SubscriptionRecord,
   SubscriptionSnapshot,
-} from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/subscription";
 import { describe, expect, it } from "@effect/vitest";
 import { Schema } from "effect";
 

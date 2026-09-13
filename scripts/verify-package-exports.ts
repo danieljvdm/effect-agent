@@ -22,6 +22,13 @@ class PackageExportsError extends Schema.TaggedError<PackageExportsError>()("Pac
 const propertyName = (node: ts.PropertyName): string | undefined =>
   ts.isIdentifier(node) || ts.isStringLiteral(node) ? node.text : undefined;
 
+const frameworkLayers: Readonly<Record<string, ReadonlyArray<string>>> = {
+  core: ["core"],
+  engine: ["core", "engine"],
+  sandbox: ["core", "sandbox"],
+  capabilities: ["core", "engine", "sandbox", "capabilities"],
+};
+
 const walk = (node: ts.Node, visit: (node: ts.Node) => void): void => {
   visit(node);
   ts.forEachChild(node, (child) => walk(child, visit));
@@ -103,11 +110,31 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
       const { manifest } = pkg;
 
       if (!manifest.private) {
-        const filenames = new Set(yield* fs.readDirectory(path.join(root, base, "src")));
+        const filenames = new Set<string>();
+        const directories = [""];
+
+        while (directories.length > 0) {
+          const directory = directories.pop();
+
+          if (directory === undefined) break;
+          for (const filename of yield* fs.readDirectory(path.join(root, base, "src", directory))) {
+            const relative = directory === "" ? filename : `${directory}/${filename}`;
+
+            if ((yield* fs.stat(path.join(root, base, "src", relative))).type === "Directory") {
+              directories.push(relative);
+            } else {
+              filenames.add(relative);
+            }
+          }
+        }
         const targets = Object.values(manifest.exports);
 
         for (const filename of filenames) {
-          if (filename.endsWith(".ts") && !targets.includes(`./src/${filename}`)) {
+          if (
+            filename.endsWith(".ts") &&
+            !filename.includes("/") &&
+            !targets.includes(`./src/${filename}`)
+          ) {
             report(
               pkg.file,
               `Unpublished source root module ./src/${filename} must move under internal/`,
@@ -122,19 +149,18 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
           entries++;
           if (
             key !== "." &&
-            (!/^\.\/[A-Za-z][A-Za-z0-9-]*(?:\/[A-Za-z][A-Za-z0-9-]*)*$/.test(key) ||
+            (!/^\.\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\/[a-z][a-z0-9]*(?:-[a-z0-9]+)*)*$/.test(key) ||
               key.split("/").some((part) => part === "internal" || part === "index"))
           ) {
             report(
               pkg.file,
-              `${key} must be an explicit public module or group path, excluding internal and index paths`,
+              `${key} must be an explicit kebab-case public module or group path, excluding internal and index paths`,
             );
           }
-          // The release publisher currently maps flat source entries to flat dist artifacts.
-          if (!/^\.\/src\/[A-Za-z][A-Za-z0-9_-]*\.ts$/.test(target))
+          if (!/^\.\/src\/(?:[A-Za-z][A-Za-z0-9_-]*\/)*[A-Za-z][A-Za-z0-9_-]*\.ts$/.test(target))
             report(
               pkg.file,
-              `${target} must be a flat ./src/Module.ts entry supported by the publisher`,
+              `${target} must be a source module under ./src/ supported by the publisher`,
             );
           if (!filenames.has(target.slice("./src/".length)))
             report(pkg.file, `${target} is missing or has different filesystem casing`);
@@ -173,13 +199,10 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
           namespaces.add(name);
           if (
             !/^[A-Z][A-Za-z0-9]*$/.test(name) ||
-            statement.moduleSpecifier.text !== `./${name}.ts` ||
-            !targets.includes(`./src/${name}.ts`)
+            !statement.moduleSpecifier.text.endsWith(`/${name}.ts`) ||
+            !targets.includes(`./src/${statement.moduleSpecifier.text.slice(2)}`)
           ) {
-            report(
-              index.fileName,
-              `${name} must reference the published same-name module ./${name}.ts`,
-            );
+            report(index.fileName, `${name} must reference a published same-name source module`);
           }
         }
         const config = yield* parse(`${base}/vite.config.ts`);
@@ -292,6 +315,13 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
               imports.push({ specifier: node.arguments[0].text, typeOnly: false });
           });
           for (const { specifier, typeOnly } of imports) {
+            const layer =
+              pkg.manifest.name === "effect-agent" && relative.startsWith("src/")
+                ? relative.split("/")[1]
+                : undefined;
+
+            const allowedLayers = layer === undefined ? undefined : frameworkLayers[layer];
+
             if (specifier.startsWith(".")) {
               const resolved = path
                 .relative(root, path.resolve(root, path.dirname(file), specifier))
@@ -299,8 +329,27 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
 
               if (resolved.startsWith("packages/") && !resolved.startsWith(`${base}/`))
                 report(file, `Import ${specifier} must use the owning package's public module`);
+              if (allowedLayers !== undefined) {
+                const targetLayer = resolved.slice(`${base}/src/`.length).split("/")[0];
+
+                if (targetLayer === undefined || !allowedLayers.includes(targetLayer))
+                  report(
+                    file,
+                    `${layer} cannot import ${specifier}; framework dependencies must point inward`,
+                  );
+              }
               continue;
             }
+
+            if (
+              allowedLayers !== undefined &&
+              specifier !== "effect" &&
+              !specifier.startsWith("effect/")
+            )
+              report(
+                file,
+                `${layer} must use relative framework imports or platform-neutral Effect modules: ${specifier}`,
+              );
 
             const name = specifier.startsWith("@")
               ? specifier.split("/").slice(0, 2).join("/")

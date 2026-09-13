@@ -1,27 +1,8 @@
-import * as Memory from "@effect-agent/core/Memory";
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
-import { MemoryNamespaceAddress } from "@effect-agent/core/MemoryNamespace";
-import { type MemoryLookup, MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
-import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
-import {
-  type MemoryReader,
-  type MemoryWrite,
-  MemoryKey,
-  MemoryDocument,
-  MemoryMutationFailpoint,
-  MemoryStorageError,
-  MemoryWriter,
-} from "@effect-agent/core/MemoryStore";
-import {
-  type MemoryIndexSearch,
-  type SemanticMemoryProfile,
-} from "@effect-agent/core/SemanticMemoryIndex";
-import { type SemanticCandidateLimits } from "@effect-agent/core/SemanticMemoryRevalidation";
 import {
   type DoMemoryStorageLimits,
   defaultDoMemoryStorageLimits,
   doMemoryStoreLayerWithFailpoints,
-} from "@effect-agent/storage-cloudflare/DoMemoryStore";
+} from "@effect-agent/storage-cloudflare/do-memory-store";
 import {
   type MemoryOwnerAuthorizer,
   decodeMemoryWire,
@@ -34,9 +15,28 @@ import {
   MemoryRpcError,
   MemoryRpcLimits,
   type MemoryOwnerFailure,
-} from "@effect-agent/storage-cloudflare/MemoryProtocol";
-import { Principal } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/storage-cloudflare/memory-protocol";
+import { Principal } from "@effect-agent/thread/submission-ledger";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
+import * as Memory from "effect-agent/memory";
+import * as MemoryNamespace from "effect-agent/memory-namespace";
+import { MemoryNamespaceAddress } from "effect-agent/memory-namespace";
+import { type MemoryLookup, MemoryRecallLimits } from "effect-agent/memory-reference";
+import { MemoryAccess } from "effect-agent/memory-revalidation";
+import {
+  type MemoryReader,
+  type MemoryWrite,
+  MemoryKey,
+  MemoryDocument,
+  MemoryMutationFailpoint,
+  MemoryStorageError,
+  MemoryWriter,
+} from "effect-agent/memory-store";
+import {
+  type MemoryIndexSearch,
+  type SemanticMemoryProfile,
+} from "effect-agent/semantic-memory-index";
+import { type SemanticCandidateLimits } from "effect-agent/semantic-memory-revalidation";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectState,

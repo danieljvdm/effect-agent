@@ -1,16 +1,9 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
-import {
-  type RunApprovalDecision,
-  type RunApprovalHook,
-  type RunApprovalRequest,
-} from "@effect-agent/engine/RunOptions";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+} from "@effect-agent/platform-node/node-durable-agent-runtime";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import {
   assertSettledBookingsExistAtSupplier,
   bookFlightIdempotencyKey,
@@ -27,23 +20,23 @@ import {
   TravelPlannerPhase5,
   TravelSupplierReconcilerLayer,
   TripRequest,
-} from "@effect-agent/testing/TravelPlanner";
+} from "@effect-agent/testing/travel-planner";
 import {
   DurableAgentRuntime,
   DurableApprovalResolver,
   DurableRuntimeConfig,
-} from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/thread/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/DurableFailpoint";
-import { PersistedJson, type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/durable-failpoint";
+import { PersistedJson, type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import {
   promptFromCanonicalRecords,
   runIdForSubmission,
   toolCallPreparedRecordId,
   toolStepSettledRecordId,
-} from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/run-journal";
 import {
   ApprovalDecisionCommand,
   IdempotencyKey,
@@ -51,11 +44,11 @@ import {
   SubmissionLedger,
   SubmissionLookupById,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/SubmissionLedger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
+import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import type { PlatformError } from "effect";
@@ -73,6 +66,13 @@ import {
   Schema,
   Stream,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { ThreadId, ToolCallId, type SubmissionId } from "effect-agent/identifiers";
+import {
+  type RunApprovalDecision,
+  type RunApprovalHook,
+  type RunApprovalRequest,
+} from "effect-agent/run-options";
 import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
 
 const decodeThreadId = Schema.decodeSync(ThreadId);

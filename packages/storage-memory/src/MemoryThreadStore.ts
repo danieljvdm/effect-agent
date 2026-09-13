@@ -1,5 +1,4 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
 import {
   type ProducerEpoch,
   type RecordId,
@@ -8,7 +7,7 @@ import {
   ObservationOffset,
   type BatchId,
   type Digest,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   type ThreadCheckpoint,
   AppendConflict,
@@ -32,7 +31,7 @@ import {
   SaveRecoveryCheckpointRequest,
   type ThreadRecoveryCheckpoints,
   MAX_THREAD_EXPORT_RECORDS,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import {
   Context,
   Crypto,
@@ -45,6 +44,7 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 
 const MAX_THREADS = 256;
 const MAX_RECORDS_PER_THREAD = MAX_THREAD_EXPORT_RECORDS;

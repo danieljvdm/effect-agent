@@ -1,6 +1,6 @@
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Context, Effect, Layer, Option, Predicate, Schema, type Duration } from "effect";
+import { ToolExecutionClass } from "effect-agent/durable-step";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";

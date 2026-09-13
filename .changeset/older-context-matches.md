@@ -1,7 +1,5 @@
 ---
-"@effect-agent/engine": patch
 "@effect-agent/thread": patch
-"@effect-agent/capabilities": patch
 "effect-agent": patch
 ---
 

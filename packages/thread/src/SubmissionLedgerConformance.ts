@@ -1,21 +1,21 @@
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { type ReceiptId } from "@effect-agent/core/Identifiers";
+import type { Crypto } from "effect";
+import { Clock, DateTime, Duration, Effect, Option, Result, Schema, Stream } from "effect";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { type ReceiptId } from "effect-agent/identifiers";
 import {
   AgentId,
   ThreadId,
   SubmissionId,
   ToolCallId,
   DelegationId,
-} from "@effect-agent/core/Identifiers";
-import { InputMessage, MessageAdmission } from "@effect-agent/core/Messaging";
+} from "effect-agent/identifiers";
+import { InputMessage, MessageAdmission } from "effect-agent/messaging";
 import {
   SubagentDelegationCaps,
   SubagentGrant,
   SubagentReservationAmounts,
-} from "@effect-agent/core/SubagentContract";
-import { WorkerCompletion, WorkerUpdate } from "@effect-agent/core/Worker";
-import type { Crypto } from "effect";
-import { Clock, DateTime, Duration, Effect, Option, Result, Schema, Stream } from "effect";
+} from "effect-agent/subagent-contract";
+import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
 import { TestClock } from "effect/testing";
 
 import { digestJson, type DigestError } from "./Digest.ts";

@@ -1,3 +1,4 @@
+import { Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
 import {
   PageCapture,
   PageCaptureInferencePolicyError,
@@ -19,9 +20,8 @@ import {
   type PageCaptureError,
   type PageCaptureOutput,
   type PageCaptureRequest,
-} from "@effect-agent/sandbox/PageCapture";
-import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
-import { Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
+} from "effect-agent/page-capture";
+import { SandboxImplementation } from "effect-agent/sandbox";
 import { HttpClient, HttpClientRequest, type HttpClientError } from "effect/unstable/http";
 
 import {

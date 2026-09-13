@@ -1,12 +1,12 @@
 /// <reference types="@cloudflare/workers-types" />
 import type { Browser, Frame, JSHandle, Page } from "@cloudflare/puppeteer";
-import { type InteractiveBrowserPolicy } from "@effect-agent/sandbox/InteractiveBrowser";
+import { Clock, Context, Crypto, Effect, Redacted, Schema, type Scope } from "effect";
+import { type InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import {
   CredentialOrigin,
   CredentialTarget,
   ProtectedBrowserControl,
-} from "@effect-agent/sandbox/ProtectedBrowser";
-import { Clock, Context, Crypto, Effect, Redacted, Schema, type Scope } from "effect";
+} from "effect-agent/protected-browser";
 
 import { inspectFrame, maxAttributeLength } from "./inspect-frame.ts";
 import {

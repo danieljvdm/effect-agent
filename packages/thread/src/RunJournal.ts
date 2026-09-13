@@ -1,25 +1,15 @@
-import {
-  ThreadId,
-  RunId,
-  ToolCallId,
-  TurnId,
-  type SubmissionId,
-} from "@effect-agent/core/Identifiers";
-import { type ExhaustedLimit } from "@effect-agent/core/RunEvent";
-import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
-import { type Selection, type Snapshot } from "@effect-agent/core/ToolExposure";
-import {
-  ModelCallUsage,
-  summarizeModelUsage,
-  type RunUsageSummary,
-} from "@effect-agent/core/Usage";
+import { type Crypto, Effect, Schema, Stream, type DateTime } from "effect";
 import {
   CLEARED_TOOL_RESULT,
   COMPACTION_SUMMARY_PREFIX,
   contextWindowId,
   contextWindowMessage,
-} from "@effect-agent/engine/Compaction";
-import { type Crypto, Effect, Schema, Stream, type DateTime } from "effect";
+} from "effect-agent/compaction";
+import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "effect-agent/identifiers";
+import { type ExhaustedLimit } from "effect-agent/run-event";
+import { RunPolicyUsage } from "effect-agent/run-policy-usage";
+import { type Selection, type Snapshot } from "effect-agent/tool-exposure";
+import { ModelCallUsage, summarizeModelUsage, type RunUsageSummary } from "effect-agent/usage";
 import { Prompt } from "effect/unstable/ai";
 
 import { digestJson, type DigestError } from "./Digest.ts";

@@ -1,5 +1,4 @@
 ---
-"@effect-agent/engine": minor
 ---
 
 Model-visible output contract (#41, #55, RUN-028/TEST-016): every model request of a Run whose

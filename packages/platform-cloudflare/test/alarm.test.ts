@@ -1,5 +1,5 @@
-import { DurableAlarmService, ThreadMutationGate } from "@effect-agent/platform-cloudflare/Alarm";
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
+import { DurableAlarmService, ThreadMutationGate } from "@effect-agent/platform-cloudflare/alarm";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -7,7 +7,7 @@ import {
   UnknownResolutionCommand,
   RecoverySnapshotRequest,
   SubmissionLedger,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Schema } from "effect";
 import { DurableObject } from "effect-cf";

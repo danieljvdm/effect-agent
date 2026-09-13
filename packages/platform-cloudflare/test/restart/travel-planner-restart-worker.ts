@@ -1,10 +1,10 @@
 import {
   ThreadObjectNamespace,
   type ThreadObjectRpc,
-} from "@effect-agent/platform-cloudflare/CloudflareBindings";
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
-import { DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/DoStorageError";
+} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/do-storage-error";
 import {
   TravelPlannerPhase4,
   makePhase6TravelPlannerBindings,
@@ -13,10 +13,10 @@ import {
   phase6SupplierReconcilerLayer,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
-} from "@effect-agent/testing/TravelPlanner";
-import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
-import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/DurableFailpoint";
-import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+} from "@effect-agent/testing/travel-planner";
+import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/durable-failpoint";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { Effect, Layer, Schema } from "effect";
 

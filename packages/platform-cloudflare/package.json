@@ -16,22 +16,22 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./Alarm": "./src/Alarm.ts",
-    "./BrowserRestCapture": "./src/BrowserRestCapture.ts",
-    "./BrowserRestCrawl": "./src/BrowserRestCrawl.ts",
-    "./CloudflareBindings": "./src/CloudflareBindings.ts",
-    "./CloudflareBrowser": "./src/CloudflareBrowser.ts",
-    "./CloudflareCodeMode": "./src/CloudflareCodeMode.ts",
-    "./CloudflareConfig": "./src/CloudflareConfig.ts",
-    "./CloudflareMemory": "./src/CloudflareMemory.ts",
-    "./CloudflareScheduling": "./src/CloudflareScheduling.ts",
-    "./CloudflareSubscriptions": "./src/CloudflareSubscriptions.ts",
-    "./CloudflareThreadClient": "./src/CloudflareThreadClient.ts",
-    "./InteractiveBrowser": "./src/InteractiveBrowser.ts",
-    "./ProtectedBrowser": "./src/ProtectedBrowser.ts",
-    "./ThreadObject": "./src/ThreadObject.ts",
-    "./WakeScheduler": "./src/WakeScheduler.ts",
-    "./CloudflareAiGateway": "./src/CloudflareAiGateway.ts"
+    "./alarm": "./src/Alarm.ts",
+    "./browser-rest-capture": "./src/BrowserRestCapture.ts",
+    "./browser-rest-crawl": "./src/BrowserRestCrawl.ts",
+    "./cloudflare-bindings": "./src/CloudflareBindings.ts",
+    "./cloudflare-browser": "./src/CloudflareBrowser.ts",
+    "./cloudflare-code-mode": "./src/CloudflareCodeMode.ts",
+    "./cloudflare-config": "./src/CloudflareConfig.ts",
+    "./cloudflare-memory": "./src/CloudflareMemory.ts",
+    "./cloudflare-scheduling": "./src/CloudflareScheduling.ts",
+    "./cloudflare-subscriptions": "./src/CloudflareSubscriptions.ts",
+    "./cloudflare-thread-client": "./src/CloudflareThreadClient.ts",
+    "./interactive-browser": "./src/InteractiveBrowser.ts",
+    "./protected-browser": "./src/ProtectedBrowser.ts",
+    "./thread-object": "./src/ThreadObject.ts",
+    "./wake-scheduler": "./src/WakeScheduler.ts",
+    "./cloudflare-ai-gateway": "./src/CloudflareAiGateway.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -41,19 +41,16 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
-    "@effect-agent/sandbox": "workspace:*",
     "@effect-agent/storage-cloudflare": "workspace:*",
     "@effect-agent/thread": "workspace:*",
     "@effect/platform-browser": "catalog:",
-    "@effect/sql-sqlite-do": "catalog:"
+    "@effect/sql-sqlite-do": "catalog:",
+    "effect-agent": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/puppeteer": "catalog:",
     "@cloudflare/vitest-pool-workers": "catalog:",
     "@cloudflare/workers-types": "catalog:",
-    "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/testing": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-d1": "catalog:",

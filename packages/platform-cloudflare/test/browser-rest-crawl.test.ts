@@ -1,14 +1,7 @@
 import {
   browserRestCrawlImplementation,
   browserRestCrawlLayer,
-} from "@effect-agent/platform-cloudflare/BrowserRestCrawl";
-import {
-  PageCrawl,
-  PageCrawlLimits,
-  PageCrawlRequest,
-  type PageCrawlError,
-  type PageCrawlRecord,
-} from "@effect-agent/sandbox/PageCrawl";
+} from "@effect-agent/platform-cloudflare/browser-rest-crawl";
 import { describe, expect, it } from "@effect/vitest";
 import {
   Cause,
@@ -22,6 +15,13 @@ import {
   Stream,
   type Layer,
 } from "effect";
+import {
+  PageCrawl,
+  PageCrawlLimits,
+  PageCrawlRequest,
+  type PageCrawlError,
+  type PageCrawlRecord,
+} from "effect-agent/page-crawl";
 import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
@@ -747,7 +747,7 @@ describe("Browser Run REST PageCrawl adapter", () => {
   );
 
   it("loads as a Node-safe subpath", async () => {
-    const module = await import("@effect-agent/platform-cloudflare/BrowserRestCrawl");
+    const module = await import("@effect-agent/platform-cloudflare/browser-rest-crawl");
 
     expect(module.browserRestCrawlImplementation).toBe(browserRestCrawlImplementation);
   });

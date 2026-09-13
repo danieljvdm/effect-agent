@@ -1,18 +1,18 @@
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { memoryThreadStoreLayer } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { memoryThreadStoreLayer } from "@effect-agent/storage-memory/memory-thread-store";
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
   certifyDurableAdapters,
   tier2NeverFiredLocations,
-} from "@effect-agent/testing/Certification";
-import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/DurableFailpoint";
+} from "@effect-agent/testing/certification";
+import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/durable-failpoint";
 import {
   CertificationReport,
   type CertificationScenario,
-} from "@effect-agent/thread/testing/Certification";
-import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/SubmissionLedgerConformance";
-import { threadStoreConformanceCases } from "@effect-agent/thread/testing/ThreadStoreConformance";
+} from "@effect-agent/thread/testing/certification";
+import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/submission-ledger-conformance";
+import { threadStoreConformanceCases } from "@effect-agent/thread/testing/thread-store-conformance";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";

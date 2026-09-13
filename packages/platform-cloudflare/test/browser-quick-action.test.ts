@@ -1,4 +1,3 @@
-import * as WebCapture from "@effect-agent/capabilities/WebCapture";
 import {
   BrowserQuickActionBrowserBinding,
   BrowserQuickActionRpcError,
@@ -10,7 +9,19 @@ import {
   type BrowserQuickActionCaptureOptions,
   type BrowserQuickActionClient,
   type BrowserQuickActionWorkersAiPolicy,
-} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
+} from "@effect-agent/platform-cloudflare/cloudflare-browser";
+import { it as effectIt } from "@effect/vitest";
+import {
+  Context,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Schema,
+  SchemaGetter,
+  Stream,
+} from "effect";
 import {
   CapturePageContent,
   CapturePageLinks,
@@ -24,19 +35,8 @@ import {
   PageUrlTarget,
   type PageCaptureError,
   type PageCaptureResult,
-} from "@effect-agent/sandbox/PageCapture";
-import { it as effectIt } from "@effect/vitest";
-import {
-  Context,
-  Deferred,
-  Effect,
-  Fiber,
-  Layer,
-  Option,
-  Schema,
-  SchemaGetter,
-  Stream,
-} from "effect";
+} from "effect-agent/page-capture";
+import * as WebCapture from "effect-agent/web-capture";
 import { TestClock } from "effect/testing";
 import type { Tool } from "effect/unstable/ai";
 import { Toolkit } from "effect/unstable/ai";

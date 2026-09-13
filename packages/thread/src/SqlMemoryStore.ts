@@ -1,4 +1,5 @@
-import { MemoryNamespaceAddress } from "@effect-agent/core/MemoryNamespace";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
+import { MemoryNamespaceAddress } from "effect-agent/memory-namespace";
 import {
   applyMemoryWrite,
   MemoryDocument,
@@ -10,8 +11,7 @@ import {
   MemoryStorageError,
   MemoryWrite,
   MemoryWriter,
-} from "@effect-agent/core/MemoryStore";
-import { Clock, Context, Effect, Layer, Schema } from "effect";
+} from "effect-agent/memory-store";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 

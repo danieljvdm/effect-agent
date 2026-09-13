@@ -1,5 +1,5 @@
-import type { PersistedJson } from "@effect-agent/thread/Records";
-import { CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import type { PersistedJson } from "@effect-agent/thread/records";
+import { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import { Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 

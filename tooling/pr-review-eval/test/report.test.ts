@@ -5,7 +5,7 @@ import {
   ReviewOutcome,
   ReviewReport,
   type ReviewSeverity,
-} from "@effect-agent/pr-review/Review";
+} from "@effect-agent/pr-review/review";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { DateTime, Effect, FileSystem, Schema, Stream } from "effect";

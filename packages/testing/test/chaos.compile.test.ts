@@ -3,17 +3,17 @@ import {
   ChaosSubmissionSpec,
   runChaosPlan,
   type ChaosConvergenceFailure,
-} from "@effect-agent/testing/Chaos";
+} from "@effect-agent/testing/chaos";
 import {
   type DurableAgentRuntime,
   type DurableRuntimeConfig,
-} from "@effect-agent/thread/DurableAgentRuntime";
-import { type DurableRuntimeFailpoint } from "@effect-agent/thread/DurableFailpoint";
-import { type SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
-import { type DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
-import { type ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { type ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { type WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/durable-agent-runtime";
+import { type DurableRuntimeFailpoint } from "@effect-agent/thread/durable-failpoint";
+import { type SubmissionLedger } from "@effect-agent/thread/submission-ledger";
+import { type DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
+import { type ThreadStore } from "@effect-agent/thread/thread-store";
+import { type ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { type WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import type { Crypto, Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 

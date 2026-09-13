@@ -1,17 +1,4 @@
-import {
-  CodeExecutionHost,
-  CodeExecutionLimits,
-  CodeExecutionNamespace,
-  CodeExecutionRequest,
-  CodeExecutor,
-  CodeHostCallFailure,
-  CodeHostCallSuccess,
-  type CodeExecutionError,
-  type CodeHostCall,
-  type CodeHostCallResult,
-} from "@effect-agent/sandbox/CodeExecutor";
-import { NetworkAllowlist, NetworkDisabled } from "@effect-agent/sandbox/Sandbox";
-import { codeExecutorConformanceCases } from "@effect-agent/testing/CodeExecutorConformance";
+import { codeExecutorConformanceCases } from "@effect-agent/testing/code-executor-conformance";
 import { DurableObject } from "cloudflare:workers";
 import {
   Cause,
@@ -26,6 +13,19 @@ import {
   Schema,
   type Layer,
 } from "effect";
+import {
+  CodeExecutionHost,
+  CodeExecutionLimits,
+  CodeExecutionNamespace,
+  CodeExecutionRequest,
+  CodeExecutor,
+  CodeHostCallFailure,
+  CodeHostCallSuccess,
+  type CodeExecutionError,
+  type CodeHostCall,
+  type CodeHostCallResult,
+} from "effect-agent/code-executor";
+import { NetworkAllowlist, NetworkDisabled } from "effect-agent/sandbox";
 
 import {
   disposeRpcHandle,

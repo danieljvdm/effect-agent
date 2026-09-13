@@ -1,25 +1,25 @@
-import type * as Agent from "@effect-agent/core/Agent";
+import { type Crypto, type Option, type Scope, Context, Effect, Layer, Schema } from "effect";
+import type * as Agent from "effect-agent/agent";
 import {
   type InputPromptSource,
   type InstructionSource,
   type ModelServices,
   type RunDispositionDeclaration,
-} from "@effect-agent/core/Agent";
-import { type ThreadId, AgentId } from "@effect-agent/core/Identifiers";
+} from "effect-agent/agent";
+import { type RuntimeBinding } from "effect-agent/agent-runtime";
+import { type ThreadId, AgentId } from "effect-agent/identifiers";
+import {
+  BackgroundReporting,
+  WorkerReportPreparationFailure,
+  type WorkerReporting,
+} from "effect-agent/subagent-host";
 import {
   AdditionalToolCatalog,
   DiscoveryTool,
   IncludesCatalogDocumentation,
   PinnedTool,
   ToolNamespace,
-} from "@effect-agent/core/ToolExposure";
-import { type RuntimeBinding } from "@effect-agent/engine/AgentRuntime";
-import {
-  BackgroundReporting,
-  WorkerReportPreparationFailure,
-  type WorkerReporting,
-} from "@effect-agent/engine/SubagentHost";
-import { type Crypto, type Option, type Scope, Context, Effect, Layer, Schema } from "effect";
+} from "effect-agent/tool-exposure";
 import { Tool } from "effect/unstable/ai";
 
 import { digestDefinitions, DigestError } from "../Digest.ts";

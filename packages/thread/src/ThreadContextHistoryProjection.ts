@@ -1,7 +1,7 @@
-import { RunId } from "@effect-agent/core/Identifiers";
-import { contextWindowId } from "@effect-agent/engine/Compaction";
-import { ContextHistoryError, ContextHistorySearch } from "@effect-agent/engine/ContextHistory";
 import { Effect, Schema } from "effect";
+import { contextWindowId } from "effect-agent/compaction";
+import { ContextHistoryError, ContextHistorySearch } from "effect-agent/context-history";
+import { RunId } from "effect-agent/identifiers";
 import { Prompt } from "effect/unstable/ai";
 
 import type { CanonicalRecordEnvelope } from "./Records.ts";

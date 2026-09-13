@@ -3,21 +3,21 @@ import {
   browserQuickActionCaptureLayer,
   browserQuickActionScreenshotLayer,
   type BrowserQuickActionClient,
-} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
+} from "@effect-agent/platform-cloudflare/cloudflare-browser";
+import { expect, it } from "@effect/vitest";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger } from "effect";
 import {
   CapturePageMarkdown,
   PageCapture,
   PageCaptureRequest,
   PageUrlTarget,
   type PageCaptureError,
-} from "@effect-agent/sandbox/PageCapture";
+} from "effect-agent/page-capture";
 import {
   PageScreenshot,
   PageScreenshotRequest,
   type PageScreenshotError,
-} from "@effect-agent/sandbox/PageScreenshot";
-import { expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Logger } from "effect";
+} from "effect-agent/page-screenshot";
 import { TestClock } from "effect/testing";
 
 const capture = (

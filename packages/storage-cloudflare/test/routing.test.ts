@@ -1,14 +1,14 @@
-import { ledgerLayer } from "@effect-agent/storage-cloudflare/DoSubmissionLedger";
-import { layer as storeLayer } from "@effect-agent/storage-cloudflare/DoThreadStore";
+import { ledgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
+import { layer as storeLayer } from "@effect-agent/storage-cloudflare/do-thread-store";
 import {
   ThreadPortTransport,
   PortTransportError,
   portTransportFailure,
   routedThreadStoreLayer,
   routedSubmissionLedgerLayer,
-} from "@effect-agent/storage-cloudflare/PortRouting";
-import { digestJson, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
-import { type PersistedJson } from "@effect-agent/thread/Records";
+} from "@effect-agent/storage-cloudflare/port-routing";
+import { digestJson, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
+import { type PersistedJson } from "@effect-agent/thread/records";
 import {
   AbortCommand,
   AdmissionConflict,
@@ -37,7 +37,7 @@ import {
   WaitingChild,
   WaitingForChildSuspension,
   type Claim,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import {
   AppendConflict,
   ThreadExportRequest,
@@ -51,7 +51,7 @@ import {
   FenceRejected,
   FencedAppendRequest,
   LoadCheckpointRequest,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { runInDurableObject } from "cloudflare:test";
 import type { Crypto } from "effect";

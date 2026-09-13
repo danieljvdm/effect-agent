@@ -1,8 +1,8 @@
 /// <reference types="@cloudflare/workers-types" />
 import puppeteer, { type Browser } from "@cloudflare/puppeteer";
-import { type InteractiveBrowserPolicy } from "@effect-agent/sandbox/InteractiveBrowser";
-import { ProtectedBrowserError } from "@effect-agent/sandbox/ProtectedBrowser";
 import { Clock, Context, Crypto, Effect, Layer, Redacted, Schema, type Scope } from "effect";
+import { type InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
+import { ProtectedBrowserError } from "effect-agent/protected-browser";
 
 import { BrowserRunSessionLifecycle } from "../internal/browser-session-lifecycle.ts";
 import { makeProtectedNativeTransport, ProtectedNativeSession } from "./native.ts";

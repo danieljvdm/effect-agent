@@ -1,5 +1,5 @@
-import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@effect-agent/core/Identifiers";
 import { Effect, Result, Schema } from "effect";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "effect-agent/identifiers";
 
 import { Receipt } from "./DurableAgentRuntime.ts";
 import { DefinitionDigests, Digest, type PersistedJson } from "./Records.ts";

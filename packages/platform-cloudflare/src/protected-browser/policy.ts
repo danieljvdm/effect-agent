@@ -1,4 +1,15 @@
-import { InteractiveBrowserPolicy } from "@effect-agent/sandbox/InteractiveBrowser";
+import {
+  Clock,
+  Context,
+  Crypto,
+  Effect,
+  Layer,
+  Redacted,
+  Schema,
+  Semaphore,
+  type Scope,
+} from "effect";
+import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 /// <reference types="@cloudflare/workers-types" />
 import {
   BrowserCredentialAccess,
@@ -27,18 +38,7 @@ import {
   type ProtectedBrowserAction,
   type ProtectedCleanup,
   type ProtectedObservationState,
-} from "@effect-agent/sandbox/ProtectedBrowser";
-import {
-  Clock,
-  Context,
-  Crypto,
-  Effect,
-  Layer,
-  Redacted,
-  Schema,
-  Semaphore,
-  type Scope,
-} from "effect";
+} from "effect-agent/protected-browser";
 
 export class ProtectedTransportError extends Schema.TaggedError<ProtectedTransportError>()(
   "ProtectedTransportError",

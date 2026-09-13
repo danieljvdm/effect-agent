@@ -1,10 +1,9 @@
-import { ThreadId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+} from "@effect-agent/platform-node/node-durable-agent-runtime";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import {
   expectedTravelPlan,
   makePhase4TravelPlannerAgent,
@@ -15,16 +14,16 @@ import {
   phase4TravelPlannerSubmitOptions,
   phase4TravelPlannerWorkerLayer,
   travelPlanFromDurableSettlement,
-} from "@effect-agent/testing/TravelPlanner";
+} from "@effect-agent/testing/travel-planner";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
-} from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/thread/durable-agent-runtime";
 import {
   DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
-} from "@effect-agent/thread/DurableFailpoint";
-import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/durable-failpoint";
+import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import {
   AbortCommand,
   ClaimRequest,
@@ -33,14 +32,15 @@ import {
   ReleaseOwnershipRequest,
   SubmissionLedger,
   SubmissionLookupById,
-} from "@effect-agent/thread/SubmissionLedger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/submission-ledger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
+import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
+import { ThreadId, type SubmissionId } from "effect-agent/identifiers";
 
 const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);

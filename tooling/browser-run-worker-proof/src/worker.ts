@@ -1,10 +1,8 @@
-import * as WebCapture from "@effect-agent/capabilities/WebCapture";
-import { WebCaptureScrapeSuccess, WebCaptureSuccess } from "@effect-agent/capabilities/WebCapture";
 import {
   BrowserQuickActionBrowserBinding,
   CloudflareBrowser,
   browserQuickActionScreenshotLayer,
-} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
+} from "@effect-agent/platform-cloudflare/cloudflare-browser";
 import {
   BrowserRunHandoffRequest,
   BrowserRunCleanupError,
@@ -12,11 +10,13 @@ import {
   BrowserRunInteractiveHost,
   BrowserRunLiveViewRequest,
   BrowserRunSessionLifecycle,
-} from "@effect-agent/platform-cloudflare/InteractiveBrowser";
+} from "@effect-agent/platform-cloudflare/interactive-browser";
 import {
   browserRunProtectedLayer,
   browserRunProtectedBindingLayer,
-} from "@effect-agent/platform-cloudflare/ProtectedBrowser";
+} from "@effect-agent/platform-cloudflare/protected-browser";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { Config, Duration, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
 import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
@@ -24,15 +24,15 @@ import {
   BrowserScrollRequest,
   InteractiveBrowserPolicy,
   InteractiveBrowserActionError,
-} from "@effect-agent/sandbox/InteractiveBrowser";
-import { PageUrlTarget } from "@effect-agent/sandbox/PageCapture";
+} from "effect-agent/interactive-browser";
+import { PageUrlTarget } from "effect-agent/page-capture";
 import {
   PageScreenshot,
   PageScreenshotLimits,
   PageScreenshotRequest,
-} from "@effect-agent/sandbox/PageScreenshot";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { Config, Duration, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
+} from "effect-agent/page-screenshot";
+import * as WebCapture from "effect-agent/web-capture";
+import { WebCaptureScrapeSuccess, WebCaptureSuccess } from "effect-agent/web-capture";
 import { Worker, WorkerEnvironment } from "effect-cf";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";

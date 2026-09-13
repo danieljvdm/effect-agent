@@ -29,12 +29,8 @@
   "devDependencies": {
     "@changesets/changelog-github": "0.7.0",
     "@changesets/cli": "2.31.0",
-    "@effect-agent/capabilities": "workspace:*",
-    "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
     "@effect-agent/platform-cloudflare": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",
-    "@effect-agent/sandbox": "workspace:*",
     "@effect-agent/sandbox-local": "workspace:*",
     "@effect-agent/storage-memory": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",

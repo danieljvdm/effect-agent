@@ -1,7 +1,4 @@
 ---
-"@effect-agent/core": minor
-"@effect-agent/engine": minor
-"@effect-agent/capabilities": minor
 "@effect-agent/thread": minor
 "@effect-agent/testing": patch
 "@effect-agent/storage-memory": minor

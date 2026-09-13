@@ -4,19 +4,19 @@ import {
   type LedgerError,
   SubmissionLedger,
   type AdmissionRequest,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import {
   type SubscriptionScope,
   type SubscriptionStoreFailure,
   type SubscriptionError,
   type SubscriptionKey,
   type SubscriptionDeliveryKey,
-} from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/subscription";
 import {
   Subscriptions,
   type SubscribeOptions,
   type SubscriptionFailure,
-} from "@effect-agent/thread/Subscriptions";
+} from "@effect-agent/thread/subscriptions";
 import { expectTypeOf, it } from "@effect/vitest";
 import { Effect } from "effect";
 

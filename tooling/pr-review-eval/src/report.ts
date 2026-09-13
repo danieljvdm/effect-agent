@@ -1,4 +1,4 @@
-import { ReviewFinding, type ReviewOutcome } from "@effect-agent/pr-review/Review";
+import { ReviewFinding, type ReviewOutcome } from "@effect-agent/pr-review/review";
 import { Effect, Schema } from "effect";
 
 import {

@@ -1,25 +1,25 @@
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
+import {
+  MemoryOwnerAuthorizer,
+  MemoryOwnerIdentity,
+  MemoryRpcError,
+  type MemoryOwnerRequest,
+} from "@effect-agent/storage-cloudflare/memory-protocol";
+import { Principal } from "@effect-agent/thread/submission-ledger";
+import { Clock, Deferred, Effect, Layer, Schema } from "effect";
+import * as MemoryNamespace from "effect-agent/memory-namespace";
 import {
   type MemoryLookup,
   MemoryPassage,
   MemoryRecallLimits,
-} from "@effect-agent/core/MemoryReference";
-import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
+} from "effect-agent/memory-reference";
+import { MemoryAccess } from "effect-agent/memory-revalidation";
 import {
   MemoryScope,
   MemoryMutationFailpoint,
   MemoryMutationFailure,
   MemoryWrite,
   type MemoryMutationPoint,
-} from "@effect-agent/core/MemoryStore";
-import {
-  MemoryOwnerAuthorizer,
-  MemoryOwnerIdentity,
-  MemoryRpcError,
-  type MemoryOwnerRequest,
-} from "@effect-agent/storage-cloudflare/MemoryProtocol";
-import { Principal } from "@effect-agent/thread/SubmissionLedger";
-import { Clock, Deferred, Effect, Layer, Schema } from "effect";
+} from "effect-agent/memory-store";
 import { DurableObjectState } from "effect-cf";
 
 export const MemoryProjects = MemoryNamespace.define({

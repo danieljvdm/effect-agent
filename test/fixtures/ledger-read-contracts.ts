@@ -1,4 +1,4 @@
-import { digestJson } from "@effect-agent/thread/Digest";
+import { digestJson } from "@effect-agent/thread/digest";
 import {
   DefinitionDigests,
   DeploymentId,
@@ -7,7 +7,7 @@ import {
   RecordEnvelope,
   SubmissionSettledRecord,
   type SettlementOutcome,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   AbortCommand,
   AdmissionRequest,
@@ -23,7 +23,7 @@ import {
   submissionSettlementId,
   submissionSettlementRecordId,
   type SubmissionSnapshot,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import { Cause, DateTime, Effect, Exit, Option, Schema, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { CurrentTransformer, type Statement } from "effect/unstable/sql/Statement";

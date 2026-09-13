@@ -1,5 +1,4 @@
 ---
-"@effect-agent/sandbox": patch
 "@effect-agent/sandbox-local": patch
 ---
 

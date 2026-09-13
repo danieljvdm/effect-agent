@@ -1,7 +1,7 @@
-import type { ThreadId } from "@effect-agent/core/Identifiers";
-import { type MessageAddress, MessagingError } from "@effect-agent/core/Messaging";
-import type { Principal } from "@effect-agent/core/Receipt";
 import { Context, type Effect } from "effect";
+import type { ThreadId } from "effect-agent/identifiers";
+import { type MessageAddress, MessagingError } from "effect-agent/messaging";
+import type { Principal } from "effect-agent/receipt";
 
 /** Separate context, history, send and management grants; incoming messages grant none of them. */
 export interface PeerAuthorizationRequest {

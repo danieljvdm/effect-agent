@@ -1,5 +1,4 @@
 ---
-"@effect-agent/core": patch
 "@effect-agent/thread": patch
 "@effect-agent/testing": patch
 "@effect-agent/storage-memory": patch

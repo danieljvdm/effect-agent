@@ -1,6 +1,6 @@
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
-import * as Remembering from "@effect-agent/core/RememberingStore";
 import { Effect, Schema } from "effect";
+import * as MemoryNamespace from "effect-agent/memory-namespace";
+import * as Remembering from "effect-agent/remembering-store";
 
 import { Source } from "./remembering-contract.ts";
 

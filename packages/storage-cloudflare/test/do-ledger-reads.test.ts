@@ -1,4 +1,4 @@
-import { SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import { SubmissionLedger } from "@effect-agent/thread/submission-ledger";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer, type Crypto } from "effect";

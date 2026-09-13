@@ -1,19 +1,19 @@
-import { type DoStorageConfig } from "@effect-agent/storage-cloudflare/DoStorageConfig";
+import { type DoStorageConfig } from "@effect-agent/storage-cloudflare/do-storage-config";
 import {
   DoStorageError,
   DoValueBoundExceeded,
-} from "@effect-agent/storage-cloudflare/DoStorageError";
-import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/DoStorageFailpoint";
+} from "@effect-agent/storage-cloudflare/do-storage-error";
+import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
 import {
   ledgerLayer,
   submissionLedgerLayer,
-} from "@effect-agent/storage-cloudflare/DoSubmissionLedger";
+} from "@effect-agent/storage-cloudflare/do-submission-ledger";
 import {
   storageConfigLayer,
   type DoStorageInitializationError,
-} from "@effect-agent/storage-cloudflare/DoThreadStore";
-import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/DoStorageFailpointTesting";
-import { digestJson } from "@effect-agent/thread/Digest";
+} from "@effect-agent/storage-cloudflare/do-thread-store";
+import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing";
+import { digestJson } from "@effect-agent/thread/digest";
 import {
   AdmissionRequest,
   AdmissionPolicyError,
@@ -32,8 +32,8 @@ import {
   SubmissionLookupByKey,
   IdempotencyKey,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/SubmissionLedger";
-import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/SubmissionLedgerConformance";
+} from "@effect-agent/thread/submission-ledger";
+import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/submission-ledger-conformance";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runInDurableObject } from "cloudflare:test";

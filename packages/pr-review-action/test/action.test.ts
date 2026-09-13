@@ -1,4 +1,4 @@
-import { ReviewRepository } from "@effect-agent/pr-review/ReviewRepository";
+import { ReviewRepository } from "@effect-agent/pr-review/review-repository";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, expectTypeOf, it, layer } from "@effect/vitest";
 import { parsePatch } from "diff";

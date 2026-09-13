@@ -1,22 +1,22 @@
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
-import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/DoStorageError";
-import { layer as doThreadStoreLayer } from "@effect-agent/storage-cloudflare/DoThreadStore";
-import { StoreExportCall, encodePortRequest } from "@effect-agent/storage-cloudflare/PortProtocol";
-import { type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
-import { type DurableRuntimeFailpointLocation } from "@effect-agent/thread/DurableFailpoint";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/do-storage-error";
+import { layer as doThreadStoreLayer } from "@effect-agent/storage-cloudflare/do-thread-store";
+import { StoreExportCall, encodePortRequest } from "@effect-agent/storage-cloudflare/port-protocol";
+import { type Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { type DurableRuntimeFailpointLocation } from "@effect-agent/thread/durable-failpoint";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
   ResolutionNeverHappened,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import {
   ThreadCheckpoint,
   ThreadExportRequest,
   ThreadTailRequest,
   ThreadStore,
   SaveCheckpointRequest,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { runInDurableObject } from "cloudflare:test";
 import { DateTime, Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";

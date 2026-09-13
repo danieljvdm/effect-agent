@@ -1,32 +1,32 @@
-import * as CodeMode from "@effect-agent/capabilities/CodeMode";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
+import { inProcessCodeExecutorLayer } from "@effect-agent/testing/code-executor-substitute";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+} from "@effect-agent/thread/durable-agent-runtime";
+import { DurableRuntimeFailpoint } from "@effect-agent/thread/durable-failpoint";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/records";
+import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
+import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, layer } from "@effect/vitest";
+import { Cause, Effect, Layer, Logger, Ref, References, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as CodeMode from "effect-agent/code-mode";
+import { ToolExecutionClass } from "effect-agent/durable-step";
+import { IdGenerator } from "effect-agent/id-generator";
+import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
 import {
   RunContextPreparationPassthrough,
   toolFailureObserverLayer,
   type ToolFailureObservation,
-} from "@effect-agent/engine/RunOptions";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
-import { inProcessCodeExecutorLayer } from "@effect-agent/testing/CodeExecutorSubstitute";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-} from "@effect-agent/thread/DurableAgentRuntime";
-import { DurableRuntimeFailpoint } from "@effect-agent/thread/DurableFailpoint";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/Records";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, layer } from "@effect/vitest";
-import { Cause, Effect, Layer, Logger, Ref, References, Schema, Stream } from "effect";
+} from "effect-agent/run-options";
+import { ThreadHistory } from "effect-agent/thread-history";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import {

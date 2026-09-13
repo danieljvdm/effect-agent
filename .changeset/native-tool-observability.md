@@ -1,6 +1,5 @@
 ---
 "effect-agent": patch
-"@effect-agent/engine": patch
 "@effect-agent/platform-cloudflare": patch
 ---
 

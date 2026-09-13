@@ -1,8 +1,8 @@
 import type {
   makeSqlSubscriptionStore,
   SqlSubscriptionTransaction,
-} from "@effect-agent/thread/SqlSubscriptionStore";
-import type { SubscriptionError } from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/sql-subscription-store";
+import type { SubscriptionError } from "@effect-agent/thread/subscription";
 import { expectTypeOf, it } from "@effect/vitest";
 import type { Effect } from "effect";
 import type { SqlClient } from "effect/unstable/sql/SqlClient";

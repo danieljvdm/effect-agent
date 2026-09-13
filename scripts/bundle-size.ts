@@ -6,6 +6,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 import { analyzeMetafile, build, version as esbuildVersion } from "esbuild";
 
+import { comparisonExports } from "./internal/comparison-exports.ts";
 import { PublishManifest, withPublishManifests } from "./release-publish.ts";
 
 class BundleSizeError extends Schema.TaggedError<BundleSizeError>()("BundleSizeError", {
@@ -47,17 +48,18 @@ const BundleReport = Schema.Struct({
 
 type BundleReport = typeof BundleReport.Type;
 
-// The same consumer source is bundled against both checkouts. Direct entry points
-// added by this PR have no historical baseline; never report those as a saving.
+// Both checkouts use the same consumer source. Historical PascalCase paths are
+// aliased only in the scratch manifests so renamed modules remain comparable.
+// New modules still have no historical baseline and never count as a saving.
 const fixtures = [
   { name: "agent-root", requires: ["effect-agent"] },
-  { name: "agent-module", requires: ["effect-agent/Agent"] },
+  { name: "agent-module", requires: ["effect-agent/agent"] },
   { name: "runtime-root", requires: ["effect-agent"] },
-  { name: "runtime-module", requires: ["effect-agent/AgentRuntime"] },
-  { name: "ephemeral-root", requires: ["effect-agent/Ephemeral"] },
-  { name: "ephemeral-module", requires: ["effect-agent/Ephemeral"] },
+  { name: "runtime-module", requires: ["effect-agent/agent-runtime"] },
+  { name: "ephemeral-root", requires: ["effect-agent/ephemeral"] },
+  { name: "ephemeral-module", requires: ["effect-agent/ephemeral"] },
   { name: "lazy-root", requires: ["effect-agent"] },
-  { name: "lazy-module", requires: ["effect-agent/Agent", "effect-agent/AgentRuntime"] },
+  { name: "lazy-module", requires: ["effect-agent/agent", "effect-agent/agent-runtime"] },
 ];
 
 // Effect has no compression platform service. Keep Node's zlib at this typed
@@ -305,14 +307,19 @@ const measureCheckout = Effect.fn("bundleSize.measureCheckout")(function* (
     const destination = path.join(stage, "packages", directory);
 
     yield* fs.makeDirectory(destination, { recursive: true });
-    yield* fs.copyFile(path.join(source, "package.json"), path.join(destination, "package.json"));
+    const exports = comparisonExports(manifest.exports);
+
+    yield* fs.writeFileString(
+      path.join(destination, "package.json"),
+      JSON.stringify({ ...manifest, exports }),
+    );
     // Copy only built files. Source imports cannot accidentally resolve here.
     yield* fs.copy(path.join(source, "dist"), path.join(destination, "dist"));
     const link = path.join(stage, "node_modules", manifest.name);
 
     yield* fs.makeDirectory(path.dirname(link), { recursive: true });
     yield* fs.symlink(destination, link);
-    for (const key of Object.keys(manifest.exports ?? {})) {
+    for (const key of Object.keys(exports)) {
       available.add(key === "." ? manifest.name : manifest.name + key.slice(1));
     }
   }

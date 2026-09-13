@@ -9,13 +9,9 @@
   "commit": false,
   "fixed": [
     [
-      "@effect-agent/capabilities",
-      "@effect-agent/core",
-      "@effect-agent/engine",
       "@effect-agent/platform-cloudflare",
       "@effect-agent/platform-node",
       "@effect-agent/pr-review",
-      "@effect-agent/sandbox",
       "@effect-agent/sandbox-local",
       "@effect-agent/thread",
       "@effect-agent/storage-cloudflare",

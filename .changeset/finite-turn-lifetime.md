@@ -1,5 +1,4 @@
 ---
-"@effect-agent/engine": patch
 ---
 
 Release completed turn state before starting the next turn to reduce memory retained during long runs.

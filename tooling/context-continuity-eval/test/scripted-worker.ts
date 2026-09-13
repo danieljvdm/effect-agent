@@ -1,6 +1,6 @@
 import process from "node:process";
 
-import { CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Config, Console, Effect, FileSystem, Layer, Redacted, Schema } from "effect";

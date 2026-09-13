@@ -1,20 +1,20 @@
 import { Effect, Layer, Ref, Result, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/Agent";
-import { AgentPolicy, CompactionPolicy } from "effect-agent/AgentPolicy";
-import * as AgentRuntime from "effect-agent/AgentRuntime";
-import { makeUsageBudget, UsageBudgetLimits } from "effect-agent/Budget";
-import { ContextCompactor, type ContextCompaction } from "effect-agent/ContextCompactor";
-import { NewContext } from "effect-agent/ContextTools";
-import { toRunBudgetHook } from "effect-agent/RunHooks";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import { makeUsageBudget, UsageBudgetLimits } from "effect-agent/budget";
+import { ContextCompactor, type ContextCompaction } from "effect-agent/context-compactor";
+import { NewContext } from "effect-agent/context-tools";
+import { toRunBudgetHook } from "effect-agent/run-hooks";
 import {
   RunContextPreparationPassthrough,
   type RunCostEstimator,
   type RunUsageDelta,
-} from "effect-agent/RunOptions";
-import * as Subagent from "effect-agent/Subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/Subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/SubagentReservations";
-import { ThreadHistory } from "effect-agent/ThreadHistory";
+} from "effect-agent/run-options";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
+import { ThreadHistory } from "effect-agent/thread-history";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/unstable/ai";
 
 import { reviewToolkit, reviewToolkitLayer } from "./internal/repository.ts";

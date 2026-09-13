@@ -4,9 +4,9 @@ import {
   ReviewOutcome,
   ReviewReport,
   ReviewRequest,
-} from "@effect-agent/pr-review/Review";
-import { type ReviewRepository } from "@effect-agent/pr-review/ReviewRepository";
-import { ScriptedModel } from "@effect-agent/testing/ScriptedModel";
+} from "@effect-agent/pr-review/review";
+import { type ReviewRepository } from "@effect-agent/pr-review/review-repository";
+import { ScriptedModel } from "@effect-agent/testing/scripted-model";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";

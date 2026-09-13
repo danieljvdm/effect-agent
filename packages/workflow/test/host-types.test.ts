@@ -1,17 +1,17 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { type ModelServices } from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { type DigestError } from "@effect-agent/thread/Digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { DefinitionDigestInput } from "@effect-agent/thread/Records";
-import { type WorkflowHostConfigError } from "@effect-agent/workflow/WorkflowAgentHost";
-import { WorkflowAgentHost } from "@effect-agent/workflow/WorkflowAgentHost";
+import { type DigestError } from "@effect-agent/thread/digest";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { DefinitionDigestInput } from "@effect-agent/thread/records";
+import { type WorkflowHostConfigError } from "@effect-agent/workflow/workflow-agent-host";
+import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
 import {
   type WorkflowDispatchStore,
   type WorkflowRepairTrigger,
-} from "@effect-agent/workflow/WorkflowDispatch";
+} from "@effect-agent/workflow/workflow-dispatch";
 import { expect, it } from "@effect/vitest";
 import { Context, type Crypto, Effect, Layer, Schema, SchemaGetter } from "effect";
+import * as Agent from "effect-agent/agent";
+import { type ModelServices } from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { Workflow, WorkflowEngine } from "effect/unstable/workflow";
 

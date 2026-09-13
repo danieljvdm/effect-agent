@@ -1,24 +1,3 @@
-import type * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { Update, UpdateError } from "@effect-agent/core/AgentUpdates";
-import { ThreadId, type AgentId, type SubmissionId } from "@effect-agent/core/Identifiers";
-import { IdempotencyKey, Receipt } from "@effect-agent/core/Receipt";
-import { SubagentDelegationCaps, SubagentGrant } from "@effect-agent/core/SubagentContract";
-import {
-  WorkerCompletion,
-  FrameworkMessage,
-  WorkerUpdate,
-  WorkerError,
-  WorkerHistoryEntry,
-  type WorkerContext,
-  WorkerRef,
-} from "@effect-agent/core/Worker";
-import {
-  type SubagentHost,
-  type WorkerObservation,
-  type WorkerReceiptRequest,
-  type WorkerRunReport,
-} from "@effect-agent/engine/SubagentHost";
 import {
   Cause,
   Clock,
@@ -31,6 +10,27 @@ import {
   Schema,
   Stream,
 } from "effect";
+import type * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { Update, UpdateError } from "effect-agent/agent-updates";
+import { ThreadId, type AgentId, type SubmissionId } from "effect-agent/identifiers";
+import { IdempotencyKey, Receipt } from "effect-agent/receipt";
+import { SubagentDelegationCaps, SubagentGrant } from "effect-agent/subagent-contract";
+import {
+  type SubagentHost,
+  type WorkerObservation,
+  type WorkerReceiptRequest,
+  type WorkerRunReport,
+} from "effect-agent/subagent-host";
+import {
+  WorkerCompletion,
+  FrameworkMessage,
+  WorkerUpdate,
+  WorkerError,
+  WorkerHistoryEntry,
+  type WorkerContext,
+  WorkerRef,
+} from "effect-agent/worker";
 
 import { digestJson } from "../Digest.ts";
 import type {

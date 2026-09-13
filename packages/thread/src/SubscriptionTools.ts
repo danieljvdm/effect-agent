@@ -1,7 +1,7 @@
-import { type AgentId, type ThreadId } from "@effect-agent/core/Identifiers";
-import { DurableStep, ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import type { Layer } from "effect";
 import { Crypto, Effect, Schema } from "effect";
+import { DurableStep, ToolExecutionClass } from "effect-agent/durable-step";
+import { type AgentId, type ThreadId } from "effect-agent/identifiers";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import type { DefinitionDigests, PersistedJson } from "./Records.ts";

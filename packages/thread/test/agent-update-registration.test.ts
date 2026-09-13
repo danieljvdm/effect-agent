@@ -1,7 +1,7 @@
-import * as Agent from "@effect-agent/core/Agent";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, expectTypeOf, it } from "@effect/vitest";
 import { type Crypto, Effect, Layer, Schema } from "effect";
+import * as Agent from "effect-agent/agent";
 import { Toolkit } from "effect/unstable/ai";
 
 import { compileRegistrations } from "../src/AgentRegistration.ts";

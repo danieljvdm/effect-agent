@@ -1,4 +1,4 @@
-import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/Records";
+import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/records";
 import { Schema } from "effect";
 
 /** The Durable Object's SQLite storage uses a private-development format this adapter cannot read. */

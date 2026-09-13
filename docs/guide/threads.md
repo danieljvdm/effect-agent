@@ -16,10 +16,10 @@ can serve many thread IDs.
 
 ```ts
 import { AgentRuntime } from "effect-agent";
-import { ThreadHistory } from "effect-agent/ThreadHistory";
-import { PersistentHistory } from "@effect-agent/thread/PersistentHistory";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
-import { layer as sqliteStore } from "@effect-agent/storage-sqlite/SqliteThreadStore";
+import { ThreadHistory } from "effect-agent/thread-history";
+import { PersistentHistory } from "@effect-agent/thread/persistent-history";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
+import { layer as sqliteStore } from "@effect-agent/storage-sqlite/sqlite-thread-store";
 import { Effect, Layer } from "effect";
 
 const MemoryHistoryLive = PersistentHistory.layer.pipe(Layer.provide(MemoryThreadStoreLive));

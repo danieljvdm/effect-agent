@@ -1,9 +1,4 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { type RunEvent } from "@effect-agent/core/RunEvent";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/ScriptedModel";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import {
   ActivityCatalog,
   ActivityCatalogLayer,
@@ -22,9 +17,14 @@ import {
   TravelPlan,
   TravelPlanner,
   TravelPlannerToolkitLayer,
-} from "@effect-agent/testing/TravelPlanner";
+} from "@effect-agent/testing/travel-planner";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import { type RunEvent } from "effect-agent/run-event";
+import { RunContextPreparationPassthrough } from "effect-agent/run-options";
+import { ThreadHistory } from "effect-agent/thread-history";
 import { Model } from "effect/unstable/ai";
 
 const makeScriptedAgent = (turns: ReadonlyArray<ScriptedTurnInput>) =>

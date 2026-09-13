@@ -14,20 +14,7 @@ import {
   type BrowserRunInteractiveRequest,
   type BrowserRunInteractiveRequestListener,
   type BrowserRunInteractiveSession,
-} from "@effect-agent/platform-cloudflare/InteractiveBrowser";
-import {
-  BrowserClickRequest,
-  BrowserFillRequest,
-  BrowserNavigateRequest,
-  BrowserReadTextRequest,
-  BrowserScreenshotRequest,
-  BrowserScrollRequest,
-  InteractiveBrowser,
-  InteractiveBrowserError,
-  InteractiveBrowserPolicy,
-  type BrowserHandle,
-  type InteractiveBrowserNetworkPolicy,
-} from "@effect-agent/sandbox/InteractiveBrowser";
+} from "@effect-agent/platform-cloudflare/interactive-browser";
 import { describe, expect, it } from "@effect/vitest";
 import {
   Clock,
@@ -41,6 +28,19 @@ import {
   Schema,
   type Scope,
 } from "effect";
+import {
+  BrowserClickRequest,
+  BrowserFillRequest,
+  BrowserNavigateRequest,
+  BrowserReadTextRequest,
+  BrowserScreenshotRequest,
+  BrowserScrollRequest,
+  InteractiveBrowser,
+  InteractiveBrowserError,
+  InteractiveBrowserPolicy,
+  type BrowserHandle,
+  type InteractiveBrowserNetworkPolicy,
+} from "effect-agent/interactive-browser";
 import { TestClock } from "effect/testing";
 
 type Equal<Left, Right> =

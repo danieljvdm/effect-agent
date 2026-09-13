@@ -1,30 +1,4 @@
-import * as Agent from "@effect-agent/core/Agent";
-import {
-  type AgentApprovalDenied,
-  type AgentApprovalPending,
-  type AgentInputError,
-  type AgentOutputError,
-  type AgentPolicyError,
-  type ContextBudgetError,
-  type ContextOverflowError,
-  type ModelProtocolError,
-  type AgentToolAuthorizationDenied,
-} from "@effect-agent/core/AgentError";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { type MemoryRecallError } from "@effect-agent/core/MemoryReference";
-import { type RunEvent } from "@effect-agent/core/RunEvent";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import {
-  type AgentChildPending,
-  type AgentRuntimeFailure,
-  type AgentRuntimeRequirements,
-  type AgentResult,
-  type DetachedRun,
-} from "@effect-agent/engine/AgentRuntime";
-import { type CompactionError } from "@effect-agent/engine/ContextCompactor";
-import { RunContextPreparationPassthrough, type RunOptions } from "@effect-agent/engine/RunOptions";
-import { ThreadHistory, type ThreadHistoryError } from "@effect-agent/engine/ThreadHistory";
-import { ScriptedModel } from "@effect-agent/testing/ScriptedModel";
+import { ScriptedModel } from "@effect-agent/testing/scripted-model";
 import {
   type ActivityCatalog,
   type ActivityUnavailable,
@@ -35,10 +9,36 @@ import {
   type LodgingUnavailable,
   type TravelGuidance,
   type TravelPlannerToolkit,
-} from "@effect-agent/testing/TravelPlanner";
-import { phase1Trip, TravelPlanner } from "@effect-agent/testing/TravelPlanner";
-import { type DurableWorkerRequirements } from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/testing/travel-planner";
+import { phase1Trip, TravelPlanner } from "@effect-agent/testing/travel-planner";
+import { type DurableWorkerRequirements } from "@effect-agent/thread/durable-agent-runtime";
 import { Context, Effect, Layer, Schema, SchemaGetter, Scope, type Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import {
+  type AgentApprovalDenied,
+  type AgentApprovalPending,
+  type AgentInputError,
+  type AgentOutputError,
+  type AgentPolicyError,
+  type ContextBudgetError,
+  type ContextOverflowError,
+  type ModelProtocolError,
+  type AgentToolAuthorizationDenied,
+} from "effect-agent/agent-error";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import {
+  type AgentChildPending,
+  type AgentRuntimeFailure,
+  type AgentRuntimeRequirements,
+  type AgentResult,
+  type DetachedRun,
+} from "effect-agent/agent-runtime";
+import { type CompactionError } from "effect-agent/context-compactor";
+import { type MemoryRecallError } from "effect-agent/memory-reference";
+import { type RunEvent } from "effect-agent/run-event";
+import { RunContextPreparationPassthrough, type RunOptions } from "effect-agent/run-options";
+import { ThreadHistory, type ThreadHistoryError } from "effect-agent/thread-history";
 import { type AiError, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { describe, expect, it } from "vite-plus/test";
 

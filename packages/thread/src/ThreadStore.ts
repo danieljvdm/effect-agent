@@ -1,6 +1,6 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
 import type { Effect, Option, Stream } from "effect";
 import { Context, Schema } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 
 import {
   BatchId,

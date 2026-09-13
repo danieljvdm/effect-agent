@@ -1,10 +1,7 @@
-import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities/Redaction";
-import { SubagentExecutionFailure } from "@effect-agent/capabilities/Subagent";
-import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+} from "@effect-agent/platform-node/node-durable-agent-runtime";
 import {
   docsCoordinatorConfidentialMarker,
   docsDocumentBodySecret,
@@ -19,15 +16,18 @@ import {
   researchCorpusDocumentIds,
   researchMissionRequest,
   summarizeCallId,
-} from "@effect-agent/testing/DocsResearcher";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
-import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/RunJournal";
-import { IdempotencyKey } from "@effect-agent/thread/SubmissionLedger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/testing/docs-researcher";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
+import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/run-journal";
+import { IdempotencyKey } from "@effect-agent/thread/submission-ledger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
+import { ThreadId, ToolCallId } from "effect-agent/identifiers";
+import { Redactor, StructuralRedactorLive } from "effect-agent/redaction";
+import { SubagentExecutionFailure } from "effect-agent/subagent";
 
 // ---------------------------------------------------------------------------
 // Red-team suite: child exfiltration through the durable join.

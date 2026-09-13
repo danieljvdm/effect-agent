@@ -1,20 +1,14 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import * as Agent from "@effect-agent/core/Agent";
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import type { Receipt } from "@effect-agent/core/Receipt";
-import { WorkerError } from "@effect-agent/core/Worker";
-import { SubagentHost } from "@effect-agent/engine/SubagentHost";
-import * as NodeHost from "@effect-agent/platform-node/NodeDurableHost";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import * as NodeHost from "@effect-agent/platform-node/node-durable-host";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
 import {
   MessageDeliveryFailpoint,
   MessageDeliveryFailpointError,
   MessageDeliveryStore,
-} from "@effect-agent/thread/MessageDelivery";
-import { DefinitionDigestInput } from "@effect-agent/thread/Records";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
-import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { WorkerConcurrencyResolver, WorkerHostAuthorizer } from "@effect-agent/thread/WorkerHost";
+} from "@effect-agent/thread/message-delivery";
+import { DefinitionDigestInput } from "@effect-agent/thread/records";
+import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
+import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/thread-store";
+import { WorkerConcurrencyResolver, WorkerHostAuthorizer } from "@effect-agent/thread/worker-host";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
@@ -33,6 +27,12 @@ import {
   Stream,
   Tracer,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { ThreadId } from "effect-agent/identifiers";
+import type { Receipt } from "effect-agent/receipt";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentHost } from "effect-agent/subagent-host";
+import { WorkerError } from "effect-agent/worker";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 

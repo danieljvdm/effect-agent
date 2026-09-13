@@ -12,7 +12,7 @@ the real interpreter without network access, credentials, provider latency, or m
 
 ```ts
 import { Model } from "effect/unstable/ai";
-import { ScriptedModel } from "@effect-agent/testing/ScriptedModel";
+import { ScriptedModel } from "@effect-agent/testing/scripted-model";
 
 const TestModel = Model.make("scripted", "test-model", ScriptedModel.layer(turns));
 ```
@@ -24,24 +24,24 @@ finalization.
 ## Choose a testing entry point
 
 The package root exports the `ScriptedModel` module namespace. Import its service, request,
-turn, hook types, and schemas directly from `@effect-agent/testing/ScriptedModel`.
+turn, hook types, and schemas directly from `@effect-agent/testing/scripted-model`.
 Specialized helpers have separate paths:
 
-| Import                                          | Contents                                                |
-| ----------------------------------------------- | ------------------------------------------------------- |
-| `@effect-agent/testing/Certification`           | Durable adapter certification                           |
-| `@effect-agent/testing/Chaos`                   | Seeded plans and convergence checks                     |
-| `@effect-agent/testing/CodeExecutorConformance` | `CodeExecutor` adapter conformance                      |
-| `@effect-agent/testing/CodeExecutorSubstitute`  | Deterministic in-process executor substitute            |
-| `@effect-agent/testing/TravelPlanner`           | Travel Planner definitions, services, and scenarios     |
-| `@effect-agent/testing/DocsResearcher`          | Docs Researcher definitions and MCP delegation fixtures |
+| Import                                            | Contents                                                |
+| ------------------------------------------------- | ------------------------------------------------------- |
+| `@effect-agent/testing/certification`             | Durable adapter certification                           |
+| `@effect-agent/testing/chaos`                     | Seeded plans and convergence checks                     |
+| `@effect-agent/testing/code-executor-conformance` | `CodeExecutor` adapter conformance                      |
+| `@effect-agent/testing/code-executor-substitute`  | Deterministic in-process executor substitute            |
+| `@effect-agent/testing/travel-planner`            | Travel Planner definitions, services, and scenarios     |
+| `@effect-agent/testing/docs-researcher`           | Docs Researcher definitions and MCP delegation fixtures |
 
 These paths ship JavaScript and declarations. Install the storage and runtime adapters used by
 your tests directly.
 
-Mutable failpoint controls live in `@effect-agent/thread/testing/DurableFailpointTestControl`,
-`@effect-agent/storage-sqlite/testing/SqliteStorageFailpointTesting`, and
-`@effect-agent/storage-cloudflare/testing/DoStorageFailpointTesting`. Their
+Mutable failpoint controls live in `@effect-agent/thread/testing/durable-failpoint-test-control`,
+`@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing`, and
+`@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing`. Their
 `.layer` values provide the production failpoint service and mutable test control over one Ref.
 The Cloudflare path also exports `evictionFailpointHandler`.
 
@@ -53,8 +53,8 @@ a deterministic counter when assertions depend on stable IDs.
 ```ts
 import { Effect, Layer, Ref, Schema } from "effect";
 import { Ephemeral } from "effect-agent";
-import { ThreadId, RunId, TurnId } from "effect-agent/Identifiers";
-import { IdGenerator } from "effect-agent/IdGenerator";
+import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
+import { IdGenerator } from "effect-agent/id-generator";
 
 const DeterministicIdGeneratorLive = Layer.effect(
   IdGenerator,

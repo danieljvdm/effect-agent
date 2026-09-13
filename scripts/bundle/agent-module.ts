@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import * as Agent from "effect-agent/Agent";
+import * as Agent from "effect-agent/agent";
 import { Toolkit } from "effect/unstable/ai";
 
 export const agent = Agent.make("bundle-probe", {

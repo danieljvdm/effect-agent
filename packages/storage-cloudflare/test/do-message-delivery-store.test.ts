@@ -1,8 +1,8 @@
-import { MessageDeliveryStore } from "@effect-agent/thread/MessageDelivery";
+import { MessageDeliveryStore } from "@effect-agent/thread/message-delivery";
 import {
   makeMessageDeliveryFixture,
   messageDeliveryStoreConformanceCases,
-} from "@effect-agent/thread/testing/MessageDeliveryStoreConformance";
+} from "@effect-agent/thread/testing/message-delivery-store-conformance";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer } from "effect";

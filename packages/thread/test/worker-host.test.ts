@@ -1,26 +1,3 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import {
-  DelegationId,
-  ReceiptId,
-  RunId,
-  SubmissionId,
-  ThreadId,
-  ToolCallId,
-} from "@effect-agent/core/Identifiers";
-import { IdempotencyKey, JoinedToHost, QueueSequence, Receipt } from "@effect-agent/core/Receipt";
-import {
-  SubagentDelegationCaps,
-  SubagentGrant,
-  SubagentReservationAmounts,
-} from "@effect-agent/core/SubagentContract";
-import { ToolResultBounds } from "@effect-agent/core/ToolResult";
-import { WorkerCompletion, WorkerError, WorkerUpdate } from "@effect-agent/core/Worker";
-import {
-  WorkerReportPreparationFailure,
-  type StartWorkerRequest,
-  type WorkerReporting,
-} from "@effect-agent/engine/SubagentHost";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
@@ -35,6 +12,29 @@ import {
   Schema,
   Stream,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import {
+  DelegationId,
+  ReceiptId,
+  RunId,
+  SubmissionId,
+  ThreadId,
+  ToolCallId,
+} from "effect-agent/identifiers";
+import { IdempotencyKey, JoinedToHost, QueueSequence, Receipt } from "effect-agent/receipt";
+import {
+  SubagentDelegationCaps,
+  SubagentGrant,
+  SubagentReservationAmounts,
+} from "effect-agent/subagent-contract";
+import {
+  WorkerReportPreparationFailure,
+  type StartWorkerRequest,
+  type WorkerReporting,
+} from "effect-agent/subagent-host";
+import { ToolResultBounds } from "effect-agent/tool-result";
+import { WorkerCompletion, WorkerError, WorkerUpdate } from "effect-agent/worker";
 import { TestClock } from "effect/testing";
 import { Toolkit } from "effect/unstable/ai";
 

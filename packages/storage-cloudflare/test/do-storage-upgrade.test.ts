@@ -3,14 +3,14 @@ import {
   ScheduleFailpointError,
   ScheduleStorageError,
   ScheduleStore,
-} from "@effect-agent/thread/Schedule";
-import { SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/schedule";
+import { SubmissionLedger } from "@effect-agent/thread/submission-ledger";
 import {
   SubscriptionError,
   SubscriptionFailpoint,
   SubscriptionFailpointError,
   SubscriptionStore,
-} from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/subscription";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Exit, Layer } from "effect";

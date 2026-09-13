@@ -1,25 +1,25 @@
-import { type DoStorageConfig } from "@effect-agent/storage-cloudflare/DoStorageConfig";
+import { type DoStorageConfig } from "@effect-agent/storage-cloudflare/do-storage-config";
 import {
   DoStorageCompatibilityError,
   DoStorageError,
   DoStorageFailpointError,
   DoValueBoundExceeded,
-} from "@effect-agent/storage-cloudflare/DoStorageError";
-import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/DoStorageFailpoint";
-import { CurrentDoStorageVersion } from "@effect-agent/storage-cloudflare/DoStorageVersion";
-import { ledgerLayer } from "@effect-agent/storage-cloudflare/DoSubmissionLedger";
+} from "@effect-agent/storage-cloudflare/do-storage-error";
+import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
+import { CurrentDoStorageVersion } from "@effect-agent/storage-cloudflare/do-storage-version";
+import { ledgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
 import {
   threadStoreLayer,
   layer,
   storageConfigLayer,
   type DoStorageInitializationError,
-} from "@effect-agent/storage-cloudflare/DoThreadStore";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
-import { CanonicalBatch, CanonicalRecord, UserInputRecorded } from "@effect-agent/thread/Records";
+} from "@effect-agent/storage-cloudflare/do-thread-store";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
+import { CanonicalBatch, CanonicalRecord, UserInputRecorded } from "@effect-agent/thread/records";
 import {
   threadStoreConformanceCases,
   threadCheckpointConformanceCases,
-} from "@effect-agent/thread/testing/ThreadStoreConformance";
+} from "@effect-agent/thread/testing/thread-store-conformance";
 import {
   ThreadCheckpoint,
   ThreadTailRequest,
@@ -33,7 +33,7 @@ import {
   LoadCheckpointRequest,
   SaveCheckpointRequest,
   SaveRecoveryCheckpointRequest,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
@@ -821,4 +821,4 @@ describe("DoThreadStore", () => {
       ),
     ));
 });
-import { SubmissionId } from "@effect-agent/core/Identifiers";
+import { SubmissionId } from "effect-agent/identifiers";

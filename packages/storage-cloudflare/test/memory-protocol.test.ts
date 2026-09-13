@@ -1,7 +1,7 @@
 import {
   decodeMemoryWire,
   encodeMemoryWire,
-} from "@effect-agent/storage-cloudflare/MemoryProtocol";
+} from "@effect-agent/storage-cloudflare/memory-protocol";
 import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 

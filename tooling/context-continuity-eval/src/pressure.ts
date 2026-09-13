@@ -1,8 +1,8 @@
-import * as ContextTools from "@effect-agent/capabilities/ContextTools";
-import * as MemoryNotes from "@effect-agent/capabilities/MemoryNotes";
-import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { Effect, Layer, Schema, Stream } from "effect";
+import { ContextCompactor } from "effect-agent/context-compactor";
+import * as ContextTools from "effect-agent/context-tools";
+import { ToolExecutionClass } from "effect-agent/durable-step";
+import * as MemoryNotes from "effect-agent/memory-notes";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { type CompactionEvidence } from "./contracts.ts";

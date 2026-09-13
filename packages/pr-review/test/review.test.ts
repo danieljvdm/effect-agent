@@ -10,13 +10,13 @@ import {
   ReviewRequest,
   ReviewUsage,
   type ReviewVerificationError,
-} from "@effect-agent/pr-review/Review";
+} from "@effect-agent/pr-review/review";
 import {
   ReviewContextError,
   ReviewFileList,
   ReviewRepository,
   ReviewSource,
-} from "@effect-agent/pr-review/ReviewRepository";
+} from "@effect-agent/pr-review/review-repository";
 import { describe, expect, expectTypeOf, it } from "@effect/vitest";
 import {
   Context,

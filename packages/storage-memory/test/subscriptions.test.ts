@@ -1,18 +1,17 @@
-import { AgentId, ThreadId, ReceiptId, SubmissionId } from "@effect-agent/core/Identifiers";
-import { memorySubscriptionStoreLayer } from "@effect-agent/storage-memory/MemorySubscriptionStore";
-import { digestJson } from "@effect-agent/thread/Digest";
-import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
-import { EventSources, makeEventSource } from "@effect-agent/thread/EventSource";
-import { PreparedInputAdmission } from "@effect-agent/thread/PreparedInputAdmission";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
-import { ScheduledInputRefused, ScheduledInputRetryable } from "@effect-agent/thread/Schedule";
+import { memorySubscriptionStoreLayer } from "@effect-agent/storage-memory/memory-subscription-store";
+import { digestJson } from "@effect-agent/thread/digest";
+import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { EventSources, makeEventSource } from "@effect-agent/thread/event-source";
+import { PreparedInputAdmission } from "@effect-agent/thread/prepared-input-admission";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
+import { ScheduledInputRefused, ScheduledInputRetryable } from "@effect-agent/thread/schedule";
 import {
   Settlement,
   submissionSettlementId,
   Principal,
   QueueSequence,
-} from "@effect-agent/thread/SubmissionLedger";
-import { SettledSubmission } from "@effect-agent/thread/SubmissionStatus";
+} from "@effect-agent/thread/submission-ledger";
+import { SettledSubmission } from "@effect-agent/thread/submission-status";
 import {
   AcceptedEvent,
   SubscriptionAuthorizer,
@@ -26,21 +25,22 @@ import {
   defaultSubscriptionLimits,
   type PreparedInput,
   type SubscriptionLimits,
-} from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/subscription";
 import {
   makeSubscriptionInputBinding,
   SubscriptionInputBindings,
   type SubscriptionInputBinding,
-} from "@effect-agent/thread/SubscriptionInput";
+} from "@effect-agent/thread/subscription-input";
 import {
   SubscriptionDriver,
   SubscriptionIntake,
   Subscriptions,
   type SubscribeOptions,
-} from "@effect-agent/thread/Subscriptions";
+} from "@effect-agent/thread/subscriptions";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { DateTime, Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "effect-agent/identifiers";
 import { TestClock } from "effect/testing";
 
 const partition = { tenantId: "tenant", address: "repository:42" };

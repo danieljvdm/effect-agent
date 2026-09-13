@@ -94,14 +94,10 @@ type WorkflowFile = typeof WorkflowFile.Type;
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).replace(/\/$/, "");
 
 const packageNames = [
-  "capabilities",
-  "core",
   "effect-agent",
-  "engine",
   "platform-cloudflare",
   "platform-node",
   "pr-review",
-  "sandbox",
   "sandbox-local",
   "thread",
   "storage-cloudflare",
@@ -128,9 +124,7 @@ const toolingNames = [
 ];
 
 const effectTestPackageNames = [
-  "capabilities",
   "effect-agent",
-  "engine",
   "platform-cloudflare",
   "platform-node",
   "pr-review",
@@ -144,14 +138,10 @@ const effectTestPackageNames = [
 ] as const;
 
 const productionPackageNames = [
-  "capabilities",
-  "core",
   "effect-agent",
-  "engine",
   "platform-cloudflare",
   "platform-node",
   "pr-review",
-  "sandbox",
   "sandbox-local",
   "thread",
   "storage-cloudflare",
@@ -179,10 +169,7 @@ const platformCloudflareProviderDependencies = new Set(["@cloudflare/puppeteer"]
 // section. Everything inward of them must stay platform-clean so the semantic
 // coordinator never gains a conditional platform branch (deployment spec §3.1).
 const inwardPackageNames = [
-  "capabilities",
-  "core",
-  "engine",
-  "sandbox",
+  "effect-agent",
   "sandbox-local",
   "thread",
   "storage-memory",
@@ -214,45 +201,21 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
 /**
  * The documented inward-only package graph (AGENTS.md "Package dependency direction"):
  * every `@effect-agent/*` edge a framework
- * manifest may declare, in any dependency section. `capabilities -> sandbox`
- * is the CodeExecutor port edge registered by ADR-0017 (declared here before
- * C1 adds the manifest edge). The `-> testing` entries are the two documented
- * dev-only exceptions; the graph test itself pins them to `devDependencies`,
- * and every other package stays clean of `testing` in every section.
+ * manifest may declare, in any dependency section. Testing dependencies remain dev-only.
+ * Internal core, engine, sandbox, and capability edges are checked by verifyPackageExports.
  */
 const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
-  capabilities: ["core", "engine", "sandbox"],
-  core: [],
-  "effect-agent": ["capabilities", "core", "engine"],
-  engine: ["core"],
-  "platform-cloudflare": [
-    "capabilities",
-    "core",
-    "engine",
-    "sandbox",
-    "thread",
-    "storage-cloudflare",
-    "testing",
-  ],
-  "platform-node": ["capabilities", "core", "engine", "thread", "storage-sqlite", "workflow"],
-  "pr-review": ["core", "engine", "effect-agent"],
-  sandbox: ["core"],
-  "sandbox-local": ["core", "sandbox"],
-  thread: ["core", "engine"],
-  "storage-cloudflare": ["core", "thread", "testing"],
-  "storage-memory": ["core", "thread", "engine"],
-  "storage-sqlite": ["core", "thread"],
-  workflow: ["core", "thread", "engine", "storage-memory"],
-  testing: [
-    "capabilities",
-    "core",
-    "engine",
-    "platform-node",
-    "sandbox",
-    "thread",
-    "storage-memory",
-    "storage-sqlite",
-  ],
+  "effect-agent": [],
+  "platform-cloudflare": ["effect-agent", "thread", "storage-cloudflare", "testing"],
+  "platform-node": ["effect-agent", "thread", "storage-sqlite", "workflow"],
+  "pr-review": ["effect-agent"],
+  "sandbox-local": ["effect-agent"],
+  thread: ["effect-agent"],
+  "storage-cloudflare": ["effect-agent", "thread", "testing"],
+  "storage-memory": ["effect-agent", "thread"],
+  "storage-sqlite": ["effect-agent", "thread"],
+  workflow: ["effect-agent", "thread", "storage-memory"],
+  testing: ["effect-agent", "platform-node", "thread", "storage-memory", "storage-sqlite"],
 };
 
 const readManifest = (path: string) =>
@@ -369,9 +332,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
               type: "module",
               exports: {
                 ".": "./src/index.ts",
-                "./Agent": "./src/Agent.ts",
-                "./AgentRuntime": "./src/AgentRuntime.ts",
-                "./Ephemeral": "./src/Ephemeral.ts",
+                [side === "base" ? "./Agent" : "./agent"]: "./src/Agent.ts",
+                [side === "base" ? "./AgentRuntime" : "./agent-runtime"]: "./src/AgentRuntime.ts",
+                [side === "base" ? "./Ephemeral" : "./ephemeral"]: "./src/Ephemeral.ts",
               },
             }),
           );
@@ -399,15 +362,15 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         for (const kind of ["root", "module"]) {
           yield* fs.writeFileString(
             path.join(fixtures, `agent-${kind}.ts`),
-            `export { agent } from "effect-agent${kind === "module" ? "/Agent" : ""}";`,
+            `export { agent } from "effect-agent${kind === "module" ? "/agent" : ""}";`,
           );
           yield* fs.writeFileString(
             path.join(fixtures, `runtime-${kind}.ts`),
-            `export { run } from "effect-agent${kind === "module" ? "/AgentRuntime" : ""}";`,
+            `export { run } from "effect-agent${kind === "module" ? "/agent-runtime" : ""}";`,
           );
           yield* fs.writeFileString(
             path.join(fixtures, `ephemeral-${kind}.ts`),
-            `export { layer } from "effect-agent${kind === "module" ? "/Ephemeral" : ""}";`,
+            `export { layer } from "effect-agent${kind === "module" ? "/ephemeral" : ""}";`,
           );
           yield* fs.writeFileString(
             path.join(fixtures, `lazy-${kind}.ts`),
@@ -418,7 +381,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
         yield* fs.writeFileString(
           smoke,
-          'import { agent } from "effect-agent/Agent"; if (!agent.startsWith("shared")) throw new Error("wrong bundled value");',
+          'import { agent } from "effect-agent/agent"; if (!agent.startsWith("shared")) throw new Error("wrong bundled value");',
         );
         // Exercise canonicalization even on hosts without macOS's /var symlink.
         const alias = path.join(scratch, "head-link");
@@ -896,7 +859,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
   );
 
   it.effect(
-    "validates and packs public groups and forwarding modules and restores source manifests",
+    "validates and packs nested modules, public groups, and forwarding modules and restores source manifests",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -943,17 +906,19 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           const directory = root + "/packages/" + name;
 
           const sources = {
-            index: 'export * as Agent from "./Agent.ts"; export { make } from "./Agent.ts";\n',
-            Agent:
+            index:
+              'export * as Agent from "./core/Agent.ts"; export { make } from "./core/Agent.ts";\n',
+            "core/Agent":
               name === "core"
                 ? "export const make = () => 1;\n"
-                : 'export * from "@fixture/core/Agent";\n',
+                : 'export * from "effect-agent/agent";\n',
             Support: 'export * as Failpoint from "./Failpoint.ts";\n',
             Failpoint: "export const armed = false;\n",
           };
 
           yield* fs.makeDirectory(directory + "/dist", { recursive: true });
-          yield* fs.makeDirectory(directory + "/src");
+          yield* fs.makeDirectory(directory + "/src/core", { recursive: true });
+          yield* fs.makeDirectory(directory + "/dist/core", { recursive: true });
           for (const [entry, source] of Object.entries(sources)) {
             yield* fs.writeFileString(`${directory}/src/${entry}.ts`, source);
             yield* fs.writeFileString(`${directory}/dist/${entry}.mjs`, "export {};\n");
@@ -969,16 +934,16 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
           const original =
             JSON.stringify({
-              name: "@fixture/" + name,
+              name: name === "core" ? "effect-agent" : "@fixture/" + name,
               version: "1.0.0-beta.17",
               exports: {
                 ".": "./src/index.ts",
-                "./Agent": "./src/Agent.ts",
+                "./agent": "./src/core/Agent.ts",
                 "./testing": "./src/Support.ts",
-                "./testing/Failpoint": "./src/Failpoint.ts",
+                "./testing/failpoint": "./src/Failpoint.ts",
               },
               files: ["dist"],
-              dependencies: name === "consumer" ? { "@fixture/core": "workspace:*" } : {},
+              dependencies: name === "consumer" ? { "effect-agent": "workspace:*" } : {},
               peerDependencies: { effect: "catalog:" },
               devDependencies: { effect: "catalog:" },
             }) + "\n";
@@ -987,19 +952,42 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           yield* fs.writeFileString(directory + "/package.json", original);
         }
 
+        yield* fs.makeDirectory(root + "/node_modules");
+        yield* fs.symlink(root + "/packages/core", root + "/node_modules/effect-agent");
         yield* verifyPackageExports(root);
         yield* verifyPackagePurity(root);
 
-        const forwardedModule = root + "/packages/consumer/src/Agent.ts";
+        const definitionModule = root + "/packages/core/src/core/Agent.ts";
+        const originalDefinition = yield* fs.readFileString(definitionModule);
+
+        yield* fs.makeDirectory(root + "/packages/core/src/capabilities");
+        yield* fs.writeFileString(
+          root + "/packages/core/src/capabilities/Private.ts",
+          "export const value = 1;\n",
+        );
+        yield* fs.writeFileString(
+          definitionModule,
+          originalDefinition + 'export { value } from "../capabilities/Private.ts";\n',
+        );
+        expect((yield* Effect.flip(verifyPackageExports(root))).message).toContain(
+          "framework dependencies must point inward",
+        );
+        yield* fs.writeFileString(definitionModule, originalDefinition + 'import "node:fs";\n');
+        expect((yield* Effect.flip(verifyPackageExports(root))).message).toContain(
+          "platform-neutral Effect modules",
+        );
+        yield* fs.writeFileString(definitionModule, originalDefinition);
+
+        const forwardedModule = root + "/packages/consumer/src/core/Agent.ts";
         const originalForwarder = yield* fs.readFileString(forwardedModule);
 
         yield* fs.writeFileString(
           forwardedModule,
-          'export * from "@fixture/core/internal/Secret";\n',
+          'export * from "effect-agent/internal/Secret";\n',
         );
         const privateForwarding = yield* Effect.flip(verifyPackageExports(root));
 
-        expect(privateForwarding.message).toContain("is not a public export of @fixture/core");
+        expect(privateForwarding.message).toContain("is not a public export of effect-agent");
         yield* fs.writeFileString(forwardedModule, originalForwarder);
 
         // The testing export key defines this boundary even though Support.ts has no test-like name.
@@ -1044,14 +1032,14 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
               yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(packed),
             ).toMatchObject({
               version: "1.0.0-beta.17",
-              dependencies: { "@fixture/core": "1.0.0-beta.17" },
+              dependencies: { "effect-agent": "1.0.0-beta.17" },
               peerDependencies: { effect: "4.0.0-rc.111" },
               devDependencies: { effect: "4.0.0-rc.111" },
               exports: {
                 ".": { types: "./dist/index.d.mts", default: "./dist/index.mjs" },
-                "./Agent": { types: "./dist/Agent.d.mts", default: "./dist/Agent.mjs" },
+                "./agent": { types: "./dist/core/Agent.d.mts", default: "./dist/core/Agent.mjs" },
                 "./testing": { types: "./dist/Support.d.mts", default: "./dist/Support.mjs" },
-                "./testing/Failpoint": {
+                "./testing/failpoint": {
                   types: "./dist/Failpoint.d.mts",
                   default: "./dist/Failpoint.mjs",
                 },
@@ -1105,7 +1093,7 @@ esac
         }
         expect((yield* runFixtureCommand(root, "git", ["tag", "--list"])).split("\n")).toEqual([
           "@fixture/consumer@1.0.0-beta.17",
-          "@fixture/core@1.0.0-beta.17",
+          "effect-agent@1.0.0-beta.17",
         ]);
         yield* assertRestored;
 
@@ -1270,9 +1258,6 @@ esac
               edges,
               `${packageName} may consume @effect-agent/testing only as a devDependency`,
             ).not.toContain("testing");
-            if (packageName === "storage-memory") {
-              expect(edges, "storage-memory uses engine only in its tests").not.toContain("engine");
-            }
           }
         }
       }

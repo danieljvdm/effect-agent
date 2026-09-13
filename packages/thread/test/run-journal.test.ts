@@ -1,11 +1,4 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { Selection, Snapshot } from "@effect-agent/core/ToolExposure";
-import { summarizeModelUsage } from "@effect-agent/core/Usage";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { contextWindowId, contextWindowMessage } from "@effect-agent/engine/Compaction";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
 import {
   BatchId,
   CanonicalBatch,
@@ -16,7 +9,7 @@ import {
   ProducerId,
   RecordEnvelope,
   RecordId,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   childThreadIdFor,
   childIdempotencyKeyFor,
@@ -43,10 +36,17 @@ import {
   turnResponseBatchId,
   turnResultsBatch,
   turnResultsBatchId,
-} from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/run-journal";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { DateTime, Effect, Layer, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import { contextWindowId, contextWindowMessage } from "effect-agent/compaction";
+import { ThreadId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
+import { ThreadHistory } from "effect-agent/thread-history";
+import { Selection, Snapshot } from "effect-agent/tool-exposure";
+import { summarizeModelUsage } from "effect-agent/usage";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { JournalCheckpointSeed } from "../src/internal/journal-checkpoint.ts";

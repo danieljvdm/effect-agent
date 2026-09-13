@@ -1,12 +1,11 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import { digestJson, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
-import { CanonicalBatch, CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/Records";
-import { AdmissionRequest, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import { digestJson, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
+import { CanonicalBatch, CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/records";
+import { AdmissionRequest, SubmissionLedger } from "@effect-agent/thread/submission-ledger";
 import {
   ThreadProjection,
   replayThread,
   replayThreadFromCheckpoint,
-} from "@effect-agent/thread/ThreadProjection";
+} from "@effect-agent/thread/thread-projection";
 import {
   ThreadCheckpoint,
   ThreadExportRequest,
@@ -16,8 +15,9 @@ import {
   FencedAppendRequest,
   LoadCheckpointRequest,
   SaveCheckpointRequest,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { DateTime, Effect, Option, Schema, Stream } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { expect } from "vite-plus/test";
 

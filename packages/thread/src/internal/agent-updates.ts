@@ -1,7 +1,7 @@
-import { Update, UpdateError } from "@effect-agent/core/AgentUpdates";
-import type { RunId, ThreadId } from "@effect-agent/core/Identifiers";
-import { IdempotencyKey } from "@effect-agent/core/Receipt";
 import { Clock, Crypto, DateTime, Effect, Option, Schema } from "effect";
+import { Update, UpdateError } from "effect-agent/agent-updates";
+import type { RunId, ThreadId } from "effect-agent/identifiers";
+import { IdempotencyKey } from "effect-agent/receipt";
 
 import { digestJson } from "../Digest.ts";
 import { DurableRuntimeFailpoint } from "../DurableFailpoint.ts";

@@ -1,21 +1,21 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import type { ThreadId, SubmissionId } from "@effect-agent/core/Identifiers";
-import { MessagingError } from "@effect-agent/core/Messaging";
-import { SubagentGrant } from "@effect-agent/core/SubagentContract";
-import { WorkerError } from "@effect-agent/core/Worker";
-import { DurableWorkerBinding } from "@effect-agent/thread/AgentRegistration";
-import { PeerAuthorizer, PeerRoutes } from "@effect-agent/thread/MessagingHost";
+import { DurableWorkerBinding } from "@effect-agent/thread/agent-registration";
+import { PeerAuthorizer, PeerRoutes } from "@effect-agent/thread/messaging-host";
 import {
   WorkerBudgetAuthorizer,
   WorkerConcurrencyResolver,
   WorkerHostAuthorizer,
   WorkerHostConfig,
   WorkerPolicyResolver,
-} from "@effect-agent/thread/WorkerHost";
+} from "@effect-agent/thread/worker-host";
 import { Duration, Effect, Layer, Option, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import type { ThreadId, SubmissionId } from "effect-agent/identifiers";
+import { MessagingError } from "effect-agent/messaging";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentGrant } from "effect-agent/subagent-contract";
+import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
+import { WorkerError } from "effect-agent/worker";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { TEST_DIGESTS, TEST_PRINCIPAL, finalParts } from "./fixtures.ts";

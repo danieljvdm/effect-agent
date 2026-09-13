@@ -1,5 +1,4 @@
 ---
-"@effect-agent/capabilities": patch
 ---
 
 Pass the original Schema-decoded delegation parameters to `projectResult` on both ephemeral and

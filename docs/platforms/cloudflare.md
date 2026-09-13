@@ -20,7 +20,7 @@ Keep framework packages at one release and add your [model provider](../guide/ge
 
 ## AI Gateway {#ai-gateway}
 
-The Node-safe `@effect-agent/platform-cloudflare/CloudflareAiGateway` subpath configures
+The Node-safe `@effect-agent/platform-cloudflare/cloudflare-ai-gateway` subpath configures
 upstream Effect clients in Workers, Durable Objects, Node, or Bun. `Gateway.provide` supplies
 the client directly in a Layer pipeline; model selection, tools, response decoding, streaming,
 and typed provider errors stay with upstream Effect AI. Use the configured client for primary agents, subagents,
@@ -37,7 +37,7 @@ For provider-native routing with stored keys or Unified Billing, pass the upstre
 `layer` factory and your resolved gateway configuration:
 
 ```ts twoslash
-import * as Gateway from "@effect-agent/platform-cloudflare/CloudflareAiGateway";
+import * as Gateway from "@effect-agent/platform-cloudflare/cloudflare-ai-gateway";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -102,9 +102,9 @@ Object namespace in the generated `Cloudflare.Env`.
 ```ts twoslash
 // @types: @cloudflare/workers-types
 import { Agent } from "effect-agent";
-import { AgentPolicy } from "effect-agent/AgentPolicy";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
-import { DefinitionDigestInput } from "@effect-agent/thread/Records";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { DefinitionDigestInput } from "@effect-agent/thread/records";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Layer, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
@@ -192,8 +192,8 @@ for Workers using the older `migrations` array.
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
-import { type ThreadObjectRpc } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import { type ThreadObjectRpc } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 
 export const threadClientLayer = (env: { THREADS: DurableObjectNamespace<ThreadObjectRpc> }) =>
   CloudflareThreadClient.layerFromBinding({ namespace: env.THREADS });
@@ -274,13 +274,13 @@ Use the optional publication Layer to deliver canonical records or durable appro
 unknown-resolution intents to a host-owned destination:
 
 ```ts
-import { ThreadPublication } from "@effect-agent/platform-cloudflare/Alarm";
+import { ThreadPublication } from "@effect-agent/platform-cloudflare/alarm";
 import {
   DurableObjectContext,
   ThreadObjectIdentity,
-} from "@effect-agent/platform-cloudflare/CloudflareBindings";
-import { ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadStore } from "@effect-agent/thread/thread-store";
+import { SubmissionLedger } from "@effect-agent/thread/submission-ledger";
 
 // `makePublication` is an application Effect yielding ThreadPublicationService.
 // It yields the raw LOCAL ThreadStore and SubmissionLedger, native DurableObjectContext,
@@ -321,7 +321,7 @@ retry, and interruption remains interruption. Custom host facts must be committe
 ### Maintain a disposable Thread index
 
 Supply `projection` to `ThreadObject.layer` with a Layer providing
-`ThreadProjectionMaintenance` from `@effect-agent/thread/ThreadProjectionMaintenance`.
+`ThreadProjectionMaintenance` from `@effect-agent/thread/thread-projection-maintenance`.
 The Layer receives the raw local `ThreadStore` and the same owner `SqlClient`; additional
 services it provides are exposed by the resulting runtime Layer so Tools can share that index.
 
@@ -359,7 +359,7 @@ owner authorization Layer, `ProjectMemory` class, and conditional update caller.
 }
 ```
 
-Add `@effect-agent/storage-cloudflare` and `@effect-agent/capabilities` alongside the packages above.
+Add `@effect-agent/storage-cloudflare` alongside the packages above.
 The owner assembles `doMemoryStoreLayerWithFailpoints` with `SqliteClient.layer({ storage: ctx.storage })`.
 Its storage-backed transaction commits the revision and operation receipt together. Local users can
 instead provide `doMemoryStoreLayer(ctx.storage)` directly. Neither path imports Node storage.
@@ -369,14 +369,14 @@ Bind the namespace and principal in authenticated host code. Never accept them f
 ```ts twoslash
 // @types: @cloudflare/workers-types
 import { MemoryNamespace } from "effect-agent";
-import { MemoryAccess } from "effect-agent/MemoryRevalidation";
-import { MemoryLookup, MemoryRecallLimits } from "effect-agent/MemoryReference";
-import { MemoryScope } from "effect-agent/MemoryStore";
+import { MemoryAccess } from "effect-agent/memory-revalidation";
+import { MemoryLookup, MemoryRecallLimits } from "effect-agent/memory-reference";
+import { MemoryScope } from "effect-agent/memory-store";
 import {
   CloudflareMemoryClient,
   type MemoryObjectRpc,
-} from "@effect-agent/platform-cloudflare/CloudflareMemory";
-import { Principal } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/platform-cloudflare/cloudflare-memory";
+import { Principal } from "@effect-agent/thread/submission-ledger";
 import { Effect, Schema } from "effect";
 
 const Projects = MemoryNamespace.define({
@@ -461,8 +461,7 @@ estimator; without it, recall conservatively estimates one token per UTF-8 byte.
 covers revalidation and local composition; the engine still enforces its full per-call context budget.
 
 Use `client.revalidate(candidates, limits)` when you need validated passages without rendering.
-To combine multiple readers under one shared budget, use `Memory.recall` from `@effect-agent/core`
-or `@effect-agent/capabilities` with their revalidation effects as sources. It retains explicit source
+To combine multiple readers under one shared budget, use `Memory.recall` from `effect-agent` with their revalidation effects as sources. It retains explicit source
 IDs and essential/optional policy for that multi-reader case.
 
 For an external semantic index, call `client.revalidateSemantic(search, profile, limits)` with its
@@ -509,7 +508,7 @@ writer call does not change them. Do not create a second independently locked DO
 `ThreadObject.layer` exposes its existing generic Effect `SqlClient` through `ThreadObject.Services`.
 Build optional owner-local repositories after that Layer and reuse this client. For local Memory,
 provide `memoryStoreLayer` with explicit `SqlMemoryLimits`, using `defaultDoMemoryStorageLimits`
-from `@effect-agent/storage-cloudflare/DoMemoryStore` or stricter validated limits. The generic SQL
+from `@effect-agent/storage-cloudflare/do-memory-store` or stricter validated limits. The generic SQL
 Memory defaults are not Durable Object limits. Thread Objects install no Memory tables unless
 the host composes the Memory store.
 

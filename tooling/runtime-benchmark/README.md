@@ -28,6 +28,11 @@ measurement. `perf:compare` always bypasses task caching. `--help` describes the
 The cleanup lines remove only declaration artifacts emitted by older package builds in those
 disposable checkouts. Every other modified or untracked file fails clean-checkout validation.
 
+Comparison staging aliases historical PascalCase exports to the current kebab-case paths without
+changing their implementations. Workers explicitly provide the same Effect AI identity generator
+to both revisions so releases predating default IDs remain runnable. These compatibility choices
+apply only to the comparison fixtures; they add no published export aliases or runtime fallbacks.
+
 The workflow runs on pushes to `main`, comparing the most recently published
 `effect-agent@…` release tag against the triggering `main` commit. It includes beta
 prereleases, excludes drafts and sibling-package/Action releases, and resolves the tag to

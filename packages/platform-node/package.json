@@ -16,12 +16,12 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./NodeDurableAgentRuntime": "./src/NodeDurableAgentRuntime.ts",
-    "./NodeDurableHost": "./src/NodeDurableHost.ts",
-    "./NodeScheduling": "./src/NodeScheduling.ts",
-    "./NodeSubscriptions": "./src/NodeSubscriptions.ts",
-    "./NodeWakeScheduler": "./src/NodeWakeScheduler.ts",
-    "./NodeWorkflow": "./src/NodeWorkflow.ts"
+    "./node-durable-agent-runtime": "./src/NodeDurableAgentRuntime.ts",
+    "./node-durable-host": "./src/NodeDurableHost.ts",
+    "./node-scheduling": "./src/NodeScheduling.ts",
+    "./node-subscriptions": "./src/NodeSubscriptions.ts",
+    "./node-wake-scheduler": "./src/NodeWakeScheduler.ts",
+    "./node-workflow": "./src/NodeWorkflow.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -31,16 +31,14 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
     "@effect-agent/thread": "workspace:*",
     "@effect-agent/workflow": "workspace:*",
     "@effect/platform-node": "catalog:",
-    "@effect/sql-sqlite-node": "catalog:"
+    "@effect/sql-sqlite-node": "catalog:",
+    "effect-agent": "workspace:*"
   },
   "devDependencies": {
-    "@effect-agent/capabilities": "workspace:*",
     "@effect/vitest": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",

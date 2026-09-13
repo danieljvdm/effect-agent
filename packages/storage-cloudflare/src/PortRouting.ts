@@ -11,7 +11,7 @@ import {
   SubmissionLookupById,
   type SubmissionLookupByKey,
   type SubmissionSnapshot,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import {
   AppendConflict,
   ThreadMaterialization,
@@ -19,7 +19,7 @@ import {
   ThreadStore,
   ThreadStoreError,
   FenceRejected,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
 
 import {

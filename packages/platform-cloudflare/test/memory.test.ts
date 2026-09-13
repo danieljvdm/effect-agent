@@ -1,27 +1,12 @@
-import { type RecalledMemory } from "@effect-agent/core/Memory";
-import { type MemoryRecallError } from "@effect-agent/core/MemoryReference";
-import {
-  MemoryWrite,
-  MemoryScope,
-  MemoryMutationPoint,
-  MemoryReader,
-  MemoryWriter,
-} from "@effect-agent/core/MemoryStore";
-import {
-  MemoryIndexCandidate,
-  MemoryIndexSearch,
-  SemanticMemoryProfile,
-} from "@effect-agent/core/SemanticMemoryIndex";
-import { SemanticCandidateLimits } from "@effect-agent/core/SemanticMemoryRevalidation";
-import { type cloudflareMemoryWriterLayer } from "@effect-agent/platform-cloudflare/CloudflareMemory";
+import { type cloudflareMemoryWriterLayer } from "@effect-agent/platform-cloudflare/cloudflare-memory";
 import {
   CloudflareMemoryClient,
   MemoryObjectNamespace,
-} from "@effect-agent/platform-cloudflare/CloudflareMemory";
+} from "@effect-agent/platform-cloudflare/cloudflare-memory";
 import {
   DoMemoryStorageLimits,
   doMemoryStoreLayer,
-} from "@effect-agent/storage-cloudflare/DoMemoryStore";
+} from "@effect-agent/storage-cloudflare/do-memory-store";
 import {
   decodeMemoryWire,
   encodeMemoryWire,
@@ -32,10 +17,25 @@ import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   type MemoryOwnerFailure,
-} from "@effect-agent/storage-cloudflare/MemoryProtocol";
-import { Principal } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/storage-cloudflare/memory-protocol";
+import { Principal } from "@effect-agent/thread/submission-ledger";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Clock, Deferred, Effect, Fiber, Schema } from "effect";
+import { type RecalledMemory } from "effect-agent/memory";
+import { type MemoryRecallError } from "effect-agent/memory-reference";
+import {
+  MemoryWrite,
+  MemoryScope,
+  MemoryMutationPoint,
+  MemoryReader,
+  MemoryWriter,
+} from "effect-agent/memory-store";
+import {
+  MemoryIndexCandidate,
+  MemoryIndexSearch,
+  SemanticMemoryProfile,
+} from "effect-agent/semantic-memory-index";
+import { SemanticCandidateLimits } from "effect-agent/semantic-memory-revalidation";
 import { TestClock } from "effect/testing";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 

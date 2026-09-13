@@ -1,6 +1,6 @@
-import { type ThreadId } from "@effect-agent/core/Identifiers";
 import type { Scope } from "effect";
 import { Context, Deferred, Effect, Layer, Ref, Stream } from "effect";
+import { type ThreadId } from "effect-agent/identifiers";
 
 /**
  * Incarnation-local, thread-keyed wake registrations. A registration is installed before

@@ -3,15 +3,15 @@ import { fileURLToPath } from "node:url";
 import * as v8 from "node:v8";
 import * as vm from "node:vm";
 
-import { ToolCallId } from "@effect-agent/core/Identifiers";
-import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
-import { ObligationThresholds } from "@effect-agent/thread/Admin";
-import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/DurableAgentRuntime";
-import { childThreadIdFor } from "@effect-agent/thread/RunJournal";
-import { SubmissionLedger, SubmissionLookupById } from "@effect-agent/thread/SubmissionLedger";
+import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
+import { ObligationThresholds } from "@effect-agent/thread/admin";
+import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { childThreadIdFor } from "@effect-agent/thread/run-journal";
+import { SubmissionLedger, SubmissionLookupById } from "@effect-agent/thread/submission-ledger";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Duration, Effect, FileSystem, Option, Schema, Stream, type Scope } from "effect";
+import { ToolCallId } from "effect-agent/identifiers";
 
 import { packageRoot, waitUntil, withHost, withRuntime } from "../crash/harness.ts";
 import {

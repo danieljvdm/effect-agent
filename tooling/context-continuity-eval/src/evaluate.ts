@@ -1,20 +1,13 @@
-import * as ContextTools from "@effect-agent/capabilities/ContextTools";
-import * as MemoryNotes from "@effect-agent/capabilities/MemoryNotes";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import { MemoryKey, MemoryReader } from "@effect-agent/core/MemoryStore";
-import { contextWindowId } from "@effect-agent/engine/Compaction";
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
-import { digestDefinitions, digestDefinition } from "@effect-agent/thread/Digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { DurableRuntimeFailpointError } from "@effect-agent/thread/DurableFailpoint";
-import { CanonicalRecordEnvelope, DefinitionDigestInput } from "@effect-agent/thread/Records";
-import { runIdForSubmission } from "@effect-agent/thread/RunJournal";
-import { memoryStoreLayer } from "@effect-agent/thread/SqlMemoryStore";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
-import * as ThreadContextHistory from "@effect-agent/thread/ThreadContextHistory";
-import { ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
+import { digestDefinitions, digestDefinition } from "@effect-agent/thread/digest";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "@effect-agent/thread/durable-failpoint";
+import { CanonicalRecordEnvelope, DefinitionDigestInput } from "@effect-agent/thread/records";
+import { runIdForSubmission } from "@effect-agent/thread/run-journal";
+import { memoryStoreLayer } from "@effect-agent/thread/sql-memory-store";
+import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
+import * as ThreadContextHistory from "@effect-agent/thread/thread-context-history";
+import { ThreadStore } from "@effect-agent/thread/thread-store";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import {
   Clock,
@@ -29,6 +22,13 @@ import {
   Ref,
   Schema,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { contextWindowId } from "effect-agent/compaction";
+import * as ContextTools from "effect-agent/context-tools";
+import { ThreadId } from "effect-agent/identifiers";
+import * as MemoryNotes from "effect-agent/memory-notes";
+import { MemoryKey, MemoryReader } from "effect-agent/memory-store";
 import { IdGenerator, Toolkit } from "effect/unstable/ai";
 
 import {

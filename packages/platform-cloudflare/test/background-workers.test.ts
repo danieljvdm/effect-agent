@@ -1,14 +1,14 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import type { SubmissionId } from "@effect-agent/core/Identifiers";
-import { MessageAdmission } from "@effect-agent/core/Messaging";
-import { WorkerCompletion, WorkerUpdate } from "@effect-agent/core/Worker";
-import { SubagentHost } from "@effect-agent/engine/SubagentHost";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { MessageDeliveryStore } from "@effect-agent/thread/MessageDelivery";
-import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { MessageDeliveryStore } from "@effect-agent/thread/message-delivery";
+import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/thread-store";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import type { SubmissionId } from "effect-agent/identifiers";
+import { MessageAdmission } from "effect-agent/messaging";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentHost } from "effect-agent/subagent-host";
+import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
 import { DurableObject } from "effect-cf";
 import { expect, it } from "vite-plus/test";
 

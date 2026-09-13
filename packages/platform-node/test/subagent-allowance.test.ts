@@ -1,29 +1,32 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import { SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities/Subagent";
-import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
-import { compileRegistrations, DurableWorkerBinding } from "@effect-agent/thread/AgentRegistration";
-import { digestDefinitions } from "@effect-agent/thread/Digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
+import {
+  compileRegistrations,
+  DurableWorkerBinding,
+} from "@effect-agent/thread/agent-registration";
+import { digestDefinitions } from "@effect-agent/thread/digest";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/DurableFailpoint";
-import { DefinitionDigests, DefinitionDigestInput, Digest } from "@effect-agent/thread/Records";
-import { childThreadIdFor } from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/durable-failpoint";
+import { DefinitionDigests, DefinitionDigestInput, Digest } from "@effect-agent/thread/records";
+import { childThreadIdFor } from "@effect-agent/thread/run-journal";
 import {
   ApprovalDecisionCommand,
   IdempotencyKey,
   Principal,
-} from "@effect-agent/thread/SubmissionLedger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/submission-ledger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { ToolExecutionClass } from "effect-agent/durable-step";
+import { ThreadId, ToolCallId } from "effect-agent/identifiers";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));

@@ -1,6 +1,4 @@
 ---
-"@effect-agent/core": patch
-"@effect-agent/capabilities": patch
 "@effect-agent/storage-memory": patch
 "@effect-agent/storage-sqlite": patch
 ---

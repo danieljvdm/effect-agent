@@ -1,14 +1,14 @@
 import {
   BrowserRunInteractiveBinding,
   browserRunInteractiveLayer,
-} from "@effect-agent/platform-cloudflare/InteractiveBrowser";
+} from "@effect-agent/platform-cloudflare/interactive-browser";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Layer } from "effect";
 import {
   BrowserFillRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
-} from "@effect-agent/sandbox/InteractiveBrowser";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+} from "effect-agent/interactive-browser";
 import { vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";

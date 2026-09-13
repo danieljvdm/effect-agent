@@ -1,35 +1,17 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy, CompactionPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId, ReceiptId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
-import {
-  COMPACTION_SUMMARY_PREFIX,
-  CONTEXT_ROLLOVER_PREFIX,
-  contextWindowId,
-  estimatePromptTokens,
-} from "@effect-agent/engine/Compaction";
-import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
-import {
-  ContextRolloverRequest,
-  ContextRolloverTool,
-  ContextWindow,
-} from "@effect-agent/engine/ContextWindow";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
-import { RunContextPreparation, RunToolAuthorization } from "@effect-agent/engine/RunOptions";
-import { ToolBroker } from "@effect-agent/engine/ToolBroker";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
-import { DurableWorkerBinding } from "@effect-agent/thread/AgentRegistration";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
+import { DurableWorkerBinding } from "@effect-agent/thread/agent-registration";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   Receipt,
   recoveryRepairRecordId,
   type DurableSubmitOptions,
-} from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/thread/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/DurableFailpoint";
+} from "@effect-agent/thread/durable-failpoint";
 import {
   BatchId,
   CanonicalRecordEnvelope,
@@ -43,7 +25,7 @@ import {
   ProducerId,
   RecordEnvelope,
   RunCompleted,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   modelResponseRecordId,
   projectRunJournal,
@@ -54,7 +36,7 @@ import {
   toolCallSettledRecordId,
   turnCanonicalBatch,
   turnIdForRun,
-} from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/run-journal";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -72,12 +54,12 @@ import {
   submissionSettlementRecordId,
   type AdmissionConflict,
   type SettlementConflict,
-} from "@effect-agent/thread/SubmissionLedger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
-import { replayThread } from "@effect-agent/thread/ThreadProjection";
-import { ThreadRead, ThreadStore, type FenceRejected } from "@effect-agent/thread/ThreadStore";
-import { ToolReconciler } from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler, makeWakeSubscriptionHub } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
+import { replayThread } from "@effect-agent/thread/thread-projection";
+import { ThreadRead, ThreadStore, type FenceRejected } from "@effect-agent/thread/thread-store";
+import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler, makeWakeSubscriptionHub } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, layer } from "@effect/vitest";
 import {
@@ -95,6 +77,24 @@ import {
   Schema,
   Stream,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
+import {
+  COMPACTION_SUMMARY_PREFIX,
+  CONTEXT_ROLLOVER_PREFIX,
+  contextWindowId,
+  estimatePromptTokens,
+} from "effect-agent/compaction";
+import { ContextCompactor } from "effect-agent/context-compactor";
+import {
+  ContextRolloverRequest,
+  ContextRolloverTool,
+  ContextWindow,
+} from "effect-agent/context-window";
+import { ToolExecutionClass } from "effect-agent/durable-step";
+import { ThreadId, ReceiptId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
+import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
+import { ToolBroker } from "effect-agent/tool-broker";
 import { TestClock } from "effect/testing";
 import {
   AiError,

@@ -1,10 +1,9 @@
-import { ThreadId, RunId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
 import {
   digestCanonicalBatch,
   digestDefinitions,
   digestJson,
   EMPTY_TAIL_DIGEST,
-} from "@effect-agent/thread/Digest";
+} from "@effect-agent/thread/digest";
 import {
   CanonicalBatch,
   CanonicalRecordEnvelope,
@@ -18,7 +17,7 @@ import {
   ProducerEpoch,
   RecordEnvelope,
   RunStartedRecord,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   approvalDecisionBatchId,
   markUnknownBatchId,
@@ -38,7 +37,7 @@ import {
   turnPreparedBatchId,
   turnResponseBatchId,
   turnResultsBatchId,
-} from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/run-journal";
 import {
   AbortCommand,
   AbortIntent,
@@ -77,22 +76,23 @@ import {
   UnknownResolutionCommand,
   UnknownResolutionConflict,
   UnknownResolutionIntent,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import {
   ThreadProjection,
   replayThread,
   replayThreadFromCheckpoint,
-} from "@effect-agent/thread/ThreadProjection";
-import { ThreadCheckpoint } from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-projection";
+import { ThreadCheckpoint } from "@effect-agent/thread/thread-store";
 import {
   PreparedToolCallEvidence,
   ReconciliationDecision,
   ToolReconciler,
-} from "@effect-agent/thread/ToolReconciler";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/tool-reconciler";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { Duration, Effect, Schema } from "effect";
+import { ThreadId, RunId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
 import { Prompt } from "effect/unstable/ai";
 
 import { historicalCheckpointJson } from "../../../test/fixtures/checkpoints.ts";

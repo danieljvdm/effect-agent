@@ -43,7 +43,7 @@ Schema with `Output.text`. The Schema must encode as a string; its checks, trans
 service requirements still apply.
 
 ```ts twoslash
-import * as Output from "@effect-agent/engine/Output";
+import * as Output from "effect-agent/output";
 import { Schema } from "effect";
 
 const Reply = Output.text(Schema.String.check(Schema.isMaxLength(20_000)));
@@ -149,7 +149,7 @@ model turn. The projector receives decoded tool parameters and result:
 
 ```ts twoslash
 import { Agent } from "effect-agent";
-import { AgentPolicy } from "effect-agent/AgentPolicy";
+import { AgentPolicy } from "effect-agent/agent-policy";
 import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 

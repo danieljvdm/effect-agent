@@ -1,43 +1,42 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { estimatePromptTokens } from "@effect-agent/engine/Compaction";
-import { CompactionError, ContextCompactor } from "@effect-agent/engine/ContextCompactor";
-import {
-  DurableStep,
-  DurableStepError,
-  ToolExecutionClass,
-} from "@effect-agent/engine/DurableStep";
-import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import {
   type ThreadMaintenanceFailpointHandler,
   type ThreadMaintenanceFailpointLocation,
-} from "@effect-agent/platform-cloudflare/Alarm";
-import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/DoStorageError";
-import { type DoStorageFailpointHandler } from "@effect-agent/storage-cloudflare/DoStorageFailpoint";
-import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/DoStorageFailpointTesting";
-import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
-import { type DurableSubmitOptions } from "@effect-agent/thread/DurableAgentRuntime";
+} from "@effect-agent/platform-cloudflare/alarm";
+import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/do-storage-error";
+import { type DoStorageFailpointHandler } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
+import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing";
+import {
+  DurableWorkerBinding,
+  type ResolvedBinding,
+} from "@effect-agent/thread/agent-registration";
+import { type DurableSubmitOptions } from "@effect-agent/thread/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointHandler,
   type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/DurableFailpoint";
-import { DefinitionDigestInput, DefinitionDigests, Digest } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/durable-failpoint";
+import { DefinitionDigestInput, DefinitionDigests, Digest } from "@effect-agent/thread/records";
 import {
   ScheduleFailpointError,
   type ScheduleOwner,
   ScheduleRecord,
   ScheduleStorageError,
-} from "@effect-agent/thread/Schedule";
-import { scheduleOwnerKey } from "@effect-agent/thread/ScheduleTransition";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/schedule";
+import { scheduleOwnerKey } from "@effect-agent/thread/schedule-transition";
+import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
 import {
   ReconciliationSafeToRetry,
   ReconciliationUncertain,
   ToolReconciler,
-} from "@effect-agent/thread/ToolReconciler";
+} from "@effect-agent/thread/tool-reconciler";
 import { type Clock, Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { estimatePromptTokens } from "effect-agent/compaction";
+import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
+import { ThreadId, ToolCallId } from "effect-agent/identifiers";
+import { RunToolAuthorization } from "effect-agent/run-options";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { layerFromBindings } from "../src/internal/layers.ts";

@@ -1,12 +1,10 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-import { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
-import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
-import { ScriptedModel } from "@effect-agent/testing/ScriptedModel";
-import { digestJson } from "@effect-agent/thread/Digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
+import { ScriptedModel } from "@effect-agent/testing/scripted-model";
+import { digestJson } from "@effect-agent/thread/digest";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
 import {
   DefinitionDigests,
   DeploymentId,
@@ -14,7 +12,7 @@ import {
   ProducerId,
   RecordEnvelope,
   SubmissionSettledRecord,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   AdmissionRequest,
   ClaimRequest,
@@ -26,9 +24,9 @@ import {
   SubmissionLedger,
   submissionSettlementId,
   submissionSettlementRecordId,
-} from "@effect-agent/thread/SubmissionLedger";
-import type { Settlement } from "@effect-agent/thread/SubmissionLedger";
-import type { SubmissionStatus } from "@effect-agent/thread/SubmissionStatus";
+} from "@effect-agent/thread/submission-ledger";
+import type { Settlement } from "@effect-agent/thread/submission-ledger";
+import type { SubmissionStatus } from "@effect-agent/thread/submission-status";
 import {
   Clock,
   Context,
@@ -41,6 +39,8 @@ import {
   Stream,
 } from "effect";
 import { Agent } from "effect-agent";
+import { ContextCompactor } from "effect-agent/context-compactor";
+import { AgentId, ThreadId } from "effect-agent/identifiers";
 import { Model, Toolkit } from "effect/unstable/ai";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { SqlClient } from "effect/unstable/sql/SqlClient";

@@ -1,13 +1,5 @@
-import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities/Redaction";
-import * as Agent from "@effect-agent/core/Agent";
-import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
-import {
-  type RunApprovalDecision,
-  type RunApprovalHook,
-  type RunApprovalRequest,
-} from "@effect-agent/engine/RunOptions";
-import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/MemorySubmissionLedger";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
+import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import {
   ActivityCatalogLayer,
   bookFlightIdempotencyKey,
@@ -24,26 +16,34 @@ import {
   TravelPlannerPhase5,
   TravelPlannerPhase5ToolkitLayer,
   TravelSupplierReconcilerLayer,
-} from "@effect-agent/testing/TravelPlanner";
+} from "@effect-agent/testing/travel-planner";
 import {
   DurableAgentRuntime,
   DurableApprovalResolver,
   DurableRuntimeConfig,
-} from "@effect-agent/thread/DurableAgentRuntime";
-import { CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
-import { runIdForSubmission } from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/durable-agent-runtime";
+import { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
+import { runIdForSubmission } from "@effect-agent/thread/run-journal";
 import {
   ApprovalDecisionCommand,
   IdempotencyKey,
   SubmissionLedger,
   SubmissionLookupById,
-} from "@effect-agent/thread/SubmissionLedger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/DurableFailpointTestControl";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { WakeScheduler } from "@effect-agent/thread/WakeScheduler";
+} from "@effect-agent/thread/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
+import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { ThreadId, ToolCallId, type SubmissionId } from "effect-agent/identifiers";
+import { Redactor, StructuralRedactorLive } from "effect-agent/redaction";
+import {
+  type RunApprovalDecision,
+  type RunApprovalHook,
+  type RunApprovalRequest,
+} from "effect-agent/run-options";
 import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
 
 // ---------------------------------------------------------------------------

@@ -1,5 +1,4 @@
 ---
-"@effect-agent/engine": minor
 ---
 
 Bound model responses, Run event replay, Subagent event bursts, diagnostics, and programmatic Tool

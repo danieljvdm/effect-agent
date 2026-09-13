@@ -2,7 +2,7 @@ import {
   ScriptedModel,
   type ScriptedStreamPart,
   type ScriptedTurnInput,
-} from "@effect-agent/testing/ScriptedModel";
+} from "@effect-agent/testing/scripted-model";
 import {
   Clock,
   Context,
@@ -18,19 +18,19 @@ import {
   Tracer,
 } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
-import * as EphemeralThreads from "effect-agent/EphemeralThreads";
-import { RunId, ThreadId } from "effect-agent/Identifiers";
-import * as Mcp from "effect-agent/Mcp";
-import * as McpClient from "effect-agent/McpClient";
-import * as Memory from "effect-agent/Memory";
-import * as MemoryNamespace from "effect-agent/MemoryNamespace";
+import * as EphemeralThreads from "effect-agent/ephemeral-threads";
+import { RunId, ThreadId } from "effect-agent/identifiers";
+import * as Mcp from "effect-agent/mcp";
+import * as McpClient from "effect-agent/mcp-client";
+import * as Memory from "effect-agent/memory";
+import * as MemoryNamespace from "effect-agent/memory-namespace";
 import {
   MemoryAttribution,
   MemoryContent,
   MemoryLookup,
   MemoryPassage,
   MemoryRecallLimits,
-} from "effect-agent/MemoryReference";
+} from "effect-agent/memory-reference";
 import {
   applyMemoryWrite,
   MemoryKey,
@@ -38,13 +38,13 @@ import {
   MemoryScope,
   MemoryWriter,
   type MemoryDocument,
-} from "effect-agent/MemoryStore";
-import * as Remembering from "effect-agent/Remembering";
-import * as Protocol from "effect-agent/RememberingStore";
-import { toRunThreadOptions } from "effect-agent/RunHooks";
-import * as Subagent from "effect-agent/Subagent";
-import * as Reservations from "effect-agent/SubagentReservations";
-import { ThreadHistory } from "effect-agent/ThreadHistory";
+} from "effect-agent/memory-store";
+import * as Remembering from "effect-agent/remembering";
+import * as Protocol from "effect-agent/remembering-store";
+import { toRunThreadOptions } from "effect-agent/run-hooks";
+import * as Subagent from "effect-agent/subagent";
+import * as Reservations from "effect-agent/subagent-reservations";
+import { ThreadHistory } from "effect-agent/thread-history";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 

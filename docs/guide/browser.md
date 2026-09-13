@@ -122,14 +122,14 @@ application owns the Cloudflare credentials and provides the `HttpClient`; the r
 typed Effect channel.
 
 ```ts twoslash
-import { browserRestCaptureLayer } from "@effect-agent/platform-cloudflare/BrowserRestCapture";
+import { browserRestCaptureLayer } from "@effect-agent/platform-cloudflare/browser-rest-capture";
 import {
   CapturePageMarkdown,
   PageCapture,
   PageCaptureLimits,
   PageCaptureRequest,
   PageUrlTarget,
-} from "@effect-agent/sandbox/PageCapture";
+} from "effect-agent/page-capture";
 import { Config, Effect } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -166,7 +166,7 @@ import { WebCapture } from "effect-agent";
 import {
   CloudflareBrowser,
   type CloudflareBrowserOptions,
-} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
+} from "@effect-agent/platform-cloudflare/cloudflare-browser";
 import { Toolkit } from "effect/unstable/ai";
 
 declare const env: { BROWSER: CloudflareBrowserOptions["browser"] };
@@ -199,7 +199,7 @@ import { WebCapture } from "effect-agent";
 import {
   CloudflareBrowserRest,
   type CloudflareBrowserRestOptions,
-} from "@effect-agent/platform-cloudflare/BrowserRestCapture";
+} from "@effect-agent/platform-cloudflare/browser-rest-capture";
 import { Layer } from "effect";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -235,8 +235,8 @@ For a custom capture adapter, provide its Layer directly to `readPage.handlers`.
 cancels the provider job when the adapter has a job identity to clean up.
 
 ```ts twoslash
-import { browserRestCrawlLayer } from "@effect-agent/platform-cloudflare/BrowserRestCrawl";
-import { PageCrawl, PageCrawlLimits, PageCrawlRequest } from "@effect-agent/sandbox/PageCrawl";
+import { browserRestCrawlLayer } from "@effect-agent/platform-cloudflare/browser-rest-crawl";
+import { PageCrawl, PageCrawlLimits, PageCrawlRequest } from "effect-agent/page-crawl";
 import { Config, Effect, Layer, Stream } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -302,13 +302,13 @@ an undispatched provider action can be identified without treating them as a suc
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { CloudflareInteractiveBrowser } from "@effect-agent/platform-cloudflare/InteractiveBrowser";
+import { CloudflareInteractiveBrowser } from "@effect-agent/platform-cloudflare/interactive-browser";
 import {
   BrowserNavigateRequest,
   BrowserReadTextRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
-} from "@effect-agent/sandbox/InteractiveBrowser";
+} from "effect-agent/interactive-browser";
 import { Effect, Layer, Redacted } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { WorkerEnvironment } from "effect-cf";
@@ -382,7 +382,7 @@ that boundary, so do not automatically replay it.
 
 `ProtectedBrowser` is a separate private pass, not an upgrade of an interactive session. Import
 `browserRunProtectedLayer` and `browserRunProtectedBindingLayer` from
-`@effect-agent/platform-cloudflare/ProtectedBrowser`. Provide the binding Layer, the same
+`@effect-agent/platform-cloudflare/protected-browser`. Provide the binding Layer, the same
 `BrowserRunSessionLifecycle` used above, and an invocation-specific `BrowserCredentialAccess`.
 Use `ExactHosts` for a fixed network allowlist. `Unrestricted` is an explicit host choice;
 `PublicWeb` is unsupported. Credential grants never expand network policy.
@@ -584,7 +584,7 @@ remains subject to the pass deadline and lock. Authorize viewport changes in you
 Session closure waits up to ten seconds to confirm whole-browser termination or exact-session
 absence. A pending close or transport/authentication failure is not proof of cleanup.
 `BrowserRunCleanupError` reports a sanitized reason. Correct authorization or configuration
-failures before retrying. The [interactive browser API comments](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/src/InteractiveBrowser.ts)
+failures before retrying. The [interactive browser API comments](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/src/interactive-browser.ts)
 describe action timing and lifecycle details.
 
 ## Hosted binding proof

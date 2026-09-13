@@ -1,10 +1,10 @@
-import { resolveTierThree } from "@effect-agent/testing/Certification";
+import { resolveTierThree } from "@effect-agent/testing/certification";
 import {
   CertificationCaseResult,
   CertificationSweepResult,
   CertificationTierThreeReport,
   CertifiedAdapterIdentity,
-} from "@effect-agent/thread/testing/Certification";
+} from "@effect-agent/thread/testing/certification";
 import { describe, expect, it } from "@effect/vitest";
 import { DateTime, Effect } from "effect";
 

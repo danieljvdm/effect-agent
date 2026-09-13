@@ -1,7 +1,12 @@
-import * as Remembering from "@effect-agent/capabilities/Remembering";
-import * as Agent from "@effect-agent/core/Agent";
-import * as Memory from "@effect-agent/core/Memory";
-import { MemoryPassage } from "@effect-agent/core/MemoryReference";
+import { doMemoryStoreLayerWithFailpoints } from "@effect-agent/storage-cloudflare/do-memory-store";
+import { ScriptedModel } from "@effect-agent/testing/scripted-model";
+import { DurableObject } from "cloudflare:workers";
+import { Clock, Deferred, Effect, Layer, ManagedRuntime, Schema, Semaphore, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import { ContextCompactor } from "effect-agent/context-compactor";
+import * as Memory from "effect-agent/memory";
+import { MemoryPassage } from "effect-agent/memory-reference";
 import {
   type MemoryDocument,
   MemoryMutationFailpoint,
@@ -9,15 +14,10 @@ import {
   MemoryReader,
   MemoryScope,
   MemoryWriter,
-} from "@effect-agent/core/MemoryStore";
-import * as Protocol from "@effect-agent/core/RememberingStore";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { doMemoryStoreLayerWithFailpoints } from "@effect-agent/storage-cloudflare/DoMemoryStore";
-import { ScriptedModel } from "@effect-agent/testing/ScriptedModel";
-import { DurableObject } from "cloudflare:workers";
-import { Clock, Deferred, Effect, Layer, ManagedRuntime, Schema, Semaphore, Stream } from "effect";
+} from "effect-agent/memory-store";
+import * as Remembering from "effect-agent/remembering";
+import * as Protocol from "effect-agent/remembering-store";
+import { ThreadHistory } from "effect-agent/thread-history";
 import { LanguageModel, Model, Toolkit } from "effect/unstable/ai";
 
 import {

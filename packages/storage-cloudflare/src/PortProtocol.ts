@@ -1,4 +1,4 @@
-import { CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+import { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import {
   AbortCommand,
   AbortIntent,
@@ -16,7 +16,7 @@ import {
   SubmissionLookup,
   SubmissionLookupByKey,
   SubmissionSnapshot,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import {
   AppendConflict,
   AppendResult,
@@ -30,7 +30,7 @@ import {
   ThreadTailRequest,
   FenceRejected,
   FencedAppendRequest,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { Schema } from "effect";
 
 /**

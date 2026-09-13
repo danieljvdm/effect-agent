@@ -1,4 +1,4 @@
-import { SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import { SubmissionLedger } from "@effect-agent/thread/submission-ledger";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";

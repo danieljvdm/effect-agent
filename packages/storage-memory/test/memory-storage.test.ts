@@ -1,6 +1,5 @@
-import { ThreadId, RunId, SubmissionId } from "@effect-agent/core/Identifiers";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
+import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
 import {
   CanonicalBatch,
   CanonicalRecord,
@@ -11,16 +10,16 @@ import {
   RunCompleted,
   UserInputRecorded,
   type CanonicalRecordPayload,
-} from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/records";
 import {
   threadStoreConformanceCases,
   threadCheckpointConformanceCases,
-} from "@effect-agent/thread/testing/ThreadStoreConformance";
+} from "@effect-agent/thread/testing/thread-store-conformance";
 import {
   ThreadProjection,
   replayThread,
   replayThreadFromCheckpoint,
-} from "@effect-agent/thread/ThreadProjection";
+} from "@effect-agent/thread/thread-projection";
 import {
   type AppendResult,
   CheckpointRejected,
@@ -34,7 +33,7 @@ import {
   FencedAppendRequest,
   LoadCheckpointRequest,
   SaveCheckpointRequest,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, describe, it } from "@effect/vitest";
 import {
@@ -51,6 +50,7 @@ import {
   Scope,
   Stream,
 } from "effect";
+import { ThreadId, RunId, SubmissionId } from "effect-agent/identifiers";
 
 const testLayer = MemoryThreadStoreLive.pipe(Layer.provide(NodeCrypto.layer));
 

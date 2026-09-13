@@ -8,6 +8,18 @@ import puppeteer, {
   type Page,
 } from "@cloudflare/puppeteer";
 import {
+  Context,
+  Clock,
+  Duration,
+  Effect,
+  Layer,
+  Redacted,
+  Ref,
+  Schema,
+  Semaphore,
+  type Scope,
+} from "effect";
+import {
   BrowserActionResult,
   BrowserScreenshotRequest,
   BrowserScrollRequest,
@@ -27,21 +39,9 @@ import {
   type BrowserHandle,
   type InteractiveBrowserError,
   type InteractiveBrowserNetworkPolicy,
-} from "@effect-agent/sandbox/InteractiveBrowser";
-import { PageScreenshotResult } from "@effect-agent/sandbox/PageScreenshot";
-import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
-import {
-  Context,
-  Clock,
-  Duration,
-  Effect,
-  Layer,
-  Redacted,
-  Ref,
-  Schema,
-  Semaphore,
-  type Scope,
-} from "effect";
+} from "effect-agent/interactive-browser";
+import { PageScreenshotResult } from "effect-agent/page-screenshot";
+import { SandboxImplementation } from "effect-agent/sandbox";
 
 import {
   BrowserRunSessionLifecycle,

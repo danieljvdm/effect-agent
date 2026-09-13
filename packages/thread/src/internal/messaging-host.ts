@@ -1,20 +1,20 @@
-import type { AgentId, ThreadId } from "@effect-agent/core/Identifiers";
-import type { InboxPage } from "@effect-agent/core/Messaging";
+import { Clock, Crypto, DateTime, Effect, Option, Schema, Stream } from "effect";
+import type { AgentId, ThreadId } from "effect-agent/identifiers";
+import type { InboxPage } from "effect-agent/messaging";
 import {
   MessageAdmission,
   MessageRef,
   MessageStatus,
   MessagingError,
   PeerName,
-} from "@effect-agent/core/Messaging";
-import { IdempotencyKey, type Principal } from "@effect-agent/core/Receipt";
-import type { WorkerSource } from "@effect-agent/core/Worker";
+} from "effect-agent/messaging";
 import {
   type MessagingHost,
   type PeerTarget,
   type SendPeerMessage,
-} from "@effect-agent/engine/MessagingHost";
-import { Clock, Crypto, DateTime, Effect, Option, Schema, Stream } from "effect";
+} from "effect-agent/messaging-host";
+import { IdempotencyKey, type Principal } from "effect-agent/receipt";
+import type { WorkerSource } from "effect-agent/worker";
 
 import { digestJson } from "../Digest.ts";
 import type { DurableSubmitOptions } from "../DurableAgentRuntime.ts";

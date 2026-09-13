@@ -1,6 +1,6 @@
-import { type ThreadId } from "@effect-agent/core/Identifiers";
-import { type ProducerId } from "@effect-agent/thread/Records";
+import { type ProducerId } from "@effect-agent/thread/records";
 import { Context, Effect, Layer, Predicate, Schema } from "effect";
+import { type ThreadId } from "effect-agent/identifiers";
 import { RpcTargets } from "effect-cf";
 
 /**

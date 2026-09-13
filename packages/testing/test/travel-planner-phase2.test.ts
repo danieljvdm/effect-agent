@@ -1,18 +1,4 @@
-import { makeUsageBudget } from "@effect-agent/capabilities/Budget";
-import {
-  FollowUpCommand,
-  makeRunCommandQueue,
-  RunCommandQueueConfig,
-  SteeringCommand,
-} from "@effect-agent/capabilities/Commands";
-import { toRunBudgetHook, toRunInputHook } from "@effect-agent/capabilities/RunHooks";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentApprovalDenied, AgentApprovalPending } from "@effect-agent/core/AgentError";
-import { ThreadId, RunId } from "@effect-agent/core/Identifiers";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/ScriptedModel";
+import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
 import {
   ActivityCatalogLayer,
   CatalogLifecycle,
@@ -31,9 +17,23 @@ import {
   TravelPlannerPhase2,
   TravelPlannerPhase2ToolkitLayer,
   TravelPlannerRuntimeLayer,
-} from "@effect-agent/testing/TravelPlanner";
+} from "@effect-agent/testing/travel-planner";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, DateTime, Effect, Fiber, Layer, Option, Ref, Schema, type Exit } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentApprovalDenied, AgentApprovalPending } from "effect-agent/agent-error";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import { makeUsageBudget } from "effect-agent/budget";
+import {
+  FollowUpCommand,
+  makeRunCommandQueue,
+  RunCommandQueueConfig,
+  SteeringCommand,
+} from "effect-agent/commands";
+import { ThreadId, RunId } from "effect-agent/identifiers";
+import { toRunBudgetHook, toRunInputHook } from "effect-agent/run-hooks";
+import { RunContextPreparationPassthrough } from "effect-agent/run-options";
+import { ThreadHistory } from "effect-agent/thread-history";
 import { Model, Prompt } from "effect/unstable/ai";
 
 const makeTravelAgent = (turns: ReadonlyArray<ScriptedTurnInput>) =>

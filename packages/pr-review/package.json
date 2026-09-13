@@ -17,8 +17,8 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./Review": "./src/Review.ts",
-    "./ReviewRepository": "./src/ReviewRepository.ts"
+    "./review": "./src/Review.ts",
+    "./review-repository": "./src/ReviewRepository.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -29,8 +29,6 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
     "effect-agent": "workspace:*"
   },
   "devDependencies": {

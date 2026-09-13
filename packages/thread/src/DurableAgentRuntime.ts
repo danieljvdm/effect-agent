@@ -1,14 +1,44 @@
-import type * as Agent from "@effect-agent/core/Agent";
-import { type RunDispositionDeclaration, type InputPromptSource } from "@effect-agent/core/Agent";
+import type { Scope } from "effect";
+import {
+  Cause,
+  Clock,
+  Context,
+  Crypto,
+  DateTime,
+  Deferred,
+  Duration,
+  Effect,
+  Equal,
+  Layer,
+  Option,
+  Ref,
+  Schedule,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
+import type * as Agent from "effect-agent/agent";
+import { type RunDispositionDeclaration, type InputPromptSource } from "effect-agent/agent";
 import {
   AgentApprovalDenied,
   AgentApprovalPending,
   AgentInputError,
   AgentToolAuthorizationDenied,
   PolicyLimit,
-} from "@effect-agent/core/AgentError";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { UpdateError } from "@effect-agent/core/AgentUpdates";
+} from "effect-agent/agent-error";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import {
+  AgentChildPending,
+  renderInputPrompt,
+  type AgentRuntimeRequirements,
+  type AgentCompletionProjectionRequirements,
+  type RuntimeBinding,
+} from "effect-agent/agent-runtime";
+import { UpdateError } from "effect-agent/agent-updates";
+import { ContextCompactor, CompactionError } from "effect-agent/context-compactor";
+import { getToolExecutionClass, type ToolExecutionClassValue } from "effect-agent/durable-step";
+import { IdGenerator } from "effect-agent/id-generator";
 import {
   type ReceiptId,
   ThreadId,
@@ -18,55 +48,11 @@ import {
   type AttemptId,
   type RunId,
   type TurnId,
-} from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import {
-  type InputMessage,
-  MessageAdmission,
-  type MessagingError,
-} from "@effect-agent/core/Messaging";
-import { Receipt } from "@effect-agent/core/Receipt";
-import { type ExhaustedLimit, type RunEvent } from "@effect-agent/core/RunEvent";
-import { RunPolicyUsage } from "@effect-agent/core/RunPolicyUsage";
-import {
-  SubagentBudgetReservation,
-  SubagentReservationAmounts,
-  SubagentGrant,
-  DelegationDepth,
-  getToolExecutionKind,
-  SubagentParentLink,
-} from "@effect-agent/core/SubagentContract";
-import { Selection, type Snapshot } from "@effect-agent/core/ToolExposure";
-import {
-  type ModelCallUsage,
-  InputTokenUsage,
-  ModelUsageGroup,
-  RunUsageSummary,
-  ChildRunUsage,
-  RunUsageReport,
-  emptyRunTotals,
-  unknownRunTotals,
-  runTotalsFromSummary,
-  sumRunTotals,
-  summarizeModelUsage,
-  OutputTokenUsage,
-} from "@effect-agent/core/Usage";
-import { FrameworkMessage } from "@effect-agent/core/Worker";
-import type { WorkerError } from "@effect-agent/core/Worker";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import {
-  AgentChildPending,
-  renderInputPrompt,
-  type AgentRuntimeRequirements,
-  type AgentCompletionProjectionRequirements,
-  type RuntimeBinding,
-} from "@effect-agent/engine/AgentRuntime";
-import { ContextCompactor, CompactionError } from "@effect-agent/engine/ContextCompactor";
-import {
-  getToolExecutionClass,
-  type ToolExecutionClassValue,
-} from "@effect-agent/engine/DurableStep";
-import { MessagingHost } from "@effect-agent/engine/MessagingHost";
+} from "effect-agent/identifiers";
+import { type InputMessage, MessageAdmission, type MessagingError } from "effect-agent/messaging";
+import { MessagingHost } from "effect-agent/messaging-host";
+import { Receipt } from "effect-agent/receipt";
+import { type ExhaustedLimit, type RunEvent } from "effect-agent/run-event";
 import {
   CurrentToolFailureObserver,
   AgentUpdateAcceptance,
@@ -89,29 +75,35 @@ import {
   type RunSubagentJoinRequest,
   type RunToolAuthorizationHook,
   type RunToolAuthorizationRequest,
-} from "@effect-agent/engine/RunOptions";
-import { SubagentHost } from "@effect-agent/engine/SubagentHost";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { RunToolVisibility } from "@effect-agent/engine/ToolExposure";
-import type { Scope } from "effect";
+} from "effect-agent/run-options";
+import { RunPolicyUsage } from "effect-agent/run-policy-usage";
 import {
-  Cause,
-  Clock,
-  Context,
-  Crypto,
-  DateTime,
-  Deferred,
-  Duration,
-  Effect,
-  Equal,
-  Layer,
-  Option,
-  Ref,
-  Schedule,
-  Schema,
-  Semaphore,
-  Stream,
-} from "effect";
+  SubagentBudgetReservation,
+  SubagentReservationAmounts,
+  SubagentGrant,
+  DelegationDepth,
+  getToolExecutionKind,
+  SubagentParentLink,
+} from "effect-agent/subagent-contract";
+import { SubagentHost } from "effect-agent/subagent-host";
+import { ThreadHistory } from "effect-agent/thread-history";
+import { Selection, type Snapshot, RunToolVisibility } from "effect-agent/tool-exposure";
+import {
+  type ModelCallUsage,
+  InputTokenUsage,
+  ModelUsageGroup,
+  RunUsageSummary,
+  ChildRunUsage,
+  RunUsageReport,
+  emptyRunTotals,
+  unknownRunTotals,
+  runTotalsFromSummary,
+  sumRunTotals,
+  summarizeModelUsage,
+  OutputTokenUsage,
+} from "effect-agent/usage";
+import { FrameworkMessage } from "effect-agent/worker";
+import type { WorkerError } from "effect-agent/worker";
 import { Prompt, type Tool } from "effect/unstable/ai";
 
 import {
@@ -544,7 +536,7 @@ export const recoveryRepairRecordId = (submissionId: SubmissionId, decisionTag: 
  * readiness are committed (DUR-001). It is an identifier for observation and reattachment, not
  * an authorization capability.
  */
-export { Receipt } from "@effect-agent/core/Receipt";
+export { Receipt } from "effect-agent/receipt";
 
 /** One executed (or deliberately deferred) recovery decision (durability §14, DUR-013). */
 export class RecoveryReport extends Schema.Class<RecoveryReport>(

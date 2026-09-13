@@ -1,5 +1,5 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
 import { Context, Effect, Schema } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 

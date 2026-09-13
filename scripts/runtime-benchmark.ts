@@ -30,6 +30,7 @@ import {
   WorkerReport,
 } from "../tooling/runtime-benchmark/src/contracts.ts";
 import { writeEvidence } from "../tooling/runtime-benchmark/src/evidence.ts";
+import { comparisonExports } from "./internal/comparison-exports.ts";
 import { PublishManifest, withPublishManifests } from "./release-publish.ts";
 
 const Revision = Schema.Struct({
@@ -207,7 +208,10 @@ export const stageCheckout = Effect.fn("benchmark.stageCheckout")(function* (
     const destination = path.join(stage, "packages", directory);
 
     yield* fs.makeDirectory(destination, { recursive: true });
-    yield* fs.copyFile(path.join(source, "package.json"), path.join(destination, "package.json"));
+    yield* fs.writeFileString(
+      path.join(destination, "package.json"),
+      JSON.stringify({ ...manifest, exports: comparisonExports(manifest.exports) }),
+    );
     yield* fs.copy(path.join(source, "dist"), path.join(destination, "dist"));
     for (const file of (yield* fs.readDirectory(path.join(destination, "dist"), {
       recursive: true,
@@ -408,9 +412,14 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
   yield* Effect.tryPromise({
     try: () =>
       build({
-        entryPoints: ["contracts.ts", "fixture.ts", "worker.ts", "evidence.ts", "seeds.ts"].map(
-          (file) => path.join(source, file),
-        ),
+        entryPoints: [
+          "contracts.ts",
+          "fixture.ts",
+          "worker.ts",
+          "evidence.ts",
+          "seeds.ts",
+          "ids.ts",
+        ].map((file) => path.join(source, file)),
         outdir: fixtures,
         bundle: false,
         platform: "node",

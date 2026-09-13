@@ -11,8 +11,8 @@ import {
   ReviewCompaction,
   ReviewContextTokenLimit,
   type ReviewRequest,
-} from "@effect-agent/pr-review/Review";
-import { type ReviewRepository } from "@effect-agent/pr-review/ReviewRepository";
+} from "@effect-agent/pr-review/review";
+import { type ReviewRepository } from "@effect-agent/pr-review/review-repository";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer, Option, Schema } from "effect";
 import { AiError } from "effect/unstable/ai";

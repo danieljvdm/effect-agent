@@ -1,9 +1,9 @@
-import type { SubscriptionAlarmProtocolError } from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
+import type { SubscriptionAlarmProtocolError } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
 import {
   makeSubscriptionPartitionAlarmHandler,
   SubscriptionAlarmExtensionError,
-} from "@effect-agent/platform-cloudflare/CloudflareSubscriptions";
-import { SubscriptionDriver } from "@effect-agent/thread/Subscriptions";
+} from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
+import { SubscriptionDriver } from "@effect-agent/thread/subscriptions";
 import { Context, DateTime, Deferred, Effect, Exit, Fiber, Schema, SchemaGetter } from "effect";
 import { DurableObjectAlarm } from "effect-cf";
 import { TestClock } from "effect/testing";

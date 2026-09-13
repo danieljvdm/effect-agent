@@ -1,22 +1,22 @@
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/Digest";
-import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/Records";
-import { ScheduleFailpoint, ScheduleFailpointError } from "@effect-agent/thread/Schedule";
+import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
+import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/records";
+import { ScheduleFailpoint, ScheduleFailpointError } from "@effect-agent/thread/schedule";
 import {
   checkV2ThreadLayout,
   upgradeV2Schedules,
   upgradeV2Subscriptions,
-} from "@effect-agent/thread/SqlStorageV2Upgrade";
+} from "@effect-agent/thread/sql-storage-v2-upgrade";
 import {
   SubscriptionFailpoint,
   SubscriptionFailpointError,
-} from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/subscription";
 import {
   MAX_THREAD_EXPORT_RECORDS,
   CheckpointRejected,
   FenceRejected,
   ThreadNotMaterialized,
   type SaveRecoveryCheckpointRequest,
-} from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect, Exit, Schema } from "effect";

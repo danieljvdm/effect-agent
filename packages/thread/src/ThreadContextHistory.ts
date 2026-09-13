@@ -1,4 +1,4 @@
-import type { ThreadId } from "@effect-agent/core/Identifiers";
+import { Effect, Layer, Schema, Stream } from "effect";
 import {
   ContextHistory,
   ContextHistoryError,
@@ -6,8 +6,8 @@ import {
   ContextHistoryPage,
   ContextHistoryRead,
   ContextHistorySearch,
-} from "@effect-agent/engine/ContextHistory";
-import { Effect, Layer, Schema, Stream } from "effect";
+} from "effect-agent/context-history";
+import type { ThreadId } from "effect-agent/identifiers";
 
 import { CanonicalRecordEnvelope, CanonicalSequence } from "./Records.ts";
 import type { ContextHistoryBoundary } from "./ThreadContextHistoryProjection.ts";

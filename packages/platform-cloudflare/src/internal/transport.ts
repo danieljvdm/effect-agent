@@ -1,7 +1,7 @@
 import {
   ThreadPortTransport,
   portTransportFailure,
-} from "@effect-agent/storage-cloudflare/PortRouting";
+} from "@effect-agent/storage-cloudflare/port-routing";
 import { Effect, Layer } from "effect";
 
 import { callThreadObject, ThreadObjectNamespace } from "../CloudflareBindings.ts";

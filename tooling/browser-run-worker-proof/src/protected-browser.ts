@@ -1,4 +1,5 @@
-import { InteractiveBrowserPolicy } from "@effect-agent/sandbox/InteractiveBrowser";
+import { Crypto, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
+import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import {
   BrowserCredentialAccess,
   CardCredential,
@@ -14,8 +15,7 @@ import {
   ProtectedBrowserObservation,
   ProtectedBrowserSession,
   UseCredential,
-} from "@effect-agent/sandbox/ProtectedBrowser";
-import { Crypto, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
+} from "effect-agent/protected-browser";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { BrowserRunWorkerProofResult } from "./contract.ts";

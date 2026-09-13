@@ -1,4 +1,3 @@
-import { AgentId } from "@effect-agent/core/Identifiers";
 import {
   GitHubWorkflowRunCompletion,
   GitHubWorkflowRunWatch,
@@ -6,22 +5,23 @@ import {
   type GitHubWorkflowRuns,
   GitHubRepository,
   makeGitHubWorkflowRunSource,
-} from "@effect-agent/thread/GitHubWorkflowSource";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/git-hub-workflow-source";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
 import {
   type SubscriptionError,
   type SubscriptionSourceError,
-} from "@effect-agent/thread/Subscription";
-import { makeSubscriptionInputBinding } from "@effect-agent/thread/SubscriptionInput";
-import { type Subscriptions } from "@effect-agent/thread/Subscriptions";
+} from "@effect-agent/thread/subscription";
+import { makeSubscriptionInputBinding } from "@effect-agent/thread/subscription-input";
 import {
   type SubscribeToEvent,
   type SubscriptionToolsOptions,
   subscriptionToolsLayer,
-} from "@effect-agent/thread/SubscriptionTools";
+} from "@effect-agent/thread/subscription-tools";
+import { type Subscriptions } from "@effect-agent/thread/subscriptions";
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Schema } from "effect";
 import type { Layer, Crypto } from "effect";
+import { AgentId } from "effect-agent/identifiers";
 import type { Tool } from "effect/unstable/ai";
 
 type Equal<Left, Right> =

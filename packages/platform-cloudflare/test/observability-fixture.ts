@@ -1,4 +1,4 @@
-import { DurableObjectContext } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { DurableObjectContext } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import type { Option } from "effect";
 import { Effect, Layer, Tracer } from "effect";
 import type { DurableObject } from "effect-cf";

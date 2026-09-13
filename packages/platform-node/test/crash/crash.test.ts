@@ -1,10 +1,9 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { NodeDurableHost } from "@effect-agent/platform-node/NodeDurableHost";
+import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
 import {
   DurableAgentRuntime,
   recoveryRepairRecordId,
-} from "@effect-agent/thread/DurableAgentRuntime";
-import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/durable-agent-runtime";
+import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import {
   modelResponseInterruptedRecordId,
   modelResponseRecordId,
@@ -16,7 +15,7 @@ import {
   toolCallSettledRecordId,
   toolCallUnknownRecordId,
   toolStepSettledRecordId,
-} from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/thread/run-journal";
 import {
   AbortCommand,
   ClaimRequest,
@@ -25,10 +24,11 @@ import {
   SubmissionLedger,
   submissionInputRecordId,
   submissionSettlementRecordId,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Option, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
 import { Prompt } from "effect/unstable/ai";
 
 import {

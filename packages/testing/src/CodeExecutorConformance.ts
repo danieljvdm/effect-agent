@@ -1,3 +1,4 @@
+import { Deferred, Duration, Effect, Fiber, Schema } from "effect";
 import {
   CodeExecutionHost,
   CodeExecutionLimits,
@@ -10,13 +11,12 @@ import {
   type CodeExecutionResult,
   type CodeHostCall,
   type CodeHostCallResult,
-} from "@effect-agent/sandbox/CodeExecutor";
+} from "effect-agent/code-executor";
 import {
   NetworkAllowlist,
   NetworkDisabled,
   type SandboxImplementation,
-} from "@effect-agent/sandbox/Sandbox";
-import { Deferred, Duration, Effect, Fiber, Schema } from "effect";
+} from "effect-agent/sandbox";
 
 /**
  * Shared `CodeExecutor` conformance (TEST-015). Every adapter — the

@@ -1,23 +1,23 @@
-import { SubmissionId } from "@effect-agent/core/Identifiers";
 import {
   ThreadObjectNamespace,
   type ThreadObjectRpc,
-} from "@effect-agent/platform-cloudflare/CloudflareBindings";
+} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import {
   CloudflareSchedulingClient,
   ScheduleOwnerNamespace,
-} from "@effect-agent/platform-cloudflare/CloudflareScheduling";
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
-import { type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
-import { scheduleOwnerKey } from "@effect-agent/thread/ScheduleTransition";
-import { type Scheduling } from "@effect-agent/thread/Scheduling";
+} from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import { type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
+import { scheduleOwnerKey } from "@effect-agent/thread/schedule-transition";
+import { type Scheduling } from "@effect-agent/thread/scheduling";
 import {
   submissionInputRecordId,
   submissionSettlementRecordId,
-} from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/thread/submission-ledger";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Crypto, Effect, Layer, Schema } from "effect";
+import { SubmissionId } from "effect-agent/identifiers";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { expect } from "vite-plus/test";
 

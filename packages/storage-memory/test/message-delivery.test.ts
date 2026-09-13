@@ -1,13 +1,6 @@
-import {
-  AgentId,
-  ReceiptId,
-  SettlementId,
-  SubmissionId,
-  ThreadId,
-} from "@effect-agent/core/Identifiers";
-import { memoryMessageDeliveryStoreLayer } from "@effect-agent/storage-memory/MemoryMessageDeliveryStore";
-import { digestJson } from "@effect-agent/thread/Digest";
-import { Receipt } from "@effect-agent/thread/DurableAgentRuntime";
+import { memoryMessageDeliveryStoreLayer } from "@effect-agent/storage-memory/memory-message-delivery-store";
+import { digestJson } from "@effect-agent/thread/digest";
+import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
 import {
   defaultMessageDeliveryStoreLimits,
   MessageDeliveryDriver,
@@ -19,21 +12,22 @@ import {
   type MessageDeliveryKey,
   type MessageDeliveryPolicy,
   type MessageDeliveryStoreLimits,
-} from "@effect-agent/thread/MessageDelivery";
-import { PreparedInputAdmission } from "@effect-agent/thread/PreparedInputAdmission";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
-import { ScheduledInputRefused, ScheduledInputRetryable } from "@effect-agent/thread/Schedule";
+} from "@effect-agent/thread/message-delivery";
+import { PreparedInputAdmission } from "@effect-agent/thread/prepared-input-admission";
+import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
+import { ScheduledInputRefused, ScheduledInputRetryable } from "@effect-agent/thread/schedule";
 import {
   IdempotencyKey,
   Principal,
   QueueSequence,
   Settlement,
-} from "@effect-agent/thread/SubmissionLedger";
-import { PendingSubmission, SettledSubmission } from "@effect-agent/thread/SubmissionStatus";
-import { PreparedInput } from "@effect-agent/thread/Subscription";
+} from "@effect-agent/thread/submission-ledger";
+import { PendingSubmission, SettledSubmission } from "@effect-agent/thread/submission-status";
+import { PreparedInput } from "@effect-agent/thread/subscription";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Crypto, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { AgentId, ReceiptId, SettlementId, SubmissionId, ThreadId } from "effect-agent/identifiers";
 import { TestClock } from "effect/testing";
 
 const ownerThreadId = Schema.decodeSync(ThreadId)("sender");

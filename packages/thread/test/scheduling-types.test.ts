@@ -1,4 +1,4 @@
-import { type DurableSubmitAgent } from "@effect-agent/thread/DurableAgentRuntime";
+import { type DurableSubmitAgent } from "@effect-agent/thread/durable-agent-runtime";
 import {
   type ScheduleAuthorizer,
   type ScheduleScope,
@@ -8,7 +8,7 @@ import {
   type ScheduleStore,
   type ScheduleValidationError,
   type ScheduleWake,
-} from "@effect-agent/thread/Schedule";
+} from "@effect-agent/thread/schedule";
 import {
   type ScheduleCreateOptions,
   type ScheduleListOptions,
@@ -16,7 +16,7 @@ import {
   type ScheduleProcessFailure,
   Scheduling,
   ScheduleDriver,
-} from "@effect-agent/thread/Scheduling";
+} from "@effect-agent/thread/scheduling";
 import { describe, expect, it } from "@effect/vitest";
 import { Context } from "effect";
 import type { Crypto, Effect, Layer, Schema } from "effect";

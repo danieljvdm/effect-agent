@@ -10,7 +10,7 @@ import {
   ReviewReport,
   type ReviewResolution,
   ReviewRequest,
-} from "@effect-agent/pr-review/Review";
+} from "@effect-agent/pr-review/review";
 import {
   ReviewContextError,
   ReviewFileList,
@@ -18,7 +18,7 @@ import {
   ReviewSearchMatch,
   ReviewSearchResult,
   ReviewSource,
-} from "@effect-agent/pr-review/ReviewRepository";
+} from "@effect-agent/pr-review/review-repository";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import {
   Cause,

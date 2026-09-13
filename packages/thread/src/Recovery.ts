@@ -1,5 +1,5 @@
-import { ThreadId, SettlementId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
 import { Effect, Schema } from "effect";
+import { ThreadId, SettlementId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
 
 import { SettlementOutcome, ToolCallPrepared } from "./Records.ts";
 import {

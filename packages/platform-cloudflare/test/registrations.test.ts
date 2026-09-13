@@ -2,10 +2,10 @@ import {
   ThreadObjectIdentity,
   ThreadObjectNamespace,
   DurableObjectContext,
-} from "@effect-agent/platform-cloudflare/CloudflareBindings";
-import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/CloudflareThreadClient";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
-import { digestDefinitions } from "@effect-agent/thread/Digest";
+} from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { digestDefinitions } from "@effect-agent/thread/digest";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runInDurableObject } from "cloudflare:test";

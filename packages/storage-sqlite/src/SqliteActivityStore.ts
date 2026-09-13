@@ -11,8 +11,8 @@ import {
   ActivityStoreError,
   ActivityWorkConflict,
   PreparedActivity,
-} from "@effect-agent/thread/ActivityStore";
-import { Digest } from "@effect-agent/thread/Records";
+} from "@effect-agent/thread/activity-store";
+import { Digest } from "@effect-agent/thread/records";
 import { Clock, Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";

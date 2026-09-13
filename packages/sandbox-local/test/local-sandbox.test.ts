@@ -2,13 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { layer as localSandboxLayer, sandboxLayer } from "@effect-agent/sandbox-local/LocalSandbox";
 import {
-  SANDBOX_DIAGNOSTIC_MAX_LENGTH,
-  Sandbox,
-  type SandboxEvent,
-  type SandboxRequest,
-} from "@effect-agent/sandbox/Sandbox";
+  layer as localSandboxLayer,
+  sandboxLayer,
+} from "@effect-agent/sandbox-local/local-sandbox";
 import { describe, expect, it, layer } from "@effect/vitest";
 import {
   Cause,
@@ -26,6 +23,12 @@ import {
   Stream,
   type Scope,
 } from "effect";
+import {
+  SANDBOX_DIAGNOSTIC_MAX_LENGTH,
+  Sandbox,
+  type SandboxEvent,
+  type SandboxRequest,
+} from "effect-agent/sandbox";
 import { PlatformError, SystemError } from "effect/PlatformError";
 import { TestClock } from "effect/testing";
 import { ChildProcessSpawner } from "effect/unstable/process";

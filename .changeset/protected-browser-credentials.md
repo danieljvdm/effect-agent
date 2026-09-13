@@ -1,5 +1,4 @@
 ---
-"@effect-agent/sandbox": minor
 "@effect-agent/platform-cloudflare": minor
 "@effect-agent/thread": minor
 ---

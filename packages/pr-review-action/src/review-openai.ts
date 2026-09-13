@@ -3,7 +3,7 @@ import {
   ReviewCostSnapshot,
   type ReviewRequest,
   ReviewUsage,
-} from "@effect-agent/pr-review/Review";
+} from "@effect-agent/pr-review/review";
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
 import { Clock, Config, Effect, Exit, Ref, Schema, Semaphore, Stream } from "effect";
 import { AiError } from "effect/unstable/ai";

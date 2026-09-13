@@ -139,7 +139,7 @@ export default defineConfig({
         },
       },
       {
-        files: ["packages/*/src/internal/**/*.ts"],
+        files: ["packages/*/src/**/internal/**/*.ts"],
         rules: { "exports/no-internal-barrel": "error" },
       },
       {

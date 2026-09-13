@@ -1,5 +1,5 @@
-import { ThreadId, RunId, ToolCallId } from "@effect-agent/core/Identifiers";
 import { Schema } from "effect";
+import { ThreadId, RunId, ToolCallId } from "effect-agent/identifiers";
 
 import { EMPTY_TAIL_DIGEST } from "./Digest.ts";
 import type { CanonicalRecordEnvelope } from "./Records.ts";

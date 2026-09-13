@@ -1,13 +1,9 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
-import * as Agent from "@effect-agent/core/Agent";
-import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { DefinitionDigestInput } from "@effect-agent/thread/Records";
-import { childThreadIdFor } from "@effect-agent/thread/RunJournal";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/SubmissionLedger";
-import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
+import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { DefinitionDigestInput } from "@effect-agent/thread/records";
+import { childThreadIdFor } from "@effect-agent/thread/run-journal";
+import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
+import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/thread-store";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
@@ -22,6 +18,10 @@ import {
   Schema,
   Stream,
 } from "effect";
+import * as Agent from "effect-agent/agent";
+import { ThreadId, ToolCallId } from "effect-agent/identifiers";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 const callId = Schema.decodeSync(ToolCallId)("scout-call");

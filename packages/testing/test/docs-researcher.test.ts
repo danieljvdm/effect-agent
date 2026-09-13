@@ -1,10 +1,7 @@
-import { connectMcp } from "@effect-agent/capabilities/Mcp";
-import { StructuralRedactorLive } from "@effect-agent/capabilities/Redaction";
-import { ThreadId, ToolCallId, type SubmissionId } from "@effect-agent/core/Identifiers";
 import {
   NodeDurableAgentRuntime,
   type NodeDurableAgentRuntimeOptions,
-} from "@effect-agent/platform-node/NodeDurableAgentRuntime";
+} from "@effect-agent/platform-node/node-durable-agent-runtime";
 import {
   assertDiscoveryMatchesAuthoredToolkit,
   docsCoordinatorConfidentialMarker,
@@ -28,21 +25,24 @@ import {
   researchCorpusDocumentIds,
   researchMissionRequest,
   summarizeCallId,
-} from "@effect-agent/testing/DocsResearcher";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/Records";
-import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/RunJournal";
+} from "@effect-agent/testing/docs-researcher";
+import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
+import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/run-journal";
 import {
   ClaimRequest,
   IdempotencyKey,
   SubmissionLedger,
   SubmissionLookupById,
-} from "@effect-agent/thread/SubmissionLedger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/ThreadStore";
+} from "@effect-agent/thread/submission-ledger";
+import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import { Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { ThreadId, ToolCallId, type SubmissionId } from "effect-agent/identifiers";
+import { connectMcp } from "effect-agent/mcp";
+import { StructuralRedactorLive } from "effect-agent/redaction";
 
 const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);

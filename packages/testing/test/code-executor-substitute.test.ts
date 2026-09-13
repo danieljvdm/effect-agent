@@ -1,18 +1,18 @@
+import { codeExecutorConformanceCases } from "@effect-agent/testing/code-executor-conformance";
+import {
+  inProcessCodeExecutorImplementation,
+  inProcessCodeExecutorLayer,
+} from "@effect-agent/testing/code-executor-substitute";
+import { expect, layer } from "@effect/vitest";
+import { Cause, Duration, Effect, Exit } from "effect";
 import {
   CodeExecutionHost,
   CodeExecutionLimits,
   CodeExecutionNamespace,
   CodeExecutionRequest,
   CodeExecutor,
-} from "@effect-agent/sandbox/CodeExecutor";
-import { NetworkDisabled } from "@effect-agent/sandbox/Sandbox";
-import { codeExecutorConformanceCases } from "@effect-agent/testing/CodeExecutorConformance";
-import {
-  inProcessCodeExecutorImplementation,
-  inProcessCodeExecutorLayer,
-} from "@effect-agent/testing/CodeExecutorSubstitute";
-import { expect, layer } from "@effect/vitest";
-import { Cause, Duration, Effect, Exit } from "effect";
+} from "effect-agent/code-executor";
+import { NetworkDisabled } from "effect-agent/sandbox";
 
 const limits = CodeExecutionLimits.make({
   maxSourceBytes: 64 * 1024,

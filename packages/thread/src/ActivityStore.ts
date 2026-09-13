@@ -1,5 +1,5 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
 import { Context, Effect, Layer, Schema } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 
 import { CanonicalSequence, Digest, PersistedJson, RecordId } from "./Records.ts";
 
