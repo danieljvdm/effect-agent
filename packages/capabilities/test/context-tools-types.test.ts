@@ -1,6 +1,5 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import type { IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
 import type {
   MemoryConflict,
@@ -83,7 +82,6 @@ type NativeRuntimeServices =
   | LanguageModel.LanguageModel
   | Model.ProviderName
   | Model.ModelName
-  | IdGenerator
   | ThreadHistory;
 
 it("keeps history and storage dependencies visible while the engine owns its local services", () => {

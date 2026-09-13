@@ -1,7 +1,6 @@
 import * as CodeMode from "@effect-agent/capabilities/CodeMode";
 import * as Agent from "@effect-agent/core/Agent";
 import { ThreadId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
@@ -130,10 +129,9 @@ const scenario = (
   };
 };
 
-layer(
-  Layer.mergeAll(IdGenerator.layer, ThreadHistory.layerTransient, RunContextPreparationPassthrough),
-  { excludeTestServices: true },
-)("Code Mode writes and concurrency", (it) => {
+layer(Layer.mergeAll(ThreadHistory.layerTransient, RunContextPreparationPassthrough), {
+  excludeTestServices: true,
+})("Code Mode writes and concurrency", (it) => {
   it.effect(
     "runs dependencies in order and independent writes with a finite concurrency limit",
     () =>

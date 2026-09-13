@@ -706,7 +706,7 @@ export type DurableWorkerRequirements<
 > =
   | Exclude<
       AgentRuntimeRequirements<AgentValue, never, InstructionRequirements>,
-      IdGenerator | ThreadHistory | RunContextPreparation
+      ThreadHistory | RunContextPreparation
     >
   | AgentCompletionProjectionRequirements<AgentValue>;
 

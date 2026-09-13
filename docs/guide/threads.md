@@ -15,8 +15,8 @@ Provide `PersistentHistory.layer` with a memory or SQLite `ThreadStore` layer. T
 can serve many thread IDs.
 
 ```ts
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
+import { AgentRuntime } from "effect-agent";
+import { ThreadHistory } from "effect-agent/ThreadHistory";
 import { PersistentHistory } from "@effect-agent/thread/PersistentHistory";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/MemoryThreadStore";
 import { layer as sqliteStore } from "@effect-agent/storage-sqlite/SqliteThreadStore";
@@ -40,7 +40,8 @@ const program = Effect.gen(function* () {
 ```
 
 Provide the history layer around the complete program, including any `start` handle. Also provide
-`IdGenerator` and the agent's other services at the application boundary.
+the agent's model and tool services at the application boundary. Runtime IDs have an overridable
+default and need no Layer.
 
 Each successful execution appends its input and native messages as one atomic batch. The runtime
 first closes run-owned resources, validates the result, and commits history. Only then does it

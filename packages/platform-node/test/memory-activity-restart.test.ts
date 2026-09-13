@@ -1,7 +1,6 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as Memory from "@effect-agent/core/Memory";
 import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
 import { MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
@@ -277,7 +276,7 @@ const runTim = Effect.fn("MemoryActivityTest.runTim")(function* (
     Effect.provide([
       historyLayer(filename),
       readerLayer(filename),
-      IdGenerator.layer,
+
       RunContextPreparationPassthrough,
     ]),
   );
@@ -326,7 +325,7 @@ it.live(
         yield* AgentRuntime.run(sourceAgent, danStatement, { threadId: danThreadId }).pipe(
           Effect.provide([
             historyLayer(filename),
-            IdGenerator.layer,
+
             RunContextPreparationPassthrough,
           ]),
         );

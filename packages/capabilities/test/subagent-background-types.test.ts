@@ -1,7 +1,6 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import * as Agent from "@effect-agent/core/Agent";
 import type { AgentRunDispositionError } from "@effect-agent/core/AgentError";
-import type { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { IdempotencyKey, type JoinedToHost, Receipt } from "@effect-agent/core/Receipt";
 import { SubagentGrant } from "@effect-agent/core/SubagentContract";
 import type { WorkerError } from "@effect-agent/core/Worker";
@@ -63,18 +62,8 @@ const updateLayerProofs = (model: Layer.Layer<Agent.ModelServices>) => {
   );
 
   const proofs: [
-    Assert<
-      Equal<
-        Layer.Services<typeof modelLayer>,
-        Encoder | Decoder | IdGenerator | SubagentReservations
-      >
-    >,
-    Assert<
-      Equal<
-        Layer.Services<typeof bindingLayer>,
-        Encoder | Decoder | IdGenerator | SubagentReservations
-      >
-    >,
+    Assert<Equal<Layer.Services<typeof modelLayer>, Encoder | Decoder | SubagentReservations>>,
+    Assert<Equal<Layer.Services<typeof bindingLayer>, Encoder | Decoder | SubagentReservations>>,
     Assert<Equal<Layer.Error<typeof modelLayer>, never>>,
     Assert<Equal<Layer.Error<typeof bindingLayer>, never>>,
   ] = [true, true, true, true];
@@ -128,18 +117,8 @@ const dispositionLayerProofs = (model: Layer.Layer<Agent.ModelServices>) => {
   );
 
   const proofs: [
-    Assert<
-      Equal<
-        Layer.Services<typeof modelLayer>,
-        Encoder | Decoder | IdGenerator | SubagentReservations
-      >
-    >,
-    Assert<
-      Equal<
-        Layer.Services<typeof bindingLayer>,
-        Encoder | Decoder | IdGenerator | SubagentReservations
-      >
-    >,
+    Assert<Equal<Layer.Services<typeof modelLayer>, Encoder | Decoder | SubagentReservations>>,
+    Assert<Equal<Layer.Services<typeof bindingLayer>, Encoder | Decoder | SubagentReservations>>,
     Assert<Equal<Layer.Error<typeof modelLayer>, never>>,
     Assert<Equal<Layer.Error<typeof bindingLayer>, never>>,
   ] = [true, true, true, true];

@@ -68,7 +68,7 @@ of other submissions, approvals, and attached children. Unknown submissions fail
 The read grants no ownership, and `canonicalRecordId` must come from canonical history.
 
 ```ts
-import type { SubmissionId } from "@effect-agent/core/Identifiers";
+import type { SubmissionId } from "effect-agent/Identifiers";
 import { AbortIntentRequest, SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
 import { Effect } from "effect";
 

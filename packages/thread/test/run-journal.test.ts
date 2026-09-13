@@ -1,6 +1,5 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { ThreadId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { Selection, Snapshot } from "@effect-agent/core/ToolExposure";
 import { summarizeModelUsage } from "@effect-agent/core/Usage";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
@@ -277,7 +276,7 @@ describe("run journal batch split (plan §2.1)", () => {
 
           yield* AgentRuntime.run(Agent.withModel(definition, model), "Find a listing", {
             onHistory: (history) => Ref.set(retained, history),
-          }).pipe(Effect.provide([IdGenerator.layer, ThreadHistory.layerTransient]));
+          }).pipe(Effect.provide([ThreadHistory.layerTransient]));
           const history = yield* Ref.get(retained);
 
           const providerResult = history.content.flatMap((message) =>
@@ -355,7 +354,7 @@ describe("run journal batch split (plan §2.1)", () => {
             {
               history: projected.prompt,
             },
-          ).pipe(Effect.provide([IdGenerator.layer, ThreadHistory.layerTransient]));
+          ).pipe(Effect.provide([ThreadHistory.layerTransient]));
           expect(yield* Ref.get(replayed)).toBe(true);
         }),
     );

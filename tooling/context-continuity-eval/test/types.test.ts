@@ -1,7 +1,6 @@
 import * as ContextTools from "@effect-agent/capabilities/ContextTools";
 import * as MemoryNotes from "@effect-agent/capabilities/MemoryNotes";
 import * as Agent from "@effect-agent/core/Agent";
-import { type IdGenerator } from "@effect-agent/core/IdGenerator";
 import { MemoryKey, type MemoryReader, type MemoryWriter } from "@effect-agent/core/MemoryStore";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { type ContextHistory } from "@effect-agent/engine/ContextHistory";
@@ -57,7 +56,6 @@ it("preserves native model, history and durable note requirements in the pressur
     | MemoryReader
     | MemoryWriter
     | AiIdGenerator.IdGenerator
-    | IdGenerator
     | ThreadHistory
   >();
   expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<
@@ -95,7 +93,7 @@ it("preserves the performance fixture's native model and runtime requirements", 
   );
 
   expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
-    OpenAiClient.OpenAiClient | IdGenerator | ThreadHistory
+    OpenAiClient.OpenAiClient | ThreadHistory
   >();
   expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<
     AgentRuntime.AgentRuntimeFailure<typeof performanceDefinition>

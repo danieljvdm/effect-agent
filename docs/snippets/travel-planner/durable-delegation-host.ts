@@ -1,17 +1,14 @@
-import { SubagentRuntime } from "@effect-agent/capabilities/Subagent";
-import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { NodeDurableHost } from "@effect-agent/platform-node";
 import { Layer } from "effect";
+import { Subagent } from "effect-agent";
+import { SubagentReservationsMemoryLive } from "effect-agent/SubagentReservations";
 
 import { Coordinator } from "./coordinator.ts";
-import { Research, ResearchFailed } from "./delegation.ts";
+import { Research } from "./delegation.ts";
 import { definitions, ModelLive, OpenAiLive } from "./node-agent.ts";
 import { TravelToolsLive } from "./tools.ts";
 
-const ResearchLive = SubagentRuntime.layer(Research, ModelLive, {
-  mapChildFailure: (error) => ResearchFailed.make({ reason: error._tag }),
-}).pipe(Layer.provide(TravelToolsLive));
+const ResearchLive = Subagent.layer(Research, ModelLive).pipe(Layer.provide(TravelToolsLive));
 
 export const HostLive = NodeDurableHost.layer(
   [
@@ -27,7 +24,7 @@ export const HostLive = NodeDurableHost.layer(
 ).pipe(
   Layer.provide(ResearchLive),
   Layer.provide(SubagentReservationsMemoryLive),
-  Layer.provide(IdGenerator.layer),
+
   Layer.provide(TravelToolsLive),
   Layer.provide(OpenAiLive),
 );

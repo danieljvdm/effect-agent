@@ -1,6 +1,5 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { AgentRuntime, Output } from "@effect-agent/engine";
 import {
   type AgentResult,
@@ -140,12 +139,7 @@ it("preserves completion correction failures and services in run and stream comp
   >();
   expectTypeOf<Stream.Error<typeof stream>>().toEqualTypeOf<Effect.Error<typeof run>>();
   expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
-    | ThreadHistory
-    | IdGenerator
-    | ProviderClient
-    | Catalog
-    | Tool.HandlersFor<typeof toolkit.tools>
-    | TurnHost
+    ThreadHistory | ProviderClient | Catalog | Tool.HandlersFor<typeof toolkit.tools> | TurnHost
   >();
   expectTypeOf<Stream.Services<typeof stream>>().toEqualTypeOf<Effect.Services<typeof run>>();
 });
@@ -164,11 +158,9 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
     | Catalog
     | Tool.HandlersFor<typeof toolkit.tools>;
   type NativeServices = LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName;
-  expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
-    DefinitionServices | NativeServices | IdGenerator
-  >();
+  expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<DefinitionServices | NativeServices>();
   expectTypeOf<Effect.Services<typeof provided>>().toEqualTypeOf<
-    DefinitionServices | ProviderClient | IdGenerator
+    DefinitionServices | ProviderClient
   >();
   expectTypeOf<Effect.Success<typeof run>>().toEqualTypeOf<
     AgentResult<{ readonly answer: string }>
@@ -229,7 +221,7 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
   >();
 
   expectTypeOf<Stream.Services<typeof stream>>().toEqualTypeOf<
-    DefinitionServices | NativeServices | IdGenerator
+    DefinitionServices | NativeServices
   >();
   const start = AgentRuntime.start(planner, input);
 
@@ -248,9 +240,7 @@ it("preserves encoded input, output, failures and every unsatisfied service", ()
     Effect.Services<typeof provided>
   >();
 
-  const composed = AgentRuntime.run(planner, input).pipe(
-    Effect.provide(Layer.mergeAll(model, IdGenerator.layer)),
-  );
+  const composed = AgentRuntime.run(planner, input).pipe(Effect.provide(Layer.mergeAll(model)));
 
   expectTypeOf<Effect.Services<typeof composed>>().toEqualTypeOf<
     DefinitionServices | ProviderClient
@@ -375,7 +365,7 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
   const execution = AgentRuntime.run(binding, { topic: "Lisbon" });
 
   expectTypeOf<Effect.Services<typeof execution>>().toEqualTypeOf<
-    ExpectedServices | ProviderClient | ThreadHistory | IdGenerator
+    ExpectedServices | ProviderClient | ThreadHistory
   >();
   expectTypeOf<
     Extract<Effect.Error<typeof execution>, InstructionError | ToolError | TopicFailure>
@@ -446,8 +436,7 @@ it("retains transformed tool parameter services and handler failures across exec
     | ParametersEncoder
     | Catalog
     | ProviderClient
-    | ThreadHistory
-    | IdGenerator;
+    | ThreadHistory;
   type UnprovidedServices = RequiredServices | Tool.HandlersFor<typeof tools.tools>;
   expectTypeOf<
     Agent.DefinitionRequirements<typeof definition>
@@ -486,7 +475,6 @@ it("retains every branch's tool requirements and failures across execution views
   type RuntimeServices =
     | DefinitionServices
     | ThreadHistory
-    | IdGenerator
     | LanguageModel.LanguageModel
     | Model.ProviderName
     | Model.ModelName;
@@ -539,11 +527,9 @@ it("retains every branch's tool requirements and failures across execution views
   const boundRun = AgentRuntime.run(binding, input);
   const selectedRun = AgentRuntime.run(bindSelected, input);
 
-  expectTypeOf<Effect.Services<typeof boundRun>>().toEqualTypeOf<
-    BoundServices | ThreadHistory | IdGenerator
-  >();
+  expectTypeOf<Effect.Services<typeof boundRun>>().toEqualTypeOf<BoundServices | ThreadHistory>();
   expectTypeOf<Effect.Services<typeof selectedRun>>().toEqualTypeOf<
-    BoundServices | ThreadHistory | IdGenerator
+    BoundServices | ThreadHistory
   >();
 });
 
@@ -580,7 +566,7 @@ it("text output preserves Schema transformations, errors and decoder requirement
   const run = AgentRuntime.run(agent, "input");
 
   expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
-    Decoder | Encoder | ProviderClient | ThreadHistory | IdGenerator
+    Decoder | Encoder | ProviderClient | ThreadHistory
   >();
   // @ts-expect-error Text output requires a string-encoded Schema.
   Output.text(Schema.Struct({ answer: Schema.String }));

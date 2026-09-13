@@ -129,6 +129,7 @@ const toolingNames = [
 
 const effectTestPackageNames = [
   "capabilities",
+  "effect-agent",
   "engine",
   "platform-cloudflare",
   "platform-node",
@@ -370,6 +371,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
                 ".": "./src/index.ts",
                 "./Agent": "./src/Agent.ts",
                 "./AgentRuntime": "./src/AgentRuntime.ts",
+                "./Ephemeral": "./src/Ephemeral.ts",
               },
             }),
           );
@@ -377,8 +379,10 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           // No src directory: accidentally measuring source instead of published
           // artifacts must fail. The two checkouts also contain different values.
           const modules = {
-            index: 'export * from "./Agent.mjs"; export * from "./AgentRuntime.mjs";',
+            index:
+              'export * from "./Agent.mjs"; export * from "./AgentRuntime.mjs"; export * from "./Ephemeral.mjs";',
             Agent: 'export { shared as agent } from "./shared.mjs";',
+            Ephemeral: 'export { shared as layer } from "./shared.mjs";',
             AgentRuntime: `import { shared } from "./shared.mjs"; export const run = [shared, ${JSON.stringify(side.repeat(side === "head" ? 20000 : 10000))}];`,
             shared: `export const shared = ${JSON.stringify("shared".repeat(200))};`,
           };
@@ -400,6 +404,10 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           yield* fs.writeFileString(
             path.join(fixtures, `runtime-${kind}.ts`),
             `export { run } from "effect-agent${kind === "module" ? "/AgentRuntime" : ""}";`,
+          );
+          yield* fs.writeFileString(
+            path.join(fixtures, `ephemeral-${kind}.ts`),
+            `export { layer } from "effect-agent${kind === "module" ? "/Ephemeral" : ""}";`,
           );
           yield* fs.writeFileString(
             path.join(fixtures, `lazy-${kind}.ts`),
@@ -454,6 +462,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         });
 
         expect(second.fixtures.find((fixture) => fixture.name === "agent-module")?.base).toBeNull();
+        expect(
+          second.fixtures.find((fixture) => fixture.name === "ephemeral-root")?.base,
+        ).toBeNull();
         expect(yield* fs.exists(path.join(scratch, "report", "base", "agent-module"))).toBe(false);
         expect(
           second.fixtures.find((fixture) => fixture.name === "agent-root")?.base,

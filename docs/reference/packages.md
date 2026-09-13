@@ -17,7 +17,8 @@ Before 1.0, APIs and stored data may change without a migration path.
 
 Every public package root exports module namespaces, following Effect's module layout.
 Each module also has an explicit, case-sensitive import path. The umbrella exposes the same
-core, engine, and capabilities modules:
+core, engine, and capabilities modules. Prefer the umbrella in application code; the internal
+package split keeps dependencies directed without becoming required application knowledge:
 
 ```ts twoslash
 import { Agent, AgentRuntime } from "effect-agent";
@@ -33,6 +34,10 @@ import * as Agent from "effect-agent/Agent";
 import * as AgentRuntime from "effect-agent/AgentRuntime";
 ```
 
+Both forms support tree shaking. Use direct module paths at lazy-loading boundaries: mixing a
+static root import with a dynamic import of that same root can pull the runtime into the initial
+bundle. Provider, storage, platform, and testing packages remain separate installs.
+
 `Agent.make` and `AgentRuntime.run` have the same call shape through either import form.
 Individual declarations belong to their module, including services and Schema values:
 
@@ -40,6 +45,29 @@ Individual declarations belong to their module, including services and Schema va
 import { IdGenerator } from "effect-agent/IdGenerator";
 import { CommandDrainPolicy, RunSchedulingOverride } from "effect-agent/RunOptions";
 ```
+
+Operations are available directly on their module namespace: `Subagent.layer`,
+`ThreadHistory.layerTransient`, and `IdGenerator.layer`. Service keys remain inside those modules,
+for example `IdGenerator.IdGenerator` when supplying a custom generator.
+
+### Ephemeral defaults
+
+`Ephemeral.layer` supplies transient history and a shared in-memory subagent reservation ledger.
+Provide it once around the parent program and all child handler Layers. Independent builds have
+independent state. It retains no completed history and provides no crash recovery.
+
+Runtime IDs have an overridable default; no ID Layer is required. Context preparation is also
+optional. `Ephemeral.layer` preserves custom IDs and context preparation supplied by the caller.
+Models, tool handlers, credentials, and durable storage remain explicit application choices.
+
+For retained history, provide `PersistentHistory.layer` with a store and, when using subagents,
+one shared `SubagentReservationsMemoryLive` instead of `Ephemeral.layer`. Durable hosts select
+their own history and reservation services.
+
+When upgrading, remove routine `IdGenerator.layer` provisions and `IdGenerator` from service
+requirement unions. The key is now a `Context.Reference`; custom `Layer.succeed`, `Layer.effect`,
+and `Effect.provideService` overrides still work. To explicitly reset an override to the default,
+use the module-level `layer` export from `effect-agent/IdGenerator`.
 
 Applications installing constituent packages directly use the owning package instead:
 
@@ -133,13 +161,14 @@ in your host.
 ### `effect-agent` {#effect-agent-umbrella}
 
 Re-exports `@effect-agent/core`, `@effect-agent/engine`, and `@effect-agent/capabilities`.
+Also supplies the `Ephemeral` runtime assembly.
 Provider clients, storage, hosts, sandbox adapters, and testing remain separate installs.
 
 ### `@effect-agent/core`
 
 Agent definitions and bindings, schemas, identifiers, errors, and run events. Shared memory
 contracts and `Memory.recall` compose host-selected readers without a storage or platform dependency.
-Start with `Agent`, `AgentPolicy`, and `IdGenerator`.
+Start with `Agent` and its optional policy. `IdGenerator` exposes an overridable default reference.
 Use [`Agent.inspectTools`](../guide/tools#failure-remains-failure) to inspect registered native tool
 failure modes without acquiring handlers or model services.
 
@@ -149,8 +178,8 @@ Runs the agent loop, schedules tool calls, enforces policy, and emits events.
 Exports module namespaces including `AgentRuntime`, `RunOptions`, and `ThreadHistory`.
 The `DetachedRun` type belongs to `AgentRuntime`.
 
-Every entry point needs a history policy. Import the `ThreadHistory` service from
-`@effect-agent/engine/ThreadHistory` and use `ThreadHistory.layerTransient` to retain nothing.
+Every entry point needs a history policy. Use `Ephemeral.layer` from `effect-agent` for transient
+execution, or the module-level `layerTransient` from `effect-agent/ThreadHistory` for history alone.
 Import `PersistentHistory` from `@effect-agent/thread/PersistentHistory` and use
 `PersistentHistory.layer` to retain successful runs.
 Provide `RunContextPreparation` only when you need host context loading. Context service failures

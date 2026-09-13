@@ -3,7 +3,6 @@ import { SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities/Suba
 import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { DurableWorkerBinding, type ResolvedBinding } from "@effect-agent/thread/AgentRegistration";
 import { DefinitionDigests, Digest } from "@effect-agent/thread/Records";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
@@ -331,7 +330,7 @@ export const siblingCoordinatorDefinition = Agent.make("cf-s2-sibling-coordinato
 // Registered worker Bindings (SUB-023: exact digest registration)
 // ---------------------------------------------------------------------------
 
-const delegationSupport = Layer.mergeAll(SubagentReservationsMemoryLive, IdGenerator.layer);
+const delegationSupport = Layer.mergeAll(SubagentReservationsMemoryLive);
 
 const mapChildFailure = (failure: { readonly _tag: string }) =>
   CfDelegationFailed.make({ childErrorTag: failure._tag });

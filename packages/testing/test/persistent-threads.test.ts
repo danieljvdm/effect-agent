@@ -1,7 +1,6 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { RunId, ThreadId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { RunCompleted, type RunEvent } from "@effect-agent/core/RunEvent";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
@@ -115,7 +114,7 @@ const lookup: ScriptedTurnInput = {
 
 const services = Layer.mergeAll(
   RunContextPreparationPassthrough,
-  IdGenerator.layer,
+
   NodeCrypto.layer,
   toolkit.toLayer({ lookup: () => Effect.succeed("Kyoto") }),
 );

@@ -4,7 +4,6 @@ import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/Subag
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import { compileRegistrations, DurableWorkerBinding } from "@effect-agent/thread/AgentRegistration";
@@ -128,7 +127,7 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
       );
 
       const handlers = SubagentRuntime.layer(delegation, childModel).pipe(
-        Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]),
+        Layer.provide([SubagentReservationsMemoryLive]),
       );
 
       const bindings = yield* compileRegistrations([
@@ -362,7 +361,7 @@ it.effect(
 
           const delegationLayer = SubagentRuntime.layer(delegation, child.model, {
             mapChildFailure: (failure) => new ProbeFailed({ tag: failure._tag }),
-          }).pipe(Layer.provide([handlers, SubagentReservationsMemoryLive, IdGenerator.layer]));
+          }).pipe(Layer.provide([handlers, SubagentReservationsMemoryLive]));
 
           const bindings = [
             yield* DurableWorkerBinding.make(parent, digests).pipe(Effect.provide(delegationLayer)),

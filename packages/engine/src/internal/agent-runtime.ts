@@ -485,7 +485,6 @@ export type AgentRuntimeRequirements<
   | Tool.ParametersSchema<Agent.ToolUnion<AgentValue>>["EncodingServices"]
   | AgentCompletionProjectionRequirements<AgentValue>
   | Agent.OutputSchema<AgentValue>["DecodingServices"]
-  | IdGenerator
   | ThreadHistory
   | HookRequirements
   | InstructionRequirements;
@@ -500,7 +499,6 @@ type InterpreterRequirements<
   InstructionRequirements = never,
 > =
   | Agent.Requirements<AgentValue>
-  | IdGenerator
   | ThreadHistory
   | ContextCompactor
   | AgentUpdateAcceptance
@@ -7570,7 +7568,7 @@ function streamWithCompletion<
         | AgentUpdateAcceptance
       >,
       ThreadHistoryError,
-      ThreadHistory | IdGenerator
+      ThreadHistory
     > {
       const history = yield* ThreadHistory;
 

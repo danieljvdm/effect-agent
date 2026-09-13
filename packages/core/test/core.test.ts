@@ -569,7 +569,7 @@ describe("core schemas", () => {
     ).toThrow();
   });
 
-  it("mints valid, distinct branded identities from the default IdGenerator Layer", () => {
+  it("mints valid, distinct branded identities without an IdGenerator Layer", () => {
     const program = Effect.gen(function* () {
       const ids = yield* IdGenerator;
 
@@ -579,7 +579,7 @@ describe("core schemas", () => {
         run: yield* ids.nextRunId,
         turn: yield* ids.nextTurnId,
       };
-    }).pipe(Effect.provide(IdGenerator.layer), Random.withSeed("core-id-generator"));
+    }).pipe(Random.withSeed("core-id-generator"));
 
     const { firstThread, secondThread, run, turn } = Effect.runSync(program);
 

@@ -10,8 +10,9 @@ before instructions execute and require native model services. Use `runUnknown`,
 or `startUnknown` for external values typed as `unknown`. See
 [Agent definitions](./agents#typed-and-external-inputs).
 
-Every entry point also requires `ThreadHistory`. Use
-`ThreadHistory.layerTransient` when you do not need retained history. Use
+Use `Ephemeral.layer` from `effect-agent` for runs without retained history, including attached
+subagents. It supplies the history policy and shared reservation state. IDs are generated
+automatically, and context preparation is optional. Use
 `PersistentHistory.layer` with a store to [retain completed runs](./threads#retain-completed-runs).
 History commits before a successful result or `RunCompleted` event becomes visible.
 
@@ -90,7 +91,7 @@ Lower the progress allowance with `bufferLimits` on `run`, `stream`, or `start`.
 cannot raise the engine's ceiling:
 
 ```ts twoslash
-import { type RunBufferLimits } from "@effect-agent/engine/RunOptions";
+import { type RunBufferLimits } from "effect-agent/RunOptions";
 
 export const progressBufferLimits: RunBufferLimits = {
   maxToolProgressBytes: 1024 * 1024,
@@ -179,7 +180,7 @@ Use `layerWithServices` to supply your own service layers. It requires
 Here is the default authorization policy; replace it with your application's implementation:
 
 ```ts twoslash
-import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
+import { RunToolAuthorization } from "effect-agent/RunOptions";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { Layer } from "effect";
 
@@ -257,7 +258,7 @@ defects and interruptions. Use [`ToolCallFailed.failureHandling` and tool teleme
 to distinguish returned failures from propagated ones, and handle the run's Effect exit separately.
 
 ```ts
-import { toolFailureObserverLayer } from "@effect-agent/engine/RunOptions";
+import { toolFailureObserverLayer } from "effect-agent/RunOptions";
 import { Effect, ErrorReporter } from "effect";
 
 const failureReporting = toolFailureObserverLayer({

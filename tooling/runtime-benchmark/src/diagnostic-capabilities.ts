@@ -20,7 +20,6 @@ import {
 import { Agent, AgentRuntime } from "effect-agent";
 import * as EphemeralThreads from "effect-agent/EphemeralThreads";
 import { RunId, ThreadId } from "effect-agent/Identifiers";
-import { IdGenerator } from "effect-agent/IdGenerator";
 import * as Mcp from "effect-agent/Mcp";
 import * as McpClient from "effect-agent/McpClient";
 import * as Memory from "effect-agent/Memory";
@@ -293,7 +292,7 @@ const historyRunCase = Effect.fn("diagnostic.historyRun")(function* (workload: D
               return index;
             }),
         }),
-        IdGenerator.layer,
+
         ThreadHistory.layerTransient,
       ),
     ),
@@ -482,7 +481,7 @@ const memoryRunCase = Effect.fn("diagnostic.memoryRun")(function* (workload: Dia
       Layer.mergeAll(
         model,
         toolkit.toLayer({ diagnostic_work: ({ index }) => Effect.succeed(index) }),
-        IdGenerator.layer,
+
         ThreadHistory.layerTransient,
       ),
     ),
@@ -853,11 +852,7 @@ const mcpCase = Effect.fn("diagnostic.mcp")(function* (workload: DiagnosticCase)
             metrics.push({ name: "foregroundRun", value: yield* elapsed(runStart) });
             yield* check(result.output.answer === "done", "MCP Run output mismatch");
             yield* (yield* ScriptedModel).assertExhausted;
-          }).pipe(
-            Effect.provide(
-              Layer.mergeAll(handlers, model, IdGenerator.layer, ThreadHistory.layerTransient),
-            ),
-          );
+          }).pipe(Effect.provide(Layer.mergeAll(handlers, model, ThreadHistory.layerTransient)));
         }
         closeStart = yield* Clock.monotonicTimeNanos;
       }),
@@ -1214,9 +1209,7 @@ const rememberingCase = Effect.fn("diagnostic.remembering")(function* (workload:
     }),
   ).pipe(
     Effect.provide(
-      Layer.mergeAll(handlers, model).pipe(
-        Layer.provideMerge(Layer.merge(IdGenerator.layer, ThreadHistory.layerTransient)),
-      ),
+      Layer.mergeAll(handlers, model).pipe(Layer.provideMerge(ThreadHistory.layerTransient)),
     ),
   );
 
@@ -1573,9 +1566,7 @@ const subagentCase = Effect.fn("diagnostic.subagent")(function* (workload: Diagn
     }),
   ).pipe(
     Effect.provide(
-      Layer.mergeAll(handlers, model).pipe(
-        Layer.provideMerge(Layer.merge(IdGenerator.layer, ThreadHistory.layerTransient)),
-      ),
+      Layer.mergeAll(handlers, model).pipe(Layer.provideMerge(ThreadHistory.layerTransient)),
     ),
     Effect.withTracer(tracer),
     // Flush bounded trace scalars even when the Run fails or is interrupted.

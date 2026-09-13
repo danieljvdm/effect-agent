@@ -27,6 +27,7 @@
     "./Compaction": "./src/Compaction.ts",
     "./ContextCompactor": "./src/ContextCompactor.ts",
     "./DurableStep": "./src/DurableStep.ts",
+    "./Ephemeral": "./src/Ephemeral.ts",
     "./EphemeralThreads": "./src/EphemeralThreads.ts",
     "./Identifiers": "./src/Identifiers.ts",
     "./IdGenerator": "./src/IdGenerator.ts",
@@ -85,6 +86,7 @@
     "@effect-agent/engine": "workspace:*"
   },
   "devDependencies": {
+    "@effect/vitest": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"

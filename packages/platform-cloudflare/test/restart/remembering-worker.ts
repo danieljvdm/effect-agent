@@ -1,6 +1,5 @@
 import * as Remembering from "@effect-agent/capabilities/Remembering";
 import * as Agent from "@effect-agent/core/Agent";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as Memory from "@effect-agent/core/Memory";
 import { MemoryPassage } from "@effect-agent/core/MemoryReference";
 import {
@@ -52,11 +51,7 @@ const recallLimits = {
   timeoutMillis: 1000,
 };
 
-const foregroundLayer = Layer.mergeAll(
-  IdGenerator.layer,
-  ThreadHistory.layerTransient,
-  ContextCompactor.layer,
-);
+const foregroundLayer = Layer.mergeAll(ThreadHistory.layerTransient, ContextCompactor.layer);
 
 const profile = (document: MemoryDocument | null) =>
   document?._tag === "ActiveMemoryDocument"

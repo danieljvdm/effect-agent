@@ -352,7 +352,7 @@ it bundles small consumer fixtures against built packages. Each checkout install
 lockfile. The comparison uses the PR's esbuild version and the same fixture source for both sides.
 
 The fixtures in `scripts/bundle` cover agent construction, importing the runtime's `run` function,
-and loading that runtime on demand, through both the root and direct module imports. The
+the ephemeral assembly, and loading the runtime on demand, through both root and direct module imports. The
 analyzer stages copies of `dist` and uses the release publisher's manifest conversion. It does
 not bundle workspace source or externalize Effect. It uses minified ESM, a browser target,
 `es2022`, production mode, and gzip level 9 per emitted chunk.

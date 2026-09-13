@@ -10,6 +10,7 @@ export * as Commands from "./Commands.ts";
 export * as Compaction from "./Compaction.ts";
 export * as ContextCompactor from "./ContextCompactor.ts";
 export * as DurableStep from "./DurableStep.ts";
+export * as Ephemeral from "./Ephemeral.ts";
 export * as EphemeralThreads from "./EphemeralThreads.ts";
 export * as Identifiers from "./Identifiers.ts";
 export * as IdGenerator from "./IdGenerator.ts";

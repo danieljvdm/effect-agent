@@ -5,7 +5,6 @@ import * as AgentRuntime from "effect-agent/AgentRuntime";
 import { makeUsageBudget, UsageBudgetLimits } from "effect-agent/Budget";
 import { ContextCompactor, type ContextCompaction } from "effect-agent/ContextCompactor";
 import { NewContext } from "effect-agent/ContextTools";
-import { IdGenerator } from "effect-agent/IdGenerator";
 import { toRunBudgetHook } from "effect-agent/RunHooks";
 import {
   RunContextPreparationPassthrough,
@@ -1045,7 +1044,6 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       });
     },
     Effect.provide([
-      IdGenerator.layer,
       ThreadHistory.layerTransient,
       RunContextPreparationPassthrough,
       reviewToolkitLayer,

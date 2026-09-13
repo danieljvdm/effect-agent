@@ -28,11 +28,11 @@ Tool broker to an application-owned Tool handler. The handler decides which reso
 In your application, install Code Mode and the Cloudflare executor:
 
 ```sh
-bun add @effect-agent/capabilities@beta @effect-agent/platform-cloudflare@beta
+bun add effect-agent@beta @effect-agent/platform-cloudflare@beta
 ```
 
 Requires `effect@^4.0.0-rc.112` and `effect-cf@^0.40.0`. For the example below, also install
-`@effect-agent/core@beta`, `@effect-agent/engine@beta`, and `@effect/ai-openai@4.0.0-rc.112`.
+`@effect/ai-openai@4.0.0-rc.112`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 
 This smaller example uses fixed invoice rows so the complete Tool and handler are visible.
@@ -41,14 +41,9 @@ rows. The linked warehouse example replaces the fixed data with a brokered SQL q
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import * as CodeMode from "@effect-agent/capabilities/CodeMode";
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
-import { RunContextPreparationPassthrough } from "@effect-agent/engine/RunOptions";
+import { Ephemeral, CodeMode, Agent, AgentRuntime } from "effect-agent";
+import { AgentPolicy } from "effect-agent/AgentPolicy";
+import { ToolExecutionClass } from "effect-agent/DurableStep";
 import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/CloudflareCodeMode";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Redacted, Schema } from "effect";
@@ -118,13 +113,7 @@ const AnalystLive = Layer.unwrap(
       ),
     );
 
-    return Layer.mergeAll(
-      CodeModeLive,
-      ModelLive,
-      IdGenerator.layer,
-      ThreadHistory.layerTransient,
-      RunContextPreparationPassthrough,
-    );
+    return Layer.mergeAll(CodeModeLive, ModelLive, Ephemeral.layer);
   }),
 );
 

@@ -20,6 +20,7 @@ export default defineConfig({
       "src/Compaction.ts",
       "src/ContextCompactor.ts",
       "src/DurableStep.ts",
+      "src/Ephemeral.ts",
       "src/EphemeralThreads.ts",
       "src/Identifiers.ts",
       "src/IdGenerator.ts",

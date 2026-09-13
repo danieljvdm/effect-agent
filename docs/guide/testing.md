@@ -47,13 +47,14 @@ The Cloudflare path also exports `evictionFailpointHandler`.
 
 ## Exercise the public runtime
 
-Provide the same layers as the application. Replace `IdGenerator.layer` with a deterministic
-counter when assertions depend on stable IDs.
+Provide the same layers as the application. Override the default `IdGenerator` reference with
+a deterministic counter when assertions depend on stable IDs.
 
 ```ts
 import { Effect, Layer, Ref, Schema } from "effect";
-import { ThreadId, RunId, TurnId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { Ephemeral } from "effect-agent";
+import { ThreadId, RunId, TurnId } from "effect-agent/Identifiers";
+import { IdGenerator } from "effect-agent/IdGenerator";
 
 const DeterministicIdGeneratorLive = Layer.effect(
   IdGenerator,
@@ -70,8 +71,7 @@ const DeterministicIdGeneratorLive = Layer.effect(
 );
 
 const TestRuntimeLive = Layer.mergeAll(
-  ThreadHistory.layerTransient,
-  RunContextPreparationPassthrough,
+  Ephemeral.layer,
   ToolkitLive,
   DomainServicesTest,
   DeterministicIdGeneratorLive,

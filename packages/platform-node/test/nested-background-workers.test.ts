@@ -2,7 +2,6 @@ import * as Subagent from "@effect-agent/capabilities/Subagent";
 import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentId, RunId, ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { SubagentGrant } from "@effect-agent/core/SubagentContract";
 import { WorkerError } from "@effect-agent/core/Worker";
 import { MessagingHost } from "@effect-agent/engine/MessagingHost";
@@ -233,7 +232,7 @@ it.live(
           background.layer,
           scoutBackground.layer,
           Subagent.SubagentRuntime.layer(scoutDeclaration, scout),
-        ).pipe(Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]));
+        ).pipe(Layer.provide([SubagentReservationsMemoryLive]));
 
         const context = yield* Layer.build(
           NodeHost.layer(

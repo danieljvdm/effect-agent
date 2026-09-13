@@ -575,7 +575,7 @@ describe("TEST-014 S1 Travel Planner Subagent delegation (E)", () => {
       );
 
       const dependencies = yield* Effect.context<
-        SubagentReservations | IdGenerator | CatalogLifecycle | ResearchDispatchGate
+        SubagentReservations | CatalogLifecycle | ResearchDispatchGate
       >();
 
       const deskDelegationLayer = destinationResearchHandlersLayer(grandchildBinding).pipe(

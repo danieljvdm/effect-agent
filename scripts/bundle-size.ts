@@ -54,6 +54,8 @@ const fixtures = [
   { name: "agent-module", requires: ["effect-agent/Agent"] },
   { name: "runtime-root", requires: ["effect-agent"] },
   { name: "runtime-module", requires: ["effect-agent/AgentRuntime"] },
+  { name: "ephemeral-root", requires: ["effect-agent/Ephemeral"] },
+  { name: "ephemeral-module", requires: ["effect-agent/Ephemeral"] },
   { name: "lazy-root", requires: ["effect-agent"] },
   { name: "lazy-module", requires: ["effect-agent/Agent", "effect-agent/AgentRuntime"] },
 ];

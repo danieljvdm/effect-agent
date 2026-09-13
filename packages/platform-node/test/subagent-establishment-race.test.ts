@@ -2,7 +2,6 @@ import * as Subagent from "@effect-agent/capabilities/Subagent";
 import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
 import * as Agent from "@effect-agent/core/Agent";
 import { ThreadId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/NodeDurableAgentRuntime";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { DefinitionDigestInput } from "@effect-agent/thread/Records";
@@ -122,7 +121,7 @@ for (const boundary of ["ThreadCreated", "SubagentLineageRecorded"] as const) {
           );
 
           const handlers = Subagent.SubagentRuntime.layer(declaration, child).pipe(
-            Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]),
+            Layer.provide([SubagentReservationsMemoryLive]),
           );
 
           const context = yield* Layer.build(

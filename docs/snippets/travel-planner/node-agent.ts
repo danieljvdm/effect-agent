@@ -1,6 +1,6 @@
-import { Agent } from "@effect-agent/core";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Layer, Schema } from "effect";
+import { Agent } from "effect-agent";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 

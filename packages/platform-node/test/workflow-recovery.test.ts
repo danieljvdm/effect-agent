@@ -2,7 +2,6 @@ import * as Subagent from "@effect-agent/capabilities/Subagent";
 import { SubagentRuntime } from "@effect-agent/capabilities/Subagent";
 import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/SubagentReservations";
 import * as Agent from "@effect-agent/core/Agent";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { digestDefinitions } from "@effect-agent/thread/Digest";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { AbortCommand } from "@effect-agent/thread/SubmissionLedger";
@@ -86,7 +85,7 @@ it.live(
 
       const handlers = SubagentRuntime.layer(delegation, childModel.model, {
         durable: { targetDigests: childDigests },
-      }).pipe(Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]));
+      }).pipe(Layer.provide([SubagentReservationsMemoryLive]));
 
       const stack = hostLayer(directory, [
         { agent: parent, definitions },

@@ -858,20 +858,20 @@ layer(testLayer)("SUB S1 engine execution seam", (it) => {
       delegatingModel("typed", { question: "child?" }, '{"answer":"typed"}'),
     );
 
-    const program = AgentRuntime.run(agent, { question: "types" });
+    const program = AgentRuntime.run(agent, { question: "types" }).pipe(Effect.provide(toolLayer));
 
     type Services = Effect.Services<typeof program>;
     type SpawnerExcluded = [Extract<Services, AgentSpawner>] extends [never] ? true : false;
     type SinkExcluded = [Extract<Services, RunEventSink>] extends [never] ? true : false;
-    type IdGeneratorKept = IdGenerator extends Services ? true : false;
+    type OnlyHistoryRequired = [Exclude<Services, ThreadHistory>] extends [never] ? true : false;
     const spawnerExcluded: SpawnerExcluded = true;
     const sinkExcluded: SinkExcluded = true;
-    const idGeneratorKept: IdGeneratorKept = true;
+    const onlyHistoryRequired: OnlyHistoryRequired = true;
 
-    expect({ spawnerExcluded, sinkExcluded, idGeneratorKept }).toEqual({
+    expect({ spawnerExcluded, sinkExcluded, onlyHistoryRequired }).toEqual({
       spawnerExcluded: true,
       sinkExcluded: true,
-      idGeneratorKept: true,
+      onlyHistoryRequired: true,
     });
 
     return AgentRuntime.run(agent, { question: "types" }).pipe(

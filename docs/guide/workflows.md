@@ -32,7 +32,7 @@ its Schema-decoded output. A pending Agent suspends the handler through Effect's
 fiber alive in the parent.
 
 ```ts twoslash
-import { Agent } from "@effect-agent/core";
+import { Agent } from "effect-agent";
 import { AgentWorkflow } from "@effect-agent/workflow";
 import { Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";

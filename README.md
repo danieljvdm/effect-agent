@@ -43,18 +43,13 @@ The output is schema-validated. Supply your model and runtime services to run it
 Save the code above and the setup below as `agent.ts`.
 
 ```ts
+import { Ephemeral } from "effect-agent";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { BunRuntime } from "@effect/platform-bun";
 import { Config, Layer } from "effect";
-import { IdGenerator } from "effect-agent/IdGenerator";
-import { ThreadHistory } from "effect-agent/ThreadHistory";
 import { FetchHttpClient } from "effect/unstable/http";
 
-const AppLive = Layer.mergeAll(
-  OpenAiLanguageModel.model("gpt-6-astra"),
-  IdGenerator.layer,
-  ThreadHistory.layerTransient,
-).pipe(
+const AppLive = Layer.mergeAll(OpenAiLanguageModel.model("gpt-6-astra"), Ephemeral.layer).pipe(
   Layer.provide(OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") })),
   Layer.provide(FetchHttpClient.layer),
 );

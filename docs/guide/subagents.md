@@ -27,7 +27,7 @@ Both attached forms use `Summarize.tool`. Durable execution comes from the host 
 For background work, expose start and follow-up tools instead:
 
 ```ts twoslash
-import * as Subagent from "@effect-agent/capabilities/Subagent";
+import { Subagent } from "effect-agent";
 import { Summarize } from "./subagent-basics.ts";
 // ---cut---
 const background = Subagent.background(Summarize.target, {

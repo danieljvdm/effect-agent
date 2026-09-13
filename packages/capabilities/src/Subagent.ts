@@ -207,10 +207,10 @@ export type SubagentReturnModeFailure = Schema.Union<
 /**
  * The native Effect AI Tool created by `Subagent.make` (SUB-001, SUB-003).
  * Its per-call dependencies are exactly the engine-provided `AgentSpawner`,
- * `RunEventSink`, and `SubagentDurability` plus `IdGenerator`; every child
+ * `RunEventSink`, and `SubagentDurability`; every child
  * requirement except the inherited Thread history policy is a construction requirement
- * of `SubagentRuntime.layer`. The engine excludes its own per-batch services from the runtime's
- * public requirements, so the visible per-call surface stays `IdGenerator`.
+ * of `Subagent.layer`. The engine excludes its own per-batch services from the runtime's
+ * public requirements. Runtime IDs use the overridable default reference.
  */
 export type SubagentTool<
   Name extends string,
@@ -227,7 +227,7 @@ export type SubagentTool<
         readonly failure: SubagentReturnModeFailure;
         readonly failureMode: "error";
       },
-      AgentSpawner | RunEventSink | SubagentDurability | IdGenerator
+      AgentSpawner | RunEventSink | SubagentDurability
     >
   : Tool.Tool<
       Name,
@@ -237,10 +237,10 @@ export type SubagentTool<
         readonly failure: SubagentToolFailure<Failure>;
         readonly failureMode: "error";
       },
-      AgentSpawner | RunEventSink | SubagentDurability | IdGenerator
+      AgentSpawner | RunEventSink | SubagentDurability
     >;
 
-/** Singleton Tool record provided by one `SubagentRuntime.layer`. */
+/** Singleton Tool record provided by one `Subagent.layer`. */
 export type SubagentTools<
   Name extends string,
   Parameters extends Schema.Top,
@@ -362,7 +362,7 @@ export interface SubagentDefineOptions<
  * An immutable Subagent capability: one target Agent Definition exposed to
  * a parent as one Effect AI Tool with explicit projections, policy, and
  * authority ceiling. It owns no acquired resources and
- * is not executable until `SubagentRuntime.layer` supplies the child's model Layer.
+ * is not executable until `Subagent.layer` supplies the child's model Layer.
  */
 export interface SubagentDelegation<
   Name extends string,
@@ -410,9 +410,10 @@ export interface SubagentDelegation<
  * Declare one attached delegation as a pure value.
  *
  * The returned `.tool` is a native Effect AI Tool whose handler dependencies
- * are exactly the engine-owned `AgentSpawner` and `RunEventSink` plus
- * `IdGenerator` (SUB-003); the concrete child Binding arrives only through
- * `SubagentRuntime.layer`. Throws on an invalid delegation name. Nested declarations remain inert unless the
+ * are exactly the engine-owned `AgentSpawner`, `RunEventSink`, and
+ * `SubagentDurability` (SUB-003); runtime IDs have an overridable default.
+ * The concrete child Binding arrives only through
+ * `Subagent.layer`. Throws on an invalid delegation name. Nested declarations remain inert unless the
  * effective inherited grant and reserved subtree budget permit their lifetime and depth.
  */
 const makeExplicit = <
@@ -886,7 +887,7 @@ export type SubagentChildRunFailure<
 >;
 
 /**
- * Construction requirements of one `SubagentRuntime.layer`: the child
+ * Construction requirements of one `Subagent.layer`: the child
  * Binding's full runtime requirements (Model Layer requirements, child Tool
  * handlers and their services, Schema services), both projection
  * requirements, and the parent-owned reservation service. Nothing here leaks
@@ -975,7 +976,7 @@ export class SubagentDurableAccounting extends Schema.Class<SubagentDurableAccou
   basis: Schema.Literals(["reserved-conservative"]),
 }) {}
 
-/** Options accepted by `SubagentRuntime.layer`. */
+/** Options accepted by `Subagent.layer`. */
 export interface SubagentRuntimeOptions<
   Failure extends Schema.Top,
   ChildFailure,
@@ -1212,7 +1213,7 @@ type SubagentHandler<
  *   conservative accounting summary. Failed children join as the bounded
  *   `SubagentExecutionFailure`; no in-process child fiber ever starts.
  */
-const layer = <
+export const layer = <
   Name extends string,
   TargetInput extends Schema.Top,
   TargetOutput extends Schema.Top,
@@ -1335,7 +1336,7 @@ const layer = <
       : { definition: delegation.target, model: modelOrBinding };
 
   if (childBinding.definition !== delegation.target) {
-    throw new Error("SubagentRuntime.layer requires the delegation's exact target Definition");
+    throw new Error("Subagent.layer requires the delegation's exact target Definition");
   }
 
   const resolvePolicy = (spawner: AgentSpawnerService) =>

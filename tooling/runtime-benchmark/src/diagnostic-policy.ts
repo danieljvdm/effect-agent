@@ -7,7 +7,6 @@ import {
 } from "@effect-agent/testing/ScriptedModel";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
-import { IdGenerator } from "effect-agent/IdGenerator";
 import { ThreadHistory } from "effect-agent/ThreadHistory";
 import { AiError, type LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 
@@ -318,7 +317,7 @@ export const runPolicyCase = Effect.fn("diagnostic.policy")(function* (workload:
 
   const app = hooks.pipe(
     Layer.provideMerge(modelAndHandlers),
-    Layer.provideMerge(Layer.merge(IdGenerator.layer, ThreadHistory.layerTransient)),
+    Layer.provideMerge(ThreadHistory.layerTransient),
   );
 
   return yield* Effect.gen(function* () {

@@ -10,8 +10,12 @@ Bind a model to the child, then run the parent:
 <<< @/snippets/travel-planner/delegation-live.ts{ts twoslash}
 
 `Coordinator` calls the `Research` tool, waits for its findings, and builds an itinerary.
-`SubagentRuntime.layer` supplies the child's model and tool handlers. The parent and child can
+`Subagent.layer` supplies the child's model and tool handlers. The parent and child can
 use different models.
+
+`Ephemeral.layer` selects transient history and shares one in-memory reservation ledger across
+the parent’s subagents. Provide it around all child handler Layers, as above. IDs are generated
+automatically; context preparation is optional. This setup keeps no completed history.
 
 The files below define `Research`, `Coordinator`, and the sample activity tools. Save them beside
 `delegation-live.ts`.
@@ -33,21 +37,25 @@ the model needs an API key. The child's tool calls stay in its own conversation.
 
 <<< @/snippets/travel-planner/delegation.ts{ts twoslash}
 
-`Subagent.make` uses the child's input Schema as its tool parameters. This example customizes
-the result: `projectResult` returns the activities and a `partial` flag, leaving research notes
-in the child's thread. The policy bounds each research task.
-
-For default input and output mapping, only `name` and `{ target: Researcher }` are needed.
-See the [minimal declaration](../subagents) or [mapping reference](../../reference/subagents#input-and-result-mappings).
+`Subagent.make` uses the child's input Schema as its tool parameters and returns
+`{ output, budgetExhausted }`. The parent policy supplies a shared delegation budget, and the
+child's own policy can tighten its limits. Expected child failures become bounded
+`SubagentExecutionFailure` values without a custom error Schema or mapper.
 
 ## Give the parent the delegation tool
 
 <<< @/snippets/travel-planner/coordinator.ts{ts twoslash}
 
-The parent sees the projected result as the tool's answer:
+The parent sees the child's output as the tool's answer:
 
 ```json
-{ "activities": ["Riverside walk", "Food market"], "partial": false }
+{
+  "output": {
+    "activities": ["Riverside walk", "Food market"],
+    "researchNotes": "Both fit a day of food and walking."
+  },
+  "budgetExhausted": false
+}
 ```
 
 ## Run it {#bind-models-and-run}
@@ -62,6 +70,13 @@ node --experimental-transform-types delegation-main.ts
 The child shares the parent's Scope. Interruption stops both; a process restart loses active
 execution. Use [durable attached](./durable-attached) when that work needs recovery. Stored history
 alone does not make execution durable.
+
+## Customize the result
+
+To expose only selected findings, add `success` and `projectResult` to the declaration.
+You can also supply explicit child limits and map failures to an application error.
+The [mapping example](../../reference/subagents#input-and-result-mappings) shows all three
+customizations after the minimal setup above.
 
 ## Failure and limits
 

@@ -1079,22 +1079,22 @@ layer(testLayer)("S2 WP1 durable Subagent engine seam", (it) => {
       ),
     );
 
-    const program = AgentRuntime.run(agent, { question: "types" });
+    const program = AgentRuntime.run(agent, { question: "types" }).pipe(Effect.provide(toolLayer));
 
     type Services = Effect.Services<typeof program>;
     type DurabilityExcluded = [Extract<Services, SubagentDurability>] extends [never]
       ? true
       : false;
     type SpawnerExcluded = [Extract<Services, AgentSpawner>] extends [never] ? true : false;
-    type IdGeneratorKept = IdGenerator extends Services ? true : false;
+    type OnlyHistoryRequired = [Exclude<Services, ThreadHistory>] extends [never] ? true : false;
     const durabilityExcluded: DurabilityExcluded = true;
     const spawnerExcluded: SpawnerExcluded = true;
-    const idGeneratorKept: IdGeneratorKept = true;
+    const onlyHistoryRequired: OnlyHistoryRequired = true;
 
-    expect({ durabilityExcluded, spawnerExcluded, idGeneratorKept }).toEqual({
+    expect({ durabilityExcluded, spawnerExcluded, onlyHistoryRequired }).toEqual({
       durabilityExcluded: true,
       spawnerExcluded: true,
-      idGeneratorKept: true,
+      onlyHistoryRequired: true,
     });
 
     return AgentRuntime.run(agent, { question: "types" }).pipe(

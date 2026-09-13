@@ -23,13 +23,10 @@ For the example below, also install `@effect/ai-openai@4.0.0-rc.112` and `@effec
 Save as `agent.ts`:
 
 ```ts
+import { Ephemeral, Agent, AgentRuntime } from "effect-agent";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { BunRuntime } from "@effect/platform-bun";
 import { Config, Console, Effect, Schema } from "effect";
-import { Agent, AgentRuntime } from "effect-agent";
-import { AgentPolicy } from "effect-agent/AgentPolicy";
-import { ThreadHistory } from "effect-agent/ThreadHistory";
-import { IdGenerator } from "effect-agent/IdGenerator";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -41,11 +38,11 @@ const triage = Agent.make("triage", {
   }),
   instructions: "Classify the bug report by severity. Explain your reasoning in one sentence.",
   toolkit: Toolkit.empty,
-  policy: AgentPolicy.resolve({
+  policy: {
     maxTurns: 2,
     maxToolCalls: 1,
     maxDuration: "30 seconds",
-  }),
+  },
 });
 
 const program = AgentRuntime.run(triage, "All users get a 500 error when signing in.").pipe(
@@ -53,8 +50,7 @@ const program = AgentRuntime.run(triage, "All users get a 500 error when signing
   Effect.provide(OpenAiLanguageModel.model("gpt-4.1-mini")),
   Effect.provide(OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") })),
   Effect.provide(FetchHttpClient.layer),
-  Effect.provide(IdGenerator.layer),
-  Effect.provide(ThreadHistory.layerTransient),
+  Effect.provide(Ephemeral.layer),
 );
 
 BunRuntime.runMain(program);

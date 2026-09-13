@@ -1,7 +1,6 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import { DelegationId, type ThreadId } from "@effect-agent/core/Identifiers";
-import { type IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { type AgentRuntimeFailure } from "@effect-agent/engine/AgentRuntime";
 import { type ThreadHistory } from "@effect-agent/engine/ThreadHistory";
@@ -175,16 +174,16 @@ const proveWorkerRequirements = (
     Equal<Extract<Agent.Failure<typeof agent>, InputProjectionFailure>, InputProjectionFailure>
   >;
   type RunRequirementsProof = Assert<
-    Equal<Effect.Services<typeof execution>, Expected | ThreadHistory | IdGenerator>
+    Equal<Effect.Services<typeof execution>, Expected | ThreadHistory>
   >;
   type StreamRequirementsProof = Assert<
-    Equal<Stream.Services<typeof events>, Expected | ThreadHistory | IdGenerator>
+    Equal<Stream.Services<typeof events>, Expected | ThreadHistory>
   >;
   type StartRequirementsProof = Assert<
-    Equal<Effect.Services<typeof detached>, Expected | ThreadHistory | IdGenerator | Scope.Scope>
+    Equal<Effect.Services<typeof detached>, Expected | ThreadHistory | Scope.Scope>
   >;
   type HistoryRequirementsProof = Assert<
-    Equal<Effect.Services<typeof retained>, Expected | ThreadStore | IdGenerator>
+    Equal<Effect.Services<typeof retained>, Expected | ThreadStore>
   >;
   type HistoryFailureProof = Assert<
     Equal<Effect.Error<typeof retained>, AgentRuntimeFailure<typeof agent>>

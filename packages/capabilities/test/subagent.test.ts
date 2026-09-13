@@ -555,7 +555,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
 
       const capturedDenial = yield* Ref.make<unknown>(undefined);
       const capturedMidRunId = yield* Ref.make<RunId>(decodeRunId("mid-run-unset"));
-      const dependencies = yield* Effect.context<SubagentReservations | IdGenerator>();
+      const dependencies = yield* Effect.context<SubagentReservations>();
 
       const midDelegationLayer = Layer.provide(
         SubagentRuntime.layer(delegation, grandchildBinding, { mapChildFailure }),
@@ -2692,8 +2692,8 @@ type HandlerSinkProof = Assert<Equal<Extract<TypedHandlerServices, RunEventSink>
 type HandlerDurabilityProof = Assert<
   Equal<Extract<TypedHandlerServices, SubagentDurability>, SubagentDurability>
 >;
-type HandlerIdGeneratorProof = Assert<
-  Equal<Extract<TypedHandlerServices, IdGenerator>, IdGenerator>
+type HandlerRequirementsProof = Assert<
+  Equal<TypedHandlerServices, AgentSpawner | RunEventSink | SubagentDurability>
 >;
 type HandlerHidesModelProof = Assert<Equal<Extract<TypedHandlerServices, ChildModelConfig>, never>>;
 type HandlerHidesReservationsProof = Assert<
@@ -2804,7 +2804,7 @@ describe("Subagent type proofs", () => {
     const handlerSpawnerProof: HandlerSpawnerProof = true;
     const handlerSinkProof: HandlerSinkProof = true;
     const handlerDurabilityProof: HandlerDurabilityProof = true;
-    const handlerIdGeneratorProof: HandlerIdGeneratorProof = true;
+    const handlerRequirementsProof: HandlerRequirementsProof = true;
     const handlerHidesModelProof: HandlerHidesModelProof = true;
     const handlerHidesReservationsProof: HandlerHidesReservationsProof = true;
     const layerModelProof: LayerModelProof = true;
@@ -2834,7 +2834,7 @@ describe("Subagent type proofs", () => {
       handlerSpawnerProof,
       handlerSinkProof,
       handlerDurabilityProof,
-      handlerIdGeneratorProof,
+      handlerRequirementsProof,
       handlerHidesModelProof,
       handlerHidesReservationsProof,
       layerModelProof,

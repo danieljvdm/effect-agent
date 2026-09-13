@@ -162,7 +162,7 @@ hosts, actions, and output size in the definition. In a Worker, the Cloudflare p
 the capture adapter, binding, and handlers in one Layer:
 
 ```ts twoslash
-import * as WebCapture from "@effect-agent/capabilities/WebCapture";
+import { WebCapture } from "effect-agent";
 import {
   CloudflareBrowser,
   type CloudflareBrowserOptions,
@@ -195,7 +195,7 @@ It preserves the definition's host policy, output bounds, typed failures, and re
 For REST capture, use the Node-safe REST subpath and supply an HTTP client:
 
 ```ts twoslash
-import * as WebCapture from "@effect-agent/capabilities/WebCapture";
+import { WebCapture } from "effect-agent";
 import {
   CloudflareBrowserRest,
   type CloudflareBrowserRestOptions,

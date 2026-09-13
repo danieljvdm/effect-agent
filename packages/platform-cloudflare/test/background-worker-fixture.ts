@@ -3,7 +3,6 @@ import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities/Subag
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
 import type { ThreadId, SubmissionId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { MessagingError } from "@effect-agent/core/Messaging";
 import { SubagentGrant } from "@effect-agent/core/SubagentContract";
 import { WorkerError } from "@effect-agent/core/Worker";
@@ -390,7 +389,7 @@ const independentPersonaModel = Model.make(
 const independentScoutHandlers = Subagent.SubagentRuntime.layer(
   independentScoutDeclaration,
   Agent.withModel(independentScout, model),
-).pipe(Layer.provide([SubagentReservationsMemoryLive, IdGenerator.layer]));
+).pipe(Layer.provide([SubagentReservationsMemoryLive]));
 
 export const backgroundWorkerBindings = Effect.all([
   DurableWorkerBinding.make(

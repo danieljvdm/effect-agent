@@ -397,7 +397,7 @@ interface ScenarioOutcome {
 const runCapture = (
   params: Record<string, unknown>,
   options?: { readonly actions?: ReadonlyArray<"markdown" | "content" | "links"> },
-): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory | RunContextPreparation> =>
+): Effect.Effect<ScenarioOutcome, unknown, ThreadHistory | RunContextPreparation> =>
   Effect.gen(function* () {
     const definition = WebCapture.make("read_webpage", {
       description: "Read documentation pages.",
@@ -430,7 +430,7 @@ const runCapture = (
 
 const runExtract = (
   params: Record<string, unknown>,
-): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory | RunContextPreparation> =>
+): Effect.Effect<ScenarioOutcome, unknown, ThreadHistory | RunContextPreparation> =>
   Effect.gen(function* () {
     const definition = WebCapture.makeExtract("extract_pricing", {
       description: "Extract pricing plans.",
@@ -464,7 +464,7 @@ const runExtract = (
 
 const runScrape = (
   params: Record<string, unknown>,
-): Effect.Effect<ScenarioOutcome, unknown, IdGenerator | ThreadHistory | RunContextPreparation> =>
+): Effect.Effect<ScenarioOutcome, unknown, ThreadHistory | RunContextPreparation> =>
   Effect.gen(function* () {
     const definition = WebCapture.makeScrape("scrape_webpage", {
       description: "Scrape rendered elements.",

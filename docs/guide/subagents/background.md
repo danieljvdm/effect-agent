@@ -8,7 +8,7 @@ description: Give the parent background tools and send worker findings back as n
 Give the parent tools to start and steer a researcher while it keeps chatting:
 
 ```ts twoslash
-import * as Subagent from "@effect-agent/capabilities/Subagent";
+import { Subagent } from "effect-agent";
 import { Researcher } from "./researcher.ts";
 
 const background = Subagent.background(Researcher, {

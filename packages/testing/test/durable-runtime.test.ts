@@ -1,7 +1,6 @@
 import * as Agent from "@effect-agent/core/Agent";
 import { AgentPolicy, CompactionPolicy } from "@effect-agent/core/AgentPolicy";
 import { ThreadId, ReceiptId, SubmissionId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { type IdGenerator } from "@effect-agent/core/IdGenerator";
 import {
   COMPACTION_SUMMARY_PREFIX,
   CONTEXT_ROLLOVER_PREFIX,
@@ -3370,16 +3369,13 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       );
 
       type WorkerError = Effect.Error<typeof workerProgram>;
-      type WorkerServices = Effect.Services<typeof workerProgram>;
       const workerHasFence: FenceRejected extends WorkerError ? true : false = true;
-      const workerProvidesIdGenerator: IdGenerator extends WorkerServices ? true : false = false;
 
       expect(submitHasAdmissionConflict).toBe(true);
       expect(submitHasFailpoint).toBe(true);
       expect(awaitHasConflict).toBe(true);
       expect(awaitReturnsSettlement).toBe(true);
       expect(workerHasFence).toBe(true);
-      expect(workerProvidesIdGenerator).toBe(false);
     }),
   );
 

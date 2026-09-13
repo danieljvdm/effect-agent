@@ -101,8 +101,8 @@ Object namespace in the generated `Cloudflare.Env`.
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { Agent } from "effect-agent";
+import { AgentPolicy } from "effect-agent/AgentPolicy";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
 import { DefinitionDigestInput } from "@effect-agent/thread/Records";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
@@ -368,10 +368,10 @@ Bind the namespace and principal in authenticated host code. Never accept them f
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
-import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
-import { MemoryLookup, MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
-import { MemoryScope } from "@effect-agent/core/MemoryStore";
+import { MemoryNamespace } from "effect-agent";
+import { MemoryAccess } from "effect-agent/MemoryRevalidation";
+import { MemoryLookup, MemoryRecallLimits } from "effect-agent/MemoryReference";
+import { MemoryScope } from "effect-agent/MemoryStore";
 import {
   CloudflareMemoryClient,
   type MemoryObjectRpc,

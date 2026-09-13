@@ -1,8 +1,7 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { Effect, Schema } from "effect";
+import { Agent, AgentRuntime } from "effect-agent";
+import { AgentPolicy } from "effect-agent/AgentPolicy";
 
 import { AppLive } from "./setup";
 import { TravelTools } from "./tools";

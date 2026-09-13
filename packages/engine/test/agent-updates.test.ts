@@ -1,6 +1,5 @@
 import * as Agent from "@effect-agent/core/Agent";
 import * as AgentUpdates from "@effect-agent/core/AgentUpdates";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { IdempotencyKey } from "@effect-agent/core/Receipt";
 import { expect, layer } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect";
@@ -62,7 +61,7 @@ const definition = Agent.make("updates", {
   toolkit: Toolkit.empty,
 });
 
-const base = Layer.mergeAll(IdGenerator.layer, ThreadHistory.layerTransient);
+const base = Layer.mergeAll(ThreadHistory.layerTransient);
 
 layer(base)("Agent updates", (it) => {
   it.effect(

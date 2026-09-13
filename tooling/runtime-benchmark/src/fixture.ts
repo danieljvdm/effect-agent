@@ -68,7 +68,6 @@ import {
   Stream,
 } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
-import { IdGenerator } from "effect-agent/IdGenerator";
 import { ThreadHistory } from "effect-agent/ThreadHistory";
 import type { LanguageModel } from "effect/unstable/ai";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
@@ -596,9 +595,7 @@ export const runSample = Effect.fn("benchmark.runSample")(function* (
         yield* markFinish;
         yield* inspectScript;
       }).pipe(
-        Effect.provide(
-          Layer.mergeAll(model(turns), handlers, IdGenerator.layer, ThreadHistory.layerTransient),
-        ),
+        Effect.provide(Layer.mergeAll(model(turns), handlers, ThreadHistory.layerTransient)),
         Effect.scoped,
       );
       yield* check(calls === workload.rounds + 1, "Unexpected provider call count");

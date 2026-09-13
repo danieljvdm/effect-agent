@@ -100,7 +100,7 @@ namespace. Return ranked `Descriptor.id` values. Every ID is validated before li
 unknown or duplicate IDs fail closed. Native tools and each Code Mode alias have separate IDs.
 
 ```ts twoslash
-import * as ToolDiscovery from "effect-agent/ToolDiscovery";
+import { ToolDiscovery } from "effect-agent";
 import { Context, Effect, Schema } from "effect";
 
 class SearchUnavailable extends Schema.TaggedError<SearchUnavailable>()("SearchUnavailable", {
@@ -315,7 +315,7 @@ allowing the outer execution Tool does not grant permission to its inner Tools.
 This policy permits only the `search` tool:
 
 ```ts twoslash
-import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
+import { RunToolAuthorization } from "effect-agent/RunOptions";
 import { Effect, Layer } from "effect";
 
 export const searchOnly = RunToolAuthorization.of({
@@ -370,9 +370,9 @@ needs `ChildProcessSpawner`, which `NodeServices.layer` supplies on Node.js. Bot
 stay in the Layer's `R`.
 
 ```ts
-import * as McpClient from "@effect-agent/capabilities/McpClient";
-import { connectMcp, McpConnectionRequest } from "@effect-agent/capabilities/Mcp";
-import { McpHttpTransport } from "@effect-agent/capabilities/McpClient";
+import { McpClient } from "effect-agent";
+import { connectMcp, McpConnectionRequest } from "effect-agent/Mcp";
+import { McpHttpTransport } from "effect-agent/McpClient";
 import { FetchHttpClient } from "effect/unstable/http";
 import { Effect, Layer } from "effect";
 
@@ -427,7 +427,7 @@ supplied LanguageModel and a native hosted search tool. The calling agent can us
 model or provider. Include `WebSearch.tool` in its toolkit, then provide this handler Layer:
 
 ```ts twoslash
-import * as WebSearch from "effect-agent/WebSearch";
+import { WebSearch } from "effect-agent";
 import * as Gateway from "@effect-agent/platform-cloudflare/CloudflareAiGateway";
 import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
 import { Layer, Redacted } from "effect";

@@ -73,3 +73,6 @@ export class ThreadHistory extends Context.Service<
       ),
   });
 }
+
+/** Retain no shared history. See {@link ThreadHistory.layerTransient}. */
+export const layerTransient = ThreadHistory.layerTransient;

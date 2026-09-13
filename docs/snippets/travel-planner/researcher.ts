@@ -1,5 +1,5 @@
-import * as Agent from "@effect-agent/core/Agent";
 import { Schema } from "effect";
+import { Agent } from "effect-agent";
 
 import { TravelTools } from "./tools.ts";
 

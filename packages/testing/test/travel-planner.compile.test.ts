@@ -11,7 +11,6 @@ import {
   type AgentToolAuthorizationDenied,
 } from "@effect-agent/core/AgentError";
 import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import { type MemoryRecallError } from "@effect-agent/core/MemoryReference";
 import { type RunEvent } from "@effect-agent/core/RunEvent";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
@@ -103,7 +102,6 @@ type ExpectedRequirements =
   | ActivityCatalog
   | TravelGuidance
   | Tool.HandlersFor<Toolkit.Tools<typeof TravelPlannerToolkit>>
-  | IdGenerator
   | ThreadHistory;
 type ExpectedFailure =
   | FlightUnavailable
@@ -168,11 +166,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
 
     const selfContained = AgentRuntime.run(plain, "question").pipe(
       Effect.provide(
-        Layer.mergeAll(
-          IdGenerator.layer,
-          ThreadHistory.layerTransient,
-          RunContextPreparationPassthrough,
-        ),
+        Layer.mergeAll(ThreadHistory.layerTransient, RunContextPreparationPassthrough),
       ),
     );
 
@@ -214,7 +208,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
 
     const outputRun = AgentRuntime.run(outputAgent, "question");
 
-    type ScopedRequirements = IdGenerator | ThreadHistory | CallerService | Scope.Scope;
+    type ScopedRequirements = ThreadHistory | CallerService | Scope.Scope;
     type BaseFailure = Exclude<
       ExpectedFailure,
       FlightUnavailable | LodgingUnavailable | ActivityUnavailable | GuidanceFailure

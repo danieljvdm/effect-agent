@@ -1,13 +1,23 @@
 import { ScriptedModel } from "@effect-agent/testing/ScriptedModel";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import { Console, Effect, Layer, Ref, Schema } from "effect";
-import { Agent, AgentError, AgentRuntime, IdGenerator } from "effect-agent";
+import {
+  Agent,
+  AgentError,
+  AgentRuntime,
+  Ephemeral,
+  IdGenerator,
+  Subagent,
+  ThreadHistory,
+} from "effect-agent";
 import * as DirectAgent from "effect-agent/Agent";
 import { AgentInputError } from "effect-agent/AgentError";
 import * as DirectRuntime from "effect-agent/AgentRuntime";
+import * as DirectEphemeral from "effect-agent/Ephemeral";
 import { RunId, ThreadId, TurnId } from "effect-agent/Identifiers";
 import { IdGenerator as DirectIdGenerator } from "effect-agent/IdGenerator";
-import { ThreadHistory } from "effect-agent/ThreadHistory";
+import * as DirectSubagent from "effect-agent/Subagent";
+import { layerTransient } from "effect-agent/ThreadHistory";
 import { Model, Toolkit } from "effect/unstable/ai";
 
 import { loadRuntime } from "./lazy-module.ts";
@@ -41,6 +51,18 @@ export const program = Effect.gen(function* () {
   yield* check(AgentRuntime.run === DirectRuntime.run, "AgentRuntime.run identity changed");
   yield* check(AgentError.AgentInputError === AgentInputError, "Schema class identity changed");
   yield* check(IdGenerator.IdGenerator === DirectIdGenerator, "Service identity changed");
+  yield* check(Ephemeral.layer === DirectEphemeral.layer, "Ephemeral.layer identity changed");
+  yield* check(Subagent.layer === DirectSubagent.layer, "Subagent.layer identity changed");
+  yield* check(ThreadHistory.layerTransient === layerTransient, "History layer identity changed");
+
+  const ids = yield* DirectIdGenerator;
+  const defaultThread = yield* ids.nextThreadId;
+  const anotherThread = yield* ids.nextThreadId;
+
+  yield* check(
+    defaultThread.startsWith("thread-") && defaultThread !== anotherThread,
+    "Default IDs failed",
+  );
 
   const deferred = yield* Effect.promise(loadRuntime);
 
@@ -74,7 +96,7 @@ export const program = Effect.gen(function* () {
     Effect.provide(
       Layer.mergeAll(
         identifiers,
-        ThreadHistory.layerTransient,
+        Ephemeral.layer,
         Layer.succeed(Model.ProviderName, "scripted"),
         Layer.succeed(Model.ModelName, "bundle-smoke"),
         ScriptedModel.layer([

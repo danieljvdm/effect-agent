@@ -60,7 +60,7 @@ Acquire resources needed across turns in a surrounding run Layer or Scope.
 To add application instructions to each request:
 
 ```ts twoslash
-import { RunContextPreparation, type RunContextHook } from "@effect-agent/engine/RunOptions";
+import { RunContextPreparation, type RunContextHook } from "effect-agent/RunOptions";
 import { Effect, Layer } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
@@ -159,7 +159,7 @@ unknown.
 This source reads a known Markdown note without a store or adapter:
 
 ```ts twoslash
-import * as Memory from "@effect-agent/core/Memory";
+import { Memory } from "effect-agent";
 import {
   MemoryAttribution,
   MemoryContent,
@@ -168,11 +168,8 @@ import {
   MemoryRecallError,
   MemoryRecallLimits,
   MemorySourceReference,
-} from "@effect-agent/core/MemoryReference";
-import {
-  RunContextPreparation,
-  type RunTransientContextHook,
-} from "@effect-agent/engine/RunOptions";
+} from "effect-agent/MemoryReference";
+import { RunContextPreparation, type RunTransientContextHook } from "effect-agent/RunOptions";
 import { Effect, Layer } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
@@ -288,16 +285,13 @@ Keep authorization, credentials, and query policy inside an application service.
 one read method; it does not create a durable copy, write to the corpus, or create embeddings:
 
 ```ts twoslash
-import * as Memory from "@effect-agent/core/Memory";
+import { Memory } from "effect-agent";
 import {
   type MemoryLookup,
   MemoryRecallError,
   MemoryRecallLimits,
-} from "@effect-agent/core/MemoryReference";
-import {
-  RunContextPreparation,
-  type RunTransientContextHook,
-} from "@effect-agent/engine/RunOptions";
+} from "effect-agent/MemoryReference";
+import { RunContextPreparation, type RunTransientContextHook } from "effect-agent/RunOptions";
 import { Context, Effect, Layer } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
@@ -372,9 +366,9 @@ and identity type. Definitions with the same identity fields but different names
 not interchangeable.
 
 ```ts twoslash
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
-import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
-import { MemoryKey, MemoryScope } from "@effect-agent/core/MemoryStore";
+import { MemoryNamespace } from "effect-agent";
+import { MemoryAccess } from "effect-agent/MemoryRevalidation";
+import { MemoryKey, MemoryScope } from "effect-agent/MemoryStore";
 import { Schema } from "effect";
 
 const TenantId = Schema.NonEmptyString.pipe(Schema.brand("app/TenantId"));
@@ -470,9 +464,9 @@ The usual recall budget can omit a replacement that no longer fits. Source failu
 the consumer must explicitly choose any optional fallback.
 
 ```ts twoslash
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
-import { MemoryContent } from "@effect-agent/core/MemoryReference";
-import { MemoryKey, MemoryScope, MemoryWriter } from "@effect-agent/core/MemoryStore";
+import { MemoryNamespace } from "effect-agent";
+import { MemoryContent } from "effect-agent/MemoryReference";
+import { MemoryKey, MemoryScope, MemoryWriter } from "effect-agent/MemoryStore";
 import { Effect, Schema } from "effect";
 
 const TeamMemory = MemoryNamespace.define({
@@ -679,10 +673,10 @@ does not become another witness. Applications that extract assistant references 
 the original `originId` instead of assigning independent evidence identity.
 
 ```ts twoslash
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
-import { MemoryContent } from "@effect-agent/core/MemoryReference";
-import { MemoryKey, MemoryScope, MemoryWrite, MemoryWriter } from "@effect-agent/core/MemoryStore";
-import { ThreadId } from "@effect-agent/core/Identifiers";
+import { MemoryNamespace } from "effect-agent";
+import { MemoryContent } from "effect-agent/MemoryReference";
+import { MemoryKey, MemoryScope, MemoryWrite, MemoryWriter } from "effect-agent/MemoryStore";
+import { ThreadId } from "effect-agent/Identifiers";
 import {
   ActivityPassLimits,
   processCommittedActivity,
@@ -826,13 +820,12 @@ import {
   SemanticQueryLimits,
   indexMemorySource,
   querySemanticMemory,
-} from "@effect-agent/capabilities/SemanticMemory";
-import * as Memory from "@effect-agent/core/Memory";
-import * as MemoryNamespace from "@effect-agent/core/MemoryNamespace";
-import { MemoryAccess } from "@effect-agent/core/MemoryRevalidation";
-import { MemoryKey, MemoryScope } from "@effect-agent/core/MemoryStore";
-import { MemoryRecallLimits } from "@effect-agent/core/MemoryReference";
-import { SemanticMemoryProfile } from "@effect-agent/core/SemanticMemoryIndex";
+} from "effect-agent/SemanticMemory";
+import { Memory, MemoryNamespace } from "effect-agent";
+import { MemoryAccess } from "effect-agent/MemoryRevalidation";
+import { MemoryKey, MemoryScope } from "effect-agent/MemoryStore";
+import { MemoryRecallLimits } from "effect-agent/MemoryReference";
+import { SemanticMemoryProfile } from "effect-agent/SemanticMemoryIndex";
 import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory/MemorySemanticIndex";
 import { Effect, Schema } from "effect";
 
@@ -1102,7 +1095,7 @@ Provide `ContextCompactor` directly to the durable host Layer. In this example, 
 application's assembled host Layer:
 
 ```ts
-import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
+import { ContextCompactor } from "effect-agent/ContextCompactor";
 import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Layer } from "effect";
 
@@ -1134,8 +1127,8 @@ with `CompactionError`; admission still checks the final prompt against `context
 For model-directed control, include the native `ContextTools.toolkit` and its handlers:
 
 ```ts
-import * as ContextTools from "@effect-agent/capabilities/ContextTools";
-import { ContextCompactor } from "@effect-agent/engine/ContextCompactor";
+import { ContextTools } from "effect-agent";
+import { ContextCompactor } from "effect-agent/ContextCompactor";
 import * as ThreadContextHistory from "@effect-agent/thread/ThreadContextHistory";
 import { Layer } from "effect";
 
