@@ -4,13 +4,12 @@ import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
   certifyDurableAdapters,
-  resolveTierThree,
   tier2NeverFiredLocations,
 } from "@effect-agent/testing/Certification";
 import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/DurableFailpoint";
 import {
-  CertificationCaseResult,
   CertificationReport,
+  type CertificationScenario,
 } from "@effect-agent/thread/testing/Certification";
 import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/SubmissionLedgerConformance";
 import { threadStoreConformanceCases } from "@effect-agent/thread/testing/ThreadStoreConformance";
@@ -51,6 +50,59 @@ const certified = Effect.gen(function* () {
   return report;
 });
 
+// Independent expectations for the fixture protocols, never inputs to discovery. A lost
+// path in one shape must fail even if another shape still fires that location globally.
+const runLocations: ReadonlyArray<DurableRuntimeFailpointLocation> = [
+  "submit:after-admit",
+  "submit:after-materialize",
+  "claim:after-claim",
+  "input:after-canonical-append",
+  "run:before-start-append",
+  "run:after-start-append",
+  "turn:after-canonical-append",
+  "terminalize:after-reserve",
+  "terminalize:after-canonical-append",
+];
+
+const toolLocations: ReadonlyArray<DurableRuntimeFailpointLocation> = [
+  "turn:after-response-append",
+  "tools:before-prepared-append",
+  "tools:after-prepared-append",
+];
+
+const ordinaryToolLocations: ReadonlyArray<DurableRuntimeFailpointLocation> = [
+  ...runLocations,
+  ...toolLocations,
+  "turn:after-results-append",
+];
+
+const expectedPaths: Record<
+  CertificationScenario,
+  ReadonlyArray<DurableRuntimeFailpointLocation>
+> = {
+  plain: runLocations,
+  "uncertain-tool": ordinaryToolLocations,
+  "durable-steps": [...ordinaryToolLocations, "step:after-step-append"],
+  approval: [...ordinaryToolLocations, "approval:after-request-append", "approval:after-suspend"],
+  join: [...runLocations, "join:after-claim", "join:after-canonical-append"],
+  // Attached delegation settles siblings at suspension and joins through the child protocol.
+  delegation: [
+    ...runLocations,
+    ...toolLocations,
+    "subagent:after-reserve",
+    "subagent:after-request-append",
+    "subagent:after-admit",
+    "subagent:after-child-ready",
+    "subagent:after-start-append",
+    "subagent:after-sibling-settle",
+    "subagent:after-suspend",
+    "subagent:before-join-append",
+    "subagent:after-join-append",
+    "subagent:after-release-pending",
+    "subagent:after-release",
+  ],
+};
+
 describe("TEST-004 STORE-010 adapter certification — storage-memory reference (Tier 3 N/A)", () => {
   it.effect(
     "TIER1: all SubmissionLedger and ThreadStore contract cases pass",
@@ -73,18 +125,22 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
       Effect.gen(function* () {
         const report = yield* certified;
 
-        // Full sweep: every location armed in every scenario shape.
-        expect(report.tier2).toHaveLength(
-          DurableRuntimeFailpointLocation.literals.length * CERTIFICATION_SCENARIOS.length,
+        // Every pair remains accounted for, including shared clean-path results.
+        expect(report.tier2.map(({ scenario, location }) => [scenario, location])).toEqual(
+          CERTIFICATION_SCENARIOS.flatMap((scenario) =>
+            DurableRuntimeFailpointLocation.literals.map((location) => [scenario, location]),
+          ),
         );
         expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
         // Every cell (fired or clean) verified with a FULLY recomputed digest chain.
         expect(report.tier2.every((row) => row.digestChainVerified)).toBe(true);
-        // Each scenario shape had its own faults actually fire.
         for (const scenario of CERTIFICATION_SCENARIOS) {
-          expect(report.tier2.some((row) => row.scenario === scenario && row.failpointFired)).toBe(
-            true,
-          );
+          expect(
+            report.tier2
+              .filter((row) => row.scenario === scenario && row.failpointFired)
+              .map((row) => row.location)
+              .sort(),
+          ).toEqual([...expectedPaths[scenario]].sort());
         }
         // The never-fired set is EXACTLY the documented paths covered by separate suites —
         // scoped coverage stated honestly, and pinned so it cannot silently grow.
@@ -125,39 +181,5 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
         expect(report.tier3.evidence).toEqual([]);
       }),
     120_000,
-  );
-
-  it.effect("TIER3: resolveTierThree maps lever, citations, and absence honestly", () =>
-    Effect.gen(function* () {
-      const exercised = yield* resolveTierThree("durable-node", {
-        crashLever: Effect.succeed([
-          CertificationCaseResult.make({
-            suite: "real-loss",
-            name: "kill/reopen designated row",
-            status: "passed",
-          }),
-        ]),
-      });
-
-      expect(exercised.status).toBe("exercised");
-      expect(exercised.cases).toHaveLength(1);
-
-      const recorded = yield* resolveTierThree("durable-node", {
-        tierThreeEvidence: ["packages/platform-node/test/crash/crash.test.ts"],
-      });
-
-      expect(recorded.status).toBe("recorded-evidence");
-
-      const notExercised = yield* resolveTierThree("durable-cloudflare", {});
-
-      expect(notExercised.status).toBe("not-exercised");
-      expect(notExercised.detail).toContain("NOT discharged");
-
-      const notApplicable = yield* resolveTierThree("non-durable", {
-        tierThreeEvidence: ["ignored"],
-      });
-
-      expect(notApplicable.status).toBe("not-applicable");
-    }),
   );
 });

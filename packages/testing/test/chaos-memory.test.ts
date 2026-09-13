@@ -26,7 +26,7 @@ import { Cause, Duration, Effect, Exit, Layer, Schema, Stream } from "effect";
  * deterministic under the test services (TestClock — no real waiting anywhere in the runner).
  * Every plan ends in the shared `verifyThreadInvariants` convergence claims, a zero-entry
  * `scanObligations`, and the desk non-fabrication sweep. Failure output prints the root seed
- * (replay with `CHAOS_SEED=<seed> bun run test`) and the failing plan's own seed.
+ * (replay with `CHAOS_SEED=<seed> vp test test/chaos-memory.test.ts`) and the failing plan's own seed.
  */
 
 const ROOT_SEED = chaosSeedFromEnv(process.env);

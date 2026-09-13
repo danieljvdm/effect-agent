@@ -90,53 +90,20 @@ const certified = Effect.gen(function* () {
 });
 
 describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () => {
-  // Each verdict exercises the full SQLite certification independently. Keep its timeout
-  // per case so disk latency across four sweeps cannot consume one shared test budget.
-  it.effect.each([
-    {
-      name: "missing",
-      crashLever: undefined,
-      ok: true,
-      full: false,
-      status: "not-exercised",
-    },
-    {
-      name: "empty",
-      crashLever: Effect.succeed([]),
-      ok: true,
-      full: false,
-      status: "not-exercised",
-    },
-    {
-      name: "passed",
-      crashLever: Effect.succeed([
-        CertificationCaseResult.make({
-          suite: "real-loss",
-          name: "supplied lever result",
-          status: "passed",
-        }),
-      ]),
-      ok: true,
-      full: true,
-      status: "exercised",
-    },
-    {
-      name: "failed",
-      crashLever: Effect.succeed([
-        CertificationCaseResult.make({
-          suite: "real-loss",
-          name: "supplied lever result",
-          status: "failed",
-        }),
-      ]),
-      ok: false,
-      full: false,
-      status: "exercised",
-    },
-  ])(
-    "distinguishes executed-check success from complete real-loss certification: $name lever",
-    (row) =>
+  // Verdict combinations belong to certification-verdict.test.ts. Keep one negative full
+  // run as well as the shared successful certificate: bypassing report aggregation must fail.
+  it.effect(
+    "propagates a failed supplied crash lever into the final certification verdict",
+    () =>
       Effect.gen(function* () {
+        const failedCase = CertificationCaseResult.make({
+          suite: "real-loss",
+          name: "injected lever failure",
+          status: "failed",
+        });
+
+        let leverRuns = 0;
+
         const report = yield* Effect.scoped(
           Effect.gen(function* () {
             const fs = yield* FileSystem.FileSystem;
@@ -148,19 +115,24 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
             const adapters = combinedAdapters(`${directory}/test.sqlite`);
 
             return yield* certifyDurableAdapters({
-              adapter: { name: row.name },
+              adapter: { name: "failed-lever" },
               submissionLedger: adapters,
               threadStore: adapters,
-              crashLever: row.crashLever,
+              crashLever: Effect.sync(() => {
+                leverRuns++;
+
+                return [failedCase];
+              }),
             });
           }),
         );
 
-        expect({
-          ok: report.ok,
-          full: report.fullyCertified,
-          status: report.tier3.status,
-        }).toEqual({ ok: row.ok, full: row.full, status: row.status });
+        expect(leverRuns).toBe(1);
+        expect(report.tier1.filter((row) => row.status === "failed")).toEqual([]);
+        expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
+        expect(report.tier3).toMatchObject({ status: "exercised", cases: [failedCase] });
+        expect(report.ok).toBe(false);
+        expect(report.fullyCertified).toBe(false);
       }).pipe(Effect.provide([NodeFileSystem.layer, NodeCrypto.layer])),
     300_000,
   );
@@ -186,8 +158,10 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
       Effect.gen(function* () {
         const report = yield* certified;
 
-        expect(report.tier2).toHaveLength(
-          DurableRuntimeFailpointLocation.literals.length * CERTIFICATION_SCENARIOS.length,
+        expect(report.tier2.map(({ scenario, location }) => [scenario, location])).toEqual(
+          CERTIFICATION_SCENARIOS.flatMap((scenario) =>
+            DurableRuntimeFailpointLocation.literals.map((location) => [scenario, location]),
+          ),
         );
         expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
         expect(report.tier2.every((row) => row.digestChainVerified)).toBe(true);

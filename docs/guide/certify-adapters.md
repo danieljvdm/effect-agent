@@ -11,7 +11,7 @@ returns one schema-encoded report.
 | Level                      | Evidence                                                                           |
 | -------------------------- | ---------------------------------------------------------------------------------- |
 | 1. Port contract           | Runs all shared ledger and thread store conformance cases                          |
-| 2. Coordinator convergence | Injects each coordinator failpoint into six durable scenarios and drives recovery  |
+| 2. Coordinator convergence | Discovers six coordinator paths, injects reached failpoints and drives recovery    |
 | 3. Runtime loss            | Exercises process termination or eviction, or records the committed suites that do |
 
 ## Implement the store contract {#store-contract}
@@ -127,20 +127,25 @@ without earning durable certification. Reports use the `effect-agent/certificati
 
 ## Interpret tier 2 results {#what-tier-2-asserts-exactly}
 
-Tier 2 arms every coordinator failpoint across six scenarios. Each cell uses fresh
-thread state, injects one failpoint, and drives recovery through public operations. The
-runner resolves unknown outcomes as `SafeToRetry` and approvals as `approved` only when
-`explainThread` authorizes that action.
+Tier 2 first drives and verifies each of six scenarios without a fault, recording reached
+coordinator locations. It then injects each reached failpoint into fresh thread state and
+drives recovery through public operations. Locations observed during recovery also enter the
+sweep. Each scenario/location pair is armed at most once. The runner resolves unknown outcomes
+as `SafeToRetry` and approvals as `approved` only when `explainThread` authorizes that action.
 
 Each cell reports:
 
 - `converged` when the failpoint fired and recovery settled with verified invariants;
-- `not-triggered` when the scenario never reached that location and the clean run still verified;
+- `not-triggered` when the location did not fire, including locations that share the scenario's
+  verified clean run because they were never reached;
 - `failed` for any other result, with bounded diagnostic detail.
 
-`not-triggered` records the tested scope. It makes no fault-survival claim. The runner also checks
-the expected set of locations that these six scenarios never reach. Dedicated suites and crash
-matrices cover those operator, abort, compaction, background-worker, and Agent-update paths.
+`not-triggered` records the tested scope. It makes no fault-survival claim. Every scenario/location
+pair remains in the report; shared clean results are identified in their detail. A location absent
+from both discovery and the documented never-fired set is armed in every scenario, so new
+failpoints cannot silently disappear from the sweep. Repository tests pin the fired paths per
+scenario and the exact never-fired set. Dedicated suites and crash matrices cover those operator, abort, compaction,
+background-worker, and Agent-update paths.
 Those dedicated suites run separately; the certificate runner does not execute them.
 
 The final invariant check recomputes the digest chain from `EMPTY_TAIL_DIGEST` and uses the same

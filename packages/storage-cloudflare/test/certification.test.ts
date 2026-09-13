@@ -108,8 +108,10 @@ describe("TEST-004 STORE-010 STORE-013 adapter certification — storage-cloudfl
     async () => {
       const report = await certified();
 
-      expect(report.tier2).toHaveLength(
-        DurableRuntimeFailpointLocation.literals.length * CERTIFICATION_SCENARIOS.length,
+      expect(report.tier2.map(({ scenario, location }) => [scenario, location])).toEqual(
+        CERTIFICATION_SCENARIOS.flatMap((scenario) =>
+          DurableRuntimeFailpointLocation.literals.map((location) => [scenario, location]),
+        ),
       );
       expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
       expect(report.tier2.every((row) => row.digestChainVerified)).toBe(true);

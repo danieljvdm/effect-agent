@@ -323,6 +323,9 @@ describe("Durable subscription delivery", () => {
     },
   );
 
+  // Keep the historical >1,000-delivery regression through the complete driver here.
+  // Shared store conformance uses short quota cycles for each adapter; this also exercises
+  // intake, routing, settlement observation and maintenance together throughout the run.
   it.effect(
     "sustains over 1000 distinct events with bounded retention and rejects expired replay",
     () => {

@@ -47,7 +47,7 @@ import {
 } from "@effect-agent/thread/SubmissionLedger";
 import {
   type CertificationCaseResult,
-  CertificationReport,
+  type CertificationReport,
   CertificationSweepResult,
   CertificationTierThreeReport,
   CertifiedAdapterIdentity,
@@ -80,6 +80,8 @@ import {
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+import { makeCertificationReport } from "./internal/certification-report.ts";
+
 /**
  * P7 WP2 — `certifyDurableAdapters` (plan §1): the one certification entry point a durable
  * adapter pair runs to earn a Schema-encoded certificate.
@@ -88,12 +90,13 @@ import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unsta
  *   `certifyPorts` (TEST-004/STORE-010).
  * - **Tier 2 — coordinator protocol + failpoint convergence**: the durable coordinator is
  *   assembled over the CANDIDATE Layer pair with a scripted deterministic model; every
- *   `DurableRuntimeFailpointLocation` is armed one-shot across the six scenario shapes
- *   (plain / uncertain-tool / durable-steps / approval / join / delegation). After the injected
- *   fault the runner asserts the state stays CLASSIFIABLE (recovery + the public unblocking
- *   operations `resolveUnknown`/`resolveApproval` are the only levers used) and that the
- *   re-drive CONVERGES to `verifyThreadInvariants` with `requireAllSettled` — including a
- *   fully discharged digest-chain check, because the runner captures per-batch producer
+ *   reached `DurableRuntimeFailpointLocation` is armed one-shot across the six scenario shapes
+ *   (plain / uncertain-tool / durable-steps / approval / join / delegation). Unreached locations
+ *   share a verified clean run per shape; new unaccounted-for locations get a full sweep.
+ *   After the injected fault the runner asserts the state stays CLASSIFIABLE (recovery +
+ *   the public unblocking operations `resolveUnknown`/`resolveApproval` are the only levers
+ *   used) and that the re-drive CONVERGES to `verifyThreadInvariants` with `requireAllSettled`,
+ *   including a fully discharged digest-chain check, because the runner captures per-batch producer
  *   identity at append time.
  * - **Tier 3 — real loss lever**: recorded honestly. A durable adapter either supplies a
  *   `CertificationCrashLever` executed in this run, cites its committed real-loss evidence
@@ -778,26 +781,29 @@ const failureTagOf = <E>(cause: Cause.Cause<E>): string => {
   return "defect";
 };
 
-/** One Tier-2 sweep cell: arm `location` one-shot, drive `scenario`, converge, verify. */
+type SweepOutcome = Pick<
+  CertificationSweepResult,
+  "failpointFired" | "status" | "digestChainVerified" | "detail"
+>;
+
+/** Discover a clean path, or arm one location; both drives converge and verify real storage. */
 const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
   scenario: CertificationScenario,
-  location: DurableRuntimeFailpointLocation,
+  location: DurableRuntimeFailpointLocation | undefined,
   batchProducers: ReadonlyMap<BatchId, ProducerId>,
   leaseAdvance: Duration.Duration,
+  reached: Set<DurableRuntimeFailpointLocation>,
 ) {
   const ledger = yield* SubmissionLedger;
   const control = yield* DurableRuntimeFailpointTestControl;
-  const slug = `${scenario}-${location.replaceAll(":", "-")}`;
+  const slug = `${scenario}-${location?.replaceAll(":", "-") ?? "discovery"}`;
 
-  const failed = (detail: string, fired: boolean): CertificationSweepResult =>
-    CertificationSweepResult.make({
-      scenario,
-      location,
-      failpointFired: fired,
-      status: "failed",
-      digestChainVerified: false,
-      detail: detail.slice(0, 4_096),
-    });
+  const failed = (detail: string, fired: boolean): SweepOutcome => ({
+    failpointFired: fired,
+    status: "failed",
+    digestChainVerified: false,
+    detail: detail.slice(0, 4_096),
+  });
 
   const cell = yield* makeCell(scenario, slug);
 
@@ -816,15 +822,19 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
   const fired = yield* Ref.make(false);
 
   yield* control.setHandler((hit) =>
-    hit !== location
-      ? Effect.void
-      : Ref.getAndSet(fired, true).pipe(
-          Effect.flatMap((already) =>
-            already
-              ? Effect.void
-              : Effect.fail(DurableRuntimeFailpointError.make({ location: hit })),
-          ),
-        ),
+    Effect.suspend(() => {
+      reached.add(hit);
+
+      return hit !== location
+        ? Effect.void
+        : Ref.getAndSet(fired, true).pipe(
+            Effect.flatMap((already) =>
+              already
+                ? Effect.void
+                : Effect.fail(DurableRuntimeFailpointError.make({ location: hit })),
+            ),
+          );
+    }),
   );
 
   // Submissions are idempotent (DUR-001): one replay recovers a submit-boundary fault.
@@ -954,13 +964,11 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
     );
   }
 
-  return CertificationSweepResult.make({
-    scenario,
-    location,
+  return {
     failpointFired: wasFired,
     status: wasFired ? "converged" : "not-triggered",
     digestChainVerified,
-  });
+  } satisfies SweepOutcome;
 });
 
 // ---------------------------------------------------------------------------
@@ -1079,12 +1087,73 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
   const program = Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
 
-    // Tier 2 — coordinator failpoint convergence sweep.
+    // Tier 2 — discover each deterministic shape without a fault. Unreached locations
+    // would all repeat this same clean drive, including its full digest verification.
     const tier2: Array<CertificationSweepResult> = [];
 
+    const discoveries: Array<{
+      readonly scenario: CertificationScenario;
+      readonly outcome: SweepOutcome;
+      readonly reached: Set<DurableRuntimeFailpointLocation>;
+    }> = [];
+
     for (const scenario of CERTIFICATION_SCENARIOS) {
+      const reached = new Set<DurableRuntimeFailpointLocation>();
+
+      const outcome = yield* runSweepCell(
+        scenario,
+        undefined,
+        batchProducers,
+        leaseAdvance,
+        reached,
+      );
+
+      discoveries.push({ scenario, outcome, reached });
+    }
+    const observed = new Set(discoveries.flatMap(({ reached }) => [...reached]));
+
+    // Never silently omit a new location: if neither discovery nor the documented
+    // never-fired set accounts for it, arm it in EVERY shape. Tests pin the fired paths
+    // per shape and the never-fired set, so new or lost routes require explicit review.
+    const unaccounted = new Set(
+      DurableRuntimeFailpointLocation.literals.filter(
+        (location) => !observed.has(location) && !TIER2_UNREACHED_LOCATIONS.includes(location),
+      ),
+    );
+
+    for (const discovery of discoveries) {
+      const { scenario, reached } = discovery;
+      const outcomes = new Map<DurableRuntimeFailpointLocation, SweepOutcome>();
+
+      if (discovery.outcome.status !== "failed") {
+        while (true) {
+          // Recovery may expose another route. Discover those too, without re-running a
+          // cell already checked. Schema order bounds this to one drive per location.
+          const location = DurableRuntimeFailpointLocation.literals.find(
+            (candidate) =>
+              !outcomes.has(candidate) && (reached.has(candidate) || unaccounted.has(candidate)),
+          );
+
+          if (location === undefined) break;
+          outcomes.set(
+            location,
+            yield* runSweepCell(scenario, location, batchProducers, leaseAdvance, reached),
+          );
+        }
+      }
       for (const location of DurableRuntimeFailpointLocation.literals) {
-        tier2.push(yield* runSweepCell(scenario, location, batchProducers, leaseAdvance));
+        const outcome = outcomes.get(location) ?? discovery.outcome;
+
+        tier2.push(
+          CertificationSweepResult.make({
+            scenario,
+            location,
+            ...outcome,
+            ...(outcomes.has(location) || outcome.status === "failed"
+              ? {}
+              : { detail: "verified clean scenario did not reach this location" }),
+          }),
+        );
       }
     }
 
@@ -1097,13 +1166,7 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
 
     const generatedAt = yield* nowUtc;
 
-    const ok =
-      tier1.every((result) => result.status === "passed") &&
-      tier2.every((result) => result.status !== "failed") &&
-      tier3.cases.every((result) => result.status === "passed");
-
-    return CertificationReport.make({
-      format: "effect-agent/certification@2",
+    return makeCertificationReport({
       adapter: CertifiedAdapterIdentity.make({
         name: options.adapter.name,
         ...(options.adapter.version === undefined ? {} : { version: options.adapter.version }),
@@ -1113,13 +1176,6 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
       tier1,
       tier2,
       tier3,
-      ok,
-      fullyCertified:
-        ok &&
-        capabilities.durability !== "non-durable" &&
-        tier3.status === "exercised" &&
-        tier3.cases.length > 0 &&
-        tier3.cases.every((result) => result.suite === "real-loss"),
     });
   });
 

@@ -49,9 +49,8 @@ export class CertificationCaseResult extends Schema.Class<CertificationCaseResul
 }) {}
 
 /**
- * The six Tier-2 scenario shapes (plan §1): every `DurableRuntimeFailpointLocation` is armed
- * once per shape, so each coordinator fault boundary is exercised in every protocol family it
- * can appear in.
+ * The six Tier-2 scenario shapes: each reached coordinator fault boundary is armed once
+ * per shape. Locations outside a shape's path share its verified clean run.
  */
 export const CertificationScenario = Schema.Literals([
   "plain",
@@ -69,14 +68,14 @@ export type CertificationScenario = typeof CertificationScenario.Type;
  *
  * - `converged` — the armed fault fired once, recovery classified the state, and the re-drive
  *   converged to verified invariants;
- * - `not-triggered` — the armed location is not on this scenario's coordinator path (recorded
- *   honestly, never claimed as fault coverage); the clean run still converged and verified;
+ * - `not-triggered` — the location was not reached with that fault armed, or was absent from
+ *   the scenario's verified clean path (shared across such locations). Never fault coverage;
  * - `failed` — anything else.
  */
 export const CertificationSweepStatus = Schema.Literals(["converged", "not-triggered", "failed"]);
 export type CertificationSweepStatus = typeof CertificationSweepStatus.Type;
 
-/** One Tier-2 cell: one scenario shape with one armed coordinator failpoint location. */
+/** One Tier-2 scenario/location result, including locations outside the verified path. */
 export class CertificationSweepResult extends Schema.Class<CertificationSweepResult>(
   "@effect-agent/thread/CertificationSweepResult",
 )({
@@ -89,6 +88,7 @@ export class CertificationSweepResult extends Schema.Class<CertificationSweepRes
    * Every lane's digest chain recomputed from `EMPTY_TAIL_DIGEST` and matched the exported
    * tail — fully discharged here because the runner captures per-batch producer identity at
    * append time (the port-only admin `verify` reports this check `skipped` instead).
+   * Unreached locations may share the scenario's clean-run verification.
    */
   digestChainVerified: Schema.Boolean,
   detail: Schema.optionalKey(BoundedCertificationDetail),

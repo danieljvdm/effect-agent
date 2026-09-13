@@ -133,6 +133,19 @@ packages.
   a short usage example or an explicit BEHAVIOR CHANGE note when consumers must act; keep IDs,
   root-cause, review and test stories, and implementation mechanics in the pull request.
 
+## Test discipline
+
+Follow `.agents/skills/testing/SKILL.md`.
+
+- Every test must protect a plausible regression with an independent observable assertion and
+  distinct coverage beyond its neighbors. Avoid implementation mirrors and redundant smoke tests.
+- Use the cheapest faithful boundary; exercise decision tables over typed results while retaining
+  real wiring, adapter, restart, security and cleanup guarantees in the PR gate.
+- Size loops from quotas, pages, replay horizons or documented scale regressions. Reduced fault
+  sweeps must account for every scenario/location pair and expose new or lost routes.
+- Compare equivalent workloads before claiming savings. Reuse successful checks for unchanged
+  inputs, state the limits of resource assertions and explain material coverage tradeoffs.
+
 ## Parallel work
 
 Parallel agents must own disjoint packages or documents. Shared domain schemas, error unions,

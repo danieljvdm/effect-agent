@@ -24,13 +24,12 @@ import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai
 
 /**
  * P7 WP4 pure-memory soak (plan §5): 5,000 Submissions across 500 lanes under TestClock,
- * heavy on queued input so the joining/joined machinery (`joinedInputEnvelopes` and friends)
- * runs constantly. The leak claim is scoped honestly: the coordinator's per-Attempt maps are
- * function-local, so the observable property from outside is that after each HALF of the soak
- * finishes and its Layer scope closes, a forced GC returns the process heap to its baseline —
- * no module-level map, lingering fiber, or unclosed resource retains the 2,500 settled
- * Submissions' state. A per-Submission leak of even ~1KB would hold ~2.5MB per window and
- * fail the window-to-window stability bound.
+ * heavy on queued input so the joining/joined machinery runs constantly. Heap samples follow
+ * forced GC after each 2,500-Submission wave's Layer scope closes. The final sample may grow
+ * at most 16 MiB beyond the first wave and 32 MiB above the initial baseline. This detects
+ * large retained graphs after scope closure, not small per-Submission leaks: 1 KiB per
+ * Submission is about 2.4 MiB per wave and fits within both bounds. Settlement and obligation
+ * assertions independently require every wave to drain.
  */
 
 // The memory ThreadStore bounds itself to 256 Threads (SEC-013), so each wave
@@ -168,7 +167,7 @@ const runWave = (wave: number) =>
 
 describe("DUR-016 P7 pure-memory soak (coordinator map cleanup)", () => {
   it.effect(
-    `SOAK: ${WAVES * LANES * SUBMISSIONS_PER_LANE} submissions across ${WAVES * LANES} join-heavy lanes settle and the heap returns to baseline after each wave's scope closes`,
+    `SOAK: ${WAVES * LANES * SUBMISSIONS_PER_LANE} submissions across ${WAVES * LANES} join-heavy lanes settle with bounded retained heap after scope closure`,
     () =>
       Effect.gen(function* () {
         const baseline = yield* sampleHeap;
@@ -181,11 +180,9 @@ describe("DUR-016 P7 pure-memory soak (coordinator map cleanup)", () => {
         const first = waveHeaps[0] ?? Number.NaN;
         const last = waveHeaps.at(-1) ?? Number.NaN;
 
-        // Window-to-window stability: closing each wave's Layer scope releases everything the
-        // wave retained (canonical records included — they live in the wave's memory adapters).
-        // A coordinator leak surviving the scope would grow monotonically across windows.
+        // Post-GC bounds tolerate allocator/JIT noise; they do not prove zero retained state.
+        // Canonical records belong to the wave's memory adapters and should die with its scope.
         expect(last).toBeLessThanOrEqual(first + 16 * 1024 * 1024);
-        // And the whole soak returns near the pre-soak baseline.
         expect(last).toBeLessThanOrEqual(baseline + 32 * 1024 * 1024);
       }),
     240_000,

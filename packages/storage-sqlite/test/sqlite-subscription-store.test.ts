@@ -64,11 +64,7 @@ describe("SqliteSubscriptionStore", () => {
       testCase.name,
       () =>
         withTemporaryDatabase((filename) => testCase.run.pipe(Effect.provide(testLayer(filename)))),
-      // The 1,005-event case performs thousands of file-backed transactions and can
-      // exceed 30 seconds on hosted runners. Match the Cloudflare conformance budget.
-      testCase.name === "processes more than 1000 distinct events within fixed retained quotas"
-        ? 120_000
-        : 30_000,
+      30_000,
     );
   }
 });

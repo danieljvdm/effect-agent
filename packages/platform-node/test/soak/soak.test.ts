@@ -30,14 +30,13 @@ import {
  * incarnation is a new producer identity, so every kill exercises epoch supersession). Plain
  * multi-Submission lanes keep the joining/joined machinery hot; delegation lanes run the S2
  * establish → child → join protocol; the final host asserts convergence through the shared
- * admin surface (`verify`, `scanObligations`) plus the resource claims: heap stability across
- * forced-GC windows, the active-handle count back at baseline, no orphaned child processes,
- * and a clean database close.
+ * admin surface (`verify`, `scanObligations`), no orphaned child processes and a fresh
+ * database reopen. Heap and active-resource samples cover this harness process and its
+ * in-process hosts, not the worker heaps. The bounds allow 48 MiB above the initial heap,
+ * 16 MiB after convergence and eight additional active resources; small leaks can fit.
  *
- * Lane placement: this suite runs in the same lane as the process-kill crash tests — today
- * that is the ordinary per-package `vp test` gate (`bun run ready`); testing.md §13 assigns
- * crash/soak suites to the release-candidate gate as CI matures. Budget ≤ 5 minutes
- * (`SOAK_BUDGET_MS`); see docs/guides/operations.md.
+ * This remains in the ordinary `vp run ready` gate with the process-kill crash tests.
+ * Budget ≤ 5 minutes (`SOAK_BUDGET_MS`).
  */
 
 const PLAIN_LANES = 16;
@@ -204,7 +203,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
   "DUR-001/DUR-016/SUB-030 P7 DN soak (real worker kills over one SQLite file)",
   (it) => {
     it.effect(
-      `SOAK: ${TOTAL_SUBMISSIONS} submissions across ${PLAIN_LANES + DELEGATION_LANES} lanes converge under ${KILLS} seeded worker kills with stable heap, baseline handles, no orphans, and a clean close`,
+      `SOAK: ${TOTAL_SUBMISSIONS} submissions across ${PLAIN_LANES + DELEGATION_LANES} lanes converge under ${KILLS} seeded worker kills, reap workers and reopen settled storage with bounded harness resources`,
       () =>
         Effect.scoped(
           Effect.gen(function* () {
@@ -351,9 +350,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               expect(alive, `worker pid ${pid} is still alive`).toBe(false);
             }
 
-            // Resource stability after forced GC: the run and its teardown return the process
-            // near its baselines (bounds are lenient against allocator noise, strict against
-            // leaks proportional to 500 submissions).
+            // Coarse post-GC bounds for the harness; worker cleanup is checked by PID above.
             const heapFinal = heapAfterGc();
 
             expect(heapFinal).toBeLessThanOrEqual(heapBaseline + 48 * 1024 * 1024);

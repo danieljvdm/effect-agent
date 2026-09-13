@@ -492,12 +492,6 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     { timeout: 30_000 },
   );
 
-  it.effect("executes an Effect program through the Vite+ test runner", () =>
-    Effect.sync(() => {
-      expect("ready").toBe("ready");
-    }),
-  );
-
   it.effect("keeps package workspaces separate from leaf example workspaces", () =>
     Effect.gen(function* () {
       const [activePackages, activeExamples, activeTooling, rootEntries, rootManifest] =

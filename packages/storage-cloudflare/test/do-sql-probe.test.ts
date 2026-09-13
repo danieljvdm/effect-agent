@@ -64,29 +64,6 @@ describe("@effect/sql-sqlite-do inside a SQLite-backed Durable Object (WP0 probe
     ]);
   });
 
-  // The 0.21.x pool (vitest 4 line) dropped the old `isolatedStorage` option:
-  // Durable Object storage is SHARED across tests within a run unless a test
-  // explicitly calls `reset()`. Conformance harnesses must therefore mint a
-  // unique Durable Object name per case (matching how the SQLite suites mint a
-  // temporary database file per case) or reset between tests.
-  it("shares DO storage across tests in a run: first write", async () => {
-    const stub = env.PROBE.get(env.PROBE.idFromName("wp0-isolation-probe"));
-
-    await runInDurableObject(stub, async (_instance, state) => {
-      await state.storage.put("wp0:isolation", "written-by-earlier-test");
-    });
-  });
-
-  it("shares DO storage across tests in a run: later read observes it", async () => {
-    const stub = env.PROBE.get(env.PROBE.idFromName("wp0-isolation-probe"));
-
-    const observed = await runInDurableObject(stub, (_instance, state) =>
-      state.storage.get<string>("wp0:isolation"),
-    );
-
-    expect(observed).toBe("written-by-earlier-test");
-  });
-
   it("delivers Durable Object alarms through runDurableObjectAlarm (WP3 harness lever)", async () => {
     const stub = env.PROBE.get(env.PROBE.idFromName("wp0-alarm-probe"));
 

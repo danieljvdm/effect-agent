@@ -663,7 +663,7 @@ const revisionsAndRetention = conformanceCase(
 );
 
 const sustainedRetention = conformanceCase(
-  "processes more than 1000 distinct events within fixed retained quotas",
+  "reuses event, delivery and tombstone quotas across replay horizons",
   (ensure) =>
     Effect.gen(function* () {
       const store = yield* SubscriptionStore;
@@ -679,7 +679,11 @@ const sustainedRetention = conformanceCase(
 
       const registration = yield* store.register(record("sustained", "continuous"), limits);
 
-      for (let index = 0; index < 1005; index++) {
+      // 32 events reuse four live slots and eight tombstone slots across six replay
+      // horizons, including the lexical 9→10 boundary. The full driver's >1,000-event
+      // regression remains in storage-memory/test/subscriptions.test.ts; bounded cursor
+      // traversal is exercised separately by retentionFairness on every adapter.
+      for (let index = 0; index < 32; index++) {
         const now = yield* Clock.currentTimeMillis;
 
         const accepted = yield* store.accept(
@@ -716,6 +720,10 @@ const sustainedRetention = conformanceCase(
         });
         yield* store.compact(now, policy, 8);
         yield* ensure(
+          (yield* store.delivery(selected.key)) === null,
+          "Settled delivery must release its quota on every cycle",
+        );
+        yield* ensure(
           (yield* store.accept(accepted, limits)).tombstone === true,
           "Duplicate acknowledgement must preserve its tombstone",
         );
@@ -731,7 +739,9 @@ const sustainedRetention = conformanceCase(
         .pipe(Effect.result);
 
       yield* ensure(
-        Result.isFailure(expired),
+        Result.isFailure(expired) &&
+          expired.failure._tag === "SubscriptionError" &&
+          expired.failure.code === "event-replay-horizon",
         "Reclaimed identity must not be admitted after its replay horizon",
       );
     }),

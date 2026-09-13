@@ -47,8 +47,8 @@ export const scheduleStub = (name: string) => env.SCHEDULES.get(env.SCHEDULES.id
  * Run one Effect program against a named Thread Durable Object's real SQLite storage
  * inside workerd. The 0.21.x pool shares Durable Object storage across tests within a run,
  * so callers mint a UNIQUE object name per test/case (mirroring how the SQLite suites mint a
- * temporary database file per case). A manual `TestClock.layer()` is provided at the root —
- * the WP0-proven standalone path — so the shared conformance cases can drive lease expiry
+ * temporary database file per case). A manual `TestClock.layer()` is provided at the root
+ * so the shared conformance cases can drive lease expiry
  * through virtual time exactly as they do under `@effect/vitest`'s `it.effect` on Node.
  */
 export const withThreadStorage = <A, E>(
