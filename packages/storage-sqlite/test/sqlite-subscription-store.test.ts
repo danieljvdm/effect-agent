@@ -64,8 +64,11 @@ describe("SqliteSubscriptionStore", () => {
       testCase.name,
       () =>
         withTemporaryDatabase((filename) => testCase.run.pipe(Effect.provide(testLayer(filename)))),
-      // Shared conformance includes sustained durable writes on CI's slower filesystem.
-      30_000,
+      // The 1,005-event case performs thousands of file-backed transactions and can
+      // exceed 30 seconds on hosted runners. Match the Cloudflare conformance budget.
+      testCase.name === "processes more than 1000 distinct events within fixed retained quotas"
+        ? 120_000
+        : 30_000,
     );
   }
 });
