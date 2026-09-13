@@ -30,7 +30,7 @@ In your application, install the browser adapters:
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Requires `effect@^4.0.0-rc.112`. For the examples below, also install `@effect-agent/sandbox@beta`.
+Requires `effect@^4.0.0-rc.112`. For the examples below, also install `effect-agent@beta`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 The REST examples need no Puppeteer dependency.
 
@@ -157,7 +157,7 @@ or structured data.
 
 ## Give an agent a capture Tool
 
-Install `@effect-agent/capabilities@beta` to wrap capture in a native Effect AI Tool. Fix the allowed
+Use `WebCapture` from `effect-agent` to wrap capture in a native Effect AI Tool. Fix the allowed
 hosts, actions, and output size in the definition. In a Worker, the Cloudflare package assembles
 the capture adapter, binding, and handlers in one Layer:
 

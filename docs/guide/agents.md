@@ -43,7 +43,7 @@ Schema with `Output.text`. The Schema must encode as a string; its checks, trans
 service requirements still apply.
 
 ```ts twoslash
-import * as Output from "effect-agent/output";
+import { Output } from "effect-agent";
 import { Schema } from "effect";
 
 const Reply = Output.text(Schema.String.check(Schema.isMaxLength(20_000)));

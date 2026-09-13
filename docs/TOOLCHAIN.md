@@ -307,9 +307,15 @@ defaults, so declare `dts` and `sourcemap` there when needed.
 
 Follow the pinned Effect package's module layout. Package roots and public groups use namespace
 exports such as `export * as Agent from "./Agent.ts"`; explicit named conveniences are also
-allowed, as Effect does for `pipe` and `flow`. Public namespaces and source filenames use PascalCase; public import subpaths use kebab-case. `import { Agent } from "effect-agent"` and
+allowed, as Effect does for `pipe` and `flow`. Public namespaces and source filenames use
+PascalCase; public import subpaths use kebab-case. `import { Agent } from "effect-agent"` and
 `import * as Agent from "effect-agent/agent"` select the same module.
 
+- Lead documentation examples with named namespace imports from package roots, such as
+  `import { NodeDurableHost } from "@effect-agent/platform-node"`. Use kebab-case subpaths for
+  individual declarations such as services, schemas, or types; direct module and lazy-loading examples; and specialized
+  adapters or runtime-specific helpers. In particular, Node-safe Cloudflare helpers must use
+  their dedicated subpaths rather than the Workers package root.
 - Keep implementations in named modules. A public module exposes every declaration it exports;
   move sibling-only helpers into private files. A small, explicit public selector may expose
   supported declarations from a private implementation without exposing its helpers.

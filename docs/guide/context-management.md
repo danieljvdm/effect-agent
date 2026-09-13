@@ -1129,7 +1129,7 @@ For model-directed control, include the native `ContextTools.toolkit` and its ha
 ```ts
 import { ContextTools } from "effect-agent";
 import { ContextCompactor } from "effect-agent/context-compactor";
-import * as ThreadContextHistory from "@effect-agent/thread/thread-context-history";
+import { ThreadContextHistory } from "@effect-agent/thread";
 import { Layer } from "effect";
 
 const tools = ContextTools.toolkit;

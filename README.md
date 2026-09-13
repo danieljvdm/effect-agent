@@ -11,6 +11,11 @@ bun add effect-agent@beta
 ```
 
 Use an [Effect AI provider](docs/guide/getting-started.md) for model access.
+
+Prefer named namespace imports from package roots, such as `import { Agent } from "effect-agent"`.
+Direct module paths use kebab-case, such as `effect-agent/agent-runtime`; see the
+[import guide](docs/reference/packages.md#public-imports) for direct imports and lazy loading.
+
 Public beta: APIs and stored data may change before 1.0. Persistent adapters support a
 [data-preserving beta49/beta50 storage upgrade](docs/guide/operations.md#adopting-these-contracts).
 

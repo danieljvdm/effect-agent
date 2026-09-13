@@ -40,7 +40,7 @@ bun add @effect-agent/sandbox-local@beta
 ```
 
 Requires `effect@^4.0.0-rc.112`. For the example below, also install
-`@effect-agent/sandbox@beta` and `@effect/platform-node@4.0.0-rc.112`.
+`effect-agent@beta` and `@effect/platform-node@4.0.0-rc.112`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 
 `@effect-agent/sandbox-local` runs a child process on the current machine. It is useful for local
@@ -50,13 +50,13 @@ development and trusted automation. Every event identifies it as `unisolated`.
 
 The local adapter accepts only the `unisolated-process` runtime with the `local-process` identity.
 The request must name every environment variable the child may receive. It starts with an empty
-environment, then copies only those names. The `layer` export supplies the Node process services.
+environment, then copies only those names. `LocalSandbox.layer` supplies the Node process services.
 
 ```ts twoslash
 // @types: node
 import { NodeRuntime } from "@effect/platform-node";
 import { NetworkDisabled, Sandbox, SandboxRequest } from "effect-agent/sandbox";
-import { layer as LocalSandboxLive } from "@effect-agent/sandbox-local/local-sandbox";
+import { LocalSandbox } from "@effect-agent/sandbox-local";
 import { Console, Duration, Effect, Stream } from "effect";
 
 const request = SandboxRequest.make({
@@ -89,7 +89,7 @@ const program = Effect.gen(function* () {
       }
     }),
   );
-}).pipe(Effect.provide(LocalSandboxLive), Effect.scoped);
+}).pipe(Effect.provide(LocalSandbox.layer), Effect.scoped);
 
 NodeRuntime.runMain(program);
 ```

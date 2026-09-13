@@ -15,8 +15,9 @@ Before 1.0, APIs and stored data may change without a migration path.
 
 ## Public imports
 
-Public package roots export PascalCase module namespaces. Direct module paths use kebab-case.
-Agent definitions, execution, and capabilities live in one package:
+Prefer named namespace imports from package roots in application code and examples.
+Namespaces use PascalCase; direct module paths use kebab-case. Agent definitions, execution,
+and capabilities live in one package:
 
 ```ts twoslash
 import { Agent, AgentRuntime } from "effect-agent";
@@ -25,19 +26,32 @@ Agent.make;
 AgentRuntime.run;
 ```
 
-The corresponding direct imports are:
+The same convention applies to adapters:
+
+```ts twoslash
+import { NodeDurableHost } from "@effect-agent/platform-node";
+
+NodeDurableHost.layer;
+```
+
+For direct module access or lazy-loading boundaries, the corresponding imports are:
 
 ```ts
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
+import * as NodeDurableHost from "@effect-agent/platform-node/node-durable-host";
 ```
 
 Both forms support tree shaking. Use direct module paths at lazy-loading boundaries: mixing a
 static root import with a dynamic import of that same root can pull the runtime into the initial
-bundle. Provider, storage, platform, and testing packages remain separate installs.
+bundle. Also use dedicated subpaths for optional adapters and helpers intended for another
+runtime, such as the Node-safe Cloudflare AI Gateway helper. The Cloudflare package root
+includes Workers-specific modules. Provider, storage, platform, and testing packages remain
+separate installs.
 
 `Agent.make` and `AgentRuntime.run` have the same call shape through either import form.
-Individual declarations belong to their module, including services and Schema values:
+Use direct imports for individual declarations, including services and Schema values, instead
+of importing a namespace when only its service key is needed:
 
 ```ts
 import { IdGenerator } from "effect-agent/id-generator";
@@ -175,11 +189,10 @@ are part of this package; concrete executors and browser adapters are separate. 
 Replace dependencies on `@effect-agent/core`, `@effect-agent/engine`,
 `@effect-agent/capabilities`, and `@effect-agent/sandbox` with `effect-agent`.
 Those packages are consolidated into this release; previously published versions remain on npm.
-Use root namespaces or kebab-case direct paths:
+Prefer root namespaces:
 
 ```ts
-import { Agent, AgentRuntime, Subagent, CodeExecutor } from "effect-agent";
-import * as ThreadHistory from "effect-agent/thread-history";
+import { Agent, AgentRuntime, Subagent, CodeExecutor, ThreadHistory } from "effect-agent";
 ```
 
 All remaining framework packages also use kebab-case module subpaths, for example

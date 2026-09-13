@@ -14,7 +14,7 @@ SQLite-backed Durable Object. RPC calls and alarms drive execution and recovery.
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Also install `effect@4.0.0-rc.112`, `effect-cf@^0.40.0`, `@effect-agent/core@beta`,
+Also install `effect@4.0.0-rc.112`, `effect-cf@^0.40.0`, `effect-agent@beta`,
 `@effect-agent/thread@beta`, and `@effect/ai-openai@4.0.0-rc.112` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
@@ -103,7 +103,7 @@ Object namespace in the generated `Cloudflare.Env`.
 // @types: @cloudflare/workers-types
 import { Agent } from "effect-agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { ThreadObject } from "@effect-agent/platform-cloudflare";
 import { DefinitionDigestInput } from "@effect-agent/thread/records";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Layer, Schema } from "effect";
