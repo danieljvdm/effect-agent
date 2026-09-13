@@ -8,12 +8,16 @@ const selectHistory = (module: {
     readonly layer?: Layer.Layer<ThreadHistory.ThreadHistory>;
     readonly layerTransient?: Layer.Layer<ThreadHistory.ThreadHistory>;
   };
-}): Layer.Layer<ThreadHistory.ThreadHistory> => {
+}) => {
   const layer = module.layer ?? module.ThreadHistory.layer ?? module.ThreadHistory.layerTransient;
 
   if (layer === undefined) throw new Error("Compared release has no supported history Layer");
 
-  return layer;
+  return {
+    layer,
+    retainsHistory: module.layer !== undefined || module.ThreadHistory.layer !== undefined,
+  };
 };
 
-export const BenchmarkHistoryLive = selectHistory(ThreadHistory);
+export const { layer: BenchmarkHistoryLive, retainsHistory: BenchmarkRetainsHistory } =
+  selectHistory(ThreadHistory);

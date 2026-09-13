@@ -55,7 +55,7 @@ import {
   type DiagnosticMark,
   type DiagnosticResult,
 } from "./diagnostic-contracts.js";
-import { BenchmarkHistoryLive } from "./history.js";
+import { BenchmarkHistoryLive, BenchmarkRetainsHistory } from "./history.js";
 
 export { capabilityCases } from "./diagnostic-cases.js";
 
@@ -308,7 +308,7 @@ const historyRunCase = Effect.fn("diagnostic.historyRun")(function* (workload: D
     "History Run work/finalizers mismatch",
   );
   yield* check(
-    enabled
+    enabled || BenchmarkRetainsHistory
       ? snapshot.nextSequence > prefix.content.length
       : snapshot.nextSequence === prefix.content.length,
     "History hook retention mismatch",
