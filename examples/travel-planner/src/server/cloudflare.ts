@@ -42,6 +42,10 @@ import {
   researchScout,
   progressResearchScout,
   recoverableResearchScout,
+  updatingResearchScout,
+  UpdatingResearchScoutBackground,
+  UpdatingResearchScoutActions,
+  PreviousRecoverableResearchScoutBackground,
   RecoverableResearchScoutBackground,
   PreviousProgressResearchScoutBackground,
   ProgressResearchScoutBackground,
@@ -49,7 +53,12 @@ import {
 } from "../research/scout.ts";
 import { AppBuildBucketLive } from "../trip-app/bindings.ts";
 import { EditorHostLive, editorAttemptLayer } from "../trip-app/editor-runtime.ts";
-import { AppEditorBackground, appEditor } from "../trip-app/editor.ts";
+import {
+  AppEditorBackground,
+  ReportingAppEditorBackground,
+  ReportingAppEditorActions,
+  appEditor,
+} from "../trip-app/editor.ts";
 import { OwnerAppRepositoryLive, serveAppRepository } from "../trip-app/remote.ts";
 import {
   AppSourceLive,
@@ -80,6 +89,7 @@ import {
   previousVoicePlanner,
   previousProgressPlanner,
   previousDelegatingPlanner,
+  previousRecoverablePlanner,
   previousTextPlanner,
   previousBudgetPlanner,
   previousResearchPlanner,
@@ -285,21 +295,24 @@ export const plannerApplication = <E, R>(
       readonly submissionId: SubmissionLookupById["submissionId"];
       readonly attemptId: string;
     },
-    expandedResearch: boolean | "progress" | "recoverable" = false,
+    expandedResearch: boolean | "progress" | "recoverable" | "updates" = false,
   ) =>
     Layer.mergeAll(
       TripToolsLive(context.threadId),
       AppToolsLive,
-      AppEditorBackground.layer,
+      expandedResearch === "updates" ? ReportingAppEditorActions.layer : AppEditorBackground.layer,
       PreviousResearchScoutBackground.layer,
       PreviousProgressResearchScoutBackground.layer,
-      expandedResearch === "recoverable"
-        ? RecoverableResearchScoutBackground.layer
-        : expandedResearch === "progress"
-          ? ProgressResearchScoutBackground.layer
-          : expandedResearch
-            ? ExpandedResearchScoutBackground.layer
-            : ResearchScoutBackground.layer,
+      PreviousRecoverableResearchScoutBackground.layer,
+      expandedResearch === "updates"
+        ? UpdatingResearchScoutActions.layer
+        : expandedResearch === "recoverable"
+          ? RecoverableResearchScoutBackground.layer
+          : expandedResearch === "progress"
+            ? ProgressResearchScoutBackground.layer
+            : expandedResearch
+              ? ExpandedResearchScoutBackground.layer
+              : ResearchScoutBackground.layer,
     ).pipe(
       Layer.provideMerge(
         Layer.effect(
@@ -356,9 +369,19 @@ export const plannerApplication = <E, R>(
       agent: planner,
       model: selectedModel ?? model,
       definitions: DefinitionDigestInput.make({
-        agent: { id: planner.id, version: "travel-planner-v15" },
+        agent: { id: planner.id, version: "travel-planner-v16" },
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(planner.toolkit.tools),
+      }),
+      attemptLayer: (context) => attemptLayer(context, "updates"),
+    },
+    {
+      agent: previousRecoverablePlanner,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: previousRecoverablePlanner.id, version: "travel-planner-v15" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(previousRecoverablePlanner.toolkit.tools),
       }),
       reporting: [recoverableScoutReport, editorReport],
       attemptLayer: (context) => attemptLayer(context, "recoverable"),
@@ -438,6 +461,24 @@ export const plannerApplication = <E, R>(
         tools: Object.keys(previousEditorPlanner.toolkit.tools),
       }),
       attemptLayer,
+    },
+    {
+      agent: updatingResearchScout,
+      model: selectedModel ?? model,
+      definitions: DefinitionDigestInput.make({
+        agent: { id: updatingResearchScout.id, version: "travel-research-scout-v4" },
+        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
+        tools: Object.keys(updatingResearchScout.toolkit.tools),
+      }),
+      attemptLayer: (context) =>
+        scoutAttemptLayer(context, true).pipe(
+          Layer.provideMerge(
+            Layer.succeed(DiagnosticContext, {
+              submissionId: context.submissionId,
+              attemptId: context.attemptId,
+            }),
+          ),
+        ),
     },
     {
       agent: recoverableResearchScout,
@@ -572,6 +613,9 @@ export const plannerApplication = <E, R>(
       attemptLayer,
     },
   ]).pipe(
+    // Reports have no parent attempt. Keep their projection services in the registration context.
+    Layer.provide(UpdatingResearchScoutBackground.layer),
+    Layer.provide(ReportingAppEditorBackground.layer),
     Layer.provide(browser),
     Layer.provide(EditorHostLive),
     Layer.provide(ResearchAuthorizationLive),

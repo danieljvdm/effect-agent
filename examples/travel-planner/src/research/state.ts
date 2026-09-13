@@ -1,4 +1,5 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
+import * as AgentUpdates from "@effect-agent/core/AgentUpdates";
 import { ThreadId } from "@effect-agent/core/Identifiers";
 import { Principal } from "@effect-agent/core/Receipt";
 import { SubagentHost } from "@effect-agent/engine/SubagentHost";
@@ -14,7 +15,13 @@ import { RecordedDiagnostics } from "../server/diagnostics.ts";
 import { emptyProgress } from "../server/progress.ts";
 import { ownerOfThread } from "../server/tenancy.ts";
 import { ScoutFindings, ScoutRequest } from "./contracts.ts";
-import { ResearchScout, ProgressResearchScout, RecoverableResearchScout } from "./scout.ts";
+import {
+  ResearchScout,
+  ProgressResearchScout,
+  RecoverableResearchScout,
+  UpdatingResearchScout,
+  updatingResearchScout,
+} from "./scout.ts";
 
 /** Discover only source-owned native workers; opaque worker IDs never grant cross-account access. */
 export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
@@ -56,11 +63,13 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
 
       return Effect.gen(function* () {
         const declaration =
-          reference.targetAgentId === RecoverableResearchScout.target.id
-            ? RecoverableResearchScout
-            : reference.targetAgentId === ProgressResearchScout.target.id
-              ? ProgressResearchScout
-              : ResearchScout;
+          reference.targetAgentId === UpdatingResearchScout.target.id
+            ? UpdatingResearchScout
+            : reference.targetAgentId === RecoverableResearchScout.target.id
+              ? RecoverableResearchScout
+              : reference.targetAgentId === ProgressResearchScout.target.id
+                ? ProgressResearchScout
+                : ResearchScout;
 
         const worker = yield* Schema.decodeEffect(Subagent.Worker(declaration))(reference);
         const runtime = yield* DurableAgentRuntime;
@@ -122,6 +131,23 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
             ? Schema.decodeUnknownOption(ScoutFindings)(completed.output)
             : undefined;
 
+        const latestUpdate = history
+          .toReversed()
+          .find(({ record }) => record.payload._tag === "AgentUpdateEmitted")?.record.payload;
+
+        const latestRun = history
+          .toReversed()
+          .find(({ record }) => record.payload._tag === "RunStarted")?.record.payload;
+
+        const milestone =
+          latestUpdate?._tag === "AgentUpdateEmitted" &&
+          latestRun?._tag === "RunStarted" &&
+          latestUpdate.update.runId === latestRun.runId
+            ? yield* AgentUpdates.decode(updatingResearchScout, latestUpdate.update).pipe(
+                Effect.option,
+              )
+            : undefined;
+
         return {
           ...base,
           ...(summary.state === "idle" &&
@@ -137,13 +163,15 @@ export const researchSnapshot = Effect.fn("researchSnapshot")(function* (
               ? "failed"
               : summary.state,
           progress:
-            summary.state === "idle" &&
-            settled?._tag === "SubmissionSettled" &&
-            settled.outcome === "completed" &&
-            progress.text === "" &&
-            findings?._tag === "Some"
-              ? { ...progress, text: findings.value.summary }
-              : progress,
+            summary.state === "active" && milestone?._tag === "Some"
+              ? { ...progress, text: milestone.value.summary }
+              : summary.state === "idle" &&
+                  settled?._tag === "SubmissionSettled" &&
+                  settled.outcome === "completed" &&
+                  progress.text === "" &&
+                  findings?._tag === "Some"
+                ? { ...progress, text: findings.value.summary }
+                : progress,
           activity: plannerActivity(history, diagnostics).slice(-40),
         } satisfies ResearchScoutActivity;
       }).pipe(

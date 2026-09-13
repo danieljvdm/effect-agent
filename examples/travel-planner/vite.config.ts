@@ -20,7 +20,21 @@ export default defineConfig({
         react(),
       ],
   resolve: { tsconfigPaths: true },
-  test: { cache: false, silent: "passed-only" },
+  test: {
+    cache: false,
+    silent: "passed-only",
+    deps: {
+      optimizer: {
+        ssr: {
+          enabled: true,
+          // Bundle this entry so unused effect-cf native exports are removed in Node tests.
+          include: ["@effect-agent/platform-cloudflare/CloudflareBindings"],
+          exclude: ["effect", "@effect-agent/core", "@effect-agent/thread"],
+          rolldownOptions: { external: [/^cloudflare:/] },
+        },
+      },
+    },
+  },
   run: {
     tasks: {
       build: {

@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { WorkerUpdate, WorkerCompletion } from "@effect-agent/core/Worker";
 import { SettlementFailureDiagnostic } from "@effect-agent/thread/Records";
 import { ThreadExport } from "@effect-agent/thread/ThreadStore";
 import { Effect, Schema } from "effect";
@@ -9,13 +10,20 @@ import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
-import { PlannerSnapshot, Trip, type PlannerSettings } from "../src/domain.ts";
+import {
+  VoiceWork,
+  PlannerInput,
+  PlannerSnapshot,
+  Trip,
+  type PlannerSettings,
+} from "../src/domain.ts";
 import {
   previousResearchCoordinatorId,
   researchCoordinatorId,
   ScoutInput,
   ScoutReportInput,
   ScoutProgressInput,
+  ScoutProgress,
 } from "../src/research/contracts.ts";
 import { fixtureOwner } from "./fixtures/identity.ts";
 
@@ -338,7 +346,7 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
   ).toBe(true);
 }, 90_000);
 
-it.each(["current", "retained", "delegating"])(
+it.each(["current", "retained", "delegating", "recoverable"])(
   "delivers a %s sourced milestone before worker completion and accepts a correction on that active worker",
   async (version) => {
     const email = `progress-${version}@example.com`;
@@ -373,16 +381,54 @@ it.each(["current", "retained", "delegating"])(
     ).toBe(false);
     const parent = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
 
-    const updates = parent.records.flatMap(({ record }) =>
-      record.payload._tag === "UserInputRecorded" &&
-      Schema.is(ScoutProgressInput)(record.payload.input)
-        ? [record.payload.input]
-        : [],
-    );
+    const updates = parent.records.flatMap(({ record }) => {
+      if (record.payload._tag !== "UserInputRecorded") return [];
+      const message = record.payload.messageAdmission;
+
+      return Schema.is(WorkerUpdate)(message)
+        ? [
+            {
+              settings: Schema.decodeUnknownSync(ScoutProgressInput.fields.settings)(
+                Schema.decodeUnknownSync(PlannerInput)(record.payload.input).settings,
+              ),
+              finding: Schema.decodeUnknownSync(ScoutProgress)(message.update.value),
+            },
+          ]
+        : Schema.is(ScoutProgressInput)(record.payload.input)
+          ? [record.payload.input]
+          : [];
+    });
 
     expect(updates).toHaveLength(1);
     expect(updates[0]?.settings).toEqual(settings);
     expect(updates[0]?.finding.summary).toContain("availability is unconfirmed");
+    expect(active.messages.filter(({ role }) => role === "user")).toHaveLength(1);
+    expect(active.queuedMessages).toEqual([]);
+    const requestId = active.messages.find(({ role }) => role === "user")?.requestId;
+
+    expect(requestId).toBeTruthy();
+    expect(
+      Schema.decodeUnknownSync(VoiceWork)(
+        await rpc(
+          "GetVoiceWork",
+          {
+            conversationId: "research",
+            requestId,
+          },
+          email,
+        ),
+      ),
+    ).toMatchObject({ state: "completed", superseded: false });
+    expect(active.scouts?.[0]?.progress.text.includes("availability is unconfirmed")).toBe(
+      version === "current",
+    );
+    expect(active.activity.some(({ text }) => text === "Research milestone received")).toBe(
+      version === "current",
+    );
+    // Acknowledged milestones survive reconstruction without becoming another user request.
+    await runtime.dispose();
+    runtime = makeRuntime();
+    expect((await snapshot(email)).messages.filter(({ role }) => role === "user")).toHaveLength(1);
     await send("steer live progress 50 km", email);
 
     const steered = await until(
@@ -397,7 +443,7 @@ it.each(["current", "retained", "delegating"])(
 
     const completed = await until(
       () => snapshot(email),
-      (state) => state.scouts?.[0]?.state === "idle",
+      (state) => state.pending === 0 && state.scouts?.[0]?.state === "idle",
     );
 
     expect(completed.scouts?.[0]?.finding?.text).toContain("Experienced at 50 km");
@@ -412,7 +458,7 @@ it.each(["current", "retained", "delegating"])(
         : [],
     );
 
-    expect(failed).toHaveLength(version === "current" ? 1 : 0);
+    expect(failed).toHaveLength(["current", "recoverable"].includes(version) ? 1 : 0);
     expect(
       child.records.filter(({ record }) => record.payload._tag === "RunCompleted"),
     ).toHaveLength(1);
@@ -422,6 +468,20 @@ it.each(["current", "retained", "delegating"])(
         record.payload._tag === "ToolCallSettled" && record.payload.toolName === "finish_research",
     );
 
+    const retained = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
+
+    const messages = retained.records.flatMap(({ record }) =>
+      record.payload._tag === "UserInputRecorded" ? [record.payload.messageAdmission] : [],
+    );
+
+    expect(messages.filter(Schema.is(WorkerCompletion))).toHaveLength(
+      version === "current" ? 1 : 0,
+    );
+    expect(messages.filter(Schema.is(WorkerUpdate))).toHaveLength(version === "current" ? 2 : 0);
+    expect(completed.messages.filter(({ role }) => role === "user")).toHaveLength(2);
+    expect(
+      child.records.filter(({ record }) => record.payload._tag === "AgentUpdateEmitted"),
+    ).toHaveLength(version === "current" ? 2 : 0);
     expect(completionStarted).toBeGreaterThanOrEqual(0);
     expect(
       child.records
@@ -516,12 +576,14 @@ it("runs six scouts and an editor beyond the old budgets, preserves them across 
     (state) =>
       state.pending === 0 &&
       state.editor?.state === "idle" &&
+      state.messages.some(({ text }) => text === "Editor completion received.") &&
       state.scouts
         ?.filter((scout) => scout.task.includes("expanded allowance"))
         .every((scout) => scout.state === "idle" || scout.state === "failed") === true,
   );
 
   expect(completed.editor?.id).toBe(active.editor?.id);
+  expect(completed.messages.filter(({ role }) => role === "user")).toHaveLength(2);
   expect(
     completed.scouts
       ?.filter((scout) => scout.task.includes("expanded allowance"))
@@ -552,4 +614,48 @@ it("runs six scouts and an editor beyond the old budgets, preserves them across 
       ),
     ).toBe(true);
   }
+}, 90_000);
+
+it("does not treat the retained request on a worker update or completion as fresh delegation authority", async () => {
+  const email = "report-denial@example.com";
+  const thread = `${fixtureOwner(email)}--research`;
+
+  await send("start report denial", email);
+
+  const active = await until(
+    () => snapshot(email),
+    (state) =>
+      state.pending === 0 &&
+      state.scouts?.[0]?.state === "active" &&
+      state.activity.some(({ text }) => text.includes("AgentToolAuthorizationDenied")),
+  );
+
+  expect(active.scouts).toHaveLength(1);
+  expect(active.messages.filter(({ role }) => role === "user")).toHaveLength(1);
+  expect(active.queuedMessages).toEqual([]);
+  await fixture("gate", { name: "Report denial" }, "POST");
+
+  const completed = await until(
+    () => snapshot(email),
+    (state) => state.pending === 0 && state.scouts?.[0]?.state === "idle",
+  );
+
+  const parent = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
+
+  const denied = parent.records.filter(
+    ({ record }) =>
+      record.payload._tag === "SubmissionSettled" &&
+      record.payload.outcome === "failed" &&
+      Schema.decodeOption(SettlementFailureDiagnostic)(record.payload.result).pipe(
+        (failure) =>
+          failure._tag === "Some" && failure.value.errorTag === "AgentToolAuthorizationDenied",
+      ),
+  );
+
+  expect(denied).toHaveLength(2);
+  expect(completed.scouts).toHaveLength(1);
+  expect(completed.messages.filter(({ role }) => role === "user")).toHaveLength(1);
+  expect(completed.messages.some(({ text }) => text.includes("couldn't finish this request"))).toBe(
+    false,
+  );
 }, 90_000);

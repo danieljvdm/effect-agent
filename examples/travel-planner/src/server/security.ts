@@ -15,13 +15,14 @@ export const requestsPublication = (message: string): boolean =>
 
 /** The grant comes from the admitted user command, never model prose or page contents. */
 export const publicationAuthorization = RunToolAuthorization.of({
-  authorize: ({ input, call }) => {
+  authorize: ({ input, call, frameworkMessage }) => {
     if (call.toolName !== "publish_trip_site") return Effect.succeed({ _tag: "allowed" });
     const source = Schema.decodeUnknownOption(PlannerInput)(input);
     const target = Schema.decodeUnknownOption(PublishTripRequest)(call.parameters);
 
     return Effect.succeed(
-      source._tag === "Some" &&
+      frameworkMessage === undefined &&
+        source._tag === "Some" &&
         target._tag === "Some" &&
         source.value.publication !== null &&
         source.value.selectedTripId === target.value.tripId &&

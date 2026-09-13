@@ -49,7 +49,11 @@ The conversational planner delegates public-source research to up to six focused
 it has no web search or page-reading tools. It dispatches useful independent tasks before
 optional draft saves, then replies after acceptance while asking about your preferences.
 Scouts do not require a saved trip; the app editor does, so a requested site may need a save first.
-Later details steer those same durable workers. Completed findings return
+Later details steer those same durable workers. Scouts declare `updates: ScoutProgress`
+and use the native `emit_update` tool for sourced milestones while continuing research.
+The beta.85 integration enables `reportToParent: true` on research and editor background tools.
+The framework delivers `WorkerUpdate` and `WorkerCompletion` separately from the traveler's
+input, retaining the original request and model settings as context. Completed findings return
 to the planner automatically; you do not need to ask it to check again. A compact research
 dock above the composer opens live progress and recorded activity in a dialog. Scouts can
 research public sources but cannot book, change trip apps, or launch more agents. Internal
@@ -61,8 +65,16 @@ Cross-conversation writes remain forbidden. A storage failure may follow a commi
 the planner must read the saved state before retrying and stop saving if it cannot verify it.
 The host allows seven active workers across research and app editing, leaving room for six
 scouts and an editor, and retains at most 100 workers per conversation. Each worker accepts
-up to 256 total inputs and 16 pending inputs; its reference lasts seven days. Existing
-conversations and app editors continue to work.
+up to 256 total inputs and 16 pending inputs; its reference lasts seven days. New user submissions use coordinator v16 and new research workers use scout v4. Existing
+conversations and app editors continue to work; accepted coordinators through v15 and
+scouts through v3 retain their original definitions, progress routes, and completion reports.
+Follow-ups use the existing worker rather than creating a replacement for the version change.
+
+Background handlers have two service lifetimes. Start/follow-up preparation uses the current
+parent attempt's model settings. Inspection and automatic-report layers are installed at runtime
+registration, because completion preparation runs after that attempt has ended. In beta.85 the
+report descriptor discovers its services from the background layer; installing that layer only
+inside `attemptLayer` causes a retained `WorkerReportRefused` with reason `preparation`.
 
 New research scouts validate completion drafts inside the `finish_research` handler. A rejected
 draft returns corrective feedback to the same running scout, preserving its research context.
@@ -172,7 +184,7 @@ can reach voice before the planner finishes synthesizing the full answer. The co
 summary arrives as bounded quiet context chunks, including its caveats, before one spoken
 finding update. Each result is sent
 once; corrections discard pending notes. Activity labels and timers do not trigger waiting
-announcements. A planner reply does not consume unrelated pending scout findings. Raw tool data, private reasoning, and diagnostics are excluded. New scouts can deliberately report a sourced milestone with `report_research_progress` while they continue; Effect Agent durable messaging delivers it to the original conversation. The host derives the destination and account from canonical worker lineage, never model-selected routing. These milestones preserve uncertainty and cannot authorize new research or app edits. Earlier accepted workers retain their original executable definitions and completion reporting. A brief utterance
+announcements. A planner reply does not consume unrelated pending scout findings. Raw tool data, private reasoning, and diagnostics are excluded. New scouts deliberately report a sourced milestone with `emit_update` while they continue; Effect Agent retains the update and its parent delivery together before acknowledgement. The research dock displays the latest current-run milestone, including after reconnect or restart. The host derives the destination and account from canonical worker lineage, never model-selected routing. These milestones preserve uncertainty and cannot authorize new research, app edits, or legacy publication. Framework reports do not duplicate the original user message in the conversation or queued-message list, and do not supersede voice work as if a new user request arrived. Earlier accepted workers retain their original executable definitions and completion reporting. A brief utterance
 delays an outgoing result without discarding it; actual delegated corrections and typed requests
 replace the work followed by voice.
 Typing redirects the current explanation without leaving audio muted. Provider acknowledgment,
@@ -278,7 +290,7 @@ Each inspection makes one capture request with a 25-second outer timeout, a 512 
 limit, and a 12 KiB result limit. There is no automatic retry or fallback capture. Selector
 changes, incomplete content, access challenges, and provider timeouts can still fail. Browser
 Run API HTTP 422 is not a destination status or proof that Airbnb blocked the request.
-The provider's detailed cause stays in private diagnostics; the published beta.78 adapter
+The provider's detailed cause stays in private diagnostics; the published adapter
 reports only the generic API status for these navigation timeouts to the model.
 
 Local interruption stops waiting and finalizes an acquired response reader; it does not
@@ -289,8 +301,8 @@ lifecycle.
 
 ## Deploy with Alchemy
 
-The app pins published `0.1.0-beta.78` packages, including JSON persistence,
-existing-conversation worker upgrades, and browser failure diagnostics. Library fixes
+The app pins published `0.1.0-beta.85` packages, including typed agent updates,
+automatic worker reporting, and existing-conversation worker upgrades. Library fixes
 are released separately before the demo adopts them; local library patches are not bundled.
 
 For an existing deployment, approve and complete the maintenance prerequisites in
@@ -655,8 +667,8 @@ Editor progress comes from its own thread and does not keep the parent conversat
 The latest task and worker reference are projected from canonical source records. A temporarily
 unavailable observer leaves saved app state intact; failed editor runs are shown separately from
 build failures. Editor history is bounded to 40 displayed events and excludes credentials and
-private provider reasoning. There is no automatic completion message injected into the parent;
-the dock shows the current editor/build state.
+private provider reasoning. Editor completion returns to the parent through `WorkerCompletion`;
+the dock independently shows the current editor/build state.
 Older app records without progress remain readable. Retry and code edits begin a fresh timeline.
 
 The public gateway resolves app ownership through a private R2 address directory and confirms

@@ -98,3 +98,19 @@ export const AppEditorBackground = Subagent.background(AppEditor, {
   list: true,
   budgetScope: "worker-run",
 });
+
+/** Input preparation uses the admitted settings of the fenced parent attempt. */
+export const ReportingAppEditorActions = Subagent.background(AppEditor, {
+  start: true,
+  followUp: true,
+  budgetScope: "worker-run",
+});
+
+/** Install at registration so completion reporting survives the launching attempt. */
+export const ReportingAppEditorBackground = Subagent.background(AppEditor, {
+  summary: true,
+  inspect: true,
+  list: true,
+  budgetScope: "worker-run",
+  reportToParent: true,
+});

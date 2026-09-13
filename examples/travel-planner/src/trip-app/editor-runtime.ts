@@ -14,12 +14,7 @@ import { Toolkit } from "effect/unstable/ai";
 import { DeliverResponse } from "../agent.ts";
 import { PlannerError } from "../domain.ts";
 import { researchCoordinatorIds, expandedCoordinatorIds } from "../research/contracts.ts";
-import {
-  ResearchScout,
-  researchScout,
-  progressResearchScout,
-  recoverableResearchScout,
-} from "../research/scout.ts";
+import { ResearchScout, researchScout, researchScoutIds } from "../research/scout.ts";
 import { activeWorkerLimit, editorPolicy, scoutPolicy } from "../server/agent-limits.ts";
 import { PlannerAttempt, ProgressStore, trackTool } from "../server/progress.ts";
 import { ownerOfThread, StorageOwner } from "../server/tenancy.ts";
@@ -198,14 +193,7 @@ export const EditorHostLive = Layer.mergeAll(
   Layer.succeed(WorkerPolicyResolver, {
     resolveSource: () => Effect.succeed(Option.none()),
     resolveTarget: (request) => {
-      if (
-        ![
-          appEditor.id,
-          researchScout.id,
-          progressResearchScout.id,
-          recoverableResearchScout.id,
-        ].includes(request.definition.id)
-      )
+      if (![appEditor.id, ...researchScoutIds].includes(request.definition.id))
         return Effect.succeed(Option.none());
       // A worker's allowance is immutable. Follow-ups and recovery retain it, including
       // workers started by earlier coordinators; v11 and later admissions opt in.
@@ -220,13 +208,7 @@ export const EditorHostLive = Layer.mergeAll(
         return Effect.fail(WorkerError.make({ operation: "start", reason: "unavailable" }));
 
       return Effect.succeed(
-        Option.some(
-          [researchScout.id, progressResearchScout.id, recoverableResearchScout.id].includes(
-            request.definition.id,
-          )
-            ? scoutPolicy
-            : editorPolicy,
-        ),
+        Option.some(researchScoutIds.includes(request.definition.id) ? scoutPolicy : editorPolicy),
       );
     },
   }),
@@ -237,9 +219,7 @@ export const EditorHostLive = Layer.mergeAll(
         (request.worker.delegationId === AppEditor.delegationId &&
           request.worker.targetAgentId === appEditor.id) ||
         (request.worker.delegationId === ResearchScout.delegationId &&
-          [researchScout.id, progressResearchScout.id, recoverableResearchScout.id].includes(
-            request.worker.targetAgentId,
-          )))
+          researchScoutIds.includes(request.worker.targetAgentId)))
         ? Effect.succeed(request.principal)
         : Effect.fail(WorkerError.make({ operation: request.operation, reason: "denied" })),
   }),
@@ -255,9 +235,7 @@ export const EditorHostLive = Layer.mergeAll(
       const scout =
         researchCoordinatorIds.includes(request.source.agentId) &&
         request.worker.delegationId === ResearchScout.delegationId &&
-        [researchScout.id, progressResearchScout.id, recoverableResearchScout.id].includes(
-          request.worker.targetAgentId,
-        );
+        researchScoutIds.includes(request.worker.targetAgentId);
 
       const ceiling = editor
         ? expanded

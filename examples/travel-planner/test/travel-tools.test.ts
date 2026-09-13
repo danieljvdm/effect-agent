@@ -1,3 +1,5 @@
+import * as AgentUpdates from "@effect-agent/core/AgentUpdates";
+import type { IdempotencyKey } from "@effect-agent/core/Receipt";
 import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { it } from "@effect/vitest";
 import type { Layer } from "effect";
@@ -13,11 +15,14 @@ import {
   ResponseToolsLive,
   ShowTravelOptions,
 } from "../src/agent.ts";
+import type { PlannerInput } from "../src/domain.ts";
 import { PreviousReadTravelPage, PreviousReadTravelPageResult } from "../src/research.ts";
+import { updatingResearchScout } from "../src/research/scout.ts";
 import {
   planner,
   previousProgressPlanner,
   previousDelegatingPlanner,
+  previousRecoverablePlanner,
   previousTextPlanner,
   previousBudgetPlanner,
   previousResearchPlanner,
@@ -110,7 +115,8 @@ it.effect(
   "requires response delivery while retaining the accepted v11/v10/v9/v8/v7/v6/v5/v4/v3/v2 contracts",
   () =>
     Effect.gen(function* () {
-      expect(planner.id).toBe("travel-planner-v15");
+      expect(planner.id).toBe("travel-planner-v16");
+      expect(previousRecoverablePlanner.id).toBe("travel-planner-v15");
       expect(previousDelegatingPlanner.id).toBe("travel-planner-v14");
       expect(previousProgressPlanner.id).toBe("travel-planner-v13");
       expect(previousProgressPlanner.toolkit.tools).toHaveProperty("OpenAiWebSearch");
@@ -188,4 +194,31 @@ it.effect(
       }
       expectTypeOf<Layer.Services<typeof ResponseToolsLive>>().toEqualTypeOf<never>();
     }).pipe(Effect.provide(ResponseToolsLive)),
+);
+
+it.effect("exposes typed scout updates without turning reports into application input", () =>
+  Effect.gen(function* () {
+    const emit = (idempotencyKey: IdempotencyKey) =>
+      AgentUpdates.emit(
+        updatingResearchScout,
+        {
+          summary: "A verified coastal route; entry availability is unconfirmed.",
+          sources: ["https://visitlisboa.com"],
+        },
+        { idempotencyKey },
+      );
+
+    expectTypeOf<Effect.Error<ReturnType<typeof emit>>>().toEqualTypeOf<AgentUpdates.UpdateError>();
+    expectTypeOf<Effect.Services<ReturnType<typeof emit>>>().toEqualTypeOf<AgentUpdates.Emitter>();
+    expectTypeOf<typeof planner.input.Type>().toEqualTypeOf<typeof PlannerInput.Type>();
+    expect(updatingResearchScout.toolkit.tools).toHaveProperty("emit_update");
+    expect(updatingResearchScout.toolkit.tools).not.toHaveProperty("report_research_progress");
+    for (const tool of Object.values(updatingResearchScout.toolkit.tools)) {
+      if (Tool.isProviderDefined(tool)) continue;
+      expect(Tool.getJsonSchema(tool, { transformer: toCodecOpenAI })).toMatchObject({
+        type: "object",
+      });
+    }
+    expect(yield* planner.instructions()).toContain("WorkerUpdate");
+  }),
 );

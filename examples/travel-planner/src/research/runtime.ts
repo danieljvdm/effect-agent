@@ -3,6 +3,7 @@ import * as Subagent from "@effect-agent/capabilities/Subagent";
 import { MessagingError } from "@effect-agent/core/Messaging";
 import type { Principal } from "@effect-agent/core/Receipt";
 import { Receipt, IdempotencyKey } from "@effect-agent/core/Receipt";
+import { FrameworkMessage } from "@effect-agent/core/Worker";
 import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import { PeerRoutes, PeerAuthorizer } from "@effect-agent/thread/MessagingHost";
 import { SubmissionLedger, SubmissionLookupById } from "@effect-agent/thread/SubmissionLedger";
@@ -11,7 +12,11 @@ import { Effect, Layer, Option, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
 
 import { PlannerError, PlannerInput } from "../domain.ts";
-import { planner, previousProgressPlanner, previousDelegatingPlanner } from "../server/planner.ts";
+import {
+  previousRecoverablePlanner,
+  previousProgressPlanner,
+  previousDelegatingPlanner,
+} from "../server/planner.ts";
 import { PlannerAttempt, ProgressStore } from "../server/progress.ts";
 import { publicationAuthorization } from "../server/security.ts";
 import { ownerOfThread } from "../server/tenancy.ts";
@@ -32,11 +37,11 @@ import {
 import {
   FinishResearch,
   ResearchScout,
-  researchScout,
   ProgressResearchScout,
   ReportResearchProgress,
   progressResearchScout,
   recoverableResearchScout,
+  researchScoutIds,
   RecoverableResearchScout,
 } from "./scout.ts";
 
@@ -67,9 +72,7 @@ export const readScoutInput = Effect.fn("readScoutInput")(function* (
   if (
     origin === undefined ||
     origin.worker.threadId !== submission.threadId ||
-    ![researchScout.id, progressResearchScout.id, recoverableResearchScout.id].includes(
-      origin.worker.targetAgentId,
-    ) ||
+    !researchScoutIds.includes(origin.worker.targetAgentId) ||
     origin.worker.delegationId !== ResearchScout.delegationId ||
     !researchCoordinatorIds.includes(origin.source.agentId) ||
     origin.source.threadId !== input.sourceThreadId ||
@@ -164,7 +167,9 @@ export const editorReport = Subagent.reporting(AppEditor, {
   }),
 });
 
-const conversationPeer = Messaging.peer("travel_conversation", { target: planner });
+const conversationPeer = Messaging.peer("travel_conversation", {
+  target: previousRecoverablePlanner,
+});
 
 const previousConversationPeer = Messaging.peer("travel_conversation", {
   target: previousProgressPlanner,
@@ -333,16 +338,18 @@ export const ResearchAuthorizationLive = Layer.effect(
     return RunToolAuthorization.of({
       authorize: (request) => {
         if (
-          Option.isNone(
-            Schema.decodeUnknownOption(
-              Schema.Union([ScoutReportInput, ScoutProgressInput, EditorReportInput]),
-            )(request.input),
-          ) ||
+          (request.frameworkMessage === undefined &&
+            Option.isNone(
+              Schema.decodeUnknownOption(
+                Schema.Union([ScoutReportInput, ScoutProgressInput, EditorReportInput]),
+              )(request.input),
+            )) ||
           ![
             "research_scout_start",
             "research_scout_follow_up",
             "previous_research_scout_follow_up",
             "previous_progress_research_scout_follow_up",
+            "previous_recoverable_research_scout_follow_up",
             "app_editor_start",
             "app_editor_follow_up",
           ].includes(request.call.toolName)
@@ -361,6 +368,7 @@ export const ResearchAuthorizationLive = Layer.effect(
               ({ record }) =>
                 record.payload._tag === "UserInputRecorded" &&
                 record.payload.runId === request.runId &&
+                !Schema.is(FrameworkMessage)(record.payload.messageAdmission) &&
                 Schema.is(PlannerInput)(record.payload.input),
             )
               ? { _tag: "allowed" as const }

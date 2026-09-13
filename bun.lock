@@ -52,14 +52,14 @@
       "dependencies": {
         "@base-ui/react": "catalog:",
         "@cloudflare/sandbox": "catalog:",
-        "@effect-agent/capabilities": "0.1.0-beta.78",
-        "@effect-agent/core": "0.1.0-beta.78",
-        "@effect-agent/engine": "0.1.0-beta.78",
-        "@effect-agent/platform-cloudflare": "0.1.0-beta.78",
-        "@effect-agent/sandbox": "0.1.0-beta.78",
-        "@effect-agent/storage-cloudflare": "0.1.0-beta.78",
-        "@effect-agent/testing": "0.1.0-beta.78",
-        "@effect-agent/thread": "0.1.0-beta.78",
+        "@effect-agent/capabilities": "0.1.0-beta.85",
+        "@effect-agent/core": "0.1.0-beta.85",
+        "@effect-agent/engine": "0.1.0-beta.85",
+        "@effect-agent/platform-cloudflare": "0.1.0-beta.85",
+        "@effect-agent/sandbox": "0.1.0-beta.85",
+        "@effect-agent/storage-cloudflare": "0.1.0-beta.85",
+        "@effect-agent/testing": "0.1.0-beta.85",
+        "@effect-agent/thread": "0.1.0-beta.85",
         "@effect/ai-openai": "catalog:",
         "@effect/atom-react": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
@@ -3135,21 +3135,21 @@
 
     "@cloudflare/sandbox/capnweb": ["capnweb@0.8.0", "", {}, "sha512-BK/TuXUiyfLSKsmjojn70yN7oYG/JJzoURZ3tckjg5Zj2KcygPm0A5jyOlswK7SYB4f0Gh9tt+RZ132b80iLfA=="],
 
-    "@effect-agent/example-travel-planner/@effect-agent/capabilities": ["@effect-agent/capabilities@0.1.0-beta.78", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.78", "@effect-agent/engine": "0.1.0-beta.78", "@effect-agent/sandbox": "0.1.0-beta.78" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-eQhqkELUOXhzh8Ho5aOwWjjkhIs/BYJsdgneeAqmEtv2zttYdfqujfNDEsu6dix2ji6KZ/5v/G5XM/ufwa1Z/g=="],
+    "@effect-agent/example-travel-planner/@effect-agent/capabilities": ["@effect-agent/capabilities@0.1.0-beta.85", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.85", "@effect-agent/engine": "0.1.0-beta.85", "@effect-agent/sandbox": "0.1.0-beta.85" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-yEhIF9iPGuE85BwUHdi74KgkbhRAkd058xrBoqifIVKD0taL8cZzOl3oSWC7pcdoloppyeUfxJDUQbfQ9B7Lmg=="],
 
-    "@effect-agent/example-travel-planner/@effect-agent/core": ["@effect-agent/core@0.1.0-beta.78", "", { "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-oCzl83zVXFWNFJzU15o/4jBGqGgVnOM2JugBUQeNZXc4CXT7aclJuSAxMv8VaZqmPEoTwd+fD6SMmyGOX3/ZsQ=="],
+    "@effect-agent/example-travel-planner/@effect-agent/core": ["@effect-agent/core@0.1.0-beta.85", "", { "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-EeqnGmz3C5YAh9dOvcdH5HwoMjRSGCrv5Y+4VNRGKpwXLzXkkO3Ln/HW7Fuv/MtevtKUKe8CbdNG8zQspho+/w=="],
 
-    "@effect-agent/example-travel-planner/@effect-agent/engine": ["@effect-agent/engine@0.1.0-beta.78", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.78" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-eEv6kNrZVeW9A/uFZ+Bn1QYuuTeRjvZPrtog3lQvdzclbpXapWmPQzPnelmnMmzLUaPjOVpn9xCLmrrx98KeMg=="],
+    "@effect-agent/example-travel-planner/@effect-agent/engine": ["@effect-agent/engine@0.1.0-beta.85", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.85" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-39oPggBylNdxSktpOljNOC+4c4IP08PMomcPsCUoQv5/hu7OTfQm6crMoNHywgCb5vDdUfLgiLpA4wne2nNmkQ=="],
 
-    "@effect-agent/example-travel-planner/@effect-agent/platform-cloudflare": ["@effect-agent/platform-cloudflare@0.1.0-beta.78", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.78", "@effect-agent/engine": "0.1.0-beta.78", "@effect-agent/sandbox": "0.1.0-beta.78", "@effect-agent/storage-cloudflare": "0.1.0-beta.78", "@effect-agent/thread": "0.1.0-beta.78", "@effect/platform-browser": "4.0.0-rc.112", "@effect/sql-sqlite-do": "4.0.0-rc.112" }, "peerDependencies": { "@cloudflare/puppeteer": "^1.1.0", "effect": "^4.0.0-rc.112", "effect-cf": "^0.40.0" }, "optionalPeers": ["@cloudflare/puppeteer"] }, "sha512-r9McmM3pN8kNjMmT0DKoGG/lAeU3zrGC5Nbf2TniYuIR1pWPYkH2Vt+FxKmoCvklB9sYf83z5oJCkY3lUjZSYA=="],
+    "@effect-agent/example-travel-planner/@effect-agent/platform-cloudflare": ["@effect-agent/platform-cloudflare@0.1.0-beta.85", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.85", "@effect-agent/engine": "0.1.0-beta.85", "@effect-agent/sandbox": "0.1.0-beta.85", "@effect-agent/storage-cloudflare": "0.1.0-beta.85", "@effect-agent/thread": "0.1.0-beta.85", "@effect/platform-browser": "4.0.0-rc.112", "@effect/sql-sqlite-do": "4.0.0-rc.112" }, "peerDependencies": { "@cloudflare/puppeteer": "^1.1.0", "effect": "^4.0.0-rc.112", "effect-cf": "^0.41.0" }, "optionalPeers": ["@cloudflare/puppeteer"] }, "sha512-LTCpw8D66jkI5cSdjLUcgq3Zo410euafPNIBbHyhmSfOK/andiZeWxk6oNXvsO6AQmehXkcVHZOs3NXvC61F8w=="],
 
-    "@effect-agent/example-travel-planner/@effect-agent/sandbox": ["@effect-agent/sandbox@0.1.0-beta.78", "", { "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-b7rnoVd/qCs9ttfDbSvDGqbJOC08W6wWGDgJ/7Q78X7egj1GFOvUkIlSApMveJZ4cTsV82bmpUPTCe63/WK8TA=="],
+    "@effect-agent/example-travel-planner/@effect-agent/sandbox": ["@effect-agent/sandbox@0.1.0-beta.85", "", { "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-dozKZLVeQONI9nVndM6H83TwRGpJwnlqvG50WmCEoD7mdsrGgtBHBGW+NgipAhfZYTVgkfdrC/BhuzuMXrRRew=="],
 
-    "@effect-agent/example-travel-planner/@effect-agent/storage-cloudflare": ["@effect-agent/storage-cloudflare@0.1.0-beta.78", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.78", "@effect-agent/thread": "0.1.0-beta.78", "@effect/platform-browser": "4.0.0-rc.112", "@effect/sql-sqlite-do": "4.0.0-rc.112" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-SkDjVFtMX27BjU2/LPfsMUG+y8eebFprwKRsfRECM4/x1jSjIvPdNgEXmShtfU6eGpnvxpXQGMZi6FdvrOzR8A=="],
+    "@effect-agent/example-travel-planner/@effect-agent/storage-cloudflare": ["@effect-agent/storage-cloudflare@0.1.0-beta.85", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.85", "@effect-agent/thread": "0.1.0-beta.85", "@effect/platform-browser": "4.0.0-rc.112", "@effect/sql-sqlite-do": "4.0.0-rc.112" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-8x3fwHfHxxoIA6m7YZ16oLZdCbKTSwo9EmAdpoUkuuxLhNudlvzFO+6HphiGP9SKKBy+WjzivZgN6Zar0rlP0Q=="],
 
-    "@effect-agent/example-travel-planner/@effect-agent/testing": ["@effect-agent/testing@0.1.0-beta.78", "", { "dependencies": { "@effect-agent/capabilities": "0.1.0-beta.78", "@effect-agent/core": "0.1.0-beta.78", "@effect-agent/engine": "0.1.0-beta.78", "@effect-agent/sandbox": "0.1.0-beta.78", "@effect-agent/thread": "0.1.0-beta.78" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-GMKLahIekfbrmdUkFLwWtwT8wiDAQ32/juzTQuu3/Jwp+EVKWhozV1H12KlJwihHwO9jiFrbYN9x5UZ9scoBMw=="],
+    "@effect-agent/example-travel-planner/@effect-agent/testing": ["@effect-agent/testing@0.1.0-beta.85", "", { "dependencies": { "@effect-agent/capabilities": "0.1.0-beta.85", "@effect-agent/core": "0.1.0-beta.85", "@effect-agent/engine": "0.1.0-beta.85", "@effect-agent/sandbox": "0.1.0-beta.85", "@effect-agent/thread": "0.1.0-beta.85" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-4zbS6ykIujNlq6fdEPuYIZE1pXZM3mVRkWqd85KgW7iA92xWtQYjgr2m0aPKdPHfq2nazTHUBXwlXIFysS8fpQ=="],
 
-    "@effect-agent/example-travel-planner/@effect-agent/thread": ["@effect-agent/thread@0.1.0-beta.78", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.78", "@effect-agent/engine": "0.1.0-beta.78" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-M/tAYIvO67egEE1Rw/g1Sivqol6G135dvdcMxTcbhcVJLXu5Cdb449DPzwXi9V60xESrSjlhTy8rQ6ldBH9jQA=="],
+    "@effect-agent/example-travel-planner/@effect-agent/thread": ["@effect-agent/thread@0.1.0-beta.85", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.85", "@effect-agent/engine": "0.1.0-beta.85" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-VDCT1jlQKEuEZdacgJzO/Q1r1nhdUOdpt4CPajC15Wa9F7RutmYJuUvAFm8ahEDvY7wR6mNAJvAkHoFf7AiuHg=="],
 
     "@effect/platform-node-shared/ws": ["ws@8.21.3", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw=="],
 

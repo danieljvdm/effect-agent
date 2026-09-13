@@ -1,5 +1,6 @@
 import { ThreadId, RunId, TurnId, ToolCallId } from "@effect-agent/core/Identifiers";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
+import { WorkerUpdate, type FrameworkMessage } from "@effect-agent/core/Worker";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { ConfigProvider, Effect, Schema } from "effect";
@@ -32,11 +33,12 @@ const grant = {
   publication: { tripId: "lisbon", expectedRevision: 2 },
 };
 
-const authorize = (input: unknown, parameters: unknown) =>
+const authorize = (input: unknown, parameters: unknown, frameworkMessage?: FrameworkMessage) =>
   Effect.runPromise(
     publicationAuthorization.authorize({
       ...authority,
       input,
+      frameworkMessage,
       call: {
         toolCallId: Schema.decodeSync(ToolCallId)("publish"),
         toolName: "publish_trip_site",
@@ -151,4 +153,30 @@ it("keeps trip and publication dependencies visible through native Agent composi
     TripRepository | TripSiteStore
   >();
   expectTypeOf<Effect.Error<typeof publication>>().toEqualTypeOf<PlannerError>();
+});
+
+it("does not reuse a retained publication grant when a worker report starts a run", async () => {
+  const message = Schema.decodeSync(WorkerUpdate)({
+    _tag: "WorkerUpdate",
+    schemaVersion: 1,
+    worker: {
+      schemaVersion: 1,
+      delegationId: "research_scout",
+      targetAgentId: "travel-research-scout-v4",
+      threadId: "scout",
+    },
+    update: {
+      schemaVersion: 1,
+      agentId: "travel-research-scout-v4",
+      threadId: "scout",
+      runId: "scout-run",
+      updateId: "milestone",
+      sequence: 1,
+      value: { summary: "Public evidence", sources: ["https://visitlisboa.com"] },
+    },
+  });
+
+  expect((await authorize(grant, { tripId: "lisbon", expectedRevision: 2 }, message))._tag).toBe(
+    "denied",
+  );
 });

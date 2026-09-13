@@ -1,5 +1,6 @@
 import { ThreadId } from "@effect-agent/core/Identifiers";
 import { IdempotencyKey, Principal } from "@effect-agent/core/Receipt";
+import { FrameworkMessage } from "@effect-agent/core/Worker";
 import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import {
@@ -214,6 +215,10 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
     // oxlint-disable-next-line typescript/switch-exhaustiveness-check
     switch (payload._tag) {
       case "UserInputRecorded": {
+        if (Schema.is(FrameworkMessage)(payload.messageAdmission)) {
+          if (payload.submissionId !== undefined) reportSubmissions.add(payload.submissionId);
+          break;
+        }
         if (
           payload.submissionId !== undefined &&
           Schema.decodeUnknownOption(ScoutReportInput)(payload.input)._tag === "Some"
@@ -362,7 +367,11 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
   );
 
   const queuedMessages = pending.flatMap((submission) => {
-    if (recordedInputs.has(submission.submissionId)) return [];
+    if (
+      recordedInputs.has(submission.submissionId) ||
+      Schema.is(FrameworkMessage)(submission.messageAdmission)
+    )
+      return [];
     const input = Schema.decodeUnknownOption(PlannerInput)(submission.inputPayload);
 
     return Option.isSome(input) && !input.value.voice?.input
@@ -439,6 +448,7 @@ export const voiceWork = Effect.fn("voiceWork")(function* (request: typeof Voice
       (next) =>
         next.threadId === submission.threadId &&
         next.queueSequence > submission.queueSequence &&
+        !Schema.is(FrameworkMessage)(next.messageAdmission) &&
         Schema.is(PlannerInput)(next.inputPayload),
     ) ||
     (inputIndex >= 0 &&
@@ -447,6 +457,7 @@ export const voiceWork = Effect.fn("voiceWork")(function* (request: typeof Voice
         .some(
           ({ record }) =>
             record.payload._tag === "UserInputRecorded" &&
+            !Schema.is(FrameworkMessage)(record.payload.messageAdmission) &&
             Schema.is(PlannerInput)(record.payload.input),
         ));
 

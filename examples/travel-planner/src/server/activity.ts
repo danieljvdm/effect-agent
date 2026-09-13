@@ -1,3 +1,4 @@
+import { FrameworkMessage } from "@effect-agent/core/Worker";
 import { SettlementFailureDiagnostic } from "@effect-agent/thread/Records";
 import type { ThreadExport } from "@effect-agent/thread/ThreadStore";
 import { DateTime, Schema } from "effect";
@@ -76,6 +77,18 @@ export const plannerActivity = (
     // oxlint-disable-next-line typescript/switch-exhaustiveness-check
     switch (payload._tag) {
       case "UserInputRecorded": {
+        if (Schema.is(FrameworkMessage)(payload.messageAdmission)) {
+          activity.push({
+            ...base,
+            kind: "status",
+            text:
+              payload.messageAdmission._tag === "WorkerUpdate"
+                ? "Research milestone received"
+                : "Worker completion received",
+            details: [detail("Report", payload.messageAdmission), recordDetails],
+          });
+          break;
+        }
         const input = Schema.decodeUnknownOption(PlannerInput)(payload.input);
 
         if (input._tag === "None") break;
@@ -288,6 +301,15 @@ export const plannerActivity = (
             }),
             recordDetails,
           ],
+        });
+        break;
+      case "AgentUpdateEmitted":
+        activity.push({
+          ...base,
+          runId: payload.update.runId,
+          kind: "status",
+          text: "Research milestone shared",
+          details: [detail("Finding", payload.update.value), recordDetails],
         });
         break;
       case "RunCompleted":

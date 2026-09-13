@@ -1,5 +1,6 @@
 import { ThreadId } from "@effect-agent/core/Identifiers";
 import { IdempotencyKey, Principal } from "@effect-agent/core/Receipt";
+import { WorkerCompletion, WorkerUpdate } from "@effect-agent/core/Worker";
 import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
 import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
@@ -27,6 +28,8 @@ import {
   ResearchScoutBackground,
   ProgressResearchScoutBackground,
   RecoverableResearchScoutBackground,
+  UpdatingResearchScoutActions,
+  PreviousRecoverableResearchScoutBackground,
   PreviousProgressResearchScoutBackground,
 } from "../../src/research/scout.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
@@ -35,6 +38,7 @@ import {
   previousResearchPlanner,
   previousProgressPlanner,
   previousDelegatingPlanner,
+  previousRecoverablePlanner,
 } from "../../src/server/planner.ts";
 import { PlannerAttempt } from "../../src/server/progress.ts";
 import { ownerOfThread } from "../../src/server/tenancy.ts";
@@ -164,21 +168,26 @@ const model = Model.make(
               );
               const key = `gate/${scout.input.title}`;
 
+              const updateTool = tools.some((tool) => tool.name === "emit_update")
+                ? "emit_update"
+                : "report_research_progress";
+
+              const milestone = {
+                summary:
+                  (scout.input.title === "Report denial" ? "Report denial: " : "") +
+                  "The coastal trail offers a verified 50 km route; entry availability is unconfirmed.",
+                sources: ["https://visitlisboa.com"],
+              };
+
               if (
-                scout.input.title === "Live progress" &&
-                tools.some((tool) => tool.name === "report_research_progress") &&
-                !results(prompt, scout.index).some(
-                  (result) => result.name === "report_research_progress",
-                )
+                ["Live progress", "Report denial"].includes(scout.input.title) &&
+                tools.some((tool) => tool.name === updateTool) &&
+                !results(prompt, scout.index).some((result) => result.name === updateTool)
               )
                 return Stream.fromIterable(
                   call(
-                    "report_research_progress",
-                    {
-                      summary:
-                        "The coastal trail offers a verified 50 km route; entry availability is unconfirmed.",
-                      sources: ["https://visitlisboa.com"],
-                    },
+                    updateTool,
+                    updateTool === "emit_update" ? { value: milestone } : milestone,
                     `milestone-${scout.index}`,
                   ),
                 );
@@ -238,6 +247,41 @@ const model = Model.make(
             }
             const parent = inputs(prompt, PlannerInput).at(-1);
 
+            const update = inputs(prompt, WorkerUpdate).at(-1);
+            const completion = inputs(prompt, WorkerCompletion).at(-1);
+            const frameworkIndex = Math.max(update?.index ?? -1, completion?.index ?? -1);
+
+            if (frameworkIndex > (parent?.index ?? -1)) {
+              const report = prompt.content[frameworkIndex];
+
+              if (
+                report?.role === "user" &&
+                report.content.some(
+                  (part) => part.type === "text" && part.text.includes("Report denial"),
+                )
+              )
+                return Stream.fromIterable(
+                  call(
+                    "research_scout_start",
+                    {
+                      title: "Recursive scout",
+                      message: "Must be denied",
+                    },
+                    `recursive-${frameworkIndex}`,
+                  ),
+                );
+
+              return Stream.fromIterable(
+                finish(
+                  frameworkIndex === update?.index
+                    ? "Verified milestone received while research continues."
+                    : completion?.input.report.worker.delegationId === "app_editor"
+                      ? "Editor completion received."
+                      : "Research update received.",
+                ),
+              );
+            }
+
             const internalIndex = prompt.content.findLastIndex(
               (message) =>
                 message.role === "user" &&
@@ -281,19 +325,30 @@ const model = Model.make(
                 );
 
               return Stream.fromIterable(
-                updateCurrentTrip(prompt, reportIndex, "Research findings saved after restart") ??
-                  finish("Research update received."),
+                (report?.role === "user" &&
+                report.content.some(
+                  (part) => part.type === "text" && part.text.includes('"title":"Live progress"'),
+                )
+                  ? undefined
+                  : updateCurrentTrip(
+                      prompt,
+                      reportIndex,
+                      "Research findings saved after restart",
+                    )) ?? finish("Research update received."),
               );
             }
             if (!parent) return Stream.fromIterable(finish("Ready"));
             const current = results(prompt, parent.index);
 
-            if (parent.input.message === "start live progress")
+            if (["start live progress", "start report denial"].includes(parent.input.message))
               return Stream.fromIterable(
                 current.some((result) => result.name === "research_scout_start")
                   ? finish("Research started.")
                   : call("research_scout_start", {
-                      title: "Live progress",
+                      title:
+                        parent.input.message === "start report denial"
+                          ? "Report denial"
+                          : "Live progress",
                       message: "Find coastal trails; distance unknown",
                     }),
               );
@@ -310,14 +365,25 @@ const model = Model.make(
                 )(started.result),
               );
 
+              const recoverable = Option.isSome(
+                Schema.decodeUnknownOption(
+                  RecoverableResearchScoutBackground.tools.research_scout_start.successSchema,
+                )(started.result),
+              );
+
               const start = previous
                 ? ProgressResearchScoutBackground.tools.research_scout_start
-                : RecoverableResearchScoutBackground.tools.research_scout_start;
+                : recoverable
+                  ? RecoverableResearchScoutBackground.tools.research_scout_start
+                  : UpdatingResearchScoutActions.tools.research_scout_start;
 
               const follow = previous
                 ? PreviousProgressResearchScoutBackground.tools
                     .previous_progress_research_scout_follow_up
-                : RecoverableResearchScoutBackground.tools.research_scout_follow_up;
+                : recoverable
+                  ? PreviousRecoverableResearchScoutBackground.tools
+                      .previous_recoverable_research_scout_follow_up
+                  : UpdatingResearchScoutActions.tools.research_scout_follow_up;
 
               const accepted = yield* Schema.decodeUnknownEffect(start.successSchema)(
                 started.result,
@@ -537,9 +603,11 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
             ? runtime.submitRegistered(
                 {
                   definition:
-                    url.searchParams.get("version") === "delegating"
-                      ? previousDelegatingPlanner
-                      : previousProgressPlanner,
+                    url.searchParams.get("version") === "recoverable"
+                      ? previousRecoverablePlanner
+                      : url.searchParams.get("version") === "delegating"
+                        ? previousDelegatingPlanner
+                        : previousProgressPlanner,
                 },
                 input,
                 options,

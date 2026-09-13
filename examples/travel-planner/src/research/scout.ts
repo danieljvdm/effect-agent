@@ -1,5 +1,6 @@
 import * as Subagent from "@effect-agent/capabilities/Subagent";
 import * as Agent from "@effect-agent/core/Agent";
+import type { AgentId } from "@effect-agent/core/Identifiers";
 import { MessagingError, MessageStatus } from "@effect-agent/core/Messaging";
 import { SubagentGrant, WorkerOperationTool } from "@effect-agent/core/SubagentContract";
 import { MessagingHost } from "@effect-agent/engine/MessagingHost";
@@ -185,6 +186,61 @@ export const RecoverableResearchScoutBackground = Subagent.background(Recoverabl
   budgetScope: "worker-run",
 });
 
+/** Typed findings and their parent delivery are retained together before acknowledgement. */
+export const updatingResearchScout = Agent.make("travel-research-scout-v4", {
+  input: ScoutInput,
+  updates: ScoutProgress,
+  output: ScoutFindings,
+  policy: recoverableResearchScout.policy,
+  toolkit: Toolkit.make(
+    CheckedFinishResearch,
+    ReadTravelPage,
+    OpenAiTool.WebSearch({ search_context_size: "low" }),
+  ),
+  instructions:
+    recoverableResearchScout.instructions.replaceAll("report_research_progress", "emit_update") +
+    " Call emit_update with { value: { summary, sources } } for at most three distinct useful sourced milestones per pass. A milestone is provisional, not completion. Never send waiting, plans, private reasoning, or repeated findings. Continue research if an update is refused; finish_research still delivers the final findings.",
+  completion: { tool: "finish_research", required: true, project: ({ result }) => result },
+});
+
+export const UpdatingResearchScout = Subagent.make("research_scout", {
+  ...RecoverableResearchScout,
+  target: updatingResearchScout,
+  grant: SubagentGrant.make({
+    ...RecoverableResearchScout.grant,
+    allowedToolNames: Object.keys(updatingResearchScout.toolkit.tools),
+  }),
+});
+
+/** Input preparation reads the settings of the fenced parent attempt. */
+export const UpdatingResearchScoutActions = Subagent.background(UpdatingResearchScout, {
+  start: true,
+  followUp: true,
+  cancel: true,
+  budgetScope: "worker-run",
+});
+
+/** Install outside attemptLayer: automatic reports outlive the attempt that started a worker. */
+export const UpdatingResearchScoutBackground = Subagent.background(UpdatingResearchScout, {
+  summary: true,
+  inspect: true,
+  list: true,
+  budgetScope: "worker-run",
+  reportToParent: true,
+});
+
+export const PreviousRecoverableResearchScoutBackground = Subagent.background(
+  { ...RecoverableResearchScout, name: "previous_recoverable_research_scout" as const },
+  {
+    followUp: true,
+    summary: true,
+    inspect: true,
+    list: true,
+    cancel: true,
+    budgetScope: "worker-run",
+  },
+);
+
 export const PreviousProgressResearchScoutBackground = Subagent.background(
   { ...ProgressResearchScout, name: "previous_progress_research_scout" as const },
   {
@@ -209,3 +265,11 @@ export const PreviousResearchScoutBackground = Subagent.background(
     budgetScope: "worker-run",
   },
 );
+
+/** Supported executable identities, including accepted workers from earlier releases. */
+export const researchScoutIds: ReadonlyArray<AgentId> = [
+  researchScout.id,
+  progressResearchScout.id,
+  recoverableResearchScout.id,
+  updatingResearchScout.id,
+];
