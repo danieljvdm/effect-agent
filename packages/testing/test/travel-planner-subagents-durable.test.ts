@@ -476,86 +476,81 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
       ),
   );
 
-  it.effect(
-    "a lost join acknowledgment replays the accounting and never re-executes the completed child",
-    () =>
+  // Each independent crash/recovery scenario gets its own timeout and failure report.
+  it.effect.each([
+    "subagent:before-join-append",
+    "subagent:after-join-append",
+    "subagent:after-release-pending",
+    "subagent:after-release",
+  ] satisfies ReadonlyArray<DurableRuntimeFailpointLocation>)(
+    "a lost join acknowledgment at %s replays accounting without re-executing the completed child",
+    (location) =>
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
-          const locations = [
-            "subagent:before-join-append",
-            "subagent:after-join-append",
-            "subagent:after-release-pending",
-            "subagent:after-release",
-          ] satisfies ReadonlyArray<DurableRuntimeFailpointLocation>;
+          const slug = location.replaceAll(":", "-");
+          const harness = yield* makeDurableResearchHarness();
+          const arm: FailpointArm = { location: undefined };
 
-          for (const location of locations) {
-            const slug = location.replaceAll(":", "-");
-            const harness = yield* makeDurableResearchHarness();
-            const arm: FailpointArm = { location: undefined };
+          yield* Effect.gen(function* () {
+            const receipt = yield* submitParent(`travel-planner-s2-${slug}`, `s2-join-${slug}`);
+            const childThreadId = childThreadIdFor(receipt.submissionId, DELEGATE_CALL);
 
-            yield* Effect.gen(function* () {
-              const receipt = yield* submitParent(`travel-planner-s2-${slug}`, `s2-join-${slug}`);
-              const childThreadId = childThreadIdFor(receipt.submissionId, DELEGATE_CALL);
+            yield* drive(receipt.threadId);
+            const childSettlements = yield* drive(childThreadId);
 
-              yield* drive(receipt.threadId);
-              const childSettlements = yield* drive(childThreadId);
+            expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+            expect(yield* harness.childModelCalls).toBe(2);
 
-              expect(childSettlements.map((settlement) => settlement.outcome)).toEqual([
-                "completed",
-              ]);
-              expect(yield* harness.childModelCalls).toBe(2);
+            arm.location = location;
+            const exit = yield* Effect.exit(drive(receipt.threadId));
 
-              arm.location = location;
-              const exit = yield* Effect.exit(drive(receipt.threadId));
+            expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
+            arm.location = undefined;
+            yield* expireAbandonedLease;
 
-              expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
-              arm.location = undefined;
-              yield* expireAbandonedLease;
+            // The canonical SubagentJoined record (or the frozen releasePending decision) is
+            // the replay source: re-entry completes the release idempotently and the settled
+            // child is NEVER re-executed merely because the acknowledgment was lost.
+            const settlements = yield* drive(receipt.threadId);
 
-              // The canonical SubagentJoined record (or the frozen releasePending decision) is
-              // the replay source: re-entry completes the release idempotently and the settled
-              // child is NEVER re-executed merely because the acknowledgment was lost.
-              const settlements = yield* drive(receipt.threadId);
+            expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+            expect(yield* harness.childModelCalls).toBe(2);
+            expect(yield* harness.guideInvocations).toBe(1);
+            const log = yield* readLog(receipt.threadId);
 
-              expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
-              expect(yield* harness.childModelCalls).toBe(2);
-              expect(yield* harness.guideInvocations).toBe(1);
-              const log = yield* readLog(receipt.threadId);
+            expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
+            const joined = payloadsOf(log, "SubagentJoined")[0]?.record.payload;
 
-              expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
-              const joined = payloadsOf(log, "SubagentJoined")[0]?.record.payload;
+            expect(joined).toMatchObject({
+              usage: {
+                modelCalls: 2,
+                inputTokens: 192,
+                outputTokens: 128,
+                costMicrousd: 0,
+                usageStatus: "partial",
+                pricingStatus: "unknown",
+              },
+              delegatedUsage: {
+                modelCalls: 0,
+                usageStatus: "complete",
+                pricingStatus: "complete",
+              },
+            });
 
-              expect(joined).toMatchObject({
-                usage: {
-                  modelCalls: 2,
-                  inputTokens: 192,
-                  outputTokens: 128,
-                  costMicrousd: 0,
-                  usageStatus: "partial",
-                  pricingStatus: "unknown",
-                },
-                delegatedUsage: {
-                  modelCalls: 0,
-                  usageStatus: "complete",
-                  pricingStatus: "complete",
-                },
-              });
+            const reservations = yield* childReservations(receipt.submissionId);
 
-              const reservations = yield* childReservations(receipt.submissionId);
-
-              expect(reservations.map((row) => row.status)).toEqual(["released"]);
-            }).pipe(
-              Effect.provide(
-                NodeDurableAgentRuntime.layerWithBindings(
-                  harness.bindings,
-                  runtimeOptions(`${directory}/${slug}.sqlite`, {
-                    runtimeFailpoint: armableFailpoint(arm),
-                    ownershipLeaseDuration: FAILPOINT_LEASE_MILLIS,
-                  }),
-                ),
+            expect(reservations.map((row) => row.status)).toEqual(["released"]);
+          }).pipe(
+            Effect.provide(
+              NodeDurableAgentRuntime.layerWithBindings(
+                harness.bindings,
+                runtimeOptions(`${directory}/${slug}.sqlite`, {
+                  runtimeFailpoint: armableFailpoint(arm),
+                  ownershipLeaseDuration: FAILPOINT_LEASE_MILLIS,
+                }),
               ),
-            );
-          }
+            ),
+          );
         }),
       ),
   );
