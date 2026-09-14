@@ -5653,6 +5653,18 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       > = {
         drain: (policy) =>
           Effect.gen(function* () {
+            const state = yield* Ref.get(stateRef);
+
+            // A completed Tool batch has returned its outcomes before this steering seam.
+            // Persist them before a host ledger read can halt the Attempt and make those
+            // ordinary calls appear unknown. A no-tool response still belongs to its later
+            // continuation or atomic RunCompleted commit.
+            if (
+              state.pendingTurn !== undefined &&
+              knownIds.has(modelResponseRecordId(runId, state.pendingTurn.turn))
+            )
+              yield* recordHalt(commitPendingTurn);
+
             const joinedInputs = yield* recordHalt(
               Effect.gen(function* () {
                 const limit = policy === "one" ? 1 : MAX_JOIN_DRAIN;
