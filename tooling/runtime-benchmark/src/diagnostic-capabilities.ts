@@ -59,6 +59,20 @@ import { BenchmarkHistoryLive, BenchmarkRetainsHistory } from "./history.js";
 
 export { capabilityCases } from "./diagnostic-cases.js";
 
+// The same comparison fixture runs against releases before the module-level Subagent.layer API.
+const selectSubagentLayer = <BuildLayer>(module: {
+  readonly layer?: BuildLayer;
+  readonly SubagentRuntime?: { readonly layer: BuildLayer };
+}): BuildLayer => {
+  const layer = module.layer ?? module.SubagentRuntime?.layer;
+
+  if (layer === undefined) throw new Error("Compared release has no supported Subagent Layer");
+
+  return layer;
+};
+
+const subagentLayer = selectSubagentLayer(Subagent);
+
 /** Faults are test-only fixture inputs; the public diagnostic inventory always uses "none". */
 export const DiagnosticFault = Context.Reference("runtime-benchmark/DiagnosticFault", {
   defaultValue: (): "none" | "mcp-malformed-discovery" | "mcp-call-failure" => "none",
@@ -1471,7 +1485,7 @@ const subagentCase = Effect.fn("diagnostic.subagent")(function* (workload: Diagn
   const tools = enabled ? Toolkit.make(delegation.tool) : localToolkit;
 
   const handlers = enabled
-    ? Subagent.SubagentRuntime.layer(delegation, Agent.withModel(child, childModel), {
+    ? subagentLayer(delegation, Agent.withModel(child, childModel), {
         mapChildFailure: (failure) =>
           BenchmarkError.make({ message: `Diagnostic child failed: ${failure._tag}` }),
       })

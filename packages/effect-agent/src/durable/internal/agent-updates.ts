@@ -2,6 +2,7 @@ import { Clock, Crypto, DateTime, Effect, Option, Schema } from "effect";
 
 import { Update, UpdateError } from "../../core/AgentUpdates.ts";
 import type { RunId, ThreadId } from "../../core/Identifiers.ts";
+import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { IdempotencyKey } from "../../core/Receipt.ts";
 import { digestJson } from "../Digest.ts";
 import { DurableRuntimeFailpoint } from "../DurableFailpoint.ts";
@@ -33,7 +34,6 @@ import {
   ThreadStore,
   ThreadTailRequest,
 } from "../ThreadStore.ts";
-import { utf8ByteLength } from "./utf8.ts";
 import { WorkerRuntime } from "./worker-runtime.ts";
 
 export const lastWorkerReportMessageId = (records: ReadonlyArray<CanonicalRecordEnvelope>) => {

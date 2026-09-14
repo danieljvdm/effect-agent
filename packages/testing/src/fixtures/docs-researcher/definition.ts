@@ -3,7 +3,7 @@ import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { type RuntimeBinding } from "effect-agent/agent-runtime";
 import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentPolicy } from "effect-agent/subagent";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 // ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ export const docsSummaryHandlersLayer = <Provider, ModelProvides, ModelRequires>
     ModelRequires
   >,
 ) =>
-  SubagentRuntime.layer(delegateDocumentSummary, childBinding, {
+  Subagent.layer(delegateDocumentSummary, childBinding, {
     mapChildFailure: mapSummaryChildFailure,
     durable: { targetDigests: docsSummarizerDigestStrings },
   });

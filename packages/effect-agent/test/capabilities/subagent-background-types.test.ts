@@ -54,12 +54,9 @@ const updateBackground = Subagent.background(updateTarget, { start: true });
 const updateDeclaration = Subagent.make("updating", { target: updateTarget });
 
 const updateLayerProofs = (model: Layer.Layer<Agent.ModelServices>) => {
-  const modelLayer = Subagent.SubagentRuntime.layer(updateDeclaration, model);
+  const modelLayer = Subagent.layer(updateDeclaration, model);
 
-  const bindingLayer = Subagent.SubagentRuntime.layer(
-    updateDeclaration,
-    Agent.withModel(updateTarget, model),
-  );
+  const bindingLayer = Subagent.layer(updateDeclaration, Agent.withModel(updateTarget, model));
 
   const proofs: [
     Assert<Equal<Layer.Services<typeof modelLayer>, Encoder | Decoder | SubagentReservations>>,
@@ -101,7 +98,7 @@ const dispositionTypes: [
 ] = [true, true, true];
 
 const dispositionLayerProofs = (model: Layer.Layer<Agent.ModelServices>) => {
-  const modelLayer = Subagent.SubagentRuntime.layer(dispositionDeclaration, model, {
+  const modelLayer = Subagent.layer(dispositionDeclaration, model, {
     mapChildFailure: (error) => {
       const dispositionFailure: Assert<
         Equal<Extract<typeof error, AgentRunDispositionError>, AgentRunDispositionError>
@@ -111,7 +108,7 @@ const dispositionLayerProofs = (model: Layer.Layer<Agent.ModelServices>) => {
     },
   });
 
-  const bindingLayer = Subagent.SubagentRuntime.layer(
+  const bindingLayer = Subagent.layer(
     dispositionDeclaration,
     Agent.withModel(dispositionTarget, model),
   );

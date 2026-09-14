@@ -66,7 +66,7 @@ export class ThreadHistory extends Context.Service<
 >()("@effect-agent/engine/ThreadHistory") {
   /**
    * Retain bounded in-memory history across Runs. Provide once around the application so
-   * all Runs share the same store. The underlying ConversationStore service is exposed for
+   * all Runs share the same store. The underlying Thread.Store service is exposed for
    * snapshots and interactive hooks; separate Layer builds own separate stores.
    */
   static readonly layer = Layer.effect(

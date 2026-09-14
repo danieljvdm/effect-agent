@@ -4,7 +4,7 @@ import { AgentPolicy } from "effect-agent/agent-policy";
 import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
 import { DefinitionDigests, Digest } from "effect-agent/records";
 import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
@@ -346,7 +346,7 @@ export const makeSubagentTestBindings: Effect.Effect<ReadonlyArray<ResolvedBindi
   function* () {
     const childBinding = Agent.withModel(researcherDefinition, researcherModel);
 
-    const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
+    const delegationLayer = Subagent.layer(researchDelegation, childBinding, {
       mapChildFailure,
     }).pipe(Layer.provide([delegationSupport, bookToolLayer]));
 

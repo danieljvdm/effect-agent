@@ -34,7 +34,7 @@ import {
 import { childThreadIdFor, runIdForSubmission } from "effect-agent/run-journal";
 import { RunToolAuthorization } from "effect-agent/run-options";
 import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import {
   AbortCommand,
@@ -374,7 +374,7 @@ const makeHarness = (options?: {
 
     const parentBinding = Agent.withModel(coordinatorDefinition, parentScripted.model);
 
-    const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
+    const delegationLayer = Subagent.layer(researchDelegation, childBinding, {
       mapChildFailure,
       ...(options?.declaredDigests === undefined
         ? {}
@@ -460,7 +460,7 @@ const makeSiblingHarnessWith = (pendingSibling = false, retryableSibling = true)
     const lookupInvocations = yield* Ref.make(0);
     const lookupFinalizers = yield* Ref.make(0);
 
-    const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
+    const delegationLayer = Subagent.layer(researchDelegation, childBinding, {
       mapChildFailure,
       durable: { targetDigests: CHILD_DIGEST_STRINGS },
     }).pipe(Layer.provide(delegationSupport));
@@ -1648,7 +1648,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
             parentScripted.model,
           );
 
-          const delegationLayer = SubagentRuntime.layer(containedResearchDelegation, childBinding, {
+          const delegationLayer = Subagent.layer(containedResearchDelegation, childBinding, {
             mapChildFailure,
             durable: { targetDigests: CHILD_DIGEST_STRINGS },
           }).pipe(Layer.provide(delegationSupport));
@@ -1850,7 +1850,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         new_context: Effect.succeed,
       });
 
-      const delegation = SubagentRuntime.layer(researchDelegation, childBinding, {
+      const delegation = Subagent.layer(researchDelegation, childBinding, {
         mapChildFailure,
       }).pipe(Layer.provide(delegationSupport));
 

@@ -4,6 +4,7 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 
 import type { AnyDefinition } from "../../core/Agent.ts";
 import { RunId, SettlementId, ThreadId } from "../../core/Identifiers.ts";
+import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { IdempotencyKey, JoinedToHost, Receipt } from "../../core/Receipt.ts";
 import {
   BackgroundSpawnTool,
@@ -36,7 +37,7 @@ import {
 } from "./subagent-contract.ts";
 import { resolveSubagentPolicy, resolveToolCallAllowance } from "./subagent-policy.ts";
 import { automaticReporting } from "./subagent-reporting.ts";
-import { utf8ByteLength, utf8Bytes } from "./utf8.ts";
+import { utf8Bytes } from "./utf8.ts";
 
 export type Declaration<
   Name extends string,

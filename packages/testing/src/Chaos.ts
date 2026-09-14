@@ -31,7 +31,7 @@ import {
 import { childThreadIdFor } from "effect-agent/run-journal";
 import { RunToolAuthorization } from "effect-agent/run-options";
 import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import {
   AbortCommand,
@@ -759,7 +759,7 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
 
       const childBinding = Agent.withModel(childDefinition, childModel);
 
-      const delegationLayer = SubagentRuntime.layer(chaosDelegation, childBinding, {
+      const delegationLayer = Subagent.layer(chaosDelegation, childBinding, {
         mapChildFailure: (failure) => ChaosDelegationFailed.make({ childErrorTag: failure._tag }),
         durable: { targetDigests: childDigestStrings(laneIndex) },
       }).pipe(Layer.provide(delegationSupport));

@@ -16,7 +16,7 @@ import { ThreadId, ToolCallId } from "effect-agent/identifiers";
 import { DefinitionDigests, DefinitionDigestInput, Digest } from "effect-agent/records";
 import { childThreadIdFor } from "effect-agent/run-journal";
 import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
@@ -122,7 +122,7 @@ it.effect("shares a durable delegation pool across calls and SQLite reopen", () 
         ),
       );
 
-      const handlers = SubagentRuntime.layer(delegation, childModel).pipe(
+      const handlers = Subagent.layer(delegation, childModel).pipe(
         Layer.provide([SubagentReservationsMemoryLive]),
       );
 
@@ -355,7 +355,7 @@ it.effect(
             ),
           );
 
-          const delegationLayer = SubagentRuntime.layer(delegation, child.model, {
+          const delegationLayer = Subagent.layer(delegation, child.model, {
             mapChildFailure: (failure) => new ProbeFailed({ tag: failure._tag }),
           }).pipe(Layer.provide([handlers, SubagentReservationsMemoryLive]));
 

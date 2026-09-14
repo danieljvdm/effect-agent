@@ -1,7 +1,7 @@
 /**
  * Minimal MCP server on stdio, built from Effect AI's native `McpServer`, for
  * the stdio transport test. Run with
- * `node --experimental-transform-types packages/capabilities/test/fixtures/mcp-stdio-server.ts`.
+ * `vp node --experimental-transform-types packages/effect-agent/test/capabilities/fixtures/mcp-stdio-server.ts`.
  * Logs go to stderr so stdout stays a clean JSON-RPC channel.
  */
 import { NodeRuntime, NodeStdio } from "@effect/platform-node";

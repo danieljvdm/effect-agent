@@ -22,8 +22,8 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { RpcClient, RpcClientError, type RpcMessage, RpcSerialization } from "effect/unstable/rpc";
 
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { ToolExecutionClass, type ToolExecutionClassValue } from "../engine/DurableStep.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 import {
   McpConnectionError,
   McpConnector,

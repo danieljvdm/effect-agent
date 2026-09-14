@@ -46,7 +46,7 @@ import {
 import { childThreadIdFor } from "effect-agent/run-journal";
 import { RunToolAuthorization } from "effect-agent/run-options";
 import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import {
   ApprovalDecisionCommand,
@@ -659,7 +659,7 @@ const makeCell = Effect.fn("Certification.makeCell")(function* (
         ),
       );
 
-      const delegationLayer = SubagentRuntime.layer(researchDelegation, childBinding, {
+      const delegationLayer = Subagent.layer(researchDelegation, childBinding, {
         mapChildFailure,
         durable: { targetDigests: CHILD_DIGEST_STRINGS },
       }).pipe(Layer.provide(delegationSupport));

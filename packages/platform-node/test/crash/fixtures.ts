@@ -11,7 +11,7 @@ import { ThreadId, RunId, ToolCallId, TurnId } from "effect-agent/identifiers";
 import { DefinitionDigests, Digest } from "effect-agent/records";
 import { RunContextPreparation } from "effect-agent/run-options";
 import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { IdempotencyKey, Principal, Settlement } from "effect-agent/submission-ledger";
 import {
@@ -816,7 +816,7 @@ export const makeCrashSubagentBindings = Effect.fn("CrashFixtures.makeCrashSubag
     const childModel = makeCrashChildModel(options.supplierDir, options.childBlock);
     const childBinding = Agent.withModel(researcherDefinition, childModel);
 
-    const delegationLayer = SubagentRuntime.layer(delegation, childBinding, {
+    const delegationLayer = Subagent.layer(delegation, childBinding, {
       mapChildFailure: mapCrashChildFailure,
       durable: { targetDigests: CHILD_DIGEST_STRINGS },
     }).pipe(Layer.provide(delegationSupport));

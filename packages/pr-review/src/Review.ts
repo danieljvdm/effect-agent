@@ -12,7 +12,7 @@ import {
   type RunUsageDelta,
 } from "effect-agent/run-options";
 import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { ThreadHistory } from "effect-agent/thread-history";
 import { type LanguageModel, type Model, Tool, Toolkit } from "effect/unstable/ai";
@@ -839,25 +839,21 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
         }),
       });
 
-      const researchLayer = SubagentRuntime.layer(
-        delegation,
-        options.research?.model ?? options.model,
-        {
-          child: {
-            ...runOptions,
-            // Child usage contributes to totals without acknowledging parent diff pages.
-            budget: {
-              ...accounting,
-              consume: (delta) =>
-                accounting.consume(delta).pipe(
-                  Effect.andThen(Ref.update(modelCalls, (count) => count + delta.modelCalls)),
-                  // This accounting ledger has no limits; native usage is already validated.
-                  Effect.orDie,
-                ),
-            },
+      const researchLayer = Subagent.layer(delegation, options.research?.model ?? options.model, {
+        child: {
+          ...runOptions,
+          // Child usage contributes to totals without acknowledging parent diff pages.
+          budget: {
+            ...accounting,
+            consume: (delta) =>
+              accounting.consume(delta).pipe(
+                Effect.andThen(Ref.update(modelCalls, (count) => count + delta.modelCalls)),
+                // This accounting ledger has no limits; native usage is already validated.
+                Effect.orDie,
+              ),
           },
         },
-      ).pipe(
+      }).pipe(
         Layer.provide([
           recordingLayer,
           researchCompletion.toLayer({ finish_research: () => Effect.succeed(null) }),

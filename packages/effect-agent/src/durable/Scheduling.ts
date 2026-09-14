@@ -12,6 +12,7 @@ import {
 } from "effect";
 
 import { type AgentId, ThreadId } from "../core/Identifiers.ts";
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { digestJson } from "./Digest.ts";
 import type { DurableSubmitAgent } from "./DurableAgentRuntime.ts";
 import {
@@ -21,7 +22,6 @@ import {
   scheduleNextAfter,
   scheduleResumeCursor,
 } from "./internal/schedule-time.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 import { admitPreparedInput } from "./PreparedInputAdmission.ts";
 import { DefinitionDigests, type Digest, PersistedJson } from "./Records.ts";
 import {

@@ -5,7 +5,8 @@ import { type RuntimeBinding } from "effect-agent/agent-runtime";
 import { type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
 import { type ThreadId } from "effect-agent/identifiers";
 import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
-import { delegationAllocationFromPolicy, SubagentRuntime } from "effect-agent/subagent";
+import * as Subagent from "effect-agent/subagent";
+import { delegationAllocationFromPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { Principal, type IdempotencyKey } from "effect-agent/submission-ledger";
 import { LanguageModel, Model, type Response, type Toolkit } from "effect/unstable/ai";
@@ -250,7 +251,7 @@ export const durableDestinationResearchHandlersLayer = <Provider, ModelProvides,
     ModelRequires
   >,
 ) =>
-  SubagentRuntime.layer(destinationResearchDelegation, childBinding, {
+  Subagent.layer(destinationResearchDelegation, childBinding, {
     mapChildFailure: mapResearchChildFailure,
     durable: { targetDigests: s2ResearcherDigestStrings },
   });

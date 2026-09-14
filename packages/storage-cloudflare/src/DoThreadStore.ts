@@ -81,7 +81,7 @@ export interface DoStorageOptions {
   readonly observationPollInterval?: number | undefined;
   /**
    * Submission ownership lease duration in milliseconds (D5). Defaults to
-   * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `@effect-agent/thread`.
+   * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `effect-agent/submission-ledger`.
    */
   readonly ownershipLeaseDuration?: number | undefined;
   /**

@@ -1,8 +1,8 @@
 import { Effect, Option, Schema } from "effect";
 import { LanguageModel, Tool, Toolkit } from "effect/unstable/ai";
 
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { ToolExecutionClass } from "../engine/DurableStep.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 
 /** Only the query is model-selectable; the host fixes the search backend and limits. */
 export const Parameters = Schema.Struct({

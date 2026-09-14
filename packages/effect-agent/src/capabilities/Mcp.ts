@@ -15,7 +15,7 @@ import {
 import { Tool, type Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
 
-import { utf8ByteLength } from "./internal/utf8.ts";
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 
 const MAX_MCP_TOOLS = 128;
 const MAX_MCP_DISCOVERY_BYTES = 1024 * 1024;

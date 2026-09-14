@@ -120,7 +120,7 @@ for (const boundary of ["ThreadCreated", "SubagentLineageRecorded"] as const) {
             model("parent", parentCalls, true),
           );
 
-          const handlers = Subagent.SubagentRuntime.layer(declaration, child).pipe(
+          const handlers = Subagent.layer(declaration, child).pipe(
             Layer.provide([SubagentReservationsMemoryLive]),
           );
 

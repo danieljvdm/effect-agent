@@ -2,6 +2,7 @@ import { Clock, Context, Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { MemoryNamespaceAddress } from "../core/MemoryNamespace.ts";
 import {
   applyMemoryWrite,
@@ -15,7 +16,6 @@ import {
   MemoryWrite,
   MemoryWriter,
 } from "../core/MemoryStore.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 
 const STORAGE_VERSION = 2 as const;
 const METADATA_COMPONENT = "memory";

@@ -1,7 +1,8 @@
 import { Option, Schema } from "effect";
 import { Response } from "effect/unstable/ai";
 
-import { boundedValueFootprint, utf8ByteLength } from "./bounded-value.ts";
+import { utf8ByteLength } from "../../core/internal/utf8.ts";
+import { boundedValueFootprint } from "./bounded-value.ts";
 
 const brand = "~effect/ai/Content/Part";
 const keys = [brand, "type", "id", "delta", "metadata"];

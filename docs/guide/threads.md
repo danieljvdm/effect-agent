@@ -169,7 +169,7 @@ The durable modules in `effect-agent` define versioned record schemas and a pure
 is append-only. It records user input, completed model output, settled tool calls, compaction, run
 completion or failure, and repairs. Partial tool argument deltas and live queue state are absent.
 
-Immediate history appends `UserInputRecorded`, `ModelCompleted`, and `RunCompleted` together.
+`PersistentHistory.layer` appends `UserInputRecorded`, `ModelCompleted`, and `RunCompleted` together.
 Durable execution records each turn and tool result separately for recovery. It can resume from a
 [disposable recovery checkpoint](../concepts/durability#recovery-checkpoints) plus a bounded suffix;
 retained-history execution still loads the complete export.

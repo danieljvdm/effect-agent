@@ -55,7 +55,6 @@ import {
   SubagentPolicy,
   SubagentPrestartDenied,
   SubagentProjectionFailure,
-  SubagentRuntime,
 } from "effect-agent/subagent";
 import { DelegationTool, SubagentDelegationCaps } from "effect-agent/subagent-contract";
 import {
@@ -267,7 +266,7 @@ const researchLayer = <Provider, ModelProvides, ModelRequires>(
     ModelProvides,
     ModelRequires
   >,
-) => SubagentRuntime.layer(researchDelegation, childBinding, { mapChildFailure });
+) => Subagent.layer(researchDelegation, childBinding, { mapChildFailure });
 
 const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
   expect(Exit.isFailure(exit)).toBe(true);
@@ -318,7 +317,7 @@ const expectSettledOnce = (view: SubagentReservationView | undefined): void => {
   }
 };
 
-layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
+layer(TestServices)("Subagent.layer S1 attached delegation", (it) => {
   it.effect("captures the child input projector's service without exposing host input", () =>
     Effect.gen(function* () {
       const promptRef = yield* Ref.make<unknown>(undefined);
@@ -366,7 +365,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         ),
       );
 
-      const childLayer = SubagentRuntime.layer(delegation, child, { mapChildFailure }).pipe(
+      const childLayer = Subagent.layer(delegation, child, { mapChildFailure }).pipe(
         Layer.provide(
           Layer.succeed(ChildInputRenderer, {
             render: (question) => Effect.succeed(`Rendered: ${question}`),
@@ -558,7 +557,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const dependencies = yield* Effect.context<SubagentReservations>();
 
       const midDelegationLayer = Layer.provide(
-        SubagentRuntime.layer(delegation, grandchildBinding, { mapChildFailure }),
+        Subagent.layer(delegation, grandchildBinding, { mapChildFailure }),
         Layer.succeedContext(dependencies),
       );
 
@@ -692,7 +691,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const runId = decodeRunId("parent-run-max-children");
 
       const exit = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
-        Effect.provide(SubagentRuntime.layer(soloDelegation, childBinding, { mapChildFailure })),
+        Effect.provide(Subagent.layer(soloDelegation, childBinding, { mapChildFailure })),
         Effect.exit,
       );
 
@@ -786,9 +785,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const runId = decodeRunId("parent-run-concurrency");
 
       const fiber = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
-        Effect.provide(
-          SubagentRuntime.layer(parallelDelegation, childBinding, { mapChildFailure }),
-        ),
+        Effect.provide(Subagent.layer(parallelDelegation, childBinding, { mapChildFailure })),
         Effect.scoped,
         Effect.exit,
         Effect.forkChild,
@@ -942,7 +939,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const exit = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
         Effect.provide(
           Layer.provide(
-            SubagentRuntime.layer(boomDelegation, childBinding, { mapChildFailure }),
+            Subagent.layer(boomDelegation, childBinding, { mapChildFailure }),
             boomToolLayer,
           ),
         ),
@@ -1021,7 +1018,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const runId = decodeRunId("parent-run-duration");
 
       const fiber = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
-        Effect.provide(SubagentRuntime.layer(slowDelegation, childBinding, { mapChildFailure })),
+        Effect.provide(Subagent.layer(slowDelegation, childBinding, { mapChildFailure })),
         Effect.scoped,
         Effect.exit,
         Effect.forkChild,
@@ -1088,7 +1085,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const runId = decodeRunId("parent-run-projection");
 
       const detached = yield* AgentRuntime.start(parent, { mission: "m" }, { runId }).pipe(
-        Effect.provide(SubagentRuntime.layer(boundedDelegation, childBinding, { mapChildFailure })),
+        Effect.provide(Subagent.layer(boundedDelegation, childBinding, { mapChildFailure })),
       );
 
       const exit = yield* Effect.exit(detached.await);
@@ -1193,9 +1190,9 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
           },
         });
 
-        const leafLive = SubagentRuntime.layer(leaf, answeringModel("leaf-answer", '"leaf"'));
+        const leafLive = Subagent.layer(leaf, answeringModel("leaf-answer", '"leaf"'));
 
-        const middleLive = SubagentRuntime.layer(
+        const middleLive = Subagent.layer(
           middle,
           delegatingModel(
             "middle-answer",
@@ -1326,7 +1323,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const exit = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
         Effect.provide(
           Layer.provide(
-            SubagentRuntime.layer(restrictedDelegation, childBinding, { mapChildFailure }),
+            Subagent.layer(restrictedDelegation, childBinding, { mapChildFailure }),
             probeToolLayer,
           ),
         ),
@@ -1363,7 +1360,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
 
       const exit = yield* AgentRuntime.run(parent, { mission: "m" }, { runId }).pipe(
         Effect.provide(
-          SubagentRuntime.layer(researchDelegation, childBinding, {
+          Subagent.layer(researchDelegation, childBinding, {
             mapChildFailure,
             parentCaps: SubagentDelegationCaps.make({ maxConcurrentChildren: 0 }),
           }),
@@ -1503,7 +1500,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
         ).pipe(
           Effect.provide(
             Layer.provide(
-              SubagentRuntime.layer(partialDelegation, childBinding, { mapChildFailure }),
+              Subagent.layer(partialDelegation, childBinding, { mapChildFailure }),
               probeToolLayer,
             ),
           ),
@@ -1625,7 +1622,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const detached = yield* AgentRuntime.start(parent, { mission: "m" }, { runId }).pipe(
         Effect.provide(
           Layer.provide(
-            SubagentRuntime.layer(failFastDelegation, childBinding, { mapChildFailure }),
+            Subagent.layer(failFastDelegation, childBinding, { mapChildFailure }),
             probeToolLayer,
           ),
         ),
@@ -1718,7 +1715,7 @@ const countingChildBinding = (invocations: Ref.Ref<number>) =>
   );
 
 const durableResearchLayer = (invocations: Ref.Ref<number>) =>
-  SubagentRuntime.layer(researchDelegation, countingChildBinding(invocations), {
+  Subagent.layer(researchDelegation, countingChildBinding(invocations), {
     mapChildFailure,
     durable: { targetDigests: durableDigests },
   });
@@ -1763,7 +1760,7 @@ const durableParent = (name: string, topic: string) =>
     ),
   );
 
-layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
+layer(TestServices)("Subagent.layer S2 durable delegation", (it) => {
   it.effect("assembles the establishment request from construction-fixed declaration values", () =>
     Effect.gen(function* () {
       const invocations = yield* Ref.make(0);
@@ -2000,8 +1997,8 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
           const options = { durable: { targetDigests: durableDigests } };
 
           const handlers = contained
-            ? SubagentRuntime.layer(returnDelegation, childModel, options)
-            : SubagentRuntime.layer(errorDelegation, childModel, options);
+            ? Subagent.layer(returnDelegation, childModel, options)
+            : Subagent.layer(errorDelegation, childModel, options);
 
           const parent = Agent.make("projection-parent", {
             input: Schema.String,
@@ -2224,7 +2221,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
           establishes,
         });
 
-        const undeclaredLayer = SubagentRuntime.layer(
+        const undeclaredLayer = Subagent.layer(
           researchDelegation,
           countingChildBinding(invocations),
           { mapChildFailure },
@@ -2300,7 +2297,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
           },
         ).pipe(
           Effect.provide(
-            SubagentRuntime.layer(declared, answeringModel("not-started", '{"answer":"none"}'), {
+            Subagent.layer(declared, answeringModel("not-started", '{"answer":"none"}'), {
               mapChildFailure,
             }),
           ),
@@ -2377,7 +2374,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         answeringModel("probe-durable-model", '{"answer":"never-runs"}'),
       );
 
-      const revokedLayer = SubagentRuntime.layer(revokedDelegation, childBinding, {
+      const revokedLayer = Subagent.layer(revokedDelegation, childBinding, {
         mapChildFailure,
         durable: { targetDigests: durableDigests },
       });
@@ -2637,7 +2634,7 @@ const typedDelegation = Subagent.make("typed", {
   policy: researchPolicy,
 });
 
-const typedLayer = SubagentRuntime.layer(typedDelegation, typedModel, {
+const typedLayer = Subagent.layer(typedDelegation, typedModel, {
   mapChildFailure: (failure) => ResearchDelegationFailed.make({ childErrorTag: failure._tag }),
 });
 
@@ -2753,7 +2750,7 @@ type ProgramDurabilityExcludedProof = Assert<
 >;
 
 const unboundDefinitionRejected = () =>
-  SubagentRuntime.layer(
+  Subagent.layer(
     typedDelegation,
     // @ts-expect-error an unbound child Definition cannot be executed
     typedChildDefinition,
@@ -2898,10 +2895,10 @@ const containedLayer = <Provider, ModelProvides, ModelRequires>(
     ModelProvides,
     ModelRequires
   >,
-) => SubagentRuntime.layer(containedDelegation, childBinding, { mapChildFailure });
+) => Subagent.layer(containedDelegation, childBinding, { mapChildFailure });
 
 const containedDurableLayer = (invocations: Ref.Ref<number>) =>
-  SubagentRuntime.layer(containedDelegation, countingChildBinding(invocations), {
+  Subagent.layer(containedDelegation, countingChildBinding(invocations), {
     mapChildFailure,
     durable: { targetDigests: durableDigests },
   });
@@ -2912,7 +2909,7 @@ const containedParent = (name: string, topic: string, answer = '{"report":"handl
     delegatingModel(name, "delegate_contained", [{ id: "call-1", params: { topic } }], answer),
   );
 
-layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
+layer(TestServices)("Subagent.layer SUB-033 contained failure mode", (it) => {
   it.effect("SUB-033 contains an expected child failure as the model-visible Tool result", () =>
     Effect.gen(function* () {
       const childBinding = Agent.withModel(
@@ -3010,7 +3007,7 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
       const runId = decodeRunId("parent-run-contained-tight");
 
       const detached = yield* AgentRuntime.start(parent, { mission: "m" }, { runId }).pipe(
-        Effect.provide(SubagentRuntime.layer(tightDelegation, childBinding, { mapChildFailure })),
+        Effect.provide(Subagent.layer(tightDelegation, childBinding, { mapChildFailure })),
       );
 
       const result = yield* detached.await;
@@ -3305,7 +3302,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
         policy: parentPolicy,
       });
 
-      const researchLayer = SubagentRuntime.layer(
+      const researchLayer = Subagent.layer(
         research,
         delegatingModel(
           "payment-child",
@@ -3380,7 +3377,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
           { topic: "defaults", declares: 2, answer: '{"answer":"partial"}' },
         ]);
 
-        const childLayer = SubagentRuntime.layer(delegation, model).pipe(
+        const childLayer = Subagent.layer(delegation, model).pipe(
           Layer.provide(
             probeToolkit.toLayer({
               probe_doc: () => Ref.update(starts, (n) => n + 1).pipe(Effect.as("found")),
@@ -3456,10 +3453,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
 
         const handle = yield* AgentRuntime.start(parent, "start").pipe(
           Effect.provide([
-            SubagentRuntime.layer(
-              delegation,
-              answeringModel("transformed", '{"answer":"ok"}', prompt),
-            ),
+            Subagent.layer(delegation, answeringModel("transformed", '{"answer":"ok"}', prompt)),
             delegatingModel(
               "transformed-parent",
               delegation.name,
@@ -3502,7 +3496,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
     const other = { ...childDefinition };
 
     expect(() =>
-      SubagentRuntime.layer(
+      Subagent.layer(
         delegation,
         Agent.withModel(other, answeringModel("other", '{"answer":"wrong"}')),
       ),
@@ -3510,7 +3504,7 @@ layer(TestServices)("derived subagent declarations", (it) => {
   });
 });
 
-layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => {
+layer(TestServices)("Subagent.layer SUB-034 per-invocation allowance", (it) => {
   const runAllowance = (options: {
     readonly name: string;
     readonly calls: ReadonlyArray<{ readonly id: string; readonly params: unknown }>;
@@ -3535,7 +3529,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
           Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
       });
 
-      const runtimeLayer = SubagentRuntime.layer(allowanceDelegation, childBinding, {
+      const runtimeLayer = Subagent.layer(allowanceDelegation, childBinding, {
         mapChildFailure,
       }).pipe(Layer.provide(probeLayer));
 
@@ -3659,7 +3653,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
             Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
         });
 
-        const runtimeLayer = SubagentRuntime.layer(allowanceDelegation, childBinding, {
+        const runtimeLayer = Subagent.layer(allowanceDelegation, childBinding, {
           mapChildFailure,
         }).pipe(Layer.provide(probeLayer));
 
@@ -3741,7 +3735,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
             Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
         });
 
-        const runtimeLayer = SubagentRuntime.layer(brokenDefaultDelegation, childBinding, {
+        const runtimeLayer = Subagent.layer(brokenDefaultDelegation, childBinding, {
           mapChildFailure,
         }).pipe(Layer.provide(probeLayer));
 
@@ -3815,7 +3809,7 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
           probe_doc: () => Effect.succeed("unused"),
         });
 
-        const runtimeLayer = SubagentRuntime.layer(
+        const runtimeLayer = Subagent.layer(
           allowanceDelegation,
           countingProbingChildBinding(invocations),
           { mapChildFailure, durable: { targetDigests: durableDigests } },
@@ -3904,7 +3898,7 @@ layer(TestServices)("Subagent usage accounting", (it) => {
 
   it.effect("reports priced child totals on completion and the detached handle", () =>
     Effect.gen(function* () {
-      const childLayer = SubagentRuntime.layer(
+      const childLayer = Subagent.layer(
         researchDelegation,
         Agent.withModel(childDefinition, reviewModel('{"answer":"ok"}')),
         {
@@ -3947,7 +3941,7 @@ layer(TestServices)("Subagent usage accounting", (it) => {
 
   it.effect("reports consumed child usage when output validation fails", () =>
     Effect.gen(function* () {
-      const childLayer = SubagentRuntime.layer(
+      const childLayer = Subagent.layer(
         researchDelegation,
         Agent.withModel(childDefinition, reviewModel("invalid json")),
         {
@@ -4046,7 +4040,7 @@ layer(TestServices)("Subagent usage accounting", (it) => {
 
         yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
 
-        const childLayer = SubagentRuntime.layer(delegation, Agent.withModel(target, childModel), {
+        const childLayer = Subagent.layer(delegation, Agent.withModel(target, childModel), {
           mapChildFailure,
           child: { estimateCostMicrousd: () => Effect.succeed(17) },
         }).pipe(Layer.provide(progressTools.toLayer({ progress: () => Effect.succeed("done") })));
@@ -4159,7 +4153,7 @@ layer(TestServices)("Subagent usage accounting", (it) => {
           },
         ).pipe(
           Effect.provide(
-            SubagentRuntime.layer(
+            Subagent.layer(
               delegation,
               Agent.withModel(childDefinition, reviewModel('{"answer":"unused"}')),
             ),

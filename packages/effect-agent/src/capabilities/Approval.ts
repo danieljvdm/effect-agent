@@ -1,7 +1,7 @@
 import { Clock, Context, DateTime, Duration, Effect, Layer, Ref, Schema } from "effect";
 
 import { ThreadId, RunId, ToolCallId } from "../core/Identifiers.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { RedactedPreview, Redactor, type RedactionError } from "./Redaction.ts";
 
 const MAX_APPROVAL_TARGETS = 32;

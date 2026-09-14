@@ -299,7 +299,7 @@ reference unless `RunOptions.scheduling` is explicitly supplied.
 
 ## Approve before execution {#approval}
 
-Effect AI's `needsApproval` marks a tool for approval. The capabilities package turns its native
+Effect AI's `needsApproval` marks a tool for approval. Effect Agent turns its native
 request into a typed Effect service with stable run identity, normalized resource targets, a
 bounded preview, expiration, audit, and a deny or unresolved decision.
 

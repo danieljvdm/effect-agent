@@ -1,9 +1,9 @@
 import { Cause, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect";
 
 import { ThreadId } from "../core/Identifiers.ts";
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { digestJson } from "./Digest.ts";
 import { EventSources, type NormalizedEvent } from "./EventSource.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 import { admitPreparedInput, PreparedInputAdmission } from "./PreparedInputAdmission.ts";
 import { DefinitionDigests, type PersistedJson } from "./Records.ts";
 import { type ScheduleRetryReason } from "./Schedule.ts";

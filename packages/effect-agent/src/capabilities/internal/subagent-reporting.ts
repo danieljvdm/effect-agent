@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect";
 
+import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { Receipt } from "../../core/Receipt.ts";
 import { type WorkerReport, WorkerCompletion } from "../../core/Worker.ts";
 import {
@@ -9,7 +10,6 @@ import {
 } from "../../engine/SubagentHost.ts";
 import { type Declaration } from "./subagent-background.ts";
 import { SubagentExecutionFailure } from "./subagent-contract.ts";
-import { utf8ByteLength } from "./utf8.ts";
 
 export { WorkerReport } from "../../core/Worker.ts";
 

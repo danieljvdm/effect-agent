@@ -1,6 +1,7 @@
 import { Clock, Effect, Schema } from "effect";
 import { IdGenerator, Tool, Toolkit } from "effect/unstable/ai";
 
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { MemoryContent, MemorySourceReference } from "../core/MemoryReference.ts";
 import {
   ActiveMemoryDocument,
@@ -16,7 +17,6 @@ import {
   MemoryWriter,
 } from "../core/MemoryStore.ts";
 import { DurableStep, DurableStepError, ToolExecutionClass } from "../engine/DurableStep.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 
 const NotesText = Schema.String.check(
   Schema.isMaxLength(20_000),

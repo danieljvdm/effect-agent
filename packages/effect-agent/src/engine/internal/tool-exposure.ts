@@ -3,6 +3,7 @@ import { Tool, type LanguageModel } from "effect/unstable/ai";
 
 import type { AnyDefinition } from "../../core/Agent.ts";
 import { ModelProtocolError } from "../../core/AgentError.ts";
+import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import {
   getToolExecutionKind,
   isSubagentToolAllowed,
@@ -22,7 +23,6 @@ import {
 import { ContextRolloverTool } from "../ContextWindow.ts";
 import { getToolExecutionClass } from "../DurableStep.ts";
 import { RunToolVisibility, type CatalogEntry, type VisibilityRequest } from "../ToolExposure.ts";
-import { utf8ByteLength } from "./bounded-value.ts";
 
 const invalid = (message: string) => ModelProtocolError.make({ message });
 

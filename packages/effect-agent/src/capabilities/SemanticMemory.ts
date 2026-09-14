@@ -1,6 +1,7 @@
 import { Clock, Crypto, Effect, Encoding, Schema } from "effect";
 import { EmbeddingModel } from "effect/unstable/ai";
 
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import type * as MemoryNamespace from "../core/MemoryNamespace.ts";
 import { MemoryLookup } from "../core/MemoryReference.ts";
 import { MemoryAccess } from "../core/MemoryRevalidation.ts";
@@ -24,7 +25,6 @@ import {
   SemanticCandidateLimits,
   revalidateSemanticMemoryCandidates,
 } from "../core/SemanticMemoryRevalidation.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 
 const Timestamp = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const InputTokens = Schema.NullOr(Schema.Natural);

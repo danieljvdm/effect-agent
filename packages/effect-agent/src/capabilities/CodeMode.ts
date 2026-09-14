@@ -11,6 +11,7 @@ import {
 } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { AdditionalToolCatalog, IncludesCatalogDocumentation } from "../core/ToolExposure.ts";
 import {
   type ToolBrokerConfigurationError,
@@ -34,7 +35,6 @@ import {
   type CodeHostCallResult,
 } from "../sandbox/CodeExecutor.ts";
 import { NetworkDisabled } from "../sandbox/Sandbox.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 
 /**
  * Code Mode (D-035, ADR-0017; capability spec §9.1): one native Effect AI
@@ -969,7 +969,7 @@ const make = <
         // The live engine broker is re-provided innermost so a Layer built
         // inside another Run can never shadow it; the captured construction
         // context supplies the selected handlers' services (same idiom as
-        // SubagentRuntime). TypeScript cannot reduce the deferred Exclude
+        // Subagent.layer). TypeScript cannot reduce the deferred Exclude
         // over the generic namespace record, so the same private-assertion
         // contract as the engine's provideHookServices pins the identity
         // that providing the captured Context leaves no requirements; it

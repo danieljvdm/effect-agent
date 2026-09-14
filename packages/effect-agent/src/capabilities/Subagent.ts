@@ -11,6 +11,7 @@ import {
 import type { AgentPolicy } from "../core/AgentPolicy.ts";
 import { type AgentId, DelegationId, ToolCallId } from "../core/Identifiers.ts";
 import { IdGenerator } from "../core/IdGenerator.ts";
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import type { SubagentDelegationCaps } from "../core/SubagentContract.ts";
 import {
   DelegationTool,
@@ -61,7 +62,6 @@ import {
   resolveToolCallAllowance,
   residualSubagentCaps,
 } from "./internal/subagent-policy.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 import {
   type BudgetReservationId,
   makeBudgetReservationId,
@@ -1190,8 +1190,8 @@ type SubagentHandler<
 >;
 
 /**
- * Build the Toolkit handler Layer for one delegation Tool from an explicit
- * child Agent Binding.
+ * Build the Toolkit handler Layer for one delegation Tool from a model Layer or
+ * an explicit child Agent Binding.
  *
  * Construction requirements carry the child Binding's full runtime needs and
  * both projections; they are captured once via `Effect.context` so the
@@ -2162,13 +2162,6 @@ export const layer = <
 
   return toolkit.toLayer(build);
 };
-
-/**
- * Runtime wiring for declared attached delegation:
- * `layer` pairs one immutable Subagent capability with a model Layer or a
- * matching Agent Binding and produces its Toolkit handler Layer.
- */
-export const SubagentRuntime = { layer } as const;
 
 export { reporting, reportingToWorker, WorkerReport } from "./internal/subagent-reporting.ts";
 

@@ -231,7 +231,7 @@ it.live(
         const handlers = Layer.mergeAll(
           background.layer,
           scoutBackground.layer,
-          Subagent.SubagentRuntime.layer(scoutDeclaration, scout),
+          Subagent.layer(scoutDeclaration, scout),
         ).pipe(Layer.provide([SubagentReservationsMemoryLive]));
 
         const context = yield* Layer.build(

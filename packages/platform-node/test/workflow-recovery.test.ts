@@ -6,7 +6,6 @@ import * as Agent from "effect-agent/agent";
 import { digestDefinitions } from "effect-agent/digest";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import * as Subagent from "effect-agent/subagent";
-import { SubagentRuntime } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import { AbortCommand } from "effect-agent/submission-ledger";
 import { Toolkit, type Response } from "effect/unstable/ai";
@@ -83,7 +82,7 @@ it.live(
       const definitions = definitionsFor(parent.definition.id);
       const digests = yield* digestDefinitions(definitions);
 
-      const handlers = SubagentRuntime.layer(delegation, childModel.model, {
+      const handlers = Subagent.layer(delegation, childModel.model, {
         durable: { targetDigests: childDigests },
       }).pipe(Layer.provide([SubagentReservationsMemoryLive]));
 

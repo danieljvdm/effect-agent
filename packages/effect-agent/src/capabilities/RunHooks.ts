@@ -218,9 +218,9 @@ export type ThreadAdapterError =
   | ThreadHistoryDiverged;
 
 /**
- * Advanced integration for an existing ConversationStore snapshot. Ordinary Runs automatically
+ * Advanced integration for an existing Thread.Store snapshot. Ordinary Runs automatically
  * retain history through ThreadHistory.layer; use this helper only for explicit snapshot hooks.
- * Share that Layer's ConversationStore owner. PersistentHistory rejects these competing hooks.
+ * Share that Layer's Thread.Store owner. PersistentHistory rejects these competing hooks.
  * The snapshot is explicit initial Prompt data. Each inline onHistory call immediately records
  * its append-only suffix, including updates from Runs that later fail or are interrupted. Writes
  * already made remain in the snapshot. Callback errors stop the Run as ThreadAdapterError;

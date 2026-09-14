@@ -386,7 +386,7 @@ const independentPersonaModel = Model.make(
   ),
 );
 
-const independentScoutHandlers = Subagent.SubagentRuntime.layer(
+const independentScoutHandlers = Subagent.layer(
   independentScoutDeclaration,
   Agent.withModel(independentScout, model),
 ).pipe(Layer.provide([SubagentReservationsMemoryLive]));

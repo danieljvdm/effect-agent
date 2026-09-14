@@ -1,5 +1,7 @@
 import { DateTime, Redacted } from "effect";
 
+import { utf8ByteLength } from "../../core/internal/utf8.ts";
+
 const DEFAULT_MAX_DEPTH = 128;
 const OBJECT_OVERHEAD_BYTES = 32;
 const PROPERTY_OVERHEAD_BYTES = 8;
@@ -126,19 +128,6 @@ const isCanonicalArrayIndex = (key: string): boolean => {
   const index = Number(key);
 
   return Number.isInteger(index) && index >= 0 && index < 0xffff_ffff && String(index) === key;
-};
-
-/** Platform-neutral UTF-8 byte length; the engine's TypeScript lib excludes `TextEncoder`. */
-export const utf8ByteLength = (value: string): number => {
-  let total = 0;
-
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-
-    total += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
-  }
-
-  return total;
 };
 
 /**

@@ -901,9 +901,10 @@ export interface RunBufferLimits {
 }
 
 /**
- * Per-Run values and advanced integration hooks. Use ThreadHistory for successful-run
- * retention. Hook failures and requirements stay visible in the returned Stream / Effect
- * through the generic parameters.
+ * Per-Run values and advanced integration hooks. ThreadHistory.layer retains history
+ * incrementally in memory, including completed updates before a failure or interruption.
+ * PersistentHistory.layer commits only successful Runs to a ThreadStore. Hook failures and
+ * requirements stay visible in the returned Stream / Effect through the generic parameters.
  */
 export interface RunOptions<HookError = never, HookRequirements = never> {
   /** Finite per-Run limits: accepted update count and cumulative UTF-8 JSON value bytes. Defaults: 32 and 16384. */

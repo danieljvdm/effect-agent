@@ -57,6 +57,7 @@ import {
   type TurnId,
 } from "../../core/Identifiers.ts";
 import { IdGenerator } from "../../core/IdGenerator.ts";
+import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { IdempotencyKey } from "../../core/Receipt.ts";
 import {
   AgentUpdateEmitted,
@@ -119,7 +120,7 @@ import { MessagingHost } from "../MessagingHost.ts";
 import { SubagentHost } from "../SubagentHost.ts";
 import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { CurrentToolCatalog, RunToolVisibility, type CatalogEntry } from "../ToolExposure.ts";
-import { boundedValueFootprint, utf8ByteLength } from "./bounded-value.ts";
+import { boundedValueFootprint } from "./bounded-value.ts";
 import { insertOutputContract, isTextOutput, outputSchemaContract } from "./output-contract.ts";
 import { ownPrimitiveDelta } from "./primitive-delta.ts";
 import {

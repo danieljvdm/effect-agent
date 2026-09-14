@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Schema } from "effect";
 
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { RunEvent } from "../core/RunEvent.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 
 const MAX_REDACTED_PREVIEW_BYTES = 8 * 1024;
 const MAX_REDACTION_NODES = 4_096;

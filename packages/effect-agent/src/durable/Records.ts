@@ -17,6 +17,7 @@ import {
   ToolCallId,
   TurnId,
 } from "../core/Identifiers.ts";
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { IdempotencyKey, Principal } from "../core/Receipt.ts";
 import { ExhaustedLimit } from "../core/RunEvent.ts";
 import { RunPolicyUsage } from "../core/RunPolicyUsage.ts";
@@ -31,7 +32,6 @@ import { Selection, Snapshot } from "../core/ToolExposure.ts";
 import { ModelCallUsage, RunUsageSummary, RunTotals } from "../core/Usage.ts";
 import { WorkerBudgetScope, WorkerRef, WorkerSource } from "../core/Worker.ts";
 import { ContextHandoff } from "../engine/ContextWindow.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 
 const identifier = <const Name extends string>(name: Name) =>
   Schema.NonEmptyString.pipe(Schema.brand(`@effect-agent/thread/${name}`));

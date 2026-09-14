@@ -3,7 +3,7 @@ import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { type RuntimeBinding } from "effect-agent/agent-runtime";
 import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentPolicy } from "effect-agent/subagent";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import type { ScriptedTurnInput } from "../../ScriptedModel.ts";
@@ -269,7 +269,7 @@ export const destinationResearchHandlersLayer = <Provider, ModelProvides, ModelR
     ModelRequires
   >,
 ) =>
-  SubagentRuntime.layer(destinationResearchDelegation, childBinding, {
+  Subagent.layer(destinationResearchDelegation, childBinding, {
     mapChildFailure: mapResearchChildFailure,
   });
 

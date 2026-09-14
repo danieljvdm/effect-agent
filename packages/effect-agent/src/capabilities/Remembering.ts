@@ -1,5 +1,6 @@
 import { Effect, Encoding, Schema } from "effect";
 
+import { utf8ByteLength } from "../core/internal/utf8.ts";
 import type * as MemoryNamespace from "../core/MemoryNamespace.ts";
 import { MemoryContent, MemorySourceReference } from "../core/MemoryReference.ts";
 import {
@@ -11,7 +12,6 @@ import {
   MemoryWriter,
 } from "../core/MemoryStore.ts";
 import * as Protocol from "../core/RememberingStore.ts";
-import { utf8ByteLength } from "./internal/utf8.ts";
 
 export class Limits extends Schema.Class<Limits>("@effect-agent/remembering/Limits")({
   maxSourceBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 4_194_304 })),

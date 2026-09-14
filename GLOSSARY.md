@@ -454,7 +454,7 @@ A location where behavior can be changed without editing the caller.
 A concrete implementation at a Seam.
 
 **Core**  
-The inward domain, authoring, and engine packages that contain no provider, database, transport, or
+The inward domain, authoring, and engine modules that contain no provider, database, transport, or
 platform implementation.
 
 **Reference Application**  
