@@ -41,6 +41,7 @@ export const stageComparisonModules = Effect.fn("comparison.stageModules")(funct
 
     yield* fs.makeDirectory(directory, { recursive: true });
     yield* fs.writeFileString(path.join(directory, `${name}.mjs`), source);
+    yield* fs.writeFileString(path.join(directory, `${name}.d.mts`), source);
     exports[key] = `./src/comparison/${name}.ts`;
     added.push(`effect-agent${key.slice(1)}`);
   });
