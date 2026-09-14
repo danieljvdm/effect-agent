@@ -1,5 +1,5 @@
 import { Context, DateTime, Duration, Effect, Layer, Option, Schedule, Schema } from "effect";
-import { WorkerEnvironment, Workflow } from "effect-cf";
+import { CloudflareTracer, WorkerEnvironment, Workflow } from "effect-cf";
 import * as Sandbox from "effect-cf/sandbox";
 
 import {
@@ -638,5 +638,5 @@ export class SiteBuild extends SiteBuildBinding.make(BuildHostLive, {
       return yield* runSiteBuild(request).pipe(
         Effect.provide(Layer.merge(apps, appSourceLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE))),
       );
-    }),
+    }).pipe(Effect.provide(CloudflareTracer.layer)),
 }) {}

@@ -381,6 +381,12 @@ uses the app's verified Auth identities and the funding panel described below.
 - Automatic invocation URL logs, request traces and Worker Logpush are disabled to keep
   callback codes/state out of telemetry. Keep that setting; review any independently managed
   edge Logpush/analytics pipeline to exclude callback query strings before enabling it.
+  The app installs `effect-cf`'s `CloudflareTracer.layer` per invocation in the main Worker,
+  planner Thread Object, auth Object, trip-data Worker and site-build Workflow. It maps
+  existing named Effect spans to Cloudflare's native trace waterfall without an OTLP
+  endpoint or exporter. The layer is never cached in an isolate-wide runtime. Trace export
+  remains disabled by the Alchemy observability configuration: enabling it also captures
+  automatic request URL attributes, so callback query protection must be addressed first.
 - Rejected GitHub callbacks emit `auth.github.callback-rejected` in Workers Logs with a fixed
   `reason` label for the observed binding, state, issuer, flow or post-claim failure stage.
   These records contain no account/flow IDs, codes, state values, cookies, digests or provider

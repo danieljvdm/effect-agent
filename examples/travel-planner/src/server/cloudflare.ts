@@ -10,7 +10,7 @@ import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
 import { DefinitionDigestInput } from "@effect-agent/thread/Records";
 import { SubmissionLedger, SubmissionLookupById } from "@effect-agent/thread/SubmissionLedger";
 import { Effect, Layer, Option, Schema } from "effect";
-import { DurableObject, WorkerEnvironment } from "effect-cf";
+import { CloudflareTracer, DurableObject, WorkerEnvironment } from "effect-cf";
 import type { Tool } from "effect/unstable/ai";
 import { FetchHttpClient, HttpRouter } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
@@ -680,6 +680,7 @@ export const makeTravelPlannerThread = <E>(
   application = PlannerLive,
 ) => {
   return class extends ThreadObject.make(application.pipe(Layer.provideMerge(sites)), {
+    eventLayer: CloudflareTracer.layer,
     namespaceBinding: "ACCOUNT_THREADS",
     deploymentId: "travel-planner-v1",
     producerPrefix: "travel-planner",

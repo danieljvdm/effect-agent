@@ -1,7 +1,7 @@
 import type { Sandbox } from "@cloudflare/sandbox";
 import start from "@tanstack/react-start/server-entry";
 import { Effect, Layer, Schema } from "effect";
-import { Worker, WorkerEnvironment } from "effect-cf";
+import { CloudflareTracer, Worker, WorkerEnvironment } from "effect-cf";
 
 import { artifactsLayer } from "./artifacts";
 import { captureCallbackScript } from "./auth/callback";
@@ -304,6 +304,7 @@ export const makeWorker = (verify = authenticate) => ({
 });
 
 export default Worker.make(Layer.empty, {
+  eventLayer: CloudflareTracer.layer,
   fetch: Effect.gen(function* () {
     const request = yield* Worker.NativeRequest;
     const env = yield* WorkerEnvironment;

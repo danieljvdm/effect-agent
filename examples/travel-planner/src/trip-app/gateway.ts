@@ -1,5 +1,5 @@
 import { Effect, Layer, Schema } from "effect";
-import { Worker, WorkerEnvironment } from "effect-cf";
+import { CloudflareTracer, Worker, WorkerEnvironment } from "effect-cf";
 
 import { PlannerError, TripApp, TripAppData, TripId } from "../domain.ts";
 import { appNameFromHost, readTripAppAddress } from "./addresses.ts";
@@ -13,6 +13,7 @@ const unavailable = () =>
 
 /** Generated Workers get this fixed service binding, never the owner's namespace. */
 export class TripData extends Worker.make(Layer.empty, {
+  eventLayer: CloudflareTracer.layer,
   fetch: Effect.gen(function* () {
     const request = yield* Worker.NativeRequest;
     const context = yield* Worker.ExecutionContext;

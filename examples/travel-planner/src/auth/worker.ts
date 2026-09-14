@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
+import { CloudflareTracer, WorkerEnvironment } from "effect-cf";
 
 import { AccountError, AccountSession, AccountId } from "./account";
 import { emailDeliveryLayer } from "./email-delivery";
@@ -37,6 +37,7 @@ export class PlannerAuth extends DurableObject<Cloudflare.Env> {
           Boolean(this.env.SERVER_OPENAI_KEY),
         );
       }).pipe(
+        Effect.provide(CloudflareTracer.layer),
         Effect.catch(() =>
           Effect.succeed(
             new Response("Authentication is temporarily unavailable.", {
