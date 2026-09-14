@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.89
+
+### Minor Changes
+
+- [#479](https://github.com/danieljvdm/effect-agent/pull/479) [`983a558`](https://github.com/danieljvdm/effect-agent/commit/983a558703a187285ff9c900792defc8f15984a1) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add host-owned protected browser suspension, exact-page resume, and authorized human takeover while preserving credential exposure and browser budgets. Require fresh observation after Return and keep transferred sessions independent of the previous Attempt’s scope.
+
 ## 0.1.0-beta.88
 
 ### Patch Changes

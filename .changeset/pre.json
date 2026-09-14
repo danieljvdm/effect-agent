@@ -163,6 +163,7 @@
     "prompt-cloudflare-message-delivery",
     "protect-prepared-context",
     "protected-browser-credentials",
+    "protected-browser-human-handoff",
     "protected-browser-ordinary-controls",
     "provider-call-accounting",
     "pure-session-boundaries",
