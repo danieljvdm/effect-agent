@@ -74,6 +74,8 @@ import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-op
 import {
   AbortCommand,
   ApprovalDecisionCommand,
+  ClaimRequest,
+  DEFAULT_OWNERSHIP_LEASE_DURATION,
   IdempotencyKey,
   Principal,
   QueueSequence,
@@ -3168,46 +3170,80 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     }),
   );
 
-  it.effect("recovery appends a reserved-but-unappended settlement exactly as reserved", () =>
-    Effect.gen(function* () {
-      const runtime = yield* DurableAgentRuntime;
-      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"reserved"}'));
-      const agent = Agent.withModel(plannerDefinition, scripted.model);
-      const thread = "thread-recover-reserved";
+  for (const driver of ["recovery", "worker"] as const) {
+    it.effect(`completes the exact reserved settlement through ${driver}`, () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const ledger = yield* SubmissionLedger;
+        const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"reserved"}'));
+        const agent = Agent.withModel(plannerDefinition, scripted.model);
+        const thread = `thread-recover-reserved-${driver}`;
 
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "reserve" },
-        submitOptions(thread, "reserved-1"),
-      );
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "reserve" },
+          submitOptions(thread, "reserved-1"),
+        );
 
-      yield* armFailpoint("terminalize:after-reserve");
-      const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
+        yield* armFailpoint("terminalize:after-reserve");
+        const killed = yield* Effect.exit(runtime.processThread(agent, decodeThreadId(thread)));
 
-      expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-      yield* clearFailpoint;
+        expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
 
-      const reports = yield* runtime.runRecovery;
-      const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
+        const snapshot = yield* ledger.loadRecoverySnapshot(
+          RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+        );
 
-      expect(report?.decision._tag).toBe("AppendReservedSettlement");
-      expect(report?.disposition).toBe("repaired");
+        expect(snapshot.reservation?.finalized).toBe(false);
+        if (driver === "worker") {
+          // Recovery observes a still-owned reservation. Its lease expires before the
+          // following worker claim, as it can between the two phases of an alarm pass.
+          const claimed = yield* ledger.claim(
+            ClaimRequest.make({
+              threadId: decodeThreadId(thread),
+              producerId: ProducerId.make("owner-before-expiry"),
+            }),
+          );
 
-      const settlement = yield* runtime.awaitSettlement(receipt);
+          expect(Option.isSome(claimed)).toBe(true);
+        }
 
-      expect(settlement.outcome).toBe("completed");
-      const records = yield* readLog(thread);
+        const reports = yield* runtime.runRecovery;
+        const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
-      const settledRecords = records.filter(
-        (envelope) => envelope.record.payload._tag === "SubmissionSettled",
-      );
+        expect(report?.decision._tag).toBe("AppendReservedSettlement");
+        expect(report?.disposition).toBe(driver === "recovery" ? "repaired" : "deferred");
 
-      expect(settledRecords).toHaveLength(1);
-      expect(records.map((envelope) => envelope.record.recordId)).toContain(
-        recoveryRepairRecordId(receipt.submissionId, "AppendReservedSettlement"),
-      );
-    }),
-  );
+        if (driver === "worker") {
+          yield* TestClock.adjust(DEFAULT_OWNERSHIP_LEASE_DURATION);
+          const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+
+          expect(settlements).toHaveLength(1);
+        }
+
+        const settlement = yield* runtime.awaitSettlement(receipt);
+
+        expect(settlement.outcome).toBe("completed");
+        expect(yield* lookupState(receipt.submissionId)).toBe("settled");
+        expect(scripted.prompts).toHaveLength(1);
+        const records = yield* readLog(thread);
+
+        const settledRecords = records.filter(
+          (envelope) => envelope.record.payload._tag === "SubmissionSettled",
+        );
+
+        expect(settledRecords.map((envelope) => envelope.record)).toEqual([
+          snapshot.reservation?.record,
+        ]);
+        if (driver === "recovery") {
+          expect(records.map((envelope) => envelope.record.recordId)).toContain(
+            recoveryRepairRecordId(receipt.submissionId, "AppendReservedSettlement"),
+          );
+        }
+      }),
+    );
+  }
 
   it.effect("recovery finalizes the ledger from history without rewriting the record", () =>
     Effect.gen(function* () {

@@ -296,18 +296,10 @@ describe("DC Travel Planner — eviction equivalence", () => {
     armRuntimeEviction(thread, "terminalize:after-reserve");
     const receipt = await submitPlanner(thread);
 
-    // Alarms alone drive recovery. The ledger settles before recoverSubmission appends
-    // its repair audit, so read-only probes must wait for both before taking the snapshot.
-    await drainAlarmsUntil(thread, async () => {
-      if (!(await allSettled(thread)())) return false;
-      const records = await readCanonical(thread);
-
-      return records.some(
-        ({ record: { payload } }) =>
-          payload._tag === "RepairAnnotated" &&
-          payload.reason === "recovery:AppendReservedSettlement",
-      );
-    });
+    // Recovery can defer to a live lease that expires before the same alarm's worker claim.
+    // Both paths complete the reservation, but only an executed recovery decision emits its
+    // repair audit. Convergence depends on the settlement, not which phase wins the claim.
+    await drainAlarmsUntil(thread, allSettled(thread));
     expect(armedEvictionsRemaining(thread)).toBe(0);
     await assertConvergence(thread);
 
@@ -316,7 +308,7 @@ describe("DC Travel Planner — eviction equivalence", () => {
 
     expect(settled.outcome).toBe("completed");
 
-    // Recovery appended the EXACT reserved record (durability §12 step 1→2 gap).
+    // Resumed execution appended the EXACT reserved record (durability §12 step 1→2 gap).
     const reservations = await reservationRows(thread);
 
     expect(reservations).toHaveLength(1);
@@ -331,14 +323,8 @@ describe("DC Travel Planner — eviction equivalence", () => {
       encodeEnvelope(settledEnvelope).record,
     );
 
-    // The recovery left its DUR-013 audit trail …
-    const repairs = records.flatMap((envelope) =>
-      envelope.record.payload._tag === "RepairAnnotated" ? [envelope.record.payload] : [],
-    );
-
-    expect(repairs.map((repair) => repair.reason)).toContain("recovery:AppendReservedSettlement");
-    // … and modulo that audit, the evicted run's normalized evidence equals the SAME golden
-    // an uninterrupted DN run produces.
+    // Modulo any recovery audit, the evicted run's normalized evidence equals the SAME
+    // golden an uninterrupted DN run produces.
     expect(await normalizedDcEvidence(records, receipt, thread)).toEqual(
       phase6TravelPlannerGoldenEvidence,
     );
