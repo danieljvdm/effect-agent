@@ -39,6 +39,8 @@ const passed = Effect.gen(function* () {
 });
 
 it("runs every case, alternates case order, and rejects incomplete result matrices", async () => {
+  // Both matrix rounds persist every phase through the real filesystem. Keep the
+  // whole-matrix deadline separate from the worker's per-sample timeout.
   await Effect.runPromise(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -98,9 +100,9 @@ it("runs every case, alternates case order, and rejects incomplete result matric
           diagnosticCases,
         ),
       ).toBe(false);
-    }).pipe(Effect.scoped, Effect.provide(services)),
+    }).pipe(Effect.scoped, Effect.provide(services), Effect.timeout("25 seconds")),
   );
-});
+}, 30_000);
 
 it.each(["failure", "defect", "timeout"] as const)(
   "retains a sample %s and its finalized phase before later successes",
