@@ -42,7 +42,6 @@ rows. The linked warehouse example replaces the fixed data with a brokered SQL q
 ```ts twoslash
 // @types: @cloudflare/workers-types
 import { Ephemeral, CodeMode, Agent, AgentRuntime } from "effect-agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/cloudflare-code-mode";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
@@ -89,13 +88,13 @@ const analyst = Agent.make("invoice-analyst", {
   output: Schema.Struct({ answer: Schema.String }),
   instructions: "Use run_javascript to calculate invoice answers. Return an answer as JSON.",
   toolkit: Toolkit.make(codeMode.tool),
-  policy: AgentPolicy.make({
+  policy: {
     maxTurns: 3,
     maxToolCalls: 6,
     maxDuration: "45 seconds",
     // This sandbox example runs one generated program at a time.
     toolConcurrency: 1,
-  }),
+  },
 });
 
 const AnalystLive = Layer.unwrap(

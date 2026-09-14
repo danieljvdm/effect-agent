@@ -1,7 +1,6 @@
 import { AnthropicLanguageModel } from "@effect/ai-anthropic";
 import { Effect, Schema } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
 
 import { AppLive } from "./setup";
 import { TravelTools } from "./tools";
@@ -12,11 +11,11 @@ export const TravelPlanner = Agent.make("travel-planner", {
   instructions: ({ city, days }) =>
     `Find activities with search_activities, then plan ${days} days in ${city}.`,
   toolkit: TravelTools,
-  policy: AgentPolicy.resolve({
+  policy: {
     maxTurns: 6,
     maxToolCalls: 10,
     maxDuration: "2 minutes",
-  }),
+  },
 });
 
 export const plan = AgentRuntime.run(TravelPlanner, { city: "Lisbon", days: 2 }).pipe(

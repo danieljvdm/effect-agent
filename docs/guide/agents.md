@@ -26,7 +26,8 @@ resource. Reuse one definition across many runs.
 ## Build a definition {#definition-contract}
 
 `Agent.make` requires an ID, input and output schemas, instructions, and a toolkit.
-`policy` accepts an `AgentPolicy` or a partial policy declaration. Standalone defaults are
+Declare ordinary limits as a plain `policy` object; `Agent.make` validates it and fills defaults.
+A complete `AgentPolicy` value is also accepted. Standalone defaults are
 12 turns, 24 tool calls, 5 minutes, and tool concurrency 4. Other defaults follow `AgentPolicy.make`.
 Delegated children inherit omitted policy fields from their parent. Supply a partial object
 to inherit individual fields; `AgentPolicy.make` fills its own defaults before inheritance.
@@ -149,7 +150,6 @@ model turn. The projector receives decoded tool parameters and result:
 
 ```ts twoslash
 import { Agent } from "effect-agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
 import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
@@ -162,11 +162,11 @@ export const Definition = Agent.make("answer-question", {
   output: Answer,
   instructions: "Answer the question using the complete tool.",
   toolkit: Tools,
-  policy: AgentPolicy.resolve({
+  policy: {
     maxTurns: 3,
     maxToolCalls: 3,
     maxDuration: "30 seconds",
-  }),
+  },
   completion: {
     tool: "complete",
     required: true,
@@ -271,7 +271,11 @@ migration promise.
 
 ## Policy is part of the program
 
-```ts
+For a reusable validated policy value, import the Schema declaration directly:
+
+```ts twoslash
+import { AgentPolicy } from "effect-agent/agent-policy";
+
 AgentPolicy.make({
   maxTurns: 12,
   maxToolCalls: 24,

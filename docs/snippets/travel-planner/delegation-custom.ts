@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect";
 import { Subagent } from "effect-agent";
-import { SubagentPolicy } from "effect-agent/subagent";
 
 import { Researcher } from "./researcher.ts";
 
@@ -23,7 +22,7 @@ export const Research = Subagent.make("delegate_research_activities", {
       partial: budgetExhausted,
       // researchNotes stays in the child's thread.
     }),
-  policy: SubagentPolicy.make({
+  policy: Subagent.SubagentPolicy.make({
     maxChildren: 2,
     maxConcurrency: 2,
     maxTurns: 4,

@@ -364,25 +364,23 @@ call automatically. See [Persistence & durability](../concepts/durability).
 
 ## Connect MCP servers {#mcp}
 
-`McpClient.layer` provides `McpConnector` over real transports. `McpHttpTransport.make` speaks
-Streamable HTTP and needs `HttpClient`; `McpStdioTransport.make` runs a local server process and
-needs `ChildProcessSpawner`, which `NodeServices.layer` supplies on Node.js. Both requirements
-stay in the Layer's `R`.
+`McpClient.layer` provides `McpConnector` over real transports. `McpClient.McpHttpTransport.make`
+speaks Streamable HTTP and needs `HttpClient`; `McpClient.McpStdioTransport.make` runs a local server
+process and needs `ChildProcessSpawner`, which `NodeServices.layer` supplies on Node.js. Both
+requirements stay in the Layer's `R`.
 
-```ts
-import { McpClient } from "effect-agent";
-import { connectMcp, McpConnectionRequest } from "effect-agent/mcp";
-import { McpHttpTransport } from "effect-agent/mcp-client";
+```ts twoslash
+import { Mcp, McpClient } from "effect-agent";
 import { FetchHttpClient } from "effect/unstable/http";
 import { Effect, Layer } from "effect";
 
 const McpLive = McpClient.layer([
-  McpHttpTransport.make({ serverId: "docs", url: "https://mcp.example.com/mcp" }),
+  McpClient.McpHttpTransport.make({ serverId: "docs", url: "https://mcp.example.com/mcp" }),
 ]).pipe(Layer.provide(FetchHttpClient.layer));
 
 const program = Effect.gen(function* () {
-  const connection = yield* connectMcp(
-    McpConnectionRequest.make({
+  const connection = yield* Mcp.connectMcp(
+    Mcp.McpConnectionRequest.make({
       serverId: "docs",
       maxToolCount: 16,
       maxToolDescriptionBytes: 1_024,
@@ -396,7 +394,7 @@ const program = Effect.gen(function* () {
 });
 ```
 
-`connectMcp` negotiates a protocol revision, lists tools within the request bounds, and returns
+`Mcp.connectMcp` negotiates a protocol revision, lists tools within the request bounds, and returns
 dynamic Effect AI tools whose handlers forward `tools/call`. Provide the returned `handlers` Layer
 wherever the agent runs. The connection lives in the caller's Scope; closing it ends the session
 or stops the process. Server-initiated requests such as sampling and elicitation are declined, and

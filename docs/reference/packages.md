@@ -58,6 +58,11 @@ import { IdGenerator } from "effect-agent/id-generator";
 import { CommandDrainPolicy, RunSchedulingOverride } from "effect-agent/run-options";
 ```
 
+Root imports name module namespaces. For example, root `AgentPolicy` exposes its Schema class as
+`AgentPolicy.AgentPolicy`; a named import from `effect-agent/agent-policy` selects that class
+directly. Ordinary agent definitions can pass a plain `policy` object to `Agent.make`, which
+validates it and fills defaults.
+
 Operations are available directly on their module namespace: `Subagent.layer`,
 `ThreadHistory.layer`, and `IdGenerator.layer`. Service keys remain inside those modules,
 for example `IdGenerator.IdGenerator` when supplying a custom generator.

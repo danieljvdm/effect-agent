@@ -102,7 +102,6 @@ Object namespace in the generated `Cloudflare.Env`.
 ```ts twoslash
 // @types: @cloudflare/workers-types
 import { Agent } from "effect-agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
 import { ThreadObject } from "@effect-agent/platform-cloudflare";
 import { DefinitionDigestInput } from "effect-agent/records";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
@@ -115,11 +114,11 @@ const TravelPlanner = Agent.make("travel-planner", {
   output: Schema.Struct({ itinerary: Schema.Array(Schema.String) }),
   instructions: "Create a practical travel itinerary.",
   toolkit: Toolkit.make(),
-  policy: AgentPolicy.resolve({
+  policy: {
     maxTurns: 3,
     maxToolCalls: 1,
     maxDuration: "30 seconds",
-  }),
+  },
 });
 
 const modelName = "gpt-4.1-mini";
