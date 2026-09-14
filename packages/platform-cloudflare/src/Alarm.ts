@@ -403,6 +403,8 @@ export class ThreadMutationGate extends Context.Service<
   {
     readonly withMutation: <A, E, R>(
       body: Effect.Effect<A, E, R>,
+      /** Indexed host work has its own durable deadline and does not invalidate ledger recovery. */
+      options?: { readonly invalidatesRecovery: boolean },
     ) => Effect.Effect<A, E | DurableAlarmError, R>;
     readonly withSnapshot: <A, E, R>(
       body: (active: number) => Effect.Effect<A, E, R>,
@@ -421,20 +423,23 @@ export class ThreadMutationGate extends Context.Service<
 
       const runTransaction = yield* makeStorageOperation;
 
-      const beginMutation = Effect.fn("ThreadMaintenance.beginMutation")(function* () {
+      const beginMutation = Effect.fn("ThreadMaintenance.beginMutation")(function* (
+        invalidatesRecovery: boolean,
+      ) {
         yield* failpoint.hit("maintenance:dirty:before");
         const now = yield* Clock.currentTimeMillis;
 
         yield* runTransaction("advance maintenance generation", () =>
           ctx.storage.transaction(async (transaction) => {
-            const { state } = await readMaintenanceState(transaction);
+            const { state, initialized } = await readMaintenanceState(transaction);
 
             const next = ThreadMaintenanceState.make({
               ...state,
-              dirty: state.dirty + 1n,
+              dirty: state.dirty + (invalidatesRecovery ? 1n : 0n),
             });
 
-            await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
+            if (invalidatesRecovery || !initialized)
+              await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
             // The earliest configured retry bounds a newly actionable mutation without relying
             // on its best-effort immediate wake hint.
             await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
@@ -450,9 +455,10 @@ export class ThreadMutationGate extends Context.Service<
 
       const withMutation = <A, E, R>(
         body: Effect.Effect<A, E, R>,
+        options?: { readonly invalidatesRecovery: boolean },
       ): Effect.Effect<A, E | DurableAlarmError, R> =>
         Effect.acquireUseRelease(
-          generationGate.withPermit(beginMutation()),
+          generationGate.withPermit(beginMutation(options?.invalidatesRecovery ?? true)),
           () =>
             failpoint.hit("maintenance:mutation:armed").pipe(
               Effect.andThen(body),

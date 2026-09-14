@@ -1,7 +1,9 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Clock, Effect } from "effect";
 import { digestJson } from "effect-agent/digest";
+import { type AgentId } from "effect-agent/identifiers";
 import { MessageDeliveryStore, prepareMessageDelivery } from "effect-agent/message-delivery";
+import { ApprovalDecisionCommand } from "effect-agent/submission-ledger";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
@@ -9,14 +11,18 @@ import { describe, expect, it } from "vite-plus/test";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import {
   alarmAttemptHolds,
+  approvalDefinition,
+  BOOK_TOOL_CALL_ID,
   decodeIdempotencyKey,
   decodeThreadId,
   maintenanceClocks,
   plannerDefinition,
   submitOptions,
+  supplierCountsFor,
 } from "./fixtures.ts";
 import {
   allSettled,
+  anyInState,
   drainAlarmsUntil,
   laneRows,
   runClient,
@@ -63,7 +69,13 @@ const read = (source: string, message = "message") =>
     ),
   );
 
-const enqueue = (source: string, destination: string, now: number, message = "message") =>
+const enqueue = (
+  source: string,
+  destination: string,
+  now: number,
+  message = "message",
+  agentId: AgentId = plannerDefinition.id,
+) =>
   runInDurableObject(stubFor(source), (instance) =>
     instance[DurableObject.RunSymbol](
       Effect.gen(function* () {
@@ -86,7 +98,7 @@ const enqueue = (source: string, destination: string, now: number, message = "me
             schemaVersion: 1,
             threadId: options.threadId,
             deliveryPrincipal: options.principal,
-            agentId: plannerDefinition.id,
+            agentId,
             definitions: options.definitions,
             input,
             inputDigest: yield* digestJson(input),
@@ -142,6 +154,58 @@ const withThreads = (
   );
 
 describe("Thread Object message maintenance", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81
+  it("sleeps until the delivery deadline while its destination waits for external approval", () =>
+    withThreads(async (source, destination, now, advance) => {
+      await submit(source, "initial");
+      await drainAlarmsUntil(source, allSettled(source));
+      await drainAlarmsUntil(source, async () => (await scheduledAlarm(source)) === null);
+      await enqueue(source, destination, now, "message", approvalDefinition.id);
+      await runDurableObjectAlarm(stubFor(source));
+      const accepted = await read(source);
+
+      expect(accepted?.status).toBe("accepted");
+      expect(accepted?.receipt).not.toBeNull();
+      expect(await allSettled(source)()).toBe(true);
+      expect(
+        (await scheduledAlarm(source))! - now,
+        "delivery bookkeeping must not schedule an execution recovery before its next due attempt",
+      ).toBe(20);
+      await drainAlarmsUntil(destination, anyInState(destination, "suspended"));
+      await drainAlarmsUntil(destination, async () => (await scheduledAlarm(destination)) === null);
+      expect(supplierCountsFor(destination)).toEqual({});
+
+      await advance(20);
+      await runDurableObjectAlarm(stubFor(source));
+      expect((await read(source))?.receipt).toEqual(accepted?.receipt);
+      expect((await read(source))?.status).toBe("accepted");
+      expect((await scheduledAlarm(source))! - now).toBe(40);
+      expect(await scheduledAlarm(destination)).toBeNull();
+      await runClient(
+        Effect.flatMap(CloudflareThreadClient, (client) =>
+          client.resolveApproval(
+            decodeThreadId(destination),
+            ApprovalDecisionCommand.make({
+              submissionId: accepted!.receipt!.submissionId,
+              toolCallId: BOOK_TOOL_CALL_ID,
+              decision: "approved",
+              resolver: "message-delivery-approver",
+              reason: "resume retained delivery",
+            }),
+          ),
+        ),
+      );
+      await drainAlarmsUntil(destination, allSettled(destination));
+      await advance(20);
+      await runDurableObjectAlarm(stubFor(source));
+      const processed = await read(source);
+
+      expect(processed?.status).toBe("processed");
+      expect(processed?.receipt).toEqual(accepted?.receipt);
+      expect(supplierCountsFor(destination)).toEqual({ book: 1 });
+      expect(await scheduledAlarm(source)).toBeNull();
+    }));
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81
   it("delivers inserted messages, queued waves and settlement polls while its source Attempt is running", () =>
     withThreads(async (source, destination, now, advance) => {

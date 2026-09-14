@@ -11,7 +11,7 @@ import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "..
 import { ThreadObjectPlacement } from "../CloudflareBindings.ts";
 import { CloudflareDurableRuntimeConfig } from "../CloudflareConfig.ts";
 
-/** Every externally requested write prearms the owning Object's maintenance generation. */
+/** Every write prearms its owner; the delivery due index owns its recovery deadline. */
 export const guardedMessageDeliveryStoreLayer = Layer.effect(
   MessageDeliveryStore,
   Effect.gen(function* () {
@@ -36,7 +36,12 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
 
     const mutate = <A, E>(body: Effect.Effect<A, E>) =>
       mutations
-        .withMutation(cacheGate.withPermit(Ref.set(deadline, undefined).pipe(Effect.andThen(body))))
+        .withMutation(
+          cacheGate.withPermit(Ref.set(deadline, undefined).pipe(Effect.andThen(body))),
+          // A foreign receipt changing does not make the source ledger actionable. Keep the
+          // prearm and producer gate so eviction and a racing pass cannot lose delivery work.
+          { invalidatesRecovery: false },
+        )
         .pipe(
           Effect.catchTag("DurableAlarmError", () =>
             MessageDeliveryError.make({ reason: "storage", operation: "prearm message delivery" }),
