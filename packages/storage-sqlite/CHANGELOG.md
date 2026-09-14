@@ -1,5 +1,18 @@
 # @effect-agent/storage-sqlite
 
+## 0.1.0-beta.86
+
+### Minor Changes
+
+- [#466](https://github.com/danieljvdm/effect-agent/pull/466) [`6560df2`](https://github.com/danieljvdm/effect-agent/commit/6560df20d900627d28d745ea11e9759774bb9cf0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Consolidate agent definitions, execution, capabilities, and sandbox contracts into `effect-agent`, and use kebab-case public module paths across framework packages.
+
+  BEHAVIOR CHANGE: Replace `@effect-agent/core`, `@effect-agent/engine`, `@effect-agent/capabilities`, and `@effect-agent/sandbox` dependencies with `effect-agent`; migrate direct imports such as `effect-agent/AgentRuntime` to `effect-agent/agent-runtime` and upgrade framework packages together.
+
+### Patch Changes
+
+- Updated dependencies [[`1112b1b`](https://github.com/danieljvdm/effect-agent/commit/1112b1bfb388be600c9326737d10608660698ef3), [`6560df2`](https://github.com/danieljvdm/effect-agent/commit/6560df20d900627d28d745ea11e9759774bb9cf0), [`6560df2`](https://github.com/danieljvdm/effect-agent/commit/6560df20d900627d28d745ea11e9759774bb9cf0), [`6560df2`](https://github.com/danieljvdm/effect-agent/commit/6560df20d900627d28d745ea11e9759774bb9cf0)]:
+  - effect-agent@0.1.0-beta.86
+
 ## 0.1.0-beta.85
 
 ### Minor Changes

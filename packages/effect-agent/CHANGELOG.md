@@ -1,5 +1,29 @@
 # effect-agent
 
+## 0.1.0-beta.86
+
+### Minor Changes
+
+- [#466](https://github.com/danieljvdm/effect-agent/pull/466) [`6560df2`](https://github.com/danieljvdm/effect-agent/commit/6560df20d900627d28d745ea11e9759774bb9cf0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Consolidate agent definitions, execution, capabilities, and sandbox contracts into `effect-agent`, and use kebab-case public module paths across framework packages.
+
+  BEHAVIOR CHANGE: Replace `@effect-agent/core`, `@effect-agent/engine`, `@effect-agent/capabilities`, and `@effect-agent/sandbox` dependencies with `effect-agent`; migrate direct imports such as `effect-agent/AgentRuntime` to `effect-agent/agent-runtime` and upgrade framework packages together.
+
+- [#466](https://github.com/danieljvdm/effect-agent/pull/466) [`6560df2`](https://github.com/danieljvdm/effect-agent/commit/6560df20d900627d28d745ea11e9759774bb9cf0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Fold `@effect-agent/thread` into `effect-agent` and expose the in-memory conversation model through the `Thread` namespace. Keep database drivers and platform hosts in their adapter packages.
+
+  BEHAVIOR CHANGE: Replace `@effect-agent/thread/*` imports with `effect-agent/*` and remove the old dependency. Use `Thread.Store`, `Thread.Thread`, `Thread.layerMemory`, and `Thread.toPrompt` in place of the `EphemeralThreads` module; import `PersistentHistory` from the package root for `PersistentHistory.layer`. Stored formats and service identities are unchanged.
+
+### Patch Changes
+
+- [#467](https://github.com/danieljvdm/effect-agent/pull/467) [`1112b1b`](https://github.com/danieljvdm/effect-agent/commit/1112b1bfb388be600c9326737d10608660698ef3) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce the time required to certify durable adapters and run subscription-store conformance.
+
+- [#466](https://github.com/danieljvdm/effect-agent/pull/466) [`6560df2`](https://github.com/danieljvdm/effect-agent/commit/6560df20d900627d28d745ea11e9759774bb9cf0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Run agents and attached subagents with `Ephemeral.layer` for in-memory conversation history, default IDs, and module-level `Subagent.layer` and `ThreadHistory.layer` APIs.
+
+  BEHAVIOR CHANGE: Replace `SubagentRuntime.layer` with `Subagent.layer`.
+
+  BEHAVIOR CHANGE: Remove `IdGenerator` from service requirement unions and omit routine ID Layer provisions; custom generator overrides still work, and explicitly selecting the default uses the module-level `layer` export from `effect-agent/id-generator`.
+
+  BEHAVIOR CHANGE: Replace `ThreadHistory.layerTransient` with `ThreadHistory.layer`; share one application Layer and reuse Thread IDs to retain conversations between Runs. Complete history updates remain after a failed or interrupted Run and are released when the application Scope closes. Custom history adapters must declare `retention` as `"incremental"` or `"on-success"` and return a history owner from `open`.
+
 ## 0.1.0-beta.85
 
 ### Minor Changes
