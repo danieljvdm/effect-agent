@@ -542,8 +542,10 @@ checkpoint integrity, and expiry cleanup. These are required host responsibiliti
 2. The receiving host calls `resume(checkpoint)`. It remains quiesced. An authorized human’s
    takeover calls `handoff(request)` and persists the updated checkpoint, which now includes a
    handoff ID. Only then expose a short-lived `getLiveView(request)` URL to that specific human.
-3. Query `getHandoffState` and require completion before committing Return. Transfer the latest
-   checkpoint and original credential exposure ledger to the continuing worker under a new
+3. Query `getHandoffState` and require completion before committing Return. If the host needs
+   the page’s current origin for its return policy, call `getReturnOrigin`; it reads only the
+   provider’s current top origin after that handoff completes and leaves agent tools paused.
+   Transfer the latest checkpoint and original credential exposure ledger to the continuing worker under a new
    controller generation. Detach the old attachment before resuming another.
 4. Resume with the current worker’s credential authority and call `returnControl`. The provider
    must report the same completed handoff. The host’s `observation` hook must approve current

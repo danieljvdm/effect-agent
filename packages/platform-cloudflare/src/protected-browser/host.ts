@@ -12,6 +12,7 @@ import {
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import {
   type BrowserCredentialAccess,
+  CredentialOrigin,
   ProtectedBrowserCheckpoint,
   ProtectedBrowserError,
   type ProtectedBrowserHandle,
@@ -53,6 +54,8 @@ export interface BrowserRunProtectedSession {
     request: BrowserRunLiveViewRequest,
   ) => Effect.Effect<BrowserRunLiveViewResult, ProtectedBrowserError>;
   readonly getHandoffState: Effect.Effect<BrowserRunHandoffState, ProtectedBrowserError>;
+  /** Read only the exact page’s current origin after its recorded handoff completes; tools remain paused. */
+  readonly getReturnOrigin: Effect.Effect<typeof CredentialOrigin.Type, ProtectedBrowserError>;
   /** Requires provider completion and a renewed observation grant. Tools must observe before acting. */
   readonly returnControl: Effect.Effect<void, ProtectedBrowserError>;
   /** Releases this attachment without terminating the remote browser. Only a committed handoff may detach. */
@@ -293,6 +296,19 @@ export const browserRunProtectedHostLayer = () =>
               }),
             ),
           getHandoffState: control(getHandoffState),
+          getReturnOrigin: control(
+            Effect.gen(function* () {
+              if ((yield* getHandoffState).active) return yield* failure("busy");
+
+              const context = yield* provider.driver.context.pipe(
+                Effect.mapError((error) => failure(error.reason)),
+              );
+
+              return yield* Schema.decodeEffect(CredentialOrigin)(context.topOrigin).pipe(
+                Effect.mapError(() => failure("provider")),
+              );
+            }),
+          ),
           returnControl: control(
             Effect.gen(function* () {
               if ((yield* getHandoffState).active) return yield* failure("busy");
