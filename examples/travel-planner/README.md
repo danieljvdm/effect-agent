@@ -272,6 +272,16 @@ Model selection and the provider's native web-search tool stay at the host bound
 The agent accepts a research toolkit and a provider-independent model Layer.
 The selectable models support native web search. `OPENAI_MODEL` is retained for the previous
 registration so already accepted work can finish with its original model after deployment.
+
+The host temporarily omits `web_search_call.action.sources` from provider requests.
+The pinned `@effect/ai-openai` schema accepts only URL sources, but OpenAI also includes
+[weather, sports, and finance feeds](https://developers.openai.com/api/docs/guides/tools-web-search#sources)
+in that optional inventory, which can fail an otherwise successful research response.
+Native search actions, results, and answer citations remain available; activity omits the
+complete list of consulted sources. This is an application mitigation for an upstream provider
+schema defect. Remove it after adopting a published provider fix for both streaming and
+non-streaming search responses.
+
 Page inspection accepts newly discovered HTTPS websites without a travel-site allowlist,
 including tourism boards, campsites, and independent hotels. URL checks reject IP literals,
 local hostnames, embedded credentials, and custom ports, and also apply to browser redirects

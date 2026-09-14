@@ -2,11 +2,11 @@ import * as Agent from "@effect-agent/core/Agent";
 import { IdGenerator } from "@effect-agent/core/IdGenerator";
 import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
 import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
 import { it } from "@effect/vitest";
 import { ConfigProvider, Effect, Layer, Redacted, Ref, Result, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient, type HttpClient } from "effect/unstable/http";
 import { expect, expectTypeOf } from "vite-plus/test";
 
 import { TripToolsLive } from "../src/agent.ts";
@@ -25,7 +25,12 @@ import {
   type CredentialSource,
 } from "../src/server/credentials.ts";
 import { FailureDiagnostics, type FailureDiagnostic } from "../src/server/diagnostics.ts";
-import { liveModel, observeOpenAi, selectableModel } from "../src/server/models.ts";
+import {
+  credentialClient,
+  liveModel,
+  observeOpenAi,
+  selectableModel,
+} from "../src/server/models.ts";
 // Retain these protocol/legacy-publication regressions against the admitted v5 definition.
 import { previousResponsePlanner as planner } from "../src/server/planner.ts";
 import { PlannerAttempt, ProgressStore } from "../src/server/progress.ts";
@@ -346,6 +351,161 @@ it.effect(
         Layer.Services<ReturnType<typeof selectableModel<never>>>
       >().toEqualTypeOf<PlannerAttempt>();
     }).pipe(Effect.provide(ProgressStore.layer)),
+);
+
+it.effect.each(["streamText", "generateText"] as const)(
+  "keeps native search and citations without requesting the incompatible source inventory (%s)",
+  (method) =>
+    Effect.gen(function* () {
+      const SearchRequest = Schema.Struct({
+        model: Schema.String,
+        include: Schema.Array(Schema.String),
+        stream: Schema.optionalKey(Schema.Boolean),
+        tools: Schema.Array(Schema.Struct({ type: Schema.String })),
+      });
+
+      const requests: Array<typeof SearchRequest.Type> = [];
+      const text = "Check the forecast before running.";
+
+      const citation = {
+        type: "url_citation",
+        url: "https://www.weather.gov/",
+        title: "National Weather Service",
+        start_index: 0,
+        end_index: text.length,
+      };
+
+      const action = { type: "search", query: "Mill Valley trail weather" };
+
+      const fetch: typeof globalThis.fetch = async (_url, init) => {
+        const request = Schema.decodeSync(Schema.fromJsonString(SearchRequest))(
+          await new Response(init?.body).text(),
+        );
+
+        requests.push(request);
+
+        const search = {
+          type: "web_search_call",
+          id: "search-weather",
+          status: "completed",
+          action: {
+            ...action,
+            // OpenAI includes the full inventory only when requested, including live feeds.
+            ...(request.include.includes("web_search_call.action.sources")
+              ? {
+                  sources: [
+                    { type: "url", url: citation.url },
+                    { type: "api", name: "oai-weather" },
+                  ],
+                }
+              : {}),
+          },
+        };
+
+        const message = {
+          type: "message",
+          id: "answer-weather",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text, annotations: [citation] }],
+        };
+
+        const response = {
+          id: "response-weather",
+          object: "response",
+          model: request.model,
+          created_at: 0,
+          output: [search, message],
+        };
+
+        if (!request.stream) return Response.json(response);
+
+        const events = [
+          { type: "response.created", response: { ...response, output: [] } },
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { ...search, status: "in_progress" },
+          },
+          { type: "response.output_item.done", output_index: 0, item: search },
+          {
+            type: "response.output_item.added",
+            output_index: 1,
+            item: { ...message, status: "in_progress", content: [] },
+          },
+          {
+            type: "response.output_text.delta",
+            item_id: message.id,
+            output_index: 1,
+            content_index: 0,
+            delta: text,
+          },
+          {
+            type: "response.output_text.annotation.added",
+            item_id: message.id,
+            output_index: 1,
+            content_index: 0,
+            annotation_index: 0,
+            annotation: citation,
+          },
+          { type: "response.output_item.done", output_index: 1, item: message },
+          { type: "response.completed", response },
+        ];
+
+        return new Response(
+          events
+            .map(
+              (event, sequence_number) =>
+                `data: ${JSON.stringify({ ...event, sequence_number })}\n\n`,
+            )
+            .join(""),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      };
+
+      const client = credentialClient(Effect.succeed(Redacted.make("fake-api-key")));
+
+      const model = OpenAiLanguageModel.model("gpt-5.6-luna", {
+        store: false,
+      }).pipe(
+        Layer.provide(Layer.effect(OpenAiClient.OpenAiClient, client)),
+        Layer.provide(FetchHttpClient.layer),
+      );
+
+      const parts = yield* Effect.gen(function* () {
+        const options = {
+          prompt: "Check trail conditions near Mill Valley.",
+          toolkit: Toolkit.make(OpenAiTool.WebSearch({ search_context_size: "low" })),
+        };
+
+        if (method === "streamText")
+          return yield* LanguageModel.streamText(options).pipe(Stream.runCollect);
+
+        return (yield* LanguageModel.generateText(options)).content;
+      }).pipe(Effect.provide(model), Effect.provideService(FetchHttpClient.Fetch, fetch));
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.include).toEqual(["reasoning.encrypted_content"]);
+      expect(requests[0]?.tools).toEqual([{ type: "web_search" }]);
+      expect(parts.filter((part) => part.type === "tool-call")).toMatchObject([
+        { name: "OpenAiWebSearch", params: { action }, providerExecuted: true },
+      ]);
+      expect(parts.filter((part) => part.type === "tool-result")).toMatchObject([
+        { name: "OpenAiWebSearch", result: { action, status: "completed" }, isFailure: false },
+      ]);
+      expect(parts.filter((part) => part.type === "source")).toMatchObject([
+        { sourceType: "url", url: new URL(citation.url), title: citation.title },
+      ]);
+      expect(
+        parts
+          .flatMap((part) =>
+            part.type === "text-delta" ? [part.delta] : part.type === "text" ? [part.text] : [],
+          )
+          .join(""),
+      ).toBe(text);
+      expectTypeOf<Effect.Error<typeof client>>().toEqualTypeOf<never>();
+      expectTypeOf<Effect.Services<typeof client>>().toEqualTypeOf<HttpClient.HttpClient>();
+    }),
 );
 
 it.effect(

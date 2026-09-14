@@ -148,6 +148,17 @@ const unavailableModel = (error: PlannerError) => {
   );
 };
 
+// The pinned provider accepts only URL sources, but OpenAI also returns live feeds.
+// Omit the optional inventory until upstream supports those sources. Answer citations
+// arrive separately in output-text annotations and remain available.
+const withoutSearchSources = (request: Parameters<OpenAiClient.Service["createResponse"]>[0]) =>
+  request.include === undefined || request.include === null
+    ? request
+    : {
+        ...request,
+        include: request.include.filter((value) => value !== "web_search_call.action.sources"),
+      };
+
 /** Resolve on each HTTP request so removal/rotation also affects running durable workers.
  * Capture required services when constructing the provider adapter, never the resolved key.
  * An already dispatched provider request may finish; subsequent requests still require the account’s own key.
@@ -157,7 +168,7 @@ export const credentialClient = Effect.fn("credentialClient")(function* <R>(
 ) {
   const context = yield* Effect.context<R>();
 
-  return yield* OpenAiClient.make({
+  const client = yield* OpenAiClient.make({
     transformClient: (client) =>
       HttpClient.mapRequestEffect(client, (request) =>
         key.pipe(
@@ -171,6 +182,12 @@ export const credentialClient = Effect.fn("credentialClient")(function* <R>(
           ),
         ),
       ),
+  });
+
+  return OpenAiClient.OpenAiClient.of({
+    ...client,
+    createResponse: (request) => client.createResponse(withoutSearchSources(request)),
+    createResponseStream: (request) => client.createResponseStream(withoutSearchSources(request)),
   });
 });
 
