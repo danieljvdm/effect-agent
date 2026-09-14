@@ -18,7 +18,6 @@ import {
   Tracer,
 } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
-import * as EphemeralThreads from "effect-agent/ephemeral-threads";
 import { RunId, ThreadId } from "effect-agent/identifiers";
 import * as Mcp from "effect-agent/mcp";
 import * as McpClient from "effect-agent/mcp-client";
@@ -44,6 +43,7 @@ import * as Protocol from "effect-agent/remembering-store";
 import { toRunThreadOptions } from "effect-agent/run-hooks";
 import * as Subagent from "effect-agent/subagent";
 import * as Reservations from "effect-agent/subagent-reservations";
+import * as Thread from "effect-agent/thread";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
@@ -115,7 +115,7 @@ const historyCase = Effect.fn("diagnostic.history")(function* (workload: Diagnos
   const progress = yield* DiagnosticProgress;
 
   yield* progress.phase("setup");
-  const threads = yield* EphemeralThreads.EphemeralThreads;
+  const threads = yield* Thread.Store;
   const threadId = ThreadId.make("diagnostic-thread-0");
   const seedRun = RunId.make("diagnostic-seed");
   const runId = RunId.make("diagnostic-operation");
@@ -142,7 +142,7 @@ const historyCase = Effect.fn("diagnostic.history")(function* (workload: Diagnos
   yield* progress.phase("verification");
   yield* check(snapshot.nextSequence === prefix + suffix, "History sequence mismatch");
   yield* check(
-    (yield* encodedPrompt(EphemeralThreads.threadPrompt(snapshot))) === expected,
+    (yield* encodedPrompt(Thread.toPrompt(snapshot))) === expected,
     "History native messages changed",
   );
   yield* check(
@@ -182,7 +182,7 @@ const historyRunCase = Effect.fn("diagnostic.historyRun")(function* (workload: D
   const progress = yield* DiagnosticProgress;
 
   yield* progress.phase("setup");
-  const threads = yield* EphemeralThreads.EphemeralThreads;
+  const threads = yield* Thread.Store;
   const threadId = ThreadId.make("diagnostic-run-thread");
   const runId = RunId.make("diagnostic-run");
   const prefix = historyPrompt(workload.parameters.prefix ?? 256);
@@ -1655,7 +1655,7 @@ export const runCapabilityCase = Effect.fn("diagnostic.runCapabilityCase")(
 
         return yield* memoryRunCase(workload);
       }),
-    ).pipe(Effect.provide(EphemeralThreads.EphemeralThreadsLive));
+    ).pipe(Effect.provide(Thread.layerMemory));
 
     return result;
   },

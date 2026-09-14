@@ -1,5 +1,5 @@
-import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/records";
 import { Schema } from "effect";
+import { CanonicalSequence, ProducerEpoch } from "effect-agent/records";
 
 /** The SQLite file uses a private-development format this adapter cannot read. */
 export class SqliteStorageCompatibilityError extends Schema.TaggedError<SqliteStorageCompatibilityError>()(

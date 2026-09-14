@@ -1,55 +1,3 @@
-import {
-  DurableWorkerBinding,
-  type ResolvedBinding,
-} from "@effect-agent/thread/agent-registration";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  type DurableSubmitFailure,
-  type DurableSubmitOptions,
-  type Receipt,
-} from "@effect-agent/thread/durable-agent-runtime";
-import {
-  DurableRuntimeFailpointError,
-  DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/durable-failpoint";
-import {
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ProducerId,
-  type BatchId,
-} from "@effect-agent/thread/records";
-import { childThreadIdFor } from "@effect-agent/thread/run-journal";
-import {
-  ApprovalDecisionCommand,
-  IdempotencyKey,
-  Principal,
-  ResolutionSafeToRetry,
-  SubmissionLedger,
-  SubmissionLookupById,
-  UnknownResolutionCommand,
-  DEFAULT_OWNERSHIP_LEASE_DURATION,
-  type SubmissionSnapshot,
-} from "@effect-agent/thread/submission-ledger";
-import {
-  type CertificationCaseResult,
-  type CertificationReport,
-  CertificationSweepResult,
-  CertificationTierThreeReport,
-  CertifiedAdapterIdentity,
-  certifyPorts,
-  type CertificationScenario,
-} from "@effect-agent/thread/testing/certification";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
-import { verifyThreadInvariants } from "@effect-agent/thread/thread-invariants";
-import {
-  ThreadExportRequest,
-  ThreadStore,
-  LoadCheckpointRequest,
-} from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import type { Crypto } from "effect";
 import {
   Cause,
@@ -66,6 +14,18 @@ import {
 } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitFailure,
+  type DurableSubmitOptions,
+  type Receipt,
+} from "effect-agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpointError,
+  DurableRuntimeFailpointLocation,
+} from "effect-agent/durable-failpoint";
 import { DurableStep, DurableStepError } from "effect-agent/durable-step";
 import { IdGenerator } from "effect-agent/id-generator";
 import {
@@ -76,10 +36,43 @@ import {
   type AgentId,
   type SubmissionId,
 } from "effect-agent/identifiers";
+import {
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  type BatchId,
+} from "effect-agent/records";
+import { childThreadIdFor } from "effect-agent/run-journal";
 import { RunToolAuthorization } from "effect-agent/run-options";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
+import {
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+  ResolutionSafeToRetry,
+  SubmissionLedger,
+  SubmissionLookupById,
+  UnknownResolutionCommand,
+  DEFAULT_OWNERSHIP_LEASE_DURATION,
+  type SubmissionSnapshot,
+} from "effect-agent/submission-ledger";
+import {
+  type CertificationCaseResult,
+  type CertificationReport,
+  CertificationSweepResult,
+  CertificationTierThreeReport,
+  CertifiedAdapterIdentity,
+  certifyPorts,
+  type CertificationScenario,
+} from "effect-agent/testing/certification";
+import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
+import { verifyThreadInvariants } from "effect-agent/thread-invariants";
+import { ThreadExportRequest, ThreadStore, LoadCheckpointRequest } from "effect-agent/thread-store";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
@@ -194,7 +187,7 @@ export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLoc
   "subagent:after-child-abort-intent",
   // Background workers use retained delivery, source capacity, and child-origin paths absent
   // from these six attached/ordinary scenarios. The before/after creation and completion
-  // boundaries are exercised by packages/thread/test/worker-host.test.ts.
+  // boundaries are exercised by packages/effect-agent/test/durable/worker-host.test.ts.
   "worker:before-source-append",
   "worker:after-source-append",
   "worker:before-origin-append",
@@ -211,7 +204,7 @@ export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLoc
   "worker:before-report-delivery",
   "worker:after-report-delivery",
   // None of the six shapes emits Agent updates. All four boundaries are exercised separately
-  // by packages/thread/test/worker-host.test.ts ("repairs an accepted parent update after ...").
+  // by packages/effect-agent/test/durable/worker-host.test.ts ("repairs an accepted parent update after ...").
   // Node restart/lost-ack coverage is in packages/platform-node/test/worker-updates.test.ts;
   // Cloudflare eviction/alarm recovery is in packages/platform-cloudflare/test/background-workers.test.ts.
   // These suites are not executed by this certification runner; its update rows remain not-triggered.

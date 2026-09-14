@@ -2,6 +2,11 @@ import {
   activityProcessorStoreLayer,
   activityProcessorStoreLayerWithFailpoints,
 } from "@effect-agent/storage-sqlite/sqlite-activity-store";
+import { NodeFileSystem } from "@effect/platform-node";
+import { SqliteClient } from "@effect/sql-sqlite-node";
+import { describe, expect, it } from "@effect/vitest";
+import type { PlatformError } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Result, Schema } from "effect";
 import {
   ActivityBusy,
   ActivityClaimRequest,
@@ -14,13 +19,8 @@ import {
   ActivityStoreError,
   ActivityWorkConflict,
   PreparedActivity,
-} from "@effect-agent/thread/activity-store";
-import { RecordId } from "@effect-agent/thread/records";
-import { NodeFileSystem } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
-import { describe, expect, it } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import { Cause, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Result, Schema } from "effect";
+} from "effect-agent/activity-store";
+import { RecordId } from "effect-agent/records";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 

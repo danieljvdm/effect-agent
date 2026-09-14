@@ -1,18 +1,15 @@
-import {
-  DurableWorkerBinding,
-  type ResolvedBinding,
-} from "@effect-agent/thread/agent-registration";
-import { type DurableSubmitOptions } from "@effect-agent/thread/durable-agent-runtime";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
+import { type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
 import { IdGenerator } from "effect-agent/id-generator";
 import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
+import { DefinitionDigests, Digest } from "effect-agent/records";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
+import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { type Prompt, LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 /**

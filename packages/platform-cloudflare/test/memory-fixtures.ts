@@ -4,7 +4,6 @@ import {
   MemoryRpcError,
   type MemoryOwnerRequest,
 } from "@effect-agent/storage-cloudflare/memory-protocol";
-import { Principal } from "@effect-agent/thread/submission-ledger";
 import { Clock, Deferred, Effect, Layer, Schema } from "effect";
 import * as MemoryNamespace from "effect-agent/memory-namespace";
 import {
@@ -20,6 +19,7 @@ import {
   MemoryWrite,
   type MemoryMutationPoint,
 } from "effect-agent/memory-store";
+import { Principal } from "effect-agent/submission-ledger";
 import { DurableObjectState } from "effect-cf";
 
 export const MemoryProjects = MemoryNamespace.define({

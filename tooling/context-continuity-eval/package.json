@@ -12,7 +12,6 @@
   "dependencies": {
     "@effect-agent/platform-cloudflare": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",
-    "@effect-agent/thread": "workspace:*",
     "@effect/ai-openai": "catalog:",
     "@effect/platform-browser": "catalog:",
     "@effect/platform-node": "catalog:",

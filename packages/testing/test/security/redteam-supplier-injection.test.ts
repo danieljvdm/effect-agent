@@ -17,33 +17,33 @@ import {
   TravelPlannerPhase5ToolkitLayer,
   TravelSupplierReconcilerLayer,
 } from "@effect-agent/testing/travel-planner";
-import {
-  DurableAgentRuntime,
-  DurableApprovalResolver,
-  DurableRuntimeConfig,
-} from "@effect-agent/thread/durable-agent-runtime";
-import { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
-import { runIdForSubmission } from "@effect-agent/thread/run-journal";
-import {
-  ApprovalDecisionCommand,
-  IdempotencyKey,
-  SubmissionLedger,
-  SubmissionLookupById,
-} from "@effect-agent/thread/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
+import {
+  DurableAgentRuntime,
+  DurableApprovalResolver,
+  DurableRuntimeConfig,
+} from "effect-agent/durable-agent-runtime";
 import { ThreadId, ToolCallId, type SubmissionId } from "effect-agent/identifiers";
+import { CanonicalRecordEnvelope } from "effect-agent/records";
 import { Redactor, StructuralRedactorLive } from "effect-agent/redaction";
+import { runIdForSubmission } from "effect-agent/run-journal";
 import {
   type RunApprovalDecision,
   type RunApprovalHook,
   type RunApprovalRequest,
 } from "effect-agent/run-options";
+import {
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  SubmissionLedger,
+  SubmissionLookupById,
+} from "effect-agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
 
 // ---------------------------------------------------------------------------

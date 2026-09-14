@@ -16,7 +16,25 @@ import {
   storageConfigLayer,
   type SqliteStorageInitializationError,
 } from "@effect-agent/storage-sqlite/sqlite-thread-store";
-import { digestJson, EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { SqliteClient } from "@effect/sql-sqlite-node";
+import { describe, expect, it } from "@effect/vitest";
+import type { Crypto, PlatformError } from "effect";
+import {
+  Cause,
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  FileSystem,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
+import { digestJson, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import {
   CanonicalBatch,
   CanonicalRecord,
@@ -32,7 +50,7 @@ import {
   UserInputRecorded,
   type PersistedJson,
   type SettlementOutcome,
-} from "@effect-agent/thread/records";
+} from "effect-agent/records";
 import {
   AdmissionPolicyError,
   SubmissionAdmissionFence,
@@ -78,8 +96,8 @@ import {
   submissionSettlementRecordId,
   type AdmissionResult,
   type OwnershipToken,
-} from "@effect-agent/thread/submission-ledger";
-import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/submission-ledger-conformance";
+} from "effect-agent/submission-ledger";
+import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
 import {
   ThreadMaterialization,
   ThreadStore,
@@ -87,25 +105,7 @@ import {
   FencedAppendRequest,
   FenceRejected,
   type AppendResult,
-} from "@effect-agent/thread/thread-store";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
-import { describe, expect, it } from "@effect/vitest";
-import type { Crypto, PlatformError } from "effect";
-import {
-  Cause,
-  DateTime,
-  Deferred,
-  Effect,
-  Exit,
-  FileSystem,
-  Fiber,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
+} from "effect-agent/thread-store";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { CurrentTransformer } from "effect/unstable/sql/Statement";

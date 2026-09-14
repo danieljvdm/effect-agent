@@ -1,32 +1,25 @@
 import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
-import {
-  compileRegistrations,
-  DurableWorkerBinding,
-} from "@effect-agent/thread/agent-registration";
-import { digestDefinitions } from "@effect-agent/thread/digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
-import {
-  DurableRuntimeFailpointError,
-  type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/durable-failpoint";
-import { DefinitionDigests, DefinitionDigestInput, Digest } from "@effect-agent/thread/records";
-import { childThreadIdFor } from "@effect-agent/thread/run-journal";
-import {
-  ApprovalDecisionCommand,
-  IdempotencyKey,
-  Principal,
-} from "@effect-agent/thread/submission-ledger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import { compileRegistrations, DurableWorkerBinding } from "effect-agent/agent-registration";
+import { digestDefinitions } from "effect-agent/digest";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "effect-agent/durable-failpoint";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { ThreadId, ToolCallId } from "effect-agent/identifiers";
+import { DefinitionDigests, DefinitionDigestInput, Digest } from "effect-agent/records";
+import { childThreadIdFor } from "effect-agent/run-journal";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
+import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));

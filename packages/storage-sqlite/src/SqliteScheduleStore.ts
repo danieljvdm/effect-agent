@@ -1,3 +1,4 @@
+import { Effect, Layer, Result, Schema } from "effect";
 import {
   ScheduleCapacityError,
   ScheduleDueCursor,
@@ -15,13 +16,12 @@ import {
   ScheduleRecord,
   ScheduleStorageError,
   ScheduleStore,
-} from "@effect-agent/thread/schedule";
+} from "effect-agent/schedule";
 import {
   scheduleUsesCapacity,
   applyScheduleChange,
   scheduleDeadline,
-} from "@effect-agent/thread/schedule-transition";
-import { Effect, Layer, Result, Schema } from "effect";
+} from "effect-agent/schedule-transition";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { initializeSqliteJournal } from "./internal/sqlite-journal.ts";

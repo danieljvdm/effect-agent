@@ -1,9 +1,9 @@
 ---
-"@effect-agent/thread": minor
 "@effect-agent/storage-memory": minor
 "@effect-agent/storage-sqlite": minor
 "@effect-agent/storage-cloudflare": minor
 "@effect-agent/testing": minor
+"effect-agent": minor
 ---
 
 Provide canonical thread history to `AgentRuntime.run`, `start`, and `stream` through `PersistentHistory.layer` without admitting durable work. Make checkpoint storage an optional `ThreadStore.checkpoints` capability.

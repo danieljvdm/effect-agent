@@ -7,12 +7,15 @@ import {
 import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
 import { SqliteStorageFailpointLocation } from "@effect-agent/storage-sqlite/sqlite-storage-error";
 import { type SqliteStorageFailpointHandler } from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
-import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/durable-agent-runtime";
+import { Cause, Duration, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { DurableAgentRuntime, type Receipt } from "effect-agent/durable-agent-runtime";
 import {
   DurableRuntimeFailpointLocation,
   type DurableRuntimeFailpointHandler,
-} from "@effect-agent/thread/durable-failpoint";
-import { childThreadIdFor } from "@effect-agent/thread/run-journal";
+} from "effect-agent/durable-failpoint";
+import { type ThreadId } from "effect-agent/identifiers";
+import { childThreadIdFor } from "effect-agent/run-journal";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -22,10 +25,7 @@ import {
   UnknownResolutionCommand,
   type Settlement,
   type SubmissionSnapshot,
-} from "@effect-agent/thread/submission-ledger";
-import { Cause, Duration, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { type ThreadId } from "effect-agent/identifiers";
+} from "effect-agent/submission-ledger";
 import type { Response } from "effect/unstable/ai";
 
 import {

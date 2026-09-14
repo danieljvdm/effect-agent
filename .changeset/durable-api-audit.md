@@ -1,8 +1,8 @@
 ---
-"@effect-agent/thread": minor
 "@effect-agent/platform-node": minor
 "@effect-agent/platform-cloudflare": patch
 "@effect-agent/testing": minor
+"effect-agent": minor
 ---
 
 Enforce durable child tool-call allowances across recovery and distinguish passing checks from complete adapter certification. Rename the custom durable assembly to `layerWithServices` and preserve Node extension-layer construction errors and dependencies.

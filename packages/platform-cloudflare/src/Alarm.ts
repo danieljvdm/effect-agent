@@ -1,15 +1,3 @@
-import { type DurableBindingFailure } from "@effect-agent/thread/agent-registration";
-import {
-  DurableAgentRuntime,
-  type DurableWorkerFailure,
-  type RecoveryReport,
-} from "@effect-agent/thread/durable-agent-runtime";
-import { SubmissionLedger, type SubmissionSnapshot } from "@effect-agent/thread/submission-ledger";
-import {
-  ThreadProjectionMaintenance,
-  drainDue,
-  type ThreadProjectionError,
-} from "@effect-agent/thread/thread-projection-maintenance";
 import {
   Cause,
   Clock,
@@ -27,7 +15,19 @@ import {
   Semaphore,
   Stream,
 } from "effect";
+import { type DurableBindingFailure } from "effect-agent/agent-registration";
+import {
+  DurableAgentRuntime,
+  type DurableWorkerFailure,
+  type RecoveryReport,
+} from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
+import { SubmissionLedger, type SubmissionSnapshot } from "effect-agent/submission-ledger";
+import {
+  ThreadProjectionMaintenance,
+  drainDue,
+  type ThreadProjectionError,
+} from "effect-agent/thread-projection-maintenance";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { DurableObjectContext } from "./CloudflareBindings.ts";

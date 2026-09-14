@@ -16,7 +16,6 @@ import {
   MemoryRpcLimits,
   type MemoryOwnerFailure,
 } from "@effect-agent/storage-cloudflare/memory-protocol";
-import { Principal } from "@effect-agent/thread/submission-ledger";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
 import * as Memory from "effect-agent/memory";
 import * as MemoryNamespace from "effect-agent/memory-namespace";
@@ -37,6 +36,7 @@ import {
   type SemanticMemoryProfile,
 } from "effect-agent/semantic-memory-index";
 import { type SemanticCandidateLimits } from "effect-agent/semantic-memory-revalidation";
+import { Principal } from "effect-agent/submission-ledger";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectState,

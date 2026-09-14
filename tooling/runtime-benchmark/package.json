@@ -10,7 +10,6 @@
   "dependencies": {
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/testing": "workspace:*",
-    "@effect-agent/thread": "workspace:*",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "effect-agent": "workspace:*"

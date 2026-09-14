@@ -10,7 +10,6 @@ import {
   MemoryOwnerResponse,
   type MemoryOwnerFailure,
 } from "@effect-agent/storage-cloudflare/memory-protocol";
-import { Principal } from "@effect-agent/thread/submission-ledger";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Clock, Deferred, Effect, Fiber, Schema } from "effect";
 import type { MemoryDocument } from "effect-agent/memory-store";
@@ -21,6 +20,7 @@ import {
   MemoryStorageError,
   MemoryWriter,
 } from "effect-agent/memory-store";
+import { Principal } from "effect-agent/submission-ledger";
 import { TestClock } from "effect/testing";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 

@@ -1,6 +1,6 @@
-import { RecoverySnapshotRequest, SubmissionLedger } from "@effect-agent/thread/submission-ledger";
-import { ThreadStore, ThreadTailRequest } from "@effect-agent/thread/thread-store";
 import { Clock, Effect, Layer, Option, Schema, Stream } from "effect";
+import { RecoverySnapshotRequest, SubmissionLedger } from "effect-agent/submission-ledger";
+import { ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
 
 import { ThreadPublication, DurableAlarmError } from "../src/Alarm.ts";
 import { DurableObjectContext, ThreadObjectIdentity } from "../src/CloudflareBindings.ts";

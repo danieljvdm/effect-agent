@@ -1,5 +1,5 @@
 ---
-"@effect-agent/thread": patch
+"effect-agent": patch
 ---
 
 Add host-authorized independent allowances for background worker Runs while preserving delegation lineage and bounded attached descendants. Keep joined inputs and replacement Attempts on the same durable allowance.

@@ -2,14 +2,18 @@ import {
   MemorySubmissionLedgerLive,
   memorySubmissionLedgerLayer,
 } from "@effect-agent/storage-memory/memory-submission-ledger";
-import { digestJson } from "@effect-agent/thread/digest";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { digestJson } from "effect-agent/digest";
+import { AgentId, ThreadId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
 import {
   CanonicalSequence,
   DefinitionDigests,
   DeploymentId,
   Digest,
   ProducerId,
-} from "@effect-agent/thread/records";
+} from "effect-agent/records";
 import {
   AdmissionRequest,
   AdmissionPolicyError,
@@ -46,12 +50,8 @@ import {
   WaitingForChildSuspension,
   submissionInputRecordId,
   submissionSettlementId,
-} from "@effect-agent/thread/submission-ledger";
-import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/submission-ledger-conformance";
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-import { AgentId, ThreadId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
+} from "effect-agent/submission-ledger";
+import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
 
 const testLayer = Layer.mergeAll(MemorySubmissionLedgerLive, NodeCrypto.layer);
 

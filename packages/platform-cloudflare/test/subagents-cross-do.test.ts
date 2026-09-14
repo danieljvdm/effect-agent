@@ -5,11 +5,11 @@ import {
   decodePortResponse,
   encodePortRequest,
 } from "@effect-agent/storage-cloudflare/port-protocol";
-import { type Receipt } from "@effect-agent/thread/durable-agent-runtime";
-import { type DurableRuntimeFailpointLocation } from "@effect-agent/thread/durable-failpoint";
-import { AbortCommand, ChildSettledNotification } from "@effect-agent/thread/submission-ledger";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
+import { type Receipt } from "effect-agent/durable-agent-runtime";
+import { type DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
+import { AbortCommand, ChildSettledNotification } from "effect-agent/submission-ledger";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

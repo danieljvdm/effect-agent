@@ -13,7 +13,12 @@ import {
   type DoStorageInitializationError,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
 import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing";
-import { digestJson } from "@effect-agent/thread/digest";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
+import { runInDurableObject } from "cloudflare:test";
+import type { Crypto } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { digestJson } from "effect-agent/digest";
 import {
   AdmissionRequest,
   AdmissionPolicyError,
@@ -32,13 +37,8 @@ import {
   SubmissionLookupByKey,
   IdempotencyKey,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/submission-ledger";
-import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/submission-ledger-conformance";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import { runInDurableObject } from "cloudflare:test";
-import type { Crypto } from "effect";
-import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+} from "effect-agent/submission-ledger";
+import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { CurrentTransformer } from "effect/unstable/sql/Statement";
 import { describe, expect, it } from "vite-plus/test";

@@ -1,13 +1,13 @@
-import { type DurableSubmitAgent } from "@effect-agent/thread/durable-agent-runtime";
-import { PreparedInputAdmission } from "@effect-agent/thread/prepared-input-admission";
-import { PersistedJson } from "@effect-agent/thread/records";
+import { Context, Effect } from "effect";
+import { type DurableSubmitAgent } from "effect-agent/durable-agent-runtime";
+import { type AgentId } from "effect-agent/identifiers";
+import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
+import { PersistedJson } from "effect-agent/records";
 import {
   ScheduledInputRetryable,
   ScheduledInputRefused,
   ScheduleStorageError,
-} from "@effect-agent/thread/schedule";
-import { Context, Effect } from "effect";
-import { type AgentId } from "effect-agent/identifiers";
+} from "effect-agent/schedule";
 
 import { type NodeDurableHost } from "../NodeDurableHost.ts";
 

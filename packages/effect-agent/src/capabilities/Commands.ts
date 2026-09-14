@@ -1,7 +1,7 @@
 import { Effect, Option, Queue, Schema } from "effect";
 
 import { ThreadId, RunId } from "../core/Identifiers.ts";
-import { ThreadText } from "../engine/EphemeralThreads.ts";
+import { ThreadText } from "../core/Thread.ts";
 import { type CommandDrainPolicy } from "../engine/RunOptions.ts";
 
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));

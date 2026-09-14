@@ -1,13 +1,9 @@
+import { Effect, Layer, Schema } from "effect";
 import {
   makeSqlSubscriptionStore,
   SqlSubscriptionTransaction,
-} from "@effect-agent/thread/sql-subscription-store";
-import {
-  SourcePartition,
-  SubscriptionError,
-  SubscriptionStore,
-} from "@effect-agent/thread/subscription";
-import { Effect, Layer, Schema } from "effect";
+} from "effect-agent/sql-subscription-store";
+import { SourcePartition, SubscriptionError, SubscriptionStore } from "effect-agent/subscription";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { initializeSqliteJournal } from "./internal/sqlite-journal.ts";

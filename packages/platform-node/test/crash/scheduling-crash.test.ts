@@ -1,11 +1,5 @@
 import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
 import { NodeScheduling } from "@effect-agent/platform-node/node-scheduling";
-import {
-  ScheduleAuthorizer,
-  ScheduleRecord,
-  defaultSchedulingLimits,
-} from "@effect-agent/thread/schedule";
-import { Scheduling } from "@effect-agent/thread/scheduling";
 import { NodeServices } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
@@ -21,6 +15,8 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { ScheduleAuthorizer, ScheduleRecord, defaultSchedulingLimits } from "effect-agent/schedule";
+import { Scheduling } from "effect-agent/scheduling";
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 

@@ -9,15 +9,12 @@ import {
   SubscriptionPartitionNamespace,
   type SubscriptionPartitionObjectRpc,
 } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
-import { type EventSources } from "@effect-agent/thread/event-source";
-import { Principal } from "@effect-agent/thread/submission-ledger";
-import {
-  type SourcePartition,
-  type SubscriptionAuthorizer,
-} from "@effect-agent/thread/subscription";
-import { type SubscriptionInputBindings } from "@effect-agent/thread/subscription-input";
-import { SubscriptionIntake, Subscriptions } from "@effect-agent/thread/subscriptions";
 import { Effect, Layer, Schema } from "effect";
+import { type EventSources } from "effect-agent/event-source";
+import { Principal } from "effect-agent/submission-ledger";
+import { type SourcePartition, type SubscriptionAuthorizer } from "effect-agent/subscription";
+import { type SubscriptionInputBindings } from "effect-agent/subscription-input";
+import { SubscriptionIntake, Subscriptions } from "effect-agent/subscriptions";
 import type { DurableObjectState, WorkerEnvironment } from "effect-cf";
 
 /**

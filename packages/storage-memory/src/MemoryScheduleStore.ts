@@ -1,3 +1,4 @@
+import { Effect, Layer, Ref, Result, Schema } from "effect";
 import {
   ScheduleCapacityError,
   ScheduleDueCursor,
@@ -12,7 +13,7 @@ import {
   ScheduleRecord,
   ScheduleStorageError,
   ScheduleStore,
-} from "@effect-agent/thread/schedule";
+} from "effect-agent/schedule";
 import {
   scheduleUsesCapacity,
   applyScheduleChange,
@@ -22,8 +23,7 @@ import {
   scheduleKeyString,
   scheduleKeyOf,
   scheduleOwnerKey,
-} from "@effect-agent/thread/schedule-transition";
-import { Effect, Layer, Ref, Result, Schema } from "effect";
+} from "effect-agent/schedule-transition";
 
 interface MemoryScheduleState {
   readonly records: ReadonlyMap<string, string>;

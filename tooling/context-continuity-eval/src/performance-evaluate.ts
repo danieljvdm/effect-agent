@@ -1,7 +1,7 @@
-import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
-import { runIdForSubmission } from "@effect-agent/thread/run-journal";
 import type { Redacted } from "effect";
 import { Clock, Effect, Exit, FileSystem, Path, Schedule, Schema } from "effect";
+import { Receipt } from "effect-agent/durable-agent-runtime";
+import { runIdForSubmission } from "effect-agent/run-journal";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { EvaluationError } from "./contracts.ts";

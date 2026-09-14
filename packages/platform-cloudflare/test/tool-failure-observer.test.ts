@@ -3,11 +3,11 @@ import {
   threadNamespaceLayer,
 } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
 import { toolFailureObserverLayer, type ToolFailureObservation } from "effect-agent/run-options";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";

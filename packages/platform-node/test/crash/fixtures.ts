@@ -1,29 +1,26 @@
 import * as fs from "node:fs";
 
-import {
-  DurableWorkerBinding,
-  type ResolvedBinding,
-} from "@effect-agent/thread/agent-registration";
-import { Receipt, type DurableSubmitOptions } from "@effect-agent/thread/durable-agent-runtime";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
-import { IdempotencyKey, Principal, Settlement } from "@effect-agent/thread/submission-ledger";
+import { Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
+import { Receipt, type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
+import { IdGenerator } from "effect-agent/id-generator";
+import { ThreadId, RunId, ToolCallId, TurnId } from "effect-agent/identifiers";
+import { DefinitionDigests, Digest } from "effect-agent/records";
+import { RunContextPreparation } from "effect-agent/run-options";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
+import { IdempotencyKey, Principal, Settlement } from "effect-agent/submission-ledger";
 import {
   ReconciliationCompleted,
   ReconciliationNeverStarted,
   ReconciliationSafeToRetry,
   ReconciliationUncertain,
   ToolReconciler,
-} from "@effect-agent/thread/tool-reconciler";
-import { Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, ToolCallId, TurnId } from "effect-agent/identifiers";
-import { RunContextPreparation } from "effect-agent/run-options";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
+} from "effect-agent/tool-reconciler";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 /**

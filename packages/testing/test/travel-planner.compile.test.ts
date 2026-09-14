@@ -11,7 +11,6 @@ import {
   type TravelPlannerToolkit,
 } from "@effect-agent/testing/travel-planner";
 import { phase1Trip, TravelPlanner } from "@effect-agent/testing/travel-planner";
-import { type DurableWorkerRequirements } from "@effect-agent/thread/durable-agent-runtime";
 import { Context, Effect, Layer, Schema, SchemaGetter, Scope, type Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import {
@@ -35,6 +34,7 @@ import {
   type DetachedRun,
 } from "effect-agent/agent-runtime";
 import { type CompactionError } from "effect-agent/context-compactor";
+import { type DurableWorkerRequirements } from "effect-agent/durable-agent-runtime";
 import { type MemoryRecallError } from "effect-agent/memory-reference";
 import { type RunEvent } from "effect-agent/run-event";
 import { RunContextPreparationPassthrough, type RunOptions } from "effect-agent/run-options";

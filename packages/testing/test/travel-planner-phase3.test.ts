@@ -8,13 +8,16 @@ import {
   phase3TravelPlannerEncodedFixture,
   travelPlanFromProjection,
 } from "@effect-agent/testing/travel-planner";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
-import { CanonicalBatch, CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/records";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
+import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { CanonicalBatch, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
 import {
   ThreadProjection,
   replayThread,
   replayThreadFromCheckpoint,
-} from "@effect-agent/thread/thread-projection";
+} from "effect-agent/thread-projection";
 import {
   ThreadExport,
   ThreadExportRequest,
@@ -25,10 +28,7 @@ import {
   FencedAppendRequest,
   LoadCheckpointRequest,
   SaveCheckpointRequest,
-} from "@effect-agent/thread/thread-store";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
+} from "effect-agent/thread-store";
 
 const producerEpoch = Schema.decodeSync(ProducerEpoch)(1);
 const initialSequence = Schema.decodeSync(CanonicalSequence)(0);

@@ -1,8 +1,8 @@
 ---
-"@effect-agent/thread": minor
 "@effect-agent/storage-cloudflare": patch
 "@effect-agent/storage-memory": patch
 "@effect-agent/storage-sqlite": patch
+"effect-agent": minor
 ---
 
 Require every failed canonical `SubmissionSettled` record to carry the exact bounded generic

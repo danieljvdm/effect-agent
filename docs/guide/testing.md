@@ -39,7 +39,7 @@ Specialized helpers have separate paths:
 These paths ship JavaScript and declarations. Install the storage and runtime adapters used by
 your tests directly.
 
-Mutable failpoint controls live in `@effect-agent/thread/testing/durable-failpoint-test-control`,
+Mutable failpoint controls live in `effect-agent/testing/durable-failpoint-test-control`,
 `@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing`, and
 `@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing`. Their
 `.layer` values provide the production failpoint service and mutable test control over one Ref.

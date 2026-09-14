@@ -13,14 +13,14 @@ import {
 } from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
 import { makeSubscriptionPartitionObjectClass } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
-import { OperationDenied } from "@effect-agent/thread/operation-authorizer";
-import { ScheduleAuthorizer, ScheduleFailpoint } from "@effect-agent/thread/schedule";
 import { Clock, Config, Context, Crypto, Effect, Layer, Schema } from "effect";
 import * as Agent from "effect-agent/agent";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { RecalledMemory } from "effect-agent/memory";
 import { MemoryLookup } from "effect-agent/memory-reference";
 import { MemoryWrite, MemoryDocument } from "effect-agent/memory-store";
+import { OperationDenied } from "effect-agent/operation-authorizer";
+import { ScheduleAuthorizer, ScheduleFailpoint } from "effect-agent/schedule";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
 import { OtlpExporter } from "effect/unstable/observability";
 

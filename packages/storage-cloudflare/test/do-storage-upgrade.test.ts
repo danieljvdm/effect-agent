@@ -1,19 +1,19 @@
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
+import { Effect, Exit, Layer } from "effect";
 import {
   ScheduleFailpoint,
   ScheduleFailpointError,
   ScheduleStorageError,
   ScheduleStore,
-} from "@effect-agent/thread/schedule";
-import { SubmissionLedger } from "@effect-agent/thread/submission-ledger";
+} from "effect-agent/schedule";
+import { SubmissionLedger } from "effect-agent/submission-ledger";
 import {
   SubscriptionError,
   SubscriptionFailpoint,
   SubscriptionFailpointError,
   SubscriptionStore,
-} from "@effect-agent/thread/subscription";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Effect, Exit, Layer } from "effect";
+} from "effect-agent/subscription";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 

@@ -3,30 +3,6 @@ import { fileURLToPath } from "node:url";
 
 import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
 import { ScriptedModel } from "@effect-agent/testing/scripted-model";
-import { digestJson } from "@effect-agent/thread/digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
-import {
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ProducerId,
-  RecordEnvelope,
-  SubmissionSettledRecord,
-} from "@effect-agent/thread/records";
-import {
-  AdmissionRequest,
-  ClaimRequest,
-  IdempotencyKey,
-  MarkReadyRequest,
-  Principal,
-  SettlementFinalization,
-  SettlementReservation,
-  SubmissionLedger,
-  submissionSettlementId,
-  submissionSettlementRecordId,
-} from "@effect-agent/thread/submission-ledger";
-import type { Settlement } from "@effect-agent/thread/submission-ledger";
-import type { SubmissionStatus } from "@effect-agent/thread/submission-status";
 import {
   Clock,
   Context,
@@ -40,7 +16,31 @@ import {
 } from "effect";
 import { Agent } from "effect-agent";
 import { ContextCompactor } from "effect-agent/context-compactor";
+import { digestJson } from "effect-agent/digest";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { AgentId, ThreadId } from "effect-agent/identifiers";
+import {
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  RecordEnvelope,
+  SubmissionSettledRecord,
+} from "effect-agent/records";
+import {
+  AdmissionRequest,
+  ClaimRequest,
+  IdempotencyKey,
+  MarkReadyRequest,
+  Principal,
+  SettlementFinalization,
+  SettlementReservation,
+  SubmissionLedger,
+  submissionSettlementId,
+  submissionSettlementRecordId,
+} from "effect-agent/submission-ledger";
+import type { Settlement } from "effect-agent/submission-ledger";
+import type { SubmissionStatus } from "effect-agent/submission-status";
 import { Model, Toolkit } from "effect/unstable/ai";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { SqlClient } from "effect/unstable/sql/SqlClient";

@@ -1,5 +1,5 @@
 ---
-"@effect-agent/thread": patch
+"effect-agent": patch
 ---
 
 Distinguish durably retained worker input from storage failures with `WorkerError` reason `delivery-pending`. Treat this outcome as pending delivery, preserve the original idempotency key, and wait for a Receipt before reporting destination acceptance.

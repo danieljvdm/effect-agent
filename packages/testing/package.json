@@ -33,7 +33,6 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/thread": "workspace:*",
     "effect-agent": "workspace:*"
   },
   "devDependencies": {

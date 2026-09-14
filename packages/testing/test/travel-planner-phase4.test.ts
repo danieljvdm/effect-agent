@@ -15,15 +15,17 @@ import {
   phase4TravelPlannerWorkerLayer,
   travelPlanFromDurableSettlement,
 } from "@effect-agent/testing/travel-planner";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-} from "@effect-agent/thread/durable-agent-runtime";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import type { PlatformError } from "effect";
+import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
 import {
   DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
-} from "@effect-agent/thread/durable-failpoint";
-import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
+} from "effect-agent/durable-failpoint";
+import { ThreadId, type SubmissionId } from "effect-agent/identifiers";
+import { ProducerId, type CanonicalRecordEnvelope } from "effect-agent/records";
 import {
   AbortCommand,
   ClaimRequest,
@@ -32,15 +34,10 @@ import {
   ReleaseOwnershipRequest,
   SubmissionLedger,
   SubmissionLookupById,
-} from "@effect-agent/thread/submission-ledger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
-import { ThreadId, type SubmissionId } from "effect-agent/identifiers";
+} from "effect-agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 
 const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);

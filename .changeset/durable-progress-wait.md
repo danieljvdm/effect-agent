@@ -1,6 +1,6 @@
 ---
-"@effect-agent/thread": minor
 "@effect-agent/platform-cloudflare": minor
+"effect-agent": minor
 ---
 
 Add the Effect-native durable progress wait from #94. Runtime and Cloudflare callers now subscribe

@@ -99,7 +99,6 @@ const packageNames = [
   "platform-node",
   "pr-review",
   "sandbox-local",
-  "thread",
   "storage-cloudflare",
   "storage-memory",
   "storage-sqlite",
@@ -129,7 +128,6 @@ const effectTestPackageNames = [
   "platform-node",
   "pr-review",
   "sandbox-local",
-  "thread",
   "storage-cloudflare",
   "storage-memory",
   "storage-sqlite",
@@ -143,7 +141,6 @@ const productionPackageNames = [
   "platform-node",
   "pr-review",
   "sandbox-local",
-  "thread",
   "storage-cloudflare",
   "storage-memory",
   "storage-sqlite",
@@ -171,7 +168,6 @@ const platformCloudflareProviderDependencies = new Set(["@cloudflare/puppeteer"]
 const inwardPackageNames = [
   "effect-agent",
   "sandbox-local",
-  "thread",
   "storage-memory",
   "storage-sqlite",
   "workflow",
@@ -206,16 +202,15 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
  */
 const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
   "effect-agent": [],
-  "platform-cloudflare": ["effect-agent", "thread", "storage-cloudflare", "testing"],
-  "platform-node": ["effect-agent", "thread", "storage-sqlite", "workflow"],
+  "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
+  "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
   "pr-review": ["effect-agent"],
   "sandbox-local": ["effect-agent"],
-  thread: ["effect-agent"],
-  "storage-cloudflare": ["effect-agent", "thread", "testing"],
-  "storage-memory": ["effect-agent", "thread"],
-  "storage-sqlite": ["effect-agent", "thread"],
-  workflow: ["effect-agent", "thread", "storage-memory"],
-  testing: ["effect-agent", "platform-node", "thread", "storage-memory", "storage-sqlite"],
+  "storage-cloudflare": ["effect-agent", "testing"],
+  "storage-memory": ["effect-agent"],
+  "storage-sqlite": ["effect-agent"],
+  workflow: ["effect-agent", "storage-memory"],
+  testing: ["effect-agent", "platform-node", "storage-memory", "storage-sqlite"],
 };
 
 const readManifest = (path: string) =>
@@ -1360,8 +1355,8 @@ esac
       }
       expect(visited.size).toBeGreaterThan(1);
       // Library development still exercises source through explicit workspace: dependencies.
-      expect(createRequire(import.meta.url).resolve("@effect-agent/thread")).toBe(
-        `${repositoryRoot}/packages/thread/src/index.ts`,
+      expect(createRequire(import.meta.url).resolve("effect-agent")).toBe(
+        `${repositoryRoot}/packages/effect-agent/src/index.ts`,
       );
     }),
   );

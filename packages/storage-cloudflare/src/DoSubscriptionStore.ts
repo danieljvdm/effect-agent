@@ -1,17 +1,17 @@
-import { upgradeV2Subscriptions } from "@effect-agent/thread/sql-storage-v2-upgrade";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { Context, Effect, Layer, Schema } from "effect";
+import { upgradeV2Subscriptions } from "effect-agent/sql-storage-v2-upgrade";
 import {
   makeSqlSubscriptionStore,
   SqlSubscriptionTransaction,
-} from "@effect-agent/thread/sql-subscription-store";
+} from "effect-agent/sql-subscription-store";
 import {
   SourcePartition,
   SubscriptionError,
   SubscriptionFailpoint,
   type SubscriptionFailpointError,
   SubscriptionStore,
-} from "@effect-agent/thread/subscription";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { Context, Effect, Layer, Schema } from "effect";
+} from "effect-agent/subscription";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 

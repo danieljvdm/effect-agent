@@ -1,11 +1,14 @@
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-} from "@effect-agent/thread/durable-agent-runtime";
-import { DurableRuntimeFailpoint } from "@effect-agent/thread/durable-failpoint";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, it } from "@effect/vitest";
+import { Array, Cause, DateTime, Effect, Exit, Layer, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
+import { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
+import { RunId, ThreadId } from "effect-agent/identifiers";
 import {
   BatchId,
   CanonicalBatch,
@@ -22,13 +25,14 @@ import {
   RecordId,
   RepairAnnotated,
   ThreadCreated,
-} from "@effect-agent/thread/records";
+} from "effect-agent/records";
+import { RunToolAuthorization } from "effect-agent/run-options";
 import {
   IdempotencyKey,
   Principal,
   RecoverySnapshotRequest,
   SubmissionLedger,
-} from "@effect-agent/thread/submission-ledger";
+} from "effect-agent/submission-ledger";
 import {
   FencedAppendRequest,
   ThreadMaterialization,
@@ -36,16 +40,9 @@ import {
   ThreadStoreError,
   ThreadTailRequest,
   type ThreadRead,
-} from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, it } from "@effect/vitest";
-import { Array, Cause, DateTime, Effect, Exit, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { RunId, ThreadId } from "effect-agent/identifiers";
-import { RunToolAuthorization } from "effect-agent/run-options";
+} from "effect-agent/thread-store";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/unstable/ai";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));

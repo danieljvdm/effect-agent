@@ -14,37 +14,21 @@ import {
   storageFailpointLayer,
   type SqliteStorageInitializationError,
 } from "@effect-agent/storage-sqlite/sqlite-thread-store";
-import {
-  type AgentRegistration,
-  type ResolvedBinding,
-} from "@effect-agent/thread/agent-registration";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-} from "@effect-agent/thread/durable-agent-runtime";
-import {
-  DurableRuntimeFailpoint,
-  type DurableRuntimeFailpointHandler,
-} from "@effect-agent/thread/durable-failpoint";
-import {
-  type MessageDeliveryError,
-  type MessageDeliveryStore,
-} from "@effect-agent/thread/message-delivery";
-import { DeploymentId, ProducerId } from "@effect-agent/thread/records";
-import { type ScheduleStore } from "@effect-agent/thread/schedule";
-import {
-  DEFAULT_OWNERSHIP_LEASE_DURATION,
-  ReleaseOwnershipRequest,
-  SubmissionLedger,
-  type OwnershipToken,
-} from "@effect-agent/thread/submission-ledger";
-import { type ThreadStore } from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { type WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Context, type Crypto, Duration, Effect, Layer, Ref, Schema } from "effect";
+import { type AgentRegistration, type ResolvedBinding } from "effect-agent/agent-registration";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpoint,
+  type DurableRuntimeFailpointHandler,
+} from "effect-agent/durable-failpoint";
 import { type SubmissionId } from "effect-agent/identifiers";
+import {
+  type MessageDeliveryError,
+  type MessageDeliveryStore,
+} from "effect-agent/message-delivery";
+import { DeploymentId, ProducerId } from "effect-agent/records";
 import {
   CurrentToolFailureObserver,
   RunContextPreparationPassthrough,
@@ -54,6 +38,16 @@ import {
   type RunCostEstimator,
   type RunToolFailureObserver,
 } from "effect-agent/run-options";
+import { type ScheduleStore } from "effect-agent/schedule";
+import {
+  DEFAULT_OWNERSHIP_LEASE_DURATION,
+  ReleaseOwnershipRequest,
+  SubmissionLedger,
+  type OwnershipToken,
+} from "effect-agent/submission-ledger";
+import { type ThreadStore } from "effect-agent/thread-store";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { type WakeScheduler } from "effect-agent/wake-scheduler";
 import type * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { NodeWakeSchedulerConfig, nodeWakeSchedulerLayer } from "./NodeWakeScheduler.ts";

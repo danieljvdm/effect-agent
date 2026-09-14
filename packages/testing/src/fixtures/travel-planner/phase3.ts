@@ -1,3 +1,5 @@
+import { Effect, Schema } from "effect";
+import { AgentId, ThreadId, RunId, SubmissionId } from "effect-agent/identifiers";
 import {
   BatchId,
   CanonicalBatch,
@@ -7,11 +9,9 @@ import {
   ProducerId,
   RecordEnvelope,
   RecordId,
-} from "@effect-agent/thread/records";
-import { ThreadProjection } from "@effect-agent/thread/thread-projection";
-import { ThreadCheckpoint } from "@effect-agent/thread/thread-store";
-import { Effect, Schema } from "effect";
-import { AgentId, ThreadId, RunId, SubmissionId } from "effect-agent/identifiers";
+} from "effect-agent/records";
+import { ThreadProjection } from "effect-agent/thread-projection";
+import { ThreadCheckpoint } from "effect-agent/thread-store";
 
 import { TravelPlan, TripRequest } from "./definition.ts";
 import { expectedTravelPlan, phase1Trip } from "./scenarios.ts";

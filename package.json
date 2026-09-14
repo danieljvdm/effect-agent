@@ -35,7 +35,6 @@
     "@effect-agent/storage-memory": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
     "@effect-agent/testing": "workspace:*",
-    "@effect-agent/thread": "workspace:*",
     "@effect-agent/workflow": "workspace:*",
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",

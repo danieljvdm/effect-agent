@@ -7,13 +7,13 @@ import {
   MemoryOwnerIdentity,
   MemoryRpcError,
 } from "@effect-agent/storage-cloudflare/memory-protocol";
-import { Principal } from "@effect-agent/thread/submission-ledger";
 import { Effect, Layer, Schema } from "effect";
 import * as MemoryNamespace from "effect-agent/memory-namespace";
 import { type MemoryLookup, type MemoryRecallLimits } from "effect-agent/memory-reference";
 import { MemoryAccess } from "effect-agent/memory-revalidation";
 import { type MemoryWrite } from "effect-agent/memory-store";
 import { MemoryKey, MemoryScope } from "effect-agent/memory-store";
+import { Principal } from "effect-agent/submission-ledger";
 
 export const Projects = MemoryNamespace.define({
   name: "application/projects",

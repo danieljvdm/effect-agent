@@ -1,12 +1,12 @@
 import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
-import { digestDefinitions } from "@effect-agent/thread/digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
-import { DefinitionDigestInput } from "@effect-agent/thread/records";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
 import { Context, Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import { digestDefinitions } from "effect-agent/digest";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { DefinitionDigestInput } from "effect-agent/records";
+import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { DurableObject } from "effect-cf";
 import {
   LanguageModel,

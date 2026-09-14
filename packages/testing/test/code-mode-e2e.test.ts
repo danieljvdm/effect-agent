@@ -1,16 +1,6 @@
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { inProcessCodeExecutorLayer } from "@effect-agent/testing/code-executor-substitute";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-} from "@effect-agent/thread/durable-agent-runtime";
-import { DurableRuntimeFailpoint } from "@effect-agent/thread/durable-failpoint";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/records";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Layer, Logger, Ref, References, Schema, Stream } from "effect";
@@ -18,15 +8,22 @@ import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import * as CodeMode from "effect-agent/code-mode";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
+import { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { IdGenerator } from "effect-agent/id-generator";
 import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
 import {
   RunContextPreparationPassthrough,
   toolFailureObserverLayer,
   type ToolFailureObservation,
 } from "effect-agent/run-options";
+import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { ThreadHistory } from "effect-agent/thread-history";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import {

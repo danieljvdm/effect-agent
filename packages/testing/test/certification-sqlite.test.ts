@@ -10,17 +10,14 @@ import {
   certifyDurableAdapters,
   tier2NeverFiredLocations,
 } from "@effect-agent/testing/certification";
-import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/durable-failpoint";
-import {
-  CertificationCaseResult,
-  CertificationReport,
-} from "@effect-agent/thread/testing/certification";
-import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/submission-ledger-conformance";
-import { threadStoreConformanceCases } from "@effect-agent/thread/testing/thread-store-conformance";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Schema } from "effect";
+import { DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
+import { CertificationCaseResult, CertificationReport } from "effect-agent/testing/certification";
+import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
+import { threadStoreConformanceCases } from "effect-agent/testing/thread-store-conformance";
 
 import { maybeWriteReport } from "./certification-report-io.ts";
 

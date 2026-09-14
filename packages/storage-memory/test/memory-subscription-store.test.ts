@@ -1,10 +1,10 @@
 import { memorySubscriptionStoreLayer } from "@effect-agent/storage-memory/memory-subscription-store";
+import { describe, it } from "@effect/vitest";
+import { Effect } from "effect";
 import {
   subscriptionConformancePartition,
   subscriptionStoreConformanceCases,
-} from "@effect-agent/thread/testing/subscription-store-conformance";
-import { describe, it } from "@effect/vitest";
-import { Effect } from "effect";
+} from "effect-agent/testing/subscription-store-conformance";
 
 describe("MemorySubscriptionStore", () => {
   for (const testCase of subscriptionStoreConformanceCases) {

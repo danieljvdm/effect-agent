@@ -1,9 +1,3 @@
-import {
-  SqlMemoryLimits,
-  memoryReaderLayer,
-  memoryStoreLayer,
-  memoryStoreLayerWithFailpoints,
-} from "@effect-agent/thread/sql-memory-store";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -34,6 +28,12 @@ import {
   MemoryWrite,
   MemoryWriter,
 } from "effect-agent/memory-store";
+import {
+  SqlMemoryLimits,
+  memoryReaderLayer,
+  memoryStoreLayer,
+  memoryStoreLayerWithFailpoints,
+} from "effect-agent/sql-memory-store";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 

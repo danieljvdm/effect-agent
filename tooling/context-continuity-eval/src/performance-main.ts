@@ -1,4 +1,3 @@
-import { digestJson } from "@effect-agent/thread/digest";
 import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import {
   Clock,
@@ -15,6 +14,7 @@ import {
   Schedule,
   Schema,
 } from "effect";
+import { digestJson } from "effect-agent/digest";
 import { Command, Flag } from "effect/unstable/cli";
 import {
   FetchHttpClient,

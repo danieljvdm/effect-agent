@@ -1,65 +1,5 @@
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import { DurableWorkerBinding } from "@effect-agent/thread/agent-registration";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  Receipt,
-  recoveryRepairRecordId,
-  type DurableSubmitOptions,
-} from "@effect-agent/thread/durable-agent-runtime";
-import {
-  DurableRuntimeFailpointError,
-  type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/durable-failpoint";
-import {
-  BatchId,
-  CanonicalRecordEnvelope,
-  CanonicalSequence,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ModelResponseRecorded,
-  ObservationOffset,
-  PersistedJson,
-  ProducerId,
-  RecordEnvelope,
-  RunCompleted,
-} from "@effect-agent/thread/records";
-import {
-  modelResponseRecordId,
-  projectRunJournal,
-  promptFromCanonicalRecords,
-  runCompletedRecordId,
-  runIdForSubmission,
-  runStartedRecordId,
-  toolCallSettledRecordId,
-  turnCanonicalBatch,
-  turnIdForRun,
-} from "@effect-agent/thread/run-journal";
-import {
-  AbortCommand,
-  ApprovalDecisionCommand,
-  IdempotencyKey,
-  Principal,
-  QueueSequence,
-  RecoverySnapshotRequest,
-  ResolutionCompletedWithResult,
-  UnknownResolutionCommand,
-  Settlement,
-  SubmissionLedger,
-  SubmissionLookupById,
-  SubmissionLookupByKey,
-  submissionInputRecordId,
-  submissionSettlementRecordId,
-  type AdmissionConflict,
-  type SettlementConflict,
-} from "@effect-agent/thread/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
-import { replayThread } from "@effect-agent/thread/thread-projection";
-import { ThreadRead, ThreadStore, type FenceRejected } from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler, makeWakeSubscriptionHub } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, layer } from "@effect/vitest";
 import {
@@ -79,6 +19,7 @@ import {
 } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
+import { DurableWorkerBinding } from "effect-agent/agent-registration";
 import {
   COMPACTION_SUMMARY_PREFIX,
   CONTEXT_ROLLOVER_PREFIX,
@@ -91,10 +32,69 @@ import {
   ContextRolloverTool,
   ContextWindow,
 } from "effect-agent/context-window";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  Receipt,
+  recoveryRepairRecordId,
+  type DurableSubmitOptions,
+} from "effect-agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "effect-agent/durable-failpoint";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { ThreadId, ReceiptId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
+import {
+  BatchId,
+  CanonicalRecordEnvelope,
+  CanonicalSequence,
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ModelResponseRecorded,
+  ObservationOffset,
+  PersistedJson,
+  ProducerId,
+  RecordEnvelope,
+  RunCompleted,
+} from "effect-agent/records";
+import {
+  modelResponseRecordId,
+  projectRunJournal,
+  promptFromCanonicalRecords,
+  runCompletedRecordId,
+  runIdForSubmission,
+  runStartedRecordId,
+  toolCallSettledRecordId,
+  turnCanonicalBatch,
+  turnIdForRun,
+} from "effect-agent/run-journal";
 import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
+import {
+  AbortCommand,
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+  QueueSequence,
+  RecoverySnapshotRequest,
+  ResolutionCompletedWithResult,
+  UnknownResolutionCommand,
+  Settlement,
+  SubmissionLedger,
+  SubmissionLookupById,
+  SubmissionLookupByKey,
+  submissionInputRecordId,
+  submissionSettlementRecordId,
+  type AdmissionConflict,
+  type SettlementConflict,
+} from "effect-agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
+import { replayThread } from "effect-agent/thread-projection";
+import { ThreadRead, ThreadStore, type FenceRejected } from "effect-agent/thread-store";
 import { ToolBroker } from "effect-agent/tool-broker";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler, makeWakeSubscriptionHub } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
 import {
   AiError,

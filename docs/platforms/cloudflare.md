@@ -15,7 +15,7 @@ bun add @effect-agent/platform-cloudflare@beta
 ```
 
 Also install `effect@4.0.0-rc.112`, `effect-cf@^0.40.0`, `effect-agent@beta`,
-`@effect-agent/thread@beta`, and `@effect/ai-openai@4.0.0-rc.112` for the examples below.
+`@effect/ai-openai@4.0.0-rc.112` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
 ## AI Gateway {#ai-gateway}
@@ -104,7 +104,7 @@ Object namespace in the generated `Cloudflare.Env`.
 import { Agent } from "effect-agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { ThreadObject } from "@effect-agent/platform-cloudflare";
-import { DefinitionDigestInput } from "@effect-agent/thread/records";
+import { DefinitionDigestInput } from "effect-agent/records";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Layer, Schema } from "effect";
 import { Toolkit } from "effect/unstable/ai";
@@ -279,8 +279,8 @@ import {
   DurableObjectContext,
   ThreadObjectIdentity,
 } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
-import { ThreadStore } from "@effect-agent/thread/thread-store";
-import { SubmissionLedger } from "@effect-agent/thread/submission-ledger";
+import { ThreadStore } from "effect-agent/thread-store";
+import { SubmissionLedger } from "effect-agent/submission-ledger";
 
 // `makePublication` is an application Effect yielding ThreadPublicationService.
 // It yields the raw LOCAL ThreadStore and SubmissionLedger, native DurableObjectContext,
@@ -321,7 +321,7 @@ retry, and interruption remains interruption. Custom host facts must be committe
 ### Maintain a disposable Thread index
 
 Supply `projection` to `ThreadObject.layer` with a Layer providing
-`ThreadProjectionMaintenance` from `@effect-agent/thread/thread-projection-maintenance`.
+`ThreadProjectionMaintenance` from `effect-agent/thread-projection-maintenance`.
 The Layer receives the raw local `ThreadStore` and the same owner `SqlClient`; additional
 services it provides are exposed by the resulting runtime Layer so Tools can share that index.
 
@@ -376,7 +376,7 @@ import {
   CloudflareMemoryClient,
   type MemoryObjectRpc,
 } from "@effect-agent/platform-cloudflare/cloudflare-memory";
-import { Principal } from "@effect-agent/thread/submission-ledger";
+import { Principal } from "effect-agent/submission-ledger";
 import { Effect, Schema } from "effect";
 
 const Projects = MemoryNamespace.define({

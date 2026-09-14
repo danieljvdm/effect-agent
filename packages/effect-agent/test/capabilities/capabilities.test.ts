@@ -38,17 +38,6 @@ import {
   RunCommandQueueConfig,
   SteeringCommand,
 } from "effect-agent/commands";
-import {
-  ThreadAppend,
-  ThreadEncodingError,
-  ThreadExport,
-  ThreadHistoryDiverged,
-  type ThreadNotFound,
-  ThreadSnapshot,
-  EphemeralThreads,
-  EphemeralThreadsLive,
-  threadPrompt,
-} from "effect-agent/ephemeral-threads";
 import { AgentId, ThreadId, RunId, ToolCallId, TurnId } from "effect-agent/identifiers";
 import {
   connectMcp,
@@ -70,6 +59,17 @@ import {
 import { redactedTranscript, StructuralRedactorLive } from "effect-agent/redaction";
 import { RunStarted, TextDelta } from "effect-agent/run-event";
 import { toRunBudgetHook, toRunThreadOptions, toRunApprovalHook } from "effect-agent/run-hooks";
+import {
+  ThreadAppend,
+  ThreadEncodingError,
+  ThreadExport,
+  ThreadHistoryDiverged,
+  type ThreadNotFound,
+  Thread as ThreadSnapshot,
+  Store as ConversationStore,
+  layerMemory,
+  toPrompt,
+} from "effect-agent/thread";
 import { TestClock } from "effect/testing";
 import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
@@ -121,7 +121,7 @@ describe("capability contracts", () => {
     "keeps one bounded ephemeral thread available to multiple Runs and exports a snapshot",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
 
         yield* threads.create(threadId);
         yield* threads.append(
@@ -150,12 +150,12 @@ describe("capability contracts", () => {
             yield* Schema.encodeEffect(ThreadExport)(exported),
           ),
         ).toEqual(exported);
-      }).pipe(Effect.provide(EphemeralThreadsLive)),
+      }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect("round-trips structured Effect AI Prompt history through the engine adapter", () =>
     Effect.gen(function* () {
-      const threads = yield* EphemeralThreads;
+      const threads = yield* ConversationStore;
 
       yield* threads.create(threadId);
 
@@ -183,7 +183,7 @@ describe("capability contracts", () => {
 
       const threadOptions = toRunThreadOptions(threadId, runId);
 
-      expectTypeOf<Effect.Services<typeof threadOptions>>().toEqualTypeOf<EphemeralThreads>();
+      expectTypeOf<Effect.Services<typeof threadOptions>>().toEqualTypeOf<ConversationStore>();
       expectTypeOf<Effect.Error<typeof threadOptions>>().toEqualTypeOf<ThreadNotFound>();
 
       const options = yield* threadOptions;
@@ -210,15 +210,15 @@ describe("capability contracts", () => {
       if (options.onHistory !== undefined) yield* options.onHistory(extended);
       const snapshot = yield* threads.snapshot(threadId);
 
-      expect(yield* Schema.encodeEffect(Prompt.Prompt)(threadPrompt(snapshot))).toEqual(
+      expect(yield* Schema.encodeEffect(Prompt.Prompt)(toPrompt(snapshot))).toEqual(
         yield* Schema.encodeEffect(Prompt.Prompt)(extended),
       );
-    }).pipe(Effect.provide(EphemeralThreadsLive)),
+    }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect("bounds the aggregate number of process-local threads", () =>
     Effect.gen(function* () {
-      const threads = yield* EphemeralThreads;
+      const threads = yield* ConversationStore;
 
       for (let index = 0; index < 256; index += 1) {
         yield* threads.create(yield* Schema.decodeEffect(ThreadId)(`bounded-${index}`));
@@ -227,12 +227,12 @@ describe("capability contracts", () => {
       const exit = yield* threads.create(overflowId).pipe(Effect.exit);
 
       expect(Exit.isFailure(exit)).toBe(true);
-    }).pipe(Effect.provide(EphemeralThreadsLive)),
+    }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect("commits exactly one of two concurrently recorded diverging histories", () =>
     Effect.gen(function* () {
-      const threads = yield* EphemeralThreads;
+      const threads = yield* ConversationStore;
 
       yield* threads.create(threadId);
 
@@ -242,7 +242,7 @@ describe("capability contracts", () => {
       );
 
       const extend = (content: string) =>
-        Prompt.fromMessages([...threadPrompt(base).content, textMessage("assistant", content)]);
+        Prompt.fromMessages([...toPrompt(base).content, textMessage("assistant", content)]);
 
       const historyA = extend("suffix A");
       const historyB = extend("suffix B");
@@ -267,15 +267,15 @@ describe("capability contracts", () => {
       const snapshot = yield* threads.snapshot(threadId);
       const winnerHistory = committed[0]?.label === "A" ? historyA : historyB;
 
-      expect(yield* Schema.encodeEffect(Prompt.Prompt)(threadPrompt(snapshot))).toEqual(
+      expect(yield* Schema.encodeEffect(Prompt.Prompt)(toPrompt(snapshot))).toEqual(
         yield* Schema.encodeEffect(Prompt.Prompt)(winnerHistory),
       );
-    }).pipe(Effect.provide(EphemeralThreadsLive)),
+    }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect("commits no suffix message when a recorded history exceeds content bounds", () =>
     Effect.gen(function* () {
-      const threads = yield* EphemeralThreads;
+      const threads = yield* ConversationStore;
 
       yield* threads.create(threadId);
 
@@ -285,7 +285,7 @@ describe("capability contracts", () => {
       );
 
       const oversized = Prompt.fromMessages([
-        ...threadPrompt(base).content,
+        ...toPrompt(base).content,
         textMessage("assistant", "a".repeat(3 * 1024 * 1024)),
         textMessage("assistant", "b".repeat(3 * 1024 * 1024)),
         textMessage("assistant", "not reached"),
@@ -305,14 +305,14 @@ describe("capability contracts", () => {
         observedValue: firstOverflow,
       });
       expect(yield* threads.snapshot(threadId)).toEqual(base);
-    }).pipe(Effect.provide(EphemeralThreadsLive)),
+    }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect(
     "records equal-by-value native histories with one timestamp and contiguous sequences",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
 
         const rich = () => [
           Prompt.userMessage({
@@ -379,19 +379,19 @@ describe("capability contracts", () => {
             (yield* encodedMessageBytes(suffix[0]!)) +
             (yield* encodedMessageBytes(suffix[1]!)),
         );
-        expect(yield* Schema.encodeEffect(Prompt.Prompt)(threadPrompt(snapshot))).toEqual(
+        expect(yield* Schema.encodeEffect(Prompt.Prompt)(toPrompt(snapshot))).toEqual(
           yield* Schema.encodeEffect(Prompt.Prompt)(history),
         );
         expect(yield* threads.recordHistory(threadId, nextRunId, history)).toEqual(snapshot);
         expect(base.messages).toHaveLength(2);
-      }).pipe(Effect.provide(EphemeralThreadsLive)),
+      }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect(
     "rechecks mutable native file data and nested options against current stored values",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
 
         const makeMessage = () => {
           const bytes = new Uint8Array([1, 2, 3]);
@@ -423,9 +423,7 @@ describe("capability contracts", () => {
         original.url.pathname = "/new";
         original.options.provider.value = "new";
         expect(
-          yield* Schema.encodeEffect(Prompt.Prompt)(
-            threadPrompt(yield* threads.snapshot(threadId)),
-          ),
+          yield* Schema.encodeEffect(Prompt.Prompt)(toPrompt(yield* threads.snapshot(threadId))),
         ).toEqual(
           yield* Schema.encodeEffect(Prompt.Prompt)(Prompt.fromMessages([original.message])),
         );
@@ -444,14 +442,14 @@ describe("capability contracts", () => {
 
         expect(snapshot.nextSequence).toBe(2);
         expect(base.messages).toHaveLength(1);
-      }).pipe(Effect.provide(EphemeralThreadsLive)),
+      }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect(
     "validates incoming messages before lookup or divergence and revalidates stored messages",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
         const options = { provider: { value: 0 } };
         const message = Prompt.systemMessage({ content: "official", options });
 
@@ -493,14 +491,14 @@ describe("capability contracts", () => {
         expect(stored).toBeInstanceOf(ThreadEncodingError);
         options.provider.value = 0;
         expect(yield* threads.snapshot(threadId)).toEqual(base);
-      }).pipe(Effect.provide(EphemeralThreadsLive)),
+      }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect(
     "reports the first message-count overflow before byte limits and rolls back the suffix",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
         const small = textMessage("system", "x");
 
         yield* threads.create(threadId);
@@ -536,14 +534,14 @@ describe("capability contracts", () => {
 
         expect(full.nextSequence).toBe(1_024);
         expect(full.contentBytes).toBe(base.contentBytes + (yield* encodedMessageBytes(small)));
-      }).pipe(Effect.provide(EphemeralThreadsLive)),
+      }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect(
     "rolls back store-byte overflow and admits only one concurrent suffix at shared capacity",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
         const mib = 1024 * 1024;
         const overhead = yield* encodedMessageBytes(Prompt.systemMessage({ content: "" }));
 
@@ -613,14 +611,14 @@ describe("capability contracts", () => {
           mib,
         ]);
         expect(snapshots.map((snapshot) => snapshot.nextSequence).sort()).toEqual([0, 1]);
-      }).pipe(Effect.provide(EphemeralThreadsLive)),
+      }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect(
     "releases a failed or interrupted history transaction without publishing its suffix",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
 
         yield* threads.create(threadId);
 
@@ -630,7 +628,7 @@ describe("capability contracts", () => {
         );
 
         const history = Prompt.fromMessages([
-          ...threadPrompt(base).content,
+          ...toPrompt(base).content,
           textMessage("assistant", "suffix"),
         ]);
 
@@ -685,13 +683,13 @@ describe("capability contracts", () => {
 
         expect(committed.nextSequence).toBe(2);
         expect(committed.messages).toHaveLength(2);
-      }).pipe(Effect.provide(EphemeralThreadsLive)),
+      }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect("starts each ephemeral store Scope with fresh thread and byte state", () =>
     Effect.gen(function* () {
       yield* Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
 
         yield* threads.create(threadId);
         yield* threads.recordHistory(
@@ -699,10 +697,10 @@ describe("capability contracts", () => {
           runId,
           Prompt.fromMessages([textMessage("user", "old scope")]),
         );
-      }).pipe(Effect.provide(EphemeralThreadsLive), Effect.scoped);
+      }).pipe(Effect.provide(layerMemory), Effect.scoped);
 
       yield* Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
         const missing = yield* threads.snapshot(threadId).pipe(Effect.flip);
 
         expect(missing._tag).toBe("ThreadNotFound");
@@ -711,7 +709,7 @@ describe("capability contracts", () => {
           contentBytes: 0,
           messages: [],
         });
-      }).pipe(Effect.provide(EphemeralThreadsLive), Effect.scoped);
+      }).pipe(Effect.provide(layerMemory), Effect.scoped);
     }),
   );
 
@@ -719,7 +717,7 @@ describe("capability contracts", () => {
     "rejects an engine history that is not an append-only extension of official history",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
 
         yield* threads.create(threadId);
 
@@ -744,7 +742,7 @@ describe("capability contracts", () => {
         expect(rewrittenError).toBeInstanceOf(ThreadHistoryDiverged);
         expect(truncatedError).toBeInstanceOf(ThreadHistoryDiverged);
         expect(yield* threads.snapshot(threadId)).toEqual(official);
-      }).pipe(Effect.provide(EphemeralThreadsLive)),
+      }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect(
@@ -812,7 +810,7 @@ describe("capability contracts", () => {
     "accounts exact encoded UTF-8 bytes for Unicode and lone-surrogate thread content",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
 
         yield* threads.create(threadId);
         let expectedBytes = 0;
@@ -835,7 +833,7 @@ describe("capability contracts", () => {
           expect(snapshot.messages.at(-1)?.encodedBytes).toBe(messageBytes);
           expect(snapshot.contentBytes).toBe(expectedBytes);
         }
-      }).pipe(Effect.provide(EphemeralThreadsLive)),
+      }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect(
@@ -1727,7 +1725,7 @@ describe("capability contracts", () => {
     "verifies exact compaction digests, preserves a nonzero uncovered prefix, and retains source",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
 
         yield* threads.create(threadId);
         for (const content of ["Original first", "Compact this", "Original last"]) {
@@ -1773,12 +1771,12 @@ describe("capability contracts", () => {
           "Middle message summary.",
           "Original last",
         ]);
-      }).pipe(Effect.provide(Layer.mergeAll(EphemeralThreadsLive, NodeCrypto.layer))),
+      }).pipe(Effect.provide(Layer.mergeAll(layerMemory, NodeCrypto.layer))),
   );
 
   it.effect("keeps transform-synthesized and partially covered model-view messages visible", () =>
     Effect.gen(function* () {
-      const threads = yield* EphemeralThreads;
+      const threads = yield* ConversationStore;
 
       yield* threads.create(threadId);
       for (const content of ["first", "second", "third"]) {
@@ -1836,12 +1834,12 @@ describe("capability contracts", () => {
         "second summarized",
         "third",
       ]);
-    }).pipe(Effect.provide(Layer.mergeAll(EphemeralThreadsLive, NodeCrypto.layer))),
+    }).pipe(Effect.provide(Layer.mergeAll(layerMemory, NodeCrypto.layer))),
   );
 
   it.effect("rejects a compaction artifact whose exact source digest mismatches", () =>
     Effect.gen(function* () {
-      const threads = yield* EphemeralThreads;
+      const threads = yield* ConversationStore;
 
       yield* threads.create(threadId);
 
@@ -1871,12 +1869,12 @@ describe("capability contracts", () => {
       const exit = yield* applyCompaction(context, artifact).pipe(Effect.exit);
 
       expect(Exit.isFailure(exit)).toBe(true);
-    }).pipe(Effect.provide(Layer.mergeAll(EphemeralThreadsLive, NodeCrypto.layer))),
+    }).pipe(Effect.provide(Layer.mergeAll(layerMemory, NodeCrypto.layer))),
   );
 
   it.effect("rejects compaction provenance outside the exact covered source range", () =>
     Effect.gen(function* () {
-      const threads = yield* EphemeralThreads;
+      const threads = yield* ConversationStore;
 
       yield* threads.create(threadId);
       yield* threads.append(threadId, ThreadAppend.make({ message: textMessage("user", "first") }));
@@ -1909,14 +1907,14 @@ describe("capability contracts", () => {
       );
 
       expect(Exit.isFailure(exit)).toBe(true);
-    }).pipe(Effect.provide(Layer.merge(EphemeralThreadsLive, NodeCrypto.layer))),
+    }).pipe(Effect.provide(Layer.merge(layerMemory, NodeCrypto.layer))),
   );
 
   it.effect(
     "retains authoritative source even when a transform replaces the entire model view",
     () =>
       Effect.gen(function* () {
-        const threads = yield* EphemeralThreads;
+        const threads = yield* ConversationStore;
 
         yield* threads.create(threadId);
 
@@ -1938,7 +1936,7 @@ describe("capability contracts", () => {
         expect(context.source.messages[0]?.message).toEqual(
           textMessage("user", "Official history"),
         );
-      }).pipe(Effect.provide(EphemeralThreadsLive)),
+      }).pipe(Effect.provide(layerMemory)),
   );
 
   it.effect("enforces native MCP discovery count and byte contracts", () =>

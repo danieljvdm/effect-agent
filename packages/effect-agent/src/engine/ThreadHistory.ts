@@ -4,11 +4,11 @@ import type { Prompt } from "effect/unstable/ai";
 import { ThreadId, type RunId } from "../core/Identifiers.ts";
 import { type RunCompleted } from "../core/RunEvent.ts";
 import {
-  EphemeralThreads,
-  EphemeralThreadsLive,
-  threadPrompt,
+  Store as ConversationStore,
+  layerMemory,
+  toPrompt,
   type ThreadError,
-} from "./EphemeralThreads.ts";
+} from "../core/Thread.ts";
 
 /** A history adapter rejected a read, staged value, or completed Run commit. */
 export class ThreadHistoryError extends Schema.TaggedError<ThreadHistoryError>()(
@@ -49,7 +49,7 @@ export interface ThreadHistoryRun {
 /**
  * History shared by Runs with the same Thread ID. The default layer retains native messages
  * incrementally in memory for its application Scope, including completed updates before a failure.
- * PersistentHistory.layer from @effect-agent/thread/persistent-history instead commits successful
+ * PersistentHistory.layer from effect-agent/persistent-history instead commits successful
  * Runs to an explicit ThreadStore. Durable hosts retain history through their journal hooks.
  * No implementation may retry model or Tool execution or claim interrupted-work recovery.
  */
@@ -66,13 +66,13 @@ export class ThreadHistory extends Context.Service<
 >()("@effect-agent/engine/ThreadHistory") {
   /**
    * Retain bounded in-memory history across Runs. Provide once around the application so
-   * all Runs share the same store. The underlying EphemeralThreads service is exposed for
+   * all Runs share the same store. The underlying ConversationStore service is exposed for
    * snapshots and interactive hooks; separate Layer builds own separate stores.
    */
   static readonly layer = Layer.effect(
     ThreadHistory,
     Effect.gen(function* () {
-      const threads = yield* EphemeralThreads;
+      const threads = yield* ConversationStore;
 
       const historyError = (cause: ThreadError): ThreadHistoryError =>
         ThreadHistoryError.make({
@@ -97,12 +97,12 @@ export class ThreadHistory extends Context.Service<
       return ThreadHistory.of({
         retention: "incremental",
         load: (threadId) =>
-          threads.snapshot(threadId).pipe(Effect.map(threadPrompt), Effect.mapError(historyError)),
+          threads.snapshot(threadId).pipe(Effect.map(toPrompt), Effect.mapError(historyError)),
         open: Effect.fn("ThreadHistory.open")(function* ({ threadId, runId }) {
           const snapshot = yield* threads.create(threadId).pipe(Effect.mapError(historyError));
 
           return {
-            prompt: threadPrompt(snapshot),
+            prompt: toPrompt(snapshot),
             stageInput: () => Effect.void,
             stageHistory: (history: Prompt.Prompt) =>
               threads
@@ -113,7 +113,7 @@ export class ThreadHistory extends Context.Service<
         }),
       });
     }),
-  ).pipe(Layer.provideMerge(EphemeralThreadsLive));
+  ).pipe(Layer.provideMerge(layerMemory));
 }
 
 /** Retain in-memory conversation history for the application Scope. */

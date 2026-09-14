@@ -1,4 +1,6 @@
-import { digestJson } from "@effect-agent/thread/digest";
+import { env, runInDurableObject } from "cloudflare:test";
+import { DateTime, Effect, Schema } from "effect";
+import { digestJson } from "effect-agent/digest";
 import {
   CanonicalSequence,
   DefinitionDigests,
@@ -11,7 +13,7 @@ import {
   SubmissionSettledRecord,
   type PersistedJson,
   type SettlementOutcome,
-} from "@effect-agent/thread/records";
+} from "effect-agent/records";
 import {
   AdmissionRequest,
   ApprovalDecisionCommand,
@@ -23,9 +25,7 @@ import {
   type AdmissionResult,
   type OwnershipToken,
   type ParentLinkage,
-} from "@effect-agent/thread/submission-ledger";
-import { env, runInDurableObject } from "cloudflare:test";
-import { DateTime, Effect, Schema } from "effect";
+} from "effect-agent/submission-ledger";
 import { TestClock } from "effect/testing";
 
 import type { ThreadStorageObject, ScheduleStorageObject } from "./worker.ts";

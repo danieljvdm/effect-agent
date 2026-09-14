@@ -10,16 +10,16 @@ import {
   type ThreadClientError,
   type HostFailure,
 } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
-import { CanonicalSequence } from "@effect-agent/thread/records";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { describe, expect, it } from "@effect/vitest";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Tracer } from "effect";
+import { Receipt } from "effect-agent/durable-agent-runtime";
+import { CanonicalSequence } from "effect-agent/records";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/submission-ledger";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Tracer } from "effect";
+} from "effect-agent/submission-ledger";
 import { TestClock } from "effect/testing";
 
 import { decodeThreadId, plannerDefinition, submitOptions } from "./fixtures.ts";

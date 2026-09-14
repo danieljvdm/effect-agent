@@ -1,5 +1,5 @@
 ---
-"@effect-agent/thread": patch
+"effect-agent": patch
 ---
 
 Omit empty uncommitted model usage from settlements so uninterrupted completion and crash recovery produce equivalent canonical records.

@@ -1,5 +1,5 @@
-import { MessageDeliveryFailpoint } from "@effect-agent/thread/message-delivery";
 import { Context, Effect, Layer } from "effect";
+import { MessageDeliveryFailpoint } from "effect-agent/message-delivery";
 import { DurableObjectState } from "effect-cf";
 
 /** Harness controls survive Object eviction, like the external fault controller. */

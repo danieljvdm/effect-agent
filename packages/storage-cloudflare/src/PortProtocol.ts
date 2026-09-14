@@ -1,4 +1,5 @@
-import { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
+import { Schema } from "effect";
+import { CanonicalRecordEnvelope } from "effect-agent/records";
 import {
   AbortCommand,
   AbortIntent,
@@ -16,7 +17,7 @@ import {
   SubmissionLookup,
   SubmissionLookupByKey,
   SubmissionSnapshot,
-} from "@effect-agent/thread/submission-ledger";
+} from "effect-agent/submission-ledger";
 import {
   AppendConflict,
   AppendResult,
@@ -30,8 +31,7 @@ import {
   ThreadTailRequest,
   FenceRejected,
   FencedAppendRequest,
-} from "@effect-agent/thread/thread-store";
-import { Schema } from "effect";
+} from "effect-agent/thread-store";
 
 /**
  * The cross-Durable-Object port protocol (plan §1.3, D-P6-3): Schema request/response/error

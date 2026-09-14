@@ -1,27 +1,24 @@
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-} from "@effect-agent/thread/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "@effect-agent/thread/durable-failpoint";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/records";
-import { projectRunJournal, runIdForSubmission } from "@effect-agent/thread/run-journal";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { CLEARED_TOOL_RESULT, CONTEXT_ROLLOVER_PREFIX } from "effect-agent/compaction";
 import { ContextRolloverRequest, ContextRolloverTool } from "effect-agent/context-window";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { ThreadId } from "effect-agent/identifiers";
 import * as Output from "effect-agent/output";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
+import { projectRunJournal, runIdForSubmission } from "effect-agent/run-journal";
 import { RunToolAuthorization } from "effect-agent/run-options";
+import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 const digest = Digest.make("a".repeat(64));

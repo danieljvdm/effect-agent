@@ -1,10 +1,10 @@
 ---
 "@effect-agent/sandbox-local": patch
-"@effect-agent/thread": patch
 "@effect-agent/storage-memory": patch
 "@effect-agent/storage-sqlite": patch
 "@effect-agent/platform-node": patch
 "@effect-agent/testing": patch
+"effect-agent": patch
 ---
 
 Republish with correctly pinned internal dependencies. The 0.0.1-beta.0

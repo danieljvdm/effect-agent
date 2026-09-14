@@ -1,52 +1,5 @@
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import {
-  DurableWorkerBinding,
-  type ResolvedBinding,
-} from "@effect-agent/thread/agent-registration";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  Receipt,
-} from "@effect-agent/thread/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "@effect-agent/thread/durable-failpoint";
-import { OperationAuthorizer, OperationDenied } from "@effect-agent/thread/operation-authorizer";
-import {
-  CanonicalBatch,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ProducerId,
-  RecordEnvelope,
-} from "@effect-agent/thread/records";
-import {
-  projectRunJournal,
-  turnIdForRun,
-  turnResponseBatch,
-} from "@effect-agent/thread/run-journal";
-import {
-  AbortCommand,
-  IdempotencyKey,
-  LedgerError,
-  OwnershipRenewal,
-  OwnershipToken,
-  Principal,
-  QueueSequence,
-  RecoverySnapshotRequest,
-  ReleaseOwnershipRequest,
-  SubmissionLedger,
-} from "@effect-agent/thread/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
-import {
-  ThreadExportRequest,
-  FencedAppendRequest,
-  ThreadTailRequest,
-  ThreadRead,
-  ThreadStore,
-  ThreadStoreError,
-} from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
@@ -67,11 +20,51 @@ import {
 } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
 import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
 import { ModelCallContext } from "effect-agent/context-window";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  Receipt,
+} from "effect-agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
 import { DurableStep, ToolExecutionClass } from "effect-agent/durable-step";
 import { ReceiptId, RunId, ThreadId } from "effect-agent/identifiers";
+import { OperationAuthorizer, OperationDenied } from "effect-agent/operation-authorizer";
+import {
+  CanonicalBatch,
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  RecordEnvelope,
+} from "effect-agent/records";
+import { projectRunJournal, turnIdForRun, turnResponseBatch } from "effect-agent/run-journal";
 import { RunContextPreparation, RunToolAuthorization } from "effect-agent/run-options";
+import {
+  AbortCommand,
+  IdempotencyKey,
+  LedgerError,
+  OwnershipRenewal,
+  OwnershipToken,
+  Principal,
+  QueueSequence,
+  RecoverySnapshotRequest,
+  ReleaseOwnershipRequest,
+  SubmissionLedger,
+} from "effect-agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
+import {
+  ThreadExportRequest,
+  FencedAppendRequest,
+  ThreadTailRequest,
+  ThreadRead,
+  ThreadStore,
+  ThreadStoreError,
+} from "effect-agent/thread-store";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
 import { Prompt, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 

@@ -1,3 +1,4 @@
+import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
 import {
   AdmissionIndeterminate,
   AdmissionConflict,
@@ -11,7 +12,7 @@ import {
   SubmissionLookupById,
   type SubmissionLookupByKey,
   type SubmissionSnapshot,
-} from "@effect-agent/thread/submission-ledger";
+} from "effect-agent/submission-ledger";
 import {
   AppendConflict,
   ThreadMaterialization,
@@ -19,8 +20,7 @@ import {
   ThreadStore,
   ThreadStoreError,
   FenceRejected,
-} from "@effect-agent/thread/thread-store";
-import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
+} from "effect-agent/thread-store";
 
 import {
   boundPortDiagnostic,

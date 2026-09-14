@@ -18,7 +18,6 @@ import {
   MemoryOwnerIdentity,
   type MemoryOwnerFailure,
 } from "@effect-agent/storage-cloudflare/memory-protocol";
-import { Principal } from "@effect-agent/thread/submission-ledger";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Clock, Deferred, Effect, Fiber, Schema } from "effect";
 import { type RecalledMemory } from "effect-agent/memory";
@@ -36,6 +35,7 @@ import {
   SemanticMemoryProfile,
 } from "effect-agent/semantic-memory-index";
 import { SemanticCandidateLimits } from "effect-agent/semantic-memory-revalidation";
+import { Principal } from "effect-agent/submission-ledger";
 import { TestClock } from "effect/testing";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 

@@ -2,7 +2,7 @@ import { Crypto, Effect, Encoding, Schema } from "effect";
 import type { Prompt } from "effect/unstable/ai";
 
 import { ThreadId } from "../core/Identifiers.ts";
-import { ThreadMessage, ThreadSnapshot, ThreadText } from "../engine/EphemeralThreads.ts";
+import { ThreadMessage, Thread as ThreadSnapshot, ThreadText } from "../core/Thread.ts";
 import { utf8ByteLength } from "./internal/utf8.ts";
 
 const MAX_CONTEXT_MESSAGES = 1_024;

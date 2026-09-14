@@ -1,10 +1,7 @@
-import { digestJson } from "@effect-agent/thread/digest";
-import {
-  MessageDeliveryStore,
-  prepareMessageDelivery,
-} from "@effect-agent/thread/message-delivery";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Clock, Effect } from "effect";
+import { digestJson } from "effect-agent/digest";
+import { MessageDeliveryStore, prepareMessageDelivery } from "effect-agent/message-delivery";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";

@@ -1,7 +1,7 @@
 ---
-"@effect-agent/thread": minor
 "@effect-agent/platform-node": minor
 "@effect-agent/platform-cloudflare": minor
+"effect-agent": minor
 ---
 
 Bind subscription input preparation to each destination Agent's retained definition version, authorize reconciliation through explicit host policy, and preserve newer delivery retry state.

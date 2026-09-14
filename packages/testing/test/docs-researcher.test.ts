@@ -26,23 +26,23 @@ import {
   researchMissionRequest,
   summarizeCallId,
 } from "@effect-agent/testing/docs-researcher";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
-import { ProducerId, type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
-import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/run-journal";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import type { PlatformError } from "effect";
+import { Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { ThreadId, ToolCallId, type SubmissionId } from "effect-agent/identifiers";
+import { connectMcp } from "effect-agent/mcp";
+import { ProducerId, type CanonicalRecordEnvelope } from "effect-agent/records";
+import { StructuralRedactorLive } from "effect-agent/redaction";
+import { childThreadIdFor, runIdForSubmission } from "effect-agent/run-journal";
 import {
   ClaimRequest,
   IdempotencyKey,
   SubmissionLedger,
   SubmissionLookupById,
-} from "@effect-agent/thread/submission-ledger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import type { PlatformError } from "effect";
-import { Effect, FileSystem, Option, Schema, Stream } from "effect";
-import { ThreadId, ToolCallId, type SubmissionId } from "effect-agent/identifiers";
-import { connectMcp } from "effect-agent/mcp";
-import { StructuralRedactorLive } from "effect-agent/redaction";
+} from "effect-agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 
 const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);

@@ -1,6 +1,3 @@
-import { type DigestError } from "@effect-agent/thread/digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
-import { DefinitionDigestInput } from "@effect-agent/thread/records";
 import { type WorkflowHostConfigError } from "@effect-agent/workflow/workflow-agent-host";
 import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
 import {
@@ -12,6 +9,9 @@ import { Context, type Crypto, Effect, Layer, Schema, SchemaGetter } from "effec
 import * as Agent from "effect-agent/agent";
 import { type ModelServices } from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import { type DigestError } from "effect-agent/digest";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { DefinitionDigestInput } from "effect-agent/records";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { Workflow, WorkflowEngine } from "effect/unstable/workflow";
 

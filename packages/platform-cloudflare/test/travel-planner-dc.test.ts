@@ -34,21 +34,21 @@ import {
   travelPlanFromDurableSettlement,
   TripRequest,
 } from "@effect-agent/testing/travel-planner";
+import { SqliteClient } from "@effect/sql-sqlite-do";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Effect, Schema } from "effect";
 import {
   type DurableSubmitAgent,
   type DurableSubmitOptions,
   type Receipt,
-} from "@effect-agent/thread/durable-agent-runtime";
-import { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
+} from "effect-agent/durable-agent-runtime";
+import { ToolCallId } from "effect-agent/identifiers";
+import { CanonicalRecordEnvelope } from "effect-agent/records";
 import {
   ApprovalDecisionCommand,
   ResolutionNeverHappened,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/submission-ledger";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Effect, Schema } from "effect";
-import { ToolCallId } from "effect-agent/identifiers";
+} from "effect-agent/submission-ledger";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 

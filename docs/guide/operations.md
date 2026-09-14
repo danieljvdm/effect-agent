@@ -51,8 +51,8 @@ sends no alerts.
 After authorization, abort a submission with:
 
 ```ts twoslash
-import { AbortCommand } from "@effect-agent/thread/submission-ledger";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { AbortCommand } from "effect-agent/submission-ledger";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { Effect } from "effect";
 
 const abortSubmission = Effect.fn("abortSubmission")(function* (command: AbortCommand) {
@@ -103,8 +103,8 @@ stream by submission or run identifier. Joined input shares its host run, while 
 record keeps the original submission identifier.
 
 ```ts
-import { DurableAgentRuntime, type Receipt } from "@effect-agent/thread/durable-agent-runtime";
-import { type ObservationOffset } from "@effect-agent/thread/records";
+import { DurableAgentRuntime, type Receipt } from "effect-agent/durable-agent-runtime";
+import { type ObservationOffset } from "effect-agent/records";
 import { Effect, Stream } from "effect";
 
 const observeOutcome = (receipt: Receipt, after?: ObservationOffset) =>
@@ -472,7 +472,7 @@ examples.
 
 ### GitHub workflow run completion
 
-Import GitHub integration from `@effect-agent/thread/git-hub-workflow-source`.
+Import GitHub integration from `effect-agent/git-hub-workflow-source`.
 `makeGitHubWorkflowRunSource` watches one repository, run ID, attempt, and expected head SHA. It
 reports successful and unsuccessful completion. It does not aggregate every check for a commit.
 

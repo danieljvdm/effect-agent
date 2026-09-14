@@ -1,9 +1,9 @@
 ---
 "@effect-agent/platform-cloudflare": patch
-"@effect-agent/thread": patch
 "@effect-agent/storage-cloudflare": patch
 "@effect-agent/storage-memory": patch
 "@effect-agent/storage-sqlite": patch
+"effect-agent": patch
 ---
 
 Make Cloudflare Thread maintenance durably incremental and quiescent (#93). Stable

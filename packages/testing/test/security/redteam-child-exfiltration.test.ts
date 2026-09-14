@@ -17,17 +17,17 @@ import {
   researchMissionRequest,
   summarizeCallId,
 } from "@effect-agent/testing/docs-researcher";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
-import { type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
-import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/run-journal";
-import { IdempotencyKey } from "@effect-agent/thread/submission-ledger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId, ToolCallId } from "effect-agent/identifiers";
+import { type CanonicalRecordEnvelope } from "effect-agent/records";
 import { Redactor, StructuralRedactorLive } from "effect-agent/redaction";
+import { childThreadIdFor, runIdForSubmission } from "effect-agent/run-journal";
 import { SubagentExecutionFailure } from "effect-agent/subagent";
+import { IdempotencyKey } from "effect-agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 
 // ---------------------------------------------------------------------------
 // Red-team suite: child exfiltration through the durable join.

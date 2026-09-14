@@ -1,35 +1,35 @@
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import { ObligationThresholds, RetryCommand } from "@effect-agent/thread/admin";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, layer } from "@effect/vitest";
+import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { ObligationThresholds, RetryCommand } from "effect-agent/admin";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   type DurableSubmitOptions,
-} from "@effect-agent/thread/durable-agent-runtime";
+} from "effect-agent/durable-agent-runtime";
+import { ThreadId, ToolCallId } from "effect-agent/identifiers";
 import {
   OperationAuthorizer,
   OperationDenied,
   type AuthorizedOperation,
   type OperationAuthorizationRequest,
   type OperationAuthorizerService,
-} from "@effect-agent/thread/operation-authorizer";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/records";
+} from "effect-agent/operation-authorizer";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
 import {
   ApprovalDecisionCommand,
   IdempotencyKey,
   Principal,
   ResolutionNeverHappened,
   UnknownResolutionCommand,
-} from "@effect-agent/thread/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, layer } from "@effect/vitest";
-import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
+} from "effect-agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 // ---------------------------------------------------------------------------

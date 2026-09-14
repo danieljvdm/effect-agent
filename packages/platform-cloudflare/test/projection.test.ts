@@ -1,14 +1,14 @@
-import { ProducerEpoch } from "@effect-agent/thread/records";
-import { ApprovalDecisionCommand } from "@effect-agent/thread/submission-ledger";
-import type { ThreadProjectionMaintenance } from "@effect-agent/thread/thread-projection-maintenance";
+import { env, runInDurableObject } from "cloudflare:test";
+import { Cause, Clock, Context, Effect, Exit, Layer, Schema } from "effect";
+import { ProducerEpoch } from "effect-agent/records";
+import { ApprovalDecisionCommand } from "effect-agent/submission-ledger";
+import type { ThreadProjectionMaintenance } from "effect-agent/thread-projection-maintenance";
 import {
   FencedAppendRequest,
   ThreadMaterialization,
   ThreadStore,
   ThreadTailRequest,
-} from "@effect-agent/thread/thread-store";
-import { env, runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Context, Effect, Exit, Layer, Schema } from "effect";
+} from "effect-agent/thread-store";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { SqlClient } from "effect/unstable/sql/SqlClient";

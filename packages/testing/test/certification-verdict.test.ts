@@ -1,12 +1,12 @@
 import { resolveTierThree } from "@effect-agent/testing/certification";
+import { describe, expect, it } from "@effect/vitest";
+import { DateTime, Effect } from "effect";
 import {
   CertificationCaseResult,
   CertificationSweepResult,
   CertificationTierThreeReport,
   CertifiedAdapterIdentity,
-} from "@effect-agent/thread/testing/certification";
-import { describe, expect, it } from "@effect/vitest";
-import { DateTime, Effect } from "effect";
+} from "effect-agent/testing/certification";
 
 import { makeCertificationReport } from "../src/internal/certification-report.ts";
 

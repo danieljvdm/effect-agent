@@ -1,11 +1,11 @@
+import { Clock, Context, Deferred, Effect, Layer, Option, Ref, Semaphore, Stream } from "effect";
+import { type ThreadId } from "effect-agent/identifiers";
 import {
   MessageDeliveryDriver,
   MessageDeliveryError,
   MessageDeliveryStore,
-} from "@effect-agent/thread/message-delivery";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
-import { Clock, Context, Deferred, Effect, Layer, Option, Ref, Semaphore, Stream } from "effect";
-import { type ThreadId } from "effect-agent/identifiers";
+} from "effect-agent/message-delivery";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 
 import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "../Alarm.ts";
 import { ThreadObjectPlacement } from "../CloudflareBindings.ts";

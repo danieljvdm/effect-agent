@@ -8,7 +8,6 @@
 "@effect-agent/sandbox-local": minor
 "@effect-agent/pr-review": minor
 "@effect-agent/testing": minor
-"@effect-agent/thread": minor
 "@effect-agent/workflow": minor
 ---
 

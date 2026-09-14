@@ -6,7 +6,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 import { analyzeMetafile, build, version as esbuildVersion } from "esbuild";
 
-import { comparisonExports } from "./internal/comparison-exports.ts";
+import { comparisonExports, stageComparisonModules } from "./internal/comparison-exports.ts";
 import { PublishManifest, withPublishManifests } from "./release-publish.ts";
 
 class BundleSizeError extends Schema.TaggedError<BundleSizeError>()("BundleSizeError", {
@@ -323,6 +323,8 @@ const measureCheckout = Effect.fn("bundleSize.measureCheckout")(function* (
       available.add(key === "." ? manifest.name : manifest.name + key.slice(1));
     }
   }
+
+  for (const specifier of yield* stageComparisonModules(stage)) available.add(specifier);
 
   const results = yield* withPublishManifests(stage, () =>
     Effect.forEach(

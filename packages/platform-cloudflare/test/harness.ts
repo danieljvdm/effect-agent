@@ -7,17 +7,17 @@ import {
   ScheduleOwnerNamespace,
 } from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import { type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
-import { scheduleOwnerKey } from "@effect-agent/thread/schedule-transition";
-import { type Scheduling } from "@effect-agent/thread/scheduling";
-import {
-  submissionInputRecordId,
-  submissionSettlementRecordId,
-} from "@effect-agent/thread/submission-ledger";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Crypto, Effect, Layer, Schema } from "effect";
 import { SubmissionId } from "effect-agent/identifiers";
+import { type CanonicalRecordEnvelope } from "effect-agent/records";
+import { scheduleOwnerKey } from "effect-agent/schedule-transition";
+import { type Scheduling } from "effect-agent/scheduling";
+import {
+  submissionInputRecordId,
+  submissionSettlementRecordId,
+} from "effect-agent/submission-ledger";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { expect } from "vite-plus/test";
 

@@ -1,6 +1,9 @@
 import { MemoryScheduleStoreLive } from "@effect-agent/storage-memory/memory-schedule-store";
-import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Layer, Schema } from "effect";
+import { Receipt } from "effect-agent/durable-agent-runtime";
+import { AgentId, ThreadId, ReceiptId, SubmissionId } from "effect-agent/identifiers";
+import { DefinitionDigests, Digest } from "effect-agent/records";
 import {
   type ScheduleChange,
   ScheduleFailpoint,
@@ -9,11 +12,8 @@ import {
   type ScheduleKey,
   type ScheduleRecord,
   ScheduleStore,
-} from "@effect-agent/thread/schedule";
-import { IdempotencyKey, Principal, QueueSequence } from "@effect-agent/thread/submission-ledger";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
-import { AgentId, ThreadId, ReceiptId, SubmissionId } from "effect-agent/identifiers";
+} from "effect-agent/schedule";
+import { IdempotencyKey, Principal, QueueSequence } from "effect-agent/submission-ledger";
 
 const principal = Schema.decodeSync(Principal)("memory-schedule-failpoint-principal");
 const agentId = Schema.decodeSync(AgentId)("memory-schedule-failpoint-agent");

@@ -15,7 +15,7 @@ bun add @effect-agent/platform-node@beta
 ```
 
 For the examples below, also install `effect@4.0.0-rc.112`, `effect-agent@beta`,
-`@effect-agent/thread@beta`, `@effect/ai-openai@4.0.0-rc.112`, and `@effect/platform-node@4.0.0-rc.112`.
+`@effect/ai-openai@4.0.0-rc.112`, and `@effect/platform-node@4.0.0-rc.112`.
 Keep framework packages at one release and use compatible [Effect and provider packages](../guide/getting-started#installation-and-compatibility).
 
 ## Create an agent

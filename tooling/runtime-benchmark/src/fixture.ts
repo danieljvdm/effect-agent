@@ -4,50 +4,6 @@ import {
   type ScriptedTurnInput,
   type ScriptedStreamPart,
 } from "@effect-agent/testing/scripted-model";
-import { digestJson } from "@effect-agent/thread/digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "@effect-agent/thread/durable-failpoint";
-import {
-  BatchId,
-  CanonicalBatch,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ModelCompleted,
-  PersistedJson,
-  ProducerEpoch,
-  ProducerId,
-  RecordEnvelope,
-  RecordId,
-  RepairAnnotated,
-  RunCompleted,
-  SubmissionSettled,
-  SubmissionSettledRecord,
-  ThreadCreated,
-  UserInputRecorded,
-} from "@effect-agent/thread/records";
-import { runIdForSubmission } from "@effect-agent/thread/run-journal";
-import {
-  AdmissionRequest,
-  ClaimRequest,
-  IdempotencyKey,
-  MarkReadyRequest,
-  Principal,
-  type Settlement,
-  SettlementFinalization,
-  SettlementReservation,
-  SubmissionLedger,
-  submissionSettlementId,
-  submissionSettlementRecordId,
-} from "@effect-agent/thread/submission-ledger";
-import {
-  FencedAppendRequest,
-  LoadCheckpointRequest,
-  ThreadExportRequest,
-  ThreadMaterialization,
-  ThreadStore,
-  ThreadTailRequest,
-} from "@effect-agent/thread/thread-store";
 import {
   Cause,
   Clock,
@@ -66,8 +22,52 @@ import {
 } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
 import { ContextCompactor } from "effect-agent/context-compactor";
+import { digestJson } from "effect-agent/digest";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
 import { AgentId, RunId, ThreadId } from "effect-agent/identifiers";
+import {
+  BatchId,
+  CanonicalBatch,
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ModelCompleted,
+  PersistedJson,
+  ProducerEpoch,
+  ProducerId,
+  RecordEnvelope,
+  RecordId,
+  RepairAnnotated,
+  RunCompleted,
+  SubmissionSettled,
+  SubmissionSettledRecord,
+  ThreadCreated,
+  UserInputRecorded,
+} from "effect-agent/records";
+import { runIdForSubmission } from "effect-agent/run-journal";
 import { RunContextPreparation } from "effect-agent/run-options";
+import {
+  AdmissionRequest,
+  ClaimRequest,
+  IdempotencyKey,
+  MarkReadyRequest,
+  Principal,
+  type Settlement,
+  SettlementFinalization,
+  SettlementReservation,
+  SubmissionLedger,
+  submissionSettlementId,
+  submissionSettlementRecordId,
+} from "effect-agent/submission-ledger";
+import {
+  FencedAppendRequest,
+  LoadCheckpointRequest,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadStore,
+  ThreadTailRequest,
+} from "effect-agent/thread-store";
 import type { LanguageModel } from "effect/unstable/ai";
 import { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 

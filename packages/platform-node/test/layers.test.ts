@@ -10,39 +10,6 @@ import * as NodeHost from "@effect-agent/platform-node/node-durable-host";
 import { SqliteStorageCompatibilityError } from "@effect-agent/storage-sqlite/sqlite-storage-error";
 import { CurrentSqliteStorageVersion } from "@effect-agent/storage-sqlite/sqlite-storage-version";
 import { type SqliteStorageInitializationError } from "@effect-agent/storage-sqlite/sqlite-thread-store";
-import type { DurableBindingFailure } from "@effect-agent/thread/agent-registration";
-import { type DigestError, digestDefinitions, digestJson } from "@effect-agent/thread/digest";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-  type DurableSubmitOptions,
-  type DurableWorkerFailure,
-} from "@effect-agent/thread/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "@effect-agent/thread/durable-failpoint";
-import {
-  type MessageDeliveryError,
-  type MessageDeliveryStore,
-} from "@effect-agent/thread/message-delivery";
-import {
-  DefinitionDigests,
-  DefinitionDigestInput,
-  Digest,
-  ProducerId,
-  type PersistedJson,
-} from "@effect-agent/thread/records";
-import {
-  AdmissionRequest,
-  ClaimRequest,
-  IdempotencyKey,
-  MarkReadyRequest,
-  Principal,
-  SubmissionLedger,
-  SubmissionLookupById,
-  type SubmissionState,
-} from "@effect-agent/thread/submission-ledger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
-import { ReconciliationUncertain, ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -67,15 +34,48 @@ import {
 } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import type { DurableBindingFailure } from "effect-agent/agent-registration";
+import { type DigestError, digestDefinitions, digestJson } from "effect-agent/digest";
+import {
+  DurableAgentRuntime,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+  type DurableWorkerFailure,
+} from "effect-agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { ThreadId } from "effect-agent/identifiers";
 import { type SubmissionId } from "effect-agent/identifiers";
+import {
+  type MessageDeliveryError,
+  type MessageDeliveryStore,
+} from "effect-agent/message-delivery";
+import {
+  DefinitionDigests,
+  DefinitionDigestInput,
+  Digest,
+  ProducerId,
+  type PersistedJson,
+} from "effect-agent/records";
 import {
   RunContextPreparation,
   RunToolAuthorization,
   toolFailureObserverLayer,
   type ToolFailureObservation,
 } from "effect-agent/run-options";
+import {
+  AdmissionRequest,
+  ClaimRequest,
+  IdempotencyKey,
+  MarkReadyRequest,
+  Principal,
+  SubmissionLedger,
+  SubmissionLookupById,
+  type SubmissionState,
+} from "effect-agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+import { ReconciliationUncertain, ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";

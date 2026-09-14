@@ -1,11 +1,11 @@
-import { MessageDeliveryStore } from "@effect-agent/thread/message-delivery";
-import {
-  makeMessageDeliveryFixture,
-  messageDeliveryStoreConformanceCases,
-} from "@effect-agent/thread/testing/message-delivery-store-conformance";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer } from "effect";
+import { MessageDeliveryStore } from "effect-agent/message-delivery";
+import {
+  makeMessageDeliveryFixture,
+  messageDeliveryStoreConformanceCases,
+} from "effect-agent/testing/message-delivery-store-conformance";
 import { expect, it } from "vite-plus/test";
 
 import { doMessageDeliveryStoreLayer } from "../src/DoMessageDeliveryStore.ts";

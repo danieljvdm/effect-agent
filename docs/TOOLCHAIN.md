@@ -61,16 +61,16 @@ Framework code stays in `packages/*`. The canonical app and operational harnesse
 Provider integrations come from upstream Effect AI Layers.
 
 ```text
-effect-agent <- thread <- storage adapters
-effect-agent + thread <- workflow
-effect-agent + thread + selected adapters <- platform packages
+effect-agent <- storage adapters
+effect-agent <- workflow
+effect-agent + selected adapters <- platform packages
 effect-agent <- sandbox-local
 effect-agent <- testing
 effect-agent <- pr-review
 ```
 
 Within `packages/effect-agent/src`, dependencies point inward:
-`core <- engine <- capabilities` and `core <- sandbox <- capabilities`.
+`core <- engine <- capabilities <- durable` and `core <- sandbox <- capabilities`.
 Public module paths address these implementations directly; source directories are not separate
 packages. Keep core and sandbox contracts platform-neutral. The export check enforces these
 internal boundaries as well as package imports.
@@ -173,7 +173,7 @@ retain a cached preview after a deployment.
 
 ## Releasing to npm
 
-All eleven public packages share one Changesets fixed group and publish to `beta`
+All ten public packages share one Changesets fixed group and publish to `beta`
 as `X.Y.Z-beta.N`. Keep the group in `.changeset/config.json` aligned with public workspaces.
 The travel planner is a private application with no package version. It does not receive
 changesets, version bumps, changelogs, package tags, or npm releases. Private-package versioning

@@ -8,18 +8,6 @@ import {
 } from "@effect-agent/platform-node/node-durable-agent-runtime";
 import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
 import { type SqliteStorageFailpointLocation } from "@effect-agent/storage-sqlite/sqlite-storage-error";
-import { type ResolvedBinding } from "@effect-agent/thread/agent-registration";
-import { type DurableRuntimeFailpointLocation } from "@effect-agent/thread/durable-failpoint";
-import { type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
-import {
-  SubmissionLedger,
-  SubmissionLookupById,
-  SubmissionLookupByKey,
-  submissionInputRecordId,
-  submissionSettlementRecordId,
-  type SubmissionSnapshot,
-} from "@effect-agent/thread/submission-ledger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
 import { expect } from "@effect/vitest";
 import {
   Cause,
@@ -32,7 +20,19 @@ import {
   Stream,
   type Scope,
 } from "effect";
+import { type ResolvedBinding } from "effect-agent/agent-registration";
+import { type DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
 import { type SubmissionId } from "effect-agent/identifiers";
+import { type CanonicalRecordEnvelope } from "effect-agent/records";
+import {
+  SubmissionLedger,
+  SubmissionLookupById,
+  SubmissionLookupByKey,
+  submissionInputRecordId,
+  submissionSettlementRecordId,
+  type SubmissionSnapshot,
+} from "effect-agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 
 import {
   CRASH_DEPLOYMENT_ID,

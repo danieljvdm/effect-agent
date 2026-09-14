@@ -1,9 +1,5 @@
 import { activityProcessorStoreLayer } from "@effect-agent/storage-sqlite/sqlite-activity-store";
 import { layer as sqliteThreadStoreLayer } from "@effect-agent/storage-sqlite/sqlite-thread-store";
-import { ActivityProcessorStore, type PreparedActivity } from "@effect-agent/thread/activity-store";
-import { PersistentHistory } from "@effect-agent/thread/persistent-history";
-import { memoryReaderLayer, memoryStoreLayer } from "@effect-agent/thread/sql-memory-store";
-import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/thread-store";
 import { NodeServices } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
@@ -21,6 +17,8 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { PersistentHistory } from "effect-agent";
+import { ActivityProcessorStore, type PreparedActivity } from "effect-agent/activity-store";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -32,7 +30,9 @@ import { revalidateMemoryLookup } from "effect-agent/memory-revalidation";
 import { MemoryScope, MemoryReader, MemoryWrite, MemoryWriter } from "effect-agent/memory-store";
 import { type ActiveMemoryDocument } from "effect-agent/memory-store";
 import { RunContextPreparationPassthrough } from "effect-agent/run-options";
+import { memoryReaderLayer, memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { ThreadHistory } from "effect-agent/thread-history";
+import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { LanguageModel, Model, Prompt, type Response, Toolkit } from "effect/unstable/ai";
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
 

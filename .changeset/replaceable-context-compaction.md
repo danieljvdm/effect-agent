@@ -1,5 +1,5 @@
 ---
-"@effect-agent/thread": patch
+"effect-agent": patch
 ---
 
 Replace compaction through `ContextCompactor` Layers, with a bounded default and configurable summary Model. Preserve metered usage, protected Tool pairs, and canonical coverage of the selected history.

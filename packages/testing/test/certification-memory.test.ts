@@ -6,16 +6,16 @@ import {
   certifyDurableAdapters,
   tier2NeverFiredLocations,
 } from "@effect-agent/testing/certification";
-import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/durable-failpoint";
-import {
-  CertificationReport,
-  type CertificationScenario,
-} from "@effect-agent/thread/testing/certification";
-import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/submission-ledger-conformance";
-import { threadStoreConformanceCases } from "@effect-agent/thread/testing/thread-store-conformance";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
+import { DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
+import {
+  CertificationReport,
+  type CertificationScenario,
+} from "effect-agent/testing/certification";
+import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
+import { threadStoreConformanceCases } from "effect-agent/testing/thread-store-conformance";
 
 import { maybeWriteReport } from "./certification-report-io.ts";
 

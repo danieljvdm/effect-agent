@@ -8,6 +8,7 @@ import {
   type PortRequest,
   type PortResponse,
 } from "@effect-agent/storage-cloudflare/port-protocol";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import {
   IntegrityReport,
   ObligationReport,
@@ -15,22 +16,24 @@ import {
   RecoveryExplanation,
   RetryCommand,
   RetryRefused,
-} from "@effect-agent/thread/admin";
-import { DigestError } from "@effect-agent/thread/digest";
+} from "effect-agent/admin";
+import { DigestError } from "effect-agent/digest";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   RecoveryReport,
   type DurableSubmitAgent,
-} from "@effect-agent/thread/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "@effect-agent/thread/durable-failpoint";
+} from "effect-agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
+import { type AgentId, type ThreadId } from "effect-agent/identifiers";
+import { SubmissionId } from "effect-agent/identifiers";
 import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
   OperationDenied,
-} from "@effect-agent/thread/operation-authorizer";
-import { PersistedJson } from "@effect-agent/thread/records";
-import { RunJournalError } from "@effect-agent/thread/run-journal";
+} from "effect-agent/operation-authorizer";
+import { PersistedJson } from "effect-agent/records";
+import { RunJournalError } from "effect-agent/run-journal";
 import {
   AdmissionPolicyError,
   LedgerError,
@@ -38,7 +41,7 @@ import {
   SettlementConflict,
   SubmissionLedger,
   SubmissionLookupByKey,
-} from "@effect-agent/thread/submission-ledger";
+} from "effect-agent/submission-ledger";
 import {
   AppendConflict,
   ThreadNotMaterialized,
@@ -46,11 +49,8 @@ import {
   ThreadStore,
   ThreadStoreError,
   FenceRejected,
-} from "@effect-agent/thread/thread-store";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
-import { type AgentId, type ThreadId } from "effect-agent/identifiers";
-import { SubmissionId } from "effect-agent/identifiers";
+} from "effect-agent/thread-store";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectState as EffectCfDurableObjectState,

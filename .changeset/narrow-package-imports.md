@@ -1,9 +1,9 @@
 ---
 "@effect-agent/testing": minor
 "@effect-agent/platform-cloudflare": minor
-"@effect-agent/thread": minor
 "@effect-agent/storage-sqlite": minor
 "@effect-agent/storage-cloudflare": minor
+"effect-agent": minor
 ---
 
 Import specialized testing utilities and fixtures from their documented subpaths, and use failpoint controls from `/testing` with `TestControl.layer` in place of `Failpoint.layerTest`; keep migration loaders internal.

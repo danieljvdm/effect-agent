@@ -1,5 +1,4 @@
 ---
-"@effect-agent/thread": minor
 "effect-agent": minor
 ---
 

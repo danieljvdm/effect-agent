@@ -69,7 +69,7 @@ The read grants no ownership, and `canonicalRecordId` must come from canonical h
 
 ```ts
 import type { SubmissionId } from "effect-agent/identifiers";
-import { AbortIntentRequest, SubmissionLedger } from "@effect-agent/thread/submission-ledger";
+import { AbortIntentRequest, SubmissionLedger } from "effect-agent/submission-ledger";
 import { Effect } from "effect";
 
 const readAbort = Effect.fn(function* (submissionId: SubmissionId) {
@@ -164,15 +164,15 @@ checker as the administrative `verify` operation.
 <a id="shipped-adapter-tests"></a>
 
 Import `CertificationReport` and `certifyPorts` from
-`@effect-agent/thread/testing/certification`. The shared conformance cases live in
-`@effect-agent/thread/testing/thread-store-conformance` and
-`@effect-agent/thread/testing/submission-ledger-conformance`. Production schemas, ports,
+`effect-agent/testing/certification`. The shared conformance cases live in
+`effect-agent/testing/thread-store-conformance` and
+`effect-agent/testing/submission-ledger-conformance`. Production schemas, ports,
 replay, verification, and runtime APIs have their own public thread modules.
 
 ## Certify subscription stores {#subscription-stores}
 
 An adapter that implements `SubscriptionStore` must also run
-`subscriptionStoreConformanceCases` from `@effect-agent/thread/testing/subscription-store-conformance`. Give each case a fresh
+`subscriptionStoreConformanceCases` from `effect-agent/testing/subscription-store-conformance`. Give each case a fresh
 partition. The cases cover intake cutoffs, deduplication, once selection, capacity, cancellation,
 prepared recovery, catch-up, scan cursors, and replay after limits tighten.
 

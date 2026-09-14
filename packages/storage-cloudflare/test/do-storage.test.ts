@@ -14,26 +14,6 @@ import {
   storageConfigLayer,
   type DoStorageInitializationError,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
-import { CanonicalBatch, CanonicalRecord, UserInputRecorded } from "@effect-agent/thread/records";
-import {
-  threadStoreConformanceCases,
-  threadCheckpointConformanceCases,
-} from "@effect-agent/thread/testing/thread-store-conformance";
-import {
-  ThreadCheckpoint,
-  ThreadTailRequest,
-  ThreadExportRequest,
-  ThreadMaterialization,
-  ThreadObservation,
-  ThreadRead,
-  ThreadStore,
-  ThreadStoreError,
-  FencedAppendRequest,
-  LoadCheckpointRequest,
-  SaveCheckpointRequest,
-  SaveRecoveryCheckpointRequest,
-} from "@effect-agent/thread/thread-store";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import type { Crypto } from "effect";
@@ -49,6 +29,26 @@ import {
   Stream,
   Tracer,
 } from "effect";
+import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { CanonicalBatch, CanonicalRecord, UserInputRecorded } from "effect-agent/records";
+import {
+  threadStoreConformanceCases,
+  threadCheckpointConformanceCases,
+} from "effect-agent/testing/thread-store-conformance";
+import {
+  ThreadCheckpoint,
+  ThreadTailRequest,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadObservation,
+  ThreadRead,
+  ThreadStore,
+  ThreadStoreError,
+  FencedAppendRequest,
+  LoadCheckpointRequest,
+  SaveCheckpointRequest,
+  SaveRecoveryCheckpointRequest,
+} from "effect-agent/thread-store";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";

@@ -4,24 +4,20 @@ import {
   SubscriptionAlarmExtensionError,
   SubscriptionPartitionIdentity,
 } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
-import { EventSources, makeEventSource } from "@effect-agent/thread/event-source";
-import { Principal } from "@effect-agent/thread/submission-ledger";
+import { DateTime, Effect, Layer, Schema } from "effect";
+import { EventSources, makeEventSource } from "effect-agent/event-source";
+import { AgentId, ThreadId } from "effect-agent/identifiers";
+import { Principal } from "effect-agent/submission-ledger";
 import {
   SourcePartition,
   SubscriptionAuthorizer,
   SubscriptionFailpoint,
-} from "@effect-agent/thread/subscription";
+} from "effect-agent/subscription";
 import {
   makeSubscriptionInputBinding,
   SubscriptionInputBindings,
-} from "@effect-agent/thread/subscription-input";
-import {
-  SubscriptionDriver,
-  SubscriptionIntake,
-  Subscriptions,
-} from "@effect-agent/thread/subscriptions";
-import { DateTime, Effect, Layer, Schema } from "effect";
-import { AgentId, ThreadId } from "effect-agent/identifiers";
+} from "effect-agent/subscription-input";
+import { SubscriptionDriver, SubscriptionIntake, Subscriptions } from "effect-agent/subscriptions";
 import { DurableObjectAlarm, DurableObjectState } from "effect-cf";
 
 import { TEST_DIGESTS } from "./fixtures.ts";

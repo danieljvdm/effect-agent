@@ -7,7 +7,6 @@
 "@effect-agent/storage-memory": minor
 "@effect-agent/storage-sqlite": minor
 "@effect-agent/testing": minor
-"@effect-agent/thread": minor
 "@effect-agent/workflow": minor
 "effect-agent": minor
 ---

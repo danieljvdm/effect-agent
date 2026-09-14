@@ -1,6 +1,6 @@
-import type { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import { Option, Schema } from "effect";
 import { ContextHistoryHit, ContextHistoryPage } from "effect-agent/context-history";
+import type { CanonicalRecordEnvelope } from "effect-agent/records";
 
 const referencesRecord = (text: string, recordId: string): boolean => {
   const literal = recordId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

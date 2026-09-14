@@ -1,36 +1,5 @@
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import {
-  DurableAgentRuntime,
-  DurableApprovalResolver,
-  DurableRuntimeConfig,
-  type DurableSubmitOptions,
-} from "@effect-agent/thread/durable-agent-runtime";
-import {
-  DurableRuntimeFailpointError,
-  type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/durable-failpoint";
-import {
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ProducerId,
-  type CanonicalRecordEnvelope,
-} from "@effect-agent/thread/records";
-import { runIdForSubmission } from "@effect-agent/thread/run-journal";
-import {
-  AbortCommand,
-  ApprovalDecisionCommand,
-  IdempotencyKey,
-  Principal,
-  SubmissionLedger,
-  SubmissionLookupById,
-  ClaimRequest,
-} from "@effect-agent/thread/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
@@ -42,14 +11,45 @@ import {
   ApprovalResolver,
   ApprovalResolverError,
 } from "effect-agent/approval";
+import {
+  DurableAgentRuntime,
+  DurableApprovalResolver,
+  DurableRuntimeConfig,
+  type DurableSubmitOptions,
+} from "effect-agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpointError,
+  type DurableRuntimeFailpointLocation,
+} from "effect-agent/durable-failpoint";
 import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "effect-agent/identifiers";
+import {
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ProducerId,
+  type CanonicalRecordEnvelope,
+} from "effect-agent/records";
 import { StructuralRedactorLive } from "effect-agent/redaction";
 import { toDurableRunApprovalHook } from "effect-agent/run-hooks";
+import { runIdForSubmission } from "effect-agent/run-journal";
 import {
   type RunApprovalDecision,
   type RunApprovalHook,
   type RunApprovalRequest,
 } from "effect-agent/run-options";
+import {
+  AbortCommand,
+  ApprovalDecisionCommand,
+  IdempotencyKey,
+  Principal,
+  SubmissionLedger,
+  SubmissionLookupById,
+  ClaimRequest,
+} from "effect-agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Response, Tool, Toolkit, type Prompt } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));

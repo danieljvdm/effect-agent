@@ -1,53 +1,5 @@
 import { ledgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
 import { layer as threadLayer } from "@effect-agent/storage-sqlite/sqlite-thread-store";
-import { IntegrityReport } from "@effect-agent/thread/admin";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
-import {
-  DurableAgentRuntime,
-  DurableRuntimeConfig,
-} from "@effect-agent/thread/durable-agent-runtime";
-import {
-  DurableRuntimeFailpoint,
-  DurableRuntimeFailpointError,
-} from "@effect-agent/thread/durable-failpoint";
-import {
-  BatchId,
-  CanonicalBatch,
-  CanonicalSequence,
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ModelResponseRecorded,
-  PersistedJson,
-  ProducerEpoch,
-  ProducerId,
-  RecordEnvelope,
-  RecordId,
-  ThreadCreated,
-  ToolCallSettled,
-} from "@effect-agent/thread/records";
-import {
-  modelResponseRecordId,
-  toolCallSettledRecordId,
-  turnIdForRun,
-} from "@effect-agent/thread/run-journal";
-import {
-  IdempotencyKey,
-  Principal,
-  SubmissionLedger,
-} from "@effect-agent/thread/submission-ledger";
-import {
-  FencedAppendRequest,
-  ThreadCheckpoint,
-  ThreadExport,
-  ThreadExportRequest,
-  ThreadMaterialization,
-  ThreadRead,
-  ThreadStore,
-  ThreadTailRequest,
-} from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
 import { NodeCrypto } from "@effect/platform-node";
 import {
   Array,
@@ -64,12 +16,53 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { IntegrityReport } from "effect-agent/admin";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { NewContext } from "effect-agent/context-tools";
+import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
+import {
+  DurableRuntimeFailpoint,
+  DurableRuntimeFailpointError,
+} from "effect-agent/durable-failpoint";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { RunId, ThreadId, ToolCallId } from "effect-agent/identifiers";
+import {
+  BatchId,
+  CanonicalBatch,
+  CanonicalSequence,
+  DefinitionDigests,
+  DeploymentId,
+  Digest,
+  ModelResponseRecorded,
+  PersistedJson,
+  ProducerEpoch,
+  ProducerId,
+  RecordEnvelope,
+  RecordId,
+  ThreadCreated,
+  ToolCallSettled,
+} from "effect-agent/records";
+import {
+  modelResponseRecordId,
+  toolCallSettledRecordId,
+  turnIdForRun,
+} from "effect-agent/run-journal";
 import { RunToolAuthorization } from "effect-agent/run-options";
+import { IdempotencyKey, Principal, SubmissionLedger } from "effect-agent/submission-ledger";
+import {
+  FencedAppendRequest,
+  ThreadCheckpoint,
+  ThreadExport,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadRead,
+  ThreadStore,
+  ThreadTailRequest,
+} from "effect-agent/thread-store";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import {
@@ -216,13 +209,13 @@ export const benchmark = Effect.gen(function* () {
   const sourceHashes: Record<string, string> = {};
 
   for (const path of [
-    "packages/thread/src/DurableAgentRuntime.ts",
-    "packages/thread/src/RunJournal.ts",
-    "packages/thread/src/internal/journal-checkpoint.ts",
-    "packages/thread/src/ThreadStore.ts",
-    "packages/thread/src/Records.ts",
-    "packages/thread/src/ThreadInvariants.ts",
-    "packages/thread/src/DurableFailpoint.ts",
+    "packages/effect-agent/src/durable/DurableAgentRuntime.ts",
+    "packages/effect-agent/src/durable/RunJournal.ts",
+    "packages/effect-agent/src/durable/internal/journal-checkpoint.ts",
+    "packages/effect-agent/src/durable/ThreadStore.ts",
+    "packages/effect-agent/src/durable/Records.ts",
+    "packages/effect-agent/src/durable/ThreadInvariants.ts",
+    "packages/effect-agent/src/durable/DurableFailpoint.ts",
     "packages/core/src/Usage.ts",
     "packages/core/src/RunPolicyUsage.ts",
     "packages/engine/src/internal/agent-runtime.ts",

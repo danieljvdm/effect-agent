@@ -1,5 +1,4 @@
 ---
-"@effect-agent/thread": minor
 "@effect-agent/testing": patch
 "@effect-agent/storage-memory": minor
 "@effect-agent/storage-sqlite": minor

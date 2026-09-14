@@ -1,4 +1,9 @@
-import { type DurableSubmitOptions } from "@effect-agent/thread/durable-agent-runtime";
+import { Effect, Layer, Option, Schema } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
+import { type ThreadId } from "effect-agent/identifiers";
 import {
   DefinitionDigests,
   DeploymentId,
@@ -6,20 +11,15 @@ import {
   PersistedJson,
   ProducerId,
   type CanonicalRecordEnvelope,
-} from "@effect-agent/thread/records";
-import { Principal, type IdempotencyKey } from "@effect-agent/thread/submission-ledger";
+} from "effect-agent/records";
+import { Principal, type IdempotencyKey } from "effect-agent/submission-ledger";
 import {
   ReconciliationCompleted,
   ReconciliationSafeToRetry,
   ReconciliationUncertain,
   ToolReconciler,
   ToolReconcilerError,
-} from "@effect-agent/thread/tool-reconciler";
-import { Effect, Layer, Option, Schema } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
-import { type ThreadId } from "effect-agent/identifiers";
+} from "effect-agent/tool-reconciler";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import {

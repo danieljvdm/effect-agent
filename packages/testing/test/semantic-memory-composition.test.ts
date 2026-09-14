@@ -1,5 +1,4 @@
 import { inMemorySemanticIndexLayer } from "@effect-agent/storage-memory/memory-semantic-index";
-import { memoryStoreLayer } from "@effect-agent/thread/sql-memory-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
@@ -10,6 +9,7 @@ import { MemoryAccess } from "effect-agent/memory-revalidation";
 import { MemoryScope, MemoryKey, MemoryWriter } from "effect-agent/memory-store";
 import { indexMemorySource, querySemanticMemory } from "effect-agent/semantic-memory";
 import { SemanticMemoryIndex, SemanticMemoryProfile } from "effect-agent/semantic-memory-index";
+import { memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { TestClock } from "effect/testing";
 import { AiError, EmbeddingModel } from "effect/unstable/ai";
 

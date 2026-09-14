@@ -8,7 +8,6 @@
 "@effect-agent/storage-memory": minor
 "@effect-agent/storage-sqlite": minor
 "@effect-agent/testing": minor
-"@effect-agent/thread": minor
 ---
 
 Rename `@effect-agent/session` to `@effect-agent/thread` and rename the Conversation framework API to Thread.

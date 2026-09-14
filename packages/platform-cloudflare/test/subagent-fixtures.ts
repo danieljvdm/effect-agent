@@ -1,11 +1,8 @@
-import {
-  DurableWorkerBinding,
-  type ResolvedBinding,
-} from "@effect-agent/thread/agent-registration";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
+import { DefinitionDigests, Digest } from "effect-agent/records";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";

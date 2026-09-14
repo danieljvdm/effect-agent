@@ -1,23 +1,6 @@
 import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
 import * as NodeHost from "@effect-agent/platform-node/node-durable-host";
 import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
-import { digestDefinitions, digestJson } from "@effect-agent/thread/digest";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "@effect-agent/thread/durable-failpoint";
-import {
-  MessageDeliveryError,
-  MessageDeliveryStore,
-  prepareMessageDelivery,
-  type MessageDeliveryKey,
-  type MessageDeliveryRecord,
-} from "@effect-agent/thread/message-delivery";
-import { DefinitionDigestInput, type DefinitionDigests } from "@effect-agent/thread/records";
-import {
-  IdempotencyKey,
-  Principal,
-  SubmissionLedger,
-  SubmissionLookupByKey,
-} from "@effect-agent/thread/submission-ledger";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -37,7 +20,24 @@ import {
   type PlatformError,
 } from "effect";
 import * as Agent from "effect-agent/agent";
+import { digestDefinitions, digestJson } from "effect-agent/digest";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
 import { AgentId, ThreadId } from "effect-agent/identifiers";
+import {
+  MessageDeliveryError,
+  MessageDeliveryStore,
+  prepareMessageDelivery,
+  type MessageDeliveryKey,
+  type MessageDeliveryRecord,
+} from "effect-agent/message-delivery";
+import { DefinitionDigestInput, type DefinitionDigests } from "effect-agent/records";
+import {
+  IdempotencyKey,
+  Principal,
+  SubmissionLedger,
+  SubmissionLookupByKey,
+} from "effect-agent/submission-ledger";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 

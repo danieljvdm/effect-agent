@@ -13,7 +13,6 @@
   "dependencies": {
     "@effect-agent/storage-memory": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
-    "@effect-agent/thread": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@huggingface/transformers": "4.2.0",

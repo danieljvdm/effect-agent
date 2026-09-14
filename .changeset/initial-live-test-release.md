@@ -1,10 +1,10 @@
 ---
 "@effect-agent/sandbox-local": patch
-"@effect-agent/thread": patch
 "@effect-agent/storage-memory": patch
 "@effect-agent/storage-sqlite": patch
 "@effect-agent/platform-node": patch
 "@effect-agent/testing": patch
+"effect-agent": patch
 ---
 
 Initial beta-channel release of the Effect Agent framework packages for live

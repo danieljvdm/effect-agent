@@ -6,9 +6,9 @@ import {
   type ThreadHistoryDiverged,
   type ThreadLimitExceeded,
   type ThreadNotFound,
-  threadPrompt,
-  EphemeralThreads,
-} from "../engine/EphemeralThreads.ts";
+  toPrompt,
+  Store as ConversationStore,
+} from "../core/Thread.ts";
 import {
   type PreparedRunContext,
   type RunApprovalDecision,
@@ -218,9 +218,9 @@ export type ThreadAdapterError =
   | ThreadHistoryDiverged;
 
 /**
- * Advanced integration for an existing EphemeralThreads snapshot. Ordinary Runs automatically
+ * Advanced integration for an existing ConversationStore snapshot. Ordinary Runs automatically
  * retain history through ThreadHistory.layer; use this helper only for explicit snapshot hooks.
- * Share that Layer's EphemeralThreads owner. PersistentHistory rejects these competing hooks.
+ * Share that Layer's ConversationStore owner. PersistentHistory rejects these competing hooks.
  * The snapshot is explicit initial Prompt data. Each inline onHistory call immediately records
  * its append-only suffix, including updates from Runs that later fail or are interrupted. Writes
  * already made remain in the snapshot. Callback errors stop the Run as ThreadAdapterError;
@@ -235,14 +235,14 @@ export const toRunThreadOptions = Effect.fn("toRunThreadOptions")(function* (
 ): Effect.fn.Return<
   Pick<RunOptions<ThreadAdapterError>, "threadId" | "history" | "onHistory">,
   ThreadNotFound,
-  EphemeralThreads
+  ConversationStore
 > {
-  const threads = yield* EphemeralThreads;
+  const threads = yield* ConversationStore;
   const snapshot = yield* threads.snapshot(threadId);
 
   return {
     threadId,
-    history: threadPrompt(snapshot),
+    history: toPrompt(snapshot),
     onHistory: (history) => threads.recordHistory(threadId, runId, history).pipe(Effect.asVoid),
   };
 });

@@ -13,7 +13,6 @@
         "@effect-agent/storage-memory": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/testing": "workspace:*",
-        "@effect-agent/thread": "workspace:*",
         "@effect-agent/workflow": "workspace:*",
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
@@ -113,7 +112,6 @@
       "version": "0.1.0-beta.85",
       "dependencies": {
         "@effect-agent/storage-cloudflare": "workspace:*",
-        "@effect-agent/thread": "workspace:*",
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
         "effect-agent": "workspace:*",
@@ -148,7 +146,6 @@
       "version": "0.1.0-beta.85",
       "dependencies": {
         "@effect-agent/storage-sqlite": "workspace:*",
-        "@effect-agent/thread": "workspace:*",
         "@effect-agent/workflow": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
@@ -219,7 +216,6 @@
       "name": "@effect-agent/storage-cloudflare",
       "version": "0.1.0-beta.85",
       "dependencies": {
-        "@effect-agent/thread": "workspace:*",
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
         "effect-agent": "workspace:*",
@@ -242,7 +238,6 @@
       "name": "@effect-agent/storage-memory",
       "version": "0.1.0-beta.85",
       "dependencies": {
-        "@effect-agent/thread": "workspace:*",
         "effect-agent": "workspace:*",
       },
       "devDependencies": {
@@ -260,7 +255,6 @@
       "name": "@effect-agent/storage-sqlite",
       "version": "0.1.0-beta.85",
       "dependencies": {
-        "@effect-agent/thread": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
         "effect-agent": "workspace:*",
@@ -279,7 +273,6 @@
       "name": "@effect-agent/testing",
       "version": "0.1.0-beta.85",
       "dependencies": {
-        "@effect-agent/thread": "workspace:*",
         "effect-agent": "workspace:*",
       },
       "devDependencies": {
@@ -297,28 +290,10 @@
         "effect": "^4.0.0-rc.112",
       },
     },
-    "packages/thread": {
-      "name": "@effect-agent/thread",
-      "version": "0.1.0-beta.85",
-      "dependencies": {
-        "effect-agent": "workspace:*",
-      },
-      "devDependencies": {
-        "@effect/platform-node": "catalog:",
-        "@effect/vitest": "catalog:",
-        "effect": "catalog:",
-        "typescript": "catalog:",
-        "vite-plus": "catalog:",
-      },
-      "peerDependencies": {
-        "effect": "^4.0.0-rc.112",
-      },
-    },
     "packages/workflow": {
       "name": "@effect-agent/workflow",
       "version": "0.1.0-beta.85",
       "dependencies": {
-        "@effect-agent/thread": "workspace:*",
         "effect-agent": "workspace:*",
       },
       "devDependencies": {
@@ -360,7 +335,6 @@
       "dependencies": {
         "@effect-agent/platform-cloudflare": "workspace:*",
         "@effect-agent/storage-cloudflare": "workspace:*",
-        "@effect-agent/thread": "workspace:*",
         "@effect/platform-node": "catalog:",
         "effect": "catalog:",
         "effect-agent": "workspace:*",
@@ -382,7 +356,6 @@
       "dependencies": {
         "@effect-agent/platform-cloudflare": "workspace:*",
         "@effect-agent/platform-node": "workspace:*",
-        "@effect-agent/thread": "workspace:*",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-browser": "catalog:",
         "@effect/platform-node": "catalog:",
@@ -425,7 +398,6 @@
       "dependencies": {
         "@effect-agent/platform-node": "workspace:*",
         "@effect-agent/testing": "workspace:*",
-        "@effect-agent/thread": "workspace:*",
         "@effect/platform-node": "catalog:",
         "effect": "catalog:",
         "effect-agent": "workspace:*",
@@ -441,7 +413,6 @@
       "dependencies": {
         "@effect-agent/storage-memory": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
-        "@effect-agent/thread": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
         "@huggingface/transformers": "4.2.0",
@@ -745,7 +716,7 @@
 
     "@effect-agent/testing": ["@effect-agent/testing@workspace:packages/testing"],
 
-    "@effect-agent/thread": ["@effect-agent/thread@workspace:packages/thread"],
+    "@effect-agent/thread": ["@effect-agent/thread@0.1.0-beta.85", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.85", "@effect-agent/engine": "0.1.0-beta.85" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-VDCT1jlQKEuEZdacgJzO/Q1r1nhdUOdpt4CPajC15Wa9F7RutmYJuUvAFm8ahEDvY7wR6mNAJvAkHoFf7AiuHg=="],
 
     "@effect-agent/workflow": ["@effect-agent/workflow@workspace:packages/workflow"],
 
@@ -3054,8 +3025,6 @@
     "@effect-agent/example-travel-planner/@effect-agent/storage-cloudflare": ["@effect-agent/storage-cloudflare@0.1.0-beta.85", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.85", "@effect-agent/thread": "0.1.0-beta.85", "@effect/platform-browser": "4.0.0-rc.112", "@effect/sql-sqlite-do": "4.0.0-rc.112" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-8x3fwHfHxxoIA6m7YZ16oLZdCbKTSwo9EmAdpoUkuuxLhNudlvzFO+6HphiGP9SKKBy+WjzivZgN6Zar0rlP0Q=="],
 
     "@effect-agent/example-travel-planner/@effect-agent/testing": ["@effect-agent/testing@0.1.0-beta.85", "", { "dependencies": { "@effect-agent/capabilities": "0.1.0-beta.85", "@effect-agent/core": "0.1.0-beta.85", "@effect-agent/engine": "0.1.0-beta.85", "@effect-agent/sandbox": "0.1.0-beta.85", "@effect-agent/thread": "0.1.0-beta.85" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-4zbS6ykIujNlq6fdEPuYIZE1pXZM3mVRkWqd85KgW7iA92xWtQYjgr2m0aPKdPHfq2nazTHUBXwlXIFysS8fpQ=="],
-
-    "@effect-agent/example-travel-planner/@effect-agent/thread": ["@effect-agent/thread@0.1.0-beta.85", "", { "dependencies": { "@effect-agent/core": "0.1.0-beta.85", "@effect-agent/engine": "0.1.0-beta.85" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-VDCT1jlQKEuEZdacgJzO/Q1r1nhdUOdpt4CPajC15Wa9F7RutmYJuUvAFm8ahEDvY7wR6mNAJvAkHoFf7AiuHg=="],
 
     "@effect/platform-node-shared/ws": ["ws@8.21.3", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw=="],
 

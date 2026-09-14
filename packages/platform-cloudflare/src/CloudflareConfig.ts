@@ -1,7 +1,7 @@
 import { DEFAULT_MAX_STORED_VALUE_BYTES } from "@effect-agent/storage-cloudflare/do-storage-config";
-import { DeploymentId } from "@effect-agent/thread/records";
-import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "@effect-agent/thread/submission-ledger";
 import { Context, Duration, Schema } from "effect";
+import { DeploymentId } from "effect-agent/records";
+import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 
 /**
  * Schema-validated configuration for the Cloudflare durable runtime (deployment spec §4:

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect";
+import { Thread } from "effect-agent";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, type Response, Toolkit } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
@@ -110,6 +111,11 @@ describe("ephemeral assembly", () => {
           yield* AgentRuntime.run(child, "A separate conversation");
           const history = yield* ThreadHistory;
           const stored = yield* history.load(threadId);
+          const threads = yield* Thread.Store;
+          const conversation = yield* threads.snapshot(threadId);
+
+          expectTypeOf<typeof conversation>().toEqualTypeOf<Thread.Thread>();
+          expect(Thread.toPrompt(conversation)).toEqual(stored);
 
           expect(prompts[1]).toContain("Plan a trip to Lisbon");
           expect(prompts[1]).toContain("done");

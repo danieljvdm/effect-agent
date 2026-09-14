@@ -1,5 +1,5 @@
 ---
-"@effect-agent/thread": patch
+"effect-agent": patch
 ---
 
 Allow application projection checkpoint callers to omit deprecated compatibility metadata while preserving and validating values in existing checkpoints.

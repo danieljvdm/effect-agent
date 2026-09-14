@@ -1,25 +1,22 @@
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
-import { CanonicalSequence, ProducerEpoch } from "@effect-agent/thread/records";
-import { ScheduleFailpoint, ScheduleFailpointError } from "@effect-agent/thread/schedule";
+import { NodeCrypto } from "@effect/platform-node";
+import { SqliteMigrator } from "@effect/sql-sqlite-node";
+import { Effect, Exit, Schema } from "effect";
+import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { CanonicalSequence, ProducerEpoch } from "effect-agent/records";
+import { ScheduleFailpoint, ScheduleFailpointError } from "effect-agent/schedule";
 import {
   checkV2ThreadLayout,
   upgradeV2Schedules,
   upgradeV2Subscriptions,
-} from "@effect-agent/thread/sql-storage-v2-upgrade";
-import {
-  SubscriptionFailpoint,
-  SubscriptionFailpointError,
-} from "@effect-agent/thread/subscription";
+} from "effect-agent/sql-storage-v2-upgrade";
+import { SubscriptionFailpoint, SubscriptionFailpointError } from "effect-agent/subscription";
 import {
   MAX_THREAD_EXPORT_RECORDS,
   CheckpointRejected,
   FenceRejected,
   ThreadNotMaterialized,
   type SaveRecoveryCheckpointRequest,
-} from "@effect-agent/thread/thread-store";
-import { NodeCrypto } from "@effect/platform-node";
-import { SqliteMigrator } from "@effect/sql-sqlite-node";
-import { Effect, Exit, Schema } from "effect";
+} from "effect-agent/thread-store";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 

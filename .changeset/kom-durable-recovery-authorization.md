@@ -1,6 +1,6 @@
 ---
-"@effect-agent/thread": patch
 "@effect-agent/platform-cloudflare": patch
+"effect-agent": patch
 ---
 
 Preserve Run limits across durable recovery, require explicit delegation replay authority, and reject unusable compaction summaries. Authorize settlement waits and aborts through the runtime authorizer and reject settlement Receipts whose Submission belongs to another Thread.

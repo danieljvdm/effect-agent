@@ -2,27 +2,6 @@ import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-threa
 import { SqliteStorageFailpointError } from "@effect-agent/storage-sqlite/sqlite-storage-error";
 import { layer as sqliteStore } from "@effect-agent/storage-sqlite/sqlite-thread-store";
 import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scripted-model";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
-import { PersistentHistory } from "@effect-agent/thread/persistent-history";
-import {
-  BatchId,
-  CanonicalBatch,
-  CanonicalSequence,
-  DeploymentId,
-  ProducerEpoch,
-  ProducerId,
-  RecordEnvelope,
-  RecordId,
-  RepairAnnotated,
-} from "@effect-agent/thread/records";
-import { replayThread } from "@effect-agent/thread/thread-projection";
-import {
-  MAX_THREAD_EXPORT_RECORDS,
-  ThreadExportRequest,
-  ThreadMaterialization,
-  ThreadStore,
-  FencedAppendRequest,
-} from "@effect-agent/thread/thread-store";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
@@ -42,13 +21,34 @@ import {
   SchemaIssue,
   Stream,
 } from "effect";
+import { PersistentHistory } from "effect-agent";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
+import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { RunId, ThreadId } from "effect-agent/identifiers";
+import {
+  BatchId,
+  CanonicalBatch,
+  CanonicalSequence,
+  DeploymentId,
+  ProducerEpoch,
+  ProducerId,
+  RecordEnvelope,
+  RecordId,
+  RepairAnnotated,
+} from "effect-agent/records";
 import { RunCompleted, type RunEvent } from "effect-agent/run-event";
 import { RunContextPreparationPassthrough } from "effect-agent/run-options";
 import { ThreadHistory } from "effect-agent/thread-history";
+import { replayThread } from "effect-agent/thread-projection";
+import {
+  MAX_THREAD_EXPORT_RECORDS,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadStore,
+  FencedAppendRequest,
+} from "effect-agent/thread-store";
 import { TestClock } from "effect/testing";
 import { Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 

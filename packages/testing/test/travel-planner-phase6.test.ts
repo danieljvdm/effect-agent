@@ -14,14 +14,14 @@ import {
   phase6TravelPlannerGoldenEvidence,
   travelPlanFromDurableSettlement,
 } from "@effect-agent/testing/travel-planner";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
-import { IdempotencyKey } from "@effect-agent/thread/submission-ledger";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import { Effect, FileSystem, Layer, Schema, Stream } from "effect";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
+import { IdempotencyKey } from "effect-agent/submission-ledger";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 
 const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);

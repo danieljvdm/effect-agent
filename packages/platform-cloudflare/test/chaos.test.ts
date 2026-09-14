@@ -1,12 +1,12 @@
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import { type Receipt } from "@effect-agent/thread/durable-agent-runtime";
-import { type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Effect } from "effect";
+import { type Receipt } from "effect-agent/durable-agent-runtime";
+import { type CanonicalRecordEnvelope } from "effect-agent/records";
 import {
   submissionInputRecordId,
   submissionSettlementRecordId,
-} from "@effect-agent/thread/submission-ledger";
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Effect } from "effect";
+} from "effect-agent/submission-ledger";
 import { describe, expect, it } from "vite-plus/test";
 
 import {

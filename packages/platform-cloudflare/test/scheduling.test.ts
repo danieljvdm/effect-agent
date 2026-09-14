@@ -4,16 +4,16 @@ import {
   type makeScheduleOwnerObjectClass,
 } from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
 import { DoScheduleAlarmControl } from "@effect-agent/storage-cloudflare/do-schedule-store";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, type Layer, Schema } from "effect";
 import {
   ScheduleId,
   defaultSchedulingLimits,
   type ScheduleAuthorizer,
   type ScheduleOwner,
-} from "@effect-agent/thread/schedule";
-import { scheduleOwnerKey } from "@effect-agent/thread/schedule-transition";
-import { Scheduling } from "@effect-agent/thread/scheduling";
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, type Layer, Schema } from "effect";
+} from "effect-agent/schedule";
+import { scheduleOwnerKey } from "effect-agent/schedule-transition";
+import { Scheduling } from "effect-agent/scheduling";
 import { DurableObject, type DurableObjectState, type WorkerEnvironment } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";

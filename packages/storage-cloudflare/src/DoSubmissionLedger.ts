@@ -1,4 +1,8 @@
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
+import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Stream } from "effect";
+import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { InputMessage } from "effect-agent/messaging";
 import {
   ApprovalDecision,
   CanonicalSequence,
@@ -9,7 +13,7 @@ import {
   ProducerEpoch,
   RecordEnvelope,
   SettlementOutcome,
-} from "@effect-agent/thread/records";
+} from "effect-agent/records";
 import {
   AbortCommand,
   AbortIntent,
@@ -81,11 +85,7 @@ import {
   submissionAbortRecordId,
   type ChildSettledOutcome,
   type SuspensionOutcome,
-} from "@effect-agent/thread/submission-ledger";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Stream } from "effect";
-import { InputMessage } from "effect-agent/messaging";
+} from "effect-agent/submission-ledger";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 

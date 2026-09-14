@@ -3,9 +3,12 @@ import {
   DoSubscriptionTransaction,
   doSubscriptionStoreLayer,
 } from "@effect-agent/storage-cloudflare/do-subscription-store";
-import { type EventSources } from "@effect-agent/thread/event-source";
-import { PersistedJson } from "@effect-agent/thread/records";
-import { Principal } from "@effect-agent/thread/submission-ledger";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
+import { Cause, Clock, Context, DateTime, Effect, Layer, Schema, type Scope } from "effect";
+import { type EventSources } from "effect-agent/event-source";
+import { PersistedJson } from "effect-agent/records";
+import { Principal } from "effect-agent/submission-ledger";
 import {
   EventAcknowledgement,
   EventSourceVersion,
@@ -22,16 +25,9 @@ import {
   SubscriptionSnapshot,
   SubscriptionSourceError,
   defaultSubscriptionLimits,
-} from "@effect-agent/thread/subscription";
-import { type SubscriptionInputBindings } from "@effect-agent/thread/subscription-input";
-import {
-  SubscriptionDriver,
-  SubscriptionIntake,
-  Subscriptions,
-} from "@effect-agent/thread/subscriptions";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Cause, Clock, Context, DateTime, Effect, Layer, Schema, type Scope } from "effect";
+} from "effect-agent/subscription";
+import { type SubscriptionInputBindings } from "effect-agent/subscription-input";
+import { SubscriptionDriver, SubscriptionIntake, Subscriptions } from "effect-agent/subscriptions";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectAlarm,

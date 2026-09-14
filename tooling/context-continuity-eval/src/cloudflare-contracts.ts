@@ -1,7 +1,7 @@
-import { CanonicalRecordEnvelope, DefinitionDigestInput } from "@effect-agent/thread/records";
 import { Schema } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import { CanonicalRecordEnvelope, DefinitionDigestInput } from "effect-agent/records";
 
 import {
   CompactionEvidence,

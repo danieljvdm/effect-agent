@@ -5,11 +5,11 @@ import {
 } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
-import { digestDefinitions } from "@effect-agent/thread/digest";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runInDurableObject } from "cloudflare:test";
 import { Cause, Context, Crypto, Effect, Exit, Layer, Option, Schema } from "effect";
+import { digestDefinitions } from "effect-agent/digest";
 import { DurableObjectState, WorkerEnvironment } from "effect-cf";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";

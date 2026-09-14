@@ -3,8 +3,8 @@ import {
   makeSubscriptionPartitionAlarmHandler,
   SubscriptionAlarmExtensionError,
 } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
-import { SubscriptionDriver } from "@effect-agent/thread/subscriptions";
 import { Context, DateTime, Deferred, Effect, Exit, Fiber, Schema, SchemaGetter } from "effect";
+import { SubscriptionDriver } from "effect-agent/subscriptions";
 import { DurableObjectAlarm } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { expect, expectTypeOf, it } from "vite-plus/test";

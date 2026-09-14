@@ -30,7 +30,7 @@ import {
   WorkerReport,
 } from "../tooling/runtime-benchmark/src/contracts.ts";
 import { writeEvidence } from "../tooling/runtime-benchmark/src/evidence.ts";
-import { comparisonExports } from "./internal/comparison-exports.ts";
+import { comparisonExports, stageComparisonModules } from "./internal/comparison-exports.ts";
 import { PublishManifest, withPublishManifests } from "./release-publish.ts";
 
 const Revision = Schema.Struct({
@@ -226,6 +226,8 @@ export const stageCheckout = Effect.fn("benchmark.stageCheckout")(function* (
     yield* fs.makeDirectory(path.dirname(link), { recursive: true });
     yield* fs.symlink(destination, link);
   }
+
+  yield* stageComparisonModules(stage);
 
   return {
     stage,

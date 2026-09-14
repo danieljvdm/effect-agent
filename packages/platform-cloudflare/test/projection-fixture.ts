@@ -1,13 +1,13 @@
-import { DurableWorkerBinding } from "@effect-agent/thread/agent-registration";
-import type { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
-import { CanonicalSequence } from "@effect-agent/thread/records";
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { DurableWorkerBinding } from "effect-agent/agent-registration";
+import type { CanonicalRecordEnvelope } from "effect-agent/records";
+import { CanonicalSequence } from "effect-agent/records";
 import {
   ThreadProjectionError,
   ThreadProjectionMaintenance,
-} from "@effect-agent/thread/thread-projection-maintenance";
-import { ThreadRead, ThreadStore, ThreadTailRequest } from "@effect-agent/thread/thread-store";
-import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
+} from "effect-agent/thread-projection-maintenance";
+import { ThreadRead, ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 

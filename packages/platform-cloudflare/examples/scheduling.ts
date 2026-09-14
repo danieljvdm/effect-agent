@@ -4,10 +4,10 @@ import {
   ScheduleOwnerNamespace,
   makeScheduleOwnerObjectClass,
 } from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
-import { type DurableSubmitAgent } from "@effect-agent/thread/durable-agent-runtime";
-import { type ScheduleAuthorizer } from "@effect-agent/thread/schedule";
-import { type ScheduleCreateOptions, Scheduling } from "@effect-agent/thread/scheduling";
 import { Effect, Layer, type Schema } from "effect";
+import { type DurableSubmitAgent } from "effect-agent/durable-agent-runtime";
+import { type ScheduleAuthorizer } from "effect-agent/schedule";
+import { type ScheduleCreateOptions, Scheduling } from "effect-agent/scheduling";
 import { WorkerEnvironment } from "effect-cf";
 
 /**

@@ -1,25 +1,5 @@
 import { NodeDurableHost } from "@effect-agent/platform-node/node-durable-host";
 import { NodeScheduling } from "@effect-agent/platform-node/node-scheduling";
-import {
-  type DurableRuntimeFailpointHandler,
-  DurableRuntimeFailpointError,
-} from "@effect-agent/thread/durable-failpoint";
-import { DefinitionDigests, Digest } from "@effect-agent/thread/records";
-import {
-  ScheduleAuthorizer,
-  ScheduleFailpoint,
-  ScheduleFailpointError,
-  ScheduleId,
-  ScheduleStore,
-  defaultSchedulingLimits,
-  type ScheduleSnapshot,
-} from "@effect-agent/thread/schedule";
-import { Scheduling } from "@effect-agent/thread/scheduling";
-import {
-  Principal,
-  SubmissionLedger,
-  SubmissionLookupByKey,
-} from "@effect-agent/thread/submission-ledger";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
@@ -35,7 +15,23 @@ import {
   Schema,
   Scope,
 } from "effect";
+import {
+  type DurableRuntimeFailpointHandler,
+  DurableRuntimeFailpointError,
+} from "effect-agent/durable-failpoint";
 import { AgentId } from "effect-agent/identifiers";
+import { DefinitionDigests, Digest } from "effect-agent/records";
+import {
+  ScheduleAuthorizer,
+  ScheduleFailpoint,
+  ScheduleFailpointError,
+  ScheduleId,
+  ScheduleStore,
+  defaultSchedulingLimits,
+  type ScheduleSnapshot,
+} from "effect-agent/schedule";
+import { Scheduling } from "effect-agent/scheduling";
+import { Principal, SubmissionLedger, SubmissionLookupByKey } from "effect-agent/submission-ledger";
 import { TestClock } from "effect/testing";
 
 const digest = Schema.decodeSync(Digest)("a".repeat(64));

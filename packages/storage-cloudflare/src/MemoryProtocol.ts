@@ -1,4 +1,3 @@
-import { Principal } from "@effect-agent/thread/submission-ledger";
 import { Clock, Context, Effect, Schema } from "effect";
 import * as MemoryNamespace from "effect-agent/memory-namespace";
 import { MemoryLookup, MemoryRecallError, MemoryRecallLimits } from "effect-agent/memory-reference";
@@ -26,6 +25,7 @@ import {
   SemanticCandidateResult,
   revalidateSemanticMemoryCandidates,
 } from "effect-agent/semantic-memory-revalidation";
+import { Principal } from "effect-agent/submission-ledger";
 
 export class MemoryRpcError extends Schema.TaggedError<MemoryRpcError>()("MemoryRpcError", {
   reason: Schema.Literals(["denied", "protocol", "budget", "timeout", "unavailable"]),

@@ -182,7 +182,7 @@ Here is the default authorization policy; replace it with your application's imp
 
 ```ts twoslash
 import { RunToolAuthorization } from "effect-agent/run-options";
-import { DurableAgentRuntime } from "@effect-agent/thread/durable-agent-runtime";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { Layer } from "effect";
 
 export const RuntimeLive = DurableAgentRuntime.layerWithServices.pipe(

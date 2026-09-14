@@ -1,0 +1,2022 @@
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it, layer } from "@effect/vitest";
+import { DateTime, Effect, Layer, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import * as AgentRuntime from "effect-agent/agent-runtime";
+import { contextWindowId, contextWindowMessage } from "effect-agent/compaction";
+import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { ThreadId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
+import {
+  BatchId,
+  CanonicalBatch,
+  CanonicalRecordEnvelope,
+  CanonicalSequence,
+  DeploymentId,
+  ObservationOffset,
+  ProducerId,
+  RecordEnvelope,
+  RecordId,
+} from "effect-agent/records";
+import {
+  childThreadIdFor,
+  childIdempotencyKeyFor,
+  RunJournalError,
+  modelResponseRecordId,
+  promptFromCanonicalRecords,
+  projectRunJournal,
+  projectRunJournalStream,
+  runCompletedRecordId,
+  runIdForSubmission,
+  subagentJoinBatchId,
+  subagentJoinedRecordId,
+  subagentLineageBatchId,
+  subagentLineageRecordId,
+  subagentRequestedBatchId,
+  subagentRequestedRecordId,
+  subagentStartedBatchId,
+  subagentStartedRecordId,
+  toolCallSettledRecordId,
+  turnCanonicalBatch,
+  turnIdForRun,
+  turnPreparedBatchId,
+  turnResponseBatch,
+  turnResponseBatchId,
+  turnResultsBatch,
+  turnResultsBatchId,
+} from "effect-agent/run-journal";
+import { ThreadHistory } from "effect-agent/thread-history";
+import { Selection, Snapshot } from "effect-agent/tool-exposure";
+import { summarizeModelUsage } from "effect-agent/usage";
+import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
+
+import { JournalCheckpointSeed } from "../../src/durable/internal/journal-checkpoint.ts";
+import { makeJournalMetadata } from "../../src/durable/internal/journal-metadata.ts";
+
+const SUBMISSION_ID = Schema.decodeSync(SubmissionId)("submission-journal");
+const RUN_ID = runIdForSubmission(SUBMISSION_ID);
+const LATER_RUN_ID = runIdForSubmission(Schema.decodeSync(SubmissionId)("submission-later"));
+const RUN_NONE_ID = runIdForSubmission(Schema.decodeSync(SubmissionId)("none"));
+const CALL_ONE = Schema.decodeSync(ToolCallId)("call-1");
+const CALL_TWO = Schema.decodeSync(ToolCallId)("call-2");
+const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-journal");
+const DEPLOYMENT_ID = Schema.decodeSync(DeploymentId)("deployment-journal");
+const CREATED_AT = DateTime.toUtc(DateTime.makeUnsafe(1_000));
+const THREAD_ID = Schema.decodeSync(ThreadId)("thread-journal");
+const isRunJournalError = Schema.is(RunJournalError);
+
+/** One tool-declaring Turn: instructions + input + assistant declaration + two tool results. */
+const toolTurnAppended: ReadonlyArray<Prompt.Message> = [
+  Prompt.makeMessage("system", { content: "Answer as JSON." }),
+  Prompt.makeMessage("user", {
+    content: [Prompt.makePart("text", { text: '{"question":"book?"}' })],
+  }),
+  Prompt.makeMessage("assistant", {
+    content: [
+      Prompt.makePart("tool-call", {
+        id: "call-1",
+        name: "book_flight",
+        params: { destination: "Kyoto" },
+        providerExecuted: false,
+      }),
+      Prompt.makePart("tool-call", {
+        id: "call-2",
+        name: "book_lodging",
+        params: { nights: 3 },
+        providerExecuted: false,
+      }),
+    ],
+  }),
+  Prompt.makeMessage("tool", {
+    content: [
+      Prompt.makePart("tool-result", {
+        id: "call-1",
+        name: "book_flight",
+        result: { bookingRef: "flight-42" },
+        isFailure: false,
+        providerExecuted: false,
+      }),
+      Prompt.makePart("tool-result", {
+        id: "call-2",
+        name: "book_lodging",
+        result: { bookingRef: "lodging-7" },
+        isFailure: false,
+        providerExecuted: false,
+      }),
+    ],
+  }),
+];
+
+const completionTurnAppended: ReadonlyArray<Prompt.Message> = [
+  Prompt.makeMessage("assistant", {
+    content: [
+      Prompt.makePart("tool-call", {
+        id: "call-1",
+        name: "post_message",
+        params: { message: "Your flight is booked." },
+        providerExecuted: false,
+      }),
+    ],
+  }),
+  Prompt.makeMessage("tool", {
+    content: [
+      Prompt.makePart("tool-result", {
+        id: "call-1",
+        name: "post_message",
+        result: { messageId: "message-42" },
+        isFailure: false,
+        providerExecuted: false,
+      }),
+    ],
+  }),
+];
+
+const finalTurnAppended: ReadonlyArray<Prompt.Message> = [
+  Prompt.makeMessage("assistant", {
+    content: [Prompt.makePart("text", { text: '{"answer":"Booked."}' })],
+  }),
+];
+
+const turnInput = (
+  appended: ReadonlyArray<Prompt.Message>,
+  turn = 1,
+  runId = RUN_ID,
+  usage?: { readonly inputTokens: number; readonly outputTokens: number },
+) => ({
+  runId,
+  turn,
+  turnId: turnIdForRun(runId, turn),
+  appended,
+  producerId: PRODUCER_ID,
+  deploymentId: DEPLOYMENT_ID,
+  createdAt: CREATED_AT,
+  ...(usage === undefined ? {} : { usage }),
+});
+
+const envelopeAt = (sequence: number, record: RecordEnvelope): CanonicalRecordEnvelope =>
+  CanonicalRecordEnvelope.make({
+    threadId: THREAD_ID,
+    batchId: Schema.decodeSync(BatchId)(`batch-journal-${sequence}`),
+    sequence: Schema.decodeSync(CanonicalSequence)(sequence),
+    offset: Schema.decodeSync(ObservationOffset)(`memory:${sequence}`),
+    record,
+  });
+
+const envelopesOf = (batches: ReadonlyArray<CanonicalBatch>): Array<CanonicalRecordEnvelope> => {
+  const envelopes: Array<CanonicalRecordEnvelope> = [];
+
+  for (const batch of batches) {
+    for (const record of batch.records) {
+      envelopes.push(envelopeAt(envelopes.length + 1, record));
+    }
+  }
+
+  return envelopes;
+};
+
+const textOfPrompt = (prompt: Prompt.Prompt): string =>
+  prompt.content
+    .map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : message.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
+    )
+    .join("\n");
+
+const resultsOfPrompt = (prompt: Prompt.Prompt): ReadonlyArray<unknown> =>
+  prompt.content.flatMap((message) =>
+    message.role === "tool"
+      ? message.content.filter((part) => part.type === "tool-result").map((part) => part.result)
+      : [],
+  );
+
+const auditRecord = (
+  recordId: string,
+  payload: (typeof RecordEnvelope.Encoded)["payload"],
+): RecordEnvelope =>
+  Schema.decodeSync(RecordEnvelope)({
+    recordId,
+    family: "thread",
+    schemaVersion: 1,
+    createdAt: "2026-08-12T12:00:00.000Z",
+    deploymentId: "deployment-journal",
+    payload,
+  });
+
+describe("run journal batch split (plan §2.1)", () => {
+  layer(NodeCrypto.layer)((it) => {
+    it.effect(
+      "journals native provider results after the engine freezes snapshot array prototypes",
+      () =>
+        Effect.gen(function* () {
+          const action = {
+            type: "search",
+            queries: ["Tahoe private hot tub"],
+            sources: [{ type: "url", url: "https://www.tahoegetaways.com/" }],
+          };
+
+          const actionSchema = Schema.Struct({
+            type: Schema.Literal("search"),
+            queries: Schema.Array(Schema.String),
+            sources: Schema.Array(
+              Schema.Struct({ type: Schema.Literal("url"), url: Schema.String }),
+            ),
+          });
+
+          const search = Tool.providerDefined({
+            id: "test.web_search",
+            customName: "HostedSearch",
+            providerName: "web_search",
+            parameters: Schema.Struct({ action: actionSchema }),
+            success: Schema.Struct({ action: actionSchema, status: Schema.String }),
+          })(undefined);
+
+          const definition = Agent.make("journal-provider-search", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Search once and answer as JSON.",
+            toolkit: Toolkit.make(search),
+            policy: { maxTurns: 1, maxToolCalls: 1, maxDuration: "30 seconds", toolConcurrency: 1 },
+          });
+
+          const parts: ReadonlyArray<Response.StreamPartEncoded> = [
+            {
+              type: "tool-call",
+              id: "search-1",
+              name: "HostedSearch",
+              params: { action },
+              providerExecuted: true,
+            },
+            {
+              type: "tool-result",
+              id: "search-1",
+              name: "HostedSearch",
+              result: { action, status: "completed" },
+              providerExecuted: true,
+              isFailure: false,
+            },
+            { type: "text-start", id: "answer" },
+            { type: "text-delta", id: "answer", delta: '"Found a listing."' },
+            { type: "text-end", id: "answer" },
+            { type: "finish", reason: "stop", usage: { inputTokens: {}, outputTokens: {} } },
+          ];
+
+          const model = Model.make(
+            "scripted",
+            "journal-search",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: () => Stream.fromIterable(parts),
+              }),
+            ),
+          );
+
+          const retained = yield* Ref.make(Prompt.empty);
+
+          yield* AgentRuntime.run(Agent.withModel(definition, model), "Find a listing", {
+            onHistory: (history) => Ref.set(retained, history),
+          }).pipe(Effect.provide([ThreadHistory.layer]));
+          const history = yield* Ref.get(retained);
+
+          const providerResult = history.content.flatMap((message) =>
+            message.role === "assistant"
+              ? message.content.filter((part) => part.type === "tool-result")
+              : [],
+          )[0];
+
+          if (providerResult === undefined)
+            return yield* Effect.die("Expected the staged provider result");
+
+          const frozen = Schema.decodeUnknownSync(
+            Schema.Struct({
+              action: Schema.Struct({ queries: Schema.Unknown, sources: Schema.Unknown }),
+            }),
+          )(providerResult.result);
+
+          for (const array of [frozen.action.queries, frozen.action.sources]) {
+            expect(Array.isArray(array)).toBe(true);
+            expect(Object.getPrototypeOf(array)).toBeNull();
+            expect(Object.isFrozen(array)).toBe(true);
+          }
+          const batch = yield* turnResponseBatch(turnInput(history.content));
+
+          const plainBatch = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalBatch))(
+            JSON.stringify(Schema.encodeSync(CanonicalBatch)(batch)),
+          );
+
+          expect(yield* digestCanonicalBatch(EMPTY_TAIL_DIGEST, batch)).toBe(
+            yield* digestCanonicalBatch(EMPTY_TAIL_DIGEST, plainBatch),
+          );
+          const projected = yield* projectRunJournal(envelopesOf([batch]), RUN_ID);
+          const encoded = Schema.encodeSync(Prompt.Prompt)(projected.prompt);
+
+          expect(JSON.stringify(encoded)).toContain("https://www.tahoegetaways.com/");
+          expect(JSON.stringify(encoded)).toContain("Tahoe private hot tub");
+          const replayed = yield* Ref.make(false);
+
+          const replayModel = Model.make(
+            "scripted",
+            "journal-search-replay",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: (request) =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      const result = request.prompt.content.flatMap((message) =>
+                        message.role === "assistant"
+                          ? message.content.filter((part) => part.type === "tool-result")
+                          : [],
+                      )[0];
+
+                      expect(result).toMatchObject({
+                        providerExecuted: true,
+                        result: { action, status: "completed" },
+                      });
+                      yield* Ref.set(replayed, true);
+
+                      return Stream.fromIterable(
+                        parts.filter(
+                          (part) => part.type !== "tool-call" && part.type !== "tool-result",
+                        ),
+                      );
+                    }),
+                  ),
+              }),
+            ),
+          );
+
+          yield* AgentRuntime.run(
+            Agent.withModel(definition, replayModel),
+            "Use the previous search",
+            {
+              history: projected.prompt,
+            },
+          ).pipe(Effect.provide([ThreadHistory.layer]));
+          expect(yield* Ref.get(replayed)).toBe(true);
+        }),
+    );
+
+    it.effect("splits a tool Turn into response and results batches with stable identities", () =>
+      Effect.gen(function* () {
+        const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
+
+        expect(response.batchId).toBe(turnResponseBatchId(RUN_ID, 1));
+        expect(response.batchId).toBe(`turn-response:${RUN_ID}:1`);
+        expect(response.records.map((record) => record.recordId)).toEqual([
+          modelResponseRecordId(RUN_ID, 1),
+        ]);
+        expect(response.records[0]?.payload._tag).toBe("ModelResponseRecorded");
+
+        const results = yield* turnResultsBatch(turnInput(toolTurnAppended));
+
+        expect(results.batchId).toBe(turnResultsBatchId(RUN_ID, 1));
+        expect(results.batchId).toBe(`turn-results:${RUN_ID}:1`);
+        // Declaration order, record identity unchanged from the P4 single-batch shape.
+        expect(results.records.map((record) => record.recordId)).toEqual([
+          toolCallSettledRecordId(RUN_ID, 1, CALL_ONE),
+          toolCallSettledRecordId(RUN_ID, 1, CALL_TWO),
+        ]);
+        for (const record of results.records) {
+          expect(record.payload._tag).toBe("ToolCallSettled");
+        }
+        expect(turnPreparedBatchId(RUN_ID, 1)).toBe(`turn-prepared:${RUN_ID}:1`);
+
+        // The split is deterministic: rebuilding yields byte-identical batches (honest replay).
+        const responseAgain = yield* turnResponseBatch(turnInput(toolTurnAppended));
+        const encodedAgain = yield* Schema.encodeEffect(RecordEnvelope)(responseAgain.records[0]!);
+        const encodedFirst = yield* Schema.encodeEffect(RecordEnvelope)(response.records[0]!);
+
+        expect(encodedAgain).toEqual(encodedFirst);
+      }),
+    );
+
+    it.effect("replays split-batch commits to the same prompt as P4 single-batch commits", () =>
+      Effect.gen(function* () {
+        const single = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+        const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
+        const results = yield* turnResultsBatch(turnInput(toolTurnAppended));
+
+        const singleProjection = yield* projectRunJournal(envelopesOf([single]), RUN_ID);
+        const splitProjection = yield* projectRunJournal(envelopesOf([response, results]), RUN_ID);
+
+        expect(splitProjection.committedTurns).toBe(singleProjection.committedTurns);
+        expect(splitProjection.prompt).toEqual(singleProjection.prompt);
+        expect(splitProjection.historyBefore).toEqual(singleProjection.historyBefore);
+      }),
+    );
+
+    it.effect("commits a no-tool final response and Run completion marker atomically", () =>
+      Effect.gen(function* () {
+        const batch = yield* turnCanonicalBatch({
+          ...turnInput(finalTurnAppended),
+          runCompletion: {
+            output: { answer: "Booked." },
+          },
+        });
+
+        expect(batch.records.map((record) => record.recordId)).toEqual([
+          modelResponseRecordId(RUN_ID, 1),
+          runCompletedRecordId(RUN_ID),
+        ]);
+        expect(batch.records[1]?.payload).toMatchObject({
+          _tag: "RunCompleted",
+          runId: RUN_ID,
+          output: { answer: "Booked." },
+        });
+      }),
+    );
+
+    it.effect("commits a terminal Tool result and Run completion marker atomically", () =>
+      Effect.gen(function* () {
+        const results = yield* turnResultsBatch({
+          ...turnInput(completionTurnAppended),
+          runCompletion: {
+            output: { deliveredMessageId: "message-42" },
+            runDisposition: { channel: "support" },
+          },
+        });
+
+        expect(results.records.map((record) => record.recordId)).toEqual([
+          toolCallSettledRecordId(RUN_ID, 1, CALL_ONE),
+          runCompletedRecordId(RUN_ID),
+        ]);
+        expect(results.records[1]?.payload).toMatchObject({
+          _tag: "RunCompleted",
+          runId: RUN_ID,
+          output: { deliveredMessageId: "message-42" },
+          runDisposition: { channel: "support" },
+        });
+      }),
+    );
+
+    it.effect("does not replay an incomplete assistant Tool turn into a later Run", () =>
+      Effect.gen(function* () {
+        const failedResponse = yield* turnResponseBatch(turnInput(toolTurnAppended));
+        const records = envelopesOf([failedResponse]);
+
+        const recovering = yield* projectRunJournal(records, RUN_ID);
+
+        expect(
+          recovering.prompt.content.some(
+            (message) =>
+              message.role === "assistant" &&
+              message.content.some((part) => part.type === "tool-call" && part.id === CALL_ONE),
+          ),
+        ).toBe(true);
+
+        const later = yield* projectRunJournal(records, LATER_RUN_ID);
+
+        expect(later.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
+        expect(
+          later.prompt.content.some(
+            (message) =>
+              message.role === "assistant" &&
+              message.content.some((part) => part.type === "tool-call"),
+          ),
+        ).toBe(false);
+        expect(later.historyBefore).toEqual(later.prompt);
+      }),
+    );
+
+    it.effect("does not reserve the real run:none identity for canonical prompt projection", () =>
+      Effect.gen(function* () {
+        expect(RUN_NONE_ID).toBe("run:none");
+        const response = yield* turnResponseBatch(turnInput(toolTurnAppended, 1, RUN_NONE_ID));
+        const records = envelopesOf([response]);
+
+        const recovering = yield* projectRunJournal(records, RUN_NONE_ID);
+
+        expect(recovering.prompt.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "assistant",
+        ]);
+
+        const canonicalPrompt = yield* promptFromCanonicalRecords(records);
+
+        expect(canonicalPrompt.content.map((message) => message.role)).toEqual(["system", "user"]);
+      }),
+    );
+
+    it.effect("reports an invalid persisted Tool Call ID as a journal error", () =>
+      Effect.gen(function* () {
+        const malformedTurn: ReadonlyArray<Prompt.Message> = [
+          Prompt.makeMessage("assistant", {
+            content: [
+              Prompt.makePart("tool-call", {
+                id: "",
+                name: "book_flight",
+                params: { destination: "Kyoto" },
+                providerExecuted: false,
+              }),
+            ],
+          }),
+        ];
+
+        const response = yield* turnResponseBatch(turnInput(malformedTurn));
+
+        const error = yield* promptFromCanonicalRecords(envelopesOf([response])).pipe(Effect.flip);
+
+        expect(isRunJournalError(error)).toBe(true);
+        expect(error.message).toBe("Failed to decode a declared Tool Call ID");
+      }),
+    );
+
+    it.effect(
+      "omits a partially settled application Tool batch from later Runs without classifying provider calls",
+      () =>
+        Effect.gen(function* () {
+          const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
+          const results = yield* turnResultsBatch(turnInput(toolTurnAppended));
+          const firstSettled = results.records[0]!;
+
+          const partialRecords = [response.records[0]!, firstSettled].map((record, index) =>
+            envelopeAt(index + 1, record),
+          );
+
+          const recovering = yield* projectRunJournal(partialRecords, RUN_ID);
+
+          const recoveringAssistant = recovering.prompt.content.find(
+            (message) => message.role === "assistant",
+          );
+
+          expect(
+            recoveringAssistant?.role === "assistant"
+              ? recoveringAssistant.content
+                  .filter((part) => part.type === "tool-call")
+                  .map((part) => part.id)
+              : [],
+          ).toEqual([CALL_ONE, CALL_TWO]);
+
+          const recoveringTool = recovering.prompt.content.find(
+            (message) => message.role === "tool",
+          );
+
+          expect(
+            recoveringTool?.role === "tool"
+              ? recoveringTool.content
+                  .filter((part) => part.type === "tool-result")
+                  .map((part) => part.id)
+              : [],
+          ).toEqual([CALL_ONE]);
+
+          const later = yield* projectRunJournal(partialRecords, LATER_RUN_ID);
+
+          expect(later.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
+          expect(later.prompt.content.some((message) => message.role === "assistant")).toBe(false);
+          expect(later.prompt.content.some((message) => message.role === "tool")).toBe(false);
+
+          const providerTurn: ReadonlyArray<Prompt.Message> = [
+            Prompt.makeMessage("system", { content: "Answer as JSON." }),
+            Prompt.makeMessage("user", {
+              content: [Prompt.makePart("text", { text: '{"question":"search?"}' })],
+            }),
+            Prompt.makeMessage("assistant", {
+              content: [
+                Prompt.makePart("tool-call", {
+                  id: "provider-call",
+                  name: "web_search",
+                  params: { query: "Kyoto" },
+                  providerExecuted: true,
+                }),
+              ],
+            }),
+          ];
+
+          const providerResponse = yield* turnResponseBatch(turnInput(providerTurn));
+
+          const providerLater = yield* projectRunJournal(
+            envelopesOf([providerResponse]),
+            LATER_RUN_ID,
+          );
+
+          expect(providerLater.prompt.content.map((message) => message.role)).toEqual([
+            "system",
+            "user",
+            "assistant",
+          ]);
+        }),
+    );
+
+    it.effect("matches Tool settlements by Run, Turn, and call identity", () =>
+      Effect.gen(function* () {
+        const firstTurn: ReadonlyArray<Prompt.Message> = [
+          Prompt.makeMessage("system", { content: "Answer as JSON." }),
+          Prompt.makeMessage("user", {
+            content: [Prompt.makePart("text", { text: '{"question":"book twice?"}' })],
+          }),
+          Prompt.makeMessage("assistant", {
+            content: [
+              Prompt.makePart("tool-call", {
+                id: CALL_ONE,
+                name: "book_flight",
+                params: { destination: "Kyoto" },
+                providerExecuted: false,
+              }),
+            ],
+          }),
+          Prompt.makeMessage("tool", {
+            content: [
+              Prompt.makePart("tool-result", {
+                id: CALL_ONE,
+                name: "book_flight",
+                result: { bookingRef: "flight-42" },
+                isFailure: false,
+                providerExecuted: false,
+              }),
+            ],
+          }),
+        ];
+
+        const secondTurn: ReadonlyArray<Prompt.Message> = [
+          Prompt.makeMessage("assistant", {
+            content: [
+              Prompt.makePart("tool-call", {
+                id: CALL_ONE,
+                name: "book_flight",
+                params: { destination: "Osaka" },
+                providerExecuted: false,
+              }),
+            ],
+          }),
+        ];
+
+        const firstResponse = yield* turnResponseBatch(turnInput(firstTurn));
+        const firstResults = yield* turnResultsBatch(turnInput(firstTurn));
+        const secondResponse = yield* turnResponseBatch(turnInput(secondTurn, 2));
+        const records = envelopesOf([firstResponse, firstResults, secondResponse]);
+
+        const recovering = yield* projectRunJournal(records, RUN_ID);
+
+        expect(recovering.prompt.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "assistant",
+          "tool",
+          "assistant",
+        ]);
+
+        const later = yield* projectRunJournal(records, LATER_RUN_ID);
+
+        expect(later.prompt.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "assistant",
+          "tool",
+        ]);
+        expect(later.prompt.content.filter((message) => message.role === "assistant")).toHaveLength(
+          1,
+        );
+        expect(
+          later.prompt.content.flatMap((message) =>
+            message.role === "tool"
+              ? message.content.filter((part) => part.type === "tool-result").map((part) => part.id)
+              : [],
+          ),
+        ).toEqual([CALL_ONE]);
+      }),
+    );
+
+    it.effect(
+      "RUN-033: keeps run-scoped instructions canonical while excluding them from later model prompts",
+      () =>
+        Effect.gen(function* () {
+          const firstResponse = yield* turnResponseBatch({
+            ...turnInput(toolTurnAppended),
+            runScopedPrefixLength: 2,
+          });
+
+          const firstResults = yield* turnResultsBatch(turnInput(toolTurnAppended));
+
+          const chatTurn: ReadonlyArray<Prompt.Message> = [
+            Prompt.makeMessage("user", {
+              content: [
+                Prompt.makePart("text", { text: "Please mention the cancellation terms." }),
+              ],
+            }),
+            Prompt.makeMessage("assistant", {
+              content: [
+                Prompt.makePart("text", { text: '{"answer":"Cancellation terms added."}' }),
+              ],
+            }),
+          ];
+
+          const secondResponse = yield* turnResponseBatch(turnInput(chatTurn, 2));
+          const records = envelopesOf([firstResponse, firstResults, secondResponse]);
+
+          const recovering = yield* projectRunJournal(records, RUN_ID);
+
+          expect(textOfPrompt(recovering.prompt)).toContain("Answer as JSON.");
+          expect(textOfPrompt(recovering.prompt)).toContain("book?");
+
+          const later = yield* projectRunJournal(records, LATER_RUN_ID);
+          const laterText = textOfPrompt(later.historyBefore);
+
+          expect(laterText).not.toContain("Answer as JSON.");
+          expect(laterText).not.toContain("book?");
+          expect(laterText).toContain("Please mention the cancellation terms.");
+          expect(laterText).toContain("Cancellation terms added.");
+          expect(resultsOfPrompt(later.historyBefore)).toEqual([
+            { bookingRef: "flight-42" },
+            { bookingRef: "lodging-7" },
+          ]);
+        }),
+    );
+
+    it.effect("projects prepared/unknown/step/approval/resolution records transparently", () =>
+      Effect.gen(function* () {
+        const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
+        const results = yield* turnResultsBatch(turnInput(toolTurnAppended));
+        const [firstSettled, secondSettled] = results.records;
+
+        const prepared = auditRecord(`tool-prepared:${RUN_ID}:1:call-1`, {
+          _tag: "ToolCallPrepared",
+          runId: RUN_ID,
+          turnId: turnIdForRun(RUN_ID, 1),
+          turn: 1,
+          toolCallId: "call-1",
+          toolName: "book_flight",
+          parameters: { destination: "Kyoto" },
+          parametersDigest: "a".repeat(64),
+        });
+
+        const approvalRequested = auditRecord(`approval-request:${RUN_ID}:1:call-1`, {
+          _tag: "ToolApprovalRequested",
+          runId: RUN_ID,
+          turnId: turnIdForRun(RUN_ID, 1),
+          turn: 1,
+          toolCallId: "call-1",
+          toolName: "book_flight",
+          parametersDigest: "a".repeat(64),
+        });
+
+        const approvalDecided = auditRecord(`approval-decision:${RUN_ID}:1:call-1`, {
+          _tag: "ToolApprovalDecided",
+          runId: RUN_ID,
+          turn: 1,
+          toolCallId: "call-1",
+          decision: "approved",
+          resolver: "operator",
+          reason: "reviewed",
+        });
+
+        const step = auditRecord(`step:${RUN_ID}:call-1:reserve-flight`, {
+          _tag: "ToolStepSettled",
+          runId: RUN_ID,
+          toolCallId: "call-1",
+          stepName: "reserve-flight",
+          output: { bookingRef: "flight-42" },
+          outputDigest: "b".repeat(64),
+        });
+
+        const unknown = auditRecord(`tool-unknown:${RUN_ID}:1:call-2`, {
+          _tag: "ToolCallUnknown",
+          runId: RUN_ID,
+          turn: 1,
+          toolCallId: "call-2",
+          toolName: "book_lodging",
+          reason: "worker lost mid-handler",
+        });
+
+        const resolved = auditRecord(`tool-resolved:${RUN_ID}:1:call-2`, {
+          _tag: "ToolCallResolved",
+          runId: RUN_ID,
+          toolCallId: "call-2",
+          resolution: "completed-with-result",
+          author: "operator",
+          reason: "supplier store shows the booking",
+        });
+
+        const interrupted = auditRecord(`interrupted:${RUN_ID}:2`, {
+          _tag: "ModelResponseInterrupted",
+          runId: RUN_ID,
+          supersededEpoch: 2,
+          attemptId: "attempt-1",
+          reason: "superseded a prior owner",
+        });
+
+        // Audit records interleave everywhere a real coordinator can put them — including
+        // BETWEEN the two ToolCallSettled records (the late-settle resolution path).
+        const interleaved = [
+          response.records[0]!,
+          approvalRequested,
+          approvalDecided,
+          prepared,
+          step,
+          interrupted,
+          firstSettled!,
+          unknown,
+          resolved,
+          secondSettled!,
+        ].map((record, index) => envelopeAt(index + 1, record));
+
+        const plain = yield* projectRunJournal(envelopesOf([response, results]), RUN_ID);
+        const transparent = yield* projectRunJournal(interleaved, RUN_ID);
+
+        // One Turn, one Tool message: the audit records neither add prompt content nor split
+        // the contiguous settled group.
+        expect(transparent.committedTurns).toBe(plain.committedTurns);
+        expect(transparent.prompt).toEqual(plain.prompt);
+        expect(transparent.prompt.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "assistant",
+          "tool",
+        ]);
+        const toolMessage = transparent.prompt.content.at(-1);
+
+        expect(toolMessage?.role === "tool" ? toolMessage.content.length : undefined).toBe(2);
+      }),
+    );
+
+    it.effect("subagent lifecycle records are prompt-transparent (S2, spec §5/§11)", () =>
+      Effect.gen(function* () {
+        const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
+        const results = yield* turnResultsBatch(turnInput(toolTurnAppended));
+        const [firstSettled, secondSettled] = results.records;
+
+        const requested = auditRecord(`subagent-requested:${RUN_ID}:call-1`, {
+          _tag: "SubagentRequested",
+          runId: RUN_ID,
+          turnId: turnIdForRun(RUN_ID, 1),
+          turn: 1,
+          toolCallId: "call-1",
+          delegationId: "delegation-destination-research",
+          targetAgentId: "destination-researcher",
+          targetDigests: { agent: "a".repeat(64), model: "b".repeat(64), tools: "c".repeat(64) },
+          childInput: { destination: "Kyoto" },
+          childInputDigest: "a".repeat(64),
+          grantDigest: "b".repeat(64),
+          reservationId: "reservation-1",
+          reservationDigest: "c".repeat(64),
+          childThreadId: childThreadIdFor(SUBMISSION_ID, CALL_ONE),
+          childPrincipal: "tenant-a",
+          childIdempotencyKey: childIdempotencyKeyFor(RUN_ID, CALL_ONE),
+        });
+
+        const started = auditRecord(`subagent-started:${RUN_ID}:call-1`, {
+          _tag: "SubagentStarted",
+          runId: RUN_ID,
+          toolCallId: "call-1",
+          childThreadId: childThreadIdFor(SUBMISSION_ID, CALL_ONE),
+          childSubmissionId: "submission-child-1",
+          childReceiptId: "receipt-child-1",
+          childRunId: "run:submission-child-1",
+        });
+
+        const joined = auditRecord(`subagent-joined:${RUN_ID}:call-1`, {
+          _tag: "SubagentJoined",
+          runId: RUN_ID,
+          toolCallId: "call-1",
+          childSubmissionId: "submission-child-1",
+          childSettlementId: "settlement:submission-child-1",
+          childOutcome: "completed",
+          childResultDigest: "a".repeat(64),
+          projectedResultDigest: "b".repeat(64),
+          usageSummary: { turns: 1, toolCalls: 0 },
+          reservationId: "reservation-1",
+          finalAccounting: { consumed: { turns: 1 }, released: { turns: 3 } },
+        });
+
+        const lineage = auditRecord(`subagent-lineage:${THREAD_ID}`, {
+          _tag: "SubagentLineageRecorded",
+          parentLink: {
+            delegationId: "delegation-destination-research",
+            parentAgentId: "travel-coordinator",
+            parentThreadId: "thread-parent",
+            parentRunId: RUN_ID,
+            parentToolCallId: "call-1",
+            depth: 1,
+          },
+          parentSubmissionId: SUBMISSION_ID,
+          childDefinitionDigests: {
+            agent: "a".repeat(64),
+            model: "b".repeat(64),
+            tools: "c".repeat(64),
+          },
+          childInputDigest: "a".repeat(64),
+          grantDigest: "b".repeat(64),
+        });
+
+        // The lifecycle records interleave everywhere a real coordinator can put them —
+        // including BETWEEN the two ToolCallSettled records, because the atomic join batch
+        // commits SubagentJoined beside the call's ToolCallSettled record (SUB-019). None of
+        // them adds prompt content, none splits the contiguous settled group, and the child
+        // transcript never enters the parent prompt (SUB-015).
+        const interleaved = [
+          response.records[0]!,
+          requested,
+          started,
+          firstSettled!,
+          joined,
+          secondSettled!,
+          lineage,
+        ].map((record, index) => envelopeAt(index + 1, record));
+
+        const plain = yield* projectRunJournal(envelopesOf([response, results]), RUN_ID);
+        const transparent = yield* projectRunJournal(interleaved, RUN_ID);
+
+        expect(transparent.committedTurns).toBe(plain.committedTurns);
+        expect(transparent.prompt).toEqual(plain.prompt);
+        const toolMessage = transparent.prompt.content.at(-1);
+
+        expect(toolMessage?.role === "tool" ? toolMessage.content.length : undefined).toBe(2);
+      }),
+    );
+
+    it.effect("fails typed when a results batch has no terminal Tool results", () =>
+      Effect.gen(function* () {
+        const noToolTurn: ReadonlyArray<Prompt.Message> = [
+          Prompt.makeMessage("assistant", {
+            content: [Prompt.makePart("text", { text: '{"answer":"done"}' })],
+          }),
+        ];
+
+        const failure = yield* Effect.flip(turnResultsBatch(turnInput(noToolTurn)));
+
+        expect(failure._tag).toBe("RunJournalError");
+
+        // And the response builder rejects a Turn with no model-visible messages at all.
+        const onlyTools: ReadonlyArray<Prompt.Message> = [
+          Prompt.makeMessage("tool", {
+            content: [
+              Prompt.makePart("tool-result", {
+                id: "call-1",
+                name: "book_flight",
+                result: { ok: true },
+                isFailure: false,
+                providerExecuted: false,
+              }),
+            ],
+          }),
+        ];
+
+        const responseFailure = yield* Effect.flip(turnResponseBatch(turnInput(onlyTools)));
+
+        expect(responseFailure._tag).toBe("RunJournalError");
+
+        const badTurn = yield* Effect.flip(turnResponseBatch(turnInput(toolTurnAppended, 0)));
+
+        expect(badTurn._tag).toBe("RunJournalError");
+      }),
+    );
+  });
+});
+
+describe("S2 subagent deterministic identities (plan §3.1)", () => {
+  it("derives the record, batch, and child identities from the parent Run and Tool Call pair", () => {
+    expect(subagentRequestedRecordId(RUN_ID, CALL_ONE)).toBe(`subagent-requested:${RUN_ID}:call-1`);
+    expect(subagentRequestedBatchId(RUN_ID, CALL_ONE)).toBe(`subagent-requested:${RUN_ID}:call-1`);
+    expect(subagentStartedRecordId(RUN_ID, CALL_ONE)).toBe(`subagent-started:${RUN_ID}:call-1`);
+    expect(subagentStartedBatchId(RUN_ID, CALL_ONE)).toBe(`subagent-started:${RUN_ID}:call-1`);
+    expect(subagentJoinBatchId(RUN_ID, CALL_ONE)).toBe(`subagent-join:${RUN_ID}:call-1`);
+    expect(subagentJoinedRecordId(RUN_ID, CALL_ONE)).toBe(`subagent-joined:${RUN_ID}:call-1`);
+    // The atomic join batch pairs the joined record with the EXISTING per-call settled
+    // identity, so `commitPendingTurn`'s record-identity dedupe covers both paths (SUB-019).
+    expect(toolCallSettledRecordId(RUN_ID, 1, CALL_ONE)).toBe(`tool-settled:${RUN_ID}:1:call-1`);
+    expect(subagentLineageRecordId(THREAD_ID)).toBe(`subagent-lineage:${THREAD_ID}`);
+    expect(subagentLineageBatchId(THREAD_ID)).toBe(`subagent-lineage:${THREAD_ID}`);
+    // D4 child identity derivations (SUB-016: idempotent establishment by construction).
+    expect(childThreadIdFor(SUBMISSION_ID, CALL_ONE)).toBe("subagent:submission-journal:call-1");
+    expect(childIdempotencyKeyFor(RUN_ID, CALL_ONE)).toBe("subagent:run:submission-journal:call-1");
+  });
+});
+
+describe("engine compaction records and projection (RUN-026)", () => {
+  const messageText = (message: Prompt.Message): string =>
+    typeof message.content === "string"
+      ? message.content
+      : message.content
+          .map((part) => ("text" in part && typeof part.text === "string" ? part.text : ""))
+          .join("");
+
+  const promptText = (prompt: Prompt.Prompt): string => prompt.content.map(messageText).join("\n");
+
+  const toolResults = (prompt: Prompt.Prompt): ReadonlyArray<unknown> =>
+    prompt.content.flatMap((message) =>
+      typeof message.content === "string"
+        ? []
+        : message.content.flatMap((part) => (part.type === "tool-result" ? [part.result] : [])),
+    );
+
+  interface CompactionOverrides {
+    readonly kind?: "clear-tool-results" | "summarize" | "rollover";
+    readonly coversThrough?: number;
+    readonly summary?: string | undefined;
+    readonly handoff?: string | undefined;
+    readonly runId?: string;
+    readonly turn?: number;
+  }
+
+  const compactionPayload = (
+    overrides: CompactionOverrides,
+  ): (typeof RecordEnvelope.Encoded)["payload"] => {
+    const summary = "summary" in overrides ? overrides.summary : "Goal: book the Kyoto trip";
+
+    return {
+      _tag: "CompactionCreated",
+      runId: overrides.runId ?? `${LATER_RUN_ID}`,
+      turn: overrides.turn ?? 1,
+      kind: overrides.kind ?? "summarize",
+      coversThrough: overrides.coversThrough ?? 3,
+      // `optionalKey` fields must be ABSENT, not undefined.
+      ...(summary === undefined ? {} : { summary }),
+      ...(overrides.handoff === undefined ? {} : { handoff: overrides.handoff }),
+    };
+  };
+
+  /** Second Turn of the owning Run: one more assistant declaration + result. */
+  const secondToolTurn: ReadonlyArray<Prompt.Message> = [
+    Prompt.makeMessage("assistant", {
+      content: [
+        Prompt.makePart("tool-call", {
+          id: "call-2",
+          name: "book_lodging",
+          params: { nights: 3 },
+          providerExecuted: false,
+        }),
+      ],
+    }),
+    Prompt.makeMessage("tool", {
+      content: [
+        Prompt.makePart("tool-result", {
+          id: "call-2",
+          name: "book_lodging",
+          result: { bookingRef: "lodging-7" },
+          isFailure: false,
+          providerExecuted: false,
+        }),
+      ],
+    }),
+  ];
+
+  it("RUN-026: CompactionCreated round-trips its reshaped payload and rejects the legacy shape", () => {
+    const record = auditRecord("compaction-roundtrip", compactionPayload({}));
+    const encoded = Schema.encodeSync(RecordEnvelope)(record);
+
+    expect(encoded.payload).toEqual(compactionPayload({}));
+    expect(Schema.decodeSync(RecordEnvelope)(encoded)).toEqual(record);
+
+    const clear = auditRecord(
+      "compaction-clear",
+      compactionPayload({ kind: "clear-tool-results", summary: undefined }),
+    );
+
+    expect(Schema.encodeSync(RecordEnvelope)(clear).payload).toMatchObject({
+      kind: "clear-tool-results",
+    });
+
+    // The legacy digest-bound shape fails decode clearly (dev-data policy).
+    const legacy = Schema.decodeUnknownExit(RecordEnvelope)({
+      recordId: "compaction-legacy",
+      family: "thread",
+      schemaVersion: 1,
+      createdAt: "2026-08-12T12:00:00.000Z",
+      deploymentId: "deployment-journal",
+      payload: {
+        _tag: "CompactionCreated",
+        runId: `${LATER_RUN_ID}`,
+        sourceDigest: "a".repeat(64),
+        summary: "legacy",
+      },
+    });
+
+    expect(legacy._tag).toBe("Failure");
+  });
+
+  layer(NodeCrypto.layer)((it) => {
+    it.effect(
+      "only the current Run's last successful uncovered singleton Tool is a pending context candidate",
+      () =>
+        Effect.gen(function* () {
+          const batch = yield* turnCanonicalBatch(turnInput(secondToolTurn));
+          const records = envelopesOf([batch]);
+
+          expect((yield* projectRunJournal(records, RUN_ID)).pendingContextToolCallId).toBe(
+            "call-2",
+          );
+          expect(
+            (yield* projectRunJournal(records, LATER_RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+          expect(
+            (yield* projectRunJournal(records.slice(0, 1), RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+
+          const next = yield* turnCanonicalBatch(turnInput(finalTurnAppended, 2));
+
+          expect(
+            (yield* projectRunJournal(envelopesOf([batch, next]), RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+
+          const terminal = envelopeAt(
+            records.length + 1,
+            auditRecord("terminal-context-candidate", {
+              _tag: "RunCompleted",
+              runId: RUN_ID,
+              output: { answer: "done" },
+            }),
+          );
+
+          expect(
+            (yield* projectRunJournal([...records, terminal], RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+
+          const rollover = envelopeAt(
+            records.length + 1,
+            auditRecord(
+              "covered-context-candidate",
+              compactionPayload({
+                kind: "rollover",
+                runId: RUN_ID,
+                turn: 2,
+                summary: undefined,
+                coversThrough: records.length,
+              }),
+            ),
+          );
+
+          expect(
+            (yield* projectRunJournal([...records, rollover], RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+          const multiple = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+
+          expect(
+            (yield* projectRunJournal(envelopesOf([multiple]), RUN_ID)).pendingContextToolCallId,
+          ).toBeUndefined();
+        }),
+    );
+
+    it.effect(
+      "rollover preserves the canonical request and Run accounting while replacing current-Run history",
+      () =>
+        Effect.gen(function* () {
+          const first = yield* turnCanonicalBatch({
+            ...turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 12, outputTokens: 3 }),
+            runScopedPrefixLength: 2,
+          });
+
+          const second = yield* turnCanonicalBatch(
+            turnInput(secondToolTurn, 2, RUN_ID, { inputTokens: 8, outputTokens: 2 }),
+          );
+
+          const records = envelopesOf([first, second]);
+          const original = yield* projectRunJournal(records, RUN_ID);
+
+          const rollover = envelopeAt(
+            records.length + 1,
+            auditRecord(
+              "current-run-rollover",
+              compactionPayload({
+                kind: "rollover",
+                runId: RUN_ID,
+                turn: 3,
+                coversThrough: first.records.length,
+                summary: undefined,
+                handoff: "The flight is booked; finish lodging.",
+              }),
+            ),
+          );
+
+          const projection = yield* projectRunJournal([...records, rollover], RUN_ID);
+
+          expect(projection.prompt.content).toEqual([
+            ...toolTurnAppended.slice(0, 2),
+            contextWindowMessage(
+              contextWindowId(RUN_ID, 3),
+              "The flight is booked; finish lodging.",
+            ),
+            ...secondToolTurn,
+          ]);
+          expect(projection.protectedContext?.content).toEqual(toolTurnAppended.slice(0, 2));
+          expect(projection.contextWindowId).toBe(contextWindowId(RUN_ID, 3));
+          expect(projection.historyBefore.content).toEqual([]);
+          expect(projection.committedTurns).toBe(2);
+          expect(projection.policyUsage).toEqual(original.policyUsage);
+          expect(projection.usage).toEqual(original.usage);
+
+          const later = yield* projectRunJournal([...records, rollover], LATER_RUN_ID);
+
+          expect(promptText(later.prompt)).not.toContain('"question":"book?"');
+          expect(later.prompt.content[0]).toEqual(
+            contextWindowMessage(
+              contextWindowId(RUN_ID, 3),
+              "The flight is booked; finish lodging.",
+            ),
+          );
+        }),
+    );
+
+    it.effect(
+      "repeated rollovers can cover the complete settled source without losing the original request",
+      () =>
+        Effect.gen(function* () {
+          const first = yield* turnCanonicalBatch({
+            ...turnInput(toolTurnAppended),
+            runScopedPrefixLength: 2,
+          });
+
+          const records = envelopesOf([first]);
+
+          const earlier = envelopeAt(
+            records.length + 1,
+            auditRecord(
+              "first-rollover",
+              compactionPayload({
+                kind: "rollover",
+                runId: RUN_ID,
+                turn: 2,
+                summary: undefined,
+                coversThrough: records.length,
+                handoff: "Earlier handoff",
+              }),
+            ),
+          );
+
+          const latest = envelopeAt(
+            records.length + 2,
+            auditRecord(
+              "replacement-rollover",
+              compactionPayload({
+                kind: "rollover",
+                runId: RUN_ID,
+                turn: 3,
+                summary: undefined,
+                coversThrough: records.length,
+                handoff: "Updated handoff",
+              }),
+            ),
+          );
+
+          const projection = yield* projectRunJournal([...records, earlier, latest], RUN_ID);
+
+          expect(projection.prompt.content).toEqual([
+            ...toolTurnAppended.slice(0, 2),
+            contextWindowMessage(contextWindowId(RUN_ID, 3), "Updated handoff"),
+          ]);
+          expect(projection.committedTurns).toBe(1);
+          expect(projection.contextWindowId).toBe(contextWindowId(RUN_ID, 3));
+          expect(projection.policyUsage.toolCalls).toBe(2);
+          expect(records).toHaveLength(3);
+        }),
+    );
+
+    for (const kind of ["rollover", "clear-tool-results"] as const)
+      it.effect(
+        `${kind} cannot cover an incomplete Tool batch even when its available results are below the cutoff`,
+        () =>
+          Effect.gen(function* () {
+            const batch = yield* turnCanonicalBatch({
+              ...turnInput(toolTurnAppended),
+              runScopedPrefixLength: 2,
+            });
+
+            const records = envelopesOf([batch]).slice(0, 2);
+
+            const rollover = envelopeAt(
+              3,
+              auditRecord(
+                "incomplete-rollover",
+                compactionPayload({
+                  kind,
+                  runId: RUN_ID,
+                  turn: 2,
+                  summary: undefined,
+                  coversThrough: 2,
+                  handoff: "Uncommitted handoff",
+                }),
+              ),
+            );
+
+            const projection = yield* projectRunJournal([...records, rollover], RUN_ID);
+
+            expect(projection.contextWindowId).toBeUndefined();
+            expect(promptText(projection.prompt)).not.toContain("Uncommitted handoff");
+            expect(projection.prompt.content.slice(0, 2)).toEqual(toolTurnAppended.slice(0, 2));
+            expect(toolResults(projection.prompt)).toEqual([{ bookingRef: "flight-42" }]);
+
+            const metadata = makeJournalMetadata(RUN_ID);
+
+            for (const record of [...records, rollover]) metadata.add(record);
+            let traversals = 0;
+
+            const source = Stream.suspend(() => {
+              traversals++;
+
+              return Stream.fromIterable([...records, rollover]);
+            });
+
+            const prepared = yield* projectRunJournalStream(
+              source,
+              RUN_ID,
+              undefined,
+              undefined,
+              metadata.snapshot(),
+            );
+
+            expect(prepared).toEqual(projection);
+            // Reusing metadata retains covered-Tool validation before the final fold.
+            expect(traversals).toBe(2);
+          }),
+      );
+
+    it.effect.each(["before", "after", "absent", "current", "response-after-terminal"] as const)(
+      "compacts invisible incomplete prior batches only after their canonical termination: %s",
+      (position) =>
+        Effect.gen(function* () {
+          const batch = yield* turnCanonicalBatch(
+            turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 100, outputTokens: 10 }),
+          );
+
+          const incomplete = envelopesOf([batch]).slice(0, 2);
+
+          const next = yield* turnCanonicalBatch(
+            turnInput(secondToolTurn, 1, LATER_RUN_ID, { inputTokens: 200, outputTokens: 20 }),
+          );
+
+          const postTerminalResponse = yield* turnResponseBatch(
+            turnInput(secondToolTurn, 2, RUN_ID, { inputTokens: 300, outputTokens: 30 }),
+          );
+
+          for (const kind of ["rollover", "clear-tool-results"] as const) {
+            for (const terminal of ["RunFailed", "RunCompleted", "SubmissionSettled"] as const) {
+              const records = [...incomplete];
+              const owner = position === "current" ? RUN_ID : LATER_RUN_ID;
+
+              const terminalRecord = auditRecord(
+                `terminal-${terminal}`,
+                terminal === "RunFailed"
+                  ? { _tag: terminal, runId: RUN_ID, failure: { message: "failed" } }
+                  : terminal === "RunCompleted"
+                    ? { _tag: terminal, runId: RUN_ID, output: "done" }
+                    : {
+                        _tag: terminal,
+                        submissionId: SUBMISSION_ID,
+                        settlementId: "terminal",
+                        receiptId: "receipt",
+                        runId: RUN_ID,
+                        outcome: "aborted",
+                      },
+              );
+
+              if (
+                position === "before" ||
+                position === "current" ||
+                position === "response-after-terminal"
+              )
+                records.push(envelopeAt(records.length + 1, terminalRecord));
+              if (position === "response-after-terminal") {
+                for (const record of postTerminalResponse.records)
+                  records.push(envelopeAt(records.length + 1, record));
+              }
+              for (const record of next.records)
+                records.push(envelopeAt(records.length + 1, record));
+              const baseline = yield* projectRunJournal(records, owner);
+
+              expect(baseline.usage).toMatchObject(
+                position === "current"
+                  ? { inputTokens: 100, outputTokens: 10 }
+                  : { inputTokens: 200, outputTokens: 20 },
+              );
+              const through = records.length;
+
+              records.push(
+                envelopeAt(
+                  records.length + 1,
+                  auditRecord(
+                    "terminal-prefix-compaction",
+                    compactionPayload({
+                      kind,
+                      runId: owner,
+                      turn: 2,
+                      summary: undefined,
+                      coversThrough: through,
+                      handoff: "Retained handoff",
+                    }),
+                  ),
+                ),
+              );
+              if (position === "after")
+                records.push(envelopeAt(records.length + 1, terminalRecord));
+              const replay = yield* projectRunJournal(records, owner);
+
+              if (position === "before") {
+                if (kind === "rollover") {
+                  expect(replay.contextWindowId).toBe(contextWindowId(owner, 2));
+                  expect(replay.prompt.content).toEqual([
+                    contextWindowMessage(contextWindowId(owner, 2), "Retained handoff"),
+                  ]);
+                  for (const projectionOwner of [RUN_ID, undefined]) {
+                    const otherBaseline = yield* projectRunJournalStream(
+                      Stream.fromIterable(records.slice(0, through)),
+                      projectionOwner,
+                    );
+
+                    const otherView = yield* projectRunJournalStream(
+                      Stream.fromIterable(records),
+                      projectionOwner,
+                    );
+
+                    expect(otherView.contextWindowId).toBe(contextWindowId(owner, 2));
+                    expect(otherView.usage).toEqual(otherBaseline.usage);
+                    expect(otherView.policyUsage).toEqual(otherBaseline.policyUsage);
+                    if (projectionOwner === RUN_ID) {
+                      expect(otherBaseline.usage).toMatchObject({
+                        inputTokens: 100,
+                        outputTokens: 10,
+                      });
+                    }
+                  }
+                } else {
+                  expect(toolResults(replay.prompt)).toEqual([
+                    "[tool result cleared by compaction]",
+                  ]);
+                }
+              } else {
+                expect(replay.prompt).toEqual(baseline.prompt);
+                expect(replay.contextWindowId).toBeUndefined();
+              }
+              expect(replay.usage).toEqual(baseline.usage);
+              expect(replay.policyUsage).toEqual(baseline.policyUsage);
+              expect(records.slice(0, incomplete.length)).toEqual(incomplete);
+            }
+          }
+        }),
+    );
+
+    it.effect(
+      "prunes fully settled current-Run batches without losing replay usage, prefix or latest result",
+      () =>
+        Effect.gen(function* () {
+          const first = yield* turnCanonicalBatch({
+            ...turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 100, outputTokens: 10 }),
+            runScopedPrefixLength: 2,
+          });
+
+          const next = yield* turnCanonicalBatch(
+            turnInput(secondToolTurn, 2, RUN_ID, { inputTokens: 200, outputTokens: 20 }),
+          );
+
+          const records = envelopesOf([first, next]);
+          const baseline = yield* projectRunJournal(records, RUN_ID);
+
+          const prune = envelopeAt(
+            records.length + 1,
+            auditRecord(
+              "prune-owner",
+              compactionPayload({
+                kind: "clear-tool-results",
+                runId: RUN_ID,
+                turn: 3,
+                summary: undefined,
+                coversThrough: first.records.length,
+              }),
+            ),
+          );
+
+          const replay = yield* projectRunJournal([...records, prune], RUN_ID);
+
+          expect(toolResults(replay.prompt)).toEqual([
+            "[tool result cleared by compaction]",
+            "[tool result cleared by compaction]",
+            { bookingRef: "lodging-7" },
+          ]);
+          expect(replay.prompt.content.slice(0, 2)).toEqual(baseline.prompt.content.slice(0, 2));
+          expect(replay.usage).toEqual(baseline.usage);
+          expect(replay.policyUsage).toEqual(baseline.policyUsage);
+          expect(replay.committedTurns).toBe(baseline.committedTurns);
+          expect(replay.pendingContextToolCallId).toBe(baseline.pendingContextToolCallId);
+        }),
+    );
+
+    it.effect("preserves an earlier Run's policy usage under a later Run's summary", () =>
+      Effect.gen(function* () {
+        const failedTurn = secondToolTurn.map((message) =>
+          message.role === "tool"
+            ? Prompt.makeMessage("tool", {
+                content: message.content.map((part) =>
+                  part.type === "tool-result" ? { ...part, isFailure: true } : part,
+                ),
+              })
+            : message,
+        );
+
+        const turn = yield* turnCanonicalBatch(
+          turnInput(failedTurn, 1, RUN_ID, {
+            inputTokens: 12,
+            outputTokens: 3,
+          }),
+        );
+
+        const envelopes = envelopesOf([turn]);
+        const uncompacted = yield* projectRunJournal(envelopes, RUN_ID);
+
+        const compacted = yield* projectRunJournal(
+          [
+            ...envelopes,
+            envelopeAt(
+              envelopes.length + 1,
+              auditRecord(
+                "later-run-summary",
+                compactionPayload({ coversThrough: envelopes.length }),
+              ),
+            ),
+          ],
+          RUN_ID,
+        );
+
+        expect(compacted.policyUsage).toEqual(uncompacted.policyUsage);
+        expect(compacted.policyUsage).toMatchObject({
+          committedTurns: 1,
+          toolCalls: 1,
+          consecutiveToolFailures: 1,
+        });
+        expect(compacted.usage).toEqual(uncompacted.usage);
+        expect(promptText(compacted.prompt)).toContain("Goal: book the Kyoto trip");
+        expect(toolResults(compacted.prompt)).toEqual([]);
+      }),
+    );
+
+    it.effect("RUN-026: a summarize compaction folds covered records into the summary", () =>
+      Effect.gen(function* () {
+        const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+        const envelopes = envelopesOf([turnOne]);
+
+        const compaction = envelopeAt(
+          envelopes.length + 1,
+          auditRecord("compaction-fold", compactionPayload({ coversThrough: envelopes.length })),
+        );
+
+        const projection = yield* projectRunJournal([...envelopes, compaction], LATER_RUN_ID);
+        const text = promptText(projection.historyBefore);
+
+        expect(text).toContain("The prior thread was compacted into this summary:");
+        expect(text).toContain("Goal: book the Kyoto trip");
+        expect(text).not.toContain("book?");
+        expect(toolResults(projection.historyBefore)).toEqual([]);
+        expect(projection.committedTurns).toBe(0);
+      }),
+    );
+
+    it.effect("RUN-026: a summarize compaction keeps the tail after coversThrough verbatim", () =>
+      Effect.gen(function* () {
+        const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+        const turnTwo = yield* turnCanonicalBatch(turnInput(secondToolTurn, 2));
+        const envelopes = envelopesOf([turnOne, turnTwo]);
+
+        // Covers exactly Turn 1's three records; Turn 2 is the kept tail.
+        const compaction = envelopeAt(
+          envelopes.length + 1,
+          auditRecord("compaction-tail", compactionPayload({ coversThrough: 3 })),
+        );
+
+        const projection = yield* projectRunJournal([...envelopes, compaction], LATER_RUN_ID);
+        const text = promptText(projection.historyBefore);
+
+        expect(text).toContain("Goal: book the Kyoto trip");
+        expect(toolResults(projection.historyBefore)).toEqual([{ bookingRef: "lodging-7" }]);
+      }),
+    );
+
+    it.effect(
+      "RUN-026: clear-tool-results renders covered tool results as the cleared marker",
+      () =>
+        Effect.gen(function* () {
+          const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+          const turnTwo = yield* turnCanonicalBatch(turnInput(secondToolTurn, 2));
+          const envelopes = envelopesOf([turnOne, turnTwo]);
+
+          const compaction = envelopeAt(
+            envelopes.length + 1,
+            auditRecord(
+              "compaction-clear-fold",
+              compactionPayload({
+                kind: "clear-tool-results",
+                summary: undefined,
+                coversThrough: 3,
+              }),
+            ),
+          );
+
+          const projection = yield* projectRunJournal([...envelopes, compaction], LATER_RUN_ID);
+          const results = toolResults(projection.historyBefore);
+
+          expect(results).toEqual([
+            "[tool result cleared by compaction]",
+            "[tool result cleared by compaction]",
+            { bookingRef: "lodging-7" },
+          ]);
+          // The assistant declarations stay: pairing structure is preserved.
+          const text = promptText(projection.historyBefore);
+
+          expect(text).not.toContain("compacted into this summary");
+        }),
+    );
+
+    it.effect("RUN-026: invalid compaction records are ignored fail-safe", () =>
+      Effect.gen(function* () {
+        const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+        const envelopes = envelopesOf([turnOne]);
+
+        // coversThrough at or beyond the record's own sequence is invalid.
+        const beyond = envelopeAt(
+          envelopes.length + 1,
+          auditRecord(
+            "compaction-invalid-range",
+            compactionPayload({ coversThrough: envelopes.length + 1 }),
+          ),
+        );
+
+        const missingSummary = envelopeAt(
+          envelopes.length + 2,
+          auditRecord(
+            "compaction-missing-summary",
+            compactionPayload({ summary: undefined, coversThrough: 1 }),
+          ),
+        );
+
+        const projection = yield* projectRunJournal(
+          [...envelopes, beyond, missingSummary],
+          LATER_RUN_ID,
+        );
+
+        expect(promptText(projection.historyBefore)).toContain("book?");
+        expect(toolResults(projection.historyBefore)).toEqual([
+          { bookingRef: "flight-42" },
+          { bookingRef: "lodging-7" },
+        ]);
+      }),
+    );
+
+    it.effect(
+      "RUN-026: a compaction that would cover its owner Run's records is ignored fail-safe",
+      () =>
+        Effect.gen(function* () {
+          const priorTurn = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+          const ownerTurn = yield* turnCanonicalBatch(turnInput(secondToolTurn, 1, LATER_RUN_ID));
+          const envelopes = envelopesOf([priorTurn, ownerTurn]);
+
+          // coversThrough reaches into LATER_RUN_ID's own records (sequences 4+):
+          // valid by the below-own-sequence rule alone, invalid by owner precedence.
+          const compaction = envelopeAt(
+            envelopes.length + 1,
+            auditRecord("compaction-covers-owner", compactionPayload({ coversThrough: 5 })),
+          );
+
+          const projection = yield* projectRunJournal([...envelopes, compaction], LATER_RUN_ID);
+          const text = promptText(projection.prompt);
+
+          expect(text).not.toContain("compacted into this summary");
+          expect(text).toContain("book?");
+          expect(toolResults(projection.prompt)).toEqual([
+            { bookingRef: "flight-42" },
+            { bookingRef: "lodging-7" },
+            { bookingRef: "lodging-7" },
+          ]);
+        }),
+    );
+
+    it.effect(
+      "RUN-026: a compaction bound that splits a response from its tool results is ignored",
+      () =>
+        Effect.gen(function* () {
+          const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+          const envelopes = envelopesOf([turnOne]);
+
+          // Sequence 1 is Turn 1's ModelResponseRecorded; its settled results
+          // sit at sequences 2-3. A bound of 1 would orphan the tool message.
+          const splitSummarize = envelopeAt(
+            envelopes.length + 1,
+            auditRecord("compaction-split-summarize", compactionPayload({ coversThrough: 1 })),
+          );
+
+          const splitClear = envelopeAt(
+            envelopes.length + 2,
+            auditRecord(
+              "compaction-split-clear",
+              compactionPayload({
+                kind: "clear-tool-results",
+                summary: undefined,
+                coversThrough: 1,
+              }),
+            ),
+          );
+
+          const projection = yield* projectRunJournal(
+            [...envelopes, splitSummarize, splitClear],
+            LATER_RUN_ID,
+          );
+
+          const text = promptText(projection.historyBefore);
+
+          expect(text).not.toContain("compacted into this summary");
+          expect(text).toContain("book?");
+          expect(toolResults(projection.historyBefore)).toEqual([
+            { bookingRef: "flight-42" },
+            { bookingRef: "lodging-7" },
+          ]);
+        }),
+    );
+
+    it.effect(
+      "streams a validated summary without decoding covered responses, but rejects split coverage",
+      () =>
+        Effect.gen(function* () {
+          const turn = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+
+          const records = envelopesOf([turn]).map((envelope) => {
+            const payload = envelope.record.payload;
+
+            return payload._tag !== "ModelResponseRecorded"
+              ? envelope
+              : CanonicalRecordEnvelope.make({
+                  ...envelope,
+                  record: RecordEnvelope.make({
+                    ...envelope.record,
+                    payload: { ...payload, messages: { archived: true } },
+                  }),
+                });
+          });
+
+          const summarize = envelopeAt(
+            records.length + 1,
+            auditRecord("stream-summary", compactionPayload({ coversThrough: 3 })),
+          );
+
+          let traversals = 0;
+
+          const source = Stream.suspend(() => {
+            traversals += 1;
+
+            return Stream.fromIterable([...records, summarize]);
+          });
+
+          const projected = yield* projectRunJournalStream(source, LATER_RUN_ID);
+
+          expect(promptText(projected.prompt)).toContain("Goal: book the Kyoto trip");
+          expect(toolResults(projected.prompt)).toEqual([]);
+          expect(traversals).toBe(2);
+
+          const split = envelopeAt(
+            records.length + 1,
+            auditRecord("stream-split", compactionPayload({ coversThrough: 1 })),
+          );
+
+          const failure = yield* projectRunJournalStream(
+            Stream.fromIterable([...records, split]),
+            LATER_RUN_ID,
+          ).pipe(Effect.flip);
+
+          expect(failure._tag).toBe("RunJournalError");
+        }),
+    );
+
+    it.effect(
+      "keeps prepared metadata bound to its captured prefix when later evidence arrives",
+      () =>
+        Effect.gen(function* () {
+          const batch = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+          const records = envelopesOf([batch]);
+
+          const replacement = envelopeAt(
+            records.length + 1,
+            auditRecord("captured-summary", compactionPayload({ coversThrough: records.length })),
+          );
+
+          const prefix = [...records, replacement];
+          const metadata = makeJournalMetadata(LATER_RUN_ID);
+
+          for (const record of prefix) metadata.add(record);
+          const captured = metadata.snapshot();
+          const settled = records.find(({ record }) => record.payload._tag === "ToolCallSettled");
+
+          if (settled === undefined) return yield* Effect.die("Expected a settled Tool fixture");
+
+          // Late settlement evidence would invalidate the summary in a newer prefix.
+          const late = envelopeAt(
+            prefix.length + 1,
+            RecordEnvelope.make({
+              ...settled.record,
+              recordId: RecordId.make("late-settlement"),
+            }),
+          );
+
+          metadata.add(late);
+
+          const projected = yield* projectRunJournalStream(
+            Stream.fromIterable(prefix),
+            LATER_RUN_ID,
+            undefined,
+            undefined,
+            captured,
+          );
+
+          expect(promptText(projected.prompt)).toContain("Goal: book the Kyoto trip");
+          expect(toolResults(projected.prompt)).toEqual([]);
+          expect(projected).toEqual(yield* projectRunJournal(prefix, LATER_RUN_ID));
+
+          const newer = yield* projectRunJournalStream(
+            Stream.fromIterable([...prefix, late]),
+            LATER_RUN_ID,
+            undefined,
+            undefined,
+            metadata.snapshot(),
+          );
+
+          expect(promptText(newer.prompt)).not.toContain("Goal: book the Kyoto trip");
+          expect(newer).toEqual(yield* projectRunJournal([...prefix, late], LATER_RUN_ID));
+        }),
+    );
+
+    it.effect("RUN-026: the widest valid summarize bound wins across repeated compactions", () =>
+      Effect.gen(function* () {
+        const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+        const turnTwo = yield* turnCanonicalBatch(turnInput(secondToolTurn, 2));
+        const envelopes = envelopesOf([turnOne, turnTwo]);
+
+        const first = envelopeAt(
+          envelopes.length + 1,
+          auditRecord(
+            "compaction-first",
+            compactionPayload({ coversThrough: 3, summary: "Goal: early summary" }),
+          ),
+        );
+
+        const second = envelopeAt(
+          envelopes.length + 2,
+          auditRecord(
+            "compaction-second",
+            compactionPayload({ coversThrough: 5, summary: "Goal: later summary" }),
+          ),
+        );
+
+        const projection = yield* projectRunJournal([...envelopes, first, second], LATER_RUN_ID);
+        const text = promptText(projection.historyBefore);
+
+        expect(text).toContain("Goal: later summary");
+        expect(text).not.toContain("Goal: early summary");
+        expect(toolResults(projection.historyBefore)).toEqual([]);
+      }),
+    );
+
+    it.effect("RUN-023: the projection sums committed response usage for the owner Run", () =>
+      Effect.gen(function* () {
+        const turnOne = yield* turnCanonicalBatch(
+          turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 100, outputTokens: 10 }),
+        );
+
+        const turnTwo = yield* turnCanonicalBatch(
+          turnInput(secondToolTurn, 2, RUN_ID, { inputTokens: 250, outputTokens: 20 }),
+        );
+
+        const other = yield* turnCanonicalBatch(
+          turnInput(toolTurnAppended, 1, LATER_RUN_ID, { inputTokens: 999, outputTokens: 99 }),
+        );
+
+        const projection = yield* projectRunJournal(envelopesOf([turnOne, turnTwo, other]), RUN_ID);
+
+        expect(projection.usage).toEqual({
+          modelCalls: 2,
+          inputTokens: 350,
+          outputTokens: 30,
+          lastInputTokens: 250,
+          lastOutputTokens: 20,
+          costMicrousd: 0,
+          modelUsage: [],
+        });
+      }),
+    );
+
+    it.effect("RUN-023: invalid staged usage fails typed instead of being repaired", () =>
+      Effect.gen(function* () {
+        // Staged usage is validated at the canonical boundary: repairing it
+        // (clamping negatives, truncating fractions) would under-record
+        // canonical usage, and NaN/Infinity must never escape as a defect.
+        const nan = yield* Effect.flip(
+          turnCanonicalBatch(
+            turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: Number.NaN, outputTokens: 5 }),
+          ),
+        );
+
+        expect(nan._tag).toBe("RunJournalError");
+
+        const negative = yield* Effect.flip(
+          turnCanonicalBatch(
+            turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: -5, outputTokens: 5 }),
+          ),
+        );
+
+        expect(negative._tag).toBe("RunJournalError");
+
+        const fractional = yield* Effect.flip(
+          turnCanonicalBatch(
+            turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 10.5, outputTokens: 5 }),
+          ),
+        );
+
+        expect(fractional._tag).toBe("RunJournalError");
+      }),
+    );
+  });
+});
+
+layer(NodeCrypto.layer)("Tool exposure journal", (it) => {
+  it.effect(
+    "retains last declared replacement across partial settles, compaction, and checkpoints",
+    () =>
+      Effect.gen(function* () {
+        const initial = Selection.make({ toolNames: ["initial"] });
+        const expected = Selection.make({ toolNames: ["last"] });
+
+        const response = yield* turnResponseBatch({
+          ...turnInput(toolTurnAppended),
+          toolExposure: Snapshot.make({
+            exposedToolNames: ["book_flight", "book_lodging"],
+            selection: initial,
+          }),
+        });
+
+        const results = yield* turnResultsBatch({
+          ...turnInput(toolTurnAppended),
+          toolSelections: new Map([
+            [CALL_ONE, Selection.make({ toolNames: ["first"] })],
+            [CALL_TWO, expected],
+          ]),
+        });
+
+        const first = results.records[0]!;
+        const second = results.records[1]!;
+        const declaration = envelopeAt(1, response.records[0]!);
+        const partial = [declaration, envelopeAt(2, second)];
+
+        expect((yield* projectRunJournal(partial, RUN_ID)).toolSelection).toEqual(initial);
+        const records = [...partial, envelopeAt(3, first)];
+        const projected = yield* projectRunJournal(records, RUN_ID);
+
+        expect(projected.toolSelection).toEqual(expected);
+        expect((yield* projectRunJournal(records, LATER_RUN_ID)).toolSelection).toBeUndefined();
+
+        const compacted = envelopeAt(
+          4,
+          auditRecord("exposure-rollover", {
+            _tag: "CompactionCreated",
+            runId: RUN_ID,
+            turn: 2,
+            kind: "rollover",
+            coversThrough: 3,
+            handoff: "Continue.",
+          }),
+        );
+
+        expect((yield* projectRunJournal([...records, compacted], RUN_ID)).toolSelection).toEqual(
+          expected,
+        );
+
+        const seed = JournalCheckpointSeed.make({
+          runId: RUN_ID,
+          throughSequence: CanonicalSequence.make(3),
+          firstSequence: CanonicalSequence.make(1),
+          committedTurns: projected.committedTurns,
+          policyUsage: projected.policyUsage,
+          modelCalls: projected.usage.modelCalls,
+          unobservedModelCalls: 0,
+          inputTokens: projected.usage.inputTokens,
+          outputTokens: projected.usage.outputTokens,
+          lastInputTokens: projected.usage.lastInputTokens,
+          lastOutputTokens: projected.usage.lastOutputTokens,
+          costMicrousd: projected.usage.costMicrousd,
+          summarizedModelUsage: yield* summarizeModelUsage(projected.usage.modelUsage),
+          compaction: compacted,
+          toolSelection: expected,
+        });
+
+        expect(
+          (yield* projectRunJournalStream(
+            Stream.fromIterable([compacted]),
+            RUN_ID,
+            undefined,
+            seed,
+          )).toolSelection,
+        ).toEqual(expected);
+
+        const hostReplacement = yield* turnCanonicalBatch({
+          ...turnInput(finalTurnAppended),
+          turn: 2,
+          turnId: turnIdForRun(RUN_ID, 2),
+          toolExposure: Snapshot.make({
+            exposedToolNames: [],
+            selection: Selection.make({ toolNames: [] }),
+          }),
+        });
+
+        expect(
+          (yield* projectRunJournal(
+            [...records, envelopeAt(4, hostReplacement.records[0]!)],
+            RUN_ID,
+          )).toolSelection?.toolNames,
+        ).toEqual([]);
+      }),
+  );
+});

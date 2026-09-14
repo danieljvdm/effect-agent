@@ -18,36 +18,6 @@ import {
   type SqliteStorageInitializationError,
 } from "@effect-agent/storage-sqlite/sqlite-thread-store";
 import { SqliteStorageFailpointTestControl } from "@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing";
-import { EMPTY_TAIL_DIGEST } from "@effect-agent/thread/digest";
-import {
-  CanonicalBatch,
-  CanonicalRecord,
-  CanonicalSequence,
-  ObservationOffset,
-  ProducerEpoch,
-  RunCompleted,
-  UserInputRecorded,
-  type CanonicalRecordPayload,
-} from "@effect-agent/thread/records";
-import {
-  threadStoreConformanceCases,
-  threadCheckpointConformanceCases,
-} from "@effect-agent/thread/testing/thread-store-conformance";
-import {
-  ThreadCheckpoint,
-  ThreadTailRequest,
-  ThreadExportRequest,
-  ThreadMaterialization,
-  ThreadObservation,
-  ThreadRead,
-  ThreadStore,
-  ThreadStoreError,
-  FencedAppendRequest,
-  LoadCheckpointRequest,
-  SaveCheckpointRequest,
-  SaveRecoveryCheckpointRequest,
-  type AppendResult,
-} from "@effect-agent/thread/thread-store";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, describe, it } from "@effect/vitest";
@@ -66,6 +36,36 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import {
+  CanonicalBatch,
+  CanonicalRecord,
+  CanonicalSequence,
+  ObservationOffset,
+  ProducerEpoch,
+  RunCompleted,
+  UserInputRecorded,
+  type CanonicalRecordPayload,
+} from "effect-agent/records";
+import {
+  threadStoreConformanceCases,
+  threadCheckpointConformanceCases,
+} from "effect-agent/testing/thread-store-conformance";
+import {
+  ThreadCheckpoint,
+  ThreadTailRequest,
+  ThreadExportRequest,
+  ThreadMaterialization,
+  ThreadObservation,
+  ThreadRead,
+  ThreadStore,
+  ThreadStoreError,
+  FencedAppendRequest,
+  LoadCheckpointRequest,
+  SaveCheckpointRequest,
+  SaveRecoveryCheckpointRequest,
+  type AppendResult,
+} from "effect-agent/thread-store";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 

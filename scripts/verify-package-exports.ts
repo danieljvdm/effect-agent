@@ -27,6 +27,7 @@ const frameworkLayers: Readonly<Record<string, ReadonlyArray<string>>> = {
   engine: ["core", "engine"],
   sandbox: ["core", "sandbox"],
   capabilities: ["core", "engine", "sandbox", "capabilities"],
+  durable: ["core", "engine", "sandbox", "capabilities", "durable"],
 };
 
 const walk = (node: ts.Node, visit: (node: ts.Node) => void): void => {

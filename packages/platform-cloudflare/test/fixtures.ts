@@ -5,38 +5,35 @@ import {
 import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/do-storage-error";
 import { type DoStorageFailpointHandler } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
 import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing";
-import {
-  DurableWorkerBinding,
-  type ResolvedBinding,
-} from "@effect-agent/thread/agent-registration";
-import { type DurableSubmitOptions } from "@effect-agent/thread/durable-agent-runtime";
+import { type Clock, Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
+import { estimatePromptTokens } from "effect-agent/compaction";
+import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
+import { type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointHandler,
   type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/durable-failpoint";
-import { DefinitionDigestInput, DefinitionDigests, Digest } from "@effect-agent/thread/records";
+} from "effect-agent/durable-failpoint";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
+import { ThreadId, ToolCallId } from "effect-agent/identifiers";
+import { DefinitionDigestInput, DefinitionDigests, Digest } from "effect-agent/records";
+import { RunToolAuthorization } from "effect-agent/run-options";
 import {
   ScheduleFailpointError,
   type ScheduleOwner,
   ScheduleRecord,
   ScheduleStorageError,
-} from "@effect-agent/thread/schedule";
-import { scheduleOwnerKey } from "@effect-agent/thread/schedule-transition";
-import { IdempotencyKey, Principal } from "@effect-agent/thread/submission-ledger";
+} from "effect-agent/schedule";
+import { scheduleOwnerKey } from "effect-agent/schedule-transition";
+import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import {
   ReconciliationSafeToRetry,
   ReconciliationUncertain,
   ToolReconciler,
-} from "@effect-agent/thread/tool-reconciler";
-import { type Clock, Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { estimatePromptTokens } from "effect-agent/compaction";
-import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
-import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import { RunToolAuthorization } from "effect-agent/run-options";
+} from "effect-agent/tool-reconciler";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { layerFromBindings } from "../src/internal/layers.ts";

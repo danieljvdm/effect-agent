@@ -10,13 +10,13 @@ import {
   certifyDurableAdapters,
   tier2NeverFiredLocations,
 } from "@effect-agent/testing/certification";
-import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/durable-failpoint";
-import { CertificationReport } from "@effect-agent/thread/testing/certification";
-import { submissionLedgerConformanceCases } from "@effect-agent/thread/testing/submission-ledger-conformance";
-import { threadStoreConformanceCases } from "@effect-agent/thread/testing/thread-store-conformance";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer, Schema } from "effect";
+import { DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
+import { CertificationReport } from "effect-agent/testing/certification";
+import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
+import { threadStoreConformanceCases } from "effect-agent/testing/thread-store-conformance";
 import { describe, expect, it } from "vite-plus/test";
 
 import { withThreadStorage } from "./harness.ts";

@@ -14,11 +14,11 @@ import {
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
 } from "@effect-agent/testing/travel-planner";
-import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
-import { DurableRuntimeFailpointLocation } from "@effect-agent/thread/durable-failpoint";
-import { type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { Effect, Layer, Schema } from "effect";
+import { Receipt } from "effect-agent/durable-agent-runtime";
+import { DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
+import { type CanonicalRecordEnvelope } from "effect-agent/records";
 
 import { layerFromBindings } from "../../src/internal/layers.ts";
 import {

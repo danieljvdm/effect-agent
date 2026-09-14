@@ -5,7 +5,7 @@ description: Choose packages, adapters, and providers for your application.
 
 # Package map
 
-Start with `effect-agent@beta` for agent definitions, execution, capabilities, and sandbox contracts.
+Start with `effect-agent@beta` for agent definitions, conversations, execution, and durability.
 Install storage, platform, sandbox execution, and testing packages as needed.
 
 Keep all framework packages at the same exact release. They require `effect@^4.0.0-rc.112`;
@@ -17,7 +17,7 @@ Before 1.0, APIs and stored data may change without a migration path.
 
 Prefer named namespace imports from package roots in application code and examples.
 Namespaces use PascalCase; direct module paths use kebab-case. Agent definitions, execution,
-and capabilities live in one package:
+capabilities, and durability live in one package:
 
 ```ts twoslash
 import { Agent, AgentRuntime } from "effect-agent";
@@ -111,7 +111,7 @@ modules above, or use the root module namespace. `CommandDrainPolicy` and
 `RunSchedulingOverride` each expose a Schema and its inferred type from `RunOptions`.
 Use `MemoryThreadStoreLive` from `@effect-agent/storage-memory/memory-thread-store` in place
 of the removed `MemoryStorageLive` alias. SQLite memory readers and writers come directly from
-`@effect-agent/thread/sql-memory-store`.
+`effect-agent/sql-memory-store`.
 
 The old `/history`, `/durability`, and `/testing` aggregation paths are removed. Use the
 canonical modules below, including `/testing/module` for test controls and conformance suites.
@@ -176,21 +176,35 @@ in your host.
 ### `effect-agent` {#effect-agent-umbrella}
 
 Agent definitions, schemas, execution, streaming, policies, subagents, memory capabilities,
-MCP, and platform-neutral sandbox contracts. It has no storage or platform runtime dependency.
+MCP, durable execution, and platform-neutral sandbox contracts. It has no database driver or platform runtime dependency.
 Start with `Agent`, `AgentRuntime`, and `Ephemeral.layer`.
 
 `Ephemeral.layer` retains in-memory conversation history and shared attached-subagent reservations.
-For storage-backed history, use `PersistentHistory.layer` from `@effect-agent/thread/persistent-history`.
+For storage-backed history, use the root namespace `PersistentHistory.layer`.
 Models, provider clients, credentials, tool handlers, and durable hosts remain application choices.
 
 Sandbox contracts including `Sandbox`, `CodeExecutor`, `PageCapture`, and `InteractiveBrowser`
 are part of this package; concrete executors and browser adapters are separate. See
 [sandbox execution](../guide/sandbox) and [browser tools](../guide/browser).
 
+### Source layout
+
+```text
+packages/effect-agent/src/
+├─ core/           # agent definitions, Thread, schemas, identifiers
+├─ engine/         # immediate execution and history integration
+├─ capabilities/   # subagents, memory, MCP, tools
+├─ sandbox/        # platform-neutral execution contracts
+└─ durable/        # persistence, journals, recovery, scheduling
+```
+
+These are internal directories, not separate packages or import prefixes. Storage drivers,
+platform hosts, workflow integrations, sandbox execution, and testing remain separate packages.
+
 ### Migrating imports
 
 Replace dependencies on `@effect-agent/core`, `@effect-agent/engine`,
-`@effect-agent/capabilities`, and `@effect-agent/sandbox` with `effect-agent`.
+`@effect-agent/capabilities`, `@effect-agent/sandbox`, and `@effect-agent/thread` with `effect-agent`.
 Those packages are consolidated into this release; previously published versions remain on npm.
 Prefer root namespaces:
 
@@ -199,7 +213,7 @@ import { Agent, AgentRuntime, Subagent, CodeExecutor, ThreadHistory } from "effe
 ```
 
 All remaining framework packages also use kebab-case module subpaths, for example
-`@effect-agent/thread/persistent-history`. Package names and PascalCase namespace names are unchanged.
+`@effect-agent/platform-node/node-durable-host`. PascalCase namespace names remain unchanged.
 Update all framework packages together. Service identities and stored formats are unchanged by
 this import migration.
 
@@ -210,9 +224,14 @@ requiring isolation it cannot enforce.
 
 Follow the [local process walkthrough](../guide/sandbox#run-a-trusted-local-process).
 
-### `@effect-agent/thread`
+### Threads and durability in `effect-agent`
 
-Thread records, storage contracts, recovery, durable execution, scheduling, and subscriptions.
+`Thread` describes an identified, ordered conversation. `Thread.Store` holds in-memory snapshots
+and `Ephemeral.layer` shares it across Runs. Persistence and execution recovery are separate choices.
+
+Versioned records, storage contracts, recovery, scheduling, and subscriptions live under
+`packages/effect-agent/src/durable`. Import their public namespaces from `effect-agent`, or use
+kebab-case subpaths such as `effect-agent/persistent-history` and `effect-agent/durable-agent-runtime`.
 `DurableAgentRuntime.layerRegistered` hashes version declarations and captures agent services
 once at construction. `layerWithBindings` accepts previously compiled registrations owned by
 the application's Scope. Worker operations use those registrations without accepting services.
@@ -225,18 +244,18 @@ submission's recovery decision with `recoverSubmission`. `submissionStatus` is t
 nonblocking read; `inspectSubmissionStatus` is reserved for trusted workers. Pending status and
 an empty processing result do not imply completion.
 
-| Import                                                        | Use                               |
-| ------------------------------------------------------------- | --------------------------------- |
-| `@effect-agent/thread/persistent-history`                     | Persistent history implementation |
-| `@effect-agent/thread/thread-store`                           | History storage contracts         |
-| `effect-agent/thread-history`                                 | Interpreter history service       |
-| `@effect-agent/thread/durable-agent-runtime`                  | Durable runtime                   |
-| `@effect-agent/thread/submission-ledger`                      | Accepted-work storage contracts   |
-| `@effect-agent/thread/git-hub-workflow-source`                | GitHub event source               |
-| `@effect-agent/thread/testing/certification`                  | Adapter certification             |
-| `@effect-agent/thread/testing/thread-store-conformance`       | History conformance               |
-| `@effect-agent/thread/testing/submission-ledger-conformance`  | Accepted-work conformance         |
-| `@effect-agent/thread/testing/durable-failpoint-test-control` | Runtime failpoint controls        |
+| Import                                                | Use                               |
+| ----------------------------------------------------- | --------------------------------- |
+| `effect-agent/persistent-history`                     | Persistent history implementation |
+| `effect-agent/thread-store`                           | History storage contracts         |
+| `effect-agent/thread-history`                         | Interpreter history service       |
+| `effect-agent/durable-agent-runtime`                  | Durable runtime                   |
+| `effect-agent/submission-ledger`                      | Accepted-work storage contracts   |
+| `effect-agent/git-hub-workflow-source`                | GitHub event source               |
+| `effect-agent/testing/certification`                  | Adapter certification             |
+| `effect-agent/testing/thread-store-conformance`       | History conformance               |
+| `effect-agent/testing/submission-ledger-conformance`  | Accepted-work conformance         |
+| `effect-agent/testing/durable-failpoint-test-control` | Runtime failpoint controls        |
 
 ### `@effect-agent/workflow`
 
@@ -274,7 +293,7 @@ Rejects incompatible stored versions; no migration path is promised.
 `CurrentSqliteStorageVersion` identifies the supported version.
 Test failpoints are in `@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing`.
 
-The independent `memoryStoreLayer` from `@effect-agent/thread/sql-memory-store` supplies optional `MemoryReader` and `MemoryWriter` ports
+The independent `memoryStoreLayer` from `effect-agent/sql-memory-store` supplies optional `MemoryReader` and `MemoryWriter` ports
 for conditional document updates and terminal withdrawal. It initializes only memory tables.
 Use `memoryReaderLayer` when the application needs no writer. See
 [memory lifecycle](../guide/context-management#memory-lifecycle).

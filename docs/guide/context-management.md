@@ -534,7 +534,7 @@ effort and does not authorize sharing or guarantee privacy.
 For a local persistent source, install the optional SQLite adapter:
 
 ```ts twoslash
-import { memoryStoreLayer } from "@effect-agent/thread/sql-memory-store";
+import { memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";
 
@@ -677,12 +677,9 @@ import { MemoryNamespace } from "effect-agent";
 import { MemoryContent } from "effect-agent/memory-reference";
 import { MemoryKey, MemoryScope, MemoryWrite, MemoryWriter } from "effect-agent/memory-store";
 import { ThreadId } from "effect-agent/identifiers";
-import {
-  ActivityPassLimits,
-  processCommittedActivity,
-} from "@effect-agent/thread/committed-activity";
-import { ActivityProcessorKey, type PreparedActivity } from "@effect-agent/thread/activity-store";
-import { type CanonicalRecordEnvelope } from "@effect-agent/thread/records";
+import { ActivityPassLimits, processCommittedActivity } from "effect-agent/committed-activity";
+import { ActivityProcessorKey, type PreparedActivity } from "effect-agent/activity-store";
+import { type CanonicalRecordEnvelope } from "effect-agent/records";
 import { Clock, DateTime, Effect, Schema } from "effect";
 
 // The application owns this message format and which Threads use it.
@@ -768,7 +765,7 @@ Thread ownership epochs, `SubmissionLedger`, or engine checkpoints for its own p
 
 ```ts twoslash
 import { activityProcessorStoreLayer } from "@effect-agent/storage-sqlite/sqlite-activity-store";
-import { memoryStoreLayer } from "@effect-agent/thread/sql-memory-store";
+import { memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Layer } from "effect";
 
@@ -1129,7 +1126,7 @@ For model-directed control, include the native `ContextTools.toolkit` and its ha
 ```ts
 import { ContextTools } from "effect-agent";
 import { ContextCompactor } from "effect-agent/context-compactor";
-import { ThreadContextHistory } from "@effect-agent/thread";
+import { ThreadContextHistory } from "effect-agent";
 import { Layer } from "effect";
 
 const tools = ContextTools.toolkit;
@@ -1229,7 +1226,7 @@ retrieve evidence removed by compaction, but cannot recover tool bytes discarded
 transient references, or records removed by a separate retention policy. Tightening Tool result
 bounds below these tools' maximum payloads may truncate their results too.
 
-For an indexed adapter, use `@effect-agent/thread/thread-context-history-projection` to project each
+For an indexed adapter, use `effect-agent/thread-context-history-projection` to project each
 canonical record into eligible retained text or a rollover boundary. Its query normalization and
 snippet matching preserve the native literal, case-folded search semantics. Operational records
 still consume their canonical sequence even when their projection is empty.
@@ -1268,7 +1265,7 @@ adopting longer histories.
 ### Manage summaries yourself {#explicit-compaction-artifacts}
 
 `effect-agent` also has an application-managed data path.
-`prepareModelContext` derives bounded text from a `ThreadSnapshot`.
+`prepareModelContext` derives bounded text from a `Thread.Thread`.
 `digestCompactionSource` binds a `CompactionArtifact` to that source. `applyCompaction` validates
 the artifact before replacing covered view messages with its summary. The application creates,
 stores, and applies the artifact.

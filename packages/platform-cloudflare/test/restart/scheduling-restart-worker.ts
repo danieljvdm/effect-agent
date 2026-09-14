@@ -5,14 +5,14 @@ import {
   makeScheduleOwnerObjectClass,
 } from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { Effect, Layer, Schema } from "effect";
 import {
   ScheduleAuthorizer,
   ScheduleFailpoint,
   ScheduleFailpointError,
   ScheduleId,
-} from "@effect-agent/thread/schedule";
-import { Scheduling } from "@effect-agent/thread/scheduling";
-import { Effect, Layer, Schema } from "effect";
+} from "effect-agent/schedule";
+import { Scheduling } from "effect-agent/scheduling";
 import { WorkerEnvironment } from "effect-cf";
 
 import {

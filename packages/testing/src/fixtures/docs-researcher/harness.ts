@@ -1,17 +1,14 @@
-import {
-  DurableWorkerBinding,
-  type ResolvedBinding,
-} from "@effect-agent/thread/agent-registration";
-import { type DurableSubmitOptions } from "@effect-agent/thread/durable-agent-runtime";
-import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "@effect-agent/thread/records";
-import { Principal, type IdempotencyKey } from "@effect-agent/thread/submission-ledger";
 import type { Crypto } from "effect";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
+import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
+import { type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
 import { type ThreadId } from "effect-agent/identifiers";
 import { connectMcp, type McpDiscovery } from "effect-agent/mcp";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
 import { Redactor, type RedactedPreview, type RedactionError } from "effect-agent/redaction";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
+import { Principal, type IdempotencyKey } from "effect-agent/submission-ledger";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";
 
 import { DeterministicIdGeneratorLayer } from "../travel-planner/deterministic-layers.ts";

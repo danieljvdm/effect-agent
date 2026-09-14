@@ -9,10 +9,10 @@ import {
   MemoryRpcError,
   memoryWireBytes,
 } from "@effect-agent/storage-cloudflare/memory-protocol";
-import { Principal } from "@effect-agent/thread/submission-ledger";
 import { Clock, Effect, Layer, Schema } from "effect";
 import * as Memory from "effect-agent/memory";
 import { MemoryAccess } from "effect-agent/memory-revalidation";
+import { Principal } from "effect-agent/submission-ledger";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
 
 import {

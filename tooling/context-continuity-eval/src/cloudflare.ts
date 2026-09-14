@@ -1,7 +1,3 @@
-import { digestDefinition } from "@effect-agent/thread/digest";
-import { Receipt } from "@effect-agent/thread/durable-agent-runtime";
-import { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
-import { runIdForSubmission } from "@effect-agent/thread/run-journal";
 import {
   Clock,
   Config,
@@ -14,6 +10,10 @@ import {
   Schema,
 } from "effect";
 import { contextWindowId } from "effect-agent/compaction";
+import { digestDefinition } from "effect-agent/digest";
+import { Receipt } from "effect-agent/durable-agent-runtime";
+import { CanonicalRecordEnvelope } from "effect-agent/records";
+import { runIdForSubmission } from "effect-agent/run-journal";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { CloudflareIdentity, CloudflareSnapshot } from "./cloudflare-contracts.ts";

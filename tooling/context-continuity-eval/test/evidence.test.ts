@@ -1,6 +1,6 @@
-import type { PersistedJson } from "@effect-agent/thread/records";
-import { CanonicalRecordEnvelope } from "@effect-agent/thread/records";
 import { Schema } from "effect";
+import type { PersistedJson } from "effect-agent/records";
+import { CanonicalRecordEnvelope } from "effect-agent/records";
 import { describe, expect, it } from "vite-plus/test";
 
 import { hasSearchPathToRead, originalArchiveRecord } from "../src/evidence.ts";

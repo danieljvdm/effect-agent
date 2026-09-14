@@ -3,19 +3,25 @@ import {
   memorySubmissionLedgerLayer,
 } from "@effect-agent/storage-memory/memory-submission-ledger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import {
-  DurableWorkerBinding,
-  type ResolvedBinding,
-} from "@effect-agent/thread/agent-registration";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, layer } from "@effect/vitest";
+import { Cause, Duration, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
+import * as Agent from "effect-agent/agent";
+import { AgentPolicy } from "effect-agent/agent-policy";
+import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
+import { ContextRolloverRequest, ContextRolloverTool } from "effect-agent/context-window";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   type DurableSubmitOptions,
-} from "@effect-agent/thread/durable-agent-runtime";
+} from "effect-agent/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
-} from "@effect-agent/thread/durable-failpoint";
+} from "effect-agent/durable-failpoint";
+import { ToolExecutionClass } from "effect-agent/durable-step";
+import { IdGenerator } from "effect-agent/id-generator";
+import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "effect-agent/identifiers";
 import {
   DefinitionDigests,
   DeploymentId,
@@ -24,8 +30,12 @@ import {
   RecordEnvelope,
   ToolCallPrepared,
   type CanonicalRecordEnvelope,
-} from "@effect-agent/thread/records";
-import { childThreadIdFor, runIdForSubmission } from "@effect-agent/thread/run-journal";
+} from "effect-agent/records";
+import { childThreadIdFor, runIdForSubmission } from "effect-agent/run-journal";
+import { RunToolAuthorization } from "effect-agent/run-options";
+import * as Subagent from "effect-agent/subagent";
+import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
+import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
 import {
   AbortCommand,
   ClaimRequest,
@@ -39,24 +49,11 @@ import {
   SubmissionLookupByKey,
   UnknownResolutionCommand,
   submissionSettlementId,
-} from "@effect-agent/thread/submission-ledger";
-import { DurableRuntimeFailpointTestControl } from "@effect-agent/thread/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore } from "@effect-agent/thread/thread-store";
-import { ToolReconciler } from "@effect-agent/thread/tool-reconciler";
-import { WakeScheduler } from "@effect-agent/thread/wake-scheduler";
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, layer } from "@effect/vitest";
-import { Cause, Duration, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { AgentPolicy } from "effect-agent/agent-policy";
-import { ContextRolloverRequest, ContextRolloverTool } from "effect-agent/context-window";
-import { ToolExecutionClass } from "effect-agent/durable-step";
-import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "effect-agent/identifiers";
-import { RunToolAuthorization } from "effect-agent/run-options";
-import * as Subagent from "effect-agent/subagent";
-import { SubagentPolicy, SubagentRuntime } from "effect-agent/subagent";
-import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
+} from "effect-agent/submission-ledger";
+import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+import { ToolReconciler } from "effect-agent/tool-reconciler";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
 import {
   LanguageModel,

@@ -5,9 +5,9 @@ description: Keep thread history across agent runs.
 
 # Threads
 
-A Thread is addressable ordered history shared across Runs. An Agent executes Runs within a Thread
-and retains their history there. A Thread is separate from an Agent definition, process lifetime,
-Submission, or model request.
+A Thread is an identified, ordered conversation shared across Runs. It exists whether messages
+are held in memory or persisted. Durable execution adds a journal and recovery protocol around
+that conversation.
 
 ## In-memory conversations
 
@@ -29,7 +29,7 @@ around all conversation Runs, or build one `ManagedRuntime` for a long-lived app
 Providing a fresh Layer separately to each Run creates separate stores. Omitting `threadId`
 creates a new conversation; reuse the returned ID for follow-ups.
 
-The layer shares one bounded `EphemeralThreads` store and the subagent reservation ledger.
+The layer shares one bounded `Thread.Store` and the subagent reservation ledger.
 `ThreadHistory.layer` supplies just the in-memory history services when assembling your own setup.
 History retains complete native messages and Tool batches as execution advances. Recorded updates
 remain after a later failure, defect, timeout, or interruption; incomplete streamed responses and
@@ -42,6 +42,24 @@ it never silently evicts earlier conversations. Concurrent updates must extend t
 prefix, or fail with reason `"conflict"` without overwriting history. Authorize thread access and
 serialize same-thread Runs when concurrent external work is unacceptable.
 
+## Inspect a conversation
+
+```ts
+import { Thread } from "effect-agent";
+
+const inspect = Effect.gen(function* () {
+  const threads = yield* Thread.Store;
+  const conversation = yield* threads.snapshot(threadId);
+  return Thread.toPrompt(conversation);
+});
+```
+
+Run this inside the same application Layer as the agent. `Thread.Thread` is the snapshot Schema;
+its messages include native text, tool results, reasoning, and files. `Thread.layerMemory` provides
+just the memory store; `Ephemeral.layer` also connects it to agent history and subagent reservations.
+`Thread.Store` snapshots and the durable `ThreadStore` journal contract serve different purposes:
+the latter also stores execution records needed for persistence and recovery.
+
 ## Retain completed runs
 
 For history backed by an explicit store, use `PersistentHistory.layer`. It commits whole
@@ -52,9 +70,7 @@ Provide `PersistentHistory.layer` with a memory or SQLite `ThreadStore` layer. T
 can serve many thread IDs.
 
 ```ts
-import { AgentRuntime } from "effect-agent";
-import { ThreadHistory } from "effect-agent/thread-history";
-import { PersistentHistory } from "@effect-agent/thread/persistent-history";
+import { AgentRuntime, PersistentHistory, ThreadHistory } from "effect-agent";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { SqliteThreadStore } from "@effect-agent/storage-sqlite";
 import { Effect, Layer } from "effect";
@@ -70,7 +86,7 @@ const HistoryLive = MemoryHistoryLive;
 const program = Effect.gen(function* () {
   const first = yield* AgentRuntime.run(agent, firstInput, { threadId });
   const second = yield* AgentRuntime.run(agent, secondInput, { threadId });
-  const history = yield* ThreadHistory;
+  const history = yield* ThreadHistory.ThreadHistory;
   const prompt = yield* history.load(threadId);
   return { first, second, prompt };
 }).pipe(Effect.provide(HistoryLive));
@@ -133,7 +149,7 @@ The advanced hooks have these ownership rules:
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
 | `RunOptions.history`   | Seeds a new in-memory Thread or extends its current history; a divergent prefix is rejected.    |
 | `RunOptions.onHistory` | Observes incremental Prompt updates after in-memory retention. Its own writes are caller-owned. |
-| `toRunThreadOptions`   | Adapts an existing `EphemeralThreads` snapshot when explicit history hooks are needed.          |
+| `toRunThreadOptions`   | Adapts an existing `Thread.Store` snapshot when explicit history hooks are needed.              |
 | Durable runtime hooks  | Own history through the journal and commit each turn for recovery.                              |
 
 Use `Ephemeral.layer` or `ThreadHistory.layer` as the shared store for `toRunThreadOptions`.
@@ -149,7 +165,7 @@ agent would otherwise stop. Neither changes work already in progress.
 
 ## Read canonical history {#canonical-history}
 
-`@effect-agent/thread` defines versioned record schemas and a pure reducer. The thread log
+The durable modules in `effect-agent` define versioned record schemas and a pure reducer. The thread log
 is append-only. It records user input, completed model output, settled tool calls, compaction, run
 completion or failure, and repairs. Partial tool argument deltas and live queue state are absent.
 

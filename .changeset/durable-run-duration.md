@@ -1,6 +1,6 @@
 ---
-"@effect-agent/thread": patch
 "@effect-agent/testing": patch
+"effect-agent": patch
 ---
 
 Preserve one wall-clock `maxDuration` deadline across durable Attempts. The coordinator now

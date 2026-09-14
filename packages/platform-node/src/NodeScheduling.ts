@@ -1,3 +1,5 @@
+import { NodeCrypto } from "@effect/platform-node";
+import { Cause, Duration, Effect, Layer, Option, PubSub, Result } from "effect";
 import {
   type ScheduleAuthorizer,
   type SchedulingLimits,
@@ -6,14 +8,8 @@ import {
   type ScheduleValidationError,
   ScheduleWake,
   defaultSchedulingLimits,
-} from "@effect-agent/thread/schedule";
-import {
-  type ScheduleProcessFailure,
-  Scheduling,
-  ScheduleDriver,
-} from "@effect-agent/thread/scheduling";
-import { NodeCrypto } from "@effect/platform-node";
-import { Cause, Duration, Effect, Layer, Option, PubSub, Result } from "effect";
+} from "effect-agent/schedule";
+import { type ScheduleProcessFailure, Scheduling, ScheduleDriver } from "effect-agent/scheduling";
 
 import type { NodeDurableHost } from "./NodeDurableHost.ts";
 import { nodeScheduledInputAdmissionLayer } from "./NodeSubscriptions.ts";

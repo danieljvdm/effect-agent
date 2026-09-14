@@ -1,5 +1,5 @@
 ---
-"@effect-agent/thread": minor
+"effect-agent": minor
 ---
 
 Keep completed Steps and projected tool calls distinct when component IDs contain separators or are reused across runs.

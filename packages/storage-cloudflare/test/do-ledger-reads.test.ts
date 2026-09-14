@@ -1,7 +1,7 @@
-import { SubmissionLedger } from "@effect-agent/thread/submission-ledger";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer, type Crypto } from "effect";
+import { SubmissionLedger } from "effect-agent/submission-ledger";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
