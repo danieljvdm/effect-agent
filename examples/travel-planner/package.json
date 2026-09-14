@@ -24,7 +24,7 @@
     "drizzle-orm": "1.0.0-rc.5-ab785fc",
     "effect": "catalog:",
     "effect-agent": "0.1.0-beta.88",
-    "effect-cf": "catalog:",
+    "effect-cf": "0.41.0",
     "isomorphic-git": "catalog:",
     "lucide-react": "catalog:",
     "memfs": "catalog:",

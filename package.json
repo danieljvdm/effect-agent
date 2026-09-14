@@ -107,7 +107,7 @@
     "clsx": "2.1.1",
     "diff": "8.0.4",
     "effect": "4.0.0-rc.112",
-    "effect-cf": "0.41.0",
+    "effect-cf": "0.42.1",
     "esbuild": "0.28.1",
     "lucide-react": "1.27.0",
     "miniflare": "5.20260811.1-alpha",
