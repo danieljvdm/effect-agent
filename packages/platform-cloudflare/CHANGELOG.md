@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.87
+
+### Patch Changes
+
+- [#471](https://github.com/danieljvdm/effect-agent/pull/471) [`0be6edf`](https://github.com/danieljvdm/effect-agent/commit/0be6edfa8c73822f59184e6177a265c56c3ac1cd) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Schedule message delivery maintenance from its durable due index without waking source execution recovery for delivery bookkeeping. Preserve prearmed recovery across eviction and wake retained deliveries when they become due.
+
+- Updated dependencies [[`0be6edf`](https://github.com/danieljvdm/effect-agent/commit/0be6edfa8c73822f59184e6177a265c56c3ac1cd)]:
+  - effect-agent@0.1.0-beta.87
+  - @effect-agent/storage-cloudflare@0.1.0-beta.87
+
 ## 0.1.0-beta.86
 
 ### Minor Changes

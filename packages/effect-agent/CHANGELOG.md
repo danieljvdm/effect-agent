@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.87
+
+### Patch Changes
+
+- [#471](https://github.com/danieljvdm/effect-agent/pull/471) [`0be6edf`](https://github.com/danieljvdm/effect-agent/commit/0be6edfa8c73822f59184e6177a265c56c3ac1cd) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Persist completed Tool results before draining new inputs. An admission read failure after a Tool returns no longer loses its outcome, turns it into an unknown call, or blocks later submissions behind it. Preserve atomic no-tool and completion-Tool terminal commits.
+
 ## 0.1.0-beta.86
 
 ### Minor Changes
