@@ -21,6 +21,7 @@ import {
   PlannerError,
   PlannerRpcs,
   PlannerSnapshot,
+  PlannerWorkerDetail,
   PlannerProgress,
   defaultPlannerSettings,
 } from "../domain.ts";
@@ -106,6 +107,7 @@ import { PlannerSettingsStore, PlannerSettingsStoreLive } from "./settings.ts";
 import { ownerOfThread, privateConversation, publicSnapshot } from "./tenancy.ts";
 import { OwnerTripRepositoryLive, serveTripRepository } from "./trip-rpc.ts";
 import { publishTrip, TripRepository } from "./trips.ts";
+import { plannerWorker, workerStatus, WorkerLocator, WorkerStatusRequest } from "./worker-state.ts";
 
 declare global {
   namespace Cloudflare {
@@ -192,6 +194,39 @@ export const plannerHandlers = PlannerRpcs.toLayer({
           });
 
         return yield* Effect.flatMap(PlannerSettingsStore, (settings) => settings.save(request));
+      }),
+    ),
+  GetPlannerWorker: ({ conversationId, ...locator }) =>
+    safeRpc(
+      Effect.gen(function* () {
+        const identity = yield* ThreadObjectIdentity;
+        const privateId = yield* privateConversation(identity.threadId, conversationId);
+        const env = yield* WorkerEnvironment;
+
+        const request = yield* Schema.encodeEffect(Schema.fromJsonString(WorkerLocator))(
+          locator,
+        ).pipe(
+          Effect.mapError(() => new PlannerError({ code: "invalid", message: "Invalid worker." })),
+        );
+
+        const reply = yield* Effect.tryPromise({
+          try: () => env.ACCOUNT_THREADS.getByName(privateId).plannerWorker(request),
+          catch: () =>
+            new PlannerError({
+              code: "unavailable",
+              message: "Worker updates are temporarily unavailable.",
+            }),
+        });
+
+        return yield* Schema.decodeEffect(Schema.fromJsonString(PlannerWorkerDetail))(reply).pipe(
+          Effect.mapError(
+            () =>
+              new PlannerError({
+                code: "unavailable",
+                message: "Worker updates could not be read.",
+              }),
+          ),
+        );
       }),
     ),
   GetPlanner: ({ conversationId }) =>
@@ -645,6 +680,8 @@ export const plannerApplication = <E, R>(
 
   return Layer.fresh(ThreadMaintenance.layer).pipe(
     Layer.provideMerge(registered),
+    // Read RPCs use the same authorization policy as the registered worker host.
+    Layer.provideMerge(EditorHostLive),
     Layer.provideMerge(local),
     Layer.provideMerge(ProgressStore.layer),
     Layer.provideMerge(Layer.succeed(PlannerModel, { model: modelLabel })),
@@ -723,6 +760,26 @@ export const makeTravelPlannerThread = <E>(
 
     tripApp(request: string): Promise<string> {
       return this[DurableObject.RunSymbol](serveAppRepository(request));
+    }
+
+    /** Source authorization happens inside this conversation object, before calling any child. */
+    plannerWorker(request: string): Promise<string> {
+      return this[DurableObject.RunSymbol](
+        Schema.decodeEffect(Schema.fromJsonString(WorkerLocator))(request).pipe(
+          Effect.flatMap(plannerWorker),
+          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
+        ),
+      );
+    }
+
+    /** Private namespace only; returns a compact view with a bounded local history read. */
+    plannerWorkerStatus(request: string): Promise<string> {
+      return this[DurableObject.RunSymbol](
+        Schema.decodeEffect(Schema.fromJsonString(WorkerStatusRequest))(request).pipe(
+          Effect.flatMap(workerStatus),
+          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
+        ),
+      );
     }
 
     plannerState(): Promise<string> {

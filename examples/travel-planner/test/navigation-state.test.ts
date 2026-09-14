@@ -3,7 +3,8 @@ import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 import { AccountError } from "../src/auth/account.ts";
-import { PlannerSnapshot, SavedTrip } from "../src/domain.ts";
+import type { PlannerWorkerDetail } from "../src/domain.ts";
+import { PlannerSnapshot, PlannerWorkerRequest, SavedTrip } from "../src/domain.ts";
 import {
   activeTripAtom,
   conversationStatusAtom,
@@ -71,6 +72,16 @@ const setup = () => {
     readonly fail: () => void;
   }> = [];
 
+  const workers: Array<{
+    readonly conversationId: string;
+    readonly workerId: string;
+    readonly sourceSequence: number;
+    aborted: boolean;
+    completed: boolean;
+    readonly succeed: (value: PlannerWorkerDetail) => void;
+    readonly fail: () => void;
+  }> = [];
+
   vi.stubGlobal(
     "fetch",
     fetchMock.mockImplementation(async (input, init) => {
@@ -88,6 +99,49 @@ const setup = () => {
           headers: { "content-type": "application/ndjson" },
         });
 
+      if (packet.tag === "GetPlannerWorker") {
+        const payload = Schema.decodeUnknownSync(PlannerWorkerRequest)(packet.payload);
+
+        return new Promise<Response>((resolve, reject) => {
+          const item = {
+            ...payload,
+            aborted: false,
+            completed: false,
+            succeed: (value: PlannerWorkerDetail) => {
+              item.completed = true;
+              resolve(response({ _tag: "Success", value }));
+            },
+            fail: () => {
+              item.completed = true;
+              resolve(
+                response({
+                  _tag: "Failure",
+                  cause: [
+                    {
+                      _tag: "Fail",
+                      error: {
+                        _tag: "PlannerError",
+                        code: "unavailable",
+                        message: "Try again",
+                      },
+                    },
+                  ],
+                }),
+              );
+            },
+          };
+
+          request.signal.addEventListener(
+            "abort",
+            () => {
+              item.aborted = true;
+              reject(new DOMException("Aborted", "AbortError"));
+            },
+            { once: true },
+          );
+          workers.push(item);
+        });
+      }
       const payload = Schema.decodeUnknownSync(Payload)(packet.payload);
 
       return new Promise<Response>((resolve) => {
@@ -136,6 +190,7 @@ const setup = () => {
   return {
     registry,
     requests,
+    workers,
     revalidateSession: () =>
       registry.set(sessionAtom, AsyncResult.waiting(registry.get(sessionAtom))),
     finishSession: (value: string | AccountError) => {
@@ -414,4 +469,128 @@ it("keeps unfinished and failed uncached loads separate and never reuses another
   } finally {
     fixture.close();
   }
+});
+
+const workerDetail = (text: string): PlannerWorkerDetail => ({
+  state: "idle",
+  progress: { submissionId: null, attemptId: null, revision: 0, text, tools: [] },
+  activity: [],
+});
+
+const withWorkers = (conversationId: string) => ({
+  ...snapshot(conversationId),
+  scouts: ["slow", "failure", "fast", "queued"].map((id, index) => ({
+    id,
+    sourceSequence: index + 10,
+    title: id,
+    task: `Research ${id}`,
+    ...workerDetail(""),
+    state: "loading" as const,
+  })),
+  editor: {
+    id: "editor",
+    sourceSequence: 20,
+    task: "Build the app",
+    ...workerDetail(""),
+    state: "loading" as const,
+  },
+});
+
+it("shows main history and worker overviews first, bounds parallel details, and isolates failure and timeout", async () => {
+  const fixture = setup();
+  const { registry, requests, workers } = fixture;
+
+  try {
+    await flush();
+    expect(workers).toHaveLength(0);
+    requests[0]!.succeed(withWorkers("lisbon"));
+    await flush();
+    expect(registry.get(conversationStatusAtom)).toBe("ready");
+    expect(AsyncResult.getOrThrow(registry.get(plannerAtom)).messages[0]?.text).toBe(
+      "lisbon history",
+    );
+    expect(workers.map(({ workerId }) => workerId)).toEqual(["slow", "failure", "fast"]);
+    expect(
+      AsyncResult.getOrThrow(registry.get(plannerAtom)).scouts?.map(({ state }) => state),
+    ).toEqual(["loading", "loading", "loading", "loading"]);
+    workers[1]!.fail();
+    workers[2]!.succeed(workerDetail("Fast result"));
+    await flush();
+    expect(workers.map(({ workerId }) => workerId)).toEqual([
+      "slow",
+      "failure",
+      "fast",
+      "queued",
+      "editor",
+    ]);
+    expect(
+      AsyncResult.getOrThrow(registry.get(plannerAtom)).scouts?.map(({ state }) => state),
+    ).toEqual(["loading", "unavailable", "idle", "loading"]);
+    workers[3]!.succeed(workerDetail("Queued result"));
+    workers[4]!.succeed(workerDetail("Editor result"));
+    await flush();
+    expect(AsyncResult.getOrThrow(registry.get(plannerAtom)).editor?.progress.text).toBe(
+      "Editor result",
+    );
+    await vi.advanceTimersByTimeAsync(3_010);
+    expect(workers[0]!.aborted).toBe(true);
+    expect(workers.filter(({ workerId }) => workerId === "fast")).toHaveLength(1);
+    expect(workers.filter(({ workerId }) => workerId === "editor")).toHaveLength(1);
+    expect(AsyncResult.getOrThrow(registry.get(plannerAtom)).scouts?.[0]?.state).toBe(
+      "unavailable",
+    );
+    expect(registry.get(conversationStatusAtom)).toBe("ready");
+    expect(
+      workers.filter((worker) => !worker.aborted && !worker.completed).length,
+    ).toBeLessThanOrEqual(3);
+  } finally {
+    fixture.close();
+  }
+  await flush();
+  expect(workers.every((worker) => worker.completed || worker.aborted)).toBe(true);
+});
+
+it("cancels worker reads and queued permits on conversation switch, rejecting stale results and task locators", async () => {
+  const fixture = setup();
+  const { registry, requests, workers } = fixture;
+
+  try {
+    await flush();
+    requests[0]!.succeed(withWorkers("lisbon"));
+    await flush();
+    registry.set(selectTripAtom, trips[1]!);
+    await flush();
+    expect(workers).toHaveLength(3);
+    expect(workers.every((worker) => worker.aborted)).toBe(true);
+    workers[0]!.succeed(workerDetail("Late Lisbon result"));
+    requests[1]!.succeed(withWorkers("kyoto"));
+    await flush();
+    expect(workers.slice(3).map(({ conversationId }) => conversationId)).toEqual([
+      "kyoto",
+      "kyoto",
+      "kyoto",
+    ]);
+    expect(AsyncResult.getOrThrow(registry.get(plannerAtom)).scouts?.[0]?.progress.text).toBe("");
+    workers[3]!.succeed(workerDetail("Kyoto result"));
+    await flush();
+    expect(AsyncResult.getOrThrow(registry.get(plannerAtom)).scouts?.[0]?.progress.text).toBe(
+      "Kyoto result",
+    );
+    await vi.advanceTimersByTimeAsync(2_010);
+    const updated = withWorkers("kyoto");
+
+    updated.scouts[0] = { ...updated.scouts[0]!, sourceSequence: 99, task: "A new request" };
+    requests.at(-1)!.succeed(updated);
+    await flush();
+    expect(AsyncResult.getOrThrow(registry.get(plannerAtom)).scouts?.[0]).toMatchObject({
+      sourceSequence: 99,
+      task: "A new request",
+      state: "loading",
+      progress: { text: "" },
+    });
+  } finally {
+    fixture.close();
+  }
+  await flush();
+  expect(workers.every((worker) => worker.completed || worker.aborted)).toBe(true);
 });

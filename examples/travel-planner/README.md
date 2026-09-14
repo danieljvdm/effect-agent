@@ -19,6 +19,8 @@ The app consumes published Effect Agent packages and uses Effect Atom for client
 The production deployment workflow enables Cloudflare traces after verifying request URL
 query-string redaction, keeping authentication callback parameters out of platform telemetry.
 Direct Alchemy deployments leave traces disabled because its SDK does not yet expose that setting.
+Manual dispatch of **Deploy travel planner** deploys the selected branch to production, so it
+requires deployment authorization even for a PR branch. Automatic deployments remain on `main`.
 
 From the repository root:
 
@@ -26,3 +28,34 @@ From the repository root:
 vp install
 vp run -F @effect-agent/example-travel-planner dev
 ```
+
+The conversation loads in stages. `GetPlanner` returns messages, trips, and the latest
+source-record overview for up to eight scouts and the trip's editor without reading child
+objects. Each `GetPlannerWorker` query then fills in its own status, public progress, and recent
+activity. The client shares three request permits across scouts and editor, polls active or unavailable queries
+two seconds after each response, and bounds each active read to three seconds. Finished views
+stop polling until a new source request, mutation invalidation, or remount. A stalled or failed
+worker leaves the conversation and other workers usable. Loading updates are distinct from
+starting work or unavailable updates.
+
+Worker query identity includes the signed-in account, conversation, worker, and canonical
+request sequence. Changing conversations or replacing a task releases its subscriptions,
+cancels queued/in-flight client reads, and prevents late replies from replacing the current
+view. Existing mutations invalidate these queries through the shared `planner` reactivity key.
+Cancellation stops observation; accepted durable work continues. Native Durable Object RPCs
+are finite and separately time-limited on the receiver; cancelling browser fetch does not
+promise immediate cancellation of an already dispatched native RPC.
+
+The conversation object verifies the exact `WorkerInputRequested` record and the host's read
+authorization before addressing a child. The child computes the compact view locally with one
+lookup for that request, a nonterminal scan, and the final 100 canonical records. Limits apply
+before decoding and activity projection. Status describes that selected request plus any
+active work on the worker; an older pending delivery is not reconstructed as a new task.
+Activity is a recent window, not a complete audit log. Reads never admit, recover, or replay
+work. Diagnostics retain the existing redaction boundary.
+
+These queries use the exact published framework dependencies in this example. They do not
+change the framework's general `Subagent.inspect` or `Subagent.observe` contracts. Any future
+framework optimization belongs in a separate library PR, followed by publication and an exact
+consumer dependency upgrade before integration. Local Miniflare checks establish behavior and
+work budgets; deployed latency requires a separately authorized deployment and measurement.

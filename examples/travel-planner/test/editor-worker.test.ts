@@ -8,7 +8,14 @@ import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
-import { AppFile, PlannerSnapshot, Trip, TripApp, type PlannerSettings } from "../src/domain.ts";
+import {
+  AppFile,
+  PlannerSnapshot,
+  PlannerWorkerDetail,
+  Trip,
+  TripApp,
+  type PlannerSettings,
+} from "../src/domain.ts";
 import { ownerEmail } from "./fixtures/identity.ts";
 
 const token = "editor-worker-fixture";
@@ -103,8 +110,31 @@ const fixture = async (path: string, params: Record<string, string>, method = "G
   return response.json();
 };
 
-const snapshot = async (conversationId: string, email = member) =>
-  Schema.decodeUnknownSync(PlannerSnapshot)(await rpc("GetPlanner", { conversationId }, email));
+const snapshot = async (conversationId: string, email = member) => {
+  const main = Schema.decodeUnknownSync(PlannerSnapshot)(
+    await rpc("GetPlanner", { conversationId }, email),
+  );
+
+  return {
+    ...main,
+    editor: main.editor
+      ? {
+          ...main.editor,
+          ...Schema.decodeUnknownSync(PlannerWorkerDetail)(
+            await rpc(
+              "GetPlannerWorker",
+              {
+                conversationId,
+                workerId: main.editor.id,
+                sourceSequence: main.editor.sourceSequence,
+              },
+              email,
+            ),
+          ),
+        }
+      : main.editor,
+  };
+};
 
 const journal = async (thread: string) =>
   Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
