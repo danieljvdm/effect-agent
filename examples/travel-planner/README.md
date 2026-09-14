@@ -16,6 +16,10 @@ It uses Cloudflare:
 The app consumes published Effect Agent packages and uses Effect Atom for client state.
 [alchemy.run.ts](alchemy.run.ts) defines the Cloudflare resources and required configuration.
 
+The production deployment workflow enables Cloudflare traces after verifying request URL
+query-string redaction, keeping authentication callback parameters out of platform telemetry.
+Direct Alchemy deployments leave traces disabled because its SDK does not yet expose that setting.
+
 From the repository root:
 
 ```sh

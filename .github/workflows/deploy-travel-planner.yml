@@ -75,3 +75,34 @@ jobs:
             fi
           done
           vp run -F @effect-agent/example-travel-planner deploy --yes
+
+      - name: Enable traces with query-string redaction
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Alchemy's SDK omits redact_query_string. Verify Cloudflare accepts it
+          # while tracing is disabled before enabling collection.
+          settings_url="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/effect-agent-travel-planner/script-settings"
+          for tracing in false true; do
+            jq -n --argjson tracing "$tracing" '{observability: {
+              enabled: true,
+              redact_query_string: true,
+              logs: {enabled: true, invocation_logs: false},
+              traces: {enabled: $tracing, persist: true, head_sampling_rate: 1}
+            }}' > "$RUNNER_TEMP/planner-observability.json"
+            curl --fail --silent --show-error --max-time 30 \
+              --request PATCH "$settings_url" \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              --header 'Content-Type: application/json' \
+              --data-binary "@$RUNNER_TEMP/planner-observability.json" \
+              | jq -e '.success == true'
+            curl --fail --silent --show-error --max-time 30 \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$settings_url" \
+              | jq -e --argjson tracing "$tracing" '
+                .success == true and
+                .result.observability.redact_query_string == true and
+                .result.observability.logs.invocation_logs == false and
+                .result.observability.traces.enabled == $tracing and
+                .result.observability.traces.persist == true'
+          done

@@ -100,7 +100,8 @@ export default Alchemy.Stack(
           "BYOK_ENCRYPTION_KEY",
         ),
       },
-      // Callback query values must not enter automatic request URL logs.
+      // The deploy workflow verifies query-string redaction before enabling traces.
+      // Keep collection off here until Alchemy's SDK supports redact_query_string.
       observability: {
         enabled: true,
         logs: { enabled: true, invocationLogs: false },
