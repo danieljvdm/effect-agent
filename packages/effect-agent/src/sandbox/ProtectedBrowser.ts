@@ -3,7 +3,7 @@ import { Context, Effect, Layer, Schema, Scope, type Redacted } from "effect";
 import {
   InteractiveBrowserHost,
   InteractiveBrowserTargetUrl,
-  type InteractiveBrowserPolicy,
+  InteractiveBrowserPolicy,
 } from "./InteractiveBrowser.ts";
 
 /** Canonical HTTPS origin, including a non-default port. Host grants match exactly. */
@@ -334,9 +334,32 @@ export class BrowserCredentialAccess extends Context.Service<
       readonly topOrigin: typeof CredentialOrigin.Type;
       readonly frameOrigins: ReadonlyArray<typeof CredentialOrigin.Type>;
       readonly exposures: ReadonlyArray<CredentialTarget>;
+      /** A human may have entered secrets; explicitly authorize observation even with no vault exposures. */
+      readonly humanExposure?: boolean;
+      /** Origins present when the human received control, retained across durable suspension. */
+      readonly humanOrigins?: ReadonlyArray<typeof CredentialOrigin.Type>;
     }) => Effect.Effect<typeof CredentialObservationDecision.Type, CredentialAccessError>;
   }
 >()("@effect-agent/sandbox/BrowserCredentialAccess") {}
+
+/**
+ * Host-only suspended-pass state. Persist with the host's fenced controller receipt, never in
+ * a Tool result. It contains no credential material, offers, DOM references usable after resume,
+ * cookies, page text, or provider capability. A host must restore its own credential exposure
+ * ledger as well. The original deadline and action allowance include time spent with the human.
+ */
+export class ProtectedBrowserCheckpoint extends Schema.Class<ProtectedBrowserCheckpoint>(
+  "ProtectedBrowserCheckpoint",
+)({
+  policy: InteractiveBrowserPolicy,
+  startedAt: Schema.Natural,
+  actions: Schema.Natural,
+  exposures: Schema.Array(CredentialTarget).check(Schema.isMaxLength(1000)),
+  humanExposure: Schema.Boolean,
+  humanOrigins: Schema.Array(CredentialOrigin).check(Schema.isMaxLength(16)),
+  dispatch: CredentialDispatch,
+  milestone: CredentialMilestone,
+}) {}
 
 /** A private ephemeral pass. No selectors, JavaScript, screenshots, viewer, or provider identity. */
 export interface ProtectedBrowserHandle {

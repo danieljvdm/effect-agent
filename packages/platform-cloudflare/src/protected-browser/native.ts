@@ -56,6 +56,8 @@ export class ProtectedNativeSession extends Context.Service<
     readonly browser: Browser;
     readonly page: Page;
     readonly close: Effect.Effect<"confirmed" | "unconfirmed">;
+    /** Host-owned attachment release may detach a committed suspended session. */
+    readonly release?: Effect.Effect<void>;
   }
 >()("@effect-agent/platform-cloudflare/ProtectedNativeSession") {}
 
@@ -249,7 +251,20 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
       page.on("framedetached", onNavigated);
       browser.on("targetcreated", onTarget);
     }),
-    () => close,
+    () =>
+      session.release === undefined
+        ? close
+        : session.release.pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                invalidate();
+                page.off("framenavigated", onNavigated);
+                page.off("framedetached", onNavigated);
+                browser.off("targetcreated", onTarget);
+                frames.clear();
+              }),
+            ),
+          ),
   );
 
   return {
@@ -271,6 +286,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
     ),
     context,
     invalidate,
+    resetReferences: clear,
     close,
     navigate: Effect.fn("ProtectedNativeTransport.navigate")(function* (url) {
       yield* check;

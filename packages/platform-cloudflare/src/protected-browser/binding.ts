@@ -1,5 +1,5 @@
 /// <reference types="@cloudflare/workers-types" />
-import puppeteer, { type Browser } from "@cloudflare/puppeteer";
+import puppeteer, { type Browser, type Page, type CDPSession } from "@cloudflare/puppeteer";
 import { Clock, Context, Crypto, Effect, Layer, Redacted, Schema, type Scope } from "effect";
 import { type InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { ProtectedBrowserError } from "effect-agent/protected-browser";
@@ -12,22 +12,50 @@ import {
   type ProtectedBrowserTransport,
 } from "./policy.ts";
 
+/** Host-private exact page identity; never include it in model-visible results. */
+export const ProtectedProviderIdentity = Schema.Struct({
+  sessionId: Schema.Redacted(Schema.String.check(Schema.isUUID())),
+  contextId: Schema.Redacted(Schema.NonEmptyString.check(Schema.isMaxLength(256))),
+  targetId: Schema.Redacted(Schema.NonEmptyString.check(Schema.isMaxLength(256))),
+});
+
+export type ProtectedProviderIdentity = typeof ProtectedProviderIdentity.Type;
+
+export interface ProtectedProviderSession {
+  readonly identity: ProtectedProviderIdentity;
+  readonly driver: ProtectedBrowserTransport;
+  readonly command: (
+    method: "Cloudflare.getLiveView" | "Cloudflare.handoff" | "Cloudflare.getHandoffState",
+    parameters: Readonly<Record<string, string | number>>,
+  ) => Effect.Effect<unknown, ProtectedBrowserError>;
+  readonly detach: Effect.Effect<void, ProtectedBrowserError>;
+}
+
+export class BrowserRunProtectedBinding extends Context.Service<
+  BrowserRunProtectedBinding,
+  {
+    readonly open: (
+      policy: InteractiveBrowserPolicy,
+      identity?: ProtectedProviderIdentity,
+    ) => Effect.Effect<ProtectedProviderSession, ProtectedBrowserError, Scope.Scope>;
+  }
+>()("@effect-agent/platform-cloudflare/BrowserRunProtectedBinding") {}
+
 /**
  * Acquires through BROWSER with recording=false explicitly on the wire. The trusted provider's
  * documented opt-in semantics are the recording guarantee; no recording-status API exists.
  * Account operators remain trusted, and must not attach external observers to private passes.
  */
-export const browserRunProtectedBindingLayer = (options: {
-  readonly browser: Pick<BrowserRun, "fetch">;
-}) =>
-  Layer.effect(BrowserRunProtectedTransport)(
+const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fetch"> }) =>
+  Layer.effect(BrowserRunProtectedBinding)(
     Effect.gen(function* () {
       const lifecycle = yield* BrowserRunSessionLifecycle;
       const crypto = yield* Crypto.Crypto;
 
       const open = Effect.fn("BrowserRunProtectedTransport.open")(function* (
         policy: InteractiveBrowserPolicy,
-      ): Effect.fn.Return<ProtectedBrowserTransport, ProtectedBrowserError, Scope.Scope> {
+        identity?: ProtectedProviderIdentity,
+      ): Effect.fn.Return<ProtectedProviderSession, ProtectedBrowserError, Scope.Scope> {
         const failure = () =>
           new ProtectedBrowserError({
             reason: "provider",
@@ -37,7 +65,10 @@ export const browserRunProtectedBindingLayer = (options: {
             cleanup: "unconfirmed",
           });
 
-        let sessionId: Redacted.Redacted<string> | undefined;
+        let sessionId: Redacted.Redacted<string> | undefined = identity?.sessionId;
+        let detached = false;
+        let control: CDPSession | undefined;
+        let providerIdentity: ProtectedProviderIdentity | undefined;
         let browser: Browser | undefined;
         let driver: ProtectedBrowserTransport | undefined;
         let invalid = false;
@@ -76,13 +107,15 @@ export const browserRunProtectedBindingLayer = (options: {
         const close = yield* Effect.cached(terminate);
 
         yield* Effect.addFinalizer(() =>
-          close.pipe(
-            Effect.flatMap((state) =>
-              state === "confirmed"
-                ? Effect.void
-                : Effect.logWarning("Protected browser exact-session closure unconfirmed"),
-            ),
-          ),
+          detached
+            ? Effect.void
+            : close.pipe(
+                Effect.flatMap((state) =>
+                  state === "confirmed"
+                    ? Effect.void
+                    : Effect.logWarning("Protected browser exact-session closure unconfirmed"),
+                ),
+              ),
         );
 
         const acquired = yield* Effect.tryPromise({
@@ -105,27 +138,64 @@ export const browserRunProtectedBindingLayer = (options: {
               },
             };
 
-            const acquired = await puppeteer.acquire(binding, {
-              recording: false,
-              // Provider inactivity timeout, independent of the finite total pass deadline.
-              keep_alive: Math.min(600_000, Math.max(10_000, policy.maxElapsedMillis)),
-            });
+            const acquired =
+              identity === undefined
+                ? await puppeteer.acquire(binding, {
+                    recording: false,
+                    // Provider inactivity timeout, independent of the finite total pass deadline.
+                    keep_alive: Math.min(600_000, Math.max(10_000, policy.maxElapsedMillis)),
+                  })
+                : { sessionId: Redacted.value(identity.sessionId) };
 
             sessionId = Redacted.make(
               Schema.decodeSync(Schema.String.check(Schema.isUUID()))(acquired.sessionId),
             );
-            if (!recordingDisabled || signal.aborted || invalid) {
+            if ((identity === undefined && !recordingDisabled) || signal.aborted || invalid) {
               await runCleanup(terminate);
               throw new ProtectedTransportError({ reason: "stale-reference" });
             }
-            // Initial attachment only. No recovery/reconnection path exists.
+            // Resume only a host-persisted exact page. Never open a replacement page or context.
             browser = await puppeteer.connect(options.browser, acquired.sessionId);
             if (signal.aborted || invalid) {
               await runCleanup(terminate);
               throw new ProtectedTransportError({ reason: "stale-reference" });
             }
-            const context = await browser.createBrowserContext();
-            const page = await context.newPage();
+            let page: Page;
+
+            if (identity === undefined) {
+              const context = await browser.createBrowserContext();
+
+              page = await context.newPage();
+            } else {
+              const context = browser
+                .browserContexts()
+                .find((candidate) => candidate.id === Redacted.value(identity.contextId));
+
+              if (context === undefined)
+                throw new ProtectedTransportError({ reason: "stale-reference" });
+              const pages = await context.pages();
+              let found: Page | undefined;
+
+              for (const candidate of pages) {
+                const client = await candidate.createCDPSession();
+                const info = await client.send("Target.getTargetInfo");
+
+                await client.detach();
+                if (info.targetInfo.targetId === Redacted.value(identity.targetId))
+                  found = candidate;
+              }
+              if (found === undefined || pages.length !== 1)
+                throw new ProtectedTransportError({ reason: "stale-reference" });
+              page = found;
+            }
+            control = await page.createCDPSession();
+            const info = await control.send("Target.getTargetInfo");
+
+            providerIdentity = Schema.decodeSync(ProtectedProviderIdentity)({
+              sessionId,
+              contextId: Redacted.make(page.browserContext().id ?? ""),
+              targetId: Redacted.make(info.targetInfo.targetId),
+            });
 
             await page.setBypassServiceWorker(true);
             await page.setRequestInterception(true);
@@ -156,7 +226,12 @@ export const browserRunProtectedBindingLayer = (options: {
               throw new ProtectedTransportError({ reason: "stale-reference" });
             }
 
-            return ProtectedNativeSession.of({ browser, page, close });
+            return ProtectedNativeSession.of({
+              browser,
+              page,
+              close,
+              release: Effect.suspend(() => (detached ? Effect.void : close.pipe(Effect.asVoid))),
+            });
           },
           catch: failure,
         }).pipe(
@@ -179,9 +254,60 @@ export const browserRunProtectedBindingLayer = (options: {
           Effect.provideService(Crypto.Crypto, crypto),
         );
 
-        return driver;
+        const exact = providerIdentity;
+
+        if (exact === undefined) return yield* failure();
+
+        return {
+          identity: exact,
+          driver,
+          command: (method, parameters) =>
+            Effect.tryPromise({
+              try: async () => {
+                if (invalid || detached || control === undefined) throw undefined;
+
+                // Cloudflare extends CDP with host-only methods absent from upstream ProtocolMapping.
+                const send = Reflect.get(control, "send");
+
+                return await Reflect.apply(send, control, [method, parameters]);
+              },
+              catch: failure,
+            }).pipe(
+              Effect.timeoutOrElse({
+                duration: "10 seconds",
+                orElse: () => Effect.fail(failure()),
+              }),
+            ),
+          detach: Effect.tryPromise({
+            try: async () => {
+              if (invalid || detached || browser === undefined) throw undefined;
+              // Stop this attachment before another controller can attach. The browser remains live.
+              await browser.disconnect();
+              detached = true;
+              driver?.invalidate();
+            },
+            catch: failure,
+          }).pipe(
+            Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.fail(failure()) }),
+          ),
+        };
       }, Effect.withTracerEnabled(false));
 
       return { open };
     }),
   );
+
+/** One binding implementation serves scoped tools and host-managed protected handoffs. */
+export const browserRunProtectedBindingLayer = (options: {
+  readonly browser: Pick<BrowserRun, "fetch">;
+}) =>
+  Layer.effect(BrowserRunProtectedTransport)(
+    Effect.gen(function* () {
+      const binding = yield* BrowserRunProtectedBinding;
+
+      return {
+        open: (policy: InteractiveBrowserPolicy) =>
+          binding.open(policy).pipe(Effect.map((session) => session.driver)),
+      };
+    }),
+  ).pipe(Layer.provideMerge(protectedBindingLayer(options)));

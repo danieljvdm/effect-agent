@@ -154,6 +154,7 @@ const fixture = (kind: "login" | "card" = "login", actionAuthority = true) => {
       yield* (yield* ProtectedBrowserDispatch).mark;
       filled.push(Redacted.value(value));
     }),
+    resetReferences: () => {},
     invalidate: () => {
       disposed = true;
     },

@@ -22,7 +22,7 @@ of same-host pages. Use an interactive pass only when navigation or page actions
 | Fill host-owned login or card credentials and continue browsing       | **Protected Browser**                 | A trusted Cloudflare Worker host  | Private vault/grants, browser binding, lifecycle token |
 
 Browser output is untrusted input. Validate model-selected URLs against your host policy and keep
-credentials, handles, Live View URLs, and handoff identities out of model Tools and durable records.
+credentials, handles, Live View URLs, and handoff identities out of model Tools and agent journals.
 
 In your application, install the browser adapters:
 
@@ -456,9 +456,11 @@ explicitly on the wire. This relies on Cloudflare's opt-in recording behavior; n
 recording-enabled attestation endpoint exists.
 
 Cloudflare account administrators and Browser Rendering token holders are trusted operators.
-They must not attach viewers, DevTools, recordings, or other observers to private sessions.
+Only an explicitly authorized human may receive the hosted takeover described below. Do not attach
+other viewers, DevTools, recordings, or observers to private sessions.
 Protection does not extend to those operators or a compromised provider. Expiring a viewer URL
-does not make a previously exposed session private; always open a fresh pass.
+does not remove the human’s access to information already seen. A returned protected session
+retains human-exposure authority and requires renewed recipient trust before observation.
 
 After any possibly dispatched secret write, every observation and non-secret action requires
 `observation` to approve current origins and prior exposures. The string
@@ -482,7 +484,7 @@ This explicitly trusts the recipient not to echo raw, encoded, transformed, or d
 It is not universal secrecy against hostile pages. Discovery omits input values, but DOM scrubbing
 and substring redaction cannot make arbitrary pages safe. Denial blocks observation before reading
 page text. The same private context retains authenticated state; no cookie export or general-browser
-handoff occurs. Request interception does not contain every worker, socket, or page network path.
+conversion occurs. Request interception does not contain every worker, socket, or page network path.
 Only use recipients the host is willing to trust with the material.
 
 ### Lifetime, evidence, and recovery
@@ -522,6 +524,50 @@ Check an approved authenticated page separately. `possibly-dispatched` can coexi
 failures after dispatch and cancellation invalidate and close the pass. Close waits for exact-session
 termination/absence and reports `unconfirmed` when it cannot prove cleanup. Logs contain only a
 fixed cleanup warning, never provider diagnostics or secret-bearing page data.
+
+### Durable human takeover
+
+Use the host-only `BrowserRunProtectedHost` from `@effect-agent/platform-cloudflare/protected-browser`
+when a human must continue the **same** protected page. Compose `browserRunProtectedHostLayer()`
+with `browserRunProtectedBindingLayer`, `BrowserRunSessionLifecycle`, and `BrowserCrypto.layer`.
+Its `open(policy)` and `resume(checkpoint)` require an invocation-specific `BrowserCredentialAccess`
+and `Scope`. Keep the returned `session.handle` as the only agent capability.
+
+The application owns controller generations, authorized human recipients, operation receipts,
+checkpoint integrity, and expiry cleanup. These are required host responsibilities:
+
+1. Fence the agent and call `session.suspend`. Atomically persist its schema-encoded
+   `BrowserRunProtectedCheckpoint` with the pending human-control request and the host’s own
+   credential exposure ledger. Call `session.detach` only after that durable commit.
+2. The receiving host calls `resume(checkpoint)`. It remains quiesced. An authorized human’s
+   takeover calls `handoff(request)` and persists the updated checkpoint, which now includes a
+   handoff ID. Only then expose a short-lived `getLiveView(request)` URL to that specific human.
+3. Query `getHandoffState` and require completion before committing Return. Transfer the latest
+   checkpoint and original credential exposure ledger to the continuing worker under a new
+   controller generation. Detach the old attachment before resuming another.
+4. Resume with the current worker’s credential authority and call `returnControl`. The provider
+   must report the same completed handoff. The host’s `observation` hook must approve current
+   origins; it receives `humanExposure` and `humanOrigins` captured before human takeover, even
+   when no vault credential was used. The agent must `observe` again before any other operation.
+
+Suspension does not itself mark human exposure. A checkpoint retains the original policy,
+start time, action usage, credential-exposure targets, and independent dispatch evidence. It holds
+redacted provider/session/page identities, but no credentials, cookies, page content, offers, or
+usable control references. Keep it in private host storage, never Tool results or the agent journal.
+The host’s item/revision/owner exposure ledger remains application-owned and must be restored too.
+A serialized checkpoint is not authorization: resume only the latest generation’s committed receipt.
+
+Resume attaches the exact saved browser context and page; missing or expired sessions fail instead
+of creating a replacement. All old refs and offers are invalidated. Detached tool handles cannot
+close or act on the transferred session. Ordinary scope release still terminates an attached
+session. An uncertain handoff closes the exact session and never produces a resumable receipt;
+ordinary uncertain browser mutations remain non-replayable.
+
+Hosted takeover requires `Unrestricted` network policy because attachment-local interception
+cannot enforce `ExactHosts` while detached. Current origin-specific credential and observation
+grants still apply. The original elapsed deadline includes human time; Cloudflare’s shorter idle
+expiry may end the session first. The host must reconcile expiry and perform exact-session cleanup
+with `closeSession`. This API does not add popup, wallet, passkey, or 3DS automation support.
 
 ## Limits, cleanup, and network boundaries
 
