@@ -2,8 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { ThreadExport } from "@effect-agent/thread/ThreadStore";
 import { Effect, Schema } from "effect";
+import { ThreadExport } from "effect-agent/thread-store";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";

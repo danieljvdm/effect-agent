@@ -1,14 +1,13 @@
-import * as Messaging from "@effect-agent/capabilities/Messaging";
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import { MessagingError } from "@effect-agent/core/Messaging";
-import type { Principal } from "@effect-agent/core/Receipt";
-import { Receipt, IdempotencyKey } from "@effect-agent/core/Receipt";
-import { FrameworkMessage } from "@effect-agent/core/Worker";
-import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
-import { PeerRoutes, PeerAuthorizer } from "@effect-agent/thread/MessagingHost";
-import { SubmissionLedger, SubmissionLookupById } from "@effect-agent/thread/SubmissionLedger";
-import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
 import { Effect, Layer, Option, Schema } from "effect";
+import { Messaging, Subagent } from "effect-agent";
+import { MessagingError } from "effect-agent/messaging";
+import { PeerRoutes, PeerAuthorizer } from "effect-agent/messaging-host";
+import type { Principal } from "effect-agent/receipt";
+import { Receipt, IdempotencyKey } from "effect-agent/receipt";
+import { RunToolAuthorization } from "effect-agent/run-options";
+import { SubmissionLedger, SubmissionLookupById } from "effect-agent/submission-ledger";
+import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
+import { FrameworkMessage } from "effect-agent/worker";
 import { Toolkit } from "effect/unstable/ai";
 
 import { PlannerError, PlannerInput } from "../domain.ts";

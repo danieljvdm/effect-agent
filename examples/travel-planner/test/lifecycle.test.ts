@@ -1,8 +1,6 @@
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { it } from "@effect/vitest";
 import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref } from "effect";
+import { AgentRuntime, ThreadHistory } from "effect-agent";
 import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
 
@@ -47,8 +45,7 @@ it.effect("times out a stalled native tool and runs its finalizer", () =>
         FixtureBrowserLive,
         TripToolsLive("test-conversation"),
         FixtureModel,
-        IdGenerator.layer,
-        ThreadHistory.layerTransient,
+        ThreadHistory.layer,
         repository,
         sites,
       ]),

@@ -1,7 +1,7 @@
-import { FrameworkMessage } from "@effect-agent/core/Worker";
-import { SettlementFailureDiagnostic } from "@effect-agent/thread/Records";
-import type { ThreadExport } from "@effect-agent/thread/ThreadStore";
 import { DateTime, Schema } from "effect";
+import { SettlementFailureDiagnostic } from "effect-agent/records";
+import type { ThreadExport } from "effect-agent/thread-store";
+import { FrameworkMessage } from "effect-agent/worker";
 import { Prompt } from "effect/unstable/ai";
 
 import { PlannerInput, type PlannerActivity } from "../domain.ts";

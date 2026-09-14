@@ -1,11 +1,9 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import * as Agent from "@effect-agent/core/Agent";
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import { SubagentGrant } from "@effect-agent/core/SubagentContract";
-import * as Output from "@effect-agent/engine/Output";
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { OpenAiTool } from "@effect/ai-openai";
 import { Effect, Schema } from "effect";
+import { Subagent, Agent, Output } from "effect-agent";
+import { ThreadId } from "effect-agent/identifiers";
+import { SubagentGrant } from "effect-agent/subagent-contract";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { DeliverResponse } from "../agent.ts";

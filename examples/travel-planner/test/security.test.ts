@@ -1,9 +1,7 @@
-import { ThreadId, RunId, TurnId, ToolCallId } from "@effect-agent/core/Identifiers";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import { WorkerUpdate, type FrameworkMessage } from "@effect-agent/core/Worker";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { ConfigProvider, Effect, Schema } from "effect";
+import { AgentRuntime, ThreadHistory } from "effect-agent";
+import { ThreadId, RunId, TurnId, ToolCallId } from "effect-agent/identifiers";
+import { WorkerUpdate, type FrameworkMessage } from "effect-agent/worker";
 import { Tool } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 import { expect, expectTypeOf, it } from "vite-plus/test";
@@ -137,8 +135,7 @@ it("keeps trip and publication dependencies visible through native Agent composi
       FixtureBrowserLive,
       TripToolsLive("test-conversation"),
       FixtureModel,
-      IdGenerator.layer,
-      ThreadHistory.layerTransient,
+      ThreadHistory.layer,
     ]),
   );
 

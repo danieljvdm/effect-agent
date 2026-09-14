@@ -1,15 +1,15 @@
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import { IdempotencyKey, Principal } from "@effect-agent/core/Receipt";
-import { FrameworkMessage } from "@effect-agent/core/Worker";
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
+import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { Context, Effect, Option, Schema, Stream } from "effect";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { ThreadId } from "effect-agent/identifiers";
+import { IdempotencyKey, Principal } from "effect-agent/receipt";
 import {
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
-} from "@effect-agent/thread/SubmissionLedger";
-import { ThreadExportRequest, ThreadStore } from "@effect-agent/thread/ThreadStore";
-import { Context, Effect, Option, Schema, Stream } from "effect";
+} from "effect-agent/submission-ledger";
+import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
+import { FrameworkMessage } from "effect-agent/worker";
 import { WorkerEnvironment } from "effect-cf";
 
 import { mergeSpeech } from "../conversation.ts";

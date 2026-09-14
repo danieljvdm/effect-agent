@@ -1,15 +1,15 @@
-import type * as Agent from "@effect-agent/core/Agent";
-import { ThreadMaintenance } from "@effect-agent/platform-cloudflare/Alarm";
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { ThreadMaintenance } from "@effect-agent/platform-cloudflare/alarm";
+import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import {
   CloudflareBrowser,
   type CloudflareBrowserOptions,
-} from "@effect-agent/platform-cloudflare/CloudflareBrowser";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/ThreadObject";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { DefinitionDigestInput } from "@effect-agent/thread/Records";
-import { SubmissionLedger, SubmissionLookupById } from "@effect-agent/thread/SubmissionLedger";
+} from "@effect-agent/platform-cloudflare/cloudflare-browser";
+import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
 import { Effect, Layer, Option, Schema } from "effect";
+import type { Agent } from "effect-agent";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { DefinitionDigestInput } from "effect-agent/records";
+import { SubmissionLedger, SubmissionLookupById } from "effect-agent/submission-ledger";
 import { CloudflareTracer, DurableObject, WorkerEnvironment } from "effect-cf";
 import type { Tool } from "effect/unstable/ai";
 import { FetchHttpClient, HttpRouter } from "effect/unstable/http";

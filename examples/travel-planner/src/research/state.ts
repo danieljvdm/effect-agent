@@ -1,12 +1,11 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import * as AgentUpdates from "@effect-agent/core/AgentUpdates";
-import { ThreadId } from "@effect-agent/core/Identifiers";
-import { Principal } from "@effect-agent/core/Receipt";
-import { SubagentHost } from "@effect-agent/engine/SubagentHost";
-import { DurableAgentRuntime } from "@effect-agent/thread/DurableAgentRuntime";
-import { RecordEnvelope } from "@effect-agent/thread/Records";
-import type { ThreadExport } from "@effect-agent/thread/ThreadStore";
 import { Effect, Schema, Stream } from "effect";
+import { Subagent, AgentUpdates } from "effect-agent";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { ThreadId } from "effect-agent/identifiers";
+import { Principal } from "effect-agent/receipt";
+import { RecordEnvelope } from "effect-agent/records";
+import { SubagentHost } from "effect-agent/subagent-host";
+import type { ThreadExport } from "effect-agent/thread-store";
 import { WorkerEnvironment } from "effect-cf";
 
 import { PlannerProgress, type ResearchScoutActivity } from "../domain.ts";

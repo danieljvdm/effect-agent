@@ -1,12 +1,11 @@
-import * as Subagent from "@effect-agent/capabilities/Subagent";
-import * as Agent from "@effect-agent/core/Agent";
-import type { AgentId } from "@effect-agent/core/Identifiers";
-import { MessagingError, MessageStatus } from "@effect-agent/core/Messaging";
-import { SubagentGrant, WorkerOperationTool } from "@effect-agent/core/SubagentContract";
-import { MessagingHost } from "@effect-agent/engine/MessagingHost";
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { OpenAiTool } from "@effect/ai-openai";
 import { Effect } from "effect";
+import { Subagent, Agent } from "effect-agent";
+import type { AgentId } from "effect-agent/identifiers";
+import { MessagingError, MessageStatus } from "effect-agent/messaging";
+import { MessagingHost } from "effect-agent/messaging-host";
+import { SubagentGrant, WorkerOperationTool } from "effect-agent/subagent-contract";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { PlannerError } from "../domain.ts";

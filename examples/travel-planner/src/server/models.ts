@@ -1,6 +1,6 @@
-import type * as Agent from "@effect-agent/core/Agent";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer, Result, Schema, Stream, Redacted } from "effect";
+import type { Agent } from "effect-agent";
 import { AiError, LanguageModel, Model } from "effect/unstable/ai";
 import {
   FetchHttpClient,

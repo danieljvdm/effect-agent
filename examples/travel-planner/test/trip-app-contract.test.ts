@@ -1,10 +1,8 @@
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import type { WorkerReportPreparationFailure } from "@effect-agent/engine/SubagentHost";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
-import type { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
-import type { SubmissionLedger } from "@effect-agent/thread/SubmissionLedger";
+import type { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { type Crypto, Effect, Schema } from "effect";
+import { AgentRuntime, ThreadHistory } from "effect-agent";
+import type { WorkerReportPreparationFailure } from "effect-agent/subagent-host";
+import type { SubmissionLedger } from "effect-agent/submission-ledger";
 import { Tool, type Toolkit } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 import { expect, expectTypeOf, it } from "vite-plus/test";
@@ -37,8 +35,7 @@ it("keeps app tools, dependencies, and typed failures in the v7 composition", ()
       FixtureBrowserLive,
       TripToolsLive("test-conversation"),
       FixtureModel,
-      IdGenerator.layer,
-      ThreadHistory.layerTransient,
+      ThreadHistory.layer,
     ]),
   );
 
@@ -123,8 +120,7 @@ it("keeps the conversational coordinator's native worker requirements and typed 
   }).pipe(Effect.provide(FixtureModel));
 
   expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
-    | ThreadHistory
-    | IdGenerator
+    | ThreadHistory.ThreadHistory
     | TripRepository
     | TripSiteStore
     | AppRepository
@@ -150,7 +146,7 @@ it("keeps research reports dependent on canonical storage and scouts free of mut
   const run = AgentRuntime.runUnknown(researchScout, {}).pipe(Effect.provide(FixtureModel));
 
   expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
-    ThreadHistory | IdGenerator | Tool.HandlersFor<typeof researchScout.toolkit.tools>
+    ThreadHistory.ThreadHistory | Tool.HandlersFor<typeof researchScout.toolkit.tools>
   >();
   expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<
     AgentRuntime.AgentRuntimeFailure<typeof researchScout>
@@ -166,8 +162,7 @@ it("preserves the editor's scoped app services without requiring a child host", 
   const run = AgentRuntime.runUnknown(appEditor, {}).pipe(Effect.provide(FixtureModel));
 
   expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
-    | ThreadHistory
-    | IdGenerator
+    | ThreadHistory.ThreadHistory
     | TripRepository
     | AppRepository
     | AppSourceStore

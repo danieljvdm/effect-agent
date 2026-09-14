@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import type { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { type Effect, Schema } from "effect";
 import type { WorkerEnvironment } from "effect-cf";
 import { build } from "esbuild";
@@ -45,7 +45,7 @@ beforeAll(async () => {
       contents: `
 import { DurableObject } from "cloudflare:workers";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { Cause, Effect, Layer } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 import { PlannerError } from "../src/domain.ts";

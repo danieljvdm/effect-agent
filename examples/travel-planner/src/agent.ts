@@ -1,7 +1,6 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
-import * as Output from "@effect-agent/engine/Output";
 import { DateTime, Effect, Layer, Schema } from "effect";
+import { Agent, Output } from "effect-agent";
+import { ToolExecutionClass } from "effect-agent/durable-step";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import {

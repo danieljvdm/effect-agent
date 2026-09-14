@@ -1,9 +1,9 @@
-import * as AgentUpdates from "@effect-agent/core/AgentUpdates";
-import type { IdempotencyKey } from "@effect-agent/core/Receipt";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
 import { it } from "@effect/vitest";
 import type { Layer } from "effect";
 import { Context, Effect, Schema, Stream } from "effect";
+import { AgentUpdates } from "effect-agent";
+import { ToolExecutionClass } from "effect-agent/durable-step";
+import type { IdempotencyKey } from "effect-agent/receipt";
 import type { AiError } from "effect/unstable/ai";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";

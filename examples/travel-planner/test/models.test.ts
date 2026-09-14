@@ -1,10 +1,7 @@
-import * as Agent from "@effect-agent/core/Agent";
-import { IdGenerator } from "@effect-agent/core/IdGenerator";
-import * as AgentRuntime from "@effect-agent/engine/AgentRuntime";
-import { ThreadHistory } from "@effect-agent/engine/ThreadHistory";
 import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
 import { it } from "@effect/vitest";
 import { ConfigProvider, Effect, Layer, Redacted, Ref, Result, Schema, Stream } from "effect";
+import { Agent, AgentRuntime, ThreadHistory } from "effect-agent";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient, type HttpClient } from "effect/unstable/http";
 import { expect, expectTypeOf } from "vite-plus/test";
@@ -253,8 +250,7 @@ it.effect(
             sites,
             TripToolsLive("date-conversation"),
             FixtureBrowserLive,
-            IdGenerator.layer,
-            ThreadHistory.layerTransient,
+            ThreadHistory.layer,
           ]),
           Effect.provideService(FetchHttpClient.Fetch, fetch),
           Effect.result,
@@ -1099,8 +1095,7 @@ it.effect(
           Effect.provide([
             OpenAiLanguageModel.model("gpt-6-astra").pipe(Layer.provide(client)),
             CheckedFinishResearchLive,
-            IdGenerator.layer,
-            ThreadHistory.layerTransient,
+            ThreadHistory.layer,
           ]),
           Effect.provideService(FetchHttpClient.Fetch, fetch),
         );

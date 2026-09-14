@@ -1,4 +1,4 @@
-import { AgentPolicy } from "@effect-agent/core/AgentPolicy";
+import { AgentPolicy } from "effect-agent/agent-policy";
 
 /** Operational allowances for work admitted by the v11 coordinator. */
 export const researchScoutLimit = 6;

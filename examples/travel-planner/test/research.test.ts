@@ -1,6 +1,7 @@
-import { WebCaptureFailure } from "@effect-agent/capabilities/WebCapture";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
-import { CloudflareBrowser } from "@effect-agent/platform-cloudflare/CloudflareBrowser";
+import { CloudflareBrowser } from "@effect-agent/platform-cloudflare/cloudflare-browser";
+import { it } from "@effect/vitest";
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect";
+import { ToolExecutionClass } from "effect-agent/durable-step";
 import {
   PageCapture,
   PageCaptureNavigationError,
@@ -8,10 +9,9 @@ import {
   PageCaptureResult,
   PageMarkdownCaptured,
   type PageCaptureCapture,
-} from "@effect-agent/sandbox/PageCapture";
-import { SandboxImplementation } from "@effect-agent/sandbox/Sandbox";
-import { it } from "@effect/vitest";
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect";
+} from "effect-agent/page-capture";
+import { SandboxImplementation } from "effect-agent/sandbox";
+import { WebCaptureFailure } from "effect-agent/web-capture";
 import { TestClock } from "effect/testing";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";

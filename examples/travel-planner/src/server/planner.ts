@@ -1,7 +1,6 @@
-import * as Agent from "@effect-agent/core/Agent";
-import * as Output from "@effect-agent/engine/Output";
 import { OpenAiTool } from "@effect/ai-openai";
 import { DateTime, Effect, Schema } from "effect";
+import { Agent, Output } from "effect-agent";
 import { Toolkit } from "effect/unstable/ai";
 
 import { currentPlannerInstructions, DeliverResponse, makePlanner } from "../agent.ts";

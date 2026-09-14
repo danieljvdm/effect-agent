@@ -1,4 +1,4 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { Effect } from "effect";
 
 import { PlannerError } from "../domain.ts";

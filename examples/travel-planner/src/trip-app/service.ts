@@ -1,4 +1,4 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { DateTime, Effect, Layer, Schema } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 

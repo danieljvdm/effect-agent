@@ -1,5 +1,5 @@
-import { WebCaptureFailure } from "@effect-agent/capabilities/WebCapture";
-import { ToolExecutionClass } from "@effect-agent/engine/DurableStep";
+import { Clock, Effect, Option, Schema } from "effect";
+import { ToolExecutionClass } from "effect-agent/durable-step";
 import {
   CapturePageMarkdown,
   PageCapture,
@@ -10,8 +10,8 @@ import {
   PageSelectorWait,
   PageUrlTarget,
   type PageCaptureError,
-} from "@effect-agent/sandbox/PageCapture";
-import { Clock, Effect, Option, Schema } from "effect";
+} from "effect-agent/page-capture";
+import { WebCaptureFailure } from "effect-agent/web-capture";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { recordDiagnostic } from "./server/diagnostics.ts";

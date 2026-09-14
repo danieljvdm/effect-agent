@@ -1,7 +1,7 @@
-import { RunId, SettlementId, ThreadId } from "@effect-agent/core/Identifiers";
-import { Receipt } from "@effect-agent/core/Receipt";
-import { WorkerRef } from "@effect-agent/core/Worker";
 import { Schema } from "effect";
+import { RunId, SettlementId, ThreadId } from "effect-agent/identifiers";
+import { Receipt } from "effect-agent/receipt";
+import { WorkerRef } from "effect-agent/worker";
 
 import { PlannerInput, TextPlannerInput, PlannerSettings, ShortText, Text } from "../domain.ts";
 import { TravelPhoto, TravelUrl } from "../travel-content.ts";

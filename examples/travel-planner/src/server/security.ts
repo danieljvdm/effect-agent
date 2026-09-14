@@ -1,5 +1,5 @@
-import { RunToolAuthorization } from "@effect-agent/engine/RunOptions";
 import { Effect, Layer, Schema } from "effect";
+import { RunToolAuthorization } from "effect-agent/run-options";
 
 import { PlannerInput, PublishTripRequest } from "../domain.ts";
 

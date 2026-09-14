@@ -1,5 +1,5 @@
-import { ThreadExport } from "@effect-agent/thread/ThreadStore";
 import { DateTime, Schema } from "effect";
+import { ThreadExport } from "effect-agent/thread-store";
 import { Prompt } from "effect/unstable/ai";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vite-plus/test";

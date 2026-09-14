@@ -1,4 +1,4 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/CloudflareBindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
