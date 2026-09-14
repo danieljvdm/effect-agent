@@ -47,6 +47,7 @@
     "bounded-memory-revalidation",
     "bounded-recovery-history",
     "bounded-selector-scrape",
+    "bright-agents-trace",
     "bright-rivers-own",
     "browser-run-page-capture",
     "browser-run-rest-capture",

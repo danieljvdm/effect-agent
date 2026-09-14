@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.88
+
+### Patch Changes
+
+- [#476](https://github.com/danieljvdm/effect-agent/pull/476) [`5e24e87`](https://github.com/danieljvdm/effect-agent/commit/5e24e8782203aef836c8b4ba49e72468d7d510b1) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Label agent and model spans with GenAI operation names and agent, conversation, and model identity for agent dashboards. Update span-name filters from `AgentRuntime.run` to `invoke_agent <agent ID>` and from `LanguageModel.streamText` to `chat <model>`.
+
 ## 0.1.0-beta.87
 
 ### Patch Changes
