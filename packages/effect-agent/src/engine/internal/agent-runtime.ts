@@ -20,6 +20,7 @@ import {
   Scope,
   Semaphore,
   Stream,
+  Tracer,
 } from "effect";
 import { Tool, AiError, LanguageModel, Model, Prompt, Response, Toolkit } from "effect/unstable/ai";
 
@@ -1816,8 +1817,47 @@ interface ToolTelemetryDescriptor {
   readonly sequenceIndex?: number | undefined;
 }
 
+/** A definition names the agent; its Thread identifies the continuing instance and conversation. */
+const agentTelemetryAttributes = (context: RunContext) => ({
+  "gen_ai.agent.name": context.agentId,
+  "gen_ai.agent.id": context.threadId,
+  "gen_ai.conversation.id": context.threadId,
+});
+
+/** Label Effect AI's existing span, preserving provider usage, sampling and host async context. */
+const modelTelemetryTracer = Effect.fnUntraced(function* (context: RunContext, turnId?: TurnId) {
+  const delegate = yield* Tracer.Tracer;
+  const model = yield* Model.ModelName;
+  const provider = yield* Model.ProviderName;
+
+  return Tracer.make({
+    span(options) {
+      if (options.name !== "LanguageModel.streamText") return delegate.span(options);
+
+      const span = delegate.span({ ...options, name: `chat ${model}` });
+
+      const attributes = {
+        ...agentTelemetryAttributes(context),
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.model": model,
+        "gen_ai.provider.name": provider,
+        agentId: context.agentId,
+        threadId: context.threadId,
+        runId: context.runId,
+        ...(turnId === undefined ? {} : { turnId }),
+      };
+
+      for (const [key, value] of Object.entries(attributes)) span.attribute(key, value);
+
+      return span;
+    },
+    ...(delegate.context === undefined ? {} : { context: delegate.context.bind(delegate) }),
+  });
+});
+
 /** One bounded identity surface shared by canonical Tool spans and terminal logs. */
 const toolTelemetryAttributes = (descriptor: ToolTelemetryDescriptor) => ({
+  ...agentTelemetryAttributes(descriptor.context),
   "gen_ai.operation.name": "execute_tool",
   "gen_ai.tool.name": descriptor.toolName,
   "gen_ai.tool.type": "function",
@@ -1827,9 +1867,6 @@ const toolTelemetryAttributes = (descriptor: ToolTelemetryDescriptor) => ({
         "gen_ai.tool.call.id": descriptor.toolCallId,
         toolCallId: descriptor.toolCallId,
       }),
-  "gen_ai.agent.name": descriptor.context.agentId,
-  // OpenTelemetry calls this attribute conversation.id, including for Threads.
-  "gen_ai.conversation.id": descriptor.context.threadId,
   "effect_agent.tool.execution_class": descriptor.executionClass,
   "effect_agent.tool.invocation_kind": descriptor.invocationKind,
   "effect_agent.tool.failure_mode": descriptor.failureMode,
@@ -3937,6 +3974,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
           LanguageModel.streamText({ prompt: summarizerPrompt }),
           options.budget,
         ).pipe(
+          Stream.provideServiceEffect(Tracer.Tracer, modelTelemetryTracer(context)),
           Stream.runForEach((part) =>
             Effect.gen(function* () {
               const owned = yield* ownModelResponsePart(
@@ -6051,6 +6089,10 @@ const makeTurn = <
                       }),
                       options.budget,
                     ).pipe(
+                      Stream.provideServiceEffect(
+                        Tracer.Tracer,
+                        modelTelemetryTracer(context, turnId),
+                      ),
                       Stream.onStart(
                         Effect.sync(() => {
                           trace.usageConsumed = false;
@@ -8151,9 +8193,12 @@ function streamWithCompletion<
 
               return terminal.pipe(Stream.concat(Stream.fail(error)));
             }),
-            Stream.withSpan("AgentRuntime.run", {
+            Stream.withSpan(`invoke_agent ${context.agentId}`, {
               attributes: {
+                ...agentTelemetryAttributes(context),
+                "gen_ai.operation.name": "invoke_agent",
                 agentId: context.agentId,
+                threadId: context.threadId,
                 runId: context.runId,
               },
             }),

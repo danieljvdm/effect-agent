@@ -785,7 +785,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     });
   });
 
-  it.effect("exports content-free canonical Tool spans and bounded terminal logs", () => {
+  it.effect("exports correlated agent, model and Tool spans without payloads", () => {
     const spans: Array<Tracer.NativeSpan> = [];
     const logs: Array<ExportedLogObservation> = [];
 
@@ -834,11 +834,15 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
           return yield* LanguageModel.make({
             generateText: () => Effect.succeed([]),
-            streamText: () =>
+            streamText: ({ span }) =>
               Stream.unwrap(
                 Ref.getAndUpdate(turn, (value) => value + 1).pipe(
-                  Effect.map((value) =>
-                    value === 0
+                  Effect.map((value) => {
+                    // Providers add response identity and usage to this same span.
+                    span.attribute("gen_ai.response.model", "resolved-model");
+                    span.attribute("gen_ai.usage.input_tokens", 12);
+
+                    return value === 0
                       ? Stream.fromIterable<Response.StreamPartEncoded>([
                           {
                             type: "tool-call",
@@ -856,8 +860,8 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                           },
                           { type: "finish", reason: "tool-calls", usage },
                         ])
-                      : Stream.fromIterable(finalParts('{"answer":"observed"}')),
-                  ),
+                      : Stream.fromIterable(finalParts('{"answer":"observed"}'));
+                  }),
                 ),
               ),
           });
@@ -894,6 +898,34 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
       expect(events.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(1);
       expect(events.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
+
+      const agentSpans = spans.filter((span) => span.name === "invoke_agent tool-observability");
+      const modelSpans = spans.filter((span) => span.name === "chat tool-observability");
+
+      expect(agentSpans).toHaveLength(1);
+      expect(modelSpans).toHaveLength(2);
+      expect(spans.some((span) => span.name === "LanguageModel.streamText")).toBe(false);
+      for (const span of [...agentSpans, ...modelSpans]) {
+        expect(span.status._tag).toBe("Ended");
+        expect(Object.fromEntries(span.attributes)).toMatchObject({
+          "gen_ai.agent.name": "tool-observability",
+          "gen_ai.agent.id": "thread-1",
+          "gen_ai.conversation.id": "thread-1",
+          runId: "run-1",
+        });
+        expect(span.traceId).toBe(agentSpans[0]?.traceId);
+      }
+      expect(agentSpans[0]?.attributes.get("gen_ai.operation.name")).toBe("invoke_agent");
+      for (const span of modelSpans) {
+        expect(Object.fromEntries(span.attributes)).toMatchObject({
+          "gen_ai.operation.name": "chat",
+          "gen_ai.request.model": "tool-observability",
+          "gen_ai.provider.name": "scripted",
+          "gen_ai.response.model": "resolved-model",
+          "gen_ai.usage.input_tokens": 12,
+          turnId: "turn-1",
+        });
+      }
 
       expect(events.find((event) => event._tag === "ToolCallFailed")).toMatchObject({
         failureMode: "return",
@@ -935,6 +967,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         "gen_ai.tool.name": "fail",
         "gen_ai.tool.type": "function",
         "gen_ai.agent.name": "tool-observability",
+        "gen_ai.agent.id": "thread-1",
         "gen_ai.conversation.id": "thread-1",
         "effect_agent.tool.execution_class": "uncertain",
         "effect_agent.tool.outcome": "failure",
@@ -1043,6 +1076,72 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(exportedStrings).not.toContain(failureSecret);
     }).pipe(Effect.provideService(Tracer.Tracer, tracer), Effect.provide(Logger.layer([logger])));
   });
+
+  it.effect("closes labeled model spans on provider failure, defect and interruption", () =>
+    Effect.gen(function* () {
+      const failure = AiError.make({
+        module: "test",
+        method: "streamText",
+        reason: AiError.UnknownError.make({ description: "provider failed" }),
+      });
+
+      for (const terminal of [
+        Effect.fail(failure),
+        Effect.die("provider defect"),
+        Effect.interrupt,
+      ]) {
+        const spans: Array<Tracer.NativeSpan> = [];
+        let released = false;
+        let delegatedContext = false;
+
+        const tracer: Tracer.Tracer = Tracer.make({
+          span(options) {
+            const span = new Tracer.NativeSpan(options);
+
+            spans.push(span);
+
+            return span;
+          },
+          context(primitive, fiber) {
+            if (fiber.getRef(Tracer.Tracer) !== tracer) delegatedContext = true;
+
+            return primitive["~effect/Effect/evaluate"](fiber);
+          },
+        });
+
+        const model = Model.make(
+          "scripted",
+          "failing-model",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: () =>
+                Stream.fromEffect(terminal).pipe(
+                  Stream.ensuring(
+                    Effect.sync(() => {
+                      released = true;
+                    }),
+                  ),
+                ),
+            }),
+          ),
+        );
+
+        const exit = yield* AgentRuntime.run(Agent.withModel(runtimeDefinition, model), {
+          question: "go",
+        }).pipe(Effect.provideService(Tracer.Tracer, tracer), Effect.exit);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        expect(released).toBe(true);
+        expect(delegatedContext).toBe(true);
+        const modelSpans = spans.filter((span) => span.name === "chat failing-model");
+
+        expect(modelSpans).toHaveLength(1);
+        expect(modelSpans[0]?.status._tag).toBe("Ended");
+      }
+    }),
+  );
 
   it.effect("rejects invalid model Tool Call IDs before correlation or handler execution", () =>
     Effect.gen(function* () {

@@ -292,6 +292,32 @@ History retention waits for run-local cleanup, result validation, and commit bef
 durable Submission with an explicit persisted command. See
 [Persistence & durability](../concepts/durability).
 
+## Trace agent and model calls
+
+With an Effect tracer installed, filter `gen_ai.operation.name` to find agent work:
+
+| Operation      | Span name                            | Identity                                              |
+| -------------- | ------------------------------------ | ----------------------------------------------------- |
+| `invoke_agent` | `invoke_agent <agent definition ID>` | Agent, Thread, Run                                    |
+| `chat`         | `chat <configured model name>`       | Agent, Thread, Run, and Turn for ordinary model calls |
+| `execute_tool` | `execute_tool <tool name>`           | Agent, Thread, Run, Turn, Tool Call                   |
+
+All three carry `gen_ai.agent.name` (the definition ID), `gen_ai.agent.id` (the
+Thread-backed instance), and `gen_ai.conversation.id` (the Thread ID). Existing
+`agentId`, `threadId`, `runId`, and applicable `turnId` attributes remain available.
+Agent span names replace `AgentRuntime.run`; update filters using that old name.
+
+Model calls label the existing Effect AI `LanguageModel.streamText` span rather than
+creating a second model-call span. The configured model and provider are recorded as
+`gen_ai.request.model` and `gen_ai.provider.name`; native providers retain their response
+and token-usage annotations. Each retry and compaction summary has its own model span.
+These labels add identifiers, not prompts, instructions, or tool payloads.
+
+An agent span covers one active execution Scope. A durable Run resumed by another
+Attempt can produce another span with the same Run ID; the span is not the entire
+wall-clock lifetime of a suspended Run. See [Cloudflare tracing](../platforms/cloudflare#agent-tracing)
+for the dashboard setup and alarm-root behavior.
+
 ## Provider usage and cost evidence
 
 `AgentRuntime` results and `RunCompleted` expose optional `usage` (own calls, including compaction) and

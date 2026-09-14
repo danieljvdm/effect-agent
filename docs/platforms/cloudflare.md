@@ -228,6 +228,21 @@ They are captured when the Object acquires the runtime, not on each worker call.
 Use `options.eventLayer` for per-event observability and resources. Use
 `options.toolFailureObserver` for [recovered tool failures](../guide/run-agents#observe-recovered-tool-failures).
 
+### Agent tracing
+
+Provide `CloudflareTracer.layer` from `effect-cf` as `ThreadObject.make`'s
+`eventLayer`, and enable `observability.traces.enabled` in the deployed Worker settings.
+The tracer must be acquired per invocation so alarms and RPC calls use their own
+Cloudflare tracing context.
+
+The [agent and model span attributes](../guide/run-agents#trace-agent-and-model-calls)
+follow Cloudflare's [custom harness conventions](https://developers.cloudflare.com/agents/runtime/operations/observability/tracing/).
+Use the Cloudflare Agents tab to group activity by agent and conversation, or filter
+Workers Observability with `gen_ai.operation.name = "invoke_agent"`.
+The outer platform trace can still be named `alarm`: durable execution wakes independently
+of the submitting HTTP request. Named agent, model, and tool spans appear inside it.
+Separate alarm invocations do not become one trace solely because they share a Run ID.
+
 ### Share an application Object
 
 Use `ThreadObject.layerInHost(application)` when an existing SQLite Durable Object owns related
