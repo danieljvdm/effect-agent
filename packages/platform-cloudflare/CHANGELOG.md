@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.90
+
+### Patch Changes
+
+- [#482](https://github.com/danieljvdm/effect-agent/pull/482) [`1effa15`](https://github.com/danieljvdm/effect-agent/commit/1effa15fa381dbc78bf75e1eb7e5efd135c3b266) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose the provider-verified current origin after protected human handoff completes, without resuming agent tools or reading page content.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.90
+  - effect-agent@0.1.0-beta.90
+
 ## 0.1.0-beta.89
 
 ### Minor Changes
