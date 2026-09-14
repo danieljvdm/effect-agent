@@ -388,6 +388,31 @@ it.effect("preserves exhausted action budgets and elapsed deadlines across host 
 });
 
 it.effect(
+  "keeps the Return observation gate closed when the fresh observation exceeds its byte budget",
+  () => {
+    // Regression: https://github.com/danieljvdm/effect-agent/pull/479#pullrequestreview-5203030938
+    const f = fixture();
+
+    return Effect.gen(function* () {
+      const session = yield* (yield* BrowserRunProtectedHost).open({
+        ...policy,
+        maxReturnedBytes: 1,
+      });
+
+      yield* session.handoff(takeover);
+      f.complete();
+      yield* session.returnControl;
+      expect((yield* session.handle.observe.pipe(Effect.flip)).reason).toBe("limit");
+      expect(
+        yield* session.handle
+          .navigate({ url: "https://shop.test" })
+          .pipe(Effect.match({ onFailure: (error) => error.reason, onSuccess: () => "navigated" })),
+      ).toBe("stale-reference");
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);
+
+it.effect(
   "refuses cumulative human origins beyond the checkpoint bound before handoff dispatch",
   () => {
     const f = fixture();

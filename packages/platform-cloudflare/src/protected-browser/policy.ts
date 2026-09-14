@@ -72,6 +72,8 @@ export interface ProtectedBrowserTransport {
   readonly invalidate: () => void;
   /** Forget all discovered controls on a controller transition. */
   readonly resetReferences: () => void;
+  /** Host attachment release, available only for transferable provider sessions. */
+  readonly detach?: Effect.Effect<void, ProtectedBrowserError>;
   readonly close: Effect.Effect<typeof ProtectedCleanup.Type>;
 }
 
@@ -143,7 +145,6 @@ const secretFor = (material: BrowserCredentialMaterial, role: typeof CredentialF
 /** Shared protected policy implementation for ephemeral and host-owned passes. */
 export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(function* (
   input: InteractiveBrowserPolicy,
-  acquire: Effect.Effect<ProtectedBrowserTransport, ProtectedBrowserError, Scope.Scope>,
   checkpoint?: ProtectedBrowserCheckpoint,
 ) {
   const initialError = (reason: ProtectedBrowserError["reason"]) =>
@@ -189,7 +190,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
   )
     return yield* initialError("timeout");
   const started = restored?.startedAt ?? now;
-  const driver = yield* acquire;
+  const driver = yield* (yield* BrowserRunProtectedTransport).open(policy);
   const crypto = yield* Crypto.Crypto;
   let suspended = restored !== undefined;
   let detached = false;
@@ -458,15 +459,17 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
         if (result.frameOrigins.some((origin) => !after.frameOrigins.includes(origin)))
           return yield* fail("observation-blocked");
 
-        needsObservation = false;
-
-        return yield* bounded(
+        const observation = yield* bounded(
           ProtectedBrowserObservation.make({
             ...result,
             observation:
               exposures.length > 0 || humanExposure ? "approved-after-exposure" : "before-exposure",
           }),
         );
+
+        needsObservation = false;
+
+        return observation;
       }),
       true,
     ),
@@ -783,19 +786,19 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
         suspended = false;
       }),
     ),
-    detach: (release: Effect.Effect<void, ProtectedBrowserError>) =>
-      locked(
-        Effect.gen(function* () {
-          if (!suspended || observation === "closed") return yield* fail("denied");
-          yield* release.pipe(
-            Effect.onError(() => close),
-            Effect.onInterrupt(() => close),
-          );
-          detached = true;
-          offers.clear();
-          driver.invalidate();
-        }),
-      ),
+    detach: locked(
+      Effect.gen(function* () {
+        if (!suspended || observation === "closed") return yield* fail("denied");
+        if (driver.detach === undefined) return yield* fail("unsupported");
+        yield* driver.detach.pipe(
+          Effect.onError(() => close),
+          Effect.onInterrupt(() => close),
+        );
+        detached = true;
+        offers.clear();
+        driver.invalidate();
+      }),
+    ),
   };
 }, Effect.withTracerEnabled(false));
 
@@ -808,8 +811,9 @@ export const browserRunProtectedLayer = () =>
 
       return {
         open: (policy: InteractiveBrowserPolicy) =>
-          makeProtectedBrowserPolicy(policy, transport.open(policy)).pipe(
+          makeProtectedBrowserPolicy(policy).pipe(
             Effect.map((session) => session.handle),
+            Effect.provideService(BrowserRunProtectedTransport, transport),
             Effect.provideService(Crypto.Crypto, crypto),
           ),
       };

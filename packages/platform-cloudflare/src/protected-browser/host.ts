@@ -26,7 +26,7 @@ import {
 } from "../InteractiveBrowser.ts";
 import { BrowserRunSessionLifecycle } from "../internal/browser-session-lifecycle.ts";
 import { BrowserRunProtectedBinding, ProtectedProviderIdentity } from "./binding.ts";
-import { makeProtectedBrowserPolicy } from "./policy.ts";
+import { BrowserRunProtectedTransport, makeProtectedBrowserPolicy } from "./policy.ts";
 
 /** Host-only receipt. Store atomically with the controller lease; never return it to a model. */
 export class BrowserRunProtectedCheckpoint extends Schema.Class<BrowserRunProtectedCheckpoint>(
@@ -147,11 +147,12 @@ export const browserRunProtectedHostLayer = () =>
           return yield* failure("denied");
         const provider = yield* binding.open(policy, checkpoint);
 
-        const state = yield* makeProtectedBrowserPolicy(
-          policy,
-          Effect.succeed(provider.driver),
-          checkpoint?.protected,
-        ).pipe(Effect.provideService(Crypto.Crypto, crypto));
+        const state = yield* makeProtectedBrowserPolicy(policy, checkpoint?.protected).pipe(
+          Effect.provideService(BrowserRunProtectedTransport, {
+            open: () => Effect.succeed({ ...provider.driver, detach: provider.detach }),
+          }),
+          Effect.provideService(Crypto.Crypto, crypto),
+        );
 
         const lock = yield* Semaphore.make(1);
         let handoff = checkpoint;
@@ -302,7 +303,7 @@ export const browserRunProtectedHostLayer = () =>
           detach: control(
             Effect.gen(function* () {
               if (handoff === undefined) return yield* failure("denied");
-              yield* state.detach(provider.detach);
+              yield* state.detach;
               detached = true;
             }),
           ),
