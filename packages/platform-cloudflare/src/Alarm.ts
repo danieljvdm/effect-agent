@@ -12,6 +12,7 @@ import {
   Random,
   Ref,
   Schema,
+  Scope,
   Semaphore,
   Stream,
 } from "effect";
@@ -31,7 +32,7 @@ import {
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { DurableObjectContext } from "./CloudflareBindings.ts";
-import { CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";
+import { AuxiliaryDispatchMillis, CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";
 import { safeCauseMessage } from "./internal/boundary.ts";
 
 /**
@@ -231,6 +232,8 @@ export class ThreadMaintenanceFailpoint extends Context.Service<
  * `invalidate`, `prepareGeneration` and `pendingDeadline` must be bounded local operations.
  * `prepareGeneration` durably invalidates a scan only when its generation changes; repeated
  * calls must preserve partial scan progress. It runs with no source mutation in flight.
+ * Use this gate only for publication required before dependent native execution. Independent
+ * UI relays and outboxes belong to ThreadHostMaintenance.
  * `drain` performs bounded delivery and persists retries before returning. A pending deadline
  * defers runtime recovery/Attempts, allowing committed host publications to drain first.
  * Unexpected hook failures leave the prearmed generation for retry. Hooks acquire per-call
@@ -258,38 +261,53 @@ export class ThreadPublication extends Context.Service<
 }
 
 /**
- * Host-assembled message recovery, supplied by ThreadObject.layer even when the application
- * rebuilds ThreadMaintenance. These obligations outlive source Runs and never defer a ready
- * source Attempt while a destination is processing an accepted message.
+ * Host-assembled native message recovery. The driver bounds each actual Claim and persists its
+ * timeout/retry before this pump returns. Do not add a second timer starting at batch selection:
+ * local Claim setup may take time, and expiration still owes the driver's local retry commit.
  */
 export const ThreadMessageDelivery = Context.Reference<{
-  readonly drain: Effect.Effect<void, DurableAlarmError>;
-  /** Drain inserts and due retries during source work, finishing the bounded wave on completion. */
-  readonly drainUntil?: (
-    finished: Deferred.Deferred<void>,
-  ) => Effect.Effect<void, DurableAlarmError>;
+  readonly drainUntil: (
+    sourceFinished: Effect.Effect<void>,
+    dispatchUntil: DateTime.Utc,
+  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
 }>("@effect-agent/platform-cloudflare/ThreadMessageDelivery", {
-  defaultValue: () => ({ drain: Effect.void, pendingDeadline: Effect.succeed(Option.none()) }),
+  defaultValue: () => ({
+    drainUntil: () => Effect.void,
+    pendingDeadline: Effect.succeed(Option.none()),
+  }),
 });
 
 /**
- * Application obligations sharing this Object's alarm. The deadline read is local and
- * read-only. Drain beside the native Attempt and always finish one initial bounded wave,
- * even when `finished` was already signalled. Then stop starting new waves on that signal
- * and finish the bounded current wave before returning. Native maintenance joins that work
- * before acknowledging a generation. Mutations use the same ThreadMutationGate; hooks never
- * write the raw alarm slot. Pending host work does not defer a ready model Attempt.
+ * Application obligations sharing this Object's alarm. Admit one initial external wave even on
+ * a caught-up pass, then respond to wakes while native work runs. sourceFinished closes only
+ * admission of NEW external waves. Keep local admission/hub subscriptions in the supplied event
+ * Scope until maintenance tears it down; do not scope them to sourceFinished or to this Effect.
+ * No deadline sleeps or automatic retry loops. Return after already-admitted waves finish.
+ *
+ * Declare a finite whole-wave allowance (1..300000ms): maximum for parallel lanes, sum for
+ * sequential operations. Admit a wave only if its allowance fits before dispatchUntil. Later
+ * arrivals cannot renew the retirement window. Maintenance bounds the join after sourceFinished,
+ * interrupts and joins event Scope, then reads local deadlines under the mutation gate.
+ *
+ * Setup and pendingDeadline are bounded local operations. Persist claims/envelopes before
+ * dispatch; interrupted waits leave exact retries/receipts recoverable. Cancellation is local,
+ * not remote rollback. Retry accounting is unchanged. Network waits/finalizers must be
+ * interruptible; short local atomic commits may be uninterruptible. Hooks never write the raw
+ * alarm slot. Required native publication gates belong to ThreadPublication.
  */
 export const ThreadHostMaintenance = Context.Reference<{
-  readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
+  readonly dispatchTimeoutMillis: number;
   readonly drainUntil: (
-    finished: Deferred.Deferred<void>,
-  ) => Effect.Effect<void, DurableAlarmError>;
+    sourceFinished: Effect.Effect<void>,
+    dispatchUntil: DateTime.Utc,
+  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope>;
+  readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
 }>("@effect-agent/platform-cloudflare/ThreadHostMaintenance", {
   defaultValue: () => ({
-    pendingDeadline: Effect.succeed(Option.none()),
+    dispatchTimeoutMillis: 1,
     drainUntil: () => Effect.void,
+    pendingDeadline: Effect.succeed(Option.none()),
   }),
 });
 
@@ -403,7 +421,11 @@ export class ThreadMutationGate extends Context.Service<
   {
     readonly withMutation: <A, E, R>(
       body: Effect.Effect<A, E, R>,
-      /** Indexed host work has its own durable deadline and does not invalidate ledger recovery. */
+      /**
+       * Native admission, approval, abort and unknown resolution keep the default true.
+       * Projection/relay/reply receipt-only bookkeeping must use false: its local durable
+       * pendingDeadline owns scheduling without creating native recovery debt.
+       */
       options?: { readonly invalidatesRecovery: boolean },
     ) => Effect.Effect<A, E | DurableAlarmError, R>;
     readonly withSnapshot: <A, E, R>(
@@ -491,9 +513,13 @@ export type MaintenancePassFailure =
  *    alarm takes an O(1) path without recovery, ledger scans, or canonical-history reads.
  * 2. Recovery strictly precedes a new claim. One head Attempt advances the lane and requests
  *    a safe yield after ten minutes. The whole event has a fourteen-minute cooperative timeout.
- * 3. The final transaction acknowledges only the generation observed at pass start. A racing
+ * 3. Auxiliary dispatch and listeners belong to the event Scope. After native completion,
+ *    stop new external waves, join native delivery through its driver-owned Claim deadline,
+ *    and bound host/backfill work by explicit allowances before closing and joining Scope.
+ *    Ordinary auxiliary setup failures are reported after the one native opportunity.
+ * 4. The final transaction acknowledges only the generation observed at pass start. A racing
  *    mutation therefore remains `dirty > processed` and retains its atomically-established alarm.
- * 4. Stable external waits acknowledge and clear. Autonomous retry, indeterminate, and lease
+ * 5. Stable external waits acknowledge and clear. Autonomous retry, indeterminate, and lease
  *    recovery states leave their generation dirty and retain bounded backoff rearming.
  */
 export class ThreadMaintenance extends Context.Service<
@@ -618,7 +644,10 @@ export class ThreadMaintenance extends Context.Service<
               // Prearm even a publication-only pass before invoking any host hook.
               await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
 
-              return { _tag: "CaughtUp" as const, nonterminal: state.nonterminal };
+              return {
+                _tag: "CaughtUp" as const,
+                nonterminal: state.nonterminal,
+              };
             }
             // Pre-arm the earliest retry before recovery. A successful finish may move this slot
             // LATER to its bounded backoff, which does not cancel the running handler.
@@ -655,7 +684,8 @@ export class ThreadMaintenance extends Context.Service<
 
       const pass = Effect.fn("ThreadMaintenance.pass")(function* (
         yieldAfter: DateTime.Utc,
-      ): Effect.fn.Return<MaintenancePassReport, MaintenancePassFailure> {
+        dispatchUntil: DateTime.Utc,
+      ): Effect.fn.Return<MaintenancePassReport, MaintenancePassFailure, Scope.Scope> {
         const annotate = (report: MaintenancePassReport) =>
           Effect.annotateCurrentSpan({
             phase: report.phase,
@@ -678,32 +708,77 @@ export class ThreadMaintenance extends Context.Service<
           }),
         );
 
-        // Deliver beside source work, including messages inserted by the running Attempt.
-        // Slow destination RPCs never consume the source execution window. Stop starting
-        // waves when source work ends, then join the bounded current wave before acknowledgement.
-        const deliveryFinished = yield* Deferred.make<void>();
-
-        const delivery = yield* Effect.forkChild(
-          messages.drainUntil?.(deliveryFinished) ?? messages.drain,
+        // This scope owns auxiliary dispatch and listeners, independently of source completion.
+        // Close it before acknowledgement, including on failure or event interruption.
+        const auxiliaryScope = yield* Effect.acquireRelease(Scope.make("parallel"), (scope, exit) =>
+          Scope.close(scope, exit),
         );
 
-        const hostWork = yield* Effect.forkChild(host.drainUntil(deliveryFinished));
+        const sourceFinished = yield* Deferred.make<void>();
+        const finished = Deferred.await(sourceFinished);
 
-        const finishDelivery = Deferred.succeed(deliveryFinished, undefined).pipe(
-          Effect.andThen(Fiber.awaitAll([delivery, hostWork])),
-          Effect.flatMap((outcomes) =>
-            Effect.forEach(outcomes, (outcome) => outcome, { discard: true }),
+        // Fork setup too: an ordinary auxiliary setup failure is reported after native work,
+        // rather than gating its opportunity. Event interruption still closes every fiber.
+        const deliveryFiber = yield* Effect.forkIn(
+          Scope.provide(auxiliaryScope)(messages.drainUntil(finished, dispatchUntil)),
+          auxiliaryScope,
+        );
+
+        const hostFiber = yield* Effect.forkIn(
+          Scope.provide(auxiliaryScope)(
+            Effect.gen(function* () {
+              yield* Schema.decodeUnknownEffect(AuxiliaryDispatchMillis)(
+                host.dispatchTimeoutMillis,
+              ).pipe(
+                Effect.mapError((cause) =>
+                  DurableAlarmError.make({
+                    operation: "host dispatch allowance",
+                    message:
+                      "Declare an integer whole-wave allowance between 1 and 300000 milliseconds",
+                    cause,
+                  }),
+                ),
+              );
+              yield* host.drainUntil(finished, dispatchUntil);
+            }),
           ),
+          auxiliaryScope,
         );
 
-        // Capture derived-index failures until canonical work has had its turn. Interruption
-        // still stops the event; ordinary failures and defects retain the prearmed generation.
-        const projected = yield* Effect.exit(
-          drainDue.pipe(Effect.provideService(ThreadProjectionMaintenance, projection)),
+        // Backfill is one disposable wave; its timer starts beside native execution.
+        const backfill = yield* Effect.forkIn(
+          drainDue.pipe(
+            Effect.provideService(ThreadProjectionMaintenance, projection),
+            Effect.timeoutOption(config.projectionDispatchTimeoutMillis),
+          ),
+          auxiliaryScope,
         );
 
-        if (Exit.isFailure(projected) && Cause.hasInterrupts(projected.cause))
-          return yield* Effect.failCause(projected.cause);
+        const finishAuxiliary = Effect.gen(function* () {
+          yield* Deferred.succeed(sourceFinished, undefined);
+
+          const remaining = Math.max(
+            1,
+            DateTime.toEpochMillis(dispatchUntil) - (yield* Clock.currentTimeMillis),
+          );
+
+          const hostJoin = yield* Effect.forkIn(
+            Fiber.join(hostFiber).pipe(
+              Effect.timeoutOption(Math.min(host.dispatchTimeoutMillis, remaining)),
+              Effect.tap((result) =>
+                Effect.annotateCurrentSpan({ "host.timedOut": Option.isNone(result) }),
+              ),
+            ),
+            auxiliaryScope,
+          );
+
+          // Native transport uses the driver's actual Claim deadline, through Retry persistence.
+          // Only our host/backfill timers suppress their own interruption. Earlier failed exits,
+          // including pure self-interruption, remain failures while siblings are still blocked.
+          yield* Fiber.joinAll([deliveryFiber, hostJoin, backfill]);
+          yield* Scope.close(auxiliaryScope, Exit.void);
+        });
+
         const deadline = yield* publication.pendingDeadline;
 
         if (
@@ -715,8 +790,7 @@ export class ThreadMaintenance extends Context.Service<
         const pending = yield* publication.pendingDeadline;
 
         if (started._tag === "CaughtUp" || Option.isSome(pending)) {
-          yield* finishDelivery;
-          if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
+          yield* finishAuxiliary;
           yield* failpoint.hit("maintenance:finish:before");
 
           const disposition = yield* mutations.withSnapshot((active) =>
@@ -817,9 +891,7 @@ export class ThreadMaintenance extends Context.Service<
             ? Option.none()
             : yield* runtime.processThreadHead(selected, { yieldAfter });
 
-        yield* finishDelivery;
-        if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
-        // Observe residual state before acknowledging this exact pass-start generation.
+        yield* finishAuxiliary;
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
         const waitingHeads = new Map<ThreadId, boolean>();
 
@@ -940,9 +1012,13 @@ export class ThreadMaintenance extends Context.Service<
       return ThreadMaintenance.of({
         // A mid-pass immediate hint is droppable; durable dirty state decides the final alarm.
         pass: Effect.gen(function* () {
-          const yieldAfter = DateTime.makeUnsafe((yield* Clock.currentTimeMillis) + 10 * 60_000);
+          const now = yield* Clock.currentTimeMillis;
+          const yieldAfter = DateTime.makeUnsafe(now + 10 * 60_000);
+          const dispatchUntil = DateTime.makeUnsafe(now + 14 * 60_000);
 
-          return yield* alarm.withWakesDeferred(maintenancePassGate.withPermit(pass(yieldAfter)));
+          return yield* alarm.withWakesDeferred(
+            maintenancePassGate.withPermit(Effect.scoped(pass(yieldAfter, dispatchUntil))),
+          );
         }).pipe(
           // Include permit waiting, recovery and acknowledgement in the event deadline.
           // Interruption releases Attempt ownership, leaving the prearmed dirty generation

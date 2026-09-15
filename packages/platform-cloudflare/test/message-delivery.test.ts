@@ -2,7 +2,11 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Clock, Effect } from "effect";
 import { digestJson } from "effect-agent/digest";
 import { type AgentId } from "effect-agent/identifiers";
-import { MessageDeliveryStore, prepareMessageDelivery } from "effect-agent/message-delivery";
+import {
+  MessageDeliveryDriver,
+  MessageDeliveryStore,
+  prepareMessageDelivery,
+} from "effect-agent/message-delivery";
 import { ApprovalDecisionCommand } from "effect-agent/submission-ledger";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
@@ -32,6 +36,9 @@ import {
 import {
   droppedMessageWakes,
   messageEvictions,
+  messageClaimDelays,
+  testMessageDriverLayer,
+  messageInterruptions,
   messageDeliveryHolds,
   messageDeliveryResources,
 } from "./message-delivery-fixture.ts";
@@ -75,6 +82,7 @@ const enqueue = (
   now: number,
   message = "message",
   agentId: AgentId = plannerDefinition.id,
+  attemptTimeoutMillis = 100,
 ) =>
   runInDurableObject(stubFor(source), (instance) =>
     instance[DurableObject.RunSymbol](
@@ -86,10 +94,10 @@ const enqueue = (
         const record = yield* prepareMessageDelivery({
           key: keyFor(source, message),
           createdAtMillis: now,
-          deadlineAtMillis: now + 60_000,
+          deadlineAtMillis: now + Math.max(60_000, 4 * attemptTimeoutMillis),
           policy: {
             maxAutomaticAttempts: 3,
-            attemptTimeoutMillis: 100,
+            attemptTimeoutMillis,
             retryBaseMillis: 10,
             retryMaxMillis: 50,
             settlementPollMillis: 20,
@@ -141,6 +149,8 @@ const withThreads = (
             maintenanceClocks.delete(thread);
             droppedMessageWakes.delete(thread);
             messageEvictions.delete(thread);
+            messageClaimDelays.delete(thread);
+            messageInterruptions.delete(thread);
             messageDeliveryHolds.delete(thread);
             messageDeliveryResources.delete(thread);
             alarmAttemptHolds.delete(thread);
@@ -154,6 +164,68 @@ const withThreads = (
   );
 
 describe("Thread Object message maintenance", () => {
+  it.each(["driver", "alarm"] as const)(
+    "preserves the actual Claim window and normal timeout/backoff with %s ownership",
+    (owner) =>
+      withThreads(async (source, destination, now, advance) => {
+        await submit(source, "initial");
+        await drainAlarmsUntil(source, allSettled(source));
+        await enqueue(source, destination, now, "message", plannerDefinition.id, 1_000);
+        const claim = latch();
+        const claimRelease = latch();
+        const entered = latch();
+        const release = latch();
+
+        messageClaimDelays.set(source, { release: claimRelease.promise, entered: claim.resolve });
+        messageDeliveryHolds.set(source, {
+          point: "message-delivery:admission:response",
+          entered: entered.resolve,
+          release: release.promise,
+        });
+        let retired = false;
+
+        const running = (
+          owner === "alarm"
+            ? runDurableObjectAlarm(stubFor(source))
+            : runInDurableObject(stubFor(source), (instance) =>
+                instance[DurableObject.RunSymbol](
+                  Effect.flatMap(MessageDeliveryDriver, (driver) => driver.runDue()).pipe(
+                    Effect.provide(testMessageDriverLayer),
+                  ),
+                ),
+              )
+        ).then(() => {
+          retired = true;
+        });
+
+        try {
+          await claim.promise;
+          await advance(500);
+          claimRelease.resolve();
+          await entered.promise;
+          expect((await read(source))?.leaseUntilMillis).toBe(now + 1_500);
+          await advance(500);
+          expect(retired, "selection time must not shorten the authorized Claim window").toBe(
+            false,
+          );
+          await advance(500);
+          await running;
+          const record = await read(source);
+
+          expect(record?.leaseUntilMillis).toBeNull();
+          expect(record?.retry.lastFailure).toBe("timeout");
+          expect(record?.retry.nextAttemptAtMillis).toBe(now + 1_510);
+          expect(record?.retry.attempts).toBe(1);
+        } finally {
+          messageClaimDelays.delete(source);
+          claimRelease.resolve();
+          messageDeliveryHolds.delete(source);
+          release.resolve();
+          await running;
+        }
+      }),
+  );
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81
   it("sleeps until the delivery deadline while its destination waits for external approval", () =>
     withThreads(async (source, destination, now, advance) => {
@@ -206,126 +278,229 @@ describe("Thread Object message maintenance", () => {
       expect(await scheduledAlarm(source)).toBeNull();
     }));
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81
-  it("delivers inserted messages, queued waves and settlement polls while its source Attempt is running", () =>
+  // Wake-driven overlap is required while the source still owns its native budget.
+  it("delivers new wakes during source work and leaves retry deadlines to future alarms", () =>
     withThreads(async (source, destination, now, advance) => {
       await submit(source, "initial");
       await drainAlarmsUntil(source, allSettled(source));
-
       const entered = latch();
       const release = latch();
-      const finished = latch();
+      const deliveryEntered = latch();
       const deliveryRelease = latch();
-      const messages = ["message", ...Array.from({ length: 8 }, (_, index) => `message-${index}`)];
-      let released = false;
-
-      const statuses = () =>
-        Promise.all(messages.map(async (message) => (await read(source, message))?.status));
 
       alarmAttemptHolds.set(source, {
         location: "claim:after-claim",
         entered: Effect.sync(entered.resolve),
         release: Effect.promise(() => release.promise),
-        finished: Effect.sync(() => {
-          released = true;
-          finished.resolve();
-        }),
+        finished: Effect.void,
       });
       await submit(source, "active-source");
       const running = runDurableObjectAlarm(stubFor(source));
 
       try {
         await entered.promise;
-        expect(await read(source)).toBeNull();
         messageDeliveryHolds.set(source, {
-          point: "message-delivery:admission:after",
-          entered: () => {},
+          point: "message-delivery:admission:response",
+          entered: deliveryEntered.resolve,
           release: deliveryRelease.promise,
         });
         await enqueue(source, destination, now);
-        for (
-          let attempt = 0;
-          attempt < 200 && messageDeliveryResources.get(source)?.acquired !== 1;
-          attempt += 1
-        ) {
-          await read(source);
-        }
-        expect(messageDeliveryResources.get(source)?.acquired).toBe(1);
-        // Coalesce a backlog behind the first delivery so it exceeds a single native wave.
-        for (const message of messages.slice(1)) await enqueue(source, destination, now, message);
+        await deliveryEntered.promise;
+        for (let index = 1; index <= 8; index++)
+          await enqueue(source, destination, now, `late-${index}`);
         messageDeliveryHolds.delete(source);
         deliveryRelease.resolve();
         for (
           let attempt = 0;
-          attempt < 200 && (await statuses()).some((status) => status !== "accepted");
-          attempt += 1
-        ) {
-          await advance(1);
-        }
-        expect(await statuses()).toEqual(messages.map(() => "accepted"));
-        expect(await laneRows(destination)).toHaveLength(messages.length);
+          attempt < 200 && (await read(source, "late-8"))?.status !== "accepted";
+          attempt++
+        )
+          await Promise.resolve();
+        expect((await read(source))?.status).toBe("accepted");
+        expect((await read(source, "late-8"))?.status).toBe("accepted");
+        expect(await laneRows(destination)).toHaveLength(9);
+        const before = [await read(source), await read(source, "late-8")];
 
-        await drainAlarmsUntil(destination, allSettled(destination));
-        await advance(20);
-        for (
-          let attempt = 0;
-          attempt < 200 && (await statuses()).some((status) => status !== "processed");
-          attempt += 1
-        ) {
-          await advance(1);
-        }
-        expect(await statuses()).toEqual(messages.map(() => "processed"));
-        // Leave one accepted message for the durable alarm after source execution ends.
-        await enqueue(source, destination, now, "after-source");
-        for (
-          let attempt = 0;
-          attempt < 200 && (await read(source, "after-source"))?.status !== "accepted";
-          attempt += 1
-        ) {
-          await advance(1);
-        }
-        expect((await read(source, "after-source"))?.status).toBe("accepted");
+        await advance(200);
+        expect([await read(source), await read(source, "late-8")]).toEqual(before);
         expect(await allSettled(source)()).toBe(false);
-        expect(released).toBe(false);
       } finally {
         messageDeliveryHolds.delete(source);
         deliveryRelease.resolve();
         release.resolve();
-        // Completion must stop the delivery fiber without another clock tick.
         await running;
-        await finished.promise;
+        alarmAttemptHolds.delete(source);
       }
-      expect(released).toBe(true);
       expect(await allSettled(source)()).toBe(true);
       expect(await scheduledAlarm(source)).not.toBeNull();
-      await drainAlarmsUntil(destination, allSettled(destination));
-      await advance(20);
-      // The completed pass leaves future delivery work to its durable alarm.
-      expect((await read(source, "after-source"))?.status).toBe("accepted");
-      await runDurableObjectAlarm(stubFor(source));
-      expect((await read(source, "after-source"))?.status).toBe("processed");
     }));
 
-  it("settles ready source work while delivery is held and finalizes delivery on maintenance interruption", () =>
+  it("defers a late five-minute wave that cannot fit the physical event without claiming it", () =>
     withThreads(async (source, destination, now, advance) => {
       await submit(source, "initial");
       await drainAlarmsUntil(source, allSettled(source));
-      await enqueue(source, destination, now);
+      const entered = latch();
+      const release = latch();
+
+      alarmAttemptHolds.set(source, {
+        location: "claim:after-claim",
+        entered: Effect.sync(entered.resolve),
+        release: Effect.promise(() => release.promise),
+        finished: Effect.void,
+      });
+      await submit(source, "active-source");
+      const running = runDurableObjectAlarm(stubFor(source));
+
+      try {
+        await entered.promise;
+        await advance(9 * 60_000 + 1);
+        await enqueue(
+          source,
+          destination,
+          now + 9 * 60_000 + 1,
+          "late",
+          plannerDefinition.id,
+          300_000,
+        );
+        await advance(1);
+        expect((await read(source, "late"))?.retry.attempts).toBe(0);
+        expect(await laneRows(destination)).toHaveLength(0);
+      } finally {
+        release.resolve();
+        await running;
+        alarmAttemptHolds.delete(source);
+      }
+      expect(await scheduledAlarm(source)).not.toBeNull();
+      await runDurableObjectAlarm(stubFor(source));
+      expect((await read(source, "late"))?.status).toBe("accepted");
+      expect((await read(source, "late"))?.retry.attempts).toBe(1);
+    }));
+
+  it("finishes a listener-started wave after native completion without admitting another wave", () =>
+    withThreads(async (source, destination, now, advance) => {
+      await submit(source, "initial");
+      await drainAlarmsUntil(source, allSettled(source));
+      const nativeEntered = latch();
+      const nativeRelease = latch();
+      const entered = latch();
+      const release = latch();
+
+      alarmAttemptHolds.set(source, {
+        location: "claim:after-claim",
+        entered: Effect.sync(nativeEntered.resolve),
+        release: Effect.promise(() => nativeRelease.promise),
+        finished: Effect.void,
+      });
+      await submit(source, "active-source");
+      let retired = false;
+
+      const running = runDurableObjectAlarm(stubFor(source)).then(() => {
+        retired = true;
+      });
+
+      try {
+        await nativeEntered.promise;
+        messageDeliveryHolds.set(source, {
+          point: "message-delivery:admission:response",
+          entered: entered.resolve,
+          release: release.promise,
+        });
+        await enqueue(source, destination, now, "late", plannerDefinition.id, 30_000);
+        await entered.promise;
+        nativeRelease.resolve();
+        for (let attempt = 0; attempt < 200 && !(await allSettled(source)()); attempt++)
+          await Promise.resolve();
+        await advance(1_500);
+        expect(retired).toBe(false);
+        expect((await read(source, "late"))?.retry.attempts).toBe(1);
+        await enqueue(source, destination, now + 1_500, "after-stop");
+        await submit(source, "next-budget");
+      } finally {
+        nativeRelease.resolve();
+        alarmAttemptHolds.delete(source);
+        messageDeliveryHolds.delete(source);
+        release.resolve();
+        await running;
+      }
+      expect((await read(source, "late"))?.status).toBe("accepted");
+      expect((await read(source, "after-stop"))?.retry.attempts).toBe(0);
+      expect(await laneRows(destination)).toHaveLength(1);
+      await runDurableObjectAlarm(stubFor(source));
+      expect((await read(source, "after-stop"))?.status).toBe("accepted");
+      expect((await read(source, "after-stop"))?.retry.attempts).toBe(1);
+      expect(await allSettled(source)()).toBe(true);
+    }));
+
+  it.each(["delivery-only", "continuous native arrivals"])(
+    "grants a healthy acknowledgement its declared opportunity with %s",
+    (mode) =>
+      withThreads(async (source, destination, now, advance) => {
+        await submit(source, "initial");
+        await drainAlarmsUntil(source, allSettled(source));
+        await drainAlarmsUntil(source, async () => (await scheduledAlarm(source)) === null);
+        await enqueue(source, destination, now, "message", plannerDefinition.id, 30_000);
+        if (mode === "continuous native arrivals") await submit(source, "native-backlog");
+        const entered = latch();
+        const release = latch();
+        let retired = false;
+
+        messageDeliveryHolds.set(source, {
+          point: "message-delivery:admission:response",
+          entered: entered.resolve,
+          release: release.promise,
+        });
+
+        const running = runDurableObjectAlarm(stubFor(source)).then(() => {
+          retired = true;
+        });
+
+        try {
+          await entered.promise;
+          for (let arrival = 0; arrival < 3; arrival++) {
+            await advance(500);
+            if (mode === "continuous native arrivals") await submit(source, `arrival-${arrival}`);
+          }
+          expect(
+            retired,
+            "new native debt cannot repeatedly cancel a healthy acknowledgement",
+          ).toBe(false);
+        } finally {
+          messageDeliveryHolds.delete(source);
+          release.resolve();
+          await running;
+        }
+        expect((await read(source))?.status).toBe("accepted");
+        expect(await laneRows(destination)).toHaveLength(1);
+        expect(messageDeliveryResources.get(source)).toEqual({ acquired: 1, released: 1 });
+        expect((await read(source))?.retry.attempts).toBe(1);
+      }),
+  );
+
+  it("retires a held delivery and runs the next ready source budget before the old response resolves", () =>
+    withThreads(async (source, destination, now, advance) => {
+      await submit(source, "initial");
+      await drainAlarmsUntil(source, allSettled(source));
+      await enqueue(source, destination, now, "message", plannerDefinition.id, 10_000);
       await submit(source, "ready-during-delivery");
 
       const entered = latch();
       const release = latch();
 
       messageDeliveryHolds.set(source, {
-        point: "message-delivery:admission:after",
+        point: "message-delivery:admission:response",
         entered: entered.resolve,
         release: release.promise,
       });
       const running = runDurableObjectAlarm(stubFor(source));
 
-      // Attach the rejection observer before advancing the cooperative event deadline.
+      let retired = false;
+
       const outcome = running.then(
-        () => ({ interrupted: false }),
+        () => {
+          retired = true;
+
+          return { interrupted: false };
+        },
         () => ({ interrupted: true }),
       );
 
@@ -339,10 +514,42 @@ describe("Thread Object message maintenance", () => {
         expect((await read(source))?.status).toBe("pending");
         expect(messageDeliveryResources.get(source)).toEqual({ acquired: 1, released: 0 });
 
-        await advance(14 * 60_000);
-        expect(await outcome).toEqual({ interrupted: true });
+        const destinationRows = await laneRows(destination);
+
+        expect(destinationRows).toHaveLength(1);
+        await submit(source, "next-ready-continuation");
+        await advance(10_000);
+        expect(retired, "the destination response must not own the physical event").toBe(true);
+        expect(await outcome).toEqual({ interrupted: false });
         expect(messageDeliveryResources.get(source)).toEqual({ acquired: 1, released: 1 });
         expect(await scheduledAlarm(source)).not.toBeNull();
+        expect((await laneRows(source)).map((row) => row.state)).toEqual([
+          "settled",
+          "settled",
+          "ready",
+        ]);
+
+        // The next physical event executes its native budget before the old response resolves.
+        await runDurableObjectAlarm(stubFor(source));
+        expect(await allSettled(source)()).toBe(true);
+        expect((await read(source))?.status).toBe("pending");
+        expect((await read(source))?.retry.lastFailure).toBe("timeout");
+        expect((await read(source))?.leaseUntilMillis).toBeNull();
+        // Retry only after the driver's durable backoff, using the same admission identity.
+        messageDeliveryHolds.delete(source);
+        await advance(10);
+        await runDurableObjectAlarm(stubFor(source));
+        expect((await read(source))?.status).toBe("accepted");
+        expect((await read(source))?.receipt?.submissionId).toBe(destinationRows[0]?.submission_id);
+        expect(await laneRows(destination)).toHaveLength(1);
+        const recovered = await read(source);
+
+        release.resolve();
+        expect(await read(source)).toEqual(recovered);
+        await drainAlarmsUntil(destination, allSettled(destination));
+        await advance(20);
+        await runDurableObjectAlarm(stubFor(source));
+        expect((await read(source))?.status).toBe("processed");
       } finally {
         messageDeliveryHolds.delete(source);
         release.resolve();
@@ -386,30 +593,38 @@ describe("Thread Object message maintenance", () => {
       expect(await scheduledAlarm(source)).toBeNull();
     }));
 
-  it("recovers a lost admission acknowledgement after eviction using the same destination Receipt", () =>
-    withThreads(async (source, destination, now, advance) => {
-      await submit(source, "initial");
-      await drainAlarmsUntil(source, allSettled(source));
-      await enqueue(source, destination, now);
-      messageEvictions.set(source, "message-delivery:admission:after");
-      await expect(runDurableObjectAlarm(stubFor(source))).rejects.toThrow(
-        /message delivery eviction/u,
-      );
-      expect(messageEvictions.has(source)).toBe(false);
-      const destinationRows = await laneRows(destination);
+  it.each(["eviction", "interruption"] as const)(
+    "recovers a lost admission acknowledgement after %s and reconstruction using the same destination Receipt",
+    (failure) =>
+      withThreads(async (source, destination, now, advance) => {
+        await submit(source, "initial");
+        await drainAlarmsUntil(source, allSettled(source));
+        await enqueue(source, destination, now);
+        if (failure === "eviction")
+          messageEvictions.set(source, "message-delivery:admission:after");
+        else messageInterruptions.add(source);
+        await expect(runDurableObjectAlarm(stubFor(source))).rejects.toBeDefined();
+        if (failure === "interruption") {
+          await runInDurableObject(stubFor(source), (_, state) => {
+            state.abort("reconstruct interrupted admission");
+          }).catch(() => undefined);
+        }
+        expect(messageEvictions.has(source)).toBe(false);
+        const destinationRows = await laneRows(destination);
 
-      expect(destinationRows).toHaveLength(1);
-      await drainAlarmsUntil(destination, allSettled(destination));
-      await advance(100);
-      await runDurableObjectAlarm(stubFor(source));
-      const recovered = await read(source);
+        expect(destinationRows).toHaveLength(1);
+        await drainAlarmsUntil(destination, allSettled(destination));
+        await advance(100);
+        await runDurableObjectAlarm(stubFor(source));
+        const recovered = await read(source);
 
-      expect(recovered?.receipt?.submissionId).toBe(destinationRows[0]?.submission_id);
-      expect(await laneRows(destination)).toHaveLength(1);
-      await advance(20);
-      await runDurableObjectAlarm(stubFor(source));
-      expect((await read(source))?.status).toBe("processed");
-    }));
+        expect(recovered?.receipt?.submissionId).toBe(destinationRows[0]?.submission_id);
+        expect(await laneRows(destination)).toHaveLength(1);
+        await advance(20);
+        await runDurableObjectAlarm(stubFor(source));
+        expect((await read(source))?.status).toBe("processed");
+      }),
+  );
 
   it("prearms before an insert crash and reconstructs pending delivery after a committed insert crash", () =>
     withThreads(async (source, destination, now) => {

@@ -8,9 +8,11 @@ import {
   ThreadProjectionMaintenance,
 } from "effect-agent/thread-projection-maintenance";
 import { ThreadRead, ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
+import { ThreadHostMaintenance } from "../src/Alarm.ts";
 import { DurableObjectContext, ThreadObjectIdentity } from "../src/CloudflareBindings.ts";
 import { TEST_DIGESTS, finalParts, plannerDefinition } from "./fixtures.ts";
 
@@ -29,6 +31,36 @@ export const projectionResources = new Map<string, { acquired: number; released:
 export const projectionConstructions = new Map<string, number>();
 export const projectionLookups = new Map<string, Array<number>>();
 export const projectionLiveBatches = new Map<string, Array<number>>();
+
+export const hostMaintenanceControls = new Map<
+  string,
+  (wakes: WakeScheduler["Service"]) => Context.Service.Shape<typeof ThreadHostMaintenance>
+>();
+
+export const hostMaintenanceLayer = Layer.effectContext(
+  Effect.gen(function* () {
+    const { threadId } = yield* ThreadObjectIdentity;
+
+    const wakes = yield* WakeScheduler;
+
+    return Context.make(ThreadHostMaintenance, {
+      get dispatchTimeoutMillis() {
+        return hostMaintenanceControls.get(threadId)?.(wakes).dispatchTimeoutMillis ?? 1;
+      },
+      drainUntil: (finished, deadline) =>
+        Effect.suspend(
+          () =>
+            hostMaintenanceControls.get(threadId)?.(wakes).drainUntil(finished, deadline) ??
+            Effect.void,
+        ),
+      pendingDeadline: Effect.suspend(
+        () =>
+          hostMaintenanceControls.get(threadId)?.(wakes).pendingDeadline ??
+          Effect.succeed(Option.none()),
+      ),
+    });
+  }),
+);
 
 export class ProjectionIndex extends Context.Service<
   ProjectionIndex,
