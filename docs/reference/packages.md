@@ -67,9 +67,12 @@ Operations are available directly on their module namespace: `Subagent.layer`,
 `ThreadHistory.layer`, and `IdGenerator.layer`. Service keys remain inside those modules,
 for example `IdGenerator.IdGenerator` when supplying a custom generator.
 
-### Ephemeral defaults
+### In-memory defaults
 
-`Ephemeral.layer` supplies in-memory conversation history and a shared subagent reservation ledger.
+Import `InMemory` from `effect-agent`, or use `import * as InMemory from "effect-agent/in-memory"`.
+When upgrading, replace `Ephemeral` and `effect-agent/ephemeral` imports with these names.
+
+`InMemory.layer` supplies in-memory conversation history and a shared subagent reservation ledger.
 Provide it once around the parent program and all child handler Layers. Runs with the same Thread
 ID retain their conversation for that application Scope; independent builds have independent state.
 Complete history updates remain after a failed or interrupted Run. Scope closure or process loss
@@ -77,11 +80,11 @@ releases the state; this layer provides no crash recovery. See [in-memory conver
 for limits and a follow-up example.
 
 Runtime IDs have an overridable default; no ID Layer is required. Context preparation is also
-optional. `Ephemeral.layer` preserves custom IDs and context preparation supplied by the caller.
+optional. `InMemory.layer` preserves custom IDs and context preparation supplied by the caller.
 Models, tool handlers, credentials, and durable storage remain explicit application choices.
 
 For storage-backed history, provide `PersistentHistory.layer` with a store and, when using subagents,
-one shared `SubagentReservationsMemoryLive` instead of `Ephemeral.layer`. Durable hosts select
+one shared `SubagentReservationsMemoryLive` instead of `InMemory.layer`. Durable hosts select
 their own history and reservation services.
 
 When upgrading, remove routine `IdGenerator.layer` provisions and `IdGenerator` from service
@@ -182,9 +185,9 @@ in your host.
 
 Agent definitions, schemas, execution, streaming, policies, subagents, memory capabilities,
 MCP, durable execution, and platform-neutral sandbox contracts. It has no database driver or platform runtime dependency.
-Start with `Agent`, `AgentRuntime`, and `Ephemeral.layer`.
+Start with `Agent`, `AgentRuntime`, and `InMemory.layer`.
 
-`Ephemeral.layer` retains in-memory conversation history and shared attached-subagent reservations.
+`InMemory.layer` retains in-memory conversation history and shared attached-subagent reservations.
 For storage-backed history, use the root namespace `PersistentHistory.layer`.
 Models, provider clients, credentials, tool handlers, and durable hosts remain application choices.
 
@@ -232,7 +235,7 @@ Follow the [local process walkthrough](../guide/sandbox#run-a-trusted-local-proc
 ### Threads and durability in `effect-agent`
 
 `Thread` describes an identified, ordered conversation. `Thread.Store` holds in-memory snapshots
-and `Ephemeral.layer` shares it across Runs. Persistence and execution recovery are separate choices.
+and `InMemory.layer` shares it across Runs. Persistence and execution recovery are separate choices.
 
 Versioned records, storage contracts, recovery, scheduling, and subscriptions live under
 `packages/effect-agent/src/durable`. Import their public namespaces from `effect-agent`, or use

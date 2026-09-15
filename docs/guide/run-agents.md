@@ -10,7 +10,7 @@ before instructions execute and require native model services. Use `runUnknown`,
 or `startUnknown` for external values typed as `unknown`. See
 [Agent definitions](./agents#typed-and-external-inputs).
 
-Use `Ephemeral.layer` from `effect-agent` for in-memory conversations, including attached
+Use `InMemory.layer` from `effect-agent` for in-memory conversations, including attached
 subagents. Provide it once around the application and reuse a Thread ID for follow-up Runs.
 It retains complete history updates and shares subagent reservation state for that Scope.
 IDs are generated automatically, and context preparation is optional. Use

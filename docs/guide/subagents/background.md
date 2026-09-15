@@ -55,7 +55,7 @@ backpressure, and recovery.
 <<< @/snippets/travel-planner/background-coordinator.ts{ts twoslash}
 
 Save as `background-coordinator.ts`. This uses the
-[activity researcher](./ephemeral-attached#define-the-child) directly.
+[activity researcher](./in-memory-attached#define-the-child) directly.
 The default result is `{ output, budgetExhausted }`. Use an explicit `Subagent.make` declaration
 when the parent should receive a [custom result projection](../../reference/subagents#input-and-result-mappings).
 

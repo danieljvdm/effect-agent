@@ -14,7 +14,7 @@ import { SubagentDelegationCaps } from "../src/core/SubagentContract.ts";
 import * as AgentRuntime from "../src/engine/AgentRuntime.ts";
 import { RunContextPreparation } from "../src/engine/RunOptions.ts";
 import { ThreadHistory } from "../src/engine/ThreadHistory.ts";
-import * as Ephemeral from "../src/Ephemeral.ts";
+import * as InMemory from "../src/InMemory.ts";
 
 const answer: ReadonlyArray<Response.StreamPartEncoded> = [
   { type: "text-start", id: "answer" },
@@ -83,7 +83,7 @@ const delegate = (...names: ReadonlyArray<string>): ReadonlyArray<Response.Strea
   { type: "finish", reason: "tool-calls", usage: { inputTokens: {}, outputTokens: {} } },
 ];
 
-describe("ephemeral assembly", () => {
+describe("in-memory assembly", () => {
   for (const entrypoint of ["run", "stream", "start"] as const) {
     it.effect(`${entrypoint} retains a conversation for later Runs on that Thread`, () =>
       Effect.gen(function* () {
@@ -124,7 +124,7 @@ describe("ephemeral assembly", () => {
           expect(JSON.stringify(stored)).toContain("Make it cheaper");
 
           return history;
-        }).pipe(Effect.provide(Layer.merge(Ephemeral.layer, model)));
+        }).pipe(Effect.provide(Layer.merge(InMemory.layer, model)));
 
         // Closing the application Layer releases its store, even if a service reference escapes.
         expect(yield* history.load(threadId).pipe(Effect.flip)).toMatchObject({
@@ -136,7 +136,7 @@ describe("ephemeral assembly", () => {
         yield* AgentRuntime.run(child, "Fresh application", { threadId }).pipe(
           Effect.provide(
             Layer.merge(
-              Ephemeral.layer,
+              InMemory.layer,
               scriptedModel("fresh", [answer], (options) => {
                 fresh.push(JSON.stringify(options.prompt));
               }),
@@ -177,7 +177,7 @@ describe("ephemeral assembly", () => {
 
           yield* AgentRuntime.run(child, "Continue", { threadId });
           expect(prompts[0]).toContain("Remember this request");
-        }).pipe(Effect.provide(Layer.merge(Ephemeral.layer, model)));
+        }).pipe(Effect.provide(Layer.merge(InMemory.layer, model)));
       }),
     );
   }
@@ -212,7 +212,7 @@ describe("ephemeral assembly", () => {
         const history = yield* ThreadHistory;
 
         expect(JSON.stringify(yield* history.load(threadId))).toContain("Retain before timeout");
-      }).pipe(Effect.provide(Layer.merge(Ephemeral.layer, model)));
+      }).pipe(Effect.provide(Layer.merge(InMemory.layer, model)));
     }),
   );
 
@@ -256,7 +256,7 @@ describe("ephemeral assembly", () => {
 
           expect(stored).toContain("First request");
           expect(stored).toContain("Second request");
-        }).pipe(Effect.provide(Ephemeral.layer));
+        }).pipe(Effect.provide(InMemory.layer));
       }),
   );
 
@@ -296,7 +296,7 @@ describe("ephemeral assembly", () => {
 
           expect(replaced).toMatchObject({ _tag: "ThreadHistoryError", reason: "conflict" });
           expect(calls).toBe(0);
-        }).pipe(Effect.provide(Layer.merge(Ephemeral.layer, model)));
+        }).pipe(Effect.provide(Layer.merge(InMemory.layer, model)));
       }),
   );
 
@@ -328,7 +328,7 @@ describe("ephemeral assembly", () => {
             .pipe(Effect.flip);
 
           expect(failure.reason).toBe("not-found");
-        }).pipe(Effect.scoped, Effect.provide(Layer.merge(model, Ephemeral.layer)));
+        }).pipe(Effect.scoped, Effect.provide(Layer.merge(model, InMemory.layer)));
 
         expectTypeOf<Effect.Services<typeof program>>().toEqualTypeOf<never>();
         yield* program;
@@ -362,9 +362,7 @@ describe("ephemeral assembly", () => {
       );
 
       const result = yield* AgentRuntime.run(parent, "question").pipe(
-        Effect.provide(
-          Layer.merge(handlers, parentModel).pipe(Layer.provideMerge(Ephemeral.layer)),
-        ),
+        Effect.provide(Layer.merge(handlers, parentModel).pipe(Layer.provideMerge(InMemory.layer))),
         Effect.provideService(IdGenerator, {
           nextThreadId: next.pipe(
             Effect.map((n) => Schema.decodeSync(ThreadId)(`custom-thread-${n}`)),
@@ -422,7 +420,7 @@ describe("ephemeral assembly", () => {
           Layer.merge(
             handlers,
             scriptedModel("parent", [delegate("first", "second"), answer]),
-          ).pipe(Layer.provideMerge(Ephemeral.layer), Layer.provideMerge(identifiers)),
+          ).pipe(Layer.provideMerge(InMemory.layer), Layer.provideMerge(identifiers)),
         ),
         Effect.flip,
       );
@@ -441,7 +439,7 @@ describe("ephemeral assembly", () => {
 });
 
 class ProviderClient extends Context.Service<ProviderClient, string>()(
-  "ephemeral/ProviderClient",
+  "in-memory/ProviderClient",
 ) {}
 
 it("retains provider requirements and typed failures while default IDs require no service", () => {
@@ -464,7 +462,7 @@ it("retains provider requirements and typed failures while default IDs require n
   const handlers = Subagent.layer(first, model);
 
   const program = AgentRuntime.run(Agent.withModel(child, model), "question").pipe(
-    Effect.provide(Ephemeral.layer),
+    Effect.provide(InMemory.layer),
   );
 
   expectTypeOf<Layer.Services<typeof handlers>>().toEqualTypeOf<

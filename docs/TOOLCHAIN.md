@@ -363,10 +363,11 @@ Like [Effect's bundle check](https://github.com/Effect-TS/effect/tree/main/packa
 it bundles small consumer fixtures against built packages. Each checkout installs its own
 lockfile. The comparison uses the PR's esbuild version and the same fixture source for both sides.
 Disposable comparison manifests alias historical PascalCase subpaths to their kebab-case names;
-the published packages retain only their canonical exports. Renamed modules remain comparable.
+staged modules also expose the former `Ephemeral` assembly as `InMemory`. The published packages
+retain only their canonical exports. Renamed modules remain comparable.
 
 The fixtures in `scripts/bundle` cover agent construction, importing the runtime's `run` function,
-the ephemeral assembly, and loading the runtime on demand, through both root and direct module imports. The
+the in-memory assembly, and loading the runtime on demand, through both root and direct module imports. The
 analyzer stages copies of `dist` and uses the release publisher's manifest conversion. It does
 not bundle workspace source or externalize Effect. It uses minified ESM, a browser target,
 `es2022`, production mode, and gzip level 9 per emitted chunk.

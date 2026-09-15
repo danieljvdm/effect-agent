@@ -1,6 +1,6 @@
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer } from "effect";
-import { AgentRuntime, Ephemeral, Subagent } from "effect-agent";
+import { AgentRuntime, InMemory, Subagent } from "effect-agent";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { Coordinator } from "./coordinator.ts";
@@ -16,7 +16,7 @@ const ProviderLive = OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_
 const ResearchLive = Subagent.layer(Research, ModelLive).pipe(Layer.provide(TravelToolsLive));
 
 const AppLive = Layer.merge(ModelLive, ResearchLive).pipe(
-  Layer.provideMerge(Ephemeral.layer),
+  Layer.provideMerge(InMemory.layer),
   Layer.provide(ProviderLive),
 );
 

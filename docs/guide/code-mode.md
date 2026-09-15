@@ -41,7 +41,7 @@ rows. The linked warehouse example replaces the fixed data with a brokered SQL q
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { Ephemeral, CodeMode, Agent, AgentRuntime } from "effect-agent";
+import { InMemory, CodeMode, Agent, AgentRuntime } from "effect-agent";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/cloudflare-code-mode";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
@@ -112,7 +112,7 @@ const AnalystLive = Layer.unwrap(
       ),
     );
 
-    return Layer.mergeAll(CodeModeLive, ModelLive, Ephemeral.layer);
+    return Layer.mergeAll(CodeModeLive, ModelLive, InMemory.layer);
   }),
 );
 

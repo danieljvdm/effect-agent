@@ -311,6 +311,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         for (const side of ["base", "head"]) {
           const root = path.join(scratch, side);
           const pkg = path.join(root, "packages", "effect-agent");
+          const assembly = side === "base" ? "Ephemeral" : "InMemory";
 
           yield* fs.makeDirectory(path.join(pkg, "dist"), { recursive: true });
           yield* fs.makeDirectory(path.join(root, "node_modules", "effect"), { recursive: true });
@@ -329,7 +330,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
                 ".": "./src/index.ts",
                 [side === "base" ? "./Agent" : "./agent"]: "./src/Agent.ts",
                 [side === "base" ? "./AgentRuntime" : "./agent-runtime"]: "./src/AgentRuntime.ts",
-                [side === "base" ? "./Ephemeral" : "./ephemeral"]: "./src/Ephemeral.ts",
+                [side === "base" ? "./Ephemeral" : "./in-memory"]: `./src/${assembly}.ts`,
               },
             }),
           );
@@ -337,10 +338,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           // No src directory: accidentally measuring source instead of published
           // artifacts must fail. The two checkouts also contain different values.
           const modules = {
-            index:
-              'export * from "./Agent.mjs"; export * from "./AgentRuntime.mjs"; export * from "./Ephemeral.mjs";',
+            index: `export * from "./Agent.mjs"; export * from "./AgentRuntime.mjs"; export * as ${assembly} from "./${assembly}.mjs";`,
             Agent: 'export { shared as agent } from "./shared.mjs";',
-            Ephemeral: 'export { shared as layer } from "./shared.mjs";',
+            [assembly]: 'export { shared as layer } from "./shared.mjs";',
             AgentRuntime: `import { shared } from "./shared.mjs"; export const run = [shared, ${JSON.stringify(side.repeat(side === "head" ? 20000 : 10000))}];`,
             shared: `export const shared = ${JSON.stringify("shared".repeat(200))};`,
           };
@@ -363,9 +363,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             path.join(fixtures, `runtime-${kind}.ts`),
             `export { run } from "effect-agent${kind === "module" ? "/agent-runtime" : ""}";`,
           );
-          yield* fs.writeFileString(
-            path.join(fixtures, `ephemeral-${kind}.ts`),
-            `export { layer } from "effect-agent${kind === "module" ? "/ephemeral" : ""}";`,
+          yield* fs.copyFile(
+            path.join(repositoryRoot, "scripts", "bundle", `in-memory-${kind}.ts`),
+            path.join(fixtures, `in-memory-${kind}.ts`),
           );
           yield* fs.writeFileString(
             path.join(fixtures, `lazy-${kind}.ts`),
@@ -399,6 +399,13 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(lazy!.head.total.raw).toBe(lazy!.head.initial.raw + lazy!.head.deferred.raw);
         expect(lazy!.head.total.gzip).toBe(lazy!.head.initial.gzip + lazy!.head.deferred.gzip);
         expect(report.fixtures.every((fixture) => fixture.head.initial.raw > 0)).toBe(true);
+        for (const kind of ["root", "module"]) {
+          const renamed = report.fixtures.find((fixture) => fixture.name === `in-memory-${kind}`);
+
+          expect(renamed?.base).toBeDefined();
+          expect(renamed?.base).not.toBeNull();
+          expect(renamed?.missingBaseExports).toEqual([]);
+        }
 
         // A newly introduced direct entry gets no fake zero/unchanged baseline.
         const baseManifest = path.join(scratch, "base", "packages", "effect-agent", "package.json");
@@ -421,7 +428,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
         expect(second.fixtures.find((fixture) => fixture.name === "agent-module")?.base).toBeNull();
         expect(
-          second.fixtures.find((fixture) => fixture.name === "ephemeral-root")?.base,
+          second.fixtures.find((fixture) => fixture.name === "in-memory-root")?.base,
         ).toBeNull();
         expect(yield* fs.exists(path.join(scratch, "report", "base", "agent-module"))).toBe(false);
         expect(
