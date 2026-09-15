@@ -87,13 +87,13 @@ export class CloudflareDurableRuntimeConfigValue extends Schema.Class<Cloudflare
   producerPrefix: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
   /** Submission ownership lease duration (D5); fences work across Object incarnations. */
   ownershipLeaseDuration: PositiveMillis,
-  /** Base delay of the alarm re-arm backoff when a pass makes no progress. */
+  /** Base delay of exponential backoff when a pass fails or makes no progress. */
   alarmBackoffBase: PositiveMillis,
-  /** Ceiling of the alarm re-arm backoff. */
+  /** Ceiling of exponential backoff after failed or no-progress maintenance passes. */
   alarmBackoffCap: PositiveMillis,
   /**
-   * The maintenance-pass scan cadence and the ceiling of every re-arm delay: nonterminal
-   * work is revisited at least this often (wake/scan pairing, persistence §14).
+   * Fallback scan cadence for newly dirty work. Failed/no-progress passes use
+   * alarmBackoffCap independently; constructor repair never shortens their retry deadline.
    */
   wakeScanInterval: PositiveMillis,
   /** `awaitSettlement` ledger re-check cadence when no wake arrives. */

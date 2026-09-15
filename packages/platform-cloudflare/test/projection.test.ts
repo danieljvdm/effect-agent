@@ -82,7 +82,9 @@ const submit = (
     namespace,
   );
 
-const withThread = (test: (thread: string, now: number) => Promise<void>) =>
+const withThread = (
+  test: (thread: string, now: number, advance: (millis: number) => Promise<void>) => Promise<void>,
+) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const thread = `projection-${crypto.randomUUID()}`;
@@ -90,6 +92,8 @@ const withThread = (test: (thread: string, now: number) => Promise<void>) =>
 
       yield* TestClock.setTime(now);
       maintenanceClocks.set(thread, yield* Clock.Clock);
+      const clock = yield* TestClock.testClockWith(Effect.succeed);
+
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           projectionControls.delete(thread);
@@ -101,7 +105,9 @@ const withThread = (test: (thread: string, now: number) => Promise<void>) =>
           releaseMaintenancePause(thread);
         }),
       );
-      yield* Effect.promise(() => test(thread, now));
+      yield* Effect.promise(() =>
+        test(thread, now, (millis) => Effect.runPromise(clock.adjust(millis))),
+      );
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
@@ -282,7 +288,7 @@ describe("live Thread projection and alarm backfill", () => {
   );
 
   it("preserves interruption and recovers through the prearmed alarm", () =>
-    withThread(async (thread) => {
+    withThread(async (thread, _now, advance) => {
       projectionControls.set(thread, { skipLive: true });
       await submit(thread, plannerDefinition);
       projectionControls.set(thread, {
@@ -297,6 +303,7 @@ describe("live Thread projection and alarm backfill", () => {
 
       expect(resources?.released).toBe(resources?.acquired);
       projectionControls.delete(thread);
+      await advance(100);
       await quiesce(thread);
       expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
     }));

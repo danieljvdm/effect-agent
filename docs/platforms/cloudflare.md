@@ -274,6 +274,17 @@ their own migration history, leaving the application's migration rows intact. Ca
 `ThreadMaintenance.pass` from `alarm()`. A pass recovers all local lanes and serves one eligible
 FIFO head, with a durable cursor rotating between Threads. Later work retains the alarm.
 
+Failed and no-progress passes preserve the dirty generation and use jittered exponential
+backoff up to `alarmBackoffCap` (5 seconds by default), independently of `wakeScanInterval`.
+Missing or incompatible bindings wait 5, 10, 20, 40, then 60 seconds between attempts;
+further attempts remain one minute apart. The retry deadline survives eviction:
+`ensureAlarm` and early alarm deliveries cannot accelerate native recovery for the same
+generation. A newer durable mutation can wake it immediately, and host deadlines remain
+independently serviceable. Each blocked Thread retains its own waiting period, so it cannot
+monopolize other Threads. Binding refusals still fail closed and retain the original submission.
+There is no terminal retry-count limit: dropping the alarm would strand accepted work after a
+later compatible deployment. Waiting never authorizes incompatible code to execute.
+
 Application outboxes can supply `ThreadHostMaintenance` from the application Layer. Its
 `pendingDeadline` is a bounded, local, read-only earliest deadline. `drainUntil(finished)` runs
 beside native work, completes one initial bounded wave even if already signalled, stops starting

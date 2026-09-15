@@ -102,7 +102,7 @@ const maintenanceGeneration = (thread: string) =>
   );
 
 describe("DC alarm semantics", () => {
-  // Incident: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-68
+  // Regression: unavailable deployments must retain accepted work across Object eviction.
   it("retains unavailable work with durable backoff across eviction and resumes the original receipt", () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -430,7 +430,8 @@ describe("DC alarm semantics", () => {
         expect(before.some(({ record }) => record.payload._tag === "SubmissionSettled")).toBe(
           false,
         );
-        // The same live incarnation can claim again; no lease wait or policy failure is needed.
+        // Retry after the bounded event-failure delay, without waiting for ownership expiry.
+        yield* TestClock.adjust(100);
         yield* Effect.promise(() =>
           runInDurableObject(stubFor(thread), (instance) => Promise.resolve(instance.alarm())),
         );

@@ -333,20 +333,47 @@ describe("durable host publication", () => {
     }));
 
   it.each(["failure", "defect", "interruption", "timeout"] as const)(
-    "retains a prearmed native alarm across publication %s",
+    "backs off repeated publication %s across eviction without losing native work",
     (failure) =>
-      withThread(async (thread) => {
+      withThread(async (thread, now, advance) => {
         await submit(thread);
         publicationControls.set(thread, { failure });
-        await expect(alarm(thread)).rejects.toBeDefined();
-        const resources = publicationResources.get(thread);
+        let current = now;
 
-        expect(resources?.acquired).toBeGreaterThan(0);
-        expect(resources?.released).toBe(resources?.acquired);
-        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-        const state = await generation(thread);
+        // Cover every doubling plus repetition at the configured 100ms cap. The same
+        // schedule must survive eviction for typed failures, defects and interruption.
+        for (const [minimum, maximum] of [
+          [5, 10],
+          [10, 20],
+          [20, 40],
+          [40, 80],
+          [50, 100],
+          [50, 100],
+        ] as const) {
+          await expect(alarm(thread)).rejects.toBeDefined();
+          const resources = publicationResources.get(thread);
 
-        expect(state.dirty).toBeGreaterThan(state.processed);
+          expect(resources?.acquired).toBeGreaterThan(0);
+          expect(resources?.released).toBe(resources?.acquired);
+          const deadline = await scheduledAlarm(thread, namespace);
+
+          expect(deadline).toBeGreaterThanOrEqual(current + minimum);
+          expect(deadline).toBeLessThanOrEqual(current + maximum);
+          await runInDurableObject(stub(thread), (_instance, state) => {
+            state.abort("publication retry restart");
+          }).catch(() => undefined);
+          await runInDurableObject(stub(thread), (instance) =>
+            instance[DurableObject.RunSymbol](
+              ThreadMaintenance.use((maintenance) => maintenance.ensureAlarm),
+            ),
+          );
+          expect(await scheduledAlarm(thread, namespace)).toBe(deadline);
+          const state = await generation(thread);
+
+          expect(state.dirty).toBeGreaterThan(state.processed);
+          await advance(deadline! - current);
+          current = deadline!;
+        }
         publicationControls.delete(thread);
         await runDurableObjectAlarm(stub(thread));
         await quiesce(thread);
