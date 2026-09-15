@@ -1,5 +1,13 @@
 # effect-agent
 
+## 0.1.0-beta.93
+
+### Patch Changes
+
+- [#491](https://github.com/danieljvdm/effect-agent/pull/491) [`319c156`](https://github.com/danieljvdm/effect-agent/commit/319c156be5a85a2d490cf79531f94591881436f8) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Rename the in-memory runtime setup to `InMemory.layer` and clarify that conversations can span Runs for the lifetime of the application Scope.
+
+  BEHAVIOR CHANGE: Replace the `Ephemeral` root import with `InMemory` and the `effect-agent/ephemeral` module path with `effect-agent/in-memory`.
+
 ## 0.1.0-beta.92
 
 ### Patch Changes

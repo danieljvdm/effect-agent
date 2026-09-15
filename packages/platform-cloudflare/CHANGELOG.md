@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.93
+
+### Patch Changes
+
+- [#495](https://github.com/danieljvdm/effect-agent/pull/495) [`723642c`](https://github.com/danieljvdm/effect-agent/commit/723642c2ed7a12eb41f19dcaa84c5f2c08ae9b76) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose scoped browser acquisition so hosts can persist the cleanup identity before connection and page setup. Keep interrupted allocation cleanup bound to the exact provider session, and apply the configured initial viewport to the new page.
+
+- Updated dependencies [[`319c156`](https://github.com/danieljvdm/effect-agent/commit/319c156be5a85a2d490cf79531f94591881436f8)]:
+  - effect-agent@0.1.0-beta.93
+  - @effect-agent/storage-cloudflare@0.1.0-beta.93
+
 ## 0.1.0-beta.92
 
 ### Patch Changes

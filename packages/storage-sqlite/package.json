@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/storage-sqlite",
-  "version": "0.1.0-beta.92",
+  "version": "0.1.0-beta.93",
   "description": "Node SQLite persistence adapters for the Effect Agent durable runtime and optional memory lifecycle.",
   "license": "MIT",
   "repository": {
