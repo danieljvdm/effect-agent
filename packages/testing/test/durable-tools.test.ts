@@ -481,6 +481,147 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 };
 
 layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknown)", (it) => {
+  for (const location of ["turn:after-response-append", "turn:after-results-append"] as const) {
+    it.effect(
+      `recovers strict native argument rejection after ${location} without replaying actions`,
+      () =>
+        Effect.gen(function* () {
+          yield* resetReconciler;
+          yield* clearFailpoint;
+          const runtime = yield* DurableAgentRuntime;
+          const authorization = yield* ToolAuthorizationTestControl;
+
+          yield* authorization.reset;
+
+          const Search = Tool.make("strict_search", {
+            parameters: Schema.Struct({ query: Schema.NonEmptyString }),
+            success: Schema.String,
+            failureMode: "return",
+          });
+
+          const Action = Tool.make("record_search", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+          });
+
+          const tools = Toolkit.make(Search, Action);
+
+          const scripted = yield* makeScriptedModel((call) =>
+            call === 0
+              ? toolTurn(
+                  toolCall("invalid", Search.name, { query: "" }),
+                  toolCall("action", Action.name, {}),
+                )
+              : call === 1
+                ? toolTurn(toolCall("corrected", Search.name, { query: "sea" }))
+                : finalParts('"done"'),
+          );
+
+          const agent = Agent.withModel(
+            Agent.make(`strict-arguments-${location}`, {
+              input: Schema.String,
+              output: Schema.String,
+              instructions: "Correct the query, then finish.",
+              toolkit: tools,
+              policy: { maxTurns: 4, maxToolCalls: 4 },
+            }),
+            scripted.model,
+          );
+
+          const searches: Array<string> = [];
+          let actions = 0;
+
+          const handlers = tools.toLayer({
+            strict_search: ({ query }) =>
+              Effect.sync(() => {
+                searches.push(query);
+
+                return query;
+              }),
+            record_search: () =>
+              Effect.sync(() => {
+                actions++;
+
+                return "recorded";
+              }),
+          });
+
+          const thread = `strict-arguments-${location}`;
+          const receipt = yield* runtime.submit(agent, "search", submitOptions(thread, thread));
+
+          yield* armFailpoint(location);
+
+          const first = yield* runtime
+            .processThread(agent, receipt.threadId)
+            .pipe(Effect.provide(handlers), Effect.exit);
+
+          expect(failureTag(first)).toBe("DurableRuntimeFailpointError");
+          expect(searches).toEqual([]);
+          expect(actions).toBe(location === "turn:after-response-append" ? 0 : 1);
+          const interrupted = yield* readLog(thread);
+
+          expect(
+            interrupted.find(({ record }) => record.payload._tag === "ModelResponseRecorded")
+              ?.record.payload,
+          ).toMatchObject({
+            toolParameterRejections: [
+              {
+                toolCallId: "invalid",
+                parameters: { query: "" },
+                error: { _tag: "AiError", reason: { _tag: "ToolParameterValidationError" } },
+              },
+            ],
+          });
+          yield* clearFailpoint;
+          yield* runtime.runRecovery;
+
+          const completed = yield* runtime
+            .processThread(agent, receipt.threadId)
+            .pipe(Effect.provide(handlers));
+
+          expect(completed[0]?.outcome).toBe("completed");
+          expect(yield* lookupState(receipt.submissionId)).toBe("settled");
+          expect(searches).toEqual(["sea"]);
+          expect(actions).toBe(1);
+          expect((yield* authorization.requests).map(({ call }) => call.toolCallId)).toEqual([
+            "action",
+            "corrected",
+          ]);
+          const records = yield* readLog(thread);
+
+          expect(
+            records
+              .filter(({ record }) => record.payload._tag === "ToolCallPrepared")
+              .map(({ record }) =>
+                record.payload._tag === "ToolCallPrepared" ? record.payload.toolCallId : "",
+              ),
+          ).toEqual(["action", "corrected"]);
+          const prompt = yield* promptFromCanonicalRecords(records);
+
+          const failures = prompt.content
+            .flatMap((message) => (message.role === "tool" ? message.content : []))
+            .filter((part) => part.type === "tool-result" && part.id === "invalid");
+
+          expect(failures).toHaveLength(1);
+          expect(failures[0]).toMatchObject({
+            isFailure: true,
+            result: {
+              _tag: "AiError",
+              reason: { _tag: "ToolParameterValidationError", toolName: "strict_search" },
+            },
+          });
+          expect(scripted.prompts).toHaveLength(3);
+          expect(
+            scripted.prompts[1]?.content.flatMap((message) =>
+              message.role === "tool" ? message.content : [],
+            ),
+          ).toEqual(
+            expect.arrayContaining([expect.objectContaining({ id: "invalid", isFailure: true })]),
+          );
+        }),
+    );
+  }
+
   for (const location of [
     "update:before-canonical-append",
     "update:after-canonical-append",

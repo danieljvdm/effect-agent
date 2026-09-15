@@ -1,6 +1,31 @@
 import * as Schema from "effect/Schema";
+import { AiError } from "effect/unstable/ai";
 
+import { ToolCallId } from "./Identifiers.ts";
 import { codePointUtf8Length, utf8ByteLength } from "./internal/utf8.ts";
+
+/**
+ * Engine-owned evidence that a fresh model call failed parameter validation.
+ * Retain the exact JSON arguments beside the native error so recovery can distinguish
+ * a rejected request from damaged executable parameters. This never authorizes execution.
+ */
+export const ToolParameterRejection = Schema.Struct({
+  toolCallId: ToolCallId,
+  toolName: Schema.NonEmptyString,
+  parameters: Schema.Json,
+  error: Schema.toEncoded(
+    Schema.Struct({
+      ...AiError.AiError.fields,
+      reason: AiError.ToolParameterValidationError,
+    }),
+  ),
+}).check(
+  Schema.makeFilter((rejection) => rejection.toolName === rejection.error.reason.toolName, {
+    expected: "parameter rejection for the declared Tool",
+  }),
+);
+
+export type ToolParameterRejection = typeof ToolParameterRejection.Type;
 
 /**
  * The minimal `TruncatedToolResult` envelope (empty head/tail, a 16-digit

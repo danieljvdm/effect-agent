@@ -201,7 +201,7 @@ tasks against eager exposure before claiming a performance improvement.
 ## Run batches deterministically {#batch-execution}
 
 The runtime validates the complete model response before starting any handler. It resolves tool
-names, decodes parameters, checks budgets, and obtains approvals for the whole batch.
+names, validates parameters, checks budgets, and obtains approvals for executable calls in the whole batch.
 
 It bounds both active call streams and handler execution by the resolved concurrency, using scoped
 child fibers and a finite Effect `Semaphore`. Pending calls do not allocate waiting stream fibers.
@@ -243,6 +243,23 @@ const researcher = Agent.make("researcher", {
 Agent.inspectTools(researcher);
 // [{ name: "search", failureMode: "return", requiresHandler: true }]
 ```
+
+With `failureMode: "return"`, invalid JSON arguments for a native application tool also produce
+a failed result containing Effect AI's `AiError` with reason `ToolParameterValidationError`. For
+example, `query: Schema.NonEmptyString` rejects `{ query: "" }` and lets the model submit a corrected
+query in the same run. The rejected call does not request approval, acquire execution authorization,
+or invoke the handler. It still counts toward tool-call and failure budgets and emits
+`ToolCallFailed` with `failureHandling: "returned-to-model"`, without `ToolCallStarted`.
+
+The default `failureMode: "error"`, unknown tools, malformed non-JSON response data, and invalid
+provider-executed parameters remain fatal. Valid transforming parameter codecs still supply decoded
+values to handlers and encoded values to history.
+
+Durable responses retain explicit rejection evidence tied to the original arguments. Recovery
+returns that failure without executing the rejected call; other recorded parameters still undergo
+strict validation and unfinished calls still require current authorization. Custom durability hooks
+must persist `RunTurnResponseCommit.toolParameterRejections` with the response and restore it through
+`RunTurnResume.toolParameterRejections`. A failed result by itself cannot excuse corrupt parameters.
 
 `Agent.inspectTools` accepts a Definition or Binding and reads its registered native toolkit without
 starting a run or acquiring services. It includes tools outside the current exposure. Provider-executed

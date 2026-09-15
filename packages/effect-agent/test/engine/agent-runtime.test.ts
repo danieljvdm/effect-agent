@@ -47,6 +47,7 @@ import {
 } from "effect-agent/run-options";
 import { TestClock } from "effect/testing";
 import { AiError, LanguageModel, Model, Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
+import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import { boundedValueFootprint } from "../../src/engine/internal/bounded-value.ts";
 import { errorMessage, errorTag } from "../../src/engine/internal/error-diagnostic.ts";
@@ -3702,6 +3703,184 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
+  it.effect(
+    "returns invalid native parameters to the model before approval or handler execution",
+    () =>
+      Effect.gen(function* () {
+        const starts: Array<string> = [];
+        const approvals: Array<string> = [];
+        const authorized: Array<string> = [];
+        const events: Array<RunEvent> = [];
+        const prompts: Array<Prompt.Prompt> = [];
+
+        const Search = Tool.make("strict_search", {
+          parameters: Schema.Struct({ query: Schema.NonEmptyString }),
+          success: Schema.String,
+          failureMode: "return",
+          needsApproval: true,
+        });
+
+        const tools = Toolkit.make(Search);
+        let turn = 0;
+
+        const model = Model.make(
+          "scripted",
+          "strict-parameters",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (request) => {
+                prompts.push(request.prompt);
+                expect(Tool.getJsonSchema(request.tools[0]!)).toEqual(Tool.getJsonSchema(Search));
+                const current = turn++;
+
+                return Stream.fromIterable<Response.StreamPartEncoded>(
+                  current < 2
+                    ? [
+                        {
+                          type: "tool-call",
+                          id: current === 0 ? "invalid" : "corrected",
+                          name: Search.name,
+                          params: { query: current === 0 ? "" : "sea" },
+                          providerExecuted: false,
+                        },
+                        { type: "finish", reason: "tool-calls", usage },
+                      ]
+                    : finalParts('{"answer":"found sea"}'),
+                );
+              },
+            }),
+          ),
+        );
+
+        const definition = Agent.make("strict-parameters", {
+          input: Schema.String,
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Correct rejected searches, then answer.",
+          toolkit: tools,
+          policy: { maxTurns: 3, maxToolCalls: 2 },
+        });
+
+        yield* AgentRuntime.stream(Agent.withModel(definition, model), "search", {
+          approval: {
+            request: ({ toolCallId }) =>
+              Effect.sync(() => {
+                approvals.push(toolCallId);
+
+                return { _tag: "approved" as const };
+              }),
+          },
+          toolAuthorization: {
+            authorize: ({ call }) =>
+              Effect.sync(() => {
+                authorized.push(call.toolCallId);
+
+                return { _tag: "allowed" as const };
+              }),
+          },
+        }).pipe(
+          Stream.tap((event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+          ),
+          Stream.runDrain,
+          Effect.provide(
+            tools.toLayer({
+              strict_search: ({ query }) =>
+                Effect.sync(() => {
+                  starts.push(query);
+
+                  return `found ${query}`;
+                }),
+            }),
+          ),
+        );
+        expect(starts).toEqual(["sea"]);
+        expect(approvals).toEqual(["corrected"]);
+        expect(authorized).toEqual(["corrected"]);
+        expect(
+          events
+            .filter((event) => event._tag === "ToolCallStarted")
+            .map((event) => event.toolCallId),
+        ).toEqual(["corrected"]);
+        expect(events.find((event) => event._tag === "ToolCallFailed")).toMatchObject({
+          toolCallId: "invalid",
+          errorTag: "AiError",
+          failureHandling: "returned-to-model",
+        });
+
+        const failure = prompts[1]?.content
+          .flatMap((message) => (message.role === "tool" ? message.content : []))
+          .find((part) => part.type === "tool-result");
+
+        expect(failure).toMatchObject({
+          isFailure: true,
+          result: {
+            _tag: "AiError",
+            reason: { _tag: "ToolParameterValidationError", toolName: "strict_search" },
+          },
+        });
+        expect(events.at(-1)).toMatchObject({
+          _tag: "RunCompleted",
+          output: { answer: "found sea" },
+        });
+      }),
+  );
+
+  it.effect("never recovers invalid provider-executed parameters as a local Tool failure", () =>
+    Effect.gen(function* () {
+      const Search = Tool.make("strict_search", {
+        parameters: Schema.Struct({ query: Schema.NonEmptyString }),
+        success: Schema.String,
+        failureMode: "return",
+      });
+
+      const tools = Toolkit.make(Search);
+
+      const definition = Agent.make("provider-parameter-validation", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Search.",
+        toolkit: tools,
+      });
+
+      const model = modelFromParts([
+        {
+          type: "tool-call",
+          id: "hosted-invalid",
+          name: Search.name,
+          params: { query: "" },
+          providerExecuted: true,
+        },
+        ...finalParts('"unreachable"'),
+      ]);
+
+      const events: Array<RunEvent> = [];
+
+      const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), "search").pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            events.push(event);
+          }),
+        ),
+        Stream.runDrain,
+        Effect.provide(
+          tools.toLayer({
+            strict_search: () => Effect.die("Provider call reached a local handler"),
+          }),
+        ),
+        Effect.exit,
+      );
+
+      expect(failureFrom(exit)).toBeInstanceOf(ModelProtocolError);
+      expect(
+        events.some((event) => event._tag === "ToolCallFailed" || event._tag === "ToolCallStarted"),
+      ).toBe(false);
+    }),
+  );
+
   it.effect("preflights the complete Tool batch before starting any handler", () =>
     Effect.gen(function* () {
       const starts = yield* Ref.make(0);
@@ -3786,6 +3965,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
     const Increment = Tool.make("increment", {
       parameters: Schema.Struct({
+        optional: Schema.optionalKey(Schema.String),
         value: Schema.FiniteFromString.pipe(
           Schema.decode({
             decode: SchemaGetter.transformEffect((value) =>
@@ -3798,6 +3978,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         ),
       }),
       success: Schema.Struct({ value: Schema.Finite }),
+      failureMode: "return",
     });
 
     const tools = Toolkit.make(Increment);
@@ -3826,6 +4007,19 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                       )?.result;
                     }
 
+                    // Exercise the same provider codec normalization as OpenAI, including
+                    // nullable optional fields, before the real LanguageModel response decoder.
+                    const transport = request.tools[0]!;
+                    const transportParameters = Schema.toEncoded(transport.parametersSchema);
+                    const providerCodec = toCodecOpenAI(transportParameters).codec;
+
+                    const normalized = Schema.decodeSync(providerCodec)({
+                      value: "41",
+                      optional: null,
+                    });
+
+                    const params = Schema.encodeUnknownSync(transportParameters)(normalized);
+
                     return Stream.fromIterable<Response.StreamPartEncoded>(
                       value === 0
                         ? [
@@ -3833,7 +4027,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
                               type: "tool-call",
                               id: "increment-1",
                               name: "increment",
-                              params: { value: "41" },
+                              params,
                               providerExecuted: false,
                             },
                             { type: "finish", reason: "tool-calls", usage },

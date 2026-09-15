@@ -1457,22 +1457,29 @@ describe("review output boundary", () => {
     { incomplete: true },
     { blockedOn: "" },
     { blockedOn: "x".repeat(2_001) },
-  ])("PRR-002 rejects malformed native completion without retrying: %j", (submission) =>
+  ])("PRR-002 lets the model correct malformed native completion: %j", (submission) =>
     Effect.gen(function* () {
-      const calls = yield* Ref.make(0);
+      let calls = 0;
 
-      const model = scriptedModel(() =>
-        Stream.unwrap(
-          Ref.update(calls, (count) => count + 1).pipe(Effect.as(response(submission))),
-        ),
-      );
+      const model = scriptedModel((prompt) => {
+        calls += 1;
+        if (calls === 1) return response(submission);
+
+        expect(completionResult(prompt)).toMatchObject({
+          isFailure: true,
+          result: { reason: { _tag: "ToolParameterValidationError", toolName: "submit_review" } },
+        });
+
+        return response({});
+      });
 
       const result = yield* makeReviewer({ model })
         .review(request)
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-      expect(Result.isFailure(result) && result.failure._tag).toBe("AiError");
-      expect(yield* Ref.get(calls)).toBe(1);
+      expect(result.incomplete).toBeUndefined();
+      expect(result.report.findings).toEqual([]);
+      expect(calls).toBe(2);
     }),
   );
 
@@ -1482,8 +1489,17 @@ describe("review output boundary", () => {
       Effect.gen(function* () {
         let calls = 0;
 
-        const model = scriptedModel(() => {
+        const model = scriptedModel((prompt) => {
           calls += 1;
+
+          if (calls === 3) {
+            expect(completionResult(prompt)).toMatchObject({
+              isFailure: true,
+              result: { reason: { _tag: "ToolParameterValidationError" } },
+            });
+
+            return response({});
+          }
 
           return calls === 1
             ? Stream.fromIterable([
@@ -1516,11 +1532,13 @@ describe("review output boundary", () => {
           .review(request)
           .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-        expect(calls).toBe(2);
-        expect(outcome.incomplete).toBe(true);
+        expect(calls).toBe(failure === "resolution" ? 2 : 3);
+        expect(outcome.incomplete).toBe(failure === "resolution" ? true : undefined);
         expect(outcome.exhausted).toBeUndefined();
         expect(outcome.report.findings).toEqual([blocker]);
-        expect(outcome.report.summary).toContain("remaining change has not been verified");
+        if (failure === "resolution") {
+          expect(outcome.report.summary).toContain("remaining change has not been verified");
+        }
       }),
   );
 
@@ -2083,13 +2101,34 @@ new mode 100755`;
     }),
   );
 
-  it.effect("rejects oversized notes at the native tool schema boundary", () =>
+  it.effect("rejects oversized notes without changing saved notes and allows correction", () =>
     Effect.gen(function* () {
       let calls = 0;
 
       const result = yield* makeReviewer({
-        model: scriptedModel(() => {
+        model: scriptedModel((prompt) => {
           calls += 1;
+
+          const status = prompt.content
+            .flatMap((message) => (message.role === "tool" ? message.content : []))
+            .findLast((part) => part.type === "tool-result" && part.name === "review_status");
+
+          if (calls === 2) {
+            expect(status).toMatchObject({
+              isFailure: true,
+              result: { reason: { _tag: "ToolParameterValidationError" } },
+            });
+
+            return toolResponse([{ name: "review_status", params: {} }]);
+          }
+          if (calls === 3) {
+            expect(status).toMatchObject({
+              isFailure: false,
+              result: { notes: { text: "", revision: 0 } },
+            });
+
+            return response({});
+          }
 
           return toolResponse([
             {
@@ -2100,10 +2139,11 @@ new mode 100755`;
         }),
       })
         .review(request)
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.result);
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
 
-      expect(Result.isFailure(result) && result.failure._tag).toBe("AiError");
-      expect(calls).toBe(1);
+      expect(result.incomplete).toBeUndefined();
+      expect(result.notesUpdates).toBe(0);
+      expect(calls).toBe(3);
     }),
   );
 

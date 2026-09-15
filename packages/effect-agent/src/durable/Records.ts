@@ -30,6 +30,7 @@ import {
   ToolExecutionKind,
 } from "../core/SubagentContract.ts";
 import { Selection, Snapshot } from "../core/ToolExposure.ts";
+import { ToolParameterRejection } from "../core/ToolResult.ts";
 import { ModelCallUsage, RunUsageSummary, RunTotals } from "../core/Usage.ts";
 import { WorkerBudgetScope, WorkerRef, WorkerSource } from "../core/Worker.ts";
 import { ContextHandoff } from "../engine/ContextWindow.ts";
@@ -282,6 +283,8 @@ export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
  * `messagesDigest` pins the exact encoded content.
  */
 const ModelResponseRecordedFields = Schema.Struct({
+  /** Explicit pre-execution failures, committed with the original arguments before any approval. */
+  toolParameterRejections: Schema.optionalKey(Schema.Array(ToolParameterRejection)),
   toolExposure: Schema.optionalKey(Snapshot),
   runId: RunId,
   turnId: TurnId,

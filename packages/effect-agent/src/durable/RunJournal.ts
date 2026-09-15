@@ -5,6 +5,7 @@ import { ThreadId, RunId, ToolCallId, TurnId, type SubmissionId } from "../core/
 import { type ExhaustedLimit } from "../core/RunEvent.ts";
 import { RunPolicyUsage } from "../core/RunPolicyUsage.ts";
 import { type Selection, type Snapshot } from "../core/ToolExposure.ts";
+import type { ToolParameterRejection } from "../core/ToolResult.ts";
 import { ModelCallUsage, summarizeModelUsage, type RunUsageSummary } from "../core/Usage.ts";
 import {
   CLEARED_TOOL_RESULT,
@@ -1151,6 +1152,7 @@ const validStagedUsage = (label: string, value: number): Effect.Effect<number, R
       );
 
 export interface TurnCommitInput {
+  readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;
   readonly toolSelections?: ReadonlyMap<string, Selection> | undefined;
   readonly budgetRejectedCalls?: ReadonlySet<string>;
@@ -1292,6 +1294,9 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
     createdAt: input.createdAt,
     deploymentId: input.deploymentId,
     payload: ModelResponseRecorded.make({
+      ...(input.toolParameterRejections === undefined || input.toolParameterRejections.length === 0
+        ? {}
+        : { toolParameterRejections: input.toolParameterRejections }),
       ...(input.toolExposure === undefined ? {} : { toolExposure: input.toolExposure }),
       runId: input.runId,
       turnId: input.turnId,
