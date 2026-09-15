@@ -15,9 +15,11 @@ import { afterEach, beforeEach, vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 
-const sdk = vi.hoisted(() => ({ launch: vi.fn<() => Promise<object>>() }));
+const sdk = vi.hoisted(() => ({ connect: vi.fn<() => Promise<object>>() }));
 
-vi.mock("@cloudflare/puppeteer", () => ({ default: sdk }));
+vi.mock("@cloudflare/puppeteer", () => ({
+  default: { ...sdk, acquire: async () => ({ sessionId: "actions-test" }) },
+}));
 
 // Node's virtual timers cover the SDK boundary's quiet/deadline windows without
 // sleeps. Public handles still run in Effect; only the remote SDK is replaced.
@@ -101,7 +103,7 @@ const fixture = (
     },
   };
 
-  sdk.launch.mockResolvedValue({
+  sdk.connect.mockResolvedValue({
     createBrowserContext: async () => ({ newPage: async () => page, close: async () => {} }),
     sessionId: () => "actions-test",
     isConnected: () => true,

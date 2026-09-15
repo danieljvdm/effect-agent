@@ -13,9 +13,11 @@ import { expectTypeOf, vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 
-const sdk = vi.hoisted(() => ({ launch: vi.fn<(...args: Array<unknown>) => Promise<object>>() }));
+const sdk = vi.hoisted(() => ({ connect: vi.fn<(...args: Array<unknown>) => Promise<object>>() }));
 
-vi.mock("@cloudflare/puppeteer", () => ({ default: sdk }));
+vi.mock("@cloudflare/puppeteer", () => ({
+  default: { ...sdk, acquire: async () => ({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }) },
+}));
 
 const unusedRpc = async (): Promise<Response> => {
   throw new Error("The mocked SDK must not call Browser Run");
@@ -39,7 +41,7 @@ const open = Effect.gen(function* () {
 describe("Browser Run viewport boundary", () => {
   it.effect("assembles generic browser access without host controls or an eager launch", () =>
     Effect.gen(function* () {
-      sdk.launch.mockClear();
+      sdk.connect.mockClear();
 
       const live = CloudflareInteractiveBrowser.layer({
         browser,
@@ -59,7 +61,7 @@ describe("Browser Run viewport boundary", () => {
       );
 
       expect(service.open).toBeTypeOf("function");
-      expect(sdk.launch).not.toHaveBeenCalled();
+      expect(sdk.connect).not.toHaveBeenCalled();
     }),
   );
   it.effect.each([
@@ -104,7 +106,7 @@ describe("Browser Run viewport boundary", () => {
     { width: 800, height: 600, isLandscape: true },
   ])("rejects unsafe launch and resize requests without calling Puppeteer (%#)", (viewport) =>
     Effect.gen(function* () {
-      sdk.launch.mockClear();
+      sdk.connect.mockClear();
 
       const error = yield* BrowserRunInteractiveBinding.pipe(
         Effect.provide(
@@ -116,7 +118,7 @@ describe("Browser Run viewport boundary", () => {
       );
 
       expect(error).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
-      expect(sdk.launch).not.toHaveBeenCalled();
+      expect(sdk.connect).not.toHaveBeenCalled();
 
       const setViewport = vi.fn<(...args: Array<unknown>) => Promise<void>>(async () => {});
 
@@ -153,7 +155,7 @@ describe("Browser Run viewport boundary", () => {
     "forwards launch and resize presentation fields without emulation or navigation (%#)",
     (viewport) =>
       Effect.gen(function* () {
-        sdk.launch.mockClear();
+        sdk.connect.mockClear();
         const setViewport = vi.fn<(...args: Array<unknown>) => Promise<void>>(async () => {});
 
         mockBrowser(setViewport);
@@ -192,18 +194,14 @@ describe("Browser Run viewport boundary", () => {
         expect(cleanupCalls).toEqual([
           "DELETE /client/v4/accounts/1234567890abcdef1234567890abcdef/browser-rendering/devtools/browser/c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
         ]);
-        expect(sdk.launch).toHaveBeenCalledExactlyOnceWith(browser, {
-          keep_alive: 10_000,
-          ...(viewport === undefined
-            ? {}
-            : {
-                defaultViewport: {
-                  ...viewport,
-                  deviceScaleFactor: viewport.deviceScaleFactor ?? 1,
-                },
-              }),
-        });
+        expect(sdk.connect).toHaveBeenCalledExactlyOnceWith(
+          browser,
+          "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
+        );
         expect(setViewport.mock.calls).toEqual([
+          ...(viewport === undefined
+            ? []
+            : [[{ ...viewport, deviceScaleFactor: viewport.deviceScaleFactor ?? 1 }]]),
           [{ width: 960, height: 720, deviceScaleFactor: 2 }],
           [{ width: 1_440, height: 900, deviceScaleFactor: 1 }],
         ]);
@@ -223,7 +221,7 @@ const mockBrowser = (setViewport: (viewport: unknown) => Promise<void>) => {
     off: () => {},
   };
 
-  sdk.launch.mockResolvedValue({
+  sdk.connect.mockResolvedValue({
     createBrowserContext: async () => ({ newPage: async () => page, close: async () => {} }),
     sessionId: () => "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
     isConnected: () => true,

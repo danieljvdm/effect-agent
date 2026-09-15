@@ -13,9 +13,11 @@ import { vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 
-const sdk = vi.hoisted(() => ({ launch: vi.fn<() => Promise<object>>() }));
+const sdk = vi.hoisted(() => ({ connect: vi.fn<() => Promise<object>>() }));
 
-vi.mock("@cloudflare/puppeteer", () => ({ default: sdk }));
+vi.mock("@cloudflare/puppeteer", () => ({
+  default: { ...sdk, acquire: async () => ({ sessionId: "fill-regression" }) },
+}));
 
 // Only the SDK transport is replaced: fill runs the production element callback.
 const nativeLayer = (element: object) => {
@@ -39,7 +41,7 @@ const nativeLayer = (element: object) => {
     off: () => {},
   };
 
-  sdk.launch.mockResolvedValue({
+  sdk.connect.mockResolvedValue({
     createBrowserContext: async () => ({
       newPage: async () => page,
       close: async () => {},

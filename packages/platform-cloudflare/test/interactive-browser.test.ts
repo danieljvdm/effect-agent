@@ -378,13 +378,14 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
   };
 
   const binding: BrowserRunInteractiveBinding["Service"] = {
-    launch: async (keepAlive) => {
-      calls.push("binding.launch");
+    acquire: async (keepAlive) => {
+      calls.push("binding.acquire");
       keepAliveMillis.push(keepAlive);
       if (options.launchError !== undefined) throw options.launchError;
 
-      return options.launch === undefined ? browser : options.launch(browser);
+      return (options.launch === undefined ? browser : await options.launch(browser)).sessionId();
     },
+    connect: async () => browser,
     closeSession: (sessionId) =>
       Effect.sync(() => {
         calls.push(`binding.terminate:${Redacted.value(sessionId)}`);
@@ -471,6 +472,64 @@ const expectResourcesClosedOnce = (fixture: Fixture): void => {
 const awaitPromise = <A>(promise: Promise<A>): Effect.Effect<A> => Effect.promise(() => promise);
 
 describe("Browser Run interactive browser adapter", () => {
+  // Regression evidence: https://github.com/reve-ai/kommunikasie/commit/7d8a794bc4
+  // A failed open stranded the durable owner without the identity needed for cleanup.
+  it.effect.each(["connect", "context", "interception"] as const)(
+    "retains cleanup identity before a failing %s and never reconnects it",
+    (stage) =>
+      Effect.gen(function* () {
+        const failure = new Error("private startup failure");
+
+        const base = makeFixture({
+          ...(stage === "context" ? { createContextError: failure } : {}),
+          ...(stage === "interception" ? { interceptionError: failure } : {}),
+        });
+
+        let connections = 0;
+
+        const fixture: Fixture = {
+          ...base,
+          binding: {
+            ...base.binding,
+            connect: async (id) => {
+              connections++;
+              if (stage === "connect") throw failure;
+
+              return base.binding.connect(id);
+            },
+          },
+        };
+
+        const acquired = yield* withHost(fixture, (host) =>
+          Effect.gen(function* () {
+            const acquired = yield* host.acquire(policy());
+
+            expect(Redacted.value(acquired.sessionId)).toBe("session-id");
+            expect(connections).toBe(0);
+            expect(fixture.calls).toEqual(["binding.acquire"]);
+            const first = yield* Effect.flip(acquired.connect);
+
+            expect(first).toMatchObject({
+              _tag: "InteractiveBrowserProtocolError",
+              cause: failure,
+            });
+            expect(yield* Effect.flip(acquired.connect)).toBe(first);
+
+            return acquired;
+          }),
+        );
+
+        expect(connections).toBe(1);
+        expect(
+          fixture.calls.filter((call) => call === "binding.terminate:session-id"),
+        ).toHaveLength(1);
+        expect(yield* Effect.flip(acquired.connect)).toMatchObject({
+          _tag: "InteractiveBrowserExpiredError",
+        });
+        expect(connections).toBe(1);
+      }),
+  );
+
   it.effect(
     "resizes before and after action exhaustion without spending or restoring actions",
     () =>
@@ -820,7 +879,7 @@ describe("Browser Run interactive browser adapter", () => {
       );
 
       expect(error).toMatchObject({ _tag: "InteractiveBrowserPolicyDeniedError" });
-      expect(malformed.calls).not.toContain("binding.launch");
+      expect(malformed.calls).not.toContain("binding.acquire");
     }),
   );
 
@@ -1095,9 +1154,6 @@ describe("Browser Run interactive browser adapter", () => {
 
           return browserGate.promise;
         },
-        remoteClose: async (target) => {
-          if (target === "browser") cleanupGate.resolve(undefined);
-        },
       });
 
       const fixture: Fixture = {
@@ -1108,6 +1164,7 @@ describe("Browser Run interactive browser adapter", () => {
             Effect.gen(function* () {
               cleanupTimes.push(yield* Clock.currentTimeMillis);
               yield* base.binding.closeSession(sessionId);
+              cleanupGate.resolve(undefined);
             }),
         },
       };
@@ -1123,7 +1180,7 @@ describe("Browser Run interactive browser adapter", () => {
       expect(fixture.calls.filter((call) => call === "binding.terminate:session-id")).toHaveLength(
         1,
       );
-      expect(closedResources(fixture)).toEqual(["browser.close"]);
+      expect(closedResources(fixture)).toEqual([]);
     }),
   );
 
@@ -1157,7 +1214,8 @@ describe("Browser Run interactive browser adapter", () => {
       browserGate.resolve(browserFixture.browser);
       yield* Effect.yieldNow;
       yield* Effect.yieldNow;
-      expect(closedResources(browserFixture)).toEqual(["browser.close"]);
+      expect(browserFixture.calls).toContain("binding.terminate:session-id");
+      expect(closedResources(browserFixture)).toEqual([]);
 
       const contextGate = makeGate<void>();
 
@@ -1792,7 +1850,7 @@ describe("Browser Run interactive browser adapter", () => {
           {},
         ]);
         expect(fixture.calls.filter((call) => call === "cdp.close")).toHaveLength(3);
-        expect(fixture.calls.filter((call) => call === "binding.launch")).toHaveLength(1);
+        expect(fixture.calls.filter((call) => call === "binding.acquire")).toHaveLength(1);
         expect(fixture.calls.filter((call) => call === "context.newPage")).toHaveLength(1);
         expect(
           fixture.calls.filter((call) => call === `request.continue:${resource}`),
