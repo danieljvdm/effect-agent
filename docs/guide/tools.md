@@ -88,10 +88,24 @@ Default search matches every whitespace-separated query term, ignoring case, aga
 descriptions, methods and namespace hints, with deterministic catalogue-ID ordering. Namespaces
 come from `ToolNamespace` annotations or Code Mode's allowlist, never from parsing a tool name.
 Namespace hints appear only on eligible matches. Queries are bounded to 512 characters and exact
-namespace filters to 128. The default returns at most eight matches and 32 KiB of complete encoded
-JSON; limits can rise to 64 matches and 256 KiB. Oversized documentation fails with
-`ToolDiscoveryError` rather than returning broken schemas. Provider-defined tools are not ordinary
-callable schemas and cannot be documented by this capability.
+namespace filters to 128. The default considers at most eight matches and returns at most 32 KiB
+of complete encoded JSON; limits can rise to 64 matches and 256 KiB. `maxResultBytes` measures
+UTF-8 bytes of the whole discovery result, including metadata, schemas, `toolNames`, JSON escaping,
+and any recovery `notice`. It is a host budget, not a provider requirement; size it against the
+actual catalogue. The engine's tool-result and exposed-schema limits apply separately.
+
+When the first `maxResults` candidates exceed that byte budget, discovery retains complete
+matches in rank order whenever they fit, skipping larger matches and trying later candidates
+within that count. It returns a successful result with a `notice` advising a narrower search or
+namespace. Schemas are never cut, and omitted matches do not activate tools. If no match fits,
+the result is `{ toolNames: [], matches: [], notice: "..." }`; the model can continue, but the
+empty selection clears non-pinned tools. If a single tool still cannot fit, the notice advises
+asking the host to increase `maxResultBytes`.
+
+Byte overflow no longer emits `ToolDiscoveryError` with reason `limit-exceeded`. Invalid
+catalogues, invalid selected schemas, and custom-search failures still propagate as errors.
+Provider-defined tools are not ordinary callable schemas and cannot be documented by this
+capability.
 
 ### Supply application search
 

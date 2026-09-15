@@ -8,6 +8,7 @@ import { IdGenerator } from "effect-agent/id-generator";
 import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
 import { SubagentGrant } from "effect-agent/subagent-contract";
 import { ThreadHistory } from "effect-agent/thread-history";
+import * as ToolDiscovery from "effect-agent/tool-discovery";
 import {
   AdditionalToolCatalog,
   DiscoveryTool,
@@ -120,6 +121,164 @@ const failure = <E>(exit: Exit.Exit<unknown, E>) =>
   Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined;
 
 layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", (it) => {
+  // Regression: https://github.com/danieljvdm/effect-agent/issues/496
+  for (const budget of ["aggregate", "single"] as const) {
+    it.effect(`continues after ${budget} discovery overflow with only documented selections`, () =>
+      Effect.gen(function* () {
+        const documentation = "東京".repeat(64);
+
+        const ReadDocument = Tool.make("read", {
+          description: "Read café 東京 😀",
+          parameters: Schema.Struct({
+            key: Schema.String.annotate({ description: documentation }),
+          }),
+          success: Schema.NumberFromString,
+        });
+
+        const WriteDocument = Tool.make("write", {
+          parameters: ReadDocument.parametersSchema,
+          success: Schema.String,
+        });
+
+        const HostHidden = Tool.make("host_hidden", { success: Schema.String });
+        const GrantHidden = Tool.make("grant_hidden", { success: Schema.String });
+        const maxResultBytes = budget === "aggregate" ? 1_024 : 256;
+        let finalized = 0;
+
+        const discovery = ToolDiscovery.make({
+          maxResultBytes,
+          search: (_request, catalogue) =>
+            Effect.gen(function* () {
+              expect(catalogue.map((entry) => entry.name)).toEqual([
+                "discover_tools",
+                "read",
+                "status",
+                "write",
+              ]);
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  finalized++;
+                }),
+              );
+
+              return budget === "aggregate" ? ["native:read", "native:write"] : ["native:read"];
+            }),
+        });
+
+        const actions = Toolkit.make(ReadDocument, WriteDocument, Status, HostHidden, GrantHidden);
+
+        const agent = Agent.make("bounded-discovery", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Discover and use tools.",
+          toolkit: Toolkit.merge(actions, discovery.toolkit),
+          toolExposure: { initialToolNames: ["write"] },
+        });
+
+        let turn = 0;
+        const invoked: Array<string> = [];
+
+        const model = Model.make(
+          "test",
+          "bounded-discovery",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (options) => {
+                if (turn++ === 0)
+                  return Stream.fromIterable([
+                    call("find", "discover_tools", { query: "read" }),
+                    finish,
+                  ]);
+                if (turn === 2) {
+                  const results = options.prompt.content.flatMap((message) =>
+                    message.role === "tool" ? message.content : [],
+                  );
+
+                  const result = results.find((part) => part.type === "tool-result");
+
+                  expect(result).toMatchObject({ id: "find", isFailure: false });
+                  const decoded = Schema.decodeUnknownSync(ToolDiscovery.Result)(result?.result);
+
+                  expect(
+                    new TextEncoder().encode(JSON.stringify(result?.result)).length,
+                  ).toBeLessThanOrEqual(maxResultBytes);
+                  expect(decoded).toMatchObject({
+                    toolNames: budget === "aggregate" ? ["read"] : [],
+                    notice: expect.stringMatching(/narrow.*search/i),
+                  });
+                  expect(decoded.matches.map((match) => match.name)).toEqual(decoded.toolNames);
+                  if (budget === "aggregate")
+                    expect(decoded.matches).toMatchObject([
+                      {
+                        parameters: {
+                          properties: { key: { type: "string", description: documentation } },
+                        },
+                        success: { type: "string" },
+                      },
+                    ]);
+                  expect(options.tools.map((tool) => tool.name).toSorted()).toEqual(
+                    budget === "aggregate"
+                      ? ["discover_tools", "read", "status"]
+                      : ["discover_tools", "status"],
+                  );
+
+                  return Stream.fromIterable([
+                    budget === "aggregate"
+                      ? call("use", "read", { key: "record" })
+                      : call("use", "status"),
+                    finish,
+                  ]);
+                }
+
+                return Stream.fromIterable(done);
+              },
+            }),
+          ),
+        );
+
+        const result = yield* AgentRuntime.run(Agent.withModel(agent, model), "go", {
+          subagentGrant: SubagentGrant.make({
+            allowedToolNames: ["discover_tools", "read", "write", "status", "host_hidden"],
+            maxDepth: 1,
+          }),
+          delegationDepth: 1,
+        }).pipe(
+          Effect.provideService(RunToolVisibility, {
+            visible: ({ toolNames }) =>
+              Effect.succeed(toolNames.filter((name) => name !== "host_hidden")),
+          }),
+          Effect.provide([
+            discovery.handlers,
+            actions.toLayer({
+              read: () =>
+                Effect.sync(() => {
+                  invoked.push("read");
+
+                  return 1;
+                }),
+              status: () =>
+                Effect.sync(() => {
+                  invoked.push("status");
+
+                  return "ok";
+                }),
+              write: () => Effect.die("Undocumented tool must not execute"),
+              host_hidden: () => Effect.die("Host-hidden tool must not execute"),
+              grant_hidden: () => Effect.die("Grant-hidden tool must not execute"),
+            }),
+          ]),
+        );
+
+        expect(result.output).toBe("done");
+        expect(turn).toBe(3);
+        expect(invoked).toEqual([budget === "aggregate" ? "read" : "status"]);
+        expect(finalized).toBe(1);
+      }),
+    );
+  }
+
   for (const authority of ["host", "grant"] as const) {
     it.effect(`keeps eligible pins across replacements while ${authority} hides another pin`, () =>
       Effect.gen(function* () {
