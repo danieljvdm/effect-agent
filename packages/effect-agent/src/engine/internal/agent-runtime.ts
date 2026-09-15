@@ -870,11 +870,6 @@ const inspectModelResponsePartCapacity = (
  * still exposes the original schema to providers and preserves their wire normalization.
  * No handler is installed or executed by this transport-only Toolkit.
  */
-const deferredToolParameterToolkits = new WeakMap<
-  Toolkit.Any,
-  Toolkit.Toolkit<Record<string, Tool.Any>>
->();
-
 const defersToolParameters = (tool: Tool.Any): boolean =>
   tool.failureMode === "return" &&
   !(Tool.isProviderDefined(tool) && !tool.requiresHandler) &&
@@ -887,11 +882,8 @@ const deferredToolParameterToolkit = <Tools extends Record<string, Tool.Any>>(
   // Toolkit's handler parameter variance is irrelevant to this resolution-disabled transport.
   if (!Object.values(toolkit.tools).some(defersToolParameters))
     return toolkit as unknown as Toolkit.Toolkit<Record<string, Tool.Any>>;
-  const cached = deferredToolParameterToolkits.get(toolkit);
 
-  if (cached !== undefined) return cached;
-
-  const deferred = Toolkit.make(
+  return Toolkit.make(
     ...Object.values(toolkit.tools).map((tool) =>
       !defersToolParameters(tool)
         ? tool
@@ -914,10 +906,6 @@ const deferredToolParameterToolkit = <Tools extends Record<string, Tool.Any>>(
           ),
     ),
   );
-
-  deferredToolParameterToolkits.set(toolkit, deferred);
-
-  return deferred;
 };
 
 /** Own fresh JSON arguments without accepting them as executable parameters. */
@@ -4837,7 +4825,6 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
 
         const rejection = yield* Schema.decodeUnknownEffect(ToolParameterRejection)({
           toolCallId,
-          toolName: part.name,
           parameters,
           error: encodedError,
         }).pipe(
@@ -7311,7 +7298,7 @@ const makeResumeTurn = <
         if (
           call === undefined ||
           call.providerExecuted ||
-          call.name !== rejection.toolName ||
+          call.name !== rejection.error.reason.toolName ||
           !sameJson(yield* decodeEventJson(call.params, "Tool parameters"), rejection.parameters) ||
           trace.toolParameterRejections.has(call.id) ||
           tools[call.name]?.failureMode !== "return"

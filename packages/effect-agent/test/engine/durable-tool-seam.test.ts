@@ -1543,7 +1543,6 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
 
       const rejection = yield* Schema.decodeUnknownEffect(ToolParameterRejection)({
         toolCallId: ToolCallId.make("call-x"),
-        toolName: "lookup",
         parameters: { key: 42 },
         error,
       });
@@ -1558,6 +1557,21 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           resume: {
             ...resume,
             toolParameterRejections: [{ ...rejection, parameters: { key: 43 } }],
+          },
+          message: "does not match recorded",
+        },
+        {
+          resume: {
+            ...resume,
+            toolParameterRejections: [
+              {
+                ...rejection,
+                error: {
+                  ...rejection.error,
+                  reason: { ...rejection.error.reason, toolName: "different-tool" },
+                },
+              },
+            ],
           },
           message: "does not match recorded",
         },

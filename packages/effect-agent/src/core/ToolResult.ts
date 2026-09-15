@@ -11,7 +11,6 @@ import { codePointUtf8Length, utf8ByteLength } from "./internal/utf8.ts";
  */
 export const ToolParameterRejection = Schema.Struct({
   toolCallId: ToolCallId,
-  toolName: Schema.NonEmptyString,
   parameters: Schema.Json,
   error: Schema.toEncoded(
     Schema.Struct({
@@ -19,11 +18,7 @@ export const ToolParameterRejection = Schema.Struct({
       reason: AiError.ToolParameterValidationError,
     }),
   ),
-}).check(
-  Schema.makeFilter((rejection) => rejection.toolName === rejection.error.reason.toolName, {
-    expected: "parameter rejection for the declared Tool",
-  }),
-);
+});
 
 export type ToolParameterRejection = typeof ToolParameterRejection.Type;
 
