@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.91
+
+### Patch Changes
+
+- [#484](https://github.com/danieljvdm/effect-agent/pull/484) [`f5ee0ad`](https://github.com/danieljvdm/effect-agent/commit/f5ee0ad2b369f0f218df7076a8600291b137778a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Require effect-cf 0.42.1 for correct Durable Object initialization ordering and native callback scheduling.
+
+- Updated dependencies [[`b60b07e`](https://github.com/danieljvdm/effect-agent/commit/b60b07e307dc366637f5247fb788b24b17c554eb)]:
+  - effect-agent@0.1.0-beta.91
+  - @effect-agent/storage-cloudflare@0.1.0-beta.91
+
 ## 0.1.0-beta.90
 
 ### Patch Changes

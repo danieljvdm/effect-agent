@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.91
+
+### Patch Changes
+
+- [#485](https://github.com/danieljvdm/effect-agent/pull/485) [`b60b07e`](https://github.com/danieljvdm/effect-agent/commit/b60b07e307dc366637f5247fb788b24b17c554eb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce CPU work for large SQL memory writes and receipt replay while preserving storage limits and receipt validation.
+
 ## 0.1.0-beta.90
 
 ## 0.1.0-beta.89
