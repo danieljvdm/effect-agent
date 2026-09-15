@@ -105,6 +105,7 @@ import {
 } from "../WorkerHost.ts";
 import {
   definitionDigestsEqual,
+  bindingSupports,
   resolveDefinitionBinding,
   type ResolvedBinding,
 } from "./agent-registration.ts";
@@ -390,9 +391,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     if (created?._tag !== "ThreadCreated") return yield* failure("start", "not-found");
 
     const binding = deps.bindings.find(
-      (entry) =>
-        entry.agentId === created.agentId &&
-        definitionDigestsEqual(entry.digests, created.definitions),
+      (entry) => entry.agentId === created.agentId && bindingSupports(entry, created.definitions),
     );
 
     const worker = current.records.find(
@@ -474,7 +473,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         : deps.bindings.find(
             (entry) =>
               entry.agentId === ownerSubmission.agentId &&
-              definitionDigestsEqual(entry.digests, ownerSubmission.agentDigests),
+              bindingSupports(entry, ownerSubmission.agentDigests),
           );
 
     const selectedBinding = ownerBinding ?? binding;
@@ -767,7 +766,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       const targetBinding = deps.bindings.find(
         (entry) =>
           entry.agentId === origin.worker.targetAgentId &&
-          definitionDigestsEqual(entry.digests, origin.targetDigests),
+          bindingSupports(entry, origin.targetDigests),
       );
 
       if (sourceBinding === undefined || targetBinding === undefined)
@@ -1041,14 +1040,13 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       const sourceBinding = deps.bindings.find(
         (entry) =>
-          entry.agentId === origin.source.agentId &&
-          definitionDigestsEqual(entry.digests, intent.sourceDigests),
+          entry.agentId === origin.source.agentId && bindingSupports(entry, intent.sourceDigests),
       );
 
       const targetBinding = deps.bindings.find(
         (entry) =>
           entry.agentId === origin.worker.targetAgentId &&
-          definitionDigestsEqual(entry.digests, origin.targetDigests),
+          bindingSupports(entry, origin.targetDigests),
       );
 
       const reports =
@@ -1082,7 +1080,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (
         source.binding === undefined ||
         source.submission === undefined ||
-        !definitionDigestsEqual(source.binding.digests, intent.sourceDigests)
+        !bindingSupports(source.binding, intent.sourceDigests)
       )
         return yield* failure("followUp", "declaration-unavailable");
 
@@ -1233,14 +1231,13 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       const sourceBinding = deps.bindings.find(
         (entry) =>
-          entry.agentId === origin.source.agentId &&
-          definitionDigestsEqual(entry.digests, intent.sourceDigests),
+          entry.agentId === origin.source.agentId && bindingSupports(entry, intent.sourceDigests),
       );
 
       const targetBinding = deps.bindings.find(
         (entry) =>
           entry.agentId === origin.worker.targetAgentId &&
-          definitionDigestsEqual(entry.digests, origin.targetDigests),
+          bindingSupports(entry, origin.targetDigests),
       );
 
       const reports =
@@ -1296,10 +1293,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         firstInput.admission.sourceSubmissionId,
       );
 
-      if (
-        source.binding === undefined ||
-        !definitionDigestsEqual(source.binding.digests, intent.sourceDigests)
-      )
+      if (source.binding === undefined || !bindingSupports(source.binding, intent.sourceDigests))
         return refused("declaration-unavailable");
 
       const sourceOriginRecord = source.current.records.find(
@@ -1698,7 +1692,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (origin === undefined) return yield* failure(operation, "not-found");
       if (
         origin.worker.delegationId !== worker.delegationId ||
-        !definitionDigestsEqual(origin.targetDigests, resolved.digests)
+        !bindingSupports(resolved, origin.targetDigests)
       )
         return yield* failure(operation, "worker-mismatch");
 
@@ -2405,9 +2399,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     if (created?._tag !== "ThreadCreated") return yield* failure("context", "not-found");
 
     const resolved = deps.bindings.find(
-      (entry) =>
-        entry.agentId === created.agentId &&
-        definitionDigestsEqual(entry.digests, created.definitions),
+      (entry) => entry.agentId === created.agentId && bindingSupports(entry, created.definitions),
     );
 
     if (resolved === undefined) return yield* failure("context", "declaration-unavailable");

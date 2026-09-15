@@ -21,7 +21,7 @@ import {
   type DurableWorkerFailure,
   type RecoveryReport,
 } from "effect-agent/durable-agent-runtime";
-import { ThreadId } from "effect-agent/identifiers";
+import { ThreadId, SubmissionId } from "effect-agent/identifiers";
 import { SubmissionLedger, type SubmissionSnapshot } from "effect-agent/submission-ledger";
 import {
   ThreadProjectionMaintenance,
@@ -320,6 +320,14 @@ const MaintenanceGeneration = Schema.BigIntFromString.check(
   Schema.isGreaterThanOrEqualToBigInt(0n),
 );
 
+class BindingRetry extends Schema.Class<BindingRetry>("BindingRetry")({
+  threadId: ThreadId,
+  submissionId: SubmissionId,
+  attempts: Schema.Natural,
+  notBefore: Schema.Finite,
+  reportedAt: Schema.Finite,
+}) {}
+
 /** Versioned, platform-private maintenance state stored through Durable Object KV. */
 class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
   "@effect-agent/platform-cloudflare/ThreadMaintenanceState",
@@ -330,6 +338,7 @@ class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
   nonterminal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** One physical-owner cursor; old single-lane records need no conversion. */
   lastServedThreadId: Schema.optionalKey(ThreadId),
+  bindingRetries: Schema.optionalKey(Schema.Array(BindingRetry)),
 }) {}
 
 const MAINTENANCE_STATE_KEY = "effect-agent:thread-maintenance:v1";
@@ -779,43 +788,93 @@ export class ThreadMaintenance extends Context.Service<
           .map((head) => head.threadId)
           .sort();
 
-        let selected = eligible[0];
+        const selectionTime = yield* Clock.currentTimeMillis;
 
-        if (heads.size > 1 && selected !== undefined) {
-          yield* failpoint.hit("maintenance:select:before");
-          selected = yield* runTransaction("select maintenance lane", () =>
-            ctx.storage.transaction(async (transaction) => {
-              const { state } = await readMaintenanceState(transaction);
+        yield* failpoint.hit("maintenance:select:before");
 
-              const next =
-                eligible.find(
-                  (threadId) =>
-                    state.lastServedThreadId === undefined || threadId > state.lastServedThreadId,
-                ) ?? eligible[0];
+        const selection = yield* runTransaction("select maintenance lane", () =>
+          ctx.storage.transaction(async (transaction) => {
+            const { state } = await readMaintenanceState(transaction);
 
-              if (next !== undefined) {
-                // Persist before the Attempt so an eviction or repeated yield cannot
-                // monopolize the first lane. The generation and prearmed alarm survive.
-                await transaction.put(
-                  MAINTENANCE_STATE_KEY,
-                  encodeMaintenanceState(
-                    ThreadMaintenanceState.make({ ...state, lastServedThreadId: next }),
-                  ),
-                );
-              }
+            const retries = (state.bindingRetries ?? []).filter(
+              (retry) => heads.get(retry.threadId)?.submissionId === retry.submissionId,
+            );
 
-              return next;
-            }),
-          );
-          yield* failpoint.hit("maintenance:select:after");
-        }
+            const runnable = eligible.filter(
+              (threadId) =>
+                !retries.some(
+                  (retry) => retry.threadId === threadId && retry.notBefore > selectionTime,
+                ),
+            );
 
-        // One FIFO head per event, across all local lanes. The runtime keeps its normal
-        // bounded Attempt and recovery contracts; followers belong to another alarm.
+            const next =
+              runnable.find(
+                (threadId) =>
+                  state.lastServedThreadId === undefined || threadId > state.lastServedThreadId,
+              ) ?? runnable[0];
+
+            if (next !== undefined) {
+              await transaction.put(
+                MAINTENANCE_STATE_KEY,
+                encodeMaintenanceState(
+                  ThreadMaintenanceState.make({ ...state, lastServedThreadId: next }),
+                ),
+              );
+            }
+
+            return { selected: next, retries };
+          }),
+        );
+
+        yield* failpoint.hit("maintenance:select:after");
+        const selected = selection.selected;
+        let retries = selection.retries;
+        let bindingFailure: DurableBindingFailure | undefined;
+        let reportBindingFailure = false;
+
+        // One FIFO head per event. An unavailable contract is a durable wait for compatible code,
+        // including for children; other local lanes and host deliveries remain independently due.
         const settlement =
           selected === undefined
             ? Option.none()
-            : yield* runtime.processThreadHead(selected, { yieldAfter });
+            : yield* runtime.processThreadHead(selected, { yieldAfter }).pipe(
+                Effect.catchTags({
+                  BindingUnavailable: (failure) => {
+                    bindingFailure = failure;
+
+                    return Effect.succeed(Option.none());
+                  },
+                  BindingDigestMismatch: (failure) => {
+                    bindingFailure = failure;
+
+                    return Effect.succeed(Option.none());
+                  },
+                }),
+              );
+
+        if (selected !== undefined) {
+          const previous = retries.find((retry) => retry.threadId === selected);
+
+          retries = retries.filter((retry) => retry.threadId !== selected);
+          const head = heads.get(selected);
+
+          if (bindingFailure !== undefined && head !== undefined) {
+            const now = yield* Clock.currentTimeMillis;
+            const attempts = Math.min(30, (previous?.attempts ?? 0) + 1);
+
+            reportBindingFailure =
+              previous === undefined || now - previous.reportedAt >= 15 * 60_000;
+            retries.push(
+              BindingRetry.make({
+                threadId: selected,
+                submissionId: head.submissionId,
+                attempts,
+                notBefore: now + Math.min(60_000, 5_000 * 2 ** (attempts - 1)),
+                reportedAt: reportBindingFailure ? now : previous!.reportedAt,
+              }),
+            );
+          }
+        }
 
         yield* finishDelivery;
         if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
@@ -844,8 +903,17 @@ export class ThreadMaintenance extends Context.Service<
           Option.isSome(settlement) ||
           recovered.some((report) => report.disposition === "repaired");
 
-        const delay = autonomous ? yield* rearmDelay(progressed) : 0;
         const now = yield* Clock.currentTimeMillis;
+        const ordinaryDelay = autonomous ? yield* rearmDelay(progressed) : 0;
+
+        const nextEligible = eligible.map(
+          (threadId) => retries.find((retry) => retry.threadId === threadId)?.notBefore ?? now,
+        );
+
+        const bindingDelay =
+          nextEligible.length === 0 ? 0 : Math.max(0, Math.min(...nextEligible) - now);
+
+        const delay = Math.max(ordinaryDelay, bindingDelay);
 
         yield* failpoint.hit("maintenance:finish:before");
 
@@ -870,6 +938,9 @@ export class ThreadMaintenance extends Context.Service<
                   ...state,
                   processed,
                   nonterminal: remaining.length,
+                  bindingRetries: retries.filter((retry) =>
+                    remaining.some((row) => row.submissionId === retry.submissionId),
+                  ),
                 });
 
                 await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
@@ -922,6 +993,14 @@ export class ThreadMaintenance extends Context.Service<
         );
 
         yield* failpoint.hit("maintenance:finish:after");
+        if (bindingFailure !== undefined) {
+          yield* reportBindingFailure
+            ? Effect.logError(
+                "Thread awaits a compatible binding; original work remains pending",
+                Cause.fail(bindingFailure),
+              )
+            : Effect.logDebug("Thread binding retry remains pending", Cause.fail(bindingFailure));
+        }
         if (alarmDisposition === "cleared") {
           yield* Ref.set(stalls, 0);
         }

@@ -39,6 +39,7 @@ import {
   fixtureReconcilerLayer,
   maintenanceRaceFailpoint,
   maintenanceClocks,
+  unavailableBindingThreads,
   makeContextCompactorLayer,
   makeContextAuthorizationLayer,
   plannerDefinition,
@@ -375,14 +376,16 @@ export class TestThreadObject extends ThreadObject.make(
     Effect.map(Effect.all([makeTestBindings, backgroundWorkerBindings]), ([existing, workers]) =>
       Layer.unwrap(
         Effect.map(ThreadObjectIdentity, ({ threadId }) =>
-          threadId.startsWith("background-cf-custom-") || customRuntimeThreads.has(threadId)
-            ? Layer.fresh(ThreadMaintenance.layer).pipe(
-                Layer.provideMerge(
-                  DurableAgentRuntime.layerWithBindings([...existing, ...workers]),
-                ),
-                Layer.provideMerge(layerFromBindings([])),
-              )
-            : layerFromBindings([...existing, ...workers]),
+          unavailableBindingThreads.has(threadId)
+            ? layerFromBindings([])
+            : threadId.startsWith("background-cf-custom-") || customRuntimeThreads.has(threadId)
+              ? Layer.fresh(ThreadMaintenance.layer).pipe(
+                  Layer.provideMerge(
+                    DurableAgentRuntime.layerWithBindings([...existing, ...workers]),
+                  ),
+                  Layer.provideMerge(layerFromBindings([])),
+                )
+              : layerFromBindings([...existing, ...workers]),
         ),
       ),
     ),

@@ -33,6 +33,7 @@ import {
   submitOptions,
   alarmAttemptHolds,
   maintenanceClocks,
+  unavailableBindingThreads,
 } from "./fixtures.ts";
 import {
   allSettled,
@@ -101,6 +102,89 @@ const maintenanceGeneration = (thread: string) =>
   );
 
 describe("DC alarm semantics", () => {
+  // Incident: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-68
+  it("retains unavailable work with durable backoff across eviction and resumes the original receipt", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const thread = lane("binding-continuity");
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(thread, yield* Clock.Clock);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            maintenanceClocks.delete(thread);
+            unavailableBindingThreads.delete(thread);
+          }),
+        );
+
+        const evict = () =>
+          Effect.promise(() =>
+            runInDurableObject(stubFor(thread), (_instance, state) => {
+              state.abort("binding continuity reinstantiation");
+            }).catch(() => undefined),
+          );
+
+        const pass = () =>
+          Effect.promise(() =>
+            runInDurableObject(stubFor(thread), (instance) => Promise.resolve(instance.alarm())),
+          );
+
+        const retry = () =>
+          Effect.promise(() =>
+            runInDurableObject(stubFor(thread), async (_instance, state) =>
+              Schema.decodeUnknownSync(
+                Schema.Struct({
+                  bindingRetries: Schema.Array(
+                    Schema.Struct({
+                      submissionId: Schema.String,
+                      attempts: Schema.Number,
+                      notBefore: Schema.Number,
+                    }),
+                  ),
+                }),
+              )(await state.storage.get("effect-agent:thread-maintenance:v1")),
+            ),
+          );
+
+        const receipt = yield* Effect.promise(() => submitTo(plannerDefinition, thread));
+
+        unavailableBindingThreads.add(thread);
+        yield* evict();
+        yield* pass();
+        const first = yield* retry();
+
+        expect(first.bindingRetries).toHaveLength(1);
+        expect(first.bindingRetries[0]).toMatchObject({
+          submissionId: receipt.submissionId,
+          attempts: 1,
+        });
+        expect(first.bindingRetries[0]!.notBefore).toBe((yield* Clock.currentTimeMillis) + 5_000);
+        yield* evict();
+        yield* pass();
+        yield* pass();
+        expect(yield* retry()).toEqual(first);
+        expect(yield* Effect.promise(allSettled(thread))).toBe(false);
+        yield* TestClock.adjust(5_000);
+        yield* pass();
+        expect((yield* retry()).bindingRetries[0]).toMatchObject({
+          submissionId: receipt.submissionId,
+          attempts: 2,
+          notBefore: (yield* Clock.currentTimeMillis) + 10_000,
+        });
+        unavailableBindingThreads.delete(thread);
+        yield* evict();
+        yield* TestClock.adjust(10_000);
+        yield* pass();
+        expect((yield* retry()).bindingRetries).toEqual([]);
+
+        const settled = yield* Effect.promise(() =>
+          runClient(CloudflareThreadClient.use((client) => client.awaitSettlement(receipt))),
+        );
+
+        expect(settled.submissionId).toBe(receipt.submissionId);
+        expect(settled.outcome).toBe("completed");
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
   // Regression: https://github.com/danieljvdm/effect-agent/commit/78d05490a
   it("keeps alarm changes independent of an interrupted concurrent SQL transaction", async () => {
     const thread = lane("sql-alarm-isolation");
