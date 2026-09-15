@@ -1,5 +1,16 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.92
+
+### Patch Changes
+
+- [#487](https://github.com/danieljvdm/effect-agent/pull/487) [`054b1c3`](https://github.com/danieljvdm/effect-agent/commit/054b1c3a7e7a6571fc82caedc4ae8835c5aacfb4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Require Effect rc.115 across the packages and effect-cf 0.43.0 for Cloudflare hosts.
+
+- [#487](https://github.com/danieljvdm/effect-agent/pull/487) [`054b1c3`](https://github.com/danieljvdm/effect-agent/commit/054b1c3a7e7a6571fc82caedc4ae8835c5aacfb4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Generate seeded chaos plans with Effect native schema arbitraries. Yield `generateChaosPlans` as an Effect and pin the generator version when replaying seeds.
+
+- Updated dependencies [[`054b1c3`](https://github.com/danieljvdm/effect-agent/commit/054b1c3a7e7a6571fc82caedc4ae8835c5aacfb4)]:
+  - effect-agent@0.1.0-beta.92
+
 ## 0.1.0-beta.91
 
 ### Patch Changes
