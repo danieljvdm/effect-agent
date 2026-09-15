@@ -27,7 +27,7 @@ import { pressureInstructions, pressureScenario } from "./pressure.ts";
 export const runCloudflareEvaluation = Effect.fn("ContextContinuity.runCloudflareEvaluation")(
   function* (options: EvaluationOptions, baseUrl: string) {
     const client = yield* HttpClient.HttpClient;
-    const token = yield* Config.redacted("CONTEXT_EVAL_TOKEN");
+    const token = yield* Config.Redacted("CONTEXT_EVAL_TOKEN");
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const start = yield* Clock.currentTimeMillis;

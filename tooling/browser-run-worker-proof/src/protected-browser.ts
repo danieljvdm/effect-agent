@@ -74,7 +74,7 @@ const final = <A, E, R, E2, R2>(
   response: Effect.Effect<
     Stream.Stream<
       {
-        readonly result: A | ProtectedBrowserError;
+        readonly result: A | ProtectedBrowserError | typeof Tool.ExecutionFailure.Type;
         readonly preliminary: boolean;
       },
       E,
@@ -88,6 +88,9 @@ const final = <A, E, R, E2, R2>(
     Effect.flatMap(Stream.runLast),
     Effect.flatMap((last): Effect.Effect<A, ProtectedBrowserError | ProtectedProofFailure> => {
       if (Option.isNone(last) || last.value.preliminary)
+        return Effect.fail(new ProtectedProofFailure());
+
+      if (Schema.is(Tool.ExecutionFailure)(last.value.result))
         return Effect.fail(new ProtectedProofFailure());
 
       return Schema.is(ProtectedBrowserError)(last.value.result)

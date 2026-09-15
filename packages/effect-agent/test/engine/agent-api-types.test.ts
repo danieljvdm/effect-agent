@@ -73,8 +73,8 @@ const Input = Schema.Struct({
   city: Schema.String,
   days: Schema.NumberFromString.pipe(
     Schema.decode({
-      decode: SchemaGetter.transformOrFail((days) => Effect.as(Decoder, days)),
-      encode: SchemaGetter.transformOrFail((days) => Effect.as(Encoder, days)),
+      decode: SchemaGetter.transformEffect((days) => Effect.as(Decoder, days)),
+      encode: SchemaGetter.transformEffect((days) => Effect.as(Encoder, days)),
     }),
   ),
 });
@@ -307,14 +307,14 @@ it("preserves disjoint tool schemas and callbacks with different input types", (
     parameters: Schema.Struct({
       text: Schema.String.pipe(
         Schema.decode({
-          decode: SchemaGetter.transformOrFail((value) => Effect.as(ParametersDecoder, value)),
+          decode: SchemaGetter.transformEffect((value) => Effect.as(ParametersDecoder, value)),
           encode: SchemaGetter.transform((value) => value),
         }),
       ),
     }),
     success: Schema.String.pipe(
       Schema.decode({
-        decode: SchemaGetter.transformOrFail((value) => Effect.as(ResultDecoder, value)),
+        decode: SchemaGetter.transformEffect((value) => Effect.as(ResultDecoder, value)),
         encode: SchemaGetter.transform((value) => value),
       }),
     ),
@@ -387,8 +387,8 @@ it("retains transformed tool parameter services and handler failures across exec
     parameters: Schema.Struct({
       value: Schema.FiniteFromString.pipe(
         Schema.decode({
-          decode: SchemaGetter.transformOrFail((value) => Effect.as(ParametersDecoder, value)),
-          encode: SchemaGetter.transformOrFail((value) => Effect.as(ParametersEncoder, value)),
+          decode: SchemaGetter.transformEffect((value) => Effect.as(ParametersDecoder, value)),
+          encode: SchemaGetter.transformEffect((value) => Effect.as(ParametersEncoder, value)),
         }),
       ),
     }),
@@ -537,8 +537,8 @@ it("text output preserves Schema transformations, errors and decoder requirement
   const schema = Output.text(
     Schema.NumberFromString.pipe(
       Schema.decode({
-        decode: SchemaGetter.transformOrFail((value) => Effect.as(Decoder, value)),
-        encode: SchemaGetter.transformOrFail((value) => Effect.as(Encoder, value)),
+        decode: SchemaGetter.transformEffect((value) => Effect.as(Decoder, value)),
+        encode: SchemaGetter.transformEffect((value) => Effect.as(Encoder, value)),
       }),
     ),
   );

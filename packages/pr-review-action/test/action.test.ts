@@ -508,7 +508,7 @@ describe("Action configuration", () => {
         ConfigProvider.fromEnv({ env: { "INPUT_AUTOMATIC-REVIEW-LIMIT": "7" } }),
       );
 
-      expect(yield* Config.string("PR_REVIEW_AUTOMATIC_LIMIT").parse(provider)).toBe("7");
+      expect(yield* Config.String("PR_REVIEW_AUTOMATIC_LIMIT").parse(provider)).toBe("7");
     }),
   );
 
@@ -518,7 +518,7 @@ describe("Action configuration", () => {
         ConfigProvider.fromEnv({ env: { INPUT_COMMAND: "@effect-agent review\r\n" } }),
       );
 
-      expect(yield* Config.string("PR_REVIEW_COMMAND").parse(provider)).toBe(
+      expect(yield* Config.String("PR_REVIEW_COMMAND").parse(provider)).toBe(
         "@effect-agent review\r\n",
       );
     }),
@@ -532,7 +532,7 @@ describe("Action configuration", () => {
         }),
       );
 
-      expect(yield* Config.nonEmptyString("OPENAI_API_KEY").parse(provider)).toBe("action-key");
+      expect(yield* Config.NonEmptyString("OPENAI_API_KEY").parse(provider)).toBe("action-key");
     }),
   );
 });

@@ -11,7 +11,7 @@ import { WorkerOptions } from "./process-host.ts";
 
 const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const file = yield* Config.string("CONTEXT_EVAL_WORKER_OPTIONS");
+  const file = yield* Config.String("CONTEXT_EVAL_WORKER_OPTIONS");
 
   const options = yield* Schema.decodeEffect(Schema.fromJsonString(WorkerOptions))(
     yield* fs.readFileString(file),
@@ -25,7 +25,7 @@ const program = Effect.gen(function* () {
   Effect.scoped,
   Effect.provide(
     Layer.mergeAll(
-      OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") }).pipe(
+      OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") }).pipe(
         Layer.provide(FetchHttpClient.layer),
       ),
       NodeServices.layer,

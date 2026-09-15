@@ -3852,6 +3852,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             providerName: "hosted_probe",
             parameters: Schema.Struct({}),
             success: Schema.String,
+            failure: Schema.String,
           })(undefined);
 
           const probe = Tool.make("probe", {

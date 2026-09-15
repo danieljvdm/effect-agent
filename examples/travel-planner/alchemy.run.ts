@@ -6,7 +6,7 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import { Config, Effect, Layer, Redacted, Schema } from "effect";
 
 const state = Layer.unwrap(
-  Config.boolean("ALCHEMY_LOCAL_STATE").pipe(
+  Config.Boolean("ALCHEMY_LOCAL_STATE").pipe(
     Config.withDefault(false),
     Effect.map((local) => (local ? Alchemy.localState() : Cloudflare.state())),
     Effect.orDie,
@@ -23,7 +23,7 @@ export default Alchemy.Stack(
   Effect.gen(function* () {
     const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
 
-    const serverOpenAiKey = yield* Config.redacted("SERVER_OPENAI_KEY").pipe(
+    const serverOpenAiKey = yield* Config.Redacted("SERVER_OPENAI_KEY").pipe(
       Config.withDefault(Redacted.make("")),
     );
 
@@ -62,11 +62,11 @@ export default Alchemy.Stack(
         }),
         AUTH: Cloudflare.DurableObject("AuthV1", { className: "PlannerAuth" }),
         AUTH_EMAIL: Cloudflare.Email.SendEmail("AuthEmail", {
-          allowedSenderAddresses: [yield* Config.nonEmptyString("AUTH_EMAIL_FROM")],
+          allowedSenderAddresses: [yield* Config.NonEmptyString("AUTH_EMAIL_FROM")],
         }),
-        AUTH_ORIGIN: Config.nonEmptyString("AUTH_ORIGIN"),
-        AUTH_EMAIL_FROM: Config.nonEmptyString("AUTH_EMAIL_FROM"),
-        AUTH_GITHUB_CLIENT_ID: Config.nonEmptyString("AUTH_GITHUB_CLIENT_ID"),
+        AUTH_ORIGIN: Config.NonEmptyString("AUTH_ORIGIN"),
+        AUTH_EMAIL_FROM: Config.NonEmptyString("AUTH_EMAIL_FROM"),
+        AUTH_GITHUB_CLIENT_ID: Config.NonEmptyString("AUTH_GITHUB_CLIENT_ID"),
         AUTH_GITHUB_CLIENT_SECRET: Config.schema(
           Schema.Redacted(Schema.NonEmptyString),
           "AUTH_GITHUB_CLIENT_SECRET",
@@ -94,7 +94,7 @@ export default Alchemy.Stack(
         }),
         ARTIFACTS_GIT_BASE: `https://${accountId}.artifacts.cloudflare.net/git/${artifacts.namespace}`,
         BROWSER: Cloudflare.Browser(),
-        OPENAI_MODEL: Config.string("OPENAI_MODEL").pipe(Config.withDefault("gpt-5.6-luna")),
+        OPENAI_MODEL: Config.String("OPENAI_MODEL").pipe(Config.withDefault("gpt-5.6-luna")),
         BYOK_ENCRYPTION_KEY: Config.schema(
           Schema.Redacted(Schema.NonEmptyString),
           "BYOK_ENCRYPTION_KEY",

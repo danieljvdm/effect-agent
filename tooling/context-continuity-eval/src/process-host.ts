@@ -31,7 +31,7 @@ export const supervise = Effect.fn("ContextContinuity.supervise")(
     const entry =
       workerFile ?? (yield* path.fromFileUrl(new URL("./worker-main.ts", import.meta.url)));
 
-    const apiKey = yield* Config.redacted("OPENAI_API_KEY");
+    const apiKey = yield* Config.Redacted("OPENAI_API_KEY");
 
     for (let incarnation = 0; incarnation <= RESTARTS.length; incarnation++) {
       const child = yield* ChildProcess.make("node", ["--experimental-transform-types", entry], {

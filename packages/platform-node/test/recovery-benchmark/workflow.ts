@@ -197,10 +197,10 @@ export const benchmark = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
 
   const config = yield* Schema.decodeUnknownEffect(BenchmarkConfig)({
-    mode: yield* Config.string("EFFECT_AGENT_RECOVERY_BENCHMARK_MODE"),
-    count: yield* Config.number("EFFECT_AGENT_RECOVERY_BENCHMARK_COUNT"),
-    root: yield* Config.string("EFFECT_AGENT_RECOVERY_BENCHMARK_OUT"),
-    revision: yield* Config.string("EFFECT_AGENT_RECOVERY_BENCHMARK_REVISION"),
+    mode: yield* Config.String("EFFECT_AGENT_RECOVERY_BENCHMARK_MODE"),
+    count: yield* Config.Number("EFFECT_AGENT_RECOVERY_BENCHMARK_COUNT"),
+    root: yield* Config.String("EFFECT_AGENT_RECOVERY_BENCHMARK_OUT"),
+    revision: yield* Config.String("EFFECT_AGENT_RECOVERY_BENCHMARK_REVISION"),
   });
 
   const { mode, count, root } = config;

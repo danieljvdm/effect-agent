@@ -29,63 +29,63 @@ import {
   SCENARIO_VERSION,
 } from "./scenario.ts";
 
-const provider = OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") }).pipe(
+const provider = OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") }).pipe(
   Layer.provide(FetchHttpClient.layer),
 );
 
 export const command = Command.make(
   "context-continuity-eval",
   {
-    cloudflareUrl: Flag.string("cloudflare-url").pipe(
+    cloudflareUrl: Flag.String("cloudflare-url").pipe(
       Flag.optional,
       Flag.withDescription(
         "Already deployed Cloudflare evaluation host; requires CONTEXT_EVAL_TOKEN.",
       ),
     ),
-    profile: Flag.choice("profile", PROFILE_IDS).pipe(
+    profile: Flag.Literals("profile", PROFILE_IDS).pipe(
       Flag.withDefault(DEFAULT_PROFILE),
       Flag.withDescription("One profile per attempt; production-capacity is preparation-only."),
     ),
-    productionContextTokens: Flag.integer("production-context-tokens").pipe(
+    productionContextTokens: Flag.Int("production-context-tokens").pipe(
       Flag.withDefault(200_000),
       Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 32_001, maximum: 1_000_000 }))),
       Flag.withDescription("Planning target only; specify the actual application/model limit."),
     ),
-    model: Flag.choice("model", MODEL_IDS).pipe(
+    model: Flag.Literals("model", MODEL_IDS).pipe(
       Flag.optional,
       Flag.withDescription("Required model, or CONTEXT_EVAL_MODEL. No model fallback."),
     ),
-    effort: Flag.choice("effort", ["low", "medium", "high"]).pipe(
+    effort: Flag.Literals("effort", ["low", "medium", "high"]).pipe(
       Flag.withDefault("low"),
       Flag.withDescription("Reasoning effort recorded with the result."),
     ),
-    seed: Flag.integer("seed").pipe(
+    seed: Flag.Int("seed").pipe(
       Flag.withSchema(Schema.Natural.check(Schema.isLessThanOrEqualTo(1_000_000))),
       Flag.withDefault(17),
       Flag.withDescription("Seed for the frozen conversation and receipt codes."),
     ),
-    maxCostUsd: Flag.float("max-cost-usd").pipe(
+    maxCostUsd: Flag.Finite("max-cost-usd").pipe(
       Flag.withSchema(Schema.Finite.check(Schema.isBetween({ minimum: 0.1, maximum: 10 }))),
       Flag.withDefault(10),
       Flag.withDescription(
         "Suite-wide conservative USD ceiling; reserve each request before inference.",
       ),
     ),
-    outputDirectory: Flag.directory("output-dir").pipe(
+    outputDirectory: Flag.Directory("output-dir").pipe(
       Flag.withDefault(".context-continuity-eval/run"),
       Flag.withDescription("New artifact directory. Existing runs are never overwritten."),
     ),
-    envFile: Flag.file("env-file").pipe(
+    envFile: Flag.File("env-file").pipe(
       Flag.optional,
       Flag.withDescription(
         "Optional existing dotenv file. Exported environment values take precedence.",
       ),
     ),
-    requireClean: Flag.boolean("require-clean").pipe(
+    requireClean: Flag.Boolean("require-clean").pipe(
       Flag.withDefault(false),
       Flag.withDescription("Reject tracked or untracked source changes; required for publication."),
     ),
-    validate: Flag.boolean("validate").pipe(
+    validate: Flag.Boolean("validate").pipe(
       Flag.withDefault(false),
       Flag.withDescription(
         "Validate the scenario without credentials or model calls. This is not a passing live eval.",
@@ -130,7 +130,7 @@ export const command = Command.make(
           message:
             "The Cloudflare profile requires --cloudflare-url for its already deployed evaluation host.",
         });
-      const enabled = yield* Config.string("EFFECT_AGENT_LIVE").pipe(Config.withDefault("0"));
+      const enabled = yield* Config.String("EFFECT_AGENT_LIVE").pipe(Config.withDefault("0"));
 
       if (enabled !== "1")
         return yield* EvaluationError.make({

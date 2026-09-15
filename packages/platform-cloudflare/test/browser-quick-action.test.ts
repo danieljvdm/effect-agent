@@ -234,7 +234,7 @@ describe("Browser Run Quick Action PageCapture adapter", () => {
       schema: Schema.Struct({
         name: Schema.String.pipe(
           Schema.decodeTo(Schema.String, {
-            decode: SchemaGetter.transformOrFail((value) =>
+            decode: SchemaGetter.transformEffect((value) =>
               Effect.map(Decoder, (decoder) => value + decoder.value),
             ),
             encode: SchemaGetter.transform((value) => value),

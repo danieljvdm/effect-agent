@@ -153,9 +153,9 @@ describe("DUR-002/DUR-004/DUR-017 P7 chaos (memory adapters)", () => {
     `CHAOS: ${PLAN_COUNT} seeded failpoint/abort interleavings over memory adapters converge to verified invariants`,
     () =>
       Effect.gen(function* () {
-        const plans = generateChaosPlans({ seed: ROOT_SEED, count: PLAN_COUNT });
+        const plans = yield* generateChaosPlans({ seed: ROOT_SEED, count: PLAN_COUNT });
         // Determinism of the generator itself: the same root seed always derives the same plans.
-        const regenerated = generateChaosPlans({ seed: ROOT_SEED, count: PLAN_COUNT });
+        const regenerated = yield* generateChaosPlans({ seed: ROOT_SEED, count: PLAN_COUNT });
 
         expect(JSON.stringify(plans)).toBe(JSON.stringify(regenerated));
 
@@ -185,7 +185,7 @@ describe("DUR-002/DUR-004/DUR-017 P7 chaos (memory adapters)", () => {
 
   it.effect("the ChaosPlan and ChaosPlanReport Schemas round-trip their encoded form", () =>
     Effect.gen(function* () {
-      const [plan] = generateChaosPlans({ seed: ROOT_SEED, count: 1 });
+      const [plan] = yield* generateChaosPlans({ seed: ROOT_SEED, count: 1 });
 
       expect(plan).toBeDefined();
       if (plan === undefined) return;

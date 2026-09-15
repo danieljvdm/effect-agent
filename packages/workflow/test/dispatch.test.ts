@@ -643,10 +643,10 @@ it.effect("retains an early wake until suspension and rejects premature native c
     expect(fixture.rows.has(intent.executionId)).toBe(true);
     yield* Ref.set(fixture.pollOverride, Option.none());
     yield* Deferred.succeed(fixture.allowSuspension, undefined);
-    yield* fixture.waitNative(intent, "Suspended");
-
-    yield* fixture.host.repair;
+    // The native engine now retains the early wake and resumes immediately after
+    // suspension; polling is not guaranteed to observe the transient suspended state.
     yield* fixture.waitNative(intent, "Complete");
+    expect(fixture.rows.has(intent.executionId)).toBe(true);
     yield* fixture.host.repair;
     expect((yield* fixture.runtime.inspectSubmissionStatus(receipt))._tag).toBe("settled");
     expect(fixture.rows.size).toBe(0);

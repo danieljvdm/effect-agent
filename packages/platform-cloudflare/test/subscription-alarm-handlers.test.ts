@@ -48,7 +48,7 @@ for (const outcome of ["success", "failure", "defect", "timeout", "interruption"
 
             const payload = Schema.String.pipe(
               Schema.decodeTo(Schema.String, {
-                decode: SchemaGetter.transformOrFail((value) =>
+                decode: SchemaGetter.transformEffect((value) =>
                   Effect.gen(function* () {
                     expect(yield* Decoder).toBe("decoder");
                     expect(yield* SubscriptionDriver).toBe(nativeDriver);

@@ -156,9 +156,9 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
       cleanup: "not-requested",
     });
 
-  const decodedPolicy = yield* Schema.decodeEffect(InteractiveBrowserPolicy)(input).pipe(
-    Effect.mapError(() => initialError("denied")),
-  );
+  const decodedPolicy = yield* Schema.decodeEffect(InteractiveBrowserPolicy, {
+    onExcessProperty: "error",
+  })(input).pipe(Effect.mapError(() => initialError("denied")));
 
   if (decodedPolicy.network._tag === "PublicWeb") return yield* initialError("unsupported");
 
@@ -529,9 +529,9 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
     fill: (request) =>
       run(
         Effect.gen(function* () {
-          const decoded = yield* Schema.decodeEffect(ProtectedBrowserFill)(request).pipe(
-            Effect.mapError(() => fail("denied")),
-          );
+          const decoded = yield* Schema.decodeEffect(ProtectedBrowserFill, {
+            onExcessProperty: "error",
+          })(request).pipe(Effect.mapError(() => fail("denied")));
 
           yield* permitObservation;
           const control = yield* target(decoded.ref);

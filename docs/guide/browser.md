@@ -30,7 +30,7 @@ In your application, install the browser adapters:
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Requires `effect@^4.0.0-rc.112`. For the examples below, also install `effect-agent@beta`.
+Requires `effect@^4.0.0-rc.115`. For the examples below, also install `effect-agent@beta`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 The REST examples need no Puppeteer dependency.
 
@@ -94,7 +94,7 @@ need to inspect an active page, follow a known flow, or perform host-approved UI
 a general browsing session and cannot become an agent Tool.
 
 Install `@cloudflare/puppeteer@^1.1.0` alongside
-`@effect-agent/platform-cloudflare@beta`, `effect@^4.0.0-rc.112`, and `effect-cf@^0.40.0`. Then provide
+`@effect-agent/platform-cloudflare@beta`, `effect@^4.0.0-rc.115`, and `effect-cf@^0.43.0`. Then provide
 `CloudflareInteractiveBrowser.layer({ browser: env.BROWSER, accountId, apiToken })` with
 `FetchHttpClient.layer` for browser actions. `CloudflareInteractiveBrowser.hostLayer` opts into
 trusted host controls for Live View and handoff. Both variants assemble the browser binding and
@@ -134,8 +134,8 @@ import { Config, Effect } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 const captureExample = Effect.gen(function* () {
-  const accountId = yield* Config.nonEmptyString("CLOUDFLARE_ACCOUNT_ID");
-  const apiToken = yield* Config.redacted("CLOUDFLARE_API_TOKEN");
+  const accountId = yield* Config.NonEmptyString("CLOUDFLARE_ACCOUNT_ID");
+  const apiToken = yield* Config.Redacted("CLOUDFLARE_API_TOKEN");
   return yield* Effect.gen(function* () {
     const capture = yield* PageCapture;
     return yield* capture.capture(
@@ -242,8 +242,8 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 const BrowserCrawlLive = Layer.unwrap(
   Effect.gen(function* () {
-    const accountId = yield* Config.nonEmptyString("CLOUDFLARE_ACCOUNT_ID");
-    const apiToken = yield* Config.redacted("CLOUDFLARE_API_TOKEN");
+    const accountId = yield* Config.NonEmptyString("CLOUDFLARE_ACCOUNT_ID");
+    const apiToken = yield* Config.Redacted("CLOUDFLARE_API_TOKEN");
     return browserRestCrawlLayer({ accountId, apiToken });
   }),
 ).pipe(Layer.provide(FetchHttpClient.layer));

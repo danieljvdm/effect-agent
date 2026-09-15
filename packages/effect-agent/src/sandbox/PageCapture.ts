@@ -160,10 +160,7 @@ type ResponseFormatNode = Schema.JsonObject & {
 };
 
 const ResponseFormatNode: Schema.Codec<ResponseFormatNode> = Schema.suspend(
-  (): Schema.Codec<ResponseFormatNode> =>
-    Schema.Struct(responseFormatFields()).pipe(
-      Schema.annotate({ parseOptions: { onExcessProperty: "error" } }),
-    ),
+  (): Schema.Codec<ResponseFormatNode> => Schema.Struct(responseFormatFields()),
 );
 
 const responseFormatFields = () => {
@@ -257,9 +254,11 @@ const responseFormatFields = () => {
 const ResponseFormatDocument = Schema.Struct({
   ...responseFormatFields(),
   type: Schema.Literal("object"),
-}).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
+});
 
-const isResponseFormatDocument = Schema.is(ResponseFormatDocument);
+const decodeResponseFormatDocument = Schema.decodeUnknownOption(ResponseFormatDocument, {
+  onExcessProperty: "error",
+});
 
 /** Preflight graph bounds before recursively decoding an untrusted JSON Schema. */
 const isBoundedResponseFormat = (input: unknown): input is typeof ResponseFormatDocument.Type => {
@@ -313,7 +312,7 @@ const isBoundedResponseFormat = (input: unknown): input is typeof ResponseFormat
       }
     }
 
-    if (!isResponseFormatDocument(input)) return false;
+    if (Option.isNone(decodeResponseFormatDocument(input))) return false;
     const encoded = JSON.stringify(input);
 
     return Encoding.encodeHex(encoded).length / 2 <= MAX_RESPONSE_FORMAT_BYTES;

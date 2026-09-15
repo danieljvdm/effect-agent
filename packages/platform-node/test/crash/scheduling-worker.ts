@@ -69,8 +69,8 @@ const authorizerLayer = Layer.succeed(ScheduleAuthorizer)({
 });
 
 const decodeConfig = Effect.fn("SchedulingCrashWorker.decodeConfig")(function* () {
-  const database = yield* Config.string("EFFECT_AGENT_SCHEDULE_DB");
-  const boundary = yield* Config.string("EFFECT_AGENT_SCHEDULE_BOUNDARY");
+  const database = yield* Config.String("EFFECT_AGENT_SCHEDULE_DB");
+  const boundary = yield* Config.String("EFFECT_AGENT_SCHEDULE_BOUNDARY");
 
   return yield* Schema.decodeUnknownEffect(WorkerConfig)({ database, boundary });
 });

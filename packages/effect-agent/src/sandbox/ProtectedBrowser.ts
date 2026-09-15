@@ -140,7 +140,7 @@ export class ProtectedBrowserFill extends Schema.Class<ProtectedBrowserFill>(
   Schema.Struct({
     ref: BrowserReference,
     value: Schema.String.check(Schema.isMaxLength(8192)),
-  }).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } })),
+  }),
 ) {}
 
 export const CredentialDispatch = Schema.Literals([

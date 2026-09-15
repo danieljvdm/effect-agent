@@ -165,7 +165,7 @@ export const reviewPublicationFailure = (input: {
 const writeOutputs = Effect.fn("writeReviewOutputs")(function* (
   entries: ReadonlyArray<readonly [string, string | number]>,
 ) {
-  const outputPath = yield* Config.string("GITHUB_OUTPUT").pipe(Config.withDefault(""));
+  const outputPath = yield* Config.String("GITHUB_OUTPUT").pipe(Config.withDefault(""));
 
   if (outputPath.length === 0) return;
   const fs = yield* FileSystem.FileSystem;
@@ -729,7 +729,7 @@ const reanchorToFullPullRequest = (
 };
 
 export const reviewActionProgram = Effect.gen(function* () {
-  const repository = yield* Config.nonEmptyString("GITHUB_REPOSITORY");
+  const repository = yield* Config.NonEmptyString("GITHUB_REPOSITORY");
 
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     return yield* ActionConfigurationError.make({
@@ -742,18 +742,18 @@ export const reviewActionProgram = Effect.gen(function* () {
     "PR_REVIEW_PULL_REQUEST",
   );
 
-  const token = yield* Config.redacted("GITHUB_TOKEN");
+  const token = yield* Config.Redacted("GITHUB_TOKEN");
 
-  const reviewAuthor = yield* Config.nonEmptyString("PR_REVIEW_AUTHOR").pipe(
+  const reviewAuthor = yield* Config.NonEmptyString("PR_REVIEW_AUTHOR").pipe(
     Config.withDefault("github-actions[bot]"),
   );
 
-  const configuredMode = yield* Config.literals(
+  const configuredMode = yield* Config.Literals(
     ["auto", "incremental", "full"],
     "PR_REVIEW_MODE",
   ).pipe(Config.withDefault("auto"));
 
-  const command = yield* Config.string("PR_REVIEW_COMMAND").pipe(Config.withDefault(""));
+  const command = yield* Config.String("PR_REVIEW_COMMAND").pipe(Config.withDefault(""));
   const mode = command.trim().length === 0 ? configuredMode : reviewModeFromCommand(command);
 
   if (mode === undefined) {
@@ -775,7 +775,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     "PR_REVIEW_AUTOMATIC_LIMIT",
   ).pipe(Config.withDefault(2));
 
-  const expectedHead = yield* Config.string("PR_REVIEW_EXPECTED_HEAD").pipe(Config.withDefault(""));
+  const expectedHead = yield* Config.String("PR_REVIEW_EXPECTED_HEAD").pipe(Config.withDefault(""));
 
   const modelName = yield* reviewModel;
   const effort = yield* reviewReasoningEffort;
@@ -784,18 +784,18 @@ export const reviewActionProgram = Effect.gen(function* () {
   const maxCostUsd = yield* reviewMaxCostUsd;
   const baseCostUsd = yield* reviewBaseCostUsd;
 
-  const guidanceFile = yield* Config.string("PR_REVIEW_GUIDANCE_FILE").pipe(Config.withDefault(""));
+  const guidanceFile = yield* Config.String("PR_REVIEW_GUIDANCE_FILE").pipe(Config.withDefault(""));
 
-  const ignore = (yield* Config.string("PR_REVIEW_IGNORE").pipe(Config.withDefault("")))
+  const ignore = (yield* Config.String("PR_REVIEW_IGNORE").pipe(Config.withDefault("")))
     .split(",")
     .map((pattern) => pattern.trim())
     .filter((pattern) => pattern.length > 0);
 
-  const apiUrl = yield* Config.nonEmptyString("GITHUB_API_URL").pipe(
+  const apiUrl = yield* Config.NonEmptyString("GITHUB_API_URL").pipe(
     Config.withDefault("https://api.github.com"),
   );
 
-  const graphqlUrl = yield* Config.nonEmptyString("GITHUB_GRAPHQL_URL").pipe(Config.option);
+  const graphqlUrl = yield* Config.NonEmptyString("GITHUB_GRAPHQL_URL").pipe(Config.option);
 
   const github = yield* makeGitHubClient({
     repository,
@@ -985,7 +985,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     }).pipe(
       Effect.provideServiceEffect(
         OpenAiClient.OpenAiClient,
-        OpenAiClient.make({ apiKey: yield* Config.redacted("OPENAI_API_KEY") }),
+        OpenAiClient.make({ apiKey: yield* Config.Redacted("OPENAI_API_KEY") }),
       ),
     );
 

@@ -1,6 +1,7 @@
-import { Context, Effect, Encoding, FileSystem, Layer, Redacted, Schema } from "effect";
+import { Context, Effect, Encoding, ByteSize, Layer, Redacted, Schema } from "effect";
 import { HttpClient, HttpIncomingMessage, HttpClientRequest } from "effect/unstable/http";
 
+import { strictSchema } from "../core/internal/strict-schema.ts";
 import { makeEventSource, type EventSource } from "./EventSource.ts";
 import type { Principal } from "./SubmissionLedger.ts";
 import type { EventAcknowledgement } from "./Subscription.ts";
@@ -18,28 +19,21 @@ const GitCommitSha = Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9
 const GitHubConclusion = Schema.NonEmptyString.check(Schema.isMaxLength(64));
 const GitHubStatus = Schema.NonEmptyString.check(Schema.isMaxLength(32));
 
-const strict = <S extends Schema.Top>(schema: S) =>
-  schema.pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
-
 /** One repository whose identity and credentials are selected by the host. */
-export const GitHubRepository = strict(
-  Schema.Struct({
-    id: PositiveId,
-    owner: GitHubName,
-    name: GitHubName,
-  }),
-);
+export const GitHubRepository = Schema.Struct({
+  id: PositiveId,
+  owner: GitHubName,
+  name: GitHubName,
+}).pipe(strictSchema);
 
 export type GitHubRepository = typeof GitHubRepository.Type;
 
 /** Exact workflow attempt requested by an Agent through a host-permitted source. */
-export const GitHubWorkflowRunWatch = strict(
-  Schema.Struct({
-    runId: PositiveId,
-    attempt: PositiveId,
-    expectedHeadSha: GitCommitSha,
-  }),
-);
+export const GitHubWorkflowRunWatch = Schema.Struct({
+  runId: PositiveId,
+  attempt: PositiveId,
+  expectedHeadSha: GitCommitSha,
+}).pipe(strictSchema);
 
 export type GitHubWorkflowRunWatch = typeof GitHubWorkflowRunWatch.Type;
 
@@ -47,15 +41,13 @@ export type GitHubWorkflowRunWatch = typeof GitHubWorkflowRunWatch.Type;
  * Small canonical completion shared by webhook intake and REST reconciliation. Provider delivery
  * IDs, URLs, actors, and mutable metadata are deliberately omitted from durable event identity.
  */
-export const GitHubWorkflowRunCompletion = strict(
-  Schema.Struct({
-    repositoryId: PositiveId,
-    runId: PositiveId,
-    attempt: PositiveId,
-    headSha: GitCommitSha,
-    conclusion: GitHubConclusion,
-  }),
-);
+export const GitHubWorkflowRunCompletion = Schema.Struct({
+  repositoryId: PositiveId,
+  runId: PositiveId,
+  attempt: PositiveId,
+  headSha: GitCommitSha,
+  conclusion: GitHubConclusion,
+}).pipe(strictSchema);
 
 export type GitHubWorkflowRunCompletion = typeof GitHubWorkflowRunCompletion.Type;
 
@@ -144,18 +136,18 @@ export const githubWorkflowRunsHttpLayer = (
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
 
-      const permittedRepository = yield* Schema.decodeEffect(GitHubRepository)(
-        options.repository,
-      ).pipe(Effect.mapError(() => httpFailure("invalid-response", false)));
+      const permittedRepository = yield* Schema.decodeEffect(GitHubRepository, {
+        onExcessProperty: "error",
+      })(options.repository).pipe(Effect.mapError(() => httpFailure("invalid-response", false)));
 
       const apiUrl = (options.apiUrl ?? "https://api.github.com").replace(/\/$/, "");
 
       const getAttempt = Effect.fn("GitHubWorkflowRuns.getAttempt")(function* (
         request: GitHubWorkflowRunAttemptRequest,
       ) {
-        const repository = yield* Schema.decodeEffect(GitHubRepository)(request.repository).pipe(
-          Effect.mapError(() => httpFailure("invalid-response", false)),
-        );
+        const repository = yield* Schema.decodeEffect(GitHubRepository, {
+          onExcessProperty: "error",
+        })(request.repository).pipe(Effect.mapError(() => httpFailure("invalid-response", false)));
 
         if (
           repository.id !== permittedRepository.id ||
@@ -165,7 +157,9 @@ export const githubWorkflowRunsHttpLayer = (
           return yield* httpFailure("unauthorized", false);
         }
 
-        const watch = yield* Schema.decodeEffect(GitHubWorkflowRunWatch)({
+        const watch = yield* Schema.decodeEffect(GitHubWorkflowRunWatch, {
+          onExcessProperty: "error",
+        })({
           runId: request.runId,
           attempt: request.attempt,
           expectedHeadSha: "0".repeat(40),
@@ -203,7 +197,7 @@ export const githubWorkflowRunsHttpLayer = (
         }
 
         return yield* response.json.pipe(
-          Effect.provideService(HttpIncomingMessage.MaxBodySize, FileSystem.Size(1024 * 1024)),
+          Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.mebibytes(1)),
           Effect.mapError(() => httpFailure("invalid-response", false)),
           Effect.flatMap(Schema.decodeUnknownEffect(GitHubWorkflowRunAttempt)),
           Effect.mapError(() => httpFailure("invalid-response", false)),
@@ -261,9 +255,9 @@ export interface GitHubWorkflowRunSourceOptions {
 export const makeGitHubWorkflowRunSource = Effect.fn("makeGitHubWorkflowRunSource")(function* (
   options: GitHubWorkflowRunSourceOptions,
 ): Effect.fn.Return<EventSource, SubscriptionSourceError, GitHubWorkflowRuns> {
-  const repository = yield* Schema.decodeEffect(GitHubRepository)(options.repository).pipe(
-    Effect.mapError(() => sourceError("github-repository-configuration", false)),
-  );
+  const repository = yield* Schema.decodeEffect(GitHubRepository, { onExcessProperty: "error" })(
+    options.repository,
+  ).pipe(Effect.mapError(() => sourceError("github-repository-configuration", false)));
 
   const runs = yield* GitHubWorkflowRuns;
 

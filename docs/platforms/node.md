@@ -14,8 +14,8 @@ A bounded worker pool executes registered agents and recovers work after a resta
 bun add @effect-agent/platform-node@beta
 ```
 
-For the examples below, also install `effect@4.0.0-rc.112`, `effect-agent@beta`,
-`@effect/ai-openai@4.0.0-rc.112`, and `@effect/platform-node@4.0.0-rc.112`.
+For the examples below, also install `effect@4.0.0-rc.115`, `effect-agent@beta`,
+`@effect/ai-openai@4.0.0-rc.115`, and `@effect/platform-node@4.0.0-rc.115`.
 Keep framework packages at one release and use compatible [Effect and provider packages](../guide/getting-started#installation-and-compatibility).
 
 ## Create an agent

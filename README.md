@@ -55,7 +55,7 @@ import { Config, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 const AppLive = Layer.mergeAll(OpenAiLanguageModel.model("gpt-6-astra"), Ephemeral.layer).pipe(
-  Layer.provide(OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") })),
+  Layer.provide(OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") })),
   Layer.provide(FetchHttpClient.layer),
 );
 

@@ -49,9 +49,11 @@ describe("context window tools", () => {
         {
           id: tool.id,
           description: tool.description,
-          parameters: Schema.toJsonSchemaDocument(tool.parametersSchema),
-          success: Schema.toJsonSchemaDocument(tool.successSchema),
-          failure: Schema.toJsonSchemaDocument(tool.failureSchema),
+          parameters: Schema.toJsonSchemaDocument(tool.parametersSchema, {
+            onExcessProperty: "error",
+          }),
+          success: Schema.toJsonSchemaDocument(tool.successSchema, { onExcessProperty: "error" }),
+          failure: Schema.toJsonSchemaDocument(tool.failureSchema, { onExcessProperty: "error" }),
           failureMode: tool.failureMode,
           executionClass: getToolExecutionClass(tool),
           readonly: Context.get(tool.annotations, Tool.Readonly),
@@ -148,9 +150,11 @@ describe("context window tools", () => {
 
           const invalid = yield* tools
             .handle("search_context_windows", { query: "saved", limit: 4 }, "legacy-bound")
-            .pipe(Effect.flip);
+            .pipe(Effect.flatMap(Stream.runCollect));
 
-          expect(invalid).toMatchObject({ reason: { _tag: "ToolParameterValidationError" } });
+          expect(invalid).toMatchObject([
+            { isFailure: true, result: { reason: { _tag: "ToolParameterValidationError" } } },
+          ]);
         }).pipe(
           Effect.provideService(ContextWindow, { status: Ref.get(current) }),
           Effect.provideService(ContextHistory, archive),
@@ -286,19 +290,25 @@ describe("context window tools", () => {
 
       const searchFailure = yield* tools
         .handle("search_context_windows", { query: "saved", limit: 4 }, "search")
-        .pipe(Effect.flip);
+        .pipe(Effect.flatMap(Stream.runCollect));
 
       const readFailure = yield* tools
         .handle("read_context_window", { recordId: "evidence", maxChars: 5_001 }, "read")
-        .pipe(Effect.flip);
+        .pipe(Effect.flatMap(Stream.runCollect));
 
       const cursorFailure = yield* tools
         .handle("search_context_windows", { query: "saved", beforeRecordId: "" }, "cursor")
-        .pipe(Effect.flip);
+        .pipe(Effect.flatMap(Stream.runCollect));
 
-      expect(searchFailure).toMatchObject({ reason: { _tag: "ToolParameterValidationError" } });
-      expect(readFailure).toMatchObject({ reason: { _tag: "ToolParameterValidationError" } });
-      expect(cursorFailure).toMatchObject({ reason: { _tag: "ToolParameterValidationError" } });
+      expect(searchFailure).toMatchObject([
+        { isFailure: true, result: { reason: { _tag: "ToolParameterValidationError" } } },
+      ]);
+      expect(readFailure).toMatchObject([
+        { isFailure: true, result: { reason: { _tag: "ToolParameterValidationError" } } },
+      ]);
+      expect(cursorFailure).toMatchObject([
+        { isFailure: true, result: { reason: { _tag: "ToolParameterValidationError" } } },
+      ]);
     }).pipe(
       Effect.provide(ContextTools.layer),
       Effect.provideService(ContextWindow, { status: Effect.die("Unexpected status read") }),

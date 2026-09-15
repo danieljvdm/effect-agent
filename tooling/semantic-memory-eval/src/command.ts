@@ -4,27 +4,27 @@ import { Command, Flag } from "effect/unstable/cli";
 import { EvaluationReport } from "./contracts.ts";
 import { runEvaluation } from "./evaluate.ts";
 
-const cachePath = Flag.directory("cache").pipe(
+const cachePath = Flag.Directory("cache").pipe(
   Flag.withDefault("/tmp/effect-agent-semantic-model"),
   Flag.withDescription("Transformers.js model cache directory."),
 );
 
-const output = Flag.file("output").pipe(
+const output = Flag.File("output").pipe(
   Flag.withDefault("/tmp/kom18-evaluation.json"),
   Flag.withDescription("Destination for the single schema-encoded JSON report."),
 );
 
-const offline = Flag.boolean("offline").pipe(
+const offline = Flag.Boolean("offline").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Require the exact pinned model revision to exist in the local cache."),
 );
 
-const environment = Flag.string("environment").pipe(
+const environment = Flag.String("environment").pipe(
   Flag.withDefault("unspecified"),
   Flag.withDescription("Reproducibility descriptor recorded verbatim in the report."),
 );
 
-const gitRevision = Flag.string("git-revision").pipe(
+const gitRevision = Flag.String("git-revision").pipe(
   Flag.withDefault("working-tree"),
   Flag.withDescription("Git revision descriptor recorded verbatim in the report."),
 );

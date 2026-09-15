@@ -56,7 +56,7 @@ it.live(
   "observes native product controls and delayed cart requests in real Chromium",
   (context) =>
     Effect.gen(function* () {
-      const executable = yield* Config.option(Config.string("BROWSER_TEST_EXECUTABLE"));
+      const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
 
       if (Option.isNone(executable)) return context.skip();
       let cartRequests = 0;

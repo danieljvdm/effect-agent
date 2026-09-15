@@ -7,20 +7,20 @@ class UnsafeStorageTarget extends Schema.TaggedError<UnsafeStorageTarget>()("Uns
   target: Schema.String,
 }) {}
 
-const database = Flag.file("database").pipe(
+const database = Flag.File("database").pipe(
   Flag.withDescription(
     "SQLite database file to reset; it must be an explicit .db, .sqlite, or .sqlite3 file inside this repository.",
   ),
 );
 
-const confirmPrivateDevelopment = Flag.boolean("confirm-private-development").pipe(
+const confirmPrivateDevelopment = Flag.Boolean("confirm-private-development").pipe(
   Flag.withDefault(false),
   Flag.withDescription(
     "Confirm that this is disposable private-development data and no stored-data migration is expected.",
   ),
 );
 
-const dryRun = Flag.boolean("dry-run").pipe(
+const dryRun = Flag.Boolean("dry-run").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Print the files that would be removed without changing them."),
 );

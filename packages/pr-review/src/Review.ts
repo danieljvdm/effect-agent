@@ -1,4 +1,13 @@
-import { Effect, Layer, Ref, Result, Schema, Stream } from "effect";
+import {
+  Effect,
+  Layer,
+  Ref,
+  Result,
+  Schema,
+  SchemaParser,
+  SchemaTransformation,
+  Stream,
+} from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -277,15 +286,30 @@ const RecordedFinding = Schema.Struct({
   priority: ReviewPriority,
 });
 
-const ReviewSubmission = Schema.Struct({
+const ReviewSubmissionFields = Schema.Struct({
   resolutions: Schema.optionalKey(Resolutions),
   blockedOn: Schema.optionalKey(ReviewBlocker).annotate({
     description:
       "Only for specific unavailable evidence that prevents assessing supported changed behavior after all patches are reviewed. Name the missing evidence, affected behavior, and failed attempts to obtain it. Unread diffs, excluded artifacts, lack of live execution, and hypothetical uncertainty are not blockers. Omit when the source-based review is complete.",
   }),
-}).annotate({
+});
+
+// Preserve rejection at the native LanguageModel boundary, before it can discard
+// unexpected fields. Parser options on annotations no longer apply in Effect rc.115.
+const ReviewSubmission = Schema.declareConstructor<typeof ReviewSubmissionFields.Type>()(
+  [ReviewSubmissionFields],
+  ([codec]) =>
+    (value, _ast, options) =>
+      SchemaParser.decodeUnknownEffect(codec)(value, { ...options, onExcessProperty: "error" }),
+  {
+    toCodecJson: ([codec]) =>
+      Schema.link<typeof ReviewSubmissionFields.Encoded>()(
+        codec,
+        SchemaTransformation.passthrough(),
+      ),
+  },
+).annotate({
   identifier: "@effect-agent/pr-review/ReviewSubmission",
-  parseOptions: { onExcessProperty: "error" },
 });
 
 /*! @license

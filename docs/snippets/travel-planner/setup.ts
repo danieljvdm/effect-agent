@@ -6,7 +6,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { TravelToolsLive } from "./tools";
 
 const AnthropicLive = AnthropicClient.layerConfig({
-  apiKey: Config.redacted("ANTHROPIC_API_KEY"),
+  apiKey: Config.Redacted("ANTHROPIC_API_KEY"),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 export const AppLive = Layer.mergeAll(TravelToolsLive, Ephemeral.layer, AnthropicLive);

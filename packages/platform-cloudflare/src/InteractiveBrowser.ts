@@ -1176,9 +1176,9 @@ const snapshotPolicy = Effect.fn("BrowserRunInteractive.snapshotPolicy")(functio
   InteractiveBrowserPolicySnapshot,
   InteractiveBrowserPolicyDeniedError | InteractiveBrowserUnsupportedError
 > {
-  const decoded = yield* Schema.decodeEffect(InteractiveBrowserPolicy)(input).pipe(
-    Effect.mapError(() => policyError("The interactive browser policy is malformed")),
-  );
+  const decoded = yield* Schema.decodeEffect(InteractiveBrowserPolicy, {
+    onExcessProperty: "error",
+  })(input).pipe(Effect.mapError(() => policyError("The interactive browser policy is malformed")));
 
   if (decoded.network._tag === "PublicWeb") {
     return yield* InteractiveBrowserUnsupportedError.make({

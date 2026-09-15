@@ -129,9 +129,9 @@ export const browserRunProtectedHostLayer = () =>
         ProtectedBrowserError,
         Scope.Scope | BrowserCredentialAccess
       > {
-        const policy = yield* Schema.decodeEffect(InteractiveBrowserPolicy)(input).pipe(
-          Effect.mapError(() => failure("denied")),
-        );
+        const policy = yield* Schema.decodeEffect(InteractiveBrowserPolicy, {
+          onExcessProperty: "error",
+        })(input).pipe(Effect.mapError(() => failure("denied")));
 
         if (policy.network._tag !== "Unrestricted") return yield* failure("unsupported");
 

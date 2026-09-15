@@ -118,7 +118,7 @@ if (import.meta.main)
   NodeRuntime.runMain(
     Effect.gen(function* () {
       const options = yield* Schema.decodeEffect(Schema.fromJsonString(WriterOptions))(
-        yield* Config.string("RUNTIME_DIAGNOSTIC_WRITER"),
+        yield* Config.String("RUNTIME_DIAGNOSTIC_WRITER"),
       );
 
       yield* runWriter(options);

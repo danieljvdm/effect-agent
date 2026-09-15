@@ -14,7 +14,7 @@ export const planner = Agent.make("trip-planner", {
 export const ModelLive = OpenAiLanguageModel.model("gpt-4.1-mini");
 
 export const OpenAiLive = OpenAiClient.layerConfig({
-  apiKey: Config.redacted("OPENAI_API_KEY"),
+  apiKey: Config.Redacted("OPENAI_API_KEY"),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 export const definitions = { agent: "v1", model: "gpt-4.1-mini", tools: "v1" };

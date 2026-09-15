@@ -119,7 +119,7 @@ const environmentFromAllowlist = Effect.fn("LocalSandbox.environmentFromAllowlis
   const environment: Record<string, string> = {};
 
   for (const name of request.environment.allow) {
-    const value = yield* Config.option(Config.string(name)).pipe(
+    const value = yield* Config.option(Config.String(name)).pipe(
       Effect.mapError((error) =>
         spawnError(
           request,

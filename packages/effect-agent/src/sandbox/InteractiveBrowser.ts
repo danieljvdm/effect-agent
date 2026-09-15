@@ -75,7 +75,7 @@ export const InteractiveBrowserNetworkPolicy = Schema.Union([
   }),
   Schema.TaggedStruct("PublicWeb", {}),
   Schema.TaggedStruct("Unrestricted", {}),
-]).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } }));
+]);
 
 export type InteractiveBrowserNetworkPolicy = typeof InteractiveBrowserNetworkPolicy.Type;
 
@@ -88,7 +88,7 @@ export class InteractiveBrowserPolicy extends Schema.Class<InteractiveBrowserPol
     maxActions: PositiveInt.check(Schema.isLessThanOrEqualTo(1_000)),
     maxElapsedMillis: PositiveInt.check(Schema.isLessThanOrEqualTo(60 * 60_000)),
     maxReturnedBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(8 * 1024 * 1024)),
-  }).pipe(Schema.annotate({ parseOptions: { onExcessProperty: "error" } })),
+  }),
 ) {}
 
 export class BrowserNavigateRequest extends Schema.Class<BrowserNavigateRequest>(

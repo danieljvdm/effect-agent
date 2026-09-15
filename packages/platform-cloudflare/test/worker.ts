@@ -218,7 +218,7 @@ const registrationResourceLayer = Layer.effect(
     const { raw: ctx } = yield* DurableObjectState.DurableObjectState;
     const env = yield* WorkerEnvironment;
     const { threadId, producerId } = yield* ThreadObjectIdentity;
-    const configuredLabel = yield* Config.string("REGISTRATION_LABEL");
+    const configuredLabel = yield* Config.String("REGISTRATION_LABEL");
 
     yield* Crypto.Crypto;
     const previous = bindingSourceProbes.get(ctx);

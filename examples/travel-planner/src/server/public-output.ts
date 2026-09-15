@@ -20,7 +20,7 @@ export const PublicOutputLive = Layer.effect(
     return {
       ...model,
       // Preserve native overload inference across a transparent variadic decorator.
-      streamText: ((...args: Parameters<LanguageModel.Service["streamText"]>) =>
+      streamText: ((...args: Parameters<LanguageModel.LanguageModel["streamText"]>) =>
         Stream.unwrap(
           Effect.sync(() => {
             let responseCall: string | undefined;
@@ -54,7 +54,7 @@ export const PublicOutputLive = Layer.effect(
               ),
             );
           }),
-        )) as LanguageModel.Service["streamText"],
-    } satisfies LanguageModel.Service;
+        )) as LanguageModel.LanguageModel["streamText"],
+    } satisfies LanguageModel.LanguageModel;
   }),
 );

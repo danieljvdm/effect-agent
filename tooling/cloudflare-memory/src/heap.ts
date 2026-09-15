@@ -179,17 +179,17 @@ const git = Effect.fn("heap.git")(function* (root: string, args: ReadonlyArray<s
 export const command = Command.make(
   "measure-heap",
   {
-    output: Flag.string("out-dir").pipe(
+    output: Flag.String("out-dir").pipe(
       Flag.withDescription(
         "New or existing directory for exact bundles, samples, and report.json.",
       ),
     ),
-    samples: Flag.integer("samples").pipe(
+    samples: Flag.Int("samples").pipe(
       Flag.withDefault(3),
       Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 20 }))),
       Flag.withDescription("Fresh processes and local workerd instances per cohort, 1–20."),
     ),
-    objects: Flag.integer("objects").pipe(
+    objects: Flag.Int("objects").pipe(
       Flag.withDefault(4),
       Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 16 }))),
       Flag.withDescription("Initialized and concurrently active Thread Objects, 1–16."),

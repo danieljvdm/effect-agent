@@ -468,7 +468,21 @@ it.each(["current", "retained", "delegating", "recoverable"])(
         record.payload._tag === "ToolCallSettled" && record.payload.toolName === "finish_research",
     );
 
-    const retained = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
+    // Worker settlement is visible before its completion message is admitted by
+    // the parent. Wait for that canonical message rather than racing its delivery.
+    const readParent = async () =>
+      Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
+
+    const retained =
+      version === "current"
+        ? await until(readParent, (journal) =>
+            journal.records.some(
+              ({ record }) =>
+                record.payload._tag === "UserInputRecorded" &&
+                Schema.is(WorkerCompletion)(record.payload.messageAdmission),
+            ),
+          )
+        : await readParent();
 
     const messages = retained.records.flatMap(({ record }) =>
       record.payload._tag === "UserInputRecorded" ? [record.payload.messageAdmission] : [],

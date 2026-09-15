@@ -55,31 +55,31 @@ const Report = Schema.Struct({
 const command = Command.make(
   "perf:cloudflare",
   {
-    sourceRoot: Flag.directory("source-root").pipe(
+    sourceRoot: Flag.Directory("source-root").pipe(
       Flag.withDefault("."),
       Flag.withDescription("Clean exact candidate checkout, using its own installed lockfile."),
     ),
-    referenceRoot: Flag.directory("reference-root").pipe(
+    referenceRoot: Flag.Directory("reference-root").pipe(
       Flag.optional,
       Flag.withDescription(
         "Optional clean reference checkout. Builds the identical fixture against its dependencies.",
       ),
     ),
-    model: Flag.choice("model", MODEL_IDS).pipe(Flag.withDefault("gpt-6-astra")),
-    samples: Flag.integer("samples").pipe(
+    model: Flag.Literals("model", MODEL_IDS).pipe(Flag.withDefault("gpt-6-astra")),
+    samples: Flag.Int("samples").pipe(
       Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3 }))),
       Flag.withDefault(1),
     ),
-    output: Flag.directory("output-dir").pipe(
+    output: Flag.Directory("output-dir").pipe(
       Flag.withDefault(".context-continuity-eval/performance"),
     ),
-    dryRun: Flag.boolean("dry-run").pipe(
+    dryRun: Flag.Boolean("dry-run").pipe(
       Flag.withDefault(false),
       Flag.withDescription(
         "Build and show bounded deployment plan without credentials, deployment, or inference.",
       ),
     ),
-    cleanup: Flag.boolean("cleanup").pipe(
+    cleanup: Flag.Boolean("cleanup").pipe(
       Flag.withDefault(false),
       Flag.withDescription(
         "Retry removal of this output directory's recorded disposable namespace/Workers; no inference.",
@@ -227,14 +227,14 @@ const command = Command.make(
           stage: "source",
           message: "Live performance requires clean exact candidate and reference checkouts",
         });
-      if ((yield* Config.string("EFFECT_AGENT_LIVE").pipe(Config.withDefault("0"))) !== "1")
+      if ((yield* Config.String("EFFECT_AGENT_LIVE").pipe(Config.withDefault("0"))) !== "1")
         return yield* EvaluationError.make({
           stage: "configuration",
           message:
             "Set EFFECT_AGENT_LIVE=1 to authorize deployment and up to $2 per sample per target in provider reservations",
         });
       const config = yield* loadPerformanceConfig;
-      const openai = yield* Config.redacted("OPENAI_API_KEY");
+      const openai = yield* Config.Redacted("OPENAI_API_KEY");
       const run = (yield* (yield* Crypto.Crypto).randomUUIDv4).replaceAll("-", "");
       const token = Redacted.make(yield* (yield* Crypto.Crypto).randomUUIDv4);
       const secretPath = yield* fs.makeTempFileScoped({ prefix: "performance-secrets-" });

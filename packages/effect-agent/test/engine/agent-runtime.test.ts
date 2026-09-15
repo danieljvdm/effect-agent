@@ -46,15 +46,7 @@ import {
   type RunUsageDelta,
 } from "effect-agent/run-options";
 import { TestClock } from "effect/testing";
-import {
-  AiError,
-  LanguageModel,
-  Model,
-  Prompt,
-  type Response,
-  Tool,
-  Toolkit,
-} from "effect/unstable/ai";
+import { AiError, LanguageModel, Model, Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import { boundedValueFootprint } from "../../src/engine/internal/bounded-value.ts";
 import { errorMessage, errorTag } from "../../src/engine/internal/error-diagnostic.ts";
@@ -266,11 +258,11 @@ const exportedLogObservation = ({ cause, fiber, logLevel, message }: Logger.Opti
     .map(([label, startTime]) => ({ label, startTime })),
   fiberId: fiber.id,
   currentSpan:
-    fiber.currentSpan === undefined
+    fiber.cache.span === undefined
       ? undefined
       : {
-          traceId: fiber.currentSpan.traceId,
-          spanId: fiber.currentSpan.spanId,
+          traceId: fiber.cache.span.traceId,
+          spanId: fiber.cache.span.spanId,
         },
 });
 
@@ -3796,10 +3788,10 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       parameters: Schema.Struct({
         value: Schema.FiniteFromString.pipe(
           Schema.decode({
-            decode: SchemaGetter.transformOrFail((value) =>
+            decode: SchemaGetter.transformEffect((value) =>
               Effect.map(ParametersDecoder, (decode) => decode(value)),
             ),
-            encode: SchemaGetter.transformOrFail((value) =>
+            encode: SchemaGetter.transformEffect((value) =>
               Effect.map(ParametersEncoder, (encode) => encode(value)),
             ),
           }),
@@ -4384,13 +4376,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it("owns primitive text and reasoning deltas while preserving source and retained bounds", () => {
     for (const type of ["text-delta", "reasoning-delta"] as const) {
-      const source = {
-        "~effect/ai/Content/Part": "~effect/ai/Content/Part",
-        type,
-        id: "reply",
-        delta: "é😀\ud800",
-        metadata: {},
-      };
+      const source = { ...Response.makePart(type, { id: "reply", delta: "é😀\ud800" }) };
 
       const sourceBytes = boundedValueFootprint(source, 1_024)!;
       const encoded = { type, id: source.id, delta: source.delta, metadata: {} };
@@ -4411,7 +4397,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
       ).toBeUndefined();
       expect(ownPrimitiveDelta({ ...source, delta: 42 }, 1_024)).toBeUndefined();
       expect(
-        ownPrimitiveDelta({ ...source, "~effect/ai/Content/Part": "invalid" }, 1_024),
+        ownPrimitiveDelta({ ...source, "~effect/ai/Response/Part": "invalid" }, 1_024),
       ).toBeUndefined();
       let reads = 0;
 
@@ -4444,7 +4430,7 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
         expect(
           ownPrimitiveDelta(
             {
-              "~effect/ai/Content/Part": "~effect/ai/Content/Part",
+              "~effect/ai/Response/Part": "~effect/ai/Response/Part",
               type: "text-delta",
               id: "reply",
               delta: "text",

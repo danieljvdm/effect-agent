@@ -14,8 +14,8 @@ class Decoder extends Context.Service<Decoder, string>()("update-types/Decoder")
 
 const finding = Schema.String.pipe(
   Schema.decodeTo(Schema.String, {
-    decode: SchemaGetter.transformOrFail((value) => Effect.as(Decoder, value)),
-    encode: SchemaGetter.transformOrFail((value) => Effect.as(Encoder, value)),
+    decode: SchemaGetter.transformEffect((value) => Effect.as(Decoder, value)),
+    encode: SchemaGetter.transformEffect((value) => Effect.as(Encoder, value)),
   }),
 );
 

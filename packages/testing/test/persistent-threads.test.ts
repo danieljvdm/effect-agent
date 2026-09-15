@@ -346,7 +346,7 @@ describe("persistent threads", () => {
 
       const output = Schema.String.pipe(
         Schema.decode({
-          decode: SchemaGetter.transformOrFail((value) =>
+          decode: SchemaGetter.transformEffect((value) =>
             Ref.updateAndGet(decodes, (n) => n + 1).pipe(
               Effect.flatMap((count) =>
                 count === 1
@@ -499,7 +499,7 @@ describe("persistent threads", () => {
 
       const input = Schema.String.pipe(
         Schema.decode({
-          decode: SchemaGetter.transformOrFail((value) =>
+          decode: SchemaGetter.transformEffect((value) =>
             Ref.updateAndGet(decodes, (n) => n + 1).pipe(
               Effect.map((count) => `${value}:${count}`),
             ),

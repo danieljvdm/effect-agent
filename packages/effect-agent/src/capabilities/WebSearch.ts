@@ -71,9 +71,9 @@ export const tool = Tool.make("WebSearch", {
 
 export const toolkit = Toolkit.make(tool);
 
-export interface Options {
+export interface Options<T extends Tool.AnyProviderDefined = Tool.AnyProviderDefined> {
   /** Native upstream hosted search tool, for example OpenAiTool.WebSearch or AnthropicTool.WebSearch_20250305. */
-  readonly tool: Tool.AnyProviderDefined;
+  readonly tool: T;
   /** One model request, with no automatic retries; defaults to 30 seconds. */
   readonly timeoutMillis?: number;
   /** Maximum encoded result size, including citations and usage; defaults to 32 KiB. */
@@ -97,7 +97,7 @@ const decodeSearchStatus = Schema.decodeUnknownOption(Schema.Struct({ status: Sc
  * Defects and interruption propagate; expected failures become failed tool results. Search
  * model usage is returned for host accounting, not silently charged to the parent Run budget.
  */
-export const layer = (options: Options) => {
+export const layer = <T extends Tool.AnyProviderDefined>(options: Options<T>) => {
   if (
     !Tool.isProviderDefined(options.tool) ||
     !["web_search", "web_search_preview"].includes(options.tool.providerName)
@@ -119,26 +119,32 @@ export const layer = (options: Options) => {
     Effect.gen(function* () {
       const model = yield* LanguageModel.LanguageModel;
 
+      const generate = (query: string) =>
+        model.generateText({
+          prompt: query,
+          toolkit: searchToolkit,
+          toolChoice: "required",
+          disableToolCallResolution: true,
+        });
+
+      const encodingContext = yield* Effect.context<Effect.Services<ReturnType<typeof generate>>>();
+
+      const generateWithContext = (query: string) =>
+        Effect.provide(generate(query), encodingContext);
+
       return {
         WebSearch: Effect.fn("WebSearch.search")(function* (input) {
           const { query } = yield* Schema.decodeEffect(Parameters)(input).pipe(
             Effect.mapError(() => new Failure({ reason: "invalid-query" })),
           );
 
-          const response = yield* model
-            .generateText({
-              prompt: query,
-              toolkit: searchToolkit,
-              toolChoice: "required",
-              disableToolCallResolution: true,
-            })
-            .pipe(
-              Effect.mapError(() => new Failure({ reason: "provider" })),
-              Effect.timeoutOrElse({
-                duration: timeoutMillis,
-                orElse: () => Effect.fail(new Failure({ reason: "timeout" })),
-              }),
-            );
+          const response = yield* generateWithContext(query).pipe(
+            Effect.mapError(() => new Failure({ reason: "provider" })),
+            Effect.timeoutOrElse({
+              duration: timeoutMillis,
+              orElse: () => Effect.fail(new Failure({ reason: "timeout" })),
+            }),
+          );
 
           if (
             response.toolResults.some((result) => {

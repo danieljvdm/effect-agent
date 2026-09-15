@@ -3628,6 +3628,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
       expect(Exit.isSuccess(fitting.exit)).toBe(true);
       expect(fitting.wireSchemas).toHaveLength(1);
       expect(fitting.admittedSchemas).toEqual(fitting.wireSchemas);
+      expect(fitting.wireSchemas[0]).toEqual(toCodecOpenAI(CredentialLookup).jsonSchema);
       const tooSmall = yield* run(2_400);
 
       expect(failureFrom(tooSmall.exit)).toBeInstanceOf(ContextBudgetError);

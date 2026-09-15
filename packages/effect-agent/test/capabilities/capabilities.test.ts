@@ -2012,13 +2012,13 @@ describe("capability contracts", () => {
           type: "object",
           properties: { query: { type: "string" } },
           required: ["query"],
-          additionalProperties: false,
+          additionalProperties: true,
         },
         outputSchema: {
           type: "object",
           properties: { answer: { type: "string" } },
           required: ["answer"],
-          additionalProperties: false,
+          additionalProperties: true,
         },
       });
 

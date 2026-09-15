@@ -248,7 +248,7 @@ describe("GitHub workflow completion source", () => {
     }),
   );
 
-  it.effect("rejects a canonical completion from another repository", () =>
+  it.effect("rejects unauthorized and excess canonical completion or watch fields", () =>
     Effect.gen(function* () {
       const source = yield* sourceWith(completedAttempt);
 
@@ -263,6 +263,29 @@ describe("GitHub workflow completion source", () => {
       );
 
       expect(failure).toMatchObject({ _tag: "SubscriptionSourceError", code: "source-schema" });
+
+      const unexpectedEventField = yield* Effect.flip(
+        source.normalize({
+          repositoryId: 101,
+          runId: 202,
+          attempt: 3,
+          headSha: SHA,
+          conclusion: "success",
+          token: "must-not-enter-canonical-events",
+        }),
+      );
+
+      const unexpectedWatchField = yield* Effect.flip(
+        source.parameters({
+          runId: 202,
+          attempt: 3,
+          expectedHeadSha: SHA,
+          repositoryId: 999,
+        }),
+      );
+
+      expect(unexpectedEventField.code).toBe("source-schema");
+      expect(unexpectedWatchField.code).toBe("source-schema");
     }),
   );
 });

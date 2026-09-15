@@ -8,7 +8,7 @@ import { measureNode } from "./heap-node.ts";
 const command = Command.make(
   "heap-node",
   {
-    bundle: Argument.string("bundle").pipe(
+    bundle: Argument.String("bundle").pipe(
       Argument.withDescription("Exact Wrangler JavaScript bundle to evaluate."),
     ),
   },

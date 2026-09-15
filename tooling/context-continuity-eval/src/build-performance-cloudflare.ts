@@ -156,8 +156,8 @@ export const buildPerformanceCloudflare = Effect.fn("Performance.build")(functio
 const command = Command.make(
   "perf:cloudflare:build",
   {
-    sourceRoot: Flag.directory("source-root").pipe(Flag.withDefault(".")),
-    output: Flag.directory("output-dir").pipe(
+    sourceRoot: Flag.Directory("source-root").pipe(Flag.withDefault(".")),
+    output: Flag.Directory("output-dir").pipe(
       Flag.withDefault(".context-continuity-eval/performance-build"),
     ),
   },

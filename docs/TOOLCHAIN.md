@@ -17,22 +17,23 @@ Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 | ------------------------------------------------------- | -------------------- |
 | Bun                                                     | `1.4.0`              |
 | Vite+                                                   | `0.3.0`              |
-| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.112`       |
-| `effect-cf`                                             | `0.42.1`             |
+| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.115`       |
+| `effect-cf`                                             | `0.43.0`             |
 | TypeScript                                              | `7.0.2`              |
-| `@effect/tsgo`                                          | `0.33.0`             |
+| `@effect/tsgo`                                          | `0.45.0`             |
 | Node.js                                                 | `22.18+` or `24.11+` |
 
-Public packages require `effect@^4.0.0-rc.112` as a peer. The exact catalog pin supplies the
+Public packages require `effect@^4.0.0-rc.115` as a peer. The exact catalog pin supplies the
 development version. Raise the peer minimum when code needs a newer API.
 Private examples declare Effect as a regular dependency. Adapters depend on the platform and
 SQL implementations they use.
 
-`platform-cloudflare` requires `effect-cf@^0.42.1` and `effect@^4.0.0-rc.112` as host peers
+`platform-cloudflare` requires `effect-cf@^0.43.0` and `effect@^4.0.0-rc.115` as host peers
 and uses the exact catalog versions for development. Supply Effect SQL packages compatible with
-rc.112 for `effect-cf`. Consumers provide the shared runtime.
+rc.115 for `effect-cf`. Consumers provide the shared runtime.
 
-Root overrides keep Effect, its Node platform, and Vitest on one version.
+Root overrides keep Effect, its Node/browser platforms, shared SQL adapters, and test packages
+on the catalog versions, including dependencies of published consumers.
 The docs deployment runs Alchemy under Bun, so the root also installs Alchemy's
 optional `@effect/platform-bun` peer at the shared Effect version.
 Vite+ supplies Vitest except in the two Cloudflare packages, whose Workers pool requires a

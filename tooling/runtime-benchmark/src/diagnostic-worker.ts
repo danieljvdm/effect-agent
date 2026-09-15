@@ -182,7 +182,7 @@ if (import.meta.main)
   NodeRuntime.runMain(
     Effect.gen(function* () {
       const options = yield* Schema.decodeEffect(Schema.fromJsonString(DiagnosticWorkerOptions))(
-        yield* Config.string("RUNTIME_DIAGNOSTIC_OPTIONS"),
+        yield* Config.String("RUNTIME_DIAGNOSTIC_OPTIONS"),
       );
 
       yield* runDiagnosticWorker(options);

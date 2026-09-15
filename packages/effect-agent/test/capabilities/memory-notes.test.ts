@@ -172,9 +172,11 @@ describe("durable working notes", () => {
 
         const write = yield* tools
           .handle("write_notes", { text: `${text}A`, expectedRevision: "1" }, "write")
-          .pipe(Effect.flip, Effect.provideService(DurableStep, steps()));
+          .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(DurableStep, steps()));
 
-        expect(write).toMatchObject({ reason: { _tag: "ToolParameterValidationError" } });
+        expect(write).toMatchObject([
+          { isFailure: true, result: { reason: { _tag: "ToolParameterValidationError" } } },
+        ]);
       });
 
       yield* exercise.pipe(

@@ -112,14 +112,14 @@ describe("subscription callback resource ownership", () => {
 
           const codec = Schema.String.pipe(
             Schema.decodeTo(Schema.String, {
-              decode: SchemaGetter.transformOrFail((value) =>
+              decode: SchemaGetter.transformEffect((value) =>
                 Effect.gen(function* () {
                   observedServices.push(yield* Decoder);
 
                   return yield* scopedValue(value);
                 }),
               ),
-              encode: SchemaGetter.transformOrFail((value) =>
+              encode: SchemaGetter.transformEffect((value) =>
                 Effect.gen(function* () {
                   observedServices.push(yield* Encoder);
 

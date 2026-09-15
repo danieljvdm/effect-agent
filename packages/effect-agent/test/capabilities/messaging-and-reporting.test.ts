@@ -21,7 +21,7 @@ class DeclaredFailure extends Schema.TaggedError<DeclaredFailure>()("ReportDenie
 const text = Schema.String.pipe(
   Schema.decodeTo(Schema.String, {
     decode: SchemaGetter.passthrough(),
-    encode: SchemaGetter.transformOrFail((value) => Effect.as(Encode, value)),
+    encode: SchemaGetter.transformEffect((value) => Effect.as(Encode, value)),
   }),
 );
 

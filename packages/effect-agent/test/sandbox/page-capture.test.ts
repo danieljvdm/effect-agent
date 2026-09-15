@@ -329,12 +329,13 @@ describe("Page capture and screenshot schemas", () => {
 
     cyclic.properties.self = cyclic;
 
-    for (const responseFormat of [...invalidDocuments, tooDeep, cyclic]) {
+    for (const [index, responseFormat] of [...invalidDocuments, tooDeep, cyclic].entries()) {
       expect(
         Schema.decodeUnknownExit(CapturePageStructured)({
           _tag: "CapturePageStructured",
           responseFormat,
         })._tag,
+        `invalid response format ${index}`,
       ).toBe("Failure");
     }
   });

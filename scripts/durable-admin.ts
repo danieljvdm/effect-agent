@@ -57,11 +57,11 @@ const decodeSubmissionId = (value: string) =>
 
 const encodeExplanation = Schema.encodeEffect(RecoveryExplanation);
 
-const database = Flag.file("database").pipe(
+const database = Flag.File("database").pipe(
   Flag.withDescription("SQLite database file of the DN deployment (Thread Log + ledger)."),
 );
 
-const json = Flag.boolean("json").pipe(
+const json = Flag.Boolean("json").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Print Schema-encoded JSON instead of operator text."),
 );
@@ -100,11 +100,11 @@ const printExplanation = (explanation: RecoveryExplanation, asJson: boolean) =>
 const explainCommand = CliCommand.make(
   "explain",
   {
-    submission: Flag.string("submission").pipe(
+    submission: Flag.String("submission").pipe(
       Flag.optional,
       Flag.withDescription("Explain one Submission by identity."),
     ),
-    thread: Flag.string("thread").pipe(
+    thread: Flag.String("thread").pipe(
       Flag.optional,
       Flag.withDescription("Explain every nonterminal Submission of one Thread lane."),
     ),
@@ -169,7 +169,7 @@ const renderReport = (report: IntegrityReport): ReadonlyArray<string> => [
 const verifyCommand = CliCommand.make(
   "verify",
   {
-    thread: Flag.string("thread").pipe(Flag.withDescription("Thread to verify.")),
+    thread: Flag.String("thread").pipe(Flag.withDescription("Thread to verify.")),
   },
   ({ thread }) =>
     withRuntime(
@@ -204,13 +204,13 @@ const renderRetry = (report: RecoveryReport): string =>
 const retryCommand = CliCommand.make(
   "retry",
   {
-    submission: Flag.string("submission").pipe(
+    submission: Flag.String("submission").pipe(
       Flag.withDescription("Submission whose classified recovery decision is re-driven."),
     ),
-    author: Flag.string("author").pipe(
+    author: Flag.String("author").pipe(
       Flag.withDescription("Mandatory audit author recorded with the operator action (SEC-011)."),
     ),
-    reason: Flag.string("reason").pipe(
+    reason: Flag.String("reason").pipe(
       Flag.withDescription("Mandatory audit reason recorded with the operator action (SEC-011)."),
     ),
   },
@@ -245,7 +245,7 @@ const retryCommand = CliCommand.make(
 const wakeCommand = CliCommand.make(
   "wake",
   {
-    thread: Flag.string("thread").pipe(Flag.withDescription("Thread lane to nudge.")),
+    thread: Flag.String("thread").pipe(Flag.withDescription("Thread lane to nudge.")),
   },
   ({ thread }) =>
     withRuntime(
@@ -272,11 +272,11 @@ const renderObligations = (report: ObligationReport): ReadonlyArray<string> =>
 const obligationsCommand = CliCommand.make(
   "obligations",
   {
-    agingSeconds: Flag.integer("aging-seconds").pipe(
+    agingSeconds: Flag.Int("aging-seconds").pipe(
       Flag.withDefault(300),
       Flag.withDescription("Age (seconds) at which an obligation is reported aging."),
     ),
-    overdueSeconds: Flag.integer("overdue-seconds").pipe(
+    overdueSeconds: Flag.Int("overdue-seconds").pipe(
       Flag.withDefault(3_600),
       Flag.withDescription("Age (seconds) at which an obligation is reported overdue."),
     ),

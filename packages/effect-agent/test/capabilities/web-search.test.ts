@@ -1,5 +1,17 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Ref,
+  Schema,
+  SchemaGetter,
+  Stream,
+} from "effect";
 import * as WebSearch from "effect-agent/web-search";
 import { TestClock } from "effect/testing";
 import { AiError, LanguageModel, Tool, type Response } from "effect/unstable/ai";
@@ -68,6 +80,34 @@ describe("WebSearch", () => {
             Array<Tool.HandlerResult<typeof WebSearch.tool>>,
             AiError.AiError,
             LanguageModel.LanguageModel
+          >
+        >();
+
+        class SearchEncoding extends Context.Service<SearchEncoding, string>()(
+          "test/SearchEncoding",
+        ) {}
+
+        const encodedSearch = Tool.providerDefined({
+          id: "test.web_search",
+          customName: "EncodedSearch",
+          providerName: "web_search",
+          args: Tool.EmptyParams,
+          parameters: Schema.Struct({
+            query: Schema.String.pipe(
+              Schema.decode({
+                decode: SchemaGetter.passthrough(),
+                encode: SchemaGetter.transformEffect((query) => Effect.as(SearchEncoding, query)),
+              }),
+            ),
+          }),
+          success: Schema.Struct({ status: Schema.String }),
+        })({});
+
+        expectTypeOf(WebSearch.layer({ tool: encodedSearch })).toEqualTypeOf<
+          Layer.Layer<
+            Tool.Handler<"WebSearch">,
+            never,
+            LanguageModel.LanguageModel | SearchEncoding
           >
         >();
 

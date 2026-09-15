@@ -10,7 +10,7 @@ import { Config, Effect, Layer } from "effect";
 // flag and the accepted values instead of silently picking a state store.
 const state = Layer.unwrap(
   Effect.gen(function* () {
-    const useLocalState = yield* Config.boolean("ALCHEMY_LOCAL_STATE").pipe(
+    const useLocalState = yield* Config.Boolean("ALCHEMY_LOCAL_STATE").pipe(
       Config.withDefault(false),
     );
 

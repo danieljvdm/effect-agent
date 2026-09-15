@@ -9,7 +9,7 @@ import { TravelToolsLive } from "./tools.ts";
 
 const ModelLive = OpenAiLanguageModel.model("gpt-4.1-mini");
 
-const ProviderLive = OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") }).pipe(
+const ProviderLive = OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") }).pipe(
   Layer.provide(FetchHttpClient.layer),
 );
 

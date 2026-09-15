@@ -15,7 +15,7 @@ import { scriptedResponse } from "./scripted-model.ts";
 // native streaming decoder, budget ledger, runtime, SQLite, and supervisor.
 const program = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const file = yield* Config.string("CONTEXT_EVAL_WORKER_OPTIONS");
+  const file = yield* Config.String("CONTEXT_EVAL_WORKER_OPTIONS");
 
   const options = yield* Schema.decodeEffect(Schema.fromJsonString(WorkerOptions))(
     yield* fs.readFileString(file),

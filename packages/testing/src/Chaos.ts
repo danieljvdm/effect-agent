@@ -51,7 +51,6 @@ import {
 import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
 import { verifyThreadInvariants } from "effect-agent/thread-invariants";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { FastCheck } from "effect/testing";
 import {
   LanguageModel,
   Model,
@@ -60,10 +59,11 @@ import {
   type Prompt,
   type Response,
 } from "effect/unstable/ai";
+import { Arbitrary } from "effect/unstable/arbitrary";
 
 /**
  * P7 WP4 chaos machinery (plan §5): a Schema-first `ChaosPlan`, a seeded generator over
- * `effect/testing/FastCheck` (already inside the pinned Effect — no new dependency), and a
+ * `effect/unstable/arbitrary`, and a
  * deterministic runner that drives the durable coordinator over whatever adapter pair the test
  * provides. Every plan ends in the SAME claims the crash matrices make:
  *
@@ -207,25 +207,14 @@ export interface ChaosGeneratorOptions {
   readonly adapterArms?: ReadonlyArray<string> | undefined;
 }
 
-interface GeneratedLane {
-  readonly kind: ChaosScenarioKind;
-  readonly depth: number;
-}
-
-const laneArbitrary: FastCheck.Arbitrary<GeneratedLane> = FastCheck.constantFrom<ChaosScenarioKind>(
-  "plain",
-  "uncertain-tool",
-  "durable-steps",
-  "approval",
-  "join",
-  "delegation",
-).chain((kind): FastCheck.Arbitrary<GeneratedLane> =>
-  kind === "join"
-    ? FastCheck.integer({ min: 2, max: 3 }).map((depth): GeneratedLane => ({ kind, depth }))
-    : kind === "plain"
-      ? FastCheck.integer({ min: 1, max: 2 }).map((depth): GeneratedLane => ({ kind, depth }))
-      : FastCheck.constant<GeneratedLane>({ kind, depth: 1 }),
-);
+const GeneratedLane = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("join"), depth: Schema.Literals([2, 3]) }),
+  Schema.Struct({ kind: Schema.Literal("plain"), depth: Schema.Literals([1, 2]) }),
+  Schema.Struct({
+    kind: Schema.Literals(["uncertain-tool", "durable-steps", "approval", "delegation"]),
+    depth: Schema.Literal(1),
+  }),
+]);
 
 interface ChaosPlanShape {
   readonly lanes: number;
@@ -239,70 +228,66 @@ interface ChaosPlanShape {
 
 const planShapeArbitrary = (
   adapterArms: ReadonlyArray<string>,
-): FastCheck.Arbitrary<ChaosPlanShape> =>
-  FastCheck.record({
-    lanes: FastCheck.array(laneArbitrary, { minLength: 1, maxLength: 3 }),
-    failpointArms: FastCheck.uniqueArray(
-      FastCheck.constantFrom(...DurableRuntimeFailpointLocation.literals),
-      { maxLength: 3 },
-    ),
-    adapterArms:
-      adapterArms.length === 0
-        ? FastCheck.constant<Array<string>>([])
-        : FastCheck.uniqueArray(FastCheck.constantFrom(...adapterArms), { maxLength: 2 }),
-    abortInjections: FastCheck.uniqueArray(FastCheck.integer({ min: 0, max: 15 }), {
-      maxLength: 2,
+): Arbitrary.Arbitrary<ChaosPlanShape> =>
+  Arbitrary.schema(
+    Schema.Struct({
+      lanes: Schema.Array(GeneratedLane).check(Schema.isMinLength(1), Schema.isMaxLength(3)),
+      failpointArms: Schema.Array(DurableRuntimeFailpointLocation).check(
+        Schema.isUnique(),
+        Schema.isMaxLength(3),
+      ),
+      adapterArms: Schema.Array(
+        adapterArms.length === 0 ? Schema.String : Schema.Literals(adapterArms),
+      ).check(Schema.isUnique(), Schema.isMaxLength(adapterArms.length === 0 ? 0 : 2)),
+      abortInjections: Schema.Array(
+        Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 15 })),
+      ).check(Schema.isUnique(), Schema.isMaxLength(2)),
+      resolutionInjections: Schema.Array(ChaosResolutionKind).check(Schema.isMaxLength(4)),
+      approvalDecisions: Schema.Array(ChaosApprovalDecision).check(Schema.isMaxLength(2)),
     }),
-    resolutionInjections: FastCheck.array(
-      FastCheck.constantFrom<ChaosResolutionKind>(
-        "never-happened",
-        "completed-from-supplier",
-        "abort-submission",
-      ),
-      { maxLength: 4 },
-    ),
-    approvalDecisions: FastCheck.array(
-      FastCheck.constantFrom<ChaosApprovalDecision>("approved", "denied"),
-      { maxLength: 2 },
-    ),
-  }).map((shape) => {
-    const submissions = shape.lanes.flatMap((lane, index) =>
-      Array.from({ length: lane.depth }, () =>
-        ChaosSubmissionSpec.make({ lane: index, kind: lane.kind }),
-      ),
-    );
+  ).pipe(
+    Arbitrary.map((shape) => {
+      const submissions = shape.lanes.flatMap((lane, index) =>
+        Array.from({ length: lane.depth }, () =>
+          ChaosSubmissionSpec.make({ lane: index, kind: lane.kind }),
+        ),
+      );
 
-    const [first, ...rest] = submissions;
+      const [first, ...rest] = submissions;
 
-    // `lanes` >= 1 and every lane has depth >= 1, so `first` always exists.
-    if (first === undefined) throw new Error("chaos generator produced an empty plan");
+      // `lanes` >= 1 and every lane has depth >= 1, so `first` always exists.
+      if (first === undefined) throw new Error("chaos generator produced an empty plan");
 
-    return {
-      lanes: shape.lanes.length,
-      submissions: [first, ...rest] as const,
-      failpointArms: shape.failpointArms,
-      adapterArms: shape.adapterArms,
-      abortInjections: shape.abortInjections,
-      resolutionInjections: shape.resolutionInjections,
-      approvalDecisions: shape.approvalDecisions,
-    };
-  });
+      return {
+        lanes: shape.lanes.length,
+        submissions: [first, ...rest] as const,
+        failpointArms: shape.failpointArms,
+        adapterArms: shape.adapterArms,
+        abortInjections: shape.abortInjections,
+        resolutionInjections: shape.resolutionInjections,
+        approvalDecisions: shape.approvalDecisions,
+      };
+    }),
+  );
 
 /**
  * Derive `count` chaos plans deterministically from one root seed. The same
  * `{seed, count, adapterArms}` triple always yields byte-identical plans, so a failure line
- * `CHAOS_SEED=<seed>` replays the exact schedule.
+ * `CHAOS_SEED=<seed>` replays the exact schedule with the same pinned generator version.
+ * Sampling is interruptible and reports bounded generation exhaustion as Arbitrary.SampleError.
  */
-export const generateChaosPlans = (options: ChaosGeneratorOptions): ReadonlyArray<ChaosPlan> => {
-  const sampled = FastCheck.sample(planShapeArbitrary(options.adapterArms ?? []), {
+export const generateChaosPlans = Effect.fnUntraced(function* (
+  options: ChaosGeneratorOptions,
+): Effect.fn.Return<ReadonlyArray<ChaosPlan>, Arbitrary.SampleError> {
+  const sampled = yield* Arbitrary.sampleEffect(planShapeArbitrary(options.adapterArms ?? []), {
     seed: options.seed,
-    numRuns: options.count,
+    count: options.count,
   });
 
   return sampled.map((shape, index) =>
     ChaosPlan.make({ ...shape, seed: (Math.imul(options.seed, 31) + index) | 0 }),
   );
-};
+});
 
 /** Deterministic PRNG for the runner's small ordering choices (lane drive order). */
 const mulberry32 = (seed: number): (() => number) => {

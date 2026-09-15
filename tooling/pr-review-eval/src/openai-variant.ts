@@ -49,7 +49,7 @@ const reviewerFailure = (error: unknown, estimatedCostMicrousd?: number): EvalRe
 };
 
 export const openAiClientLayer = OpenAiClient.layerConfig({
-  apiKey: Config.redacted("OPENAI_API_KEY"),
+  apiKey: Config.Redacted("OPENAI_API_KEY"),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 export interface CurrentOpenAiVariantOptions {

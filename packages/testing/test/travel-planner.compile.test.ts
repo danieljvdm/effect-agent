@@ -63,7 +63,7 @@ class CompletionResultDecoder extends Context.Service<
 
 const ContextualCompletionResult = Schema.String.pipe(
   Schema.decode({
-    decode: SchemaGetter.transformOrFail((value) =>
+    decode: SchemaGetter.transformEffect((value) =>
       Effect.map(CompletionResultDecoder, ({ validate }) => validate(value)),
     ),
     encode: SchemaGetter.transform((value) => value),
@@ -194,7 +194,7 @@ describe("TEST-009 P1 Travel Planner public-contract inference", () => {
     // run re-decodes this output after the inner stream has closed.
     const scopedOutput = Schema.String.pipe(
       Schema.decode({
-        decode: SchemaGetter.transformOrFail((value) => scopedText.pipe(Effect.as(value))),
+        decode: SchemaGetter.transformEffect((value) => scopedText.pipe(Effect.as(value))),
         encode: SchemaGetter.transform((value) => value),
       }),
     );

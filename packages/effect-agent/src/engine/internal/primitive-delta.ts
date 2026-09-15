@@ -4,7 +4,7 @@ import { Response } from "effect/unstable/ai";
 import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { boundedValueFootprint } from "./bounded-value.ts";
 
-const brand = "~effect/ai/Content/Part";
+const brand = "~effect/ai/Response/Part";
 const keys = [brand, "type", "id", "delta", "metadata"];
 
 const decode = Schema.decodeUnknownOption(

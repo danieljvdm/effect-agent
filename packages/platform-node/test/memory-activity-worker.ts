@@ -27,8 +27,8 @@ import {
 } from "./memory-activity-fixtures.ts";
 
 const decodeConfig = Effect.fn("MemoryActivityWorker.decodeConfig")(function* () {
-  const database = yield* Config.string("EFFECT_AGENT_MEMORY_ACTIVITY_DB");
-  const mode = yield* Config.string("EFFECT_AGENT_MEMORY_ACTIVITY_MODE");
+  const database = yield* Config.String("EFFECT_AGENT_MEMORY_ACTIVITY_DB");
+  const mode = yield* Config.String("EFFECT_AGENT_MEMORY_ACTIVITY_MODE");
 
   return yield* Schema.decodeUnknownEffect(MemoryActivityWorkerConfig)({ database, mode });
 });

@@ -81,8 +81,8 @@ class ReportDependency extends Context.Service<ReportDependency, string>()(
 
 const ServiceString = Schema.String.pipe(
   Schema.decodeTo(Schema.String, {
-    decode: SchemaGetter.transformOrFail((value) => Effect.as(SchemaEncoder, value)),
-    encode: SchemaGetter.transformOrFail((value) => Effect.as(SchemaDecoder, value)),
+    decode: SchemaGetter.transformEffect((value) => Effect.as(SchemaEncoder, value)),
+    encode: SchemaGetter.transformEffect((value) => Effect.as(SchemaDecoder, value)),
   }),
 );
 

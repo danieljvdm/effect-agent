@@ -236,7 +236,7 @@ export const liveModel: Effect.Effect<
     return yield* credentialForOwner(owner);
   });
 
-  const name = yield* Config.nonEmptyString("OPENAI_MODEL").pipe(
+  const name = yield* Config.NonEmptyString("OPENAI_MODEL").pipe(
     Config.withDefault("gpt-5.6-luna"),
   );
 

@@ -8,9 +8,9 @@ description: Choose packages, adapters, and providers for your application.
 Start with `effect-agent@beta` for agent definitions, conversations, execution, and durability.
 Install storage, platform, sandbox execution, and testing packages as needed.
 
-Keep all framework packages at the same exact release. They require `effect@^4.0.0-rc.112`;
-this repository tests Effect and its OpenAI/Anthropic providers at `4.0.0-rc.112`.
-The Cloudflare platform requires `effect@^4.0.0-rc.112` and `effect-cf@^0.40.0`.
+Keep all framework packages at the same exact release. They require `effect@^4.0.0-rc.115`;
+this repository tests Effect and its OpenAI/Anthropic providers at `4.0.0-rc.115`.
+The Cloudflare platform requires `effect@^4.0.0-rc.115` and `effect-cf@^0.43.0`.
 Before 1.0, APIs and stored data may change without a migration path.
 
 ## Public imports

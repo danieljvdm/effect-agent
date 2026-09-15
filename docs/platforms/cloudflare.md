@@ -14,8 +14,8 @@ SQLite-backed Durable Object. RPC calls and alarms drive execution and recovery.
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Also install `effect@4.0.0-rc.112`, `effect-cf@^0.40.0`, `effect-agent@beta`,
-`@effect/ai-openai@4.0.0-rc.112` for the examples below.
+Also install `effect@4.0.0-rc.115`, `effect-cf@^0.43.0`, `effect-agent@beta`,
+`@effect/ai-openai@4.0.0-rc.115` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
 ## AI Gateway {#ai-gateway}
@@ -130,7 +130,7 @@ export const travelDefinitions = DefinitionDigestInput.make({
 });
 
 const OpenAiLive = OpenAiClient.layerConfig({
-  apiKey: Config.redacted("OPENAI_API_KEY"),
+  apiKey: Config.Redacted("OPENAI_API_KEY"),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 const RuntimeLive = ThreadObject.layer([
@@ -155,7 +155,7 @@ change. Version tool implementations and model configuration when they change.
 Application layers can use `WorkerEnvironment`, `DurableObjectState`,
 `ThreadObjectIdentity`, and Crypto. Scalar Worker vars and secrets are available through Effect
 `Config`: `ThreadObject.make` installs `effect-cf`'s environment config provider. Read secrets
-with `Config.redacted`, and use `WorkerEnvironment` for resource bindings such as R2 or Durable
+with `Config.Redacted`, and use `WorkerEnvironment` for resource bindings such as R2 or Durable
 Object namespaces. Use `Layer.unwrap` when configuration selects registrations or services.
 The application is acquired once per Object instance and rebuilt after eviction. Keep initialization
 local and bounded. Eviction does not guarantee finalizers; acquire resources needing timely cleanup

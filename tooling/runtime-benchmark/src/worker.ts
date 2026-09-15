@@ -101,7 +101,7 @@ if (import.meta.main)
   NodeRuntime.runMain(
     Effect.gen(function* () {
       const options = yield* Schema.decodeEffect(Schema.fromJsonString(WorkerOptions))(
-        yield* Config.string("RUNTIME_BENCHMARK_OPTIONS"),
+        yield* Config.String("RUNTIME_BENCHMARK_OPTIONS"),
       );
 
       yield* runWorker(options).pipe(

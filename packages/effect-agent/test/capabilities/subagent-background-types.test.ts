@@ -30,8 +30,8 @@ class DeclaredFailure extends Schema.TaggedError<DeclaredFailure>()("DeclaredFai
 
 const text = Schema.String.pipe(
   Schema.decodeTo(Schema.String, {
-    decode: SchemaGetter.transformOrFail((value) => Effect.as(Decoder, value)),
-    encode: SchemaGetter.transformOrFail((value) => Effect.as(Encoder, value)),
+    decode: SchemaGetter.transformEffect((value) => Effect.as(Decoder, value)),
+    encode: SchemaGetter.transformEffect((value) => Effect.as(Encoder, value)),
   }),
 );
 

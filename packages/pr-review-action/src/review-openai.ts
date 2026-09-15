@@ -17,7 +17,7 @@ export const reviewReasoningEffort = Config.schema(ReviewReasoningEffort, "PR_RE
   Config.withDefault("medium"),
 );
 
-export const reviewPriority = Config.literals(["", "default", "fast"], "PR_REVIEW_PRIORITY").pipe(
+export const reviewPriority = Config.Literals(["", "default", "fast"], "PR_REVIEW_PRIORITY").pipe(
   Config.withDefault(""),
 );
 

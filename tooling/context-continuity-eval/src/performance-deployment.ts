@@ -76,7 +76,7 @@ export const loadPerformanceConfig = Config.all({
     Schema.String.check(Schema.isPattern(/^[a-f0-9]{32}$/)),
     "CLOUDFLARE_ACCOUNT_ID",
   ),
-  apiToken: Config.redacted("CLOUDFLARE_API_TOKEN"),
+  apiToken: Config.Redacted("CLOUDFLARE_API_TOKEN"),
   subdomain: Config.schema(
     Schema.String.check(Schema.isPattern(/^[a-z0-9-]{1,63}$/)),
     "CLOUDFLARE_WORKERS_SUBDOMAIN",
@@ -177,8 +177,8 @@ export const makePerformanceDeployment = Effect.fn("Performance.deployment")(fun
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const cwd = path.resolve(path.dirname(yield* path.fromFileUrl(new URL(import.meta.url))), "..");
-  const executableSearchPath = yield* Config.string("PATH");
-  const userHome = yield* Config.string("HOME");
+  const executableSearchPath = yield* Config.String("PATH");
+  const userHome = yield* Config.String("HOME");
 
   const run = (
     target: typeof PerformanceTarget.Type,

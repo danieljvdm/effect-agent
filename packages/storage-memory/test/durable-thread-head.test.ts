@@ -256,6 +256,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
             providerName: "hosted_failure",
             parameters: Tool.EmptyParams,
             success: Schema.Struct({ message: Schema.String }),
+            failure: Schema.Struct({ message: Schema.String }),
           })(undefined),
         );
 

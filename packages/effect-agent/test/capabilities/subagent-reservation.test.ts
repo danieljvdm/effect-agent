@@ -17,7 +17,6 @@ import {
   SubagentReservationUnknown,
   SubagentReservationView,
 } from "effect-agent/subagent-reservations";
-import { FastCheck } from "effect/testing";
 
 const decodeRunId = Schema.decodeSync(RunId);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
@@ -113,36 +112,35 @@ const assertConservation = (view: SubagentParentBudgetView): void => {
   }
 };
 
-const boundedAmount = FastCheck.integer({ min: 0, max: 6 });
-const slotIndex = FastCheck.integer({ min: 0, max: 4 });
+const boundedAmount = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 6 }));
+const slotIndex = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 4 }));
 
-const operationArb = FastCheck.oneof(
-  FastCheck.record({
-    kind: FastCheck.constant("reserve" as const),
+const operationSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("reserve"),
     slot: slotIndex,
-    allocation: FastCheck.record({
+    allocation: Schema.Struct({
       toolCalls: boundedAmount,
       inputTokens: boundedAmount,
       costMicrousd: boundedAmount,
     }),
   }),
-  FastCheck.record({
-    kind: FastCheck.constant("observe" as const),
+  Schema.Struct({
+    kind: Schema.Literal("observe"),
     slot: slotIndex,
-    usage: FastCheck.record(
-      {
-        toolCalls: boundedAmount,
-        inputTokens: boundedAmount,
-        costMicrousd: boundedAmount,
-      },
-      { requiredKeys: [] },
-    ),
+    usage: Schema.Struct({
+      toolCalls: Schema.optionalKey(boundedAmount),
+      inputTokens: Schema.optionalKey(boundedAmount),
+      costMicrousd: Schema.optionalKey(boundedAmount),
+    }),
   }),
-  FastCheck.record({ kind: FastCheck.constant("beginRelease" as const), slot: slotIndex }),
-  FastCheck.record({ kind: FastCheck.constant("release" as const), slot: slotIndex }),
-);
+  Schema.Struct({ kind: Schema.Literal("beginRelease"), slot: slotIndex }),
+  Schema.Struct({ kind: Schema.Literal("release"), slot: slotIndex }),
+]);
 
-const capArb = FastCheck.option(FastCheck.integer({ min: 0, max: 12 }), { nil: undefined });
+const capSchema = Schema.UndefinedOr(
+  Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 12 })),
+);
 
 describe("subagent budget reservations", () => {
   it("derives the stable reservation identity from parent Run and Tool Call", () => {
@@ -720,10 +718,10 @@ describe("subagent budget reservations", () => {
   it.effect.prop(
     "generated parallel reserve/observe/release sequences preserve conservation",
     {
-      toolCallsCap: capArb,
-      inputTokensCap: capArb,
-      costCap: capArb,
-      operations: FastCheck.array(operationArb, { maxLength: 32 }),
+      toolCallsCap: capSchema,
+      inputTokensCap: capSchema,
+      costCap: capSchema,
+      operations: Schema.Array(operationSchema).check(Schema.isMaxLength(32)),
     },
     ({ costCap, inputTokensCap, operations, toolCallsCap }) =>
       Effect.gen(function* () {

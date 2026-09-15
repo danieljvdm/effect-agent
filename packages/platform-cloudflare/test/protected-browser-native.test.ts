@@ -48,7 +48,7 @@ it.live(
   "discovers different native forms, rejects replaced nodes, preserves login, and fills a merchant-bound payment frame",
   (test) =>
     Effect.gen(function* () {
-      const executable = yield* Config.option(Config.string("BROWSER_TEST_EXECUTABLE"));
+      const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
 
       if (Option.isNone(executable)) return test.skip();
 
@@ -473,7 +473,7 @@ it.live(
   "fills native ordinary controls by held refs and rejects stale or credential targets",
   (test) =>
     Effect.gen(function* () {
-      const executable = yield* Config.option(Config.string("BROWSER_TEST_EXECUTABLE"));
+      const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
 
       if (Option.isNone(executable)) return test.skip();
 

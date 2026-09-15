@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
 import { InputMessage } from "../capabilities/Messaging.ts";
@@ -17,6 +17,7 @@ import {
   ToolCallId,
   TurnId,
 } from "../core/Identifiers.ts";
+import { strictSchema } from "../core/internal/strict-schema.ts";
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { IdempotencyKey, Principal } from "../core/Receipt.ts";
 import { ExhaustedLimit } from "../core/RunEvent.ts";
@@ -95,9 +96,9 @@ export const SettlementFailureDiagnostic = Schema.Struct({
   errorTag: SettlementFailureTag,
   message: SettlementFailureMessage,
 }).pipe(
+  strictSchema,
   Schema.annotate({
     identifier: "@effect-agent/thread/SettlementFailureDiagnostic",
-    parseOptions: { onExcessProperty: "error" },
   }),
 );
 
@@ -594,7 +595,9 @@ const isPolicyFailureProjection = Schema.is(
   Schema.Struct({ errorTag: Schema.Literal("AgentPolicyError") }),
 );
 
-const isSettlementFailureDiagnostic = Schema.is(SettlementFailureDiagnostic);
+const decodeSettlementFailureDiagnostic = Schema.decodeUnknownOption(SettlementFailureDiagnostic, {
+  onExcessProperty: "error",
+});
 
 const hasValidSettlementFamily = (settled: typeof RawSubmissionSettled.Type): boolean =>
   (settled.finishReason === undefined || settled.outcome === "completed") &&
@@ -607,7 +610,8 @@ const hasValidSettlementFamily = (settled: typeof RawSubmissionSettled.Type): bo
       settled.finishReason === undefined &&
       settled.runId !== undefined &&
       settled.result !== undefined)) &&
-  (settled.outcome !== "failed" || isSettlementFailureDiagnostic(settled.result)) &&
+  (settled.outcome !== "failed" ||
+    Option.isSome(decodeSettlementFailureDiagnostic(settled.result))) &&
   (settled.outcome !== "aborted" || settled.result === undefined) &&
   (settled.policyLimit === undefined ||
     (settled.outcome === "failed" && isPolicyFailureProjection(settled.result)));

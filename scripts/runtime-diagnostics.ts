@@ -366,16 +366,16 @@ export const compareDiagnostics = Effect.fn("diagnostic.compare")(function* (opt
 export const command = Command.make(
   "runtime-diagnostics",
   {
-    base: Flag.string("base-dir").pipe(
+    base: Flag.String("base-dir").pipe(
       Flag.withDescription(
         "Clean exact base checkout with its own installed lockfile and public packages built.",
       ),
     ),
-    output: Flag.string("out-dir").pipe(
+    output: Flag.String("out-dir").pipe(
       Flag.withDefault(".performance-report"),
       Flag.withDescription("New artifact directory; previous reports are never overwritten."),
     ),
-    requireClean: Flag.boolean("require-clean").pipe(
+    requireClean: Flag.Boolean("require-clean").pipe(
       Flag.withDefault(true),
       Flag.withDescription("Required: diagnostics reject modified checkouts."),
     ),

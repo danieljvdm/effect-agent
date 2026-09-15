@@ -1067,7 +1067,7 @@ esac
         yield* runFixtureCommand(root, "git", ["config", "tag.gpgsign", "false"]);
         yield* runFixtureCommand(root, "git", ["add", "package.json", "packages", ".changeset"]);
         yield* runFixtureCommand(root, "git", ["commit", "-m", "Version packages"]);
-        const executablePath = yield* Config.string("PATH");
+        const executablePath = yield* Config.String("PATH");
 
         yield* withPublishManifests(root, () =>
           runFixtureCommand(root, "env", [
@@ -1389,7 +1389,7 @@ esac
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
 
-          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.112");
+          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.115");
           expect(manifest.devDependencies?.effect).toBe("catalog:");
           expect(manifest.dependencies?.effect).toBeUndefined();
           expect(manifest.optionalDependencies?.effect).toBeUndefined();

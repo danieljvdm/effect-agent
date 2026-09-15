@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, FileSystem, Schedule, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Schedule, Schema } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { Socket } from "effect/unstable/socket";
 import { convertV4MiniflareOptions, Log, LogLevel, Miniflare } from "miniflare";
@@ -18,58 +18,32 @@ const Targets = Schema.Array(
   }),
 );
 
-const inspector = Effect.fn("heap.inspector")(function* (url: string, method: string) {
-  const response = yield* Deferred.make<unknown, HeapProbeError>();
-  const socket = yield* Socket.makeWebSocket(url);
-  const write = yield* socket.writer;
+const inspector = Effect.fn("heap.inspector")(
+  function* (url: string, method: string) {
+    const socket = yield* Socket.makeWebSocket(url);
+    const reader = yield* Socket.readerString(socket);
+    const writer = yield* socket.writer;
 
-  yield* socket
-    .runString(
-      (text) =>
-        Effect.gen(function* () {
-          const message = yield* Schema.decodeEffect(Schema.fromJsonString(Message))(text);
+    yield* writer.write(JSON.stringify({ id: 1, method }));
 
-          if (message.id !== 1) return;
-          if (message.error)
-            yield* Deferred.fail(
-              response,
-              HeapProbeError.make({ operation: `${method}: ${message.error.message}` }),
-            );
-          else yield* Deferred.succeed(response, message.result);
-        }).pipe(
-          Effect.catch((cause) =>
-            Deferred.fail(
-              response,
-              HeapProbeError.make({ operation: "decode inspector response", cause }),
-            ),
-          ),
-        ),
-      {
-        onOpen: write(JSON.stringify({ id: 1, method })).pipe(
-          Effect.catch((cause) =>
-            Deferred.fail(
-              response,
-              HeapProbeError.make({ operation: "write inspector request", cause }),
-            ),
-          ),
-          Effect.asVoid,
-        ),
-      },
-    )
-    .pipe(
-      Effect.catch((cause) =>
-        Deferred.fail(response, HeapProbeError.make({ operation: method, cause })),
-      ),
-      Effect.forkScoped,
-    );
+    while (true) {
+      const texts = yield* reader;
 
-  return yield* Deferred.await(response).pipe(
-    Effect.timeout("10 seconds"),
-    Effect.mapError((cause) =>
-      HeapProbeError.make({ operation: `inspector command ${method}`, cause }),
-    ),
-  );
-}, Effect.scoped);
+      for (const text of texts) {
+        const message = yield* Schema.decodeEffect(Schema.fromJsonString(Message))(text);
+
+        if (message.id !== 1) continue;
+        if (message.error)
+          return yield* HeapProbeError.make({ operation: `${method}: ${message.error.message}` });
+
+        return message.result;
+      }
+    }
+  },
+  Effect.scoped,
+  Effect.timeout("10 seconds"),
+  Effect.mapError((cause) => HeapProbeError.make({ operation: "inspector command", cause })),
+);
 
 const request = (runtime: Miniflare, route: string, id?: string) =>
   Effect.tryPromise({

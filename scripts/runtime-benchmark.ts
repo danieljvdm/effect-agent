@@ -646,12 +646,12 @@ export const compareRuntime = Effect.fn("benchmark.compareRuntime")(function* (o
 export const command = Command.make(
   "runtime-benchmark",
   {
-    base: Flag.string("base-dir").pipe(
+    base: Flag.String("base-dir").pipe(
       Flag.withDescription(
         "Exact base checkout, installed with its lockfile and production packages built.",
       ),
     ),
-    baselineTag: Flag.string("base-tag").pipe(
+    baselineTag: Flag.String("base-tag").pipe(
       Flag.withSchema(
         Schema.String.check(Schema.isPattern(/^effect-agent@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)),
       ),
@@ -660,17 +660,17 @@ export const command = Command.make(
       ),
       Flag.optional,
     ),
-    output: Flag.string("out-dir").pipe(
+    output: Flag.String("out-dir").pipe(
       Flag.withDefault(".performance-report"),
       Flag.withDescription("New artifact directory; existing reports are never overwritten."),
     ),
-    profile: Flag.choice("profile", ["smoke", "pr", "extended", "archive"]).pipe(
+    profile: Flag.Literals("profile", ["smoke", "pr", "extended", "archive"]).pipe(
       Flag.withDefault("pr"),
       Flag.withDescription(
         "Bounded PR cohort, larger local matrix, or manual 100k-record archive profile.",
       ),
     ),
-    requireClean: Flag.boolean("require-clean").pipe(
+    requireClean: Flag.Boolean("require-clean").pipe(
       Flag.withDefault(false),
       Flag.withDescription("Reject modified or untracked files in any checkout (required by CI)."),
     ),

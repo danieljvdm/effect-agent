@@ -73,11 +73,11 @@ export class WorkerDeploymentOperations extends Context.Service<
 
 const proofConfig = Config.all({
   accountId: Config.schema(AccountId, CLOUDFLARE_ACCOUNT_ID),
-  apiToken: Config.redacted(CLOUDFLARE_API_TOKEN),
-  browserToken: Config.redacted(BROWSER_RENDERING_API_TOKEN),
+  apiToken: Config.Redacted(CLOUDFLARE_API_TOKEN),
+  browserToken: Config.Redacted(BROWSER_RENDERING_API_TOKEN),
   workersSubdomain: Config.schema(WorkersSubdomain, CLOUDFLARE_WORKERS_SUBDOMAIN),
-  executableSearchPath: Config.nonEmptyString("PATH"),
-  userHome: Config.nonEmptyString("HOME"),
+  executableSearchPath: Config.NonEmptyString("PATH"),
+  userHome: Config.NonEmptyString("HOME"),
 });
 
 const loadProofConfig = proofConfig.pipe(

@@ -101,8 +101,8 @@ const proofLayer = Layer.unwrap(
     const env = yield* WorkerEnvironment;
 
     const lifecycleConfig = yield* Config.all({
-      accountId: Config.string("CLOUDFLARE_ACCOUNT_ID"),
-      apiToken: Config.redacted("BROWSER_RENDERING_API_TOKEN"),
+      accountId: Config.String("CLOUDFLARE_ACCOUNT_ID"),
+      apiToken: Config.Redacted("BROWSER_RENDERING_API_TOKEN"),
     });
 
     const quickActionLayer = browserQuickActionScreenshotLayer().pipe(

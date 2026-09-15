@@ -188,7 +188,7 @@ const ServicePricingSchema = Schema.Struct({
     Schema.Struct({
       name: Schema.String.pipe(
         Schema.decode({
-          decode: SchemaGetter.transformOrFail((value) =>
+          decode: SchemaGetter.transformEffect((value) =>
             Effect.map(ExtractionDecoderService, (service) => service.normalize(value)),
           ),
           encode: SchemaGetter.transform((value) => value),

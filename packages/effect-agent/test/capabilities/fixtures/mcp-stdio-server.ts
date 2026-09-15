@@ -28,7 +28,10 @@ const ServerLayer = McpServer.toolkit(Toolkit.make(Echo)).pipe(
     }),
   ),
   Layer.provide(NodeStdio.layer),
-  Layer.provide(Logger.layer([Logger.consolePretty({ stderr: true })])),
+  Layer.provide(Logger.layer([Logger.consolePrettyTty()])),
 );
 
-Layer.launch(ServerLayer).pipe(NodeRuntime.runMain);
+Layer.launch(ServerLayer).pipe(
+  Effect.provideService(Logger.LogToStderr, true),
+  NodeRuntime.runMain,
+);

@@ -50,14 +50,19 @@ describe("InteractiveBrowser schemas", () => {
   it("bounds non-secret fill, authorized address metadata, and hour-long policies", () => {
     const ref = "12345678-1234-4234-9234-123456789abc";
 
-    expect(Schema.decodeSync(ProtectedBrowserFill)({ ref, value: "" }).value).toBe("");
+    expect(
+      Schema.decodeSync(ProtectedBrowserFill, { onExcessProperty: "error" })({ ref, value: "" })
+        .value,
+    ).toBe("");
     for (const request of [
       { ref: "#address", value: "text" },
       { ref, value: "x".repeat(8193) },
       { ref, value: "text", selector: "input" },
       { ref, value: "text", script: "document.body" },
     ])
-      expect(Schema.decodeExit(ProtectedBrowserFill)(request)._tag).toBe("Failure");
+      expect(
+        Schema.decodeExit(ProtectedBrowserFill, { onExcessProperty: "error" })(request)._tag,
+      ).toBe("Failure");
 
     const metadata = CredentialOfferMetadata.make({
       label: "Personal card",
@@ -77,7 +82,7 @@ describe("InteractiveBrowser schemas", () => {
     ).toBe("Failure");
     for (const maxElapsedMillis of [600_001, 3_600_000])
       expect(
-        Schema.decodeExit(InteractiveBrowserPolicy)({
+        Schema.decodeExit(InteractiveBrowserPolicy, { onExcessProperty: "error" })({
           network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
           maxActions: 10,
           maxElapsedMillis,
@@ -143,7 +148,7 @@ describe("InteractiveBrowser schemas", () => {
       });
 
       expect(
-        Schema.decodeSync(InteractiveBrowserPolicy)(
+        Schema.decodeSync(InteractiveBrowserPolicy, { onExcessProperty: "error" })(
           Schema.encodeSync(InteractiveBrowserPolicy)(policy),
         ),
       ).toEqual(policy);
@@ -260,7 +265,10 @@ describe("InteractiveBrowser schemas", () => {
       { ...valid, maxReturnedBytes: 0 },
       { ...valid, maxReturnedBytes: 8 * 1024 * 1024 + 1 },
     ])
-      expect(Schema.decodeUnknownExit(InteractiveBrowserPolicy)(value)._tag).toBe("Failure");
+      expect(
+        Schema.decodeUnknownExit(InteractiveBrowserPolicy, { onExcessProperty: "error" })(value)
+          ._tag,
+      ).toBe("Failure");
     for (const url of [
       "https://u:p@example.com",
       "http://u:p@example.com",

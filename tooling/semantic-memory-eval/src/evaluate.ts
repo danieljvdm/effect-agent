@@ -493,7 +493,7 @@ const injectedAiError = (message: string) =>
 
 const providerCohort = Effect.fn("SemanticMemoryEvaluation.providerCohort")(function* (
   name: string,
-  base: EmbeddingModel.Service,
+  base: EmbeddingModel.EmbeddingModel,
   provider: { readonly delayMillis?: number; readonly fail?: boolean },
   timeoutMillis: number | null,
 ) {

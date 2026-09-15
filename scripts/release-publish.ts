@@ -360,17 +360,17 @@ const runCommand = Effect.fn("releasePublish.runCommand")(function* (
 export const command = CliCommand.make(
   "release-publish",
   {
-    dryRun: Flag.boolean("dry-run").pipe(
+    dryRun: Flag.Boolean("dry-run").pipe(
       Flag.withDescription("Build and inspect npm packages without publishing or creating tags."),
       Flag.withDefault(false),
     ),
-    checkContinuity: Flag.boolean("check-continuity").pipe(
+    checkContinuity: Flag.Boolean("check-continuity").pipe(
       Flag.withDescription(
         "Run the live continuity gate only when a public version needs publishing.",
       ),
       Flag.withDefault(false),
     ),
-    otp: Flag.string("otp").pipe(
+    otp: Flag.String("otp").pipe(
       Flag.optional,
       Flag.withDescription("npm one-time password for an authenticated manual release."),
     ),

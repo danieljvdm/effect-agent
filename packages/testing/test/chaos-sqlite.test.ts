@@ -128,7 +128,7 @@ describe("DUR-002/DUR-004/DUR-017 P7 chaos (SQLite adapters)", () => {
             prefix: "effect-agent-chaos-sqlite-",
           });
 
-          const plans = generateChaosPlans({
+          const plans = yield* generateChaosPlans({
             seed: ROOT_SEED,
             count: PLAN_COUNT,
             adapterArms: SQLITE_ARM_POOL,

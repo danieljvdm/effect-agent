@@ -110,9 +110,9 @@ export const makeCrashFixture = Effect.fn("WorkflowCrash.makeFixture")(function*
 
 /** The parent kills this process only after observing its exact durable-boundary marker. */
 export const workflowCrashWorker = Effect.gen(function* () {
-  const directory = yield* Config.string("EFFECT_AGENT_WORKFLOW_DIR");
+  const directory = yield* Config.String("EFFECT_AGENT_WORKFLOW_DIR");
 
-  const boundary = yield* Config.string("EFFECT_AGENT_WORKFLOW_BOUNDARY").pipe(
+  const boundary = yield* Config.String("EFFECT_AGENT_WORKFLOW_BOUNDARY").pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(WorkflowCrashBoundary)),
   );
 

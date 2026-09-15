@@ -89,32 +89,32 @@ const summarize = (observations: ReadonlyArray<typeof Observation.Type>) => {
 export const command = Command.make(
   "cloudflare-memory-measure",
   {
-    url: Flag.string("url").pipe(
+    url: Flag.String("url").pipe(
       Flag.withDescription("URL of the temporary authenticated benchmark Worker."),
     ),
-    revision: Flag.string("revision").pipe(
+    revision: Flag.String("revision").pipe(
       Flag.withDefault("working-tree"),
       Flag.withDescription("Exact source revision descriptor included in the report."),
     ),
-    samples: Flag.integer("samples").pipe(
+    samples: Flag.Int("samples").pipe(
       Flag.withDefault(200),
       Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1000 }))),
       Flag.withDescription("Warm samples per case and concurrency, at most 1000."),
     ),
-    inactivity: Flag.integer("inactivity-seconds").pipe(
+    inactivity: Flag.Int("inactivity-seconds").pipe(
       Flag.withDefault(90),
       Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 600 }))),
       Flag.withDescription(
         "Idle interval before each first-request cohort; does not prove eviction.",
       ),
     ),
-    output: Flag.string("output").pipe(
+    output: Flag.String("output").pipe(
       Flag.withDefault("/tmp/kom19-cloudflare-memory.json"),
       Flag.withDescription("Path for the schema-encoded report, including every error sample."),
     ),
   },
   Effect.fn("benchmark.measure")(function* (options) {
-    const token = yield* Config.redacted("BENCH_TOKEN");
+    const token = yield* Config.Redacted("BENCH_TOKEN");
     const http = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk);
 
     const request = Effect.fn("benchmark.request")(function* <A, I>(
