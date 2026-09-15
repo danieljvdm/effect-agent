@@ -134,10 +134,12 @@ const send = (message: string, email?: string) =>
   );
 
 const until = async <A>(read: () => Promise<A>, matches: (value: A) => boolean) => {
+  const deadline = performance.now() + 50_000;
   let value = await read();
 
-  for (let attempt = 0; attempt < 1_000; attempt++) {
+  while (true) {
     if (matches(value)) return value;
+    if (performance.now() >= deadline) break;
     await Effect.runPromise(Effect.sleep("50 millis"));
     value = await read();
   }
@@ -145,8 +147,10 @@ const until = async <A>(read: () => Promise<A>, matches: (value: A) => boolean) 
   const diagnostic = Schema.is(PlannerSnapshot)(value)
     ? {
         pending: value.pending,
-        messages: value.messages.map(({ role, text }) => ({ role, text })),
+        pendingSubmissionIds: value.pendingSubmissionIds,
+        editor: value.editor && { id: value.editor.id, state: value.editor.state },
         scouts: value.scouts?.map(({ id, state, task }) => ({ id, state, task })),
+        messages: value.messages.map(({ role, text }) => ({ role, text })),
       }
     : value;
 
@@ -590,7 +594,6 @@ it("runs six scouts and an editor beyond the old budgets, preserves them across 
     (state) =>
       state.pending === 0 &&
       state.editor?.state === "idle" &&
-      state.messages.some(({ text }) => text === "Editor completion received.") &&
       state.scouts
         ?.filter((scout) => scout.task.includes("expanded allowance"))
         .every((scout) => scout.state === "idle" || scout.state === "failed") === true,
@@ -603,6 +606,42 @@ it("runs six scouts and an editor beyond the old budgets, preserves them across 
       ?.filter((scout) => scout.task.includes("expanded allowance"))
       .map((scout) => scout.state),
   ).toEqual(["idle", "idle", "idle", "idle", "idle", "idle"]);
+
+  // Completion inputs can join the same parent run. The fixture replies to the
+  // latest input, so verify each canonical report and its settlement directly.
+  const completions = await until(
+    async () => {
+      const journal = Schema.decodeUnknownSync(ThreadExport)(
+        await fixture("journal", { thread: expandedThread }),
+      );
+
+      const settled = journal.records.flatMap(({ record }) =>
+        record.payload._tag === "SubmissionSettled" && record.payload.outcome === "completed"
+          ? [record.payload.submissionId]
+          : [],
+      );
+
+      return journal.records.flatMap(({ record }) => {
+        const input = record.payload;
+
+        return input._tag === "UserInputRecorded" &&
+          Schema.is(WorkerCompletion)(input.messageAdmission)
+          ? [
+              {
+                workerId: input.messageAdmission.report.worker.threadId,
+                outcome: input.messageAdmission.report.outcome,
+                settled: input.submissionId !== undefined && settled.includes(input.submissionId),
+              },
+            ]
+          : [];
+      });
+    },
+    (reports) =>
+      workers.every((id) => reports.some((report) => report.workerId === id && report.settled)),
+  );
+
+  expect(completions.map(({ workerId }) => workerId).sort()).toEqual([...workers].sort());
+  expect(completions.every(({ outcome }) => outcome === "completed")).toBe(true);
   for (const id of workers) {
     const journal = Schema.decodeUnknownSync(ThreadExport)(
       await fixture("journal", { thread: id }),
