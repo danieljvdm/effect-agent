@@ -10,6 +10,9 @@ import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger
  */
 
 const PositiveMillis = Schema.Int.check(Schema.isGreaterThan(0));
+
+/** Maximum supported auxiliary wave equals the native message policy's five-minute ceiling. */
+export const AuxiliaryDispatchMillis = PositiveMillis.check(Schema.isLessThanOrEqualTo(300_000));
 const NonNegativeMillis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 /** The supplied Cloudflare durable runtime configuration failed validation (DEPLOY-003). */
@@ -104,6 +107,8 @@ export class CloudflareDurableRuntimeConfigValue extends Schema.Class<Cloudflare
   abortPollInterval: PositiveMillis,
   /** Canonical observation poll cadence of the Durable Object store. */
   observationPollInterval: NonNegativeMillis,
+  /** One disposable projection backfill wave; independent of required live applyCommitted. */
+  projectionDispatchTimeoutMillis: AuxiliaryDispatchMillis,
   /** Per-value byte bound; must stay under the platform's 2 MB SQLite value limit. */
   maxStoredValueBytes: Schema.Int.check(
     Schema.isGreaterThan(0),
@@ -130,6 +135,7 @@ export const CLOUDFLARE_RUNTIME_DEFAULTS = {
   leaseRenewalInterval: 10_000,
   abortPollInterval: 500,
   observationPollInterval: 25,
+  projectionDispatchTimeoutMillis: 30_000,
   maxStoredValueBytes: DEFAULT_MAX_STORED_VALUE_BYTES,
   verifyOnOpen: false,
   maxQueueDepthPerLane: 256,

@@ -14,6 +14,7 @@ import {
   ReleaseOwnershipRequest,
   SubmissionLedger,
 } from "effect-agent/submission-ledger";
+import { ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
@@ -44,7 +45,7 @@ const Generation = Schema.Struct({
 describe("maintenance retry deadlines", () => {
   // Provenance: September 2026 Sentry incident — a root digest mismatch repeatedly claimed
   // and released the same receipt behind a 50ms pre-arm. Private customer identifiers omitted.
-  it("backs off a root digest mismatch across ensureAlarm and eviction without losing the receipt", () =>
+  it("retains root binding backoff across auxiliary failures, ensureAlarm and eviction", () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const thread = `maintenance-retry-${crypto.randomUUID()}`;
@@ -70,6 +71,7 @@ describe("maintenance retry deadlines", () => {
         let hostDeadline: number | undefined;
         let hostDrains = 0;
         let hostFailure = false;
+        let activeHostResources = 0;
         let crashAt: ThreadMaintenanceFailpointLocation | undefined;
 
         // Rebuild real runtime/maintenance services over this Object's SQLite adapters.
@@ -113,35 +115,48 @@ describe("maintenance retry deadlines", () => {
                   return yield* body.pipe(
                     Effect.provide(maintenance),
                     Effect.provideService(ThreadMaintenanceFailpoint, {
-                      hit: (location) => {
-                        if (crashAt !== location) return failpoint.hit(location);
-                        crashAt = undefined;
+                      hit: (location) =>
+                        Effect.gen(function* () {
+                          // #500 owns hook resources until event retirement. Failure backoff
+                          // must observe cleanup already complete, even if its commit crashes.
+                          if (location === "maintenance:retry:before")
+                            expect(activeHostResources).toBe(0);
+                          if (crashAt !== location) return yield* failpoint.hit(location);
+                          crashAt = undefined;
 
-                        return Effect.sync(() => state.abort("maintenance retry commit crash"));
-                      },
+                          yield* Effect.sync(() => state.abort("maintenance retry commit crash"));
+                        }),
                     }),
                     Effect.provideService(CloudflareDurableRuntimeConfig, {
                       ...config,
                       alarmBackoffBase: 100,
-                      alarmBackoffCap: 5_000,
+                      alarmBackoffCap: 100,
                       wakeScanInterval: 1_000,
                     }),
                     Effect.provideService(ThreadHostMaintenance, {
+                      dispatchTimeoutMillis: 1_000,
                       pendingDeadline: Effect.sync(() => Option.fromUndefinedOr(hostDeadline)),
                       drainUntil: () =>
-                        hostFailure
-                          ? Effect.fail(
-                              DurableAlarmError.make({
-                                operation: "test host failure",
-                                message: "host delivery remains pending",
-                              }),
-                            )
-                          : Effect.sync(() => {
-                              if (hostDeadline !== undefined) {
-                                hostDrains++;
-                                hostDeadline = undefined;
-                              }
+                        Effect.gen(function* () {
+                          yield* Effect.acquireRelease(
+                            Effect.sync(() => {
+                              activeHostResources++;
                             }),
+                            () =>
+                              Effect.sync(() => {
+                                activeHostResources--;
+                              }),
+                          );
+                          if (hostFailure)
+                            return yield* DurableAlarmError.make({
+                              operation: "test host failure",
+                              message: "host delivery remains pending",
+                            });
+                          if (hostDeadline !== undefined) {
+                            hostDrains++;
+                            hostDeadline = undefined;
+                          }
+                        }),
                     }),
                     Effect.exit,
                   );
@@ -157,11 +172,20 @@ describe("maintenance retry deadlines", () => {
           Effect.promise(() =>
             runInDurableObject(stubFor(thread), (instance) =>
               instance[DurableObject.RunSymbol](
-                SubmissionLedger.use((ledger) =>
-                  ledger.loadRecoverySnapshot(
+                Effect.gen(function* () {
+                  const ledger = yield* SubmissionLedger;
+                  const store = yield* ThreadStore;
+
+                  const snapshot = yield* ledger.loadRecoverySnapshot(
                     RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
-                  ),
-                ),
+                  );
+
+                  const tail = yield* store.inspectTail(
+                    ThreadTailRequest.make({ threadId: decodeThreadId(thread) }),
+                  );
+
+                  return { ...snapshot, producerEpoch: tail.producerEpoch };
+                }),
               ),
             ),
           );
@@ -188,13 +212,34 @@ describe("maintenance retry deadlines", () => {
 
         for (const [attempt, delay] of delays.entries()) {
           const before = yield* Clock.currentTimeMillis;
-          const deferred = yield* run(pass);
 
-          expect(Exit.isFailure(deferred) ? Cause.pretty(deferred.cause) : "deferred").toBe(
-            "deferred",
+          hostFailure = true;
+          const failed = yield* run(pass);
+
+          expect(Exit.isFailure(failed) ? Cause.pretty(failed.cause) : "success").toContain(
+            "host delivery remains pending",
           );
-          if (Exit.isSuccess(deferred)) expect(deferred.value.settled).toBe(0);
-          expect((yield* snapshot()).ownership).toBeUndefined();
+          const afterBindingFailure = yield* snapshot();
+
+          expect(afterBindingFailure.ownership).toBeUndefined();
+          const genericRetry = yield* Effect.promise(() => scheduledAlarm(thread));
+
+          // An auxiliary error must retain the longer binding wait already earned by the
+          // selected head. A second failed event at the generic deadline cannot claim it again.
+          expect(genericRetry).toBeGreaterThanOrEqual(before + 50);
+          expect(genericRetry).toBeLessThanOrEqual(before + 100);
+          yield* evict();
+          yield* run(ensure);
+          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(genericRetry);
+          yield* TestClock.adjust(genericRetry! - before);
+          expect(Exit.isFailure(yield* run(pass))).toBe(true);
+          expect(yield* snapshot()).toEqual(afterBindingFailure);
+          hostFailure = false;
+          const nextRetry = yield* Effect.promise(() => scheduledAlarm(thread));
+
+          yield* TestClock.adjust(nextRetry! - (yield* Clock.currentTimeMillis));
+          expect(Exit.isSuccess(yield* run(pass))).toBe(true);
+          expect(yield* snapshot()).toEqual(afterBindingFailure);
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(before + delay);
           yield* run(ensure);
           yield* evict();
@@ -203,12 +248,14 @@ describe("maintenance retry deadlines", () => {
           const afterFailure = yield* snapshot();
 
           // A host deadline and a forced redelivery do not run native recovery early.
+          const hostNow = yield* Clock.currentTimeMillis;
+
           hostDeadline = attempt === 0 ? before : before + 1_000;
           yield* run(ensure);
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(
-            attempt === 0 ? before + 50 : hostDeadline,
+            attempt === 0 ? hostNow + 50 : hostDeadline,
           );
-          yield* TestClock.adjust(1_000);
+          yield* TestClock.adjust(before + 1_000 - (yield* Clock.currentTimeMillis));
           expect(Exit.isSuccess(yield* run(pass))).toBe(true);
           expect(yield* snapshot()).toEqual(afterFailure);
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(before + delay);
@@ -243,7 +290,7 @@ describe("maintenance retry deadlines", () => {
             expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(before + delay);
             expect(yield* snapshot()).toEqual(afterFailure);
           }
-          yield* TestClock.adjust(delay - 1_000);
+          yield* TestClock.adjust(before + delay - (yield* Clock.currentTimeMillis));
         }
         expect(hostDrains).toBe(delays.length);
         expect(yield* Effect.promise(() => readCanonical(thread))).toEqual(canonicalBefore);
@@ -271,11 +318,25 @@ describe("maintenance retry deadlines", () => {
         }
 
         compatible = true;
-        hostFailure = false;
         const resumed = yield* run(pass);
 
-        expect(Exit.isFailure(resumed) ? Cause.pretty(resumed.cause) : "completed").toBe(
-          "completed",
+        expect(Exit.isFailure(resumed) ? Cause.pretty(resumed.cause) : "success").toContain(
+          "host delivery remains pending",
+        );
+
+        const retainedRetries = yield* Effect.promise(() =>
+          runInDurableObject(stubFor(thread), async (_instance, state) =>
+            Schema.decodeUnknownSync(
+              Schema.Struct({
+                bindingRetries: Schema.Array(Schema.Struct({ submissionId: Schema.String })),
+              }),
+            )(await state.storage.get("effect-agent:thread-maintenance:v1")),
+          ),
+        );
+
+        // A compatible attempt clears its prior binding wait even if the host join fails.
+        expect(retainedRetries.bindingRetries.map((retry) => retry.submissionId)).not.toContain(
+          receipt.submissionId,
         );
 
         const settlement = yield* Effect.promise(() =>
@@ -284,6 +345,11 @@ describe("maintenance retry deadlines", () => {
 
         expect(settlement.submissionId).toBe(receipt.submissionId);
         expect(settlement.outcome).toBe("completed");
+        hostFailure = false;
+        const finalRetry = yield* Effect.promise(() => scheduledAlarm(thread));
+
+        yield* TestClock.adjust(finalRetry! - (yield* Clock.currentTimeMillis));
+        expect(Exit.isSuccess(yield* run(pass))).toBe(true);
         expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
     ));

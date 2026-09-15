@@ -63,14 +63,22 @@ import {
   memoryRecallLimits,
   MemoryProjects,
 } from "./memory-fixtures.ts";
-import { droppedMessageWakes, messageDeliveryFaultLayer } from "./message-delivery-fixture.ts";
+import {
+  droppedMessageWakes,
+  messageDeliveryFaultLayer,
+  testMessageRecovery,
+} from "./message-delivery-fixture.ts";
 import {
   failNextFlush,
   flushCount,
   observabilityProbeLayer,
   telemetryProbe,
 } from "./observability-fixture.ts";
-import { makeProjectionBinding, projectionLayer } from "./projection-fixture.ts";
+import {
+  hostMaintenanceLayer,
+  makeProjectionBinding,
+  projectionLayer,
+} from "./projection-fixture.ts";
 import { publicationLayer } from "./publication-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
 import {
@@ -115,6 +123,7 @@ const baseOptions: ThreadObject.Options = {
   settlementPollInterval: 25,
   abortPollInterval: 25,
   alarmBackoffBase: 10,
+  projectionDispatchTimeoutMillis: 1_000,
   alarmBackoffCap: 100,
   observationPollInterval: 10,
   toolReconciler: fixtureReconcilerLayer,
@@ -360,6 +369,7 @@ export class ProjectionThreadObject extends ThreadObject.make(
     Effect.map(Effect.all([makeTestBindings, makeProjectionBinding]), ([bindings, projection]) =>
       Layer.fresh(ThreadMaintenance.layer).pipe(
         Layer.provideMerge(DurableAgentRuntime.layerWithBindings([...bindings, projection])),
+        Layer.provide(hostMaintenanceLayer),
       ),
     ),
   ).pipe(
@@ -385,7 +395,12 @@ export class TestThreadObject extends ThreadObject.make(
                   ),
                   Layer.provideMerge(layerFromBindings([])),
                 )
-              : layerFromBindings([...existing, ...workers]),
+              : threadId.startsWith("messages-")
+                ? Layer.fresh(ThreadMaintenance.layer).pipe(
+                    Layer.provide(testMessageRecovery),
+                    Layer.provideMerge(layerFromBindings([...existing, ...workers])),
+                  )
+                : layerFromBindings([...existing, ...workers]),
         ),
       ),
     ),

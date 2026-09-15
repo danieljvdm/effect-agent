@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import type { Scope } from "effect";
 import * as Agent from "effect-agent/agent";
 import { DurableWorkerBinding } from "effect-agent/agent-registration";
 import type { CanonicalRecordEnvelope } from "effect-agent/records";
@@ -8,9 +9,11 @@ import {
   ThreadProjectionMaintenance,
 } from "effect-agent/thread-projection-maintenance";
 import { ThreadRead, ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
+import { ThreadHostMaintenance, type DurableAlarmError } from "../src/Alarm.ts";
 import { DurableObjectContext, ThreadObjectIdentity } from "../src/CloudflareBindings.ts";
 import { TEST_DIGESTS, finalParts, plannerDefinition } from "./fixtures.ts";
 
@@ -29,6 +32,40 @@ export const projectionResources = new Map<string, { acquired: number; released:
 export const projectionConstructions = new Map<string, number>();
 export const projectionLookups = new Map<string, Array<number>>();
 export const projectionLiveBatches = new Map<string, Array<number>>();
+
+type HostMaintenance = Context.Service.Shape<typeof ThreadHostMaintenance>;
+
+export const hostMaintenanceControls = new Map<
+  string,
+  Omit<HostMaintenance, "drainUntil"> & {
+    readonly drainUntil: (
+      ...args: Parameters<HostMaintenance["drainUntil"]>
+    ) => Effect.Effect<void, DurableAlarmError, Scope.Scope | WakeScheduler>;
+  }
+>();
+
+export const hostMaintenanceLayer = Layer.effectContext(
+  Effect.gen(function* () {
+    const { threadId } = yield* ThreadObjectIdentity;
+
+    const wakes = yield* WakeScheduler;
+
+    return Context.make(ThreadHostMaintenance, {
+      get dispatchTimeoutMillis() {
+        return hostMaintenanceControls.get(threadId)?.dispatchTimeoutMillis ?? 1;
+      },
+      drainUntil: (finished, deadline) =>
+        Effect.suspend(
+          () =>
+            hostMaintenanceControls.get(threadId)?.drainUntil(finished, deadline) ?? Effect.void,
+        ).pipe(Effect.provideService(WakeScheduler, wakes)),
+      pendingDeadline: Effect.suspend(
+        () =>
+          hostMaintenanceControls.get(threadId)?.pendingDeadline ?? Effect.succeed(Option.none()),
+      ),
+    });
+  }),
+);
 
 export class ProjectionIndex extends Context.Service<
   ProjectionIndex,

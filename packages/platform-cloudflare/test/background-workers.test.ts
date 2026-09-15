@@ -667,14 +667,36 @@ for (const mode of ["custom", "standard"] as const)
 
     droppedMessageWakes.add(started.worker.threadId);
     try {
-      await withOwner(source, (host) =>
-        Subagent.followUp(
-          backgroundReportingWorkers,
-          started.worker,
-          { question: "joined input" },
-          { idempotencyKey: decodeIdempotencyKey("joined") },
-        ).pipe(Effect.provideService(SubagentHost, host)),
+      const followUp = Subagent.followUp(
+        backgroundReportingWorkers,
+        started.worker,
+        { question: "joined input" },
+        { idempotencyKey: decodeIdempotencyKey("joined") },
       );
+
+      await withOwner(source, (host) =>
+        followUp.pipe(
+          Effect.provideService(SubagentHost, host),
+          Effect.catchTag("WorkerError", (error) =>
+            error.reason === "delivery-pending" ? Effect.void : Effect.fail(error),
+          ),
+        ),
+      );
+      // The alarm pump may claim the retained follow-up before the direct caller. Reconcile
+      // that same request only after alarm-owned delivery records its destination receipt.
+      await drainAlarmsUntil(source, () =>
+        runInDurableObject(stubFor(source), (instance) =>
+          instance[DurableObject.RunSymbol](
+            Effect.gen(function* () {
+              const store = yield* MessageDeliveryStore;
+              const rows = yield* store.list({ ownerThreadId: decodeThreadId(source), limit: 100 });
+
+              return rows.items.length === 2 && rows.items.every((row) => row.receipt !== null);
+            }),
+          ),
+        ),
+      );
+      await withOwner(source, (host) => followUp.pipe(Effect.provideService(SubagentHost, host)));
       armRuntimeEviction(started.worker.threadId, "worker:after-report-append");
       backgroundReportGates.add(source);
       await evict(source);
@@ -686,7 +708,8 @@ for (const mode of ["custom", "standard"] as const)
           armedEvictionsRemaining(started.worker.threadId) === 0
         );
       });
-      await evict(started.worker.threadId);
+      // The armed post-append failpoint already evicted the child. Let its reconstructed
+      // alarm finish delivery instead of injecting another crash at an uncontrolled lease.
       await drainAlarmsUntil(started.worker.threadId, async () => {
         const rows = await runInDurableObject(stubFor(started.worker.threadId), (instance) =>
           instance[DurableObject.RunSymbol](

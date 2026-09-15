@@ -140,6 +140,8 @@ export interface CloudflareDurableRuntimeOptions {
   readonly toolFailureObserver?: RunToolFailureObserver | undefined;
   /** Milliseconds; default 25. */
   readonly observationPollInterval?: number | undefined;
+  /** Whole disposable projection wave in milliseconds, 1..300000; default 30000. */
+  readonly projectionDispatchTimeoutMillis?: number | undefined;
   /** Bytes; default just under the 2 MB platform value limit. */
   readonly maxStoredValueBytes?: number | undefined;
   /** Default false. */
@@ -254,6 +256,9 @@ const configFromOptions = (
     abortPollInterval: options.abortPollInterval ?? CLOUDFLARE_RUNTIME_DEFAULTS.abortPollInterval,
     observationPollInterval:
       options.observationPollInterval ?? CLOUDFLARE_RUNTIME_DEFAULTS.observationPollInterval,
+    projectionDispatchTimeoutMillis:
+      options.projectionDispatchTimeoutMillis ??
+      CLOUDFLARE_RUNTIME_DEFAULTS.projectionDispatchTimeoutMillis,
     maxStoredValueBytes:
       options.maxStoredValueBytes ?? CLOUDFLARE_RUNTIME_DEFAULTS.maxStoredValueBytes,
     verifyOnOpen: options.verifyOnOpen ?? CLOUDFLARE_RUNTIME_DEFAULTS.verifyOnOpen,
@@ -609,8 +614,8 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
       );
 
       const messageRecovery = threadMessageDeliveryLayer.pipe(
-        // Each wave is bounded even at the policy's five-minute attempt ceiling. Source
-        // completion stops new waves; remaining rows retain their indexed alarm deadline.
+        // Four parallel attempts per wave. Native completion stops new wake-driven waves;
+        // retained retry deadlines schedule future alarms.
         Layer.provide(MessageDeliveryDriver.layer({ batchSize: 4, concurrency: 4 })),
         Layer.provide(cloudflarePreparedInputAdmissionLayer),
         Layer.provide(CloudflareThreadClient.layer),

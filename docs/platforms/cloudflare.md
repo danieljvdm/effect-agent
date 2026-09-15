@@ -285,18 +285,77 @@ monopolize other Threads. Binding refusals still fail closed and retain the orig
 There is no terminal retry-count limit: dropping the alarm would strand accepted work after a
 later compatible deployment. Waiting never authorizes incompatible code to execute.
 
-Application outboxes can supply `ThreadHostMaintenance` from the application Layer. Its
-`pendingDeadline` is a bounded, local, read-only earliest deadline. `drainUntil(finished)` runs
-beside native work, completes one initial bounded wave even if already signalled, stops starting
-new waves after the signal, and finishes the current wave before returning. Native maintenance
-joins it before acknowledging a generation. Every accepted host mutation must use the shared
-`ThreadMutationGate`; hooks must not write the raw alarm slot. Typed failures and defects retain
-the prearmed generation; event interruption closes scoped work and leaves durable recovery pending.
+Application outboxes can supply `ThreadHostMaintenance` from the application Layer:
+
+```ts
+import { ThreadHostMaintenance } from "@effect-agent/platform-cloudflare/alarm";
+import { Context, Effect } from "effect";
+
+// Capture the application's services when constructing the hooks.
+const maintenance = Context.make(ThreadHostMaintenance, {
+  // For example, a wave of four sequential commits allowing 15 seconds each.
+  dispatchTimeoutMillis: 60_000,
+  pendingDeadline: outbox.pendingDeadline,
+  drainUntil: (sourceFinished, dispatchUntil) =>
+    Effect.gen(function* () {
+      // The supplied Scope belongs to the physical alarm, including retirement.
+      yield* admission.listen.pipe(Effect.forkScoped);
+      yield* outbox.drainUntil(sourceFinished, dispatchUntil);
+    }),
+});
+```
+
+The application pump admits an initial bounded wave, even on a caught-up alarm, and may dispatch
+new wake-driven waves while native execution runs. `sourceFinished` stops admission of new
+external waves; it must not close local admission or hub subscriptions. Keep those subscriptions
+in the supplied event Scope until maintenance tears it down. The pump returns after its active
+wave finishes. Remove deadline-sleep retry loops and listeners scoped to native completion.
+
+Declare the whole-wave `dispatchTimeoutMillis` as an integer from 1 to 300000 milliseconds.
+Use the sum for sequential operations and the maximum for parallel lanes. Admit a new wave only
+if its full allowance fits before `dispatchUntil`; otherwise leave the work durably due without
+claiming an attempt. New arrivals must not renew this horizon. Setup and `pendingDeadline` are
+bounded local operations. Ordinary auxiliary setup failures are reported after native work.
+
+Maintenance runs native execution, message delivery, host delivery and disposable projection
+backfill concurrently. At native completion it stops new external waves, bounds the host join
+by its declared allowance, and waits for the native driver's current parallel wave through its
+normal timeout/retry commit. The driver's timer starts from the actual Claim, not batch
+selection. Its retained policy defaults to 30000ms and permits at most 300000ms; four driver
+permits serve four selected rows without sequential attempt windows. A late active wave keeps
+its opportunity even under continuous native arrivals. The single current native hook is
+`ThreadMessageDelivery.drainUntil(sourceFinished, dispatchUntil)`; the old `drain` fallback is
+removed.
+
+Disposable backfill has one independently bounded wave per event, configured by
+`ThreadObject.Options.projectionDispatchTimeoutMillis` (default 30000ms, maximum 300000ms).
+This does not change required live `applyCommitted` publication. The worst added handoff wait is
+the maximum of the active native attempt window, declared host allowance and remaining backfill
+allowance, at most five minutes plus bounded local setup/commit/cleanup. These windows overlap;
+they are not added together. The ten-minute native yield and fourteen-minute whole-event ceiling
+remain in force. Cooperative cancellation cannot preempt synchronous code or stuck finalizers.
+
+After auxiliary cleanup, maintenance reads local durable deadlines under the mutation/generation
+gate and acknowledges only observed work. Retry deadlines schedule future physical alarms;
+there are no in-event sleeps for them. Persist exact envelopes and claims before network dispatch.
+Local cancellation does not cancel or roll back remote effects. Interrupted claims, receipts and
+projection cursors remain recoverable after reconstruction. Typed failures, defects and a hook's
+own interruption retain the prearmed generation; only the owner's finite cutoff is deferred work.
+The maintenance span records host cutoff use.
+
+Every accepted host mutation uses the shared `ThreadMutationGate`; hooks must not write the raw
+alarm slot. Native admission, approval, abort and unknown resolution retain the default
+`invalidatesRecovery: true`. Projection, relay and reply receipt-only bookkeeping uses
+`invalidatesRecovery: false`, with its local `pendingDeadline` owning scheduling. Reuse the same
+gate instance when rebuilding maintenance or runtime services. Migrate consumer hooks only with
+an actual published release containing this API, keeping the framework packages on one matching
+release; do not pin an unpublished branch or patch installed dependencies.
 
 ### Publish durable host activity
 
-Use the optional publication Layer to deliver canonical records or durable approval, abort, and
-unknown-resolution intents to a host-owned destination:
+Use the optional publication Layer when canonical records or durable approval, abort, and
+unknown-resolution intents must be published before dependent native execution. Independent
+UI relays and outboxes belong in `ThreadHostMaintenance`, since publication is an execution gate:
 
 ```ts
 import { ThreadPublication } from "@effect-agent/platform-cloudflare/alarm";
