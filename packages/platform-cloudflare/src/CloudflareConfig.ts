@@ -89,11 +89,11 @@ export class CloudflareDurableRuntimeConfigValue extends Schema.Class<Cloudflare
   ownershipLeaseDuration: PositiveMillis,
   /** Base delay of the alarm re-arm backoff when a pass makes no progress. */
   alarmBackoffBase: PositiveMillis,
-  /** Ceiling of the alarm re-arm backoff. */
+  /** Ceiling of no-progress backoff and retry delay after a failed maintenance pass. */
   alarmBackoffCap: PositiveMillis,
   /**
-   * The maintenance-pass scan cadence and the ceiling of every re-arm delay: nonterminal
-   * work is revisited at least this often (wake/scan pairing, persistence §14).
+   * Fallback scan cadence for newly dirty work. Failed/no-progress passes use
+   * alarmBackoffCap independently; constructor repair never shortens their retry deadline.
    */
   wakeScanInterval: PositiveMillis,
   /** `awaitSettlement` ledger re-check cadence when no wake arrives. */

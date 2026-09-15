@@ -335,7 +335,7 @@ describe("durable host publication", () => {
   it.each(["failure", "defect", "interruption", "timeout"] as const)(
     "retains a prearmed native alarm across publication %s",
     (failure) =>
-      withThread(async (thread) => {
+      withThread(async (thread, now, advance) => {
         await submit(thread);
         publicationControls.set(thread, { failure });
         await expect(alarm(thread)).rejects.toBeDefined();
@@ -343,11 +343,18 @@ describe("durable host publication", () => {
 
         expect(resources?.acquired).toBeGreaterThan(0);
         expect(resources?.released).toBe(resources?.acquired);
-        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
+        expect(await scheduledAlarm(thread, namespace)).toBe(now + 100);
+        await runInDurableObject(stub(thread), (instance) =>
+          instance[DurableObject.RunSymbol](
+            ThreadMaintenance.use((maintenance) => maintenance.ensureAlarm),
+          ),
+        );
+        expect(await scheduledAlarm(thread, namespace)).toBe(now + 100);
         const state = await generation(thread);
 
         expect(state.dirty).toBeGreaterThan(state.processed);
         publicationControls.delete(thread);
+        await advance(100);
         await runDurableObjectAlarm(stub(thread));
         await quiesce(thread);
         expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");

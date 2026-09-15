@@ -124,9 +124,9 @@ export interface CloudflareDurableRuntimeOptions {
   readonly ownershipLeaseDuration?: number | undefined;
   /** Milliseconds; default 100. */
   readonly alarmBackoffBase?: number | undefined;
-  /** Milliseconds; default 5000. */
+  /** No-progress backoff ceiling and failed-pass retry delay in milliseconds; default 5000. */
   readonly alarmBackoffCap?: number | undefined;
-  /** Milliseconds; default 1000. Bounds every alarm re-arm delay. */
+  /** Fallback scan cadence for newly dirty work in milliseconds; default 1000. */
   readonly wakeScanInterval?: number | undefined;
   /** Milliseconds; default 500. */
   readonly settlementPollInterval?: number | undefined;

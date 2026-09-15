@@ -14,6 +14,7 @@ import {
   Schema,
   Semaphore,
   Stream,
+  Struct,
 } from "effect";
 import { type DurableBindingFailure } from "effect-agent/agent-registration";
 import {
@@ -206,6 +207,8 @@ export type ThreadMaintenanceFailpointLocation =
   | "maintenance:begin:after"
   | "maintenance:select:before"
   | "maintenance:select:after"
+  | "maintenance:retry:before"
+  | "maintenance:retry:after"
   | "maintenance:finish:before"
   | "maintenance:finish:after";
 
@@ -320,6 +323,13 @@ const MaintenanceGeneration = Schema.BigIntFromString.check(
   Schema.isGreaterThanOrEqualToBigInt(0n),
 );
 
+class MaintenanceRetry extends Schema.Class<MaintenanceRetry>("MaintenanceRetry")({
+  generation: MaintenanceGeneration,
+  notBefore: Schema.Finite,
+  nativeOnly: Schema.Boolean,
+  stalls: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(30)),
+}) {}
+
 /** Versioned, platform-private maintenance state stored through Durable Object KV. */
 class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
   "@effect-agent/platform-cloudflare/ThreadMaintenanceState",
@@ -330,6 +340,8 @@ class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
   nonterminal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** One physical-owner cursor; old single-lane records need no conversion. */
   lastServedThreadId: Schema.optionalKey(ThreadId),
+  /** Absent on older records. A newer mutation makes this retry obsolete. */
+  retry: Schema.optionalKey(MaintenanceRetry),
 }) {}
 
 const MAINTENANCE_STATE_KEY = "effect-agent:thread-maintenance:v1";
@@ -499,7 +511,7 @@ export type MaintenancePassFailure =
 export class ThreadMaintenance extends Context.Service<
   ThreadMaintenance,
   {
-    /** One idempotent maintenance pass; failures propagate so workerd retries the alarm. */
+    /** One idempotent pass; failures propagate after durably scheduling bounded recovery. */
     readonly pass: Effect.Effect<MaintenancePassReport, MaintenancePassFailure>;
     /**
      * Constructor gate: initialize/inspect only the O(1) maintenance record and ensure a dirty
@@ -538,11 +550,6 @@ export class ThreadMaintenance extends Context.Service<
       const { ctx } = yield* DurableObjectContext;
       const failpoint = yield* ThreadMaintenanceFailpoint;
 
-      /**
-       * Consecutive no-progress passes — an in-memory CACHE, not state: a fresh incarnation
-       * restarts at zero and merely re-arms sooner than a long-lived one would have.
-       */
-      const stalls = yield* Ref.make(0);
       const mutations = yield* ThreadMutationGate;
       const publication = yield* ThreadPublication;
       const projection = yield* ThreadProjectionMaintenance;
@@ -576,7 +583,7 @@ export class ThreadMaintenance extends Context.Service<
         yield* failpoint.hit("maintenance:ensure:before");
         const now = yield* Clock.currentTimeMillis;
 
-        yield* runTransaction("ensure maintenance alarm", () =>
+        const retry = yield* runTransaction("ensure maintenance alarm", () =>
           ctx.storage.transaction(async (transaction) => {
             const { state, initialized } = await readMaintenanceState(transaction);
 
@@ -584,10 +591,18 @@ export class ThreadMaintenance extends Context.Service<
               await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(state));
             }
             if (state.dirty > state.processed) {
-              await ensureTransactionAlarmBy(transaction, now + config.wakeScanInterval);
+              await ensureTransactionAlarmBy(
+                transaction,
+                state.retry?.generation === state.dirty
+                  ? Math.max(now + minimumAlarmDelay, state.retry.notBefore)
+                  : now + config.wakeScanInterval,
+              );
             }
+
+            return state.retry?.generation === state.dirty ? state.retry : undefined;
           }),
         );
+
         const deadline = yield* pendingDeadline;
 
         if (Option.isSome(deadline)) {
@@ -595,7 +610,12 @@ export class ThreadMaintenance extends Context.Service<
             ctx.storage.transaction((transaction) =>
               ensureTransactionAlarmBy(
                 transaction,
-                Math.max(now + minimumAlarmDelay, deadline.value),
+                Math.max(
+                  now + minimumAlarmDelay,
+                  deadline.value <= now && retry !== undefined && !retry.nativeOnly
+                    ? Math.max(deadline.value, retry.notBefore)
+                    : deadline.value,
+                ),
               ),
             ),
           );
@@ -603,7 +623,9 @@ export class ThreadMaintenance extends Context.Service<
         yield* failpoint.hit("maintenance:ensure:after");
       });
 
-      const beginPass = Effect.fn("ThreadMaintenance.beginPass")(function* () {
+      const beginPass = Effect.fn("ThreadMaintenance.beginPass")(function* (observed: {
+        generation?: bigint;
+      }) {
         yield* failpoint.hit("maintenance:begin:before");
         const now = yield* Clock.currentTimeMillis;
 
@@ -611,10 +633,13 @@ export class ThreadMaintenance extends Context.Service<
           ctx.storage.transaction(async (transaction) => {
             const { state, initialized } = await readMaintenanceState(transaction);
 
+            observed.generation = state.dirty;
             if (!initialized) {
               await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(state));
             }
-            if (state.processed >= state.dirty) {
+            const retryAt = state.retry?.generation === state.dirty ? state.retry.notBefore : 0;
+
+            if (state.processed >= state.dirty || retryAt > now) {
               // Prearm even a publication-only pass before invoking any host hook.
               await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
 
@@ -628,6 +653,7 @@ export class ThreadMaintenance extends Context.Service<
               _tag: "Actionable" as const,
               generation: state.dirty,
               nonterminal: state.nonterminal,
+              stalls: state.retry?.generation === state.dirty ? state.retry.stalls : 0,
             };
           }),
         );
@@ -637,11 +663,10 @@ export class ThreadMaintenance extends Context.Service<
         return result;
       });
 
-      const rearmDelay = Effect.fn("ThreadMaintenance.rearmDelay")(function* (progressed: boolean) {
-        const priorStalls = yield* Ref.getAndUpdate(stalls, (count) =>
-          progressed ? 0 : count + 1,
-        );
-
+      const rearmDelay = Effect.fn("ThreadMaintenance.rearmDelay")(function* (
+        progressed: boolean,
+        priorStalls: number,
+      ) {
         if (progressed) return config.alarmBackoffBase;
         const exponent = Math.min(priorStalls, 30);
         const backoff = Math.min(config.alarmBackoffCap, config.alarmBackoffBase * 2 ** exponent);
@@ -650,11 +675,65 @@ export class ThreadMaintenance extends Context.Service<
         // waiting longer than the deterministic bound.
         const jittered = Math.ceil(backoff / 2 + (backoff / 2) * jitter);
 
-        return Math.min(jittered, config.wakeScanInterval);
+        return jittered;
+      });
+
+      const rearmFailure = Effect.fn("ThreadMaintenance.rearmFailure")(function* (
+        generation: bigint | undefined,
+        nativeOnly: boolean,
+      ) {
+        if (generation === undefined) return;
+        yield* failpoint.hit("maintenance:retry:before");
+        yield* mutations.withSnapshot((active) =>
+          Effect.gen(function* () {
+            // A failed deadline read must not prevent committing the native retry.
+            const deadline = yield* pendingDeadline.pipe(
+              Effect.catchCause(() => Effect.succeed(Option.none<number>())),
+            );
+
+            const now = yield* Clock.currentTimeMillis;
+
+            yield* runTransaction("back off failed maintenance", () =>
+              ctx.storage.transaction(async (transaction) => {
+                const { state } = await readMaintenanceState(transaction);
+
+                const retry = MaintenanceRetry.make({
+                  generation,
+                  notBefore: now + config.alarmBackoffCap,
+                  nativeOnly,
+                  stalls: 30,
+                });
+
+                await transaction.put(
+                  MAINTENANCE_STATE_KEY,
+                  encodeMaintenanceState(ThreadMaintenanceState.make({ ...state, retry })),
+                );
+
+                // Never postpone a producer that raced the failed observation. Host work
+                // retains its own deadline; an early delivery skips native recovery below.
+                const nativeDeadline =
+                  active > 0 || state.dirty !== generation
+                    ? now + minimumAlarmDelay
+                    : retry.notBefore;
+
+                await transaction.setAlarm(
+                  Math.max(
+                    now + minimumAlarmDelay,
+                    Option.isSome(deadline) && (nativeOnly || deadline.value > now)
+                      ? Math.min(nativeDeadline, deadline.value)
+                      : nativeDeadline,
+                  ),
+                );
+              }),
+            );
+          }),
+        );
+        yield* failpoint.hit("maintenance:retry:after");
       });
 
       const pass = Effect.fn("ThreadMaintenance.pass")(function* (
         yieldAfter: DateTime.Utc,
+        observed: { generation?: bigint; nativeOnly: boolean },
       ): Effect.fn.Return<MaintenancePassReport, MaintenancePassFailure> {
         const annotate = (report: MaintenancePassReport) =>
           Effect.annotateCurrentSpan({
@@ -667,7 +746,7 @@ export class ThreadMaintenance extends Context.Service<
 
         const started = yield* mutations.withSnapshot((activeAtStart) =>
           Effect.gen(function* () {
-            const generation = yield* beginPass();
+            const generation = yield* beginPass(observed);
 
             if (generation._tag === "Actionable" && activeAtStart === 0) {
               // The gate excludes a producer starting between the snapshot and certification.
@@ -732,7 +811,9 @@ export class ThreadMaintenance extends Context.Service<
 
                   const nativeDeadline =
                     active > 0 || state.dirty > state.processed
-                      ? now + config.wakeScanInterval
+                      ? state.retry?.generation === state.dirty && active === 0
+                        ? Math.max(now + minimumAlarmDelay, state.retry.notBefore)
+                        : now + config.wakeScanInterval
                       : Infinity;
 
                   const next = Option.isSome(latest)
@@ -765,6 +846,7 @@ export class ThreadMaintenance extends Context.Service<
           );
         }
         // Step 2 — reconciliation strictly precedes new work in this pass (exit gate).
+        observed.nativeOnly = true;
         const recovered: ReadonlyArray<RecoveryReport> = yield* runtime.runRecovery;
         const reports = new Map(recovered.map((report) => [report.submissionId, report]));
         const current = yield* Stream.runCollect(ledger.scanNonterminal);
@@ -817,6 +899,7 @@ export class ThreadMaintenance extends Context.Service<
             ? Option.none()
             : yield* runtime.processThreadHead(selected, { yieldAfter });
 
+        observed.nativeOnly = false;
         yield* finishDelivery;
         if (Exit.isFailure(projected)) return yield* Effect.failCause(projected.cause);
         // Observe residual state before acknowledging this exact pass-start generation.
@@ -844,7 +927,7 @@ export class ThreadMaintenance extends Context.Service<
           Option.isSome(settlement) ||
           recovered.some((report) => report.disposition === "repaired");
 
-        const delay = autonomous ? yield* rearmDelay(progressed) : 0;
+        const delay = autonomous ? yield* rearmDelay(progressed, started.stalls) : 0;
         const now = yield* Clock.currentTimeMillis;
 
         yield* failpoint.hit("maintenance:finish:before");
@@ -867,9 +950,19 @@ export class ThreadMaintenance extends Context.Service<
                       : started.generation;
 
                 const next = ThreadMaintenanceState.make({
-                  ...state,
+                  ...Struct.omit(state, ["retry"]),
                   processed,
                   nonterminal: remaining.length,
+                  ...(autonomous && !progressed
+                    ? {
+                        retry: MaintenanceRetry.make({
+                          generation: started.generation,
+                          notBefore: now + delay,
+                          nativeOnly: true,
+                          stalls: Math.min(30, started.stalls + 1),
+                        }),
+                      }
+                    : {}),
                 });
 
                 await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
@@ -922,9 +1015,6 @@ export class ThreadMaintenance extends Context.Service<
         );
 
         yield* failpoint.hit("maintenance:finish:after");
-        if (alarmDisposition === "cleared") {
-          yield* Ref.set(stalls, 0);
-        }
 
         return yield* annotate(
           MaintenancePassReport.make({
@@ -941,8 +1031,20 @@ export class ThreadMaintenance extends Context.Service<
         // A mid-pass immediate hint is droppable; durable dirty state decides the final alarm.
         pass: Effect.gen(function* () {
           const yieldAfter = DateTime.makeUnsafe((yield* Clock.currentTimeMillis) + 10 * 60_000);
+          const observed: { generation?: bigint; nativeOnly: boolean } = { nativeOnly: false };
 
-          return yield* alarm.withWakesDeferred(maintenancePassGate.withPermit(pass(yieldAfter)));
+          return yield* alarm.withWakesDeferred(
+            maintenancePassGate.withPermit(
+              pass(yieldAfter, observed).pipe(
+                // Runs after scoped Attempt cleanup, including on timeout/interruption, and
+                // before releasing the pass permit. Preserve the original failure Cause.
+                Effect.onErrorIf(
+                  () => true,
+                  () => rearmFailure(observed.generation, observed.nativeOnly),
+                ),
+              ),
+            ),
+          );
         }).pipe(
           // Include permit waiting, recovery and acknowledgement in the event deadline.
           // Interruption releases Attempt ownership, leaving the prearmed dirty generation
