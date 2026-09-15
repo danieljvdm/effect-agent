@@ -1,5 +1,14 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.95
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/storage-sqlite@0.1.0-beta.95
+  - @effect-agent/workflow@0.1.0-beta.95
+  - effect-agent@0.1.0-beta.95
+
 ## 0.1.0-beta.94
 
 ### Patch Changes

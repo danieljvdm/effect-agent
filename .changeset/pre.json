@@ -66,6 +66,7 @@
     "cloudflare-binding-layers",
     "cloudflare-code-mode-host-bridge",
     "cloudflare-context-compactor",
+    "cloudflare-event-ownership",
     "cloudflare-gateway-web-search",
     "cloudflare-layer-from-bindings",
     "cloudflare-shared-memory",

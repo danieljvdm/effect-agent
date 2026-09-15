@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.95
+
+### Patch Changes
+
+- [#500](https://github.com/danieljvdm/effect-agent/pull/500) [`0fe79ac`](https://github.com/danieljvdm/effect-agent/commit/0fe79ac5b432ce3a824b6c7aa49853829b92d0b4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Retire alarm-owned host delivery and disposable projection work after finite dispatch opportunities while preserving native delivery timeout/retry commits and wake-driven overlap. BEHAVIOR CHANGE: Declare `ThreadHostMaintenance.dispatchTimeoutMillis`, keep admission listeners in the event Scope, and use the single `drainUntil(sourceFinished, dispatchUntil)` hook instead of the native `drain` fallback.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.95
+  - effect-agent@0.1.0-beta.95
+
 ## 0.1.0-beta.94
 
 ### Patch Changes
