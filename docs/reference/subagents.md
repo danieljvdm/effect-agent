@@ -6,7 +6,7 @@ description: Configure subagent projections, budgets, authority, nested delegati
 # Subagent policies and recovery
 
 Start with the [subagent overview](../guide/subagents) to choose a lifecycle, then follow the
-[ephemeral attached](../guide/subagents/ephemeral-attached),
+[in-memory attached](../guide/subagents/in-memory-attached),
 [durable attached](../guide/subagents/durable-attached), or
 [background worker](../guide/subagents/background) guide. This reference covers advanced configuration
 shared by those guides.
@@ -135,7 +135,7 @@ up the first child. See [delegation budgets](../concepts/budgets#delegation-budg
 
 ## Let the parent handle a failed child {#handle-failures}
 
-The [attached example](../guide/subagents/ephemeral-attached) fails the parent tool batch if the child fails. To make expected failures available to
+The [attached example](../guide/subagents/in-memory-attached) fails the parent tool batch if the child fails. To make expected failures available to
 the parent model as result data, add `failureMode: "return"` to the declaration. In the custom
 declaration above, replace its explicit error mode:
 
@@ -157,7 +157,7 @@ interruption retain their Effect meaning.
 
 ## Limit the child's authority {#limit-authority}
 
-The [attached example](../guide/subagents/ephemeral-attached) gives the child `TravelTools` and gives the parent only `Research.tool`. Adding a tool
+The [attached example](../guide/subagents/in-memory-attached) gives the child `TravelTools` and gives the parent only `Research.tool`. Adding a tool
 to the parent does not add it to the child.
 
 To require approval before establishing the child, add this to `Subagent.make`:

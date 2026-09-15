@@ -350,6 +350,18 @@ Run directly, and otherwise the Run takes at most one constrained grace Turn
 
 ## Persistence concepts
 
+**In-memory state**
+
+State retained within one application Scope. `InMemory.layer` shares conversation history and
+attached-subagent reservations across Runs for that Scope. State may live as long as the Scope
+remains open, within the store's capacity limits; Scope closure or process loss loses it.
+
+**Ephemeral execution**
+
+Execution with no recovery after process loss. The term describes a recovery guarantee, not a
+short duration or a single-use conversation. An ephemeral Run can use either in-memory history
+or persistent history; retaining history alone does not recover interrupted work.
+
 **Memory source**
 
 Application-owned readable content used across Threads. References preserve the source's identity,

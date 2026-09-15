@@ -52,7 +52,7 @@ a deterministic counter when assertions depend on stable IDs.
 
 ```ts
 import { Effect, Layer, Ref, Schema } from "effect";
-import { Ephemeral } from "effect-agent";
+import { InMemory } from "effect-agent";
 import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
 import { IdGenerator } from "effect-agent/id-generator";
 
@@ -71,7 +71,7 @@ const DeterministicIdGeneratorLive = Layer.effect(
 );
 
 const TestRuntimeLive = Layer.mergeAll(
-  Ephemeral.layer,
+  InMemory.layer,
   ToolkitLive,
   DomainServicesTest,
   DeterministicIdGeneratorLive,

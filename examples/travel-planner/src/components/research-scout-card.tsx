@@ -7,6 +7,7 @@ import { AgentProgress } from "./agent-progress.tsx";
 import { Button } from "./ui/button.tsx";
 
 const stateLabel = {
+  loading: "Loading updates…",
   starting: "Starting",
   active: "Working",
   idle: "Finished",
@@ -58,7 +59,13 @@ export function ResearchScoutDetails({ scout }: { readonly scout: ResearchScoutA
             <ActivityEvents events={scout.activity} />
           </>
         ) : (
-          <p>No activity has been recorded yet.</p>
+          <p>
+            {scout.state === "loading"
+              ? "Loading recorded activity…"
+              : scout.state === "unavailable"
+                ? "Recorded activity is unavailable."
+                : "No activity has been recorded yet."}
+          </p>
         )}
       </details>
     </section>
@@ -75,13 +82,15 @@ export function ResearchScoutCard({
     (scout) => scout.state === "active" || scout.state === "starting",
   ).length;
 
+  const loading = scouts.filter((scout) => scout.state === "loading").length;
+
   const finished = scouts.filter((scout) => scout.state === "idle").length;
 
   const attention = scouts.filter(
     (scout) => scout.state === "failed" || scout.state === "unavailable",
   ).length;
 
-  const summary = `${finished} of ${scouts.length} finished${working ? ` · ${working} working` : ""}${attention ? ` · ${attention} ${attention === 1 ? "needs" : "need"} attention` : ""}`;
+  const summary = `${finished} of ${scouts.length} finished${working ? ` · ${working} working` : ""}${loading ? ` · ${loading} loading` : ""}${attention ? ` · ${attention} ${attention === 1 ? "needs" : "need"} attention` : ""}`;
 
   if (scouts.length === 0) return null;
 
@@ -89,7 +98,7 @@ export function ResearchScoutCard({
     <Dialog.Root>
       <div
         className="trip-app-card research-scout-card"
-        data-status={working ? "building" : attention ? "failed" : "ready"}
+        data-status={working || loading ? "building" : attention ? "failed" : "ready"}
       >
         <Dialog.Trigger
           type="button"
@@ -97,7 +106,7 @@ export function ResearchScoutCard({
           aria-label={`Research scouts: ${summary}. View research activity`}
         >
           <span className="trip-app-symbol">
-            {working ? (
+            {working || loading ? (
               <LoaderCircle className="trip-app-spinner" size={19} aria-hidden="true" />
             ) : attention ? (
               <CircleAlert size={19} aria-hidden="true" />

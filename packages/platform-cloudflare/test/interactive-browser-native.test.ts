@@ -20,9 +20,11 @@ import { vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 
-const sdk = vi.hoisted(() => ({ launch: vi.fn<() => Promise<object>>() }));
+const sdk = vi.hoisted(() => ({ connect: vi.fn<() => Promise<object>>() }));
 
-vi.mock("@cloudflare/puppeteer", () => ({ default: sdk }));
+vi.mock("@cloudflare/puppeteer", () => ({
+  default: { ...sdk, acquire: async () => ({ sessionId: "native-probe" }) },
+}));
 
 class NativeProbeError extends Schema.TaggedError<NativeProbeError>()("NativeProbeError", {
   cause: Schema.Defect(),
@@ -126,7 +128,7 @@ it.live(
       const page = yield* sdkCall(() => browser.newPage());
       const requestListenerBaseline = page.listenerCount("request");
 
-      sdk.launch.mockResolvedValue({
+      sdk.connect.mockResolvedValue({
         createBrowserContext: async () => ({ newPage: async () => page, close: async () => {} }),
         sessionId: () => "native-probe",
         isConnected: () => browser.isConnected(),

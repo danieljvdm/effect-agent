@@ -14,7 +14,7 @@ coordinator and the exact child used by `Research`, so recovery can find them af
 `definitions` contains the code versions; SQLite stores accepted work and recorded results.
 
 Save this as `durable-delegation-host.ts`. It reuses the
-[attached example files](./ephemeral-attached) and the provider setup from
+[attached example files](./in-memory-attached) and the provider setup from
 [`node-agent.ts`](../../platforms/node#create-an-agent).
 
 ## Define the delegation

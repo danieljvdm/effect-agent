@@ -1,111 +1,39 @@
-import { Effect, Schema, Stream } from "effect";
-import { Subagent } from "effect-agent";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { ThreadId } from "effect-agent/identifiers";
-import { Principal } from "effect-agent/receipt";
-import { RecordEnvelope } from "effect-agent/records";
-import { SubagentHost } from "effect-agent/subagent-host";
+import { Schema } from "effect";
 import type { ThreadExport } from "effect-agent/thread-store";
-import { WorkerEnvironment } from "effect-cf";
 
-import { type EditorActivity, PlannerProgress } from "../domain.ts";
-import { plannerActivity } from "../server/activity.ts";
-import { RecordedDiagnostics } from "../server/diagnostics.ts";
+import type { EditorActivity } from "../domain.ts";
 import { emptyProgress } from "../server/progress.ts";
-import { ownerOfThread } from "../server/tenancy.ts";
 import { AppEditor, EditorRequest } from "./editor.ts";
 
-/** The source journal supplies the worker identity; callers cannot select another account's worker. */
-export const editorSnapshot = Effect.fn("editorSnapshot")(function* (
-  conversationId: string,
+/** The overview uses the already loaded source journal, including its exact request locator. */
+export const editorOverview = (
   tripId: string,
   records: ThreadExport["records"],
-) {
-  const request = records.toReversed().find(({ record }) => {
-    const payload = record.payload;
+): EditorActivity | null => {
+  for (let index = records.length - 1; index >= 0; index--) {
+    const entry = records[index];
 
-    return (
-      payload._tag === "WorkerInputRequested" &&
-      payload.admission.origin.worker.delegationId === AppEditor.delegationId &&
-      Schema.decodeUnknownOption(EditorRequest)(payload.admission.parameters).pipe(
-        (value) => value._tag === "Some" && value.value.tripId === tripId,
-      )
-    );
-  })?.record.payload;
+    if (entry === undefined) continue;
+    const payload = entry.record.payload;
 
-  if (request?._tag !== "WorkerInputRequested") return null;
-  const origin = request.admission.origin;
-  const task = Schema.decodeUnknownOption(EditorRequest)(request.admission.parameters);
+    if (
+      payload._tag !== "WorkerInputRequested" ||
+      payload.admission.origin.worker.delegationId !== AppEditor.delegationId
+    )
+      continue;
+    const task = Schema.decodeUnknownOption(EditorRequest)(payload.admission.parameters);
 
-  if (task._tag === "None") return null;
-
-  const base = {
-    id: origin.worker.threadId,
-    task: task.value.message,
-    progress: emptyProgress,
-    activity: [],
-  };
-
-  return yield* Effect.gen(function* () {
-    const worker = yield* Schema.decodeEffect(Subagent.Worker(AppEditor))(origin.worker);
-    const runtime = yield* DurableAgentRuntime;
-    const sourceThreadId = yield* Schema.decodeEffect(ThreadId)(conversationId);
-    const owner = ownerOfThread(conversationId);
-
-    const principal = yield* Schema.decodeEffect(Principal)(owner);
-
-    const host = yield* runtime.workerHost({ sourceThreadId, principal });
-
-    const summary = yield* Subagent.inspect(AppEditor, worker).pipe(
-      Effect.provideService(SubagentHost, host),
-    );
-
-    const history = yield* Subagent.observe(AppEditor, worker).pipe(
-      Stream.takeRight(100),
-      Stream.mapEffect((entry) =>
-        Schema.decodeUnknownEffect(RecordEnvelope)(entry.record).pipe(
-          Effect.map((record) => ({ record, sequence: entry.sequence })),
-        ),
-      ),
-      Stream.runCollect,
-      Effect.provideService(SubagentHost, host),
-    );
-
-    const env = yield* WorkerEnvironment;
-
-    const progress = yield* Effect.tryPromise({
-      try: () => env.ACCOUNT_THREADS.getByName(worker.threadId).plannerProgress(),
-      catch: () => "unavailable" as const,
-    }).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(PlannerProgress))),
-      Effect.orElseSucceed(() => emptyProgress),
-    );
-
-    const diagnostics = yield* Effect.tryPromise({
-      try: () => env.ACCOUNT_THREADS.getByName(worker.threadId).plannerDiagnostics(),
-      catch: () => "unavailable" as const,
-    }).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(RecordedDiagnostics))),
-      Effect.orElseSucceed(() => []),
-    );
-
-    const settled = history
-      .toReversed()
-      .find(({ record }) => record.payload._tag === "SubmissionSettled")?.record.payload;
+    if (task._tag === "None" || task.value.tripId !== tripId) continue;
 
     return {
-      ...base,
-      state:
-        summary.state === "idle" &&
-        settled?._tag === "SubmissionSettled" &&
-        settled.outcome !== "completed"
-          ? "failed"
-          : summary.state,
-      progress,
-      activity: plannerActivity(history, diagnostics).slice(-40),
-    } satisfies EditorActivity;
-  }).pipe(
-    Effect.timeout("3 seconds"),
-    Effect.orElseSucceed(() => ({ ...base, state: "unavailable" as const })),
-  );
-});
+      id: payload.admission.origin.worker.threadId,
+      sourceSequence: entry.sequence,
+      task: task.value.message,
+      state: "loading",
+      progress: emptyProgress,
+      activity: [],
+    };
+  }
+
+  return null;
+};

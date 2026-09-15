@@ -5,7 +5,7 @@ import {
   type OAuthSignInMapping,
   type OAuthRegistrationIntentMapping,
   type OAuthRegistrationMapping,
-} from "@yielded/auth/Drizzle";
+} from "@yielded/auth-persistence/drizzle";
 import { SecurityRevision } from "@yielded/auth/Sessions";
 import { sql } from "drizzle-orm";
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";

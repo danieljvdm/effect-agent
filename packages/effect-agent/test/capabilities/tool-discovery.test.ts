@@ -256,11 +256,125 @@ describe("ToolDiscovery", () => {
         yield* invoke(ToolDiscovery.make({ maxResultBytes: bytes }), entries, { query: "read" }),
       ).toEqual(result);
 
-      const error = yield* invoke(ToolDiscovery.make({ maxResultBytes: bytes - 1 }), entries, {
+      const bounded = yield* invoke(ToolDiscovery.make({ maxResultBytes: bytes - 1 }), entries, {
+        query: "read",
+      });
+
+      expect(bounded).toMatchObject({
+        toolNames: [],
+        matches: [],
+        notice: expect.stringMatching(/increase maxResultBytes/),
+      });
+
+      const minimum = yield* invoke(ToolDiscovery.make({ maxResultBytes: 256 }), entries, {
+        query: "read",
+      });
+
+      expect(minimum).toEqual(bounded);
+
+      const boundedJson = yield* Schema.encodeEffect(Schema.fromJsonString(ToolDiscovery.Result))(
+        minimum,
+      );
+
+      expect(Encoding.encodeHex(boundedJson).length / 2).toBeLessThanOrEqual(256);
+    }),
+  );
+
+  it.effect(
+    "skips oversized candidates and keeps complete later matches in custom rank order (#496)",
+    () =>
+      Effect.gen(function* () {
+        const Oversized = Tool.make("oversized", {
+          parameters: Schema.Struct({
+            key: Schema.String.annotate({ description: "東京".repeat(400) }),
+          }),
+          success: Schema.String,
+        });
+
+        const ranked = ["native:oversized", "native:search_pages", "native:query_records"];
+
+        const definition = ToolDiscovery.make({
+          maxResults: 3,
+          maxResultBytes: 2_000,
+          search: () => Effect.succeed(ranked),
+        });
+
+        const entries = [native(Query), native(Oversized), native(Search)];
+
+        const complete = yield* invoke(ToolDiscovery.make(), [native(Search), native(Query)], {
+          query: "r",
+        });
+
+        const result = yield* invoke(definition, entries, { query: "ignored" });
+
+        expect(result.toolNames).toEqual(["search_pages", "query_records"]);
+        expect(result.matches).toEqual([complete.matches[1], complete.matches[0]]);
+        expect(result.notice).toMatch(/narrow.*search/i);
+        expect(yield* invoke(definition, entries.toReversed(), { query: "ignored" })).toEqual(
+          result,
+        );
+
+        // The exact budget includes the notice, JSON escaping, schemas and toolNames.
+        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(ToolDiscovery.Result))(
+          result,
+        );
+
+        const bytes = Encoding.encodeHex(encoded).length / 2;
+
+        expect(bytes).toBeLessThanOrEqual(2_000);
+        expect(
+          yield* invoke(
+            ToolDiscovery.make({ maxResultBytes: bytes, search: () => Effect.succeed(ranked) }),
+            entries,
+            { query: "ignored" },
+          ),
+        ).toEqual(result);
+
+        const smaller = yield* invoke(
+          ToolDiscovery.make({ maxResultBytes: bytes - 1, search: () => Effect.succeed(ranked) }),
+          entries,
+          { query: "ignored" },
+        );
+
+        expect(smaller.toolNames).toEqual(["search_pages"]);
+        expect(smaller.matches).toEqual([complete.matches[1]]);
+
+        const limited = yield* invoke(
+          ToolDiscovery.make({
+            maxResults: 1,
+            maxResultBytes: 2_000,
+            search: () => Effect.succeed(ranked),
+          }),
+          entries,
+          { query: "ignored" },
+        );
+
+        expect(limited).toMatchObject({ toolNames: [], matches: [], notice: expect.any(String) });
+      }),
+  );
+
+  it.effect("retains catalogue and selected schema failures under tight byte budgets", () =>
+    Effect.gen(function* () {
+      const definition = ToolDiscovery.make({
+        maxResultBytes: 256,
+        search: (_request, catalogue) => Effect.succeed(catalogue.map((entry) => entry.id)),
+      });
+
+      const duplicate = yield* invoke(definition, [native(Search), native(Search)], {
         query: "read",
       }).pipe(Effect.flip);
 
-      expect(error).toMatchObject({ reason: "limit-exceeded" });
+      expect(duplicate).toMatchObject({ reason: "invalid-catalogue" });
+
+      const Invalid = Tool.make("unsupported", {
+        success: Schema.Struct({ [Symbol.for("opaque")]: Schema.String }),
+      });
+
+      const invalid = yield* invoke(definition, [native(Search), native(Invalid)], {
+        query: "read",
+      }).pipe(Effect.flip);
+
+      expect(invalid).toMatchObject({ reason: "invalid-schema" });
     }),
   );
 

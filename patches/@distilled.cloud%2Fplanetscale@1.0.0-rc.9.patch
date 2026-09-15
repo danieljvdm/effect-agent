@@ -1,0 +1,34 @@
+diff --git a/lib/credentials.js b/lib/credentials.js
+index 5ce0d68597ce88dfcebea413e7919e87d7103554..d5b0eb83d0dda9c661696481e5afd7b1fe315146 100644
+--- a/lib/credentials.js
++++ b/lib/credentials.js
+@@ -40,9 +40,9 @@ export const fromOAuth = (input) => Layer.succeed(Credentials, Effect.succeed({
+     apiBaseUrl: input.apiBaseUrl ?? DEFAULT_API_BASE_URL,
+ }));
+ const envConfig = EffectConfig.all({
+-    tokenId: EffectConfig.string("PLANETSCALE_API_TOKEN_ID"),
+-    token: EffectConfig.string("PLANETSCALE_API_TOKEN"),
+-    organization: EffectConfig.string("PLANETSCALE_ORGANIZATION"),
++    tokenId: EffectConfig.String("PLANETSCALE_API_TOKEN_ID"),
++    token: EffectConfig.String("PLANETSCALE_API_TOKEN"),
++    organization: EffectConfig.String("PLANETSCALE_ORGANIZATION"),
+ });
+ export const CredentialsFromEnv = Layer.succeed(Credentials, envConfig
+     .pipe(Effect.mapError(() => new ConfigError({
+diff --git a/src/credentials.ts b/src/credentials.ts
+index 225b2bc52fa2efbdbf5b642064990ffdd684c6c9..8c8a1c3570abbf56da3e62a3b69228e203dccf54 100644
+--- a/src/credentials.ts
++++ b/src/credentials.ts
+@@ -89,9 +89,9 @@ export const fromOAuth = (input: {
+   );
+ 
+ const envConfig = EffectConfig.all({
+-  tokenId: EffectConfig.string("PLANETSCALE_API_TOKEN_ID"),
+-  token: EffectConfig.string("PLANETSCALE_API_TOKEN"),
+-  organization: EffectConfig.string("PLANETSCALE_ORGANIZATION"),
++  tokenId: EffectConfig.String("PLANETSCALE_API_TOKEN_ID"),
++  token: EffectConfig.String("PLANETSCALE_API_TOKEN"),
++  organization: EffectConfig.String("PLANETSCALE_ORGANIZATION"),
+ });
+ 
+ export const CredentialsFromEnv = Layer.succeed(

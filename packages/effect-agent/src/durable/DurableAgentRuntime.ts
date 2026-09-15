@@ -58,6 +58,7 @@ import {
   SubagentParentLink,
 } from "../core/SubagentContract.ts";
 import { Selection, type Snapshot } from "../core/ToolExposure.ts";
+import type { ToolParameterRejection } from "../core/ToolResult.ts";
 import {
   type ModelCallUsage,
   InputTokenUsage,
@@ -985,6 +986,7 @@ const terminalAssistantText = Effect.fn("DurableAgentRuntime.terminalAssistantTe
  * path). `undefined` when the Run's journal ends at a complete Turn boundary.
  */
 interface PendingToolBatch {
+  readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;
   readonly turn: number;
   readonly turnId: TurnId;
@@ -1815,6 +1817,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       | {
           readonly turn: number;
           readonly messages: PersistedJson;
+          readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
           readonly toolExposure?: Snapshot | undefined;
         }
       | undefined;
@@ -1838,6 +1841,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           lastResponse = {
             turn: payload.turn,
             messages: payload.messages,
+            toolParameterRejections: payload.toolParameterRejections,
             ...(payload.toolExposure === undefined ? {} : { toolExposure: payload.toolExposure }),
           };
         }
@@ -1910,6 +1914,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       declaredIds: new Set(calls.map((call) => call.id)),
       responseRecordId: modelResponseRecordId(runId, lastResponse.turn),
       messages: lastResponse.messages,
+      toolParameterRejections: lastResponse.toolParameterRejections,
       ...(lastResponse.toolExposure === undefined
         ? {}
         : { toolExposure: lastResponse.toolExposure }),
@@ -5084,6 +5089,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               const batch = yield* withCrypto(
                 turnResponseBatch({
                   toolExposure: commit.toolExposure,
+                  toolParameterRejections: commit.toolParameterRejections,
                   runId,
                   turn: canonicalTurn,
                   turnId: commit.turnId,
@@ -6463,6 +6469,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 turn: pending.turn,
                 turnId: pending.turnId,
                 calls: pending.calls,
+                toolParameterRejections: pending.toolParameterRejections,
                 settled: pending.settled,
                 ...(pending.toolExposure === undefined
                   ? {}

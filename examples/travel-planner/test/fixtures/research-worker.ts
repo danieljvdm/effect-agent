@@ -3,6 +3,7 @@ import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
 import { IdempotencyKey, Principal } from "effect-agent/receipt";
+import { SubmissionLedger } from "effect-agent/submission-ledger";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
@@ -17,6 +18,7 @@ import {
 import {
   PlannerError,
   PlannerInput,
+  PlannerWorkerDetail,
   PlannerSettings,
   SaveTripRequest,
   Trip,
@@ -42,6 +44,12 @@ import {
 } from "../../src/server/planner.ts";
 import { PlannerAttempt } from "../../src/server/progress.ts";
 import { ownerOfThread } from "../../src/server/tenancy.ts";
+import {
+  plannerWorker,
+  workerStatus,
+  WorkerLocator,
+  WorkerStatusRequest,
+} from "../../src/server/worker-state.ts";
 import { EditorInput } from "../../src/trip-app/editor.ts";
 import fixtureWorker from "./worker.ts";
 
@@ -152,7 +160,7 @@ const model = Model.make(
               ).length;
 
               return Stream.fromIterable(
-                reads < 25
+                reads < 35
                   ? call("get_trip", { tripId: editor.input.tripId }, `editor-read-${reads}`)
                   : finish("Expanded editor completed."),
               );
@@ -549,10 +557,72 @@ const researchBrowser = Toolkit.make(ReadTravelPage).toLayer({
     }),
 });
 
+// These RPCs must remain finite projections over the published adapters. Guard actual
+// records consumed, not only the requested limit; a hidden export/observe is a regression.
+const withReadBudget = Effect.fnUntraced(function* <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  maximum: number,
+) {
+  const store = yield* ThreadStore;
+  const ledger = yield* SubmissionLedger;
+  let lookups = 0;
+  let consumed = 0;
+
+  return yield* effect.pipe(
+    Effect.provideService(SubmissionLedger, {
+      ...ledger,
+      lookup: (request) =>
+        Effect.suspend(() =>
+          ++lookups > 1
+            ? Effect.die("Worker view exceeded its one-lookup budget")
+            : ledger.lookup(request),
+        ),
+    }),
+    Effect.provideService(ThreadStore, {
+      ...store,
+      materialize: () => Effect.die("Worker view must not materialize history"),
+      append: () => Effect.die("Worker view must not append history"),
+      export: () => Effect.die("Worker view must not export history"),
+      observe: () => Stream.die("Worker view must not observe unbounded history"),
+      read: (request) =>
+        store.read(request).pipe(
+          Stream.tap(() =>
+            Effect.sync(() => {
+              if (++consumed > maximum)
+                throw new Error(`Worker view exceeded its ${maximum}-record budget`);
+            }),
+          ),
+        ),
+    }),
+  );
+});
+
 export class TravelPlannerThread extends makeTravelPlannerThread(
   sites,
   plannerApplication(model, "research-v1", "Research fixture", researchBrowser),
 ) {
+  plannerWorker(request: string): Promise<string> {
+    return this[DurableObject.RunSymbol](
+      withReadBudget(
+        Schema.decodeEffect(Schema.fromJsonString(WorkerLocator))(request).pipe(
+          Effect.flatMap(plannerWorker),
+          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
+        ),
+        1,
+      ),
+    );
+  }
+  plannerWorkerStatus(request: string): Promise<string> {
+    return this[DurableObject.RunSymbol](
+      withReadBudget(
+        Schema.decodeEffect(Schema.fromJsonString(WorkerStatusRequest))(request).pipe(
+          Effect.flatMap(workerStatus),
+          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
+        ),
+        100,
+      ),
+    );
+  }
   fetch(request: Request): Promise<Response> {
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {

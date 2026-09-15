@@ -1,5 +1,29 @@
 # effect-agent
 
+## 0.1.0-beta.94
+
+### Patch Changes
+
+- [#494](https://github.com/danieljvdm/effect-agent/pull/494) [`373d188`](https://github.com/danieljvdm/effect-agent/commit/373d18828f2fc2851614cf2612c5e71e91075c88) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Return invalid native tool arguments to the model when the tool uses `failureMode: "return"`, before approval or handler execution. Preserve rejection evidence through durable recovery and allow corrected Code Mode arguments in the same run.
+
+  BEHAVIOR CHANGE: Custom durability hooks must persist `RunTurnResponseCommit.toolParameterRejections` and restore it through `RunTurnResume.toolParameterRejections`.
+
+- [#497](https://github.com/danieljvdm/effect-agent/pull/497) [`bbb709c`](https://github.com/danieljvdm/effect-agent/commit/bbb709c9beff0b8f2e6b67d05e0f8223a7cb6f93) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Return complete tool discovery matches within the configured UTF-8 byte budget, with an actionable notice when documentation is omitted. Keep agent runs able to continue when no match fits, using an empty tool selection instead of a limit-exceeded failure.
+
+## 0.1.0-beta.93
+
+### Patch Changes
+
+- [#491](https://github.com/danieljvdm/effect-agent/pull/491) [`319c156`](https://github.com/danieljvdm/effect-agent/commit/319c156be5a85a2d490cf79531f94591881436f8) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Rename the in-memory runtime setup to `InMemory.layer` and clarify that conversations can span Runs for the lifetime of the application Scope.
+
+  BEHAVIOR CHANGE: Replace the `Ephemeral` root import with `InMemory` and the `effect-agent/ephemeral` module path with `effect-agent/in-memory`.
+
+## 0.1.0-beta.92
+
+### Patch Changes
+
+- [#487](https://github.com/danieljvdm/effect-agent/pull/487) [`054b1c3`](https://github.com/danieljvdm/effect-agent/commit/054b1c3a7e7a6571fc82caedc4ae8835c5aacfb4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Require Effect rc.115 across the packages and effect-cf 0.43.0 for Cloudflare hosts.
+
 ## 0.1.0-beta.91
 
 ### Patch Changes

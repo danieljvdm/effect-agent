@@ -1,9 +1,9 @@
 ---
-title: Ephemeral attached subagents
+title: In-memory attached subagents
 description: Run a parent and child in one process, and return the child's findings as a tool result.
 ---
 
-# Ephemeral attached subagents
+# In-memory attached subagents
 
 Bind a model to the child, then run the parent:
 
@@ -13,7 +13,7 @@ Bind a model to the child, then run the parent:
 `Subagent.layer` supplies the child's model and tool handlers. The parent and child can
 use different models.
 
-`Ephemeral.layer` keeps parent and child conversations in memory and shares one reservation
+`InMemory.layer` keeps parent and child conversations in memory and shares one reservation
 ledger across the parent’s subagents. Provide it once around all child handler Layers, as above.
 Reuse the parent's Thread ID for follow-up Runs within that application Scope. Each child has its
 own Thread. IDs are generated automatically; context preparation is optional. Process loss loses

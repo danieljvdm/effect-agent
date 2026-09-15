@@ -62,6 +62,13 @@ it("keeps finished public findings and escaped canonical details available toget
 });
 
 it("distinguishes failed work from unavailable updates without inventing progress", () => {
+  const loading = renderToStaticMarkup(
+    <ResearchScoutDetails scout={{ ...scout("loading"), activity: [] }} />,
+  );
+
+  expect(loading).toContain("Loading updates…");
+  expect(loading).toContain("Loading recorded activity…");
+  expect(loading).not.toContain("No activity has been recorded");
   const failed = renderToStaticMarkup(<ResearchScoutDetails scout={scout("failed")} />);
   const unavailable = renderToStaticMarkup(<ResearchScoutDetails scout={scout("unavailable")} />);
 

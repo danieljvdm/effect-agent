@@ -88,10 +88,24 @@ Default search matches every whitespace-separated query term, ignoring case, aga
 descriptions, methods and namespace hints, with deterministic catalogue-ID ordering. Namespaces
 come from `ToolNamespace` annotations or Code Mode's allowlist, never from parsing a tool name.
 Namespace hints appear only on eligible matches. Queries are bounded to 512 characters and exact
-namespace filters to 128. The default returns at most eight matches and 32 KiB of complete encoded
-JSON; limits can rise to 64 matches and 256 KiB. Oversized documentation fails with
-`ToolDiscoveryError` rather than returning broken schemas. Provider-defined tools are not ordinary
-callable schemas and cannot be documented by this capability.
+namespace filters to 128. The default considers at most eight matches and returns at most 32 KiB
+of complete encoded JSON; limits can rise to 64 matches and 256 KiB. `maxResultBytes` measures
+UTF-8 bytes of the whole discovery result, including metadata, schemas, `toolNames`, JSON escaping,
+and any recovery `notice`. It is a host budget, not a provider requirement; size it against the
+actual catalogue. The engine's tool-result and exposed-schema limits apply separately.
+
+When the first `maxResults` candidates exceed that byte budget, discovery retains complete
+matches in rank order whenever they fit, skipping larger matches and trying later candidates
+within that count. It returns a successful result with a `notice` advising a narrower search or
+namespace. Schemas are never cut, and omitted matches do not activate tools. If no match fits,
+the result is `{ toolNames: [], matches: [], notice: "..." }`; the model can continue, but the
+empty selection clears non-pinned tools. If a single tool still cannot fit, the notice advises
+asking the host to increase `maxResultBytes`.
+
+Byte overflow no longer emits `ToolDiscoveryError` with reason `limit-exceeded`. Invalid
+catalogues, invalid selected schemas, and custom-search failures still propagate as errors.
+Provider-defined tools are not ordinary callable schemas and cannot be documented by this
+capability.
 
 ### Supply application search
 
@@ -201,7 +215,7 @@ tasks against eager exposure before claiming a performance improvement.
 ## Run batches deterministically {#batch-execution}
 
 The runtime validates the complete model response before starting any handler. It resolves tool
-names, decodes parameters, checks budgets, and obtains approvals for the whole batch.
+names, validates parameters, checks budgets, and obtains approvals for executable calls in the whole batch.
 
 It bounds both active call streams and handler execution by the resolved concurrency, using scoped
 child fibers and a finite Effect `Semaphore`. Pending calls do not allocate waiting stream fibers.
@@ -243,6 +257,23 @@ const researcher = Agent.make("researcher", {
 Agent.inspectTools(researcher);
 // [{ name: "search", failureMode: "return", requiresHandler: true }]
 ```
+
+With `failureMode: "return"`, invalid JSON arguments for a native application tool also produce
+a failed result containing Effect AI's `AiError` with reason `ToolParameterValidationError`. For
+example, `query: Schema.NonEmptyString` rejects `{ query: "" }` and lets the model submit a corrected
+query in the same run. The rejected call does not request approval, acquire execution authorization,
+or invoke the handler. It still counts toward tool-call and failure budgets and emits
+`ToolCallFailed` with `failureHandling: "returned-to-model"`, without `ToolCallStarted`.
+
+The default `failureMode: "error"`, unknown tools, malformed non-JSON response data, and invalid
+provider-executed parameters remain fatal. Valid transforming parameter codecs still supply decoded
+values to handlers and encoded values to history.
+
+Durable responses retain explicit rejection evidence tied to the original arguments. Recovery
+returns that failure without executing the rejected call; other recorded parameters still undergo
+strict validation and unfinished calls still require current authorization. Custom durability hooks
+must persist `RunTurnResponseCommit.toolParameterRejections` with the response and restore it through
+`RunTurnResume.toolParameterRejections`. A failed result by itself cannot excuse corrupt parameters.
 
 `Agent.inspectTools` accepts a Definition or Binding and reads its registered native toolkit without
 starting a run or acquiring services. It includes tools outside the current exposure. Provider-executed

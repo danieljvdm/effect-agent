@@ -20,7 +20,7 @@ export default defineConfig({
       "src/capabilities/ContextTools.ts",
       "src/engine/ContextWindow.ts",
       "src/engine/DurableStep.ts",
-      "src/Ephemeral.ts",
+      "src/InMemory.ts",
       "src/core/Thread.ts",
       "src/core/IdGenerator.ts",
       "src/core/Identifiers.ts",

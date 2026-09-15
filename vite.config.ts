@@ -166,6 +166,14 @@ export default defineConfig({
       scripts: true,
     },
     tasks: {
+      "docs:deploy": {
+        cache: false,
+        command: "vp exec alchemy deploy alchemy.run.ts --stage prod",
+      },
+      "check:deploy": {
+        cache: false,
+        command: "bun scripts/check-deployment.ts",
+      },
       "action:build": {
         command: "bun scripts/build-action.ts",
         input: [

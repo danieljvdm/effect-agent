@@ -1,0 +1,66 @@
+diff --git a/lib/codegen/cli.js b/lib/codegen/cli.js
+index 370e4187edb2a0d697745597c2e2291b277d5b31..4cdddfa7935f8bfaadcd5fa89cf593ddeb287b7a 100644
+--- a/lib/codegen/cli.js
++++ b/lib/codegen/cli.js
+@@ -22,9 +22,9 @@ import { generateService } from "./generator.js";
+ /** Run the generator CLI (BunRuntime main — call at module top level). */
+ export const runGeneratorCli = (options) => {
+     const command = Command.make("generate", {
+-        smithy: Flag.string("smithy").pipe(Flag.withDefault(options.smithyDir ?? ".generated-specs"), Flag.withDescription("Directory of Smithy JSON models")),
+-        out: Flag.string("out").pipe(Flag.withDefault(options.outDir ?? "src/services"), Flag.withDescription("Output directory for generated service modules")),
+-        resource: Flag.string("resource").pipe(Flag.withDefault(""), Flag.withDescription("Only generate this resource (e.g. ai)")),
++        smithy: Flag.String("smithy").pipe(Flag.withDefault(options.smithyDir ?? ".generated-specs"), Flag.withDescription("Directory of Smithy JSON models")),
++        out: Flag.String("out").pipe(Flag.withDefault(options.outDir ?? "src/services"), Flag.withDescription("Output directory for generated service modules")),
++        resource: Flag.String("resource").pipe(Flag.withDefault(""), Flag.withDescription("Only generate this resource (e.g. ai)")),
+     }, (config) => Effect.gen(function* () {
+         const fs = yield* FileSystem.FileSystem;
+         const path = yield* Path.Path;
+diff --git a/lib/retry.js b/lib/retry.js
+index 63b00c1ccd1113f4bd22c7e2113f8970ccf3753e..da98224df011079df10730814bef55a96168631f 100644
+--- a/lib/retry.js
++++ b/lib/retry.js
+@@ -72,7 +72,7 @@ export const ServerRetryHintCapMs = Context.Service("@distilled.cloud/core/Serve
+  * Layer that pins the server `retryAfter` cap to a fixed value (milliseconds).
+  */
+ export const serverRetryHintCapLayer = (capMs) => Layer.succeed(ServerRetryHintCapMs, capMs);
+-const serverRetryHintCapMsConfig = Config.string(ENV_SERVER_RETRY_HINT_CAP_MS).pipe(Config.map((raw) => {
++const serverRetryHintCapMsConfig = Config.String(ENV_SERVER_RETRY_HINT_CAP_MS).pipe(Config.map((raw) => {
+     if (raw === "")
+         return DEFAULT_SERVER_RETRY_HINT_CAP_MS;
+     const n = Number(raw);
+diff --git a/src/codegen/cli.ts b/src/codegen/cli.ts
+index d4080bc15ef96b1eb7bd051ecefe63b9279aa366..91a5ef61e74071918b455ee09bed4bc8863a27c2 100644
+--- a/src/codegen/cli.ts
++++ b/src/codegen/cli.ts
+@@ -99,15 +99,15 @@ export const runGeneratorCli = (options: GeneratorCliOptions): void => {
+   const command = Command.make(
+     "generate",
+     {
+-      smithy: Flag.string("smithy").pipe(
++      smithy: Flag.String("smithy").pipe(
+         Flag.withDefault(options.smithyDir ?? ".generated-specs"),
+         Flag.withDescription("Directory of Smithy JSON models"),
+       ),
+-      out: Flag.string("out").pipe(
++      out: Flag.String("out").pipe(
+         Flag.withDefault(options.outDir ?? "src/services"),
+         Flag.withDescription("Output directory for generated service modules"),
+       ),
+-      resource: Flag.string("resource").pipe(
++      resource: Flag.String("resource").pipe(
+         Flag.withDefault(""),
+         Flag.withDescription("Only generate this resource (e.g. ai)"),
+       ),
+diff --git a/src/retry.ts b/src/retry.ts
+index 5a4c9938ab1363af1a4745cc761a0e55a3c6d508..73ef50a6953e1d8b5739609b07eb635869afb6e5 100644
+--- a/src/retry.ts
++++ b/src/retry.ts
+@@ -121,7 +121,7 @@ export const ServerRetryHintCapMs = Context.Service<number>(
+ export const serverRetryHintCapLayer = (capMs: number) =>
+   Layer.succeed(ServerRetryHintCapMs, capMs);
+ 
+-const serverRetryHintCapMsConfig: Config.Config<number> = Config.string(
++const serverRetryHintCapMsConfig: Config.Config<number> = Config.String(
+   ENV_SERVER_RETRY_HINT_CAP_MS,
+ ).pipe(
+   Config.map((raw) => {

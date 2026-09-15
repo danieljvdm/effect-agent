@@ -23,7 +23,7 @@ For the example below, also install `@effect/ai-openai@4.0.0-rc.115` and `@effec
 Save as `agent.ts`:
 
 ```ts
-import { Ephemeral, Agent, AgentRuntime } from "effect-agent";
+import { InMemory, Agent, AgentRuntime } from "effect-agent";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { BunRuntime } from "@effect/platform-bun";
 import { Config, Console, Effect, Schema } from "effect";
@@ -50,13 +50,13 @@ const program = AgentRuntime.run(triage, "All users get a 500 error when signing
   Effect.provide(OpenAiLanguageModel.model("gpt-4.1-mini")),
   Effect.provide(OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") })),
   Effect.provide(FetchHttpClient.layer),
-  Effect.provide(Ephemeral.layer),
+  Effect.provide(InMemory.layer),
 );
 
 BunRuntime.runMain(program);
 ```
 
-The output schema validates the model's answer. The policy limits the run. `Ephemeral.layer` keeps
+The output schema validates the model's answer. The policy limits the run. `InMemory.layer` keeps
 conversation history in memory for the application Scope. To continue a conversation, share that
 Layer and reuse the returned Thread ID; see [in-memory conversations](./threads#in-memory-conversations).
 

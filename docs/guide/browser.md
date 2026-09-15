@@ -629,6 +629,12 @@ Set the initial `viewport` on `BrowserRunInteractiveBinding.layer` or use the ho
 Mobile, touch, and orientation options are unsupported. Resizing consumes no agent action but
 remains subject to the pass deadline and lock. Authorize viewport changes in your host.
 
+Durable hosts should call `host.acquire(policy)`, persist the returned private `sessionId`,
+then run `acquisition.connect`. The acquisition owns the browser in its original Scope even
+if connection or page setup fails; connection is attempted at most once. `host.open(policy)`
+combines these steps for callers that do not need a persistence boundary. Acquisition failures
+without an identity remain indeterminate unless the provider conclusively refused allocation.
+
 Session closure waits up to ten seconds to confirm whole-browser termination or exact-session
 absence. A pending close or transport/authentication failure is not proof of cleanup.
 `BrowserRunCleanupError` reports a sanitized reason. Correct authorization or configuration

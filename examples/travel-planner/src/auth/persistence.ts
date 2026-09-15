@@ -1,4 +1,4 @@
-import * as Drizzle from "@yielded/auth/DrizzleSqliteDo";
+import * as Drizzle from "@yielded/auth-persistence/drizzle/sqlite-do";
 import { EmailSignInTargets, EmailUnavailable } from "@yielded/auth/Email";
 import {
   OAuthSignInPersistence,

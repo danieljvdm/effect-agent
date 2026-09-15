@@ -41,7 +41,7 @@ rows. The linked warehouse example replaces the fixed data with a brokered SQL q
 
 ```ts twoslash
 // @types: @cloudflare/workers-types
-import { Ephemeral, CodeMode, Agent, AgentRuntime } from "effect-agent";
+import { InMemory, CodeMode, Agent, AgentRuntime } from "effect-agent";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { CloudflareCodeMode } from "@effect-agent/platform-cloudflare/cloudflare-code-mode";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
@@ -112,7 +112,7 @@ const AnalystLive = Layer.unwrap(
       ),
     );
 
-    return Layer.mergeAll(CodeModeLive, ModelLive, Ephemeral.layer);
+    return Layer.mergeAll(CodeModeLive, ModelLive, InMemory.layer);
   }),
 );
 
@@ -210,7 +210,10 @@ Approval, budget and handler authorization constraints continue to apply.
 Each generated namespace method returns a Promise. The program must be one
 async function expression, runs once with no arguments, and returns JSON. `console.log` output
 returns with the result. Expected inner Tool failures reject the Promise with a JSON failure
-envelope, which generated code can catch and handle.
+envelope, which generated code can catch and handle. Invalid inner arguments are rejected by the
+broker before their handler starts. Invalid arguments to the outer Code Mode tool, such as an empty
+`code` string, return a native `ToolParameterValidationError` result so the model can correct them
+without starting the executor.
 
 The Tool broker rejects calls outside the construction-time allowlist. Use `Promise.all` for
 independent calls and `await` for actual dependencies:

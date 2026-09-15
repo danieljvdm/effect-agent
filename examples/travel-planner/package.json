@@ -3,8 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vp exec alchemy dev alchemy.run.ts",
-    "deploy": "vp exec alchemy deploy alchemy.run.ts --stage production"
+    "dev": "vp exec alchemy dev alchemy.run.ts"
   },
   "dependencies": {
     "@base-ui/react": "catalog:",
@@ -18,7 +17,8 @@
     "@streamparser/json": "catalog:",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-start": "catalog:",
-    "@yielded/auth": "0.1.0-beta.5",
+    "@yielded/auth": "0.1.0-beta.7",
+    "@yielded/auth-persistence": "0.1.0-beta.7",
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",
     "drizzle-orm": "1.0.0-rc.5-ab785fc",

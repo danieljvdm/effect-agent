@@ -37,6 +37,10 @@ export default defineConfig({
   },
   run: {
     tasks: {
+      deploy: {
+        cache: false,
+        command: "vp exec alchemy deploy alchemy.run.ts --stage production",
+      },
       build: {
         command: "vp build",
         input: [

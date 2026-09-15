@@ -275,13 +275,10 @@ it("registers and signs in new and returning email and GitHub accounts through d
   expect((await client.request("/api/access")).status).toBe(404);
   await call("signOut", {});
 
-  const githubStart = async (flowId: string) => {
+  const githubStart = async () => {
     const start = Schema.decodeUnknownSync(OAuthSignInAuthorization)(
       await call("signIn", {
-        flowId,
-        commandId: flowId,
         provider: "github",
-        callbackId: "github",
         returnTarget: "/",
       }),
     );
@@ -289,7 +286,7 @@ it("registers and signs in new and returning email and GitHub accounts through d
     const authorization = new URL(Redacted.value(start.authorizationUrl));
 
     return {
-      flowId,
+      flowId: start.flowId,
       provider: "github",
       callbackId: "github",
       response: {
@@ -301,7 +298,7 @@ it("registers and signs in new and returning email and GitHub accounts through d
     };
   };
 
-  const github = await githubStart("github-register");
+  const github = await githubStart();
 
   const registration = Schema.decodeUnknownSync(OAuthRegistrationRequired)(
     await call("completeSignIn", github),
@@ -316,7 +313,7 @@ it("registers and signs in new and returning email and GitHub accounts through d
     }),
   ).toMatchObject({ _tag: "RegistrationAccepted" });
   expect(await call("getSession")).toBeNull();
-  expect(await call("completeSignIn", await githubStart("github-signin"))).toMatchObject({
+  expect(await call("completeSignIn", await githubStart())).toMatchObject({
     completion: { _tag: "Authenticated", session: { claims: { displayName: "River Traveler" } } },
   });
   expect(await call("getSession")).toMatchObject({ claims: { displayName: "River Traveler" } });
@@ -344,7 +341,7 @@ it("registers and signs in new and returning email and GitHub accounts through d
       await call("signOut", {});
       expect(await call("getSession")).toBeNull();
       githubName = name;
-      expect(await call("completeSignIn", await githubStart(crypto.randomUUID()))).toMatchObject({
+      expect(await call("completeSignIn", await githubStart())).toMatchObject({
         completion: { _tag: "Authenticated" },
       });
 
@@ -450,14 +447,9 @@ it("does not automatically repeat an ambiguous email delivery or establish a ses
 });
 
 const githubStart = async (client: ReturnType<typeof makeClient>) => {
-  const flowId = crypto.randomUUID();
-
   const started = Schema.decodeUnknownSync(OAuthSignInAuthorization)(
     await client.call("signIn", {
-      flowId,
-      commandId: crypto.randomUUID(),
       provider: "github",
-      callbackId: "github",
       returnTarget: "/",
     }),
   );
@@ -468,7 +460,7 @@ const githubStart = async (client: ReturnType<typeof makeClient>) => {
   expect(url.searchParams.get("scope") ?? "").not.toMatch(/repo|mail/);
 
   return {
-    flowId,
+    flowId: started.flowId,
     provider: "github",
     callbackId: "github",
     response: {
@@ -518,10 +510,7 @@ it("rejects invalid and replayed GitHub callbacks, and handles denial without ex
   expect(
     (
       await client.raw("signIn", {
-        flowId: crypto.randomUUID(),
-        commandId: crypto.randomUUID(),
         provider: "github",
-        callbackId: "github",
         returnTarget: "https://attacker.test",
       })
     ).status,
@@ -539,6 +528,8 @@ it("reports only fixed callback rejection reasons without changing authorization
   const client = makeClient();
   const superseded = await githubStart(client);
   const input = await githubStart(client);
+
+  expect(input.flowId).not.toBe(superseded.flowId);
 
   const rejected = async (payload: object) => {
     expect(await client.raw("completeSignIn", payload)).toEqual({
@@ -710,20 +701,15 @@ it("serves funding administration only to the verified owner and fences cross-or
     const client = makeClient();
 
     const complete = async () => {
-      const flowId = crypto.randomUUID();
-
       const start = Schema.decodeUnknownSync(OAuthSignInAuthorization)(
         await client.call("signIn", {
-          flowId,
-          commandId: flowId,
           provider: "github",
-          callbackId: "github",
           returnTarget: "/",
         }),
       );
 
       const result = await client.call("completeSignIn", {
-        flowId,
+        flowId: start.flowId,
         provider: "github",
         callbackId: "github",
         response: {
@@ -734,7 +720,7 @@ it("serves funding administration only to the verified owner and fences cross-or
         },
       });
 
-      return { flowId, result };
+      return { flowId: start.flowId, result };
     };
 
     const first = await complete();

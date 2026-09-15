@@ -19,6 +19,7 @@ import {
   type SavedTrip,
   type ConversationSummary,
   type PlannerSnapshot,
+  type EditorActivity,
   type SendMessageRequest,
   type SpokenMessage,
 } from "./domain";
@@ -453,7 +454,99 @@ const conversationViewAtom = Atom.make((get): ConversationView => {
   };
 });
 
-export const plannerAtom = Atom.map(conversationViewAtom, (view) => view.result);
+class WorkerKey extends Data.Class<{
+  readonly subjectId: string;
+  readonly conversationId: string;
+  readonly workerId: string;
+  readonly sourceSequence: number;
+}> {}
+
+// One limiter per account registry, shared by scouts and editor. Queuing for a permit does
+// not consume the read timeout. Disposal interrupts queued and in-flight observation only.
+const workerReadPermits = Atom.make(Semaphore.make(3)).pipe(Atom.keepAlive);
+
+const workerQuery = Atom.family((key: WorkerKey) =>
+  PlannerClient.runtime
+    .atom((get) =>
+      Effect.gen(function* () {
+        const session = yield* get.result(sessionAtom, { suspendOnWaiting: true });
+
+        if (session.subjectId !== key.subjectId) return yield* Effect.interrupt;
+        const permits = yield* get.result(workerReadPermits);
+        const client = yield* PlannerClient;
+
+        return yield* permits.withPermits(1)(
+          client("GetPlannerWorker", {
+            conversationId: key.conversationId,
+            workerId: key.workerId,
+            sourceSequence: key.sourceSequence,
+          }).pipe(Effect.timeout("3 seconds")),
+        );
+      }),
+    )
+    .pipe(PlannerClient.runtime.factory.withReactivity(["planner"]), Atom.setIdleTTL(0)),
+);
+
+const polledWorker = Atom.family((key: WorkerKey) => {
+  const query = workerQuery(key);
+  const refresh = query.pipe(Atom.withRefresh("2 seconds"));
+
+  return Atom.make((get) => {
+    const result = get(query);
+
+    // Settled views are immutable for this source request. A new request sequence,
+    // explicit mutation invalidation, or remount reads again; idle pages need no fan-out.
+    const value = Option.getOrUndefined(AsyncResult.value(result));
+
+    const settled =
+      AsyncResult.isSuccess(result) && (value?.state === "idle" || value?.state === "failed");
+
+    return result.waiting || settled ? result : get(refresh);
+  }).pipe(Atom.setIdleTTL(0));
+});
+
+/** Main history never waits for optional reads; every worker independently publishes its result. */
+export const plannerAtom = Atom.make((get) => {
+  const view = get(conversationViewAtom);
+
+  return AsyncResult.map(view.result, (snapshot) => {
+    const detail = <A extends EditorActivity>(worker: A): A => {
+      if (
+        view.subjectId === null ||
+        view.conversationId === null ||
+        worker.sourceSequence === undefined
+      )
+        return worker;
+
+      const result = get(
+        polledWorker(
+          new WorkerKey({
+            subjectId: view.subjectId,
+            conversationId: view.conversationId,
+            workerId: worker.id,
+            sourceSequence: worker.sourceSequence,
+          }),
+        ),
+      );
+
+      const value = Option.getOrUndefined(AsyncResult.value(result));
+
+      return {
+        ...worker,
+        ...value,
+        ...(AsyncResult.isFailure(result) ? { state: "unavailable" as const } : {}),
+      };
+    };
+
+    return {
+      ...snapshot,
+      ...(snapshot.scouts === undefined ? {} : { scouts: snapshot.scouts.map(detail) }),
+      ...(snapshot.editor === null || snapshot.editor === undefined
+        ? {}
+        : { editor: detail(snapshot.editor) }),
+    };
+  });
+});
 
 /** A missing snapshot is loading or failed, never an empty conversation. */
 export const conversationStatusAtom = Atom.make((get): "loading" | "ready" | "error" => {

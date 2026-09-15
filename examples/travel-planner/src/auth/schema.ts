@@ -1,4 +1,4 @@
-import { DrizzleMappingError } from "@yielded/auth/Drizzle";
+import { PersistenceMappingError } from "@yielded/auth-persistence/drizzle";
 import { SubjectId } from "@yielded/auth/Schema";
 import { type AuthenticationRequirement, SecurityRevision } from "@yielded/auth/Sessions";
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
@@ -70,7 +70,10 @@ export const emailRegistration = sqliteTable(
 );
 
 export const mappingError = () =>
-  DrizzleMappingError.make({ operation: "travel-auth", cause: "Invalid authentication record" });
+  PersistenceMappingError.make({
+    operation: "travel-auth",
+    cause: "Invalid authentication record",
+  });
 
 export const decodeMillis = (value: unknown) =>
   Schema.decodeUnknownEffect(Schema.Natural)(value).pipe(Effect.mapError(mappingError));

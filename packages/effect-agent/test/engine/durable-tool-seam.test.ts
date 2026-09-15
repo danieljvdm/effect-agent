@@ -30,7 +30,7 @@ import {
   type RunStepHook,
 } from "effect-agent/durable-step";
 import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
+import { ThreadId, RunId, TurnId, ToolCallId } from "effect-agent/identifiers";
 import { MemoryRecallError } from "effect-agent/memory-reference";
 import { type RunEvent } from "effect-agent/run-event";
 import {
@@ -44,8 +44,17 @@ import {
   type RunTurnResume,
 } from "effect-agent/run-options";
 import { DelegationTool } from "effect-agent/subagent-contract";
+import { ToolParameterRejection } from "effect-agent/tool-result";
 import { TestClock } from "effect/testing";
-import { Prompt, LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import {
+  AiError,
+  Prompt,
+  LanguageModel,
+  Model,
+  type Response,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
 
 import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 
@@ -1467,7 +1476,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
     }),
   );
 
-  it.effect("truncated tool arguments never execute after resume", () =>
+  it.effect("corrupt recorded parameters and rejection evidence never execute on resume", () =>
     Effect.gen(function* () {
       const marks = yield* Ref.make<ReadonlyArray<string>>([]);
       let handlerStarted = false;
@@ -1476,6 +1485,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       const Lookup = Tool.make("lookup", {
         parameters: Schema.Struct({ key: Schema.String }),
         success: Schema.String,
+        failureMode: "return",
       });
 
       const tools = Toolkit.make(Lookup);
@@ -1520,16 +1530,85 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         settled: [],
       };
 
-      const exit = yield* AgentRuntime.run(
-        Agent.withModel(definition, model),
-        { question: "resume" },
-        { resume, resumeUsage: oneCallResumeUsage, durability: markingDurability(marks) },
-      ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+      const error = yield* Schema.encodeEffect(Schema.toCodecJson(AiError.AiError))(
+        AiError.make({
+          module: "Toolkit",
+          method: "lookup.handle",
+          reason: new AiError.ToolParameterValidationError({
+            toolName: "lookup",
+            description: "Expected string",
+          }),
+        }),
+      );
 
-      const failure = failureFrom(exit);
+      const rejection = yield* Schema.decodeUnknownEffect(ToolParameterRejection)({
+        toolCallId: ToolCallId.make("call-x"),
+        parameters: { key: 42 },
+        error,
+      });
 
-      expect(failure).toBeInstanceOf(ModelProtocolError);
-      expect((failure as ModelProtocolError).message).toContain("failed validation on resume");
+      const cases: ReadonlyArray<{ readonly resume: RunTurnResume; readonly message: string }> = [
+        { resume, message: "failed validation on resume" },
+        {
+          resume: { ...resume, settled: [{ id: "call-x", result: error, isFailure: true }] },
+          message: "failed validation on resume",
+        },
+        {
+          resume: {
+            ...resume,
+            toolParameterRejections: [{ ...rejection, parameters: { key: 43 } }],
+          },
+          message: "does not match recorded",
+        },
+        {
+          resume: {
+            ...resume,
+            toolParameterRejections: [
+              {
+                ...rejection,
+                error: {
+                  ...rejection.error,
+                  reason: { ...rejection.error.reason, toolName: "different-tool" },
+                },
+              },
+            ],
+          },
+          message: "does not match recorded",
+        },
+        {
+          resume: {
+            ...resume,
+            toolParameterRejections: [rejection],
+            settled: [{ id: "call-x", result: "forged success", isFailure: false }],
+          },
+          message: "contradicts parameter rejection",
+        },
+        {
+          resume: {
+            ...resume,
+            calls: [{ id: "call-x", name: "lookup", params: { key: "valid" } }],
+            toolParameterRejections: [{ ...rejection, parameters: { key: "valid" } }],
+          },
+          message: "contains valid arguments",
+        },
+      ];
+
+      for (const scenario of cases) {
+        const exit = yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          { question: "resume" },
+          {
+            resume: scenario.resume,
+            resumeUsage: oneCallResumeUsage,
+            durability: markingDurability(marks),
+          },
+        ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
+
+        const failure = failureFrom(exit);
+
+        expect(failure).toBeInstanceOf(ModelProtocolError);
+        expect((failure as ModelProtocolError).message).toContain(scenario.message);
+      }
       expect(handlerStarted).toBe(false);
       expect(modelCalls).toBe(0);
       expect(yield* Ref.get(marks)).toEqual([]);

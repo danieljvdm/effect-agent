@@ -331,7 +331,9 @@ export type PlannerActivity = typeof PlannerActivity.Type;
 
 export const EditorActivity = Schema.Struct({
   id: Schema.String,
-  state: Schema.Literals(["starting", "active", "idle", "failed", "unavailable"]),
+  state: Schema.Literals(["loading", "starting", "active", "idle", "failed", "unavailable"]),
+  /** Canonical source record locator, verified again by GetPlannerWorker. */
+  sourceSequence: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   task: Text,
   progress: PlannerProgress,
   activity: Schema.Array(PlannerActivity).check(Schema.isMaxLength(40)),
@@ -347,6 +349,22 @@ export const ResearchScoutActivity = Schema.Struct({
 });
 
 export type ResearchScoutActivity = typeof ResearchScoutActivity.Type;
+
+/** A compact, independently loaded view; the source locator grants no authority. */
+export const PlannerWorkerRequest = Schema.Struct({
+  conversationId: ConversationId,
+  workerId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+  sourceSequence: Schema.Int.check(Schema.isGreaterThan(0)),
+});
+
+export const PlannerWorkerDetail = Schema.Struct({
+  state: EditorActivity.fields.state,
+  progress: PlannerProgress,
+  activity: EditorActivity.fields.activity,
+  finding: ResearchScoutActivity.fields.finding,
+});
+
+export type PlannerWorkerDetail = typeof PlannerWorkerDetail.Type;
 
 export const PlannerSnapshot = Schema.Struct({
   app: Schema.optionalKey(Schema.NullOr(TripApp)),
@@ -434,6 +452,11 @@ export const PlannerRpcs = RpcGroup.make(
   Rpc.make("GetPlanner", {
     payload: Schema.Struct({ conversationId: Schema.NullOr(ConversationId) }),
     success: PlannerSnapshot,
+    error: PlannerError,
+  }),
+  Rpc.make("GetPlannerWorker", {
+    payload: PlannerWorkerRequest,
+    success: PlannerWorkerDetail,
     error: PlannerError,
   }),
   Rpc.make("SendMessage", {

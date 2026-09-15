@@ -17,6 +17,7 @@ import {
   Queue,
   Result,
   Schema,
+  SchemaGetter,
   Scope,
   Semaphore,
   Stream,
@@ -100,6 +101,7 @@ import {
 import type { Selection } from "../../core/ToolExposure.ts";
 import { AdditionalToolCatalog, DiscoveryTool, Snapshot } from "../../core/ToolExposure.ts";
 import {
+  ToolParameterRejection,
   applyToolResultBounds,
   unserializableToolResult,
   type ToolResultBounds,
@@ -646,6 +648,8 @@ interface TurnTrace {
   /** Turn completion held with provider results so malformed trailing parts append neither. */
   turnCompletion: { readonly finishReason: Response.FinishReason } | undefined;
   readonly applicationToolCalls: Array<Response.ToolCallPart<string, unknown>>;
+  /** Fresh validation failures retained independently of executable parameters. */
+  readonly toolParameterRejections: Map<string, ToolParameterRejection>;
   /** Durable-hook view of the application calls, in declaration order (encoded parameters). */
   readonly applicationCallDescriptors: Array<RunToolCallDescriptor>;
   readonly applicationToolResults: Array<{
@@ -861,15 +865,58 @@ const inspectModelResponsePartCapacity = (
   });
 
 /**
- * `disableToolCallResolution` keeps model Tool Call parameters in their
- * encoded wire form. Build the response ownership codec from those encoded
- * parameter Schemas; the engine decodes and canonically re-encodes each call
- * against the Definition-owned Schema before it enters history or executes.
+ * LanguageModel validates encoded parameters even with automatic resolution disabled.
+ * Defer only recoverable application parameter validation; the declaration's JSON codec
+ * still exposes the original schema to providers and preserves their wire normalization.
+ * No handler is installed or executed by this transport-only Toolkit.
  */
+const defersToolParameters = (tool: Tool.Any): boolean =>
+  tool.failureMode === "return" &&
+  !(Tool.isProviderDefined(tool) && !tool.requiresHandler) &&
+  !(Tool.isDynamic(tool) && tool.jsonSchema !== undefined);
+
+const deferredToolParameterToolkit = <Tools extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.Toolkit<Tools>,
+): Toolkit.Toolkit<Record<string, Tool.Any>> => {
+  // Preserve the native request unchanged when it has no recoverable parameters.
+  // Toolkit's handler parameter variance is irrelevant to this resolution-disabled transport.
+  if (!Object.values(toolkit.tools).some(defersToolParameters))
+    return toolkit as unknown as Toolkit.Toolkit<Record<string, Tool.Any>>;
+
+  return Toolkit.make(
+    ...Object.values(toolkit.tools).map((tool) =>
+      !defersToolParameters(tool)
+        ? tool
+        : tool.setParameters(
+            Schema.declareConstructor<unknown>()(
+              [],
+              () => (input) =>
+                Schema.decodeUnknownEffect(Schema.toEncoded(tool.parametersSchema))(input).pipe(
+                  Effect.orElseSucceed(() => input),
+                ),
+              {
+                description: Tool.getDescription(tool),
+                toCodecJson: () =>
+                  Schema.link<unknown>()(Schema.toEncoded(tool.parametersSchema), {
+                    decode: SchemaGetter.passthrough(),
+                    encode: SchemaGetter.passthrough(),
+                  }),
+              },
+            ),
+          ),
+    ),
+  );
+};
+
+/** Own fresh JSON arguments without accepting them as executable parameters. */
 const encodedToolParameterToolkit = (toolkit: Toolkit.Any): Toolkit.Any =>
   Toolkit.make(
     ...Object.values(toolkit.tools).map((tool) =>
-      tool.setParameters(Schema.toEncoded(tool.parametersSchema)),
+      tool.setParameters(
+        tool.failureMode === "return" && !(Tool.isProviderDefined(tool) && !tool.requiresHandler)
+          ? Schema.Json
+          : Schema.toEncoded(tool.parametersSchema),
+      ),
     ),
   );
 
@@ -1011,7 +1058,7 @@ interface PreparedToolCall<Tools extends Record<string, Tool.Any>> {
   readonly call: Response.ToolCallPart<string, unknown>;
   readonly name: keyof Tools & string;
   readonly toolCallId: ToolCallId;
-  readonly decodedParams: Tool.Parameters<ToolUnion<Tools>>;
+  readonly validation: Result.Result<Tool.Parameters<ToolUnion<Tools>>, ToolParameterRejection>;
   readonly tool: ToolUnion<Tools>;
   readonly declarationIndex: number;
 }
@@ -1128,7 +1175,7 @@ const decodeToolCallParameters = <Tools extends Record<string, Tool.Any>>(
   tool: ToolUnion<Tools>,
   toolName: string,
   encodedParams: unknown,
-  boundary: "execution" | "resume" = "execution",
+  boundary: "model" | "execution" | "resume" = "execution",
 ): Effect.Effect<
   Tool.Parameters<ToolUnion<Tools>>,
   ModelProtocolError,
@@ -1145,20 +1192,24 @@ const decodeToolCallParameters = <Tools extends Record<string, Tool.Any>>(
   return decodeParameters(encodedParams).pipe(
     Effect.mapError((cause) =>
       ModelProtocolError.make({
-        message: `Recorded parameters for Tool ${toolName} failed validation${boundary === "resume" ? " on resume" : ""}: ${cause.message}`,
+        message:
+          boundary === "model"
+            ? `Invalid parameters for Tool ${toolName}: ${cause.message}`
+            : `Recorded parameters for Tool ${toolName} failed validation${boundary === "resume" ? " on resume" : ""}: ${cause.message}`,
       }),
     ),
   );
 };
 
 /**
- * Decode canonical parameters for approval while retaining their encoded
- * form for the native `Toolkit.handle` boundary.
+ * Decode executable parameters for approval while retaining their encoded form for
+ * Toolkit.handle. A recorded rejection is a terminal failure, never an executable call.
  */
 const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
   call: Response.ToolCallPart<string, unknown>,
   declarationIndex: number,
+  rejection?: ToolParameterRejection,
 ): Effect.Effect<
   PreparedToolCall<Tools>,
   ModelProtocolError,
@@ -1173,20 +1224,16 @@ const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
   }
   const tool = toolkit.tools[name] as ToolUnion<Tools>;
 
-  return decodeToolCallId(call.id).pipe(
-    Effect.flatMap((toolCallId) =>
-      decodeToolCallParameters<Tools>(tool, call.name, call.params).pipe(
-        Effect.map((decodedParams) => ({
-          call,
-          name,
-          toolCallId,
-          decodedParams,
-          tool,
-          declarationIndex,
-        })),
-      ),
-    ),
-  );
+  return Effect.gen(function* () {
+    const toolCallId = yield* decodeToolCallId(call.id);
+
+    const validation: PreparedToolCall<Tools>["validation"] =
+      rejection === undefined
+        ? Result.succeed(yield* decodeToolCallParameters<Tools>(tool, call.name, call.params))
+        : Result.fail(rejection);
+
+    return { call, name, toolCallId, validation, tool, declarationIndex };
+  });
 };
 
 /**
@@ -1577,6 +1624,9 @@ const approvalDecision = <Tools extends Record<string, Tool.Any>, Error, Require
   Requirements
 > =>
   Effect.gen(function* () {
+    if (Result.isFailure(prepared.validation)) return { required: false } as const;
+    const decodedParams = prepared.validation.success;
+
     const approval = prepared.tool.needsApproval;
 
     if (approval === undefined || approval === false) {
@@ -1586,7 +1636,7 @@ const approvalDecision = <Tools extends Record<string, Tool.Any>, Error, Require
     const required =
       typeof approval === "function"
         ? yield* Effect.suspend(() => {
-            const result = approval(prepared.decodedParams, {
+            const result = approval(decodedParams, {
               toolCallId: prepared.call.id,
               messages: context.history.content,
             });
@@ -1623,7 +1673,7 @@ const approvalDecision = <Tools extends Record<string, Tool.Any>, Error, Require
       turnId,
       toolCallId,
       toolName: prepared.call.name,
-      parameters: prepared.decodedParams,
+      parameters: decodedParams,
     });
 
     return {
@@ -2044,29 +2094,31 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
     );
   };
 
-  const started = Stream.fromEffect(
-    Effect.gen(function* () {
-      const toolCallId = yield* decodeToolCallId(call.id);
+  const started = Result.isFailure(prepared.validation)
+    ? Stream.empty
+    : Stream.fromEffect(
+        Effect.gen(function* () {
+          const toolCallId = yield* decodeToolCallId(call.id);
 
-      yield* Effect.logDebug("agent tool handler started").pipe(
-        Effect.annotateLogs({
-          agentId: context.agentId,
-          runId: context.runId,
-          turnId,
-          ...(telemetryToolCallId === undefined ? {} : { toolCallId: telemetryToolCallId }),
-          toolName: call.name,
-        }),
+          yield* Effect.logDebug("agent tool handler started").pipe(
+            Effect.annotateLogs({
+              agentId: context.agentId,
+              runId: context.runId,
+              turnId,
+              ...(telemetryToolCallId === undefined ? {} : { toolCallId: telemetryToolCallId }),
+              toolName: call.name,
+            }),
+          );
+          yield* Metric.update(toolCounter, 1);
+
+          return ToolCallStarted.make({
+            ...(yield* eventBase(context)),
+            turnId,
+            toolCallId,
+            toolName: call.name,
+          });
+        }).pipe(Effect.withLogSpan("AgentRuntime.tool")),
       );
-      yield* Metric.update(toolCounter, 1);
-
-      return ToolCallStarted.make({
-        ...(yield* eventBase(context)),
-        turnId,
-        toolCallId,
-        toolName: call.name,
-      });
-    }).pipe(Effect.withLogSpan("AgentRuntime.tool")),
-  );
 
   // Dynamic Tool lookup erases the name/ParametersEncoded correlation. The native handler
   // decodes these already-preflighted canonical parameters; only its input signature is widened.
@@ -2076,15 +2128,37 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
     toolCallId: string,
   ) => ReturnType<typeof toolkit.handle>;
 
+  const rejection = Result.isFailure(prepared.validation) ? prepared.validation.failure : undefined;
+
+  const handlerResults: Stream.Stream<
+    Tool.HandlerResult<Tool.Any>,
+    ToolExecutionError,
+    ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
+  > = rejection === undefined
+    ? Stream.unwrap(
+        Effect.flatMap(ToolSpanTelemetry, ({ isolateToolkitHandle }) =>
+          isolateToolkitHandle(handle.call(toolkit, prepared.name, call.params, call.id)),
+        ),
+      )
+    : Stream.fromEffect(
+        Schema.decodeEffect(Schema.toCodecJson(AiError.AiError))(rejection.error).pipe(
+          Effect.mapError(() =>
+            ModelProtocolError.make({ message: "Invalid parameter rejection evidence" }),
+          ),
+          Effect.map((error) => ({
+            result: error,
+            encodedResult: rejection.error,
+            isFailure: true,
+            preliminary: false,
+          })),
+        ),
+      );
+
   const results: Stream.Stream<
     RunEvent,
     ToolExecutionError,
     ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
-  > = Stream.unwrap(
-    Effect.flatMap(ToolSpanTelemetry, ({ isolateToolkitHandle }) =>
-      isolateToolkitHandle(handle.call(toolkit, prepared.name, call.params, call.id)),
-    ),
-  ).pipe(
+  > = handlerResults.pipe(
     Stream.mapEffect((result): Effect.Effect<RunEvent | undefined, ModelProtocolError> =>
       Effect.gen(function* () {
         if (terminal || trace.finalToolResultIds.has(call.id)) {
@@ -2395,9 +2469,15 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         });
       }
 
-      // Resolve every name and decode every parameter object before any call stream is constructed.
+      // Resolve the whole batch before constructing streams. Only calls with recorded
+      // parameter rejection evidence bypass executable-parameter decoding and approval.
       const prepared = yield* Effect.forEach(calls, (call, declarationIndex) =>
-        prepareToolCall(toolkit, call, declarationIndex),
+        prepareToolCall(
+          toolkit,
+          call,
+          declarationIndex,
+          trace.toolParameterRejections.get(call.id),
+        ),
       );
 
       if (
@@ -2425,7 +2505,9 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       // Reuse the canonical wire-form descriptors already committed with the response. Handler
       // parameters were decoded/re-encoded separately above, so the host policy never receives
       // the handler's live parameter object.
-      const descriptors = trace.applicationCallDescriptors;
+      const descriptors = trace.applicationCallDescriptors.filter(
+        (call) => !trace.toolParameterRejections.has(call.toolCallId),
+      );
 
       const durability = options.durability;
       // The hook's requirements are captured here (they are already part of
@@ -4711,19 +4793,52 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
       const toolCallId = yield* decodeToolCallId(part.id);
       const tool = tools[part.name] as ToolUnion<Tools>;
 
-      const decodedParameters = yield* decodeToolCallParameters<Tools>(
-        tool,
-        part.name,
-        part.params,
+      const decoded = yield* Effect.result(
+        decodeToolCallParameters<Tools>(tool, part.name, part.params, "model"),
       );
 
-      const encodedParameters = yield* encodeToolCallParameters<Tools>(
-        tool,
-        part.name,
-        decodedParameters,
-      );
+      let parameters: Schema.Json;
 
-      const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
+      if (Result.isFailure(decoded)) {
+        if (part.providerExecuted || tool.failureMode !== "return") return yield* decoded.failure;
+        parameters = yield* decodeEventJson(part.params, "Tool parameters");
+
+        // Approval needs decoded arguments, so validation precedes Toolkit.handle. Use
+        // Effect's native error and codec; calling the handler to discover this failure
+        // would cross the authorization boundary if a decoder changed its answer.
+        const error = AiError.make({
+          module: "Toolkit",
+          method: `${part.name}.handle`,
+          reason: new AiError.ToolParameterValidationError({
+            toolName: part.name,
+            description: decoded.failure.message,
+          }),
+        });
+
+        const encodedError = yield* Schema.encodeEffect(Schema.toCodecJson(AiError.AiError))(
+          error,
+        ).pipe(
+          Effect.mapError(() =>
+            ModelProtocolError.make({ message: "Unable to encode parameter rejection" }),
+          ),
+        );
+
+        const rejection = yield* Schema.decodeUnknownEffect(ToolParameterRejection)({
+          toolCallId,
+          parameters,
+          error: encodedError,
+        }).pipe(
+          Effect.mapError(() =>
+            ModelProtocolError.make({ message: "Invalid parameter rejection evidence" }),
+          ),
+        );
+
+        trace.toolParameterRejections.set(part.id, rejection);
+      } else {
+        parameters = yield* encodeToolCallParameters<Tools>(tool, part.name, decoded.success).pipe(
+          Effect.flatMap((encoded) => decodeEventJson(encoded, "Tool parameters")),
+        );
+      }
 
       const canonicalCall = Response.makePart("tool-call", {
         id: part.id,
@@ -5397,6 +5512,7 @@ const makeTurn = <
         providerStagedPayloadBytes: 0,
         turnCompletion: undefined,
         applicationToolCalls: [],
+        toolParameterRejections: new Map(),
         applicationCallDescriptors: [],
         applicationToolResults: [],
         finished: false,
@@ -6081,7 +6197,7 @@ const makeTurn = <
                         // including the overflow retry — carries it at the last
                         // system block.
                         prompt: providerPrompt,
-                        toolkit: requestToolkit,
+                        toolkit: deferredToolParameterToolkit(requestToolkit),
                         disableToolCallResolution: true,
                         // Exact required Tool selection preserves the toolkit. A oneOf
                         // subset can drop other schemas and break the cached prefix.
@@ -6758,6 +6874,11 @@ const makeTurn = <
                     turnId,
                     responseMessages: promptFromTurnParts(trace),
                     calls: trace.applicationCallDescriptors,
+                    ...(trace.toolParameterRejections.size === 0
+                      ? {}
+                      : {
+                          toolParameterRejections: [...trace.toolParameterRejections.values()],
+                        }),
                     toolExposure: snapshot,
                   });
                 }
@@ -7148,6 +7269,7 @@ const makeResumeTurn = <
         providerStagedPayloadBytes: 0,
         turnCompletion: undefined,
         applicationToolCalls: [],
+        toolParameterRejections: new Map(),
         applicationCallDescriptors: [],
         applicationToolResults: [],
         finished: true,
@@ -7159,6 +7281,49 @@ const makeResumeTurn = <
         string,
         { readonly index: number; readonly name: string; readonly providerExecuted: boolean }
       >();
+
+      const rejections = yield* Schema.decodeEffect(Schema.Array(ToolParameterRejection))(
+        resume.toolParameterRejections ?? [],
+      ).pipe(
+        Effect.mapError(() =>
+          ModelProtocolError.make({ message: "Invalid parameter rejection evidence on resume" }),
+        ),
+      );
+
+      const sameJson = Schema.toEquivalence(Schema.Json);
+
+      for (const rejection of rejections) {
+        const call = resume.calls.find((call) => call.id === rejection.toolCallId);
+
+        if (
+          call === undefined ||
+          call.providerExecuted ||
+          call.name !== rejection.error.reason.toolName ||
+          !sameJson(yield* decodeEventJson(call.params, "Tool parameters"), rejection.parameters) ||
+          trace.toolParameterRejections.has(call.id) ||
+          tools[call.name]?.failureMode !== "return"
+        ) {
+          return yield* ModelProtocolError.make({
+            message: "Parameter rejection does not match recorded Tool Call on resume",
+          });
+        }
+
+        const validation = yield* Effect.result(
+          decodeToolCallParameters<Tools>(
+            tools[call.name] as ToolUnion<Tools>,
+            call.name,
+            call.params,
+            "resume",
+          ),
+        );
+
+        if (Result.isSuccess(validation)) {
+          return yield* ModelProtocolError.make({
+            message: "Recorded parameter rejection contains valid arguments on resume",
+          });
+        }
+        trace.toolParameterRejections.set(call.id, rejection);
+      }
 
       for (const call of resume.calls) {
         if (!hasTool(tools, call.name)) {
@@ -7174,7 +7339,9 @@ const makeResumeTurn = <
         const tool = tools[call.name] as ToolUnion<Tools>;
         const toolCallId = yield* decodeToolCallId(call.id);
 
-        yield* decodeToolCallParameters<Tools>(tool, call.name, call.params, "resume");
+        if (!trace.toolParameterRejections.has(call.id)) {
+          yield* decodeToolCallParameters<Tools>(tool, call.name, call.params, "resume");
+        }
         const parameters = yield* decodeEventJson(call.params, "Tool parameters");
         const providerExecuted = call.providerExecuted === true;
 
@@ -7266,6 +7433,26 @@ const makeResumeTurn = <
           agent.definition.policy.toolResultBounds.maxBytes,
           providerCallIds,
         );
+
+        const rejection = trace.toolParameterRejections.get(settledCall.id);
+
+        if (
+          rejection !== undefined &&
+          (!settledCall.isFailure ||
+            settledCall.toolSelection !== undefined ||
+            (settledCall.budgetRejected !== true &&
+              !sameJson(
+                settledCall.result,
+                yield* decodeEventJson(
+                  boundEncodedToolResult(rejection.error, agent.definition.policy.toolResultBounds),
+                  "Rejected Tool result",
+                ),
+              )))
+        ) {
+          return yield* ModelProtocolError.make({
+            message: "Settled result contradicts parameter rejection on resume",
+          });
+        }
 
         const declared = declarationByCallId.get(settledCall.id);
 

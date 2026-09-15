@@ -1,0 +1,40 @@
+diff --git a/lib/credentials.js b/lib/credentials.js
+index 3c801225b366c1eced942effba0950acd3cc2f3f..dfecff442d23ad01f4cf4db2efba7b528c95f54d 100644
+--- a/lib/credentials.js
++++ b/lib/credentials.js
+@@ -43,10 +43,10 @@ export const CredentialsFromToken = (config) => Layer.succeed(Credentials, Effec
+     apiBaseUrl: config.apiBaseUrl,
+ })));
+ const envConfig = EffectConfig.all({
+-    apiToken: EffectConfig.option(EffectConfig.string("RAILWAY_API_TOKEN")),
+-    railwayToken: EffectConfig.option(EffectConfig.string("RAILWAY_TOKEN")),
+-    projectToken: EffectConfig.option(EffectConfig.string("RAILWAY_PROJECT_TOKEN")),
+-    apiBaseUrl: EffectConfig.string("RAILWAY_API_URL").pipe(EffectConfig.withDefault(DEFAULT_API_BASE_URL)),
++    apiToken: EffectConfig.option(EffectConfig.String("RAILWAY_API_TOKEN")),
++    railwayToken: EffectConfig.option(EffectConfig.String("RAILWAY_TOKEN")),
++    projectToken: EffectConfig.option(EffectConfig.String("RAILWAY_PROJECT_TOKEN")),
++    apiBaseUrl: EffectConfig.String("RAILWAY_API_URL").pipe(EffectConfig.withDefault(DEFAULT_API_BASE_URL)),
+ });
+ const MISSING_TOKEN = "RAILWAY_API_TOKEN (or RAILWAY_TOKEN / RAILWAY_PROJECT_TOKEN) environment variable is required";
+ /**
+diff --git a/src/credentials.ts b/src/credentials.ts
+index ad884711525fd0f9fe52c6965f44a34cc91a3880..2bd9d28a45f7ad1d5eea0802a22fdbf538248eb0 100644
+--- a/src/credentials.ts
++++ b/src/credentials.ts
+@@ -81,12 +81,12 @@ export const CredentialsFromToken = (config: {
+   );
+ 
+ const envConfig = EffectConfig.all({
+-  apiToken: EffectConfig.option(EffectConfig.string("RAILWAY_API_TOKEN")),
+-  railwayToken: EffectConfig.option(EffectConfig.string("RAILWAY_TOKEN")),
++  apiToken: EffectConfig.option(EffectConfig.String("RAILWAY_API_TOKEN")),
++  railwayToken: EffectConfig.option(EffectConfig.String("RAILWAY_TOKEN")),
+   projectToken: EffectConfig.option(
+-    EffectConfig.string("RAILWAY_PROJECT_TOKEN"),
++    EffectConfig.String("RAILWAY_PROJECT_TOKEN"),
+   ),
+-  apiBaseUrl: EffectConfig.string("RAILWAY_API_URL").pipe(
++  apiBaseUrl: EffectConfig.String("RAILWAY_API_URL").pipe(
+     EffectConfig.withDefault(DEFAULT_API_BASE_URL),
+   ),
+ });

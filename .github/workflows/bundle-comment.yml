@@ -35,8 +35,9 @@ jobs:
             if (!stat.isFile() || stat.size > 12000) throw new Error('Invalid bundle report');
             const table = fs.readFileSync(file, 'utf8').trim();
             const lines = table.split('\n');
-            const row = /^\| (agent|runtime|lazy)-(root|module) \| (initial|deferred|total) \| (n\/a|\d+\.\d{2} kB) \| \d+\.\d{2} kB \| (new export|[+-]?\d+\.\d{2} kB(?: \/ [+-]?\d+\.\d{2}%)?) \| \d+\.\d{2} kB \|$/;
-            if (lines.length < 8 || lines.length > 20 ||
+            const row = /^\| (agent|runtime|in-memory|lazy)-(root|module) \| (initial|deferred|total) \| (n\/a|\d+\.\d{2} kB) \| \d+\.\d{2} kB \| (new export|[+-]?\d+\.\d{2} kB(?: \/ [+-]?\d+\.\d{2}%)?) \| \d+\.\d{2} kB \|$/;
+            // Eight fixtures, each with at most three parts, plus two header rows.
+            if (lines.length < 10 || lines.length > 26 ||
                 lines[0] !== '| Fixture | Part | Base gzip | PR gzip | Change | PR minified |' ||
                 lines[1] !== '| --- | --- | ---: | ---: | ---: | ---: |' ||
                 !lines.slice(2).every(line => row.test(line))) {

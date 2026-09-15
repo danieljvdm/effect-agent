@@ -137,7 +137,7 @@ export default defineConfig({
               link: "/guide/subagents",
               collapsed: false,
               items: [
-                { text: "Ephemeral attached", link: "/guide/subagents/ephemeral-attached" },
+                { text: "In-memory attached", link: "/guide/subagents/in-memory-attached" },
                 { text: "Durable attached", link: "/guide/subagents/durable-attached" },
                 { text: "Durable background", link: "/guide/subagents/background" },
               ],

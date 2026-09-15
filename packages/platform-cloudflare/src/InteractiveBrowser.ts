@@ -17,7 +17,7 @@ import {
   Ref,
   Schema,
   Semaphore,
-  type Scope,
+  Scope,
 } from "effect";
 import {
   BrowserActionResult,
@@ -348,11 +348,12 @@ export interface BrowserRunInteractiveBrowser {
   readonly offDisconnected: (listener: () => void) => void;
 }
 
-/** Host-supplied Browser Run binding projected into one fakeable launch operation. */
+/** Host-supplied Browser Run allocation and connection transport. */
 export class BrowserRunInteractiveBinding extends Context.Service<
   BrowserRunInteractiveBinding,
   {
-    readonly launch: (keepAliveMillis: number) => Promise<BrowserRunInteractiveBrowser>;
+    readonly acquire: (keepAliveMillis: number) => Promise<unknown>;
+    readonly connect: (sessionId: string) => Promise<BrowserRunInteractiveBrowser>;
     /** Success proves whole-browser termination or exact-session absence. */
     readonly closeSession: (
       sessionId: Redacted.Redacted<string>,
@@ -375,13 +376,10 @@ export class BrowserRunInteractiveBinding extends Context.Service<
           options.viewport === undefined ? undefined : yield* decodeViewport(options.viewport);
 
         return {
-          launch: async (keepAliveMillis: number) =>
-            makeProductionBrowser(
-              await puppeteer.launch(options.browser, {
-                keep_alive: keepAliveMillis,
-                ...(viewport === undefined ? {} : { defaultViewport: { ...viewport } }),
-              }),
-            ),
+          acquire: async (keepAliveMillis: number) =>
+            (await puppeteer.acquire(options.browser, { keep_alive: keepAliveMillis })).sessionId,
+          connect: async (sessionId: string) =>
+            makeProductionBrowser(await puppeteer.connect(options.browser, sessionId), viewport),
           closeSession: (sessionId: Redacted.Redacted<string>) =>
             lifecycle
               .close(sessionId)
@@ -414,11 +412,21 @@ export interface BrowserRunInteractiveSession {
   readonly close: Effect.Effect<void, InteractiveBrowserError>;
 }
 
+/** Persist the private cleanup identity before connecting or creating a page. */
+export interface BrowserRunInteractiveAcquisition {
+  readonly sessionId: Redacted.Redacted<string>;
+  /** Connect at most once, within the acquisition's original scope and elapsed deadline. */
+  readonly connect: Effect.Effect<BrowserRunInteractiveSession, InteractiveBrowserError>;
+}
+
 /** Cloudflare host authority kept separate from the provider-neutral browser handle. */
 export class BrowserRunInteractiveHost extends Context.Service<
   BrowserRunInteractiveHost,
   {
     readonly cleanupSemantics?: "confirmed-terminal";
+    readonly acquire: (
+      policy: InteractiveBrowserPolicy,
+    ) => Effect.Effect<BrowserRunInteractiveAcquisition, InteractiveBrowserError, Scope.Scope>;
     readonly open: (
       policy: InteractiveBrowserPolicy,
     ) => Effect.Effect<BrowserRunInteractiveSession, InteractiveBrowserError, Scope.Scope>;
@@ -1097,13 +1105,25 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
   };
 };
 
-const makeProductionContext = (context: BrowserContext): BrowserRunInteractiveContext => ({
-  newPage: async () => makeProductionPage(await context.newPage()),
+const makeProductionContext = (
+  context: BrowserContext,
+  viewport?: BrowserRunViewport,
+): BrowserRunInteractiveContext => ({
+  newPage: async () => {
+    const page = await context.newPage();
+
+    if (viewport !== undefined) await page.setViewport(viewport);
+
+    return makeProductionPage(page);
+  },
   close: () => context.close(),
 });
 
-const makeProductionBrowser = (browser: Browser): BrowserRunInteractiveBrowser => ({
-  createContext: async () => makeProductionContext(await browser.createBrowserContext()),
+const makeProductionBrowser = (
+  browser: Browser,
+  viewport?: BrowserRunViewport,
+): BrowserRunInteractiveBrowser => ({
+  createContext: async () => makeProductionContext(await browser.createBrowserContext(), viewport),
   close: () => browser.close(),
   sessionId: () => browser.sessionId(),
   isConnected: () => browser.isConnected(),
@@ -1941,9 +1961,10 @@ const makeHostService = (
     ]);
   });
 
-  const open = Effect.fn("BrowserRunInteractiveHost.open")(function* (
+  const acquire = Effect.fn("BrowserRunInteractiveHost.acquire")(function* (
     policy: InteractiveBrowserPolicy,
-  ): Effect.fn.Return<BrowserRunInteractiveSession, InteractiveBrowserError, Scope.Scope> {
+  ): Effect.fn.Return<BrowserRunInteractiveAcquisition, InteractiveBrowserError, Scope.Scope> {
+    const scope = yield* Scope.Scope;
     const fixedPolicy = yield* snapshotPolicy(policy);
     const startedAt = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
     // Late SDK replies outlive the opening fiber; cleanup retains this pass's clock.
@@ -1970,14 +1991,19 @@ const makeHostService = (
           : entry.close.pipe(Effect.catchCause(() => Effect.logWarning(entry.warning))),
       );
 
-    const browser = yield* Effect.acquireRelease(
+    const sessionIdValue = yield* Effect.acquireRelease(
       withinDeadline(
         Effect.tryPromise({
           try: (signal) =>
             closeLateAcquisition(
               signal,
-              () => binding.launch(keepAliveMillis(fixedPolicy)),
-              (acquired) => runCleanup(closeAcquired(acquired)),
+              () => binding.acquire(keepAliveMillis(fixedPolicy)),
+              (id) =>
+                runCleanup(
+                  Schema.decodeUnknownEffect(BrowserRunSessionId)(id).pipe(
+                    Effect.flatMap((value) => terminate(Redacted.make(value), [])),
+                  ),
+                ),
             ),
           catch: (cause) =>
             isCapacityRefusal(cause)
@@ -1985,313 +2011,351 @@ const makeHostService = (
                   implementation: browserRunInteractiveImplementation,
                   message: "Browser Run has no capacity for a new browser session",
                 })
-              : protocolError("Launching the Browser Run session failed", cause),
-        }),
+              : protocolError("Acquiring the Browser Run session failed", cause),
+        }).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunSessionId)),
+          Effect.catchTag("SchemaError", () =>
+            protocolError("The Browser Run session identity was malformed"),
+          ),
+        ),
         fixedPolicy,
         startedAt,
       ),
-      (acquired) => {
-        state.disconnected.value = true;
+      (id) =>
+        Effect.suspend(() => {
+          state.closed.value = true;
+          state.disconnected.value = true;
 
-        return lifecycle.managedTeardownInstalled
-          ? Effect.void
-          : closeAcquired(acquired).pipe(
-              Effect.catch(() => Effect.logWarning("Whole-browser cleanup remains unconfirmed")),
-            );
-      },
+          return lifecycle.managedTeardownInstalled
+            ? Effect.void
+            : terminate(Redacted.make(id), []).pipe(
+                Effect.catch(() => Effect.logWarning("Whole-browser cleanup remains unconfirmed")),
+              );
+        }),
       { interruptible: true },
     );
 
-    closers.push(closeEntry(browser.close, "Closing the interactive browser failed"));
+    const connect = yield* Effect.cached(
+      Effect.gen(function* (): Effect.fn.Return<
+        BrowserRunInteractiveSession,
+        InteractiveBrowserError,
+        Scope.Scope
+      > {
+        const browser = yield* Effect.acquireRelease(
+          withinDeadline(
+            Effect.tryPromise({
+              try: (signal) =>
+                closeLateAcquisition(
+                  signal,
+                  () => binding.connect(sessionIdValue),
+                  (acquired) => runCleanup(closeAcquired(acquired)),
+                ),
+              catch: (cause) =>
+                protocolError("Connecting to the Browser Run session failed", cause),
+            }),
+            fixedPolicy,
+            startedAt,
+          ),
+          (acquired) =>
+            releaseBeforeManaged(
+              closeEntry(acquired.close, "Closing the local browser connection failed"),
+            ),
+          { interruptible: true },
+        );
 
-    const disconnected = () => {
-      state.disconnected.value = true;
-    };
+        closers.push(closeEntry(browser.close, "Closing the interactive browser failed"));
 
-    yield* Effect.acquireRelease(
-      Effect.try({
-        try: () => browser.onDisconnected(disconnected),
-        catch: (cause) => protocolError("Installing the browser disconnect listener failed", cause),
-      }),
-      () =>
-        releaseBeforeManaged(
+        const disconnected = () => {
+          state.disconnected.value = true;
+        };
+
+        yield* Effect.acquireRelease(
+          Effect.try({
+            try: () => browser.onDisconnected(disconnected),
+            catch: (cause) =>
+              protocolError("Installing the browser disconnect listener failed", cause),
+          }),
+          () =>
+            releaseBeforeManaged(
+              syncCloseEntry(
+                () => browser.offDisconnected(disconnected),
+                "Removing the browser disconnect listener failed",
+              ),
+            ),
+        );
+        closers.push(
           syncCloseEntry(
             () => browser.offDisconnected(disconnected),
             "Removing the browser disconnect listener failed",
           ),
-        ),
-    );
-    closers.push(
-      syncCloseEntry(
-        () => browser.offDisconnected(disconnected),
-        "Removing the browser disconnect listener failed",
-      ),
-    );
+        );
 
-    const connected = yield* Effect.try({
-      try: browser.isConnected,
-      catch: (cause) => protocolError("Reading the Browser Run connection state failed", cause),
-    });
+        const connected = yield* Effect.try({
+          try: browser.isConnected,
+          catch: (cause) => protocolError("Reading the Browser Run connection state failed", cause),
+        });
 
-    if (!connected) {
-      state.disconnected.value = true;
+        if (!connected) {
+          state.disconnected.value = true;
 
-      return yield* expiredError();
-    }
+          return yield* expiredError();
+        }
 
-    const sessionIdValue = yield* Effect.try({
-      try: browser.sessionId,
-      catch: (cause) => protocolError("Reading the Browser Run session identity failed", cause),
-    }).pipe(
-      Effect.flatMap((value) =>
-        Schema.decodeUnknownEffect(BrowserRunSessionId)(value).pipe(
-          Effect.mapError(() => protocolError("The Browser Run session identity was malformed")),
-        ),
-      ),
-    );
+        const context = yield* Effect.acquireRelease(
+          withinDeadline(
+            Effect.tryPromise({
+              try: (signal) =>
+                closeLateAcquisition(signal, browser.createContext, (acquired) => acquired.close()),
+              catch: (cause) =>
+                state.disconnected.value || isRemoteClosure(cause)
+                  ? expiredError()
+                  : protocolError("Creating the browser context failed", cause),
+            }),
+            fixedPolicy,
+            startedAt,
+          ),
+          (acquired) =>
+            releaseBeforeManaged(
+              closeEntry(acquired.close, "Closing the interactive browser context failed"),
+            ),
+          { interruptible: true },
+        );
 
-    const context = yield* Effect.acquireRelease(
-      withinDeadline(
-        Effect.tryPromise({
-          try: (signal) =>
-            closeLateAcquisition(signal, browser.createContext, (acquired) => acquired.close()),
-          catch: (cause) =>
-            state.disconnected.value || isRemoteClosure(cause)
-              ? expiredError()
-              : protocolError("Creating the browser context failed", cause),
-        }),
-        fixedPolicy,
-        startedAt,
-      ),
-      (acquired) =>
-        releaseBeforeManaged(
-          closeEntry(acquired.close, "Closing the interactive browser context failed"),
-        ),
-      { interruptible: true },
-    );
+        closers.push(closeEntry(context.close, "Closing the interactive browser context failed"));
 
-    closers.push(closeEntry(context.close, "Closing the interactive browser context failed"));
+        const page = yield* Effect.acquireRelease(
+          withinDeadline(
+            Effect.tryPromise({
+              try: (signal) =>
+                closeLateAcquisition(signal, context.newPage, (acquired) => acquired.close()),
+              catch: (cause) =>
+                state.disconnected.value || isRemoteClosure(cause)
+                  ? expiredError()
+                  : protocolError("Creating the browser page failed", cause),
+            }),
+            fixedPolicy,
+            startedAt,
+          ),
+          (acquired) =>
+            releaseBeforeManaged(
+              closeEntry(acquired.close, "Closing the interactive browser page failed"),
+            ),
+          { interruptible: true },
+        );
 
-    const page = yield* Effect.acquireRelease(
-      withinDeadline(
-        Effect.tryPromise({
-          try: (signal) =>
-            closeLateAcquisition(signal, context.newPage, (acquired) => acquired.close()),
-          catch: (cause) =>
-            state.disconnected.value || isRemoteClosure(cause)
-              ? expiredError()
-              : protocolError("Creating the browser page failed", cause),
-        }),
-        fixedPolicy,
-        startedAt,
-      ),
-      (acquired) =>
-        releaseBeforeManaged(
-          closeEntry(acquired.close, "Closing the interactive browser page failed"),
-        ),
-      { interruptible: true },
-    );
+        closers.push(closeEntry(page.close, "Closing the interactive browser page failed"));
 
-    closers.push(closeEntry(page.close, "Closing the interactive browser page failed"));
+        yield* withinDeadline(
+          Effect.tryPromise({
+            try: () => page.setBypassServiceWorker(true),
+            catch: (cause) => protocolError("Bypassing browser service workers failed", cause),
+          }),
+          fixedPolicy,
+          startedAt,
+        );
 
-    yield* withinDeadline(
-      Effect.tryPromise({
-        try: () => page.setBypassServiceWorker(true),
-        catch: (cause) => protocolError("Bypassing browser service workers failed", cause),
-      }),
-      fixedPolicy,
-      startedAt,
-    );
+        const requestListener = makeRequestListener(fixedPolicy, state);
 
-    const requestListener = makeRequestListener(fixedPolicy, state);
-
-    yield* Effect.acquireRelease(
-      Effect.try({
-        try: () => page.onRequest(requestListener),
-        catch: (cause) => protocolError("Installing the browser request listener failed", cause),
-      }),
-      () =>
-        releaseBeforeManaged(
+        yield* Effect.acquireRelease(
+          Effect.try({
+            try: () => page.onRequest(requestListener),
+            catch: (cause) =>
+              protocolError("Installing the browser request listener failed", cause),
+          }),
+          () =>
+            releaseBeforeManaged(
+              syncCloseEntry(
+                () => page.offRequest(requestListener),
+                "Removing the browser request policy failed",
+              ),
+            ),
+        );
+        closers.push(
           syncCloseEntry(
             () => page.offRequest(requestListener),
             "Removing the browser request policy failed",
           ),
-        ),
-    );
-    closers.push(
-      syncCloseEntry(
-        () => page.offRequest(requestListener),
-        "Removing the browser request policy failed",
-      ),
-    );
-
-    yield* withinDeadline(
-      Effect.tryPromise({
-        try: () => page.setRequestInterception(true),
-        catch: (cause) => protocolError("Installing the browser request policy failed", cause),
-      }),
-      fixedPolicy,
-      startedAt,
-    );
-
-    yield* withinDeadline(awaitPendingRequests(state), fixedPolicy, startedAt);
-    const setupFailure = stateFailure(state);
-
-    if (setupFailure !== undefined) return yield* setupFailure;
-
-    const teardown = yield* Effect.uninterruptible(
-      Effect.gen(function* () {
-        const cached = yield* Effect.cached(terminate(Redacted.make(sessionIdValue), closers));
-
-        lifecycle.managedTeardownInstalled = true;
-        yield* Effect.addFinalizer(() =>
-          Effect.uninterruptible(
-            Effect.sync(() => {
-              state.closed.value = true;
-              state.disconnected.value = true;
-            }).pipe(
-              Effect.andThen(cached),
-              Effect.catch(() => Effect.logWarning("Whole-browser cleanup remains unconfirmed")),
-            ),
-          ),
         );
 
-        return cached;
-      }),
-    );
+        yield* withinDeadline(
+          Effect.tryPromise({
+            try: () => page.setRequestInterception(true),
+            catch: (cause) => protocolError("Installing the browser request policy failed", cause),
+          }),
+          fixedPolicy,
+          startedAt,
+        );
 
-    const close: Effect.Effect<void, InteractiveBrowserError> = Effect.uninterruptible(
-      Effect.sync(() => {
-        state.closed.value = true;
-        state.disconnected.value = true;
-      }).pipe(Effect.andThen(teardown)),
-    );
+        yield* withinDeadline(awaitPendingRequests(state), fixedPolicy, startedAt);
+        const setupFailure = stateFailure(state);
 
-    const runtime = yield* makeHandle(page, fixedPolicy, startedAt, state, close);
-    const currentPagePreflight = decodeActionResult(page, fixedPolicy).pipe(Effect.asVoid);
+        if (setupFailure !== undefined) return yield* setupFailure;
 
-    const requestFitsSession = (requestedMillis: number): Effect.Effect<void, BrowserFailure> =>
-      remainingMillis(fixedPolicy, startedAt).pipe(
-        Effect.flatMap((remaining) =>
-          remaining > 0 && requestedMillis <= remaining
-            ? Effect.void
-            : Effect.fail(
-                policyError("The host browser request exceeds the remaining session time"),
+        const teardown = yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            const cached = yield* Effect.cached(terminate(Redacted.make(sessionIdValue), closers));
+
+            lifecycle.managedTeardownInstalled = true;
+            yield* Effect.addFinalizer(() =>
+              Effect.uninterruptible(
+                Effect.sync(() => {
+                  state.closed.value = true;
+                  state.disconnected.value = true;
+                }).pipe(
+                  Effect.andThen(cached),
+                  Effect.catch(() =>
+                    Effect.logWarning("Whole-browser cleanup remains unconfirmed"),
+                  ),
+                ),
               ),
-        ),
-      );
+            );
+
+            return cached;
+          }),
+        );
+
+        const close: Effect.Effect<void, InteractiveBrowserError> = Effect.uninterruptible(
+          Effect.sync(() => {
+            state.closed.value = true;
+            state.disconnected.value = true;
+          }).pipe(Effect.andThen(teardown)),
+        );
+
+        const runtime = yield* makeHandle(page, fixedPolicy, startedAt, state, close);
+        const currentPagePreflight = decodeActionResult(page, fixedPolicy).pipe(Effect.asVoid);
+
+        const requestFitsSession = (requestedMillis: number): Effect.Effect<void, BrowserFailure> =>
+          remainingMillis(fixedPolicy, startedAt).pipe(
+            Effect.flatMap((remaining) =>
+              remaining > 0 && requestedMillis <= remaining
+                ? Effect.void
+                : Effect.fail(
+                    policyError("The host browser request exceeds the remaining session time"),
+                  ),
+            ),
+          );
+
+        return {
+          handle: runtime.handle,
+          sessionId: Redacted.make(sessionIdValue),
+          resizeViewport: (viewport) =>
+            decodeViewport(viewport).pipe(
+              Effect.flatMap((decoded) =>
+                runtime.run(
+                  Effect.tryPromise({
+                    try: () => page.setViewport(decoded),
+                    catch: (cause) => {
+                      if (state.disconnected.value || isRemoteClosure(cause)) {
+                        state.disconnected.value = true;
+
+                        return expiredError();
+                      }
+
+                      return protocolError("Resizing the browser viewport failed", cause);
+                    },
+                  }),
+                  currentPagePreflight,
+                  false,
+                ),
+              ),
+            ),
+          getLiveView: (request) =>
+            Schema.decodeEffect(BrowserRunLiveViewRequest)(request).pipe(
+              Effect.mapError(() => policyError("The Live View request is malformed")),
+              Effect.flatMap((decoded) =>
+                runtime.run(
+                  cdpCommand(
+                    page,
+                    state,
+                    "Cloudflare.getLiveView",
+                    { mode: decoded.mode, expiresInMs: decoded.expiresInMs },
+                    LiveViewObservation,
+                    "Cloudflare returned a malformed Live View response",
+                  ).pipe(
+                    Effect.flatMap((observation) =>
+                      Schema.decodeEffect(BrowserRunLiveViewResult)({
+                        devtoolsFrontendUrl: Redacted.make(observation.devtoolsFrontendUrl),
+                      }).pipe(
+                        Effect.mapError(() =>
+                          protocolError("Cloudflare returned a malformed Live View response"),
+                        ),
+                      ),
+                    ),
+                  ),
+                  currentPagePreflight.pipe(
+                    Effect.andThen(requestFitsSession(decoded.expiresInMs)),
+                  ),
+                ),
+              ),
+            ),
+          handoff: (request) =>
+            Schema.decodeEffect(BrowserRunHandoffRequest)(request).pipe(
+              Effect.mapError(() => policyError("The browser handoff request is malformed")),
+              Effect.flatMap((decoded) =>
+                runtime.run(
+                  cdpCommand(
+                    page,
+                    state,
+                    "Cloudflare.handoff",
+                    { instructions: decoded.instructions, timeout: decoded.timeout },
+                    HandoffObservation,
+                    "Cloudflare returned a malformed browser handoff response",
+                  ).pipe(
+                    Effect.flatMap((observation) =>
+                      Schema.decodeEffect(BrowserRunHandoffResult)({
+                        handoffId: Redacted.make(observation.handoffId),
+                      }).pipe(
+                        Effect.mapError(() =>
+                          protocolError("Cloudflare returned a malformed browser handoff response"),
+                        ),
+                      ),
+                    ),
+                  ),
+                  currentPagePreflight.pipe(Effect.andThen(requestFitsSession(decoded.timeout))),
+                ),
+              ),
+            ),
+          getHandoffState: runtime.run(
+            cdpCommand(
+              page,
+              state,
+              "Cloudflare.getHandoffState",
+              {},
+              HandoffStateObservation,
+              "Cloudflare returned a malformed browser handoff state",
+            ).pipe(
+              Effect.flatMap((observation) =>
+                Schema.decodeEffect(BrowserRunHandoffState)({
+                  active: observation.active,
+                  ...(observation.handoffId === undefined
+                    ? {}
+                    : { handoffId: Redacted.make(observation.handoffId) }),
+                  ...(observation.durationMs === undefined
+                    ? {}
+                    : { durationMs: observation.durationMs }),
+                }).pipe(
+                  Effect.mapError(() =>
+                    protocolError("Cloudflare returned a malformed browser handoff state"),
+                  ),
+                ),
+              ),
+            ),
+            currentPagePreflight,
+          ),
+          close,
+        };
+      }).pipe(Effect.provideService(Scope.Scope, scope)),
+    );
 
     return {
-      handle: runtime.handle,
       sessionId: Redacted.make(sessionIdValue),
-      resizeViewport: (viewport) =>
-        decodeViewport(viewport).pipe(
-          Effect.flatMap((decoded) =>
-            runtime.run(
-              Effect.tryPromise({
-                try: () => page.setViewport(decoded),
-                catch: (cause) => {
-                  if (state.disconnected.value || isRemoteClosure(cause)) {
-                    state.disconnected.value = true;
-
-                    return expiredError();
-                  }
-
-                  return protocolError("Resizing the browser viewport failed", cause);
-                },
-              }),
-              currentPagePreflight,
-              false,
-            ),
-          ),
-        ),
-      getLiveView: (request) =>
-        Schema.decodeEffect(BrowserRunLiveViewRequest)(request).pipe(
-          Effect.mapError(() => policyError("The Live View request is malformed")),
-          Effect.flatMap((decoded) =>
-            runtime.run(
-              cdpCommand(
-                page,
-                state,
-                "Cloudflare.getLiveView",
-                { mode: decoded.mode, expiresInMs: decoded.expiresInMs },
-                LiveViewObservation,
-                "Cloudflare returned a malformed Live View response",
-              ).pipe(
-                Effect.flatMap((observation) =>
-                  Schema.decodeEffect(BrowserRunLiveViewResult)({
-                    devtoolsFrontendUrl: Redacted.make(observation.devtoolsFrontendUrl),
-                  }).pipe(
-                    Effect.mapError(() =>
-                      protocolError("Cloudflare returned a malformed Live View response"),
-                    ),
-                  ),
-                ),
-              ),
-              currentPagePreflight.pipe(Effect.andThen(requestFitsSession(decoded.expiresInMs))),
-            ),
-          ),
-        ),
-      handoff: (request) =>
-        Schema.decodeEffect(BrowserRunHandoffRequest)(request).pipe(
-          Effect.mapError(() => policyError("The browser handoff request is malformed")),
-          Effect.flatMap((decoded) =>
-            runtime.run(
-              cdpCommand(
-                page,
-                state,
-                "Cloudflare.handoff",
-                { instructions: decoded.instructions, timeout: decoded.timeout },
-                HandoffObservation,
-                "Cloudflare returned a malformed browser handoff response",
-              ).pipe(
-                Effect.flatMap((observation) =>
-                  Schema.decodeEffect(BrowserRunHandoffResult)({
-                    handoffId: Redacted.make(observation.handoffId),
-                  }).pipe(
-                    Effect.mapError(() =>
-                      protocolError("Cloudflare returned a malformed browser handoff response"),
-                    ),
-                  ),
-                ),
-              ),
-              currentPagePreflight.pipe(Effect.andThen(requestFitsSession(decoded.timeout))),
-            ),
-          ),
-        ),
-      getHandoffState: runtime.run(
-        cdpCommand(
-          page,
-          state,
-          "Cloudflare.getHandoffState",
-          {},
-          HandoffStateObservation,
-          "Cloudflare returned a malformed browser handoff state",
-        ).pipe(
-          Effect.flatMap((observation) =>
-            Schema.decodeEffect(BrowserRunHandoffState)({
-              active: observation.active,
-              ...(observation.handoffId === undefined
-                ? {}
-                : { handoffId: Redacted.make(observation.handoffId) }),
-              ...(observation.durationMs === undefined
-                ? {}
-                : { durationMs: observation.durationMs }),
-            }).pipe(
-              Effect.mapError(() =>
-                protocolError("Cloudflare returned a malformed browser handoff state"),
-              ),
-            ),
-          ),
-        ),
-        currentPagePreflight,
-      ),
-      close,
+      connect: Effect.suspend(() => (state.closed.value ? expiredError() : connect)),
     };
   });
 
   return BrowserRunInteractiveHost.of({
-    open,
+    acquire,
+    open: (policy) => acquire(policy).pipe(Effect.flatMap((acquired) => acquired.connect)),
     closeSession,
     cleanupSemantics: "confirmed-terminal",
   });

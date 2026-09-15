@@ -14,6 +14,7 @@ import {
   VoiceWork,
   PlannerInput,
   PlannerSnapshot,
+  PlannerWorkerDetail,
   Trip,
   type PlannerSettings,
 } from "../src/domain.ts";
@@ -107,10 +108,48 @@ const rpc = async (tag: string, payload: unknown, email = "research@example.com"
   return result.value;
 };
 
-const snapshot = async (email?: string) =>
+const overview = async (email?: string) =>
   Schema.decodeUnknownSync(PlannerSnapshot)(
     await rpc("GetPlanner", { conversationId: "research" }, email),
   );
+
+const snapshot = async (email?: string) => {
+  const main = await overview(email);
+
+  const read = async <A extends { readonly id: string; readonly sourceSequence?: number }>(
+    worker: A,
+  ) => ({
+    ...worker,
+    ...Schema.decodeUnknownSync(PlannerWorkerDetail)(
+      await rpc(
+        "GetPlannerWorker",
+        {
+          conversationId: "research",
+          workerId: worker.id,
+          sourceSequence: worker.sourceSequence,
+        },
+        email,
+      ),
+    ),
+  });
+
+  const workers = [...(main.scouts ?? []), ...(main.editor ? [main.editor] : [])];
+
+  const details = await Effect.runPromise(
+    Effect.forEach(workers, (worker) => Effect.promise(() => read(worker)), { concurrency: 3 }),
+  );
+
+  return {
+    ...main,
+    scouts: main.scouts?.map((scout) => ({
+      ...scout,
+      ...details.find((detail) => detail.id === scout.id),
+    })),
+    editor: main.editor
+      ? { ...main.editor, ...details.find((detail) => detail.id === main.editor?.id) }
+      : main.editor,
+  };
+};
 
 const fixture = async (path: string, parameters: Record<string, string>, method = "GET") =>
   (
@@ -207,6 +246,29 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
   );
   expect(active.scouts?.every((scout) => scout.finding === undefined)).toBe(true);
   const ids = active.scouts?.map((scout) => scout.id).sort();
+  const firstScout = active.scouts?.[0];
+
+  if (!firstScout) throw new Error("Missing worker locator");
+
+  const locator = {
+    conversationId: "research",
+    workerId: firstScout.id,
+    sourceSequence: firstScout.sourceSequence,
+  };
+
+  const main = await overview();
+
+  expect(main.scouts?.every((scout) => scout.state === "loading")).toBe(true);
+  expect(main.messages).toEqual(active.messages);
+  for (const request of [
+    { ...locator, workerId: "worker:not-owned" },
+    { ...locator, sourceSequence: 1 },
+    { ...locator, conversationId: "other-trip" },
+  ])
+    await expect(rpc("GetPlannerWorker", request)).rejects.toThrow(/PlannerError/);
+  await expect(rpc("GetPlannerWorker", locator, "other@example.com")).rejects.toThrow(
+    /PlannerError/,
+  );
 
   expect((await snapshot("other@example.com")).scouts).toEqual([]);
   const followUp = `follow research budget 200 quiet neighborhood referenceTripId=${otherTrip.id}`;
@@ -651,6 +713,9 @@ it("runs six scouts and an editor beyond the old budgets, preserves them across 
       record.payload._tag === "WorkerOriginRecorded" ? [record.payload.origin] : [],
     )[0];
 
+    // The editor exceeds the 100-record activity window; the RPC fixture checks actual
+    // consumption and rejects exports, mutations, and repeated ledger lookups.
+    expect(journal.records.length).toBeGreaterThan(id === active.editor?.id ? 100 : 0);
     expect(origin?.source.agentId).toBe(researchCoordinatorId);
     expect(origin?.policy.contextTokenLimit).toBe(128_000);
     expect(origin?.policy.runStatus).toBe("appended");

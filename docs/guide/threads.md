@@ -11,23 +11,27 @@ that conversation.
 
 ## In-memory conversations
 
-`Ephemeral.layer` is the default setup. It keeps conversation history in memory for the lifetime
+`InMemory.layer` is the default setup. It keeps conversation history in memory for the lifetime
 of its application Scope. Runs with the same Thread ID load that conversation automatically:
 
 ```ts
-import { AgentRuntime, Ephemeral } from "effect-agent";
+import { AgentRuntime, InMemory } from "effect-agent";
 import { Effect } from "effect";
 
 const conversation = Effect.gen(function* () {
   const first = yield* AgentRuntime.run(agent, "Plan a trip to Lisbon");
   return yield* AgentRuntime.run(agent, "Make it cheaper", { threadId: first.threadId });
-}).pipe(Effect.provide(Ephemeral.layer));
+}).pipe(Effect.provide(InMemory.layer));
 ```
 
 Supply the model and tool handlers around this program. Provide the application Layer once
 around all conversation Runs, or build one `ManagedRuntime` for a long-lived application.
 Providing a fresh Layer separately to each Run creates separate stores. Omitting `threadId`
 creates a new conversation; reuse the returned ID for follow-ups.
+
+Conversations may span many Runs for as long as the application Scope stays open, within the
+store's capacity limits. In-memory describes storage, not a short lifetime. Execution is
+[ephemeral](../concepts/durability): active work cannot recover after process loss.
 
 The layer shares one bounded `Thread.Store` and the subagent reservation ledger.
 `ThreadHistory.layer` supplies just the in-memory history services when assembling your own setup.
@@ -56,7 +60,7 @@ const inspect = Effect.gen(function* () {
 
 Run this inside the same application Layer as the agent. `Thread.Thread` is the snapshot Schema;
 its messages include native text, tool results, reasoning, and files. `Thread.layerMemory` provides
-just the memory store; `Ephemeral.layer` also connects it to agent history and subagent reservations.
+just the memory store; `InMemory.layer` also connects it to agent history and subagent reservations.
 `Thread.Store` snapshots and the durable `ThreadStore` journal contract serve different purposes:
 the latter also stores execution records needed for persistence and recovery.
 
@@ -140,7 +144,7 @@ need a separate history adapter:
 const program = AgentRuntime.run(agent, input, {
   threadId,
   input: toRunInputHook(commands),
-}).pipe(Effect.provide(Ephemeral.layer));
+}).pipe(Effect.provide(InMemory.layer));
 ```
 
 The advanced hooks have these ownership rules:
@@ -152,7 +156,7 @@ The advanced hooks have these ownership rules:
 | `toRunThreadOptions`   | Adapts an existing `Thread.Store` snapshot when explicit history hooks are needed.              |
 | Durable runtime hooks  | Own history through the journal and commit each turn for recovery.                              |
 
-Use `Ephemeral.layer` or `ThreadHistory.layer` as the shared store for `toRunThreadOptions`.
+Use `InMemory.layer` or `ThreadHistory.layer` as the shared store for `toRunThreadOptions`.
 The helper captures that store while constructing its hooks. Durable hosts supply their own
 journal-based history; their execution does not also append to the in-memory store.
 

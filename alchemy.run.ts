@@ -29,11 +29,11 @@ const state = Layer.unwrap(
 const stack = Effect.gen(function* () {
   const docs = yield* Cloudflare.Website.StaticSite("Docs", {
     name: "effect-agent-docs",
-    command: "bun run docs:build",
+    command: "vp run docs:build",
     outdir: "docs/.vitepress/dist",
     domain: "effect-agent.com",
     workersDev: false,
-    dev: { command: "bun run docs:dev" },
+    dev: { command: "vp run docs:dev" },
     // VitePress emits 404.html; its cleanUrls links match the default
     // auto-trailing-slash HTML handling.
     assets: { notFoundHandling: "404-page" },

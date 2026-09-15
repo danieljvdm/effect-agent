@@ -24,11 +24,11 @@ import {
   type SendMessageRequest,
 } from "../domain.ts";
 import { ScoutReportInput } from "../research/contracts.ts";
-import { researchSnapshot } from "../research/state.ts";
+import { researchOverview } from "../research/state.ts";
 import { PlannerResponse } from "../response.ts";
 import { TravelContent } from "../travel-content.ts";
 import { publishTripAppAddress } from "../trip-app/addresses.ts";
-import { editorSnapshot } from "../trip-app/editor-state.ts";
+import { editorOverview } from "../trip-app/editor-state.ts";
 import { AppRepository } from "../trip-app/repository.ts";
 import { plannerActivity } from "./activity.ts";
 import { completedAnswer, type Messages } from "./conversation.ts";
@@ -381,12 +381,11 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
 
   return {
     conversationId,
-    scouts:
-      conversationId === null ? [] : yield* researchSnapshot(conversationId, source?.records ?? []),
+    scouts: conversationId === null ? [] : researchOverview(source?.records ?? []),
     editor:
       currentTrip === undefined || conversationId === null
         ? null
-        : yield* editorSnapshot(conversationId, currentTrip.id, source?.records ?? []),
+        : editorOverview(currentTrip.id, source?.records ?? []),
     app,
     messages: visibleMessages,
     trips,

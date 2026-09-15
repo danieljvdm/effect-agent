@@ -11,14 +11,19 @@ Effect Agent supports persistent history and durable execution as separate capab
 Persistence rebuilds recorded state. Durable execution accepts work, survives lost attempts, and
 owes one terminal settlement for every acknowledged submission.
 
+`InMemory.layer` retains conversations across Runs for as long as its application Scope stays
+open, within the store's capacity limits. In-memory describes where state lives. Ephemeral
+execution means work cannot recover after process loss; it can use either in-memory or persistent
+history. Neither term implies that an application or conversation must be short-lived.
+
 ## Execution modes {#four-deployment-classes}
 
-| Class | Meaning                                            |
-| ----- | -------------------------------------------------- |
-| `E`   | ephemeral execution with no process-loss recovery  |
-| `P`   | thread history survives restart; clients may retry |
-| `DN`  | durable admission and recovery on Node and SQLite  |
-| `DC`  | the same contract on Cloudflare Durable Objects    |
+| Class | Meaning                                                    |
+| ----- | ---------------------------------------------------------- |
+| `E`   | in-memory history; execution has no process-loss recovery  |
+| `P`   | persistent history; execution has no process-loss recovery |
+| `DN`  | durable admission and recovery on Node and SQLite          |
+| `DC`  | the same contract on Cloudflare Durable Objects            |
 
 Choose a deployment class and adapter with the recovery guarantees your application needs.
 See the [Node.js](../platforms/node) and [Cloudflare](../platforms/cloudflare) guides for setup.

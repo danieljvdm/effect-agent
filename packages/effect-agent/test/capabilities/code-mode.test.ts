@@ -363,7 +363,7 @@ const identifiers = Layer.succeed(IdGenerator, {
 
 interface ScenarioOutcome {
   readonly answer: { readonly answer: string };
-  /** Every tool-message part the second model request observed. */
+  /** Every tool-message part the final model request observed. */
   readonly toolResults: ReadonlyArray<{
     readonly result: unknown;
     readonly isFailure: boolean;
@@ -375,6 +375,7 @@ const runWithCode = <R = never>(
   code: string,
   options?: {
     readonly maxEgressBytes?: number;
+    readonly firstArguments?: Schema.Json;
     readonly onModelTurn?: Effect.Effect<void>;
     readonly redactEgress?: CodeMode.CodeModeOptions<
       CodeMode.CodeModeNamespaces,
@@ -396,7 +397,7 @@ const runWithCode = <R = never>(
       instructions: "Use run_javascript.",
       toolkit: Toolkit.make(definition.tool),
       policy: AgentPolicy.make({
-        maxTurns: 2,
+        maxTurns: options?.firstArguments === undefined ? 2 : 3,
         maxToolCalls: 4,
         maxDuration: "30 seconds",
         toolConcurrency: 1,
@@ -422,9 +423,9 @@ const runWithCode = <R = never>(
                 Ref.getAndUpdate(turn, (value) => value + 1).pipe(
                   Effect.tap(() => options?.onModelTurn ?? Effect.void),
                   Effect.tap(() =>
-                    Ref.update(toolResults, (all) => [
-                      ...all,
-                      ...prompt.content
+                    Ref.set(
+                      toolResults,
+                      prompt.content
                         .filter((message) => message.role === "tool")
                         .flatMap((message) => message.content)
                         .filter((part) => part.type === "tool-result")
@@ -432,17 +433,20 @@ const runWithCode = <R = never>(
                           result: part.result,
                           isFailure: part.isFailure === true,
                         })),
-                    ]),
+                    ),
                   ),
                   Effect.map((value) =>
                     Stream.fromIterable<Response.StreamPartEncoded>(
-                      value === 0
+                      value < (options?.firstArguments === undefined ? 1 : 2)
                         ? [
                             {
                               type: "tool-call",
-                              id: "code-1",
+                              id: `code-${value + 1}`,
                               name: "run_javascript",
-                              params: { code },
+                              params:
+                                value === 0 && options?.firstArguments !== undefined
+                                  ? options.firstArguments
+                                  : { code },
                               providerExecuted: false,
                             },
                             { type: "finish", reason: "tool-calls", usage },
@@ -496,6 +500,40 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) => {
+  it.effect("recovers invalid outer Code Mode arguments and keeps inner validation catchable", () =>
+    Effect.gen(function* () {
+      const outer = yield* runWithCode('CALL warehouse.query {"sql":"select 1"}', {
+        firstArguments: { code: "" },
+      });
+
+      expect(outer.answer).toEqual({ answer: "done" });
+      expect(outer.queryCalls).toBe(1);
+      expect(outer.toolResults).toHaveLength(2);
+      expect(outer.toolResults[0]).toMatchObject({
+        isFailure: true,
+        result: {
+          _tag: "AiError",
+          reason: { _tag: "ToolParameterValidationError", toolName: "run_javascript" },
+        },
+      });
+      expect(outer.toolResults[1]).toMatchObject({
+        isFailure: false,
+        result: {
+          result: { ok: { rows: [1, 2, 3], truncated: false } },
+        },
+      });
+      const inner = yield* runWithCode('CALL warehouse.query {"sql":42}');
+
+      expect(inner.queryCalls).toBe(0);
+      expect(inner.toolResults[0]).toMatchObject({
+        isFailure: false,
+        result: {
+          result: { caught: { _tag: "ModelProtocolError" } },
+        },
+      });
+    }),
+  );
+
   it.effect("captures redaction services for success and program-failure egress", () =>
     Effect.gen(function* () {
       class EgressPolicy extends Context.Service<EgressPolicy, string>()("test/EgressPolicy") {}

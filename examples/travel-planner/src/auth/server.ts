@@ -1,8 +1,9 @@
 import * as Auth from "@yielded/auth/Auth";
 import * as Email from "@yielded/auth/Email";
-import { gitHubOAuthAppProtocolLayer } from "@yielded/auth/GitHub";
+import * as GitHub from "@yielded/auth/GitHub";
 import * as AuthHttp from "@yielded/auth/Http";
 import * as OAuth from "@yielded/auth/OAuth";
+import { ProofKeys } from "@yielded/auth/Proofs";
 import * as Sessions from "@yielded/auth/Sessions";
 import { Layer, Redacted, Schema } from "effect";
 
@@ -38,9 +39,7 @@ export const keyring = (material: string) => ({
 export const makeAuth = (config: AuthConfiguration) => {
   const email = {
     namespace: "travel-planner/email",
-    template: "elsewhere-code",
     digits: 6,
-    keys: keyring(config.AUTH_PROOF_KEY),
     policy: {
       lifetimeMillis: 300_000,
       continuationLifetimeMillis: 60_000,
@@ -93,6 +92,7 @@ export const makeAuth = (config: AuthConfiguration) => {
   });
 
   const security = Layer.mergeAll(
+    ProofKeys.layer(keyring(config.AUTH_PROOF_KEY)),
     Auth.RequestBindingConfig.layer({
       generation: 1,
       lifetimeMillis: 600_000,
@@ -103,22 +103,11 @@ export const makeAuth = (config: AuthConfiguration) => {
     Email.EmailReturnTargets.exactRoutes(["/"]),
   );
 
-  const github = gitHubOAuthAppProtocolLayer({
-    registrations: [
-      {
-        configurationGeneration: 2,
-        issuance: "active",
-        clientId: config.AUTH_GITHUB_CLIENT_ID,
-        clientSecret: Redacted.make(config.AUTH_GITHUB_CLIENT_SECRET),
-        callbacks: [
-          {
-            callbackId: OAuth.OAuthCallbackId.make("github"),
-            redirectUri: OAuth.OAuthRedirectUri.make(`${config.AUTH_ORIGIN}/auth/github/callback`),
-          },
-        ],
-      },
-    ],
-    timeoutSeconds: 10,
+  const github = GitHub.layer({
+    configurationGeneration: 2,
+    clientId: config.AUTH_GITHUB_CLIENT_ID,
+    clientSecret: Redacted.make(config.AUTH_GITHUB_CLIENT_SECRET),
+    redirectUri: `${config.AUTH_ORIGIN}/auth/github/callback`,
   });
 
   return { AppAuth, http, security, github };

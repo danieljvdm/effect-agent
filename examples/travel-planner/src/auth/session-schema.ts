@@ -1,4 +1,7 @@
-import { requiredSessionConstraints, type StatefulSessionMapping } from "@yielded/auth/Drizzle";
+import {
+  requiredSessionConstraints,
+  type StatefulSessionMapping,
+} from "@yielded/auth-persistence/drizzle";
 import { TokenDigest } from "@yielded/auth/Schema";
 import {
   SecurityRevision,

@@ -15,11 +15,11 @@ history stays out of the parent's context. Each agent can use its own model and 
 
 This defines the agents. Choose how to run them below.
 
-## Choose an execution kind
+## Choose a setup
 
 | Kind                                                 | Parent behavior                                              | Use it when                                                    |
 | ---------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------- |
-| [Ephemeral attached](./subagents/ephemeral-attached) | Waits for a tool result; child shares its Scope              | Restarting the task after a process crash is acceptable        |
+| [In-memory attached](./subagents/in-memory-attached) | Waits for a tool result; child shares its Scope              | Restarting the task after a process crash is acceptable        |
 | [Durable attached](./subagents/durable-attached)     | Suspends, then resumes with the child's result               | The parent needs the answer and progress must survive restarts |
 | [Durable background](./subagents/background)         | Continues; receives declared updates and a completion report | The user should keep chatting while work runs                  |
 
@@ -63,7 +63,7 @@ All three forms enforce permissions and budgets. Parent tools are not inherited.
 <a id="give-the-parent-the-delegation-tool"></a>
 <a id="bind-models-and-run"></a>
 Child definitions, delegation tools, and model bindings now live in the
-[ephemeral attached walkthrough](./subagents/ephemeral-attached).
+[in-memory attached walkthrough](./subagents/in-memory-attached).
 
 <a id="keep-children-attached"></a>
 Durable registration and recovery now live in the [durable attached guide](./subagents/durable-attached).

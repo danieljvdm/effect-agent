@@ -188,6 +188,36 @@ const actionCompletionDefinition = Agent.make("action-type-proof", {
   ],
 });
 
+const RecoverableSearch = Tool.make("search_availability", {
+  parameters: Schema.Struct({ destination: Schema.NonEmptyString }),
+  success: SearchAvailability.successSchema,
+  failure: AvailabilityFailure,
+  dependencies: [AvailabilityCatalog],
+  failureMode: "return",
+});
+
+const recoverableDefinition = Agent.make("recoverable-type-proof", {
+  input: Schema.String,
+  output: Schema.String,
+  instructions: "Search.",
+  toolkit: Toolkit.make(RecoverableSearch),
+});
+
+const recoverableAgent = Agent.withModel(recoverableDefinition, model);
+
+type RecoverableFailureProof = Assert<
+  Equal<
+    Agent.Failure<typeof recoverableAgent>,
+    AiError.AiError | AgentInputError | AgentOutputError
+  >
+>;
+type RecoverableRequirementsProof = Assert<
+  Equal<
+    Agent.DefinitionRequirements<typeof recoverableDefinition>,
+    AvailabilityCatalog | Tool.Handler<"search_availability">
+  >
+>;
+
 type ExpectedRequirements =
   | InstructionContext
   | ModelConfig
@@ -296,6 +326,10 @@ describe("Agent type inference", () => {
   });
 
   it("separates immutable definition from model binding", () => {
+    const recoverableFailure: RecoverableFailureProof = true;
+    const recoverableRequirements: RecoverableRequirementsProof = true;
+
+    expect(recoverableFailure && recoverableRequirements).toBe(true);
     const requirementsProof: RequirementsProof = true;
     const definitionRequirementsProof: DefinitionRequirementsProof = true;
     const failureProof: FailureProof = true;

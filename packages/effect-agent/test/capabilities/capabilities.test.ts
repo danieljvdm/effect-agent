@@ -118,7 +118,7 @@ const approvalDraft = (
 
 describe("capability contracts", () => {
   it.effect(
-    "keeps one bounded ephemeral thread available to multiple Runs and exports a snapshot",
+    "keeps one bounded in-memory thread available to multiple Runs and exports a snapshot",
     () =>
       Effect.gen(function* () {
         const threads = yield* ConversationStore;
@@ -686,7 +686,7 @@ describe("capability contracts", () => {
       }).pipe(Effect.provide(layerMemory)),
   );
 
-  it.effect("starts each ephemeral store Scope with fresh thread and byte state", () =>
+  it.effect("starts each in-memory store Scope with fresh thread and byte state", () =>
     Effect.gen(function* () {
       yield* Effect.gen(function* () {
         const threads = yield* ConversationStore;

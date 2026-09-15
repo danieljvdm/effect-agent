@@ -1,5 +1,28 @@
 # @effect-agent/sandbox-local
 
+## 0.1.0-beta.94
+
+### Patch Changes
+
+- Updated dependencies [[`373d188`](https://github.com/danieljvdm/effect-agent/commit/373d18828f2fc2851614cf2612c5e71e91075c88), [`bbb709c`](https://github.com/danieljvdm/effect-agent/commit/bbb709c9beff0b8f2e6b67d05e0f8223a7cb6f93)]:
+  - effect-agent@0.1.0-beta.94
+
+## 0.1.0-beta.93
+
+### Patch Changes
+
+- Updated dependencies [[`319c156`](https://github.com/danieljvdm/effect-agent/commit/319c156be5a85a2d490cf79531f94591881436f8)]:
+  - effect-agent@0.1.0-beta.93
+
+## 0.1.0-beta.92
+
+### Patch Changes
+
+- [#487](https://github.com/danieljvdm/effect-agent/pull/487) [`054b1c3`](https://github.com/danieljvdm/effect-agent/commit/054b1c3a7e7a6571fc82caedc4ae8835c5aacfb4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Require Effect rc.115 across the packages and effect-cf 0.43.0 for Cloudflare hosts.
+
+- Updated dependencies [[`054b1c3`](https://github.com/danieljvdm/effect-agent/commit/054b1c3a7e7a6571fc82caedc4ae8835c5aacfb4)]:
+  - effect-agent@0.1.0-beta.92
+
 ## 0.1.0-beta.91
 
 ### Patch Changes

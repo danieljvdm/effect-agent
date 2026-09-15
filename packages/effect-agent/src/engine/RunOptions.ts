@@ -26,6 +26,7 @@ import {
 } from "../core/SubagentContract.ts";
 import type { Snapshot } from "../core/ToolExposure.ts";
 import { Selection } from "../core/ToolExposure.ts";
+import type { ToolParameterRejection } from "../core/ToolResult.ts";
 import {
   ChildRunUsage,
   UsageCompleteness,
@@ -480,6 +481,8 @@ export class RunToolAuthorization extends Context.Service<
  * application Tool Calls; no-tool Turns keep their late single-batch commit.
  */
 export interface RunTurnResponseCommit {
+  /** Rejected fresh arguments; persist atomically with the response and restore on resume. */
+  readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;
   readonly turn: number;
   readonly turnId: TurnId;
@@ -816,15 +819,18 @@ export type RunResumeUsage = typeof RunResumeUsageSchema.Type;
  * Resume one canonically declared Tool batch without re-invoking the model.
  *
  * When present, the engine's first Turn skips the model request entirely: the
- * declared calls are re-validated through their Tool parameter Schemas (a
- * decode failure executes nothing), approval preflight runs against recorded
- * decisions, host Tool authorization is re-evaluated, `prepareToolCalls` replays the full
+ * executable calls are re-validated through their Tool parameter Schemas (a
+ * decode failure executes nothing). Canonically rejected calls retain their native failure;
+ * the rejection must match their exact arguments and any settled result. Approval preflight
+ * for executable calls runs against recorded decisions, host Tool authorization is re-evaluated, `prepareToolCalls` replays the full
  * prepared batch idempotently,
  * calls listed in `settled` are injected as final results without starting
  * their handlers, and only the remaining open calls execute. The Run then
  * proceeds through the normal continuation.
  */
 export interface RunTurnResume {
+  /** Canonical rejection evidence, matched to the exact call; never permits handler execution. */
+  readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;
   readonly turn: number;
   readonly turnId: TurnId;

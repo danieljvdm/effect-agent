@@ -42,13 +42,19 @@ export class Match extends Schema.Class<Match>("@effect-agent/capabilities/ToolD
   success: Schema.Json,
 }) {}
 
-/** Only nativeToolName values activate schemas; Code Mode aliases activate their owning Tool. */
+/**
+ * Only documented nativeToolName values activate schemas; Code Mode aliases activate their
+ * owning Tool. A byte-limited result is successful, including when no matches fit: an empty
+ * toolNames array clears the non-pinned selection under the engine's replacement contract.
+ */
 export const Result = Schema.Struct({
   toolNames: Schema.Array(Name).check(Schema.isMaxLength(64), Schema.isUnique()),
   matches: Schema.Array(Match).check(Schema.isMaxLength(64)),
+  /** Present when the byte budget omits complete matches, with guidance for continuing. */
+  notice: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(192))),
 });
 
-/** Invalid custom results, unsupported documentation, and bounded output failures remain typed. */
+/** Invalid custom results and unsupported documentation remain typed failures. */
 export class ToolDiscoveryError extends Schema.TaggedError<ToolDiscoveryError>()(
   "ToolDiscoveryError",
   {
@@ -57,7 +63,6 @@ export class ToolDiscoveryError extends Schema.TaggedError<ToolDiscoveryError>()
       "invalid-matches",
       "unknown-match",
       "invalid-schema",
-      "limit-exceeded",
     ]),
     message: Schema.String.check(Schema.isMaxLength(1_024)),
   },
@@ -71,12 +76,30 @@ const Bounds = Schema.Struct({
   namespaceDescriptions: Schema.Record(Namespace, NamespaceDescription),
 });
 
+const resultByteLength = Effect.fnUntraced(function* (result: typeof Result.Type) {
+  const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Result))(result).pipe(
+    Effect.mapError(() =>
+      ToolDiscoveryError.make({
+        reason: "invalid-schema",
+        message: "Discovery documentation could not be encoded",
+      }),
+    ),
+  );
+
+  return utf8ByteLength(encoded);
+});
+
 export interface Options<Failure extends Schema.Top = typeof Schema.Never, Requirements = never> {
   /** Optional generic instructions. Namespace names and hints are never appended here. */
   readonly description?: string | undefined;
   /** Maximum returned catalogue entries, default 8 and at most 64. */
   readonly maxResults?: number | undefined;
-  /** Complete JSON-encoded result budget, default 32768 and at most 262144 UTF-8 bytes. */
+  /**
+   * Complete JSON-encoded result budget, including any notice: default 32768, minimum 256,
+   * maximum 262144 UTF-8 bytes. Within the first maxResults candidates, retain whole matches
+   * in rank order when they fit; skip oversized matches and try later candidates. Overflow
+   * returns a successful result with an actionable notice, never partial schemas.
+   */
   readonly maxResultBytes?: number | undefined;
   /** Short category hints returned only for namespaces present in the visible catalogue. */
   readonly namespaceDescriptions?: Readonly<Record<string, string>> | undefined;
@@ -313,23 +336,30 @@ export const make = <Failure extends Schema.Top = typeof Schema.Never, Requireme
             matches,
           };
 
-          const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Result))(result).pipe(
-            Effect.mapError(() =>
-              ToolDiscoveryError.make({
-                reason: "invalid-schema",
-                message: "Discovery documentation could not be encoded",
-              }),
-            ),
-          );
+          if ((yield* resultByteLength(result)) <= bounds.maxResultBytes) return result;
 
-          if (utf8ByteLength(encoded) > bounds.maxResultBytes) {
-            return yield* ToolDiscoveryError.make({
-              reason: "limit-exceeded",
-              message: "Selected documentation exceeds the result byte limit; narrow the search",
-            });
+          // Validate every selected schema before packing. A byte limit must not mask an
+          // invalid catalogue/schema. The empty notice envelope fits the minimum 256 bytes.
+          let bounded: typeof Result.Type = {
+            toolNames: [],
+            matches: [],
+            notice:
+              "Result byte limit reached. Narrow the search or namespace; if one tool still cannot fit, ask the host to increase maxResultBytes.",
+          };
+
+          for (const match of matches) {
+            const candidates = [...bounded.matches, match];
+
+            const candidate = {
+              ...bounded,
+              toolNames: [...new Set(candidates.map((entry) => entry.nativeToolName))],
+              matches: candidates,
+            };
+
+            if ((yield* resultByteLength(candidate)) <= bounds.maxResultBytes) bounded = candidate;
           }
 
-          return result;
+          return bounded;
         }),
       });
     }),

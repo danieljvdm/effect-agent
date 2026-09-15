@@ -8,6 +8,7 @@ on:
       - ".github/workflows/deploy-travel-planner.yml"
       - "bun.lock"
       - "package.json"
+      - "patches/**"
       - "bunfig.toml"
       - "tsconfig.base.json"
   workflow_dispatch:
@@ -25,8 +26,9 @@ env:
 
 jobs:
   deploy:
-    # Automatic releases start after the initial, explicitly dispatched cutover.
-    if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.TRAVEL_PLANNER_DEPLOY_ENABLED == 'true') }}
+    # Manual dispatch deploys the selected ref for explicitly authorized hosted checks.
+    # Automatic deployments remain limited to main after the initial cutover.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && vars.TRAVEL_PLANNER_DEPLOY_ENABLED == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

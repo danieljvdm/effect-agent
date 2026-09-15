@@ -1,6 +1,6 @@
 {
   "name": "effect-agent",
-  "version": "0.1.0-beta.91",
+  "version": "0.1.0-beta.94",
   "description": "Effect-native agents, execution, subagents, and sandbox contracts in one tree-shakeable package.",
   "license": "MIT",
   "repository": {
@@ -39,11 +39,11 @@
     "./durable-agent-runtime": "./src/durable/DurableAgentRuntime.ts",
     "./durable-failpoint": "./src/durable/DurableFailpoint.ts",
     "./durable-step": "./src/engine/DurableStep.ts",
-    "./ephemeral": "./src/Ephemeral.ts",
     "./event-source": "./src/durable/EventSource.ts",
     "./git-hub-workflow-source": "./src/durable/GitHubWorkflowSource.ts",
     "./id-generator": "./src/core/IdGenerator.ts",
     "./identifiers": "./src/core/Identifiers.ts",
+    "./in-memory": "./src/InMemory.ts",
     "./interactive-browser": "./src/sandbox/InteractiveBrowser.ts",
     "./mcp": "./src/capabilities/Mcp.ts",
     "./mcp-client": "./src/capabilities/McpClient.ts",

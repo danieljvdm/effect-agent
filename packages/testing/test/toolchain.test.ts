@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
@@ -299,6 +300,76 @@ const runFixtureCommand = Effect.fn("toolchainTest.runFixtureCommand")(function*
 const manifestDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
   dependencySections.flatMap((section) => Object.keys(manifest[section] ?? {}));
 
+// Execute the trusted workflow itself; isolate artifact reads and GitHub writes.
+const publishBundleReport = Effect.fn("toolchainTest.publishBundleReport")(function* (
+  table: string,
+) {
+  const workflow = yield* readWorkflow(".github/workflows/bundle-comment.yml");
+
+  const script = yield* Schema.decodeUnknownEffect(Schema.String)(
+    workflowStep(workflow, "comment", "Update bundle comparison comment")?.with?.script,
+  );
+
+  const head = "a".repeat(40);
+  const base = "b".repeat(40);
+  const comments: Array<string> = [];
+
+  const files: Record<string, string> = {
+    "bundle-stats/report.md": table,
+    "bundle-stats/report.json": JSON.stringify({ base: { revision: base } }),
+    "bundle-stats/pr-number.txt": "1\n",
+  };
+
+  const execution: Promise<unknown> = runInNewContext(`(async () => { ${script} })()`, {
+    require: (name: string) => {
+      if (name !== "node:fs") throw new Error("Unexpected publisher import");
+
+      return {
+        lstatSync: (file: string) => ({
+          isFile: () => true,
+          size: Buffer.byteLength(files[file]!),
+        }),
+        readFileSync: (file: string) => files[file],
+      };
+    },
+    context: {
+      repo: { owner: "owner", repo: "repository" },
+      payload: {
+        workflow_run: {
+          head_sha: head,
+          head_repository: { id: 1 },
+          html_url: "https://example.test/run",
+        },
+      },
+    },
+    github: {
+      rest: {
+        pulls: {
+          get: async () => ({
+            data: {
+              number: 1,
+              state: "open",
+              head: { sha: head, repo: { id: 1 } },
+              base: { sha: base, repo: { full_name: "owner/repository" } },
+            },
+          }),
+        },
+        issues: {
+          listComments: "comments",
+          createComment: async ({ body }: { body: string }) => {
+            comments.push(body);
+          },
+        },
+      },
+      paginate: async () => [],
+    },
+  });
+
+  const exit = yield* Effect.exit(Effect.promise(() => execution));
+
+  return { comments, exit };
+});
+
 layer(NodeServices.layer)("workspace toolchain", (it) => {
   it.effect(
     "compares built checkouts independently and counts shared and deferred chunks once",
@@ -311,6 +382,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         for (const side of ["base", "head"]) {
           const root = path.join(scratch, side);
           const pkg = path.join(root, "packages", "effect-agent");
+          const assembly = side === "base" ? "Ephemeral" : "InMemory";
 
           yield* fs.makeDirectory(path.join(pkg, "dist"), { recursive: true });
           yield* fs.makeDirectory(path.join(root, "node_modules", "effect"), { recursive: true });
@@ -329,7 +401,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
                 ".": "./src/index.ts",
                 [side === "base" ? "./Agent" : "./agent"]: "./src/Agent.ts",
                 [side === "base" ? "./AgentRuntime" : "./agent-runtime"]: "./src/AgentRuntime.ts",
-                [side === "base" ? "./Ephemeral" : "./ephemeral"]: "./src/Ephemeral.ts",
+                [side === "base" ? "./Ephemeral" : "./in-memory"]: `./src/${assembly}.ts`,
               },
             }),
           );
@@ -337,10 +409,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           // No src directory: accidentally measuring source instead of published
           // artifacts must fail. The two checkouts also contain different values.
           const modules = {
-            index:
-              'export * from "./Agent.mjs"; export * from "./AgentRuntime.mjs"; export * from "./Ephemeral.mjs";',
+            index: `export * from "./Agent.mjs"; export * from "./AgentRuntime.mjs"; export * as ${assembly} from "./${assembly}.mjs";`,
             Agent: 'export { shared as agent } from "./shared.mjs";',
-            Ephemeral: 'export { shared as layer } from "./shared.mjs";',
+            [assembly]: 'export { shared as layer } from "./shared.mjs";',
             AgentRuntime: `import { shared } from "./shared.mjs"; export const run = [shared, ${JSON.stringify(side.repeat(side === "head" ? 20000 : 10000))}];`,
             shared: `export const shared = ${JSON.stringify("shared".repeat(200))};`,
           };
@@ -363,9 +434,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             path.join(fixtures, `runtime-${kind}.ts`),
             `export { run } from "effect-agent${kind === "module" ? "/agent-runtime" : ""}";`,
           );
-          yield* fs.writeFileString(
-            path.join(fixtures, `ephemeral-${kind}.ts`),
-            `export { layer } from "effect-agent${kind === "module" ? "/ephemeral" : ""}";`,
+          yield* fs.copyFile(
+            path.join(repositoryRoot, "scripts", "bundle", `in-memory-${kind}.ts`),
+            path.join(fixtures, `in-memory-${kind}.ts`),
           );
           yield* fs.writeFileString(
             path.join(fixtures, `lazy-${kind}.ts`),
@@ -399,6 +470,13 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(lazy!.head.total.raw).toBe(lazy!.head.initial.raw + lazy!.head.deferred.raw);
         expect(lazy!.head.total.gzip).toBe(lazy!.head.initial.gzip + lazy!.head.deferred.gzip);
         expect(report.fixtures.every((fixture) => fixture.head.initial.raw > 0)).toBe(true);
+        for (const kind of ["root", "module"]) {
+          const renamed = report.fixtures.find((fixture) => fixture.name === `in-memory-${kind}`);
+
+          expect(renamed?.base).toBeDefined();
+          expect(renamed?.base).not.toBeNull();
+          expect(renamed?.missingBaseExports).toEqual([]);
+        }
 
         // A newly introduced direct entry gets no fake zero/unchanged baseline.
         const baseManifest = path.join(scratch, "base", "packages", "effect-agent", "package.json");
@@ -421,12 +499,31 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
         expect(second.fixtures.find((fixture) => fixture.name === "agent-module")?.base).toBeNull();
         expect(
-          second.fixtures.find((fixture) => fixture.name === "ephemeral-root")?.base,
+          second.fixtures.find((fixture) => fixture.name === "in-memory-root")?.base,
         ).toBeNull();
         expect(yield* fs.exists(path.join(scratch, "report", "base", "agent-module"))).toBe(false);
         expect(
           second.fixtures.find((fixture) => fixture.name === "agent-root")?.base,
         ).not.toBeNull();
+
+        // Keep the producer and privileged publisher compatible, including new exports.
+        const table = yield* fs.readFileString(path.join(scratch, "report", "report.md"));
+        const published = yield* publishBundleReport(table);
+
+        expect(Exit.isSuccess(published.exit)).toBe(true);
+        expect(published.comments).toHaveLength(1);
+        expect(published.comments[0]).toContain(table.trim());
+        expect(published.comments[0]).toContain("| in-memory-root | initial | n/a |");
+        for (const invalid of [
+          table.replace("in-memory-root", "<script>alert(1)</script>"),
+          table.replace("0.00 kB", "[click](https://example.test)"),
+        ]) {
+          const rejected = yield* publishBundleReport(invalid);
+
+          expect(Exit.isFailure(rejected.exit)).toBe(true);
+          expect(rejected.comments).toEqual([]);
+        }
+
         // A smaller but broken bundle must fail, not publish a successful report.
         yield* fs.writeFileString(smoke, 'throw new Error("broken bundled runtime");');
 

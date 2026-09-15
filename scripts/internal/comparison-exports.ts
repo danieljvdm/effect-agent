@@ -67,6 +67,21 @@ export const stageComparisonModules = Effect.fn("comparison.stageModules")(funct
         'export { ThreadSnapshot as Thread, EphemeralThreads as Store, EphemeralThreadsLive as layerMemory, threadPrompt as toPrompt } from "effect-agent/ephemeral-threads";\n',
     );
   }
+  if (exports["./in-memory"] === undefined && exports["./ephemeral"] !== undefined) {
+    yield* forward("./in-memory", 'export * from "effect-agent/ephemeral";\n');
+
+    // Older releases expose the same assembly under the Ephemeral root namespace.
+    // Update only the staged root so both current consumer fixtures reach it.
+    for (const extension of ["mjs", "d.mts"]) {
+      const root = path.join(packageRoot, "dist", `index.${extension}`);
+
+      yield* fs.writeFileString(
+        root,
+        (yield* fs.readFileString(root)) +
+          '\nexport * as InMemory from "effect-agent/in-memory";\n',
+      );
+    }
+  }
   if (added.length > 0) {
     yield* fs.writeFileString(manifestPath, JSON.stringify({ ...manifest, exports }));
   }

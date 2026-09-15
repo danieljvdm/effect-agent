@@ -1,8 +1,8 @@
 import {
-  DrizzleMappingError,
+  PersistenceMappingError,
   requiredProofConstraints,
   type ProofPersistenceMapping,
-} from "@yielded/auth/Drizzle";
+} from "@yielded/auth-persistence/drizzle";
 import {
   ProofBinding,
   ProofPurpose,
@@ -170,7 +170,7 @@ const bindingCodec = Schema.fromJsonString(ProofBinding),
 const decodeBinding = (value: string) =>
   Schema.decodeEffect(bindingCodec)(value).pipe(
     Effect.mapError(() =>
-      DrizzleMappingError.make({
+      PersistenceMappingError.make({
         operation: "travel-auth-codec",
         cause: "invalid consumer value",
       }),
@@ -257,7 +257,7 @@ export const proofs: ProofPersistenceMapping<
     decodeReceipt: (row) =>
       Schema.decodeEffect(receiptCodec)(row.receipt).pipe(
         Effect.mapError(() =>
-          DrizzleMappingError.make({
+          PersistenceMappingError.make({
             operation: "travel-auth-codec",
             cause: "invalid consumer value",
           }),

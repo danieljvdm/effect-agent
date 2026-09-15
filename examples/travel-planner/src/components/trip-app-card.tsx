@@ -46,6 +46,7 @@ function AppEditorActivity({
   const { progress } = editor;
 
   const stateLabel = {
+    loading: "Loading updates…",
     starting: "Starting",
     active: "Working",
     idle: "Finished",
@@ -61,11 +62,23 @@ function AppEditorActivity({
       </div>
       <div
         className="trip-app-progress"
-        data-status={active ? "building" : editor.state === "idle" ? "ready" : "failed"}
+        data-status={
+          active || editor.state === "loading"
+            ? "building"
+            : editor.state === "idle"
+              ? "ready"
+              : "failed"
+        }
       >
         <div className="trip-app-progress-label">
           <BuildSymbol
-            status={active ? "building" : editor.state === "idle" ? "ready" : "failed"}
+            status={
+              active || editor.state === "loading"
+                ? "building"
+                : editor.state === "idle"
+                  ? "ready"
+                  : "failed"
+            }
           />
           <span>Current request</span>
           {(active || progress.completedAt !== undefined) && (
@@ -160,6 +173,7 @@ export function TripAppCard({
   const [result, change] = useAtom(changeTripAppAtom);
   const building = app?.status === "building";
   const editing = editor?.state === "active" || editor?.state === "starting";
+  const loadingEditor = editor?.state === "loading";
   const editorIssue = editor?.state === "failed" || editor?.state === "unavailable";
   const progress = app?.buildProgress ?? [];
   const latest = progress.at(-1);
@@ -173,14 +187,18 @@ export function TripAppCard({
   const editorSummary = editing
     ? (editor?.progress.tools.findLast((tool) => tool.state === "running")?.label ??
       "Editing your trip app…")
-    : editor?.state === "failed"
-      ? "App editor needs attention"
-      : editor?.state === "unavailable"
-        ? "App activity unavailable"
-        : "App editing finished";
+    : editor?.state === "loading"
+      ? "Loading editor updates…"
+      : editor?.state === "failed"
+        ? "App editor needs attention"
+        : editor?.state === "unavailable"
+          ? "App activity unavailable"
+          : "App editing finished";
 
-  const summary = editing || editorIssue || !app ? editorSummary : buildSummary;
-  const status = editing ? "building" : editorIssue ? "failed" : (app?.status ?? "ready");
+  const summary = editing || loadingEditor || editorIssue || !app ? editorSummary : buildSummary;
+
+  const status =
+    editing || loadingEditor ? "building" : editorIssue ? "failed" : (app?.status ?? "ready");
 
   if (!app && !editor) return null;
 
