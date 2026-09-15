@@ -9,6 +9,7 @@ import {
   ThreadStore,
   ThreadTailRequest,
 } from "effect-agent/thread-store";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
@@ -293,14 +294,14 @@ describe("live Thread projection and alarm backfill", () => {
   it("runs native work before reporting an unrelated host setup failure", () =>
     withThread(async (thread) => {
       await submit(thread, plannerDefinition);
-      hostMaintenanceControls.set(thread, () => ({
+      hostMaintenanceControls.set(thread, {
         dispatchTimeoutMillis: 1_000,
         drainUntil: () =>
           Effect.fail(
             DurableAlarmError.make({ operation: "test host setup", message: "outbox unavailable" }),
           ),
         pendingDeadline: Effect.succeed(Option.some(0)),
-      }));
+      });
       await expect(alarm(thread)).rejects.toBeDefined();
       expect(await allSettled(thread, namespace)()).toBe(true);
       expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
@@ -323,11 +324,11 @@ describe("live Thread projection and alarm backfill", () => {
         release = resolve;
       });
 
-      hostMaintenanceControls.set(thread, () => ({
+      hostMaintenanceControls.set(thread, {
         dispatchTimeoutMillis: 1_000,
         drainUntil: () => Effect.promise(() => held),
         pendingDeadline: Effect.succeed(Option.some(0)),
-      }));
+      });
       try {
         await expect(alarm(thread)).rejects.toBeDefined();
         expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
@@ -372,11 +373,12 @@ describe("live Thread projection and alarm backfill", () => {
             release: response,
           });
         }
-        hostMaintenanceControls.set(thread, (scheduler) => ({
+        hostMaintenanceControls.set(thread, {
           pendingDeadline: Effect.succeed(held === "host" ? Option.some(0) : Option.none()),
           dispatchTimeoutMillis: 1_000,
           drainUntil: () =>
             Effect.gen(function* () {
+              const scheduler = yield* WakeScheduler;
               const notified = yield* Stream.toPull(scheduler.wakes);
 
               yield* Effect.addFinalizer(() =>
@@ -398,7 +400,7 @@ describe("live Thread projection and alarm backfill", () => {
                 yield* Effect.promise(() => response);
               }
             }),
-        }));
+        });
 
         const running = alarm(thread).then(() => {
           retired = true;

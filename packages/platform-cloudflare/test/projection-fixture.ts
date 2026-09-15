@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import type { Scope } from "effect";
 import * as Agent from "effect-agent/agent";
 import { DurableWorkerBinding } from "effect-agent/agent-registration";
 import type { CanonicalRecordEnvelope } from "effect-agent/records";
@@ -12,7 +13,7 @@ import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
-import { ThreadHostMaintenance } from "../src/Alarm.ts";
+import { ThreadHostMaintenance, type DurableAlarmError } from "../src/Alarm.ts";
 import { DurableObjectContext, ThreadObjectIdentity } from "../src/CloudflareBindings.ts";
 import { TEST_DIGESTS, finalParts, plannerDefinition } from "./fixtures.ts";
 
@@ -32,9 +33,15 @@ export const projectionConstructions = new Map<string, number>();
 export const projectionLookups = new Map<string, Array<number>>();
 export const projectionLiveBatches = new Map<string, Array<number>>();
 
+type HostMaintenance = Context.Service.Shape<typeof ThreadHostMaintenance>;
+
 export const hostMaintenanceControls = new Map<
   string,
-  (wakes: WakeScheduler["Service"]) => Context.Service.Shape<typeof ThreadHostMaintenance>
+  Omit<HostMaintenance, "drainUntil"> & {
+    readonly drainUntil: (
+      ...args: Parameters<HostMaintenance["drainUntil"]>
+    ) => Effect.Effect<void, DurableAlarmError, Scope.Scope | WakeScheduler>;
+  }
 >();
 
 export const hostMaintenanceLayer = Layer.effectContext(
@@ -45,18 +52,16 @@ export const hostMaintenanceLayer = Layer.effectContext(
 
     return Context.make(ThreadHostMaintenance, {
       get dispatchTimeoutMillis() {
-        return hostMaintenanceControls.get(threadId)?.(wakes).dispatchTimeoutMillis ?? 1;
+        return hostMaintenanceControls.get(threadId)?.dispatchTimeoutMillis ?? 1;
       },
       drainUntil: (finished, deadline) =>
         Effect.suspend(
           () =>
-            hostMaintenanceControls.get(threadId)?.(wakes).drainUntil(finished, deadline) ??
-            Effect.void,
-        ),
+            hostMaintenanceControls.get(threadId)?.drainUntil(finished, deadline) ?? Effect.void,
+        ).pipe(Effect.provideService(WakeScheduler, wakes)),
       pendingDeadline: Effect.suspend(
         () =>
-          hostMaintenanceControls.get(threadId)?.(wakes).pendingDeadline ??
-          Effect.succeed(Option.none()),
+          hostMaintenanceControls.get(threadId)?.pendingDeadline ?? Effect.succeed(Option.none()),
       ),
     });
   }),

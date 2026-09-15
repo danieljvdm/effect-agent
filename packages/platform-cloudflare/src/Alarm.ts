@@ -727,9 +727,7 @@ export class ThreadMaintenance extends Context.Service<
         const hostFiber = yield* Effect.forkIn(
           Scope.provide(auxiliaryScope)(
             Effect.gen(function* () {
-              yield* Schema.decodeUnknownEffect(AuxiliaryDispatchMillis)(
-                host.dispatchTimeoutMillis,
-              ).pipe(
+              yield* Schema.decodeEffect(AuxiliaryDispatchMillis)(host.dispatchTimeoutMillis).pipe(
                 Effect.mapError((cause) =>
                   DurableAlarmError.make({
                     operation: "host dispatch allowance",
