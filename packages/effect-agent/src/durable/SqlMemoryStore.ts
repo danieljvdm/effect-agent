@@ -32,7 +32,10 @@ const EncodedMemoryChange = Schema.Struct({
   resultJson: StoredJson,
 });
 
-const equivalentContent = Schema.toEquivalence(MemoryWrite.Wire.members[0].fields.content);
+const equivalentContent = Schema.toEquivalence(
+  Schema.toEncoded(MemoryWrite.Wire.members[0].fields.content),
+);
+
 const equivalentScopes = Schema.toEquivalence(MemoryWrite.Wire.members[0].fields.scopes);
 
 /**
@@ -616,13 +619,14 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
 
           const bytes = utf8ByteLength;
           const identityBytes = bytes(next.key.namespace.address) + bytes(next.key.id);
-          const documentBytes = identityBytes + bytes(documentJson) + 128;
+          const resultBytes = bytes(resultJson);
+          const documentBytes = identityBytes + resultBytes + 128;
 
           const receiptBytes =
             identityBytes +
             bytes(decodedWrite.operationId) +
             bytes(commandJson) +
-            bytes(resultJson) +
+            resultBytes +
             128;
 
           if (Math.max(documentBytes, receiptBytes) > limits.maxRowBytes) {
