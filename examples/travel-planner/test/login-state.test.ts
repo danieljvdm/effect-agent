@@ -32,6 +32,7 @@ const fixture = () => {
   const assign = vi.fn<(url: string) => void>();
   const settledBegin = vi.fn<() => void>();
   const requests: string[] = [];
+  const signInPayloads: Record<string, unknown>[] = [];
   const pendingSessions: Array<() => void> = [];
   const pendingBegins: Array<() => void> = [];
 
@@ -73,12 +74,15 @@ const fixture = () => {
     }
     const { payload } = Schema.decodeSync(envelope)(await request.text());
 
-    if (name === "signIn")
+    if (name === "signIn") {
+      signInPayloads.push(payload);
+
       return success({
-        flowId: payload.flowId,
+        flowId: "fixture-server-flow",
         authorizationUrl: "https://github.com/login/oauth/authorize?state=fixture-state",
         expiresAtMillis: 1_900_000_000_000,
       });
+    }
     if (name === "completeSignIn") {
       if (state.outcome === "rejected") return rejected("OAuthRejected");
       if (state.outcome === "cancelled") return success({ _tag: "Cancelled", returnTarget: "/" });
@@ -146,6 +150,8 @@ const fixture = () => {
     assign,
     settledBegin,
     requests,
+    signInPayloads,
+    storage,
     releaseSession,
     releaseBegin,
     beginPending: () => pendingBegins.length > 0,
@@ -219,6 +225,10 @@ it("keeps GitHub registration in the loading screen while redirecting to its fre
     expect(f.requests.filter((name) => name === "completeSignIn")).toHaveLength(1);
     expect(f.requests.filter((name) => name === "register")).toHaveLength(1);
     expect(f.requests.filter((name) => name === "signIn")).toHaveLength(1);
+    expect(f.signInPayloads).toEqual([{ provider: "github", returnTarget: "/" }]);
+    expect(f.storage.get("elsewhere:github")).toBe(
+      JSON.stringify({ flowId: "fixture-server-flow" }),
+    );
   } finally {
     f.dispose();
   }

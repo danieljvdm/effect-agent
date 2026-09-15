@@ -16,6 +16,15 @@ It uses Cloudflare:
 The app consumes published Effect Agent packages and uses Effect Atom for client state.
 [alchemy.run.ts](alchemy.run.ts) defines the Cloudflare resources and required configuration.
 
+Authentication uses matching versions of `@yielded/auth` and `@yielded/auth-persistence`.
+The persistence package supplies the Drizzle adapters for the app-owned SQLite tables.
+GitHub sign-in creates flow IDs on the server; the browser retains the returned ID for the
+callback. Email verification keys are supplied through `ProofKeys` using `AUTH_PROOF_KEY`.
+
+When upgrading from Auth beta.5 to beta.7, keep the existing database, namespaces, and key IDs.
+Users with an email code requested before the upgrade should start a fresh email flow because
+the proof template identifier changed. Existing accounts and sessions are retained.
+
 The production deployment workflow enables Cloudflare traces after verifying request URL
 query-string redaction, keeping authentication callback parameters out of platform telemetry.
 Direct Alchemy deployments leave traces disabled because its SDK does not yet expose that setting.

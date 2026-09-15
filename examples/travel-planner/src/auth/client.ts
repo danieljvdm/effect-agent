@@ -75,22 +75,20 @@ const PendingGithub = Schema.fromJsonString(Schema.Struct({ flowId: Schema.NonEm
 
 const startGithub = Effect.gen(function* () {
   const registry = yield* AtomRegistry.AtomRegistry;
-  const flowId = yield* id();
-
-  yield* browser(() =>
-    sessionStorage.setItem("elsewhere:github", Schema.encodeSync(PendingGithub)({ flowId })),
-  );
 
   registry.set(auth.signIn, {
-    flowId,
-    commandId: yield* id(),
     provider: "github",
-    callbackId: "github",
     returnTarget: "/",
   });
 
   const started = yield* AtomRegistry.getResult(registry, auth.signIn, { suspendOnWaiting: true });
 
+  yield* browser(() =>
+    sessionStorage.setItem(
+      "elsewhere:github",
+      Schema.encodeSync(PendingGithub)({ flowId: started.flowId }),
+    ),
+  );
   yield* browser(() => location.assign(Redacted.value(started.authorizationUrl)));
 }).pipe(Effect.withSpan("Login.startGithub"));
 

@@ -3,7 +3,7 @@ import {
   requiredEmailSignInConstraints,
   type EmailRegistrationMapping,
   type EmailSignInMapping,
-} from "@yielded/auth/Drizzle";
+} from "@yielded/auth-persistence/drizzle";
 import { EmailCredentialSnapshot } from "@yielded/auth/Email";
 import { TokenDigest } from "@yielded/auth/Schema";
 import { SecurityRevision } from "@yielded/auth/Sessions";

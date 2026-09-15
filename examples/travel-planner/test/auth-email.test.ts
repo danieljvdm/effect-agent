@@ -28,7 +28,7 @@ const send = Effect.gen(function* () {
     secret: Redacted.make("123456"),
     format: "numeric-code",
     expiresAtMillis: DateTime.toEpochMillis(yield* DateTime.now) + 300_000,
-    template: "elsewhere-code",
+    template: "email-code-sign-in",
     locale: "en",
   });
 });

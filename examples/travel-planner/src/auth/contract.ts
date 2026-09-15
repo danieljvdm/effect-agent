@@ -151,7 +151,7 @@ export const LoginApi = AuthContract.make("travel-planner/Auth", {
       requestFields: { requestBinding: "request-binding", credential: "proof-continuation" },
     }),
     signIn: AuthContract.action({
-      payload: OAuth.OAuthSignInBegin,
+      payload: OAuth.OAuthSignInInput,
       success: OAuth.OAuthSignInAuthorization,
       error: Failure,
       mode: "mutation",
