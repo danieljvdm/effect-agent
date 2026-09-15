@@ -10,7 +10,7 @@ import { workerHistory } from "../src/server/worker-history.ts";
 const threadId = Schema.decodeSync(ThreadId)("worker:history");
 
 const record = (sequence: number) =>
-  Schema.decodeUnknownSync(CanonicalRecordEnvelope)({
+  Schema.decodeSync(CanonicalRecordEnvelope)({
     threadId,
     batchId: "batch",
     sequence,
@@ -45,7 +45,7 @@ const fixture = (
     observe: () => Stream.die("Reads cannot observe"),
     inspectTail: () =>
       Effect.succeed(
-        Schema.decodeUnknownSync(ThreadTail)({
+        Schema.decodeSync(ThreadTail)({
           threadId,
           tailSequence,
           tailDigest: "0".repeat(64),
