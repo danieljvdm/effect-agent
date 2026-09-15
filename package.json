@@ -20,7 +20,7 @@
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
-    "check": "vp check && vp run -r --concurrency-limit 1 check && tsc --noEmit -p scripts/tsconfig.json && vp run check:exports && bun scripts/verify-package-purity.ts",
+    "check": "vp check && vp run -r --concurrency-limit 1 check && tsc --noEmit -p scripts/tsconfig.json && vp run check:exports && vp run check:deploy && bun scripts/verify-package-purity.ts",
     "check:exports": "bun scripts/verify-package-exports.ts",
     "test": "vp run -r --parallel --concurrency-limit 4 test",
     "build": "vp run -r build && vp run docs:build && vp run action:build",
@@ -49,11 +49,12 @@
     "@shikijs/vitepress-twoslash": "catalog:",
     "@stylistic/eslint-plugin": "5.10.0",
     "@types/node": "catalog:",
-    "alchemy": "2.0.0-beta.72",
+    "alchemy": "2.0.0-beta.77",
     "effect": "catalog:",
     "effect-agent": "workspace:*",
     "effect-cf": "catalog:",
     "esbuild": "catalog:",
+    "mime": "4.1.0",
     "oxfmt": "0.64.0",
     "oxlint": "1.79.0",
     "typescript": "catalog:",
@@ -134,7 +135,19 @@
     "wrangler": "4.123.0",
     "isomorphic-git": "1.41.9",
     "memfs": "4.71.0",
-    "@alchemy.run/cloudflare-runtime": "2.0.0-beta.72",
+    "@alchemy.run/cloudflare-runtime": "2.0.0-beta.77",
     "jose": "6.2.12"
+  },
+  "patchedDependencies": {
+    "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
+    "@alchemy.run/cloudflare-runtime@2.0.0-beta.77": "patches/@alchemy.run%2Fcloudflare-runtime@2.0.0-beta.77.patch",
+    "@distilled.cloud/core@1.0.0-rc.9": "patches/@distilled.cloud%2Fcore@1.0.0-rc.9.patch",
+    "@distilled.cloud/aws@1.0.0-rc.9": "patches/@distilled.cloud%2Faws@1.0.0-rc.9.patch",
+    "@distilled.cloud/axiom@1.0.0-rc.9": "patches/@distilled.cloud%2Faxiom@1.0.0-rc.9.patch",
+    "@distilled.cloud/cloudflare@1.0.0-rc.9": "patches/@distilled.cloud%2Fcloudflare@1.0.0-rc.9.patch",
+    "@distilled.cloud/fly-io@1.0.0-rc.9": "patches/@distilled.cloud%2Ffly-io@1.0.0-rc.9.patch",
+    "@distilled.cloud/hetzner@1.0.0-rc.9": "patches/@distilled.cloud%2Fhetzner@1.0.0-rc.9.patch",
+    "@distilled.cloud/planetscale@1.0.0-rc.9": "patches/@distilled.cloud%2Fplanetscale@1.0.0-rc.9.patch",
+    "@distilled.cloud/railway@1.0.0-rc.9": "patches/@distilled.cloud%2Frailway@1.0.0-rc.9.patch"
   }
 }

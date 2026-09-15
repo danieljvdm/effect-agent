@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
@@ -299,6 +300,76 @@ const runFixtureCommand = Effect.fn("toolchainTest.runFixtureCommand")(function*
 const manifestDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
   dependencySections.flatMap((section) => Object.keys(manifest[section] ?? {}));
 
+// Execute the trusted workflow itself; isolate artifact reads and GitHub writes.
+const publishBundleReport = Effect.fn("toolchainTest.publishBundleReport")(function* (
+  table: string,
+) {
+  const workflow = yield* readWorkflow(".github/workflows/bundle-comment.yml");
+
+  const script = yield* Schema.decodeUnknownEffect(Schema.String)(
+    workflowStep(workflow, "comment", "Update bundle comparison comment")?.with?.script,
+  );
+
+  const head = "a".repeat(40);
+  const base = "b".repeat(40);
+  const comments: Array<string> = [];
+
+  const files: Record<string, string> = {
+    "bundle-stats/report.md": table,
+    "bundle-stats/report.json": JSON.stringify({ base: { revision: base } }),
+    "bundle-stats/pr-number.txt": "1\n",
+  };
+
+  const execution: Promise<unknown> = runInNewContext(`(async () => { ${script} })()`, {
+    require: (name: string) => {
+      if (name !== "node:fs") throw new Error("Unexpected publisher import");
+
+      return {
+        lstatSync: (file: string) => ({
+          isFile: () => true,
+          size: Buffer.byteLength(files[file]!),
+        }),
+        readFileSync: (file: string) => files[file],
+      };
+    },
+    context: {
+      repo: { owner: "owner", repo: "repository" },
+      payload: {
+        workflow_run: {
+          head_sha: head,
+          head_repository: { id: 1 },
+          html_url: "https://example.test/run",
+        },
+      },
+    },
+    github: {
+      rest: {
+        pulls: {
+          get: async () => ({
+            data: {
+              number: 1,
+              state: "open",
+              head: { sha: head, repo: { id: 1 } },
+              base: { sha: base, repo: { full_name: "owner/repository" } },
+            },
+          }),
+        },
+        issues: {
+          listComments: "comments",
+          createComment: async ({ body }: { body: string }) => {
+            comments.push(body);
+          },
+        },
+      },
+      paginate: async () => [],
+    },
+  });
+
+  const exit = yield* Effect.exit(Effect.promise(() => execution));
+
+  return { comments, exit };
+});
+
 layer(NodeServices.layer)("workspace toolchain", (it) => {
   it.effect(
     "compares built checkouts independently and counts shared and deferred chunks once",
@@ -434,6 +505,25 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(
           second.fixtures.find((fixture) => fixture.name === "agent-root")?.base,
         ).not.toBeNull();
+
+        // Keep the producer and privileged publisher compatible, including new exports.
+        const table = yield* fs.readFileString(path.join(scratch, "report", "report.md"));
+        const published = yield* publishBundleReport(table);
+
+        expect(Exit.isSuccess(published.exit)).toBe(true);
+        expect(published.comments).toHaveLength(1);
+        expect(published.comments[0]).toContain(table.trim());
+        expect(published.comments[0]).toContain("| in-memory-root | initial | n/a |");
+        for (const invalid of [
+          table.replace("in-memory-root", "<script>alert(1)</script>"),
+          table.replace("0.00 kB", "[click](https://example.test)"),
+        ]) {
+          const rejected = yield* publishBundleReport(invalid);
+
+          expect(Exit.isFailure(rejected.exit)).toBe(true);
+          expect(rejected.comments).toEqual([]);
+        }
+
         // A smaller but broken bundle must fail, not publish a successful report.
         yield* fs.writeFileString(smoke, 'throw new Error("broken bundled runtime");');
 

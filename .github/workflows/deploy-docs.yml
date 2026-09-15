@@ -1,6 +1,6 @@
 # Deploys the VitePress docs site to a Cloudflare Worker with Alchemy
 # (alchemy.run.ts, stage `prod`, https://effect-agent.com). Alchemy
-# runs `bun run docs:build` itself, content-hashes the output, and skips the
+# runs `vp run docs:build` itself, content-hashes the output, and skips the
 # deploy when nothing changed; state lives in the account-wide Cloudflare
 # state store, whose credentials the CI run resolves from the account's
 # Secrets Store via CLOUDFLARE_API_TOKEN.
@@ -16,6 +16,9 @@ on:
       - ".github/workflows/deploy-docs.yml"
       - "bun.lock"
       - "package.json"
+      - "vite.config.ts"
+      - "bunfig.toml"
+      - "patches/**"
   workflow_dispatch:
 
 permissions:
@@ -41,16 +44,19 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - name: Set up Vite+
+        uses: voidzero-dev/setup-vp@49c3e4e92c52e7f8392712a9267bbe71c5ab30e5 # v1.19.0
         with:
-          bun-version: 1.4.0
+          version: "0.3.0"
+          node-version: "24"
+          run-install: false
+          cache: true
 
       - name: Install dependencies (frozen, scripts suppressed)
-        run: bun install --frozen-lockfile --ignore-scripts
+        run: vp install --frozen-lockfile --ignore-scripts
 
       - name: Deploy with Alchemy
-        run: bun alchemy deploy --stage prod --yes
+        run: vp run docs:deploy --yes
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

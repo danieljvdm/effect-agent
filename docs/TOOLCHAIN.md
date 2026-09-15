@@ -13,15 +13,16 @@ The travel planner is a release consumer: its Effect Agent dependencies and comp
 use local source; registry dependencies, including transitive ones, stay on published packages.
 Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 
-| Tool                                                    | Repository version   |
-| ------------------------------------------------------- | -------------------- |
-| Bun                                                     | `1.4.0`              |
-| Vite+                                                   | `0.3.0`              |
-| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.115`       |
-| `effect-cf`                                             | `0.43.0`             |
-| TypeScript                                              | `7.0.2`              |
-| `@effect/tsgo`                                          | `0.45.0`             |
-| Node.js                                                 | `22.18+` or `24.11+` |
+| Tool                                                    | Repository version                                  |
+| ------------------------------------------------------- | --------------------------------------------------- |
+| Bun                                                     | `1.4.0`                                             |
+| Vite+                                                   | `0.3.0`                                             |
+| Alchemy and its Cloudflare runtime                      | `2.0.0-beta.77` with upstream compatibility patches |
+| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.115`                                      |
+| `effect-cf`                                             | `0.43.0`                                            |
+| TypeScript                                              | `7.0.2`                                             |
+| `@effect/tsgo`                                          | `0.45.0`                                            |
+| Node.js                                                 | `22.18+` or `24.11+`                                |
 
 Public packages require `effect@^4.0.0-rc.115` as a peer. The exact catalog pin supplies the
 development version. Raise the peer minimum when code needs a newer API.
@@ -34,14 +35,22 @@ rc.115 for `effect-cf`. Consumers provide the shared runtime.
 
 Root overrides keep Effect, its Node/browser platforms, shared SQL adapters, and test packages
 on the catalog versions, including dependencies of published consumers.
-The docs deployment runs Alchemy under Bun, so the root also installs Alchemy's
-optional `@effect/platform-bun` peer at the shared Effect version.
+The root also installs Alchemy's optional `@effect/platform-bun` peer at the shared Effect
+version so its Bun entry points remain available.
 Vite+ supplies Vitest except in the two Cloudflare packages, whose Workers pool requires a
 direct catalog-pinned Vitest dependency and a Vite task. Run those tasks through `vp run`.
 Operational harnesses under `tooling/*` also use Vite tasks for Miniflare tests.
 
 VitePress uses its own Vite dependency. Keep the root Vite+ core alias required by Vite+;
 do not add a global Vite override.
+
+Alchemy and its Cloudflare runtime advance together. Their published beta.77 packages and
+Distilled rc.9 clients still use Effect APIs renamed in rc.113. The version-specific Bun
+patches backport [Alchemy's compatibility fix](https://github.com/alchemy-run/alchemy/pull/1562)
+and [Distilled's matching fix](https://github.com/alchemy-run/distilled/pull/575), including the
+published JavaScript entry points. The root declares `mime` because the Cloudflare runtime
+imports it without declaring the dependency. Keep these corrections until a published upgrade
+includes them; verify that upgrade with a frozen install and `vp run check:deploy`.
 
 ## Current workspace
 
@@ -98,6 +107,8 @@ Run `vp help` or `vp <command> --help` for options.
 | `vp run docs:dev`                                    | Docs development server                               |
 | `vp run docs:build`                                  | Build docs and check links                            |
 | `vp run docs:preview`                                | Preview built docs                                    |
+| `vp run docs:deploy --yes`                           | Deploy docs to the existing production stack          |
+| `vp run check:deploy`                                | Load both deployment CLIs without deploying           |
 | `vp run -F @effect-agent/example-travel-planner dev` | Cloudflare travel planner                             |
 | `vp env doctor`                                      | Diagnose toolchain setup                              |
 
@@ -441,6 +452,11 @@ observe and must accompany claims about the exact candidate and configuration it
 ## CI and hooks
 
 PR CI runs static checks, tests, and builds, then reports the required `ready` result.
+Static checks include `check:deploy`, which invokes both deployment entry points with `--help`
+and imports both stack files using a temporary Alchemy profile. This catches missing dependencies
+and incompatible Effect APIs without credentials or infrastructure changes; it does not verify
+Cloudflare credentials or remote deployment. Deployment tasks disable Vite Task caching so every
+invocation runs and receives its deployment environment.
 Cloudflare storage, Cloudflare platform, Node platform, and testing have dedicated test runners.
 The remaining-workspace job includes every other package and runs one package task at a time.
 

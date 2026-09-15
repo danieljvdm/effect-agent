@@ -8,6 +8,7 @@ on:
       - ".github/workflows/deploy-travel-planner.yml"
       - "bun.lock"
       - "package.json"
+      - "patches/**"
       - "bunfig.toml"
       - "tsconfig.base.json"
   workflow_dispatch:

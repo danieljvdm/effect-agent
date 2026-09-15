@@ -3,8 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vp exec alchemy dev alchemy.run.ts",
-    "deploy": "vp exec alchemy deploy alchemy.run.ts --stage production"
+    "dev": "vp exec alchemy dev alchemy.run.ts"
   },
   "dependencies": {
     "@base-ui/react": "catalog:",

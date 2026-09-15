@@ -1,0 +1,38 @@
+diff --git a/lib/credentials.js b/lib/credentials.js
+index 41902261cfd447cbe3887a8d2c2596f2da3c557c..6e2c030bacba7bcbf8e85781ce0d3920245734ec 100644
+--- a/lib/credentials.js
++++ b/lib/credentials.js
+@@ -91,10 +91,10 @@ const fromConfigError = (message) => () => new ConfigError({
+     message,
+ });
+ const envConfig = Config.all({
+-    apiToken: Config.option(Config.string("CLOUDFLARE_API_TOKEN")),
+-    apiKey: Config.option(Config.string("CLOUDFLARE_API_KEY")),
+-    email: Config.option(Config.string("CLOUDFLARE_EMAIL")),
+-    apiBaseUrl: Config.string("CLOUDFLARE_API_BASE_URL").pipe(Config.withDefault(DEFAULT_API_BASE_URL)),
++    apiToken: Config.option(Config.String("CLOUDFLARE_API_TOKEN")),
++    apiKey: Config.option(Config.String("CLOUDFLARE_API_KEY")),
++    email: Config.option(Config.String("CLOUDFLARE_EMAIL")),
++    apiBaseUrl: Config.String("CLOUDFLARE_API_BASE_URL").pipe(Config.withDefault(DEFAULT_API_BASE_URL)),
+ });
+ export const resolveFromEnv = Effect.gen(function* () {
+     const config = yield* envConfig.pipe(Effect.mapError(fromConfigError("Failed to load Cloudflare credentials from config")));
+diff --git a/src/credentials.ts b/src/credentials.ts
+index 28cc17bb510c7fd7505f698356608e426f0d6491..1892c35162d57a18b20830ee06805c7efdd6c14f 100644
+--- a/src/credentials.ts
++++ b/src/credentials.ts
+@@ -205,10 +205,10 @@ const fromConfigError = (message: string) => () =>
+   });
+ 
+ const envConfig = Config.all({
+-  apiToken: Config.option(Config.string("CLOUDFLARE_API_TOKEN")),
+-  apiKey: Config.option(Config.string("CLOUDFLARE_API_KEY")),
+-  email: Config.option(Config.string("CLOUDFLARE_EMAIL")),
+-  apiBaseUrl: Config.string("CLOUDFLARE_API_BASE_URL").pipe(
++  apiToken: Config.option(Config.String("CLOUDFLARE_API_TOKEN")),
++  apiKey: Config.option(Config.String("CLOUDFLARE_API_KEY")),
++  email: Config.option(Config.String("CLOUDFLARE_EMAIL")),
++  apiBaseUrl: Config.String("CLOUDFLARE_API_BASE_URL").pipe(
+     Config.withDefault(DEFAULT_API_BASE_URL),
+   ),
+ });
