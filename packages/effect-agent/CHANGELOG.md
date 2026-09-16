@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.97
+
+### Patch Changes
+
+- [#504](https://github.com/danieljvdm/effect-agent/pull/504) [`385f119`](https://github.com/danieljvdm/effect-agent/commit/385f1197eb41e8114c5daf5b6763824450095cf5) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resume retained requests across compatible input changes and widened JSON Schema object declarations using their original payloads and receipts. Keep changed semantics and incompatible operations pending until compatible code is available.
+
 ## 0.1.0-beta.96
 
 ### Minor Changes

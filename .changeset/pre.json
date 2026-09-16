@@ -153,6 +153,7 @@
     "observed-browser-actions",
     "older-context-matches",
     "optional-checkpoint-metadata",
+    "optional-input-continuity",
     "optional-semantic-memory",
     "original-provider-tool-schemas",
     "owned-progress-budget",
