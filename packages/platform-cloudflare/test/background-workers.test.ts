@@ -5,6 +5,7 @@ import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import type { SubmissionId } from "effect-agent/identifiers";
 import { MessageDeliveryStore } from "effect-agent/message-delivery";
 import { MessageAdmission } from "effect-agent/messaging";
+import type { Receipt } from "effect-agent/receipt";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentHost } from "effect-agent/subagent-host";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
@@ -47,6 +48,10 @@ import {
   armedEvictionsRemaining,
 } from "./fixtures.ts";
 import { allSettled, drainAlarmsUntil, runClient, stubFor, readCanonical } from "./harness.ts";
+import {
+  armWorkerInputContention,
+  workerInputContentions,
+} from "./helpers/worker-input-contention.ts";
 import { droppedMessageWakes } from "./message-delivery-fixture.ts";
 
 const evict = async (thread: string) => {
@@ -792,8 +797,57 @@ for (const mode of ["custom", "standard"] as const)
   }, 20_000);
 
 // Regression: https://github.com/danieljvdm/effect-agent/pull/358
-it("funds native persona Runs independently while joins, eviction and scouts retain one allowance", async () => {
+it("funds native persona Runs independently while joins, eviction and scouts retain one allowance", async ({
+  onTestFinished,
+  signal,
+}) => {
   const source = `background-cf-independent-${crypto.randomUUID()}`;
+  let firstAlarm: Promise<boolean> | undefined;
+  let siblingAlarm: Promise<boolean> | undefined;
+  let sourceAlarm: Promise<boolean> | undefined;
+  let joining: Promise<unknown> | undefined;
+  let arming: Promise<void> | undefined;
+  let controlArmed = false;
+  let controlledFollowUpInvocations = 0;
+  let cleanupPromise: Promise<void> | undefined;
+
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
+      for (const round of [1, 2, 3, 4]) independentBudgetGates.add(`${source}:task:${round}`);
+      try {
+        await arming;
+      } finally {
+        try {
+          if (controlArmed)
+            await runInDurableObject(stubFor(source), () => {
+              const control = workerInputContentions.get(source);
+
+              control?.releaseCaller();
+              control?.releaseAdmission();
+            });
+        } finally {
+          const outcomes = await Promise.allSettled([
+            joining,
+            sourceAlarm,
+            firstAlarm,
+            siblingAlarm,
+          ]);
+
+          workerInputContentions.delete(source);
+          independentBudgetGrants.delete(source);
+          independentBudgetAuthorityCalls.delete(source);
+          for (const round of [1, 2, 3, 4])
+            independentBudgetGates.delete(`${source}:task:${round}`);
+          backgroundWakeDropPrefixes.delete("worker:");
+          droppedMessageWakes.delete(source);
+          const rejected = outcomes.find((outcome) => outcome.status === "rejected");
+
+          if (rejected?.status === "rejected") throw rejected.reason;
+        }
+      }
+    })());
+
+  onTestFinished(cleanup);
 
   await runClient(
     Effect.flatMap(CloudflareThreadClient, (client) =>
@@ -848,9 +902,12 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
   );
 
   droppedMessageWakes.add(sibling.worker.threadId);
+  let primaryFailure: unknown;
+
   try {
     expect(await launch()).toEqual(started);
-    const firstAlarm = runDurableObjectAlarm(stubFor(started.worker.threadId)).catch(() => false);
+    signal.throwIfAborted();
+    firstAlarm = runDurableObjectAlarm(stubFor(started.worker.threadId)).catch(() => false);
 
     await expect
       .poll(async () =>
@@ -859,7 +916,8 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
         ),
       )
       .toBe(true);
-    const siblingAlarm = runDurableObjectAlarm(stubFor(sibling.worker.threadId)).catch(() => false);
+    signal.throwIfAborted();
+    siblingAlarm = runDurableObjectAlarm(stubFor(sibling.worker.threadId)).catch(() => false);
 
     await expect
       .poll(async () =>
@@ -889,14 +947,149 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
     );
     await drainAlarmsUntil(source, allSettled(source));
 
-    const joined = await withOwner(source, (host) =>
-      Subagent.followUp(
-        independentBudgetWorkers,
-        started.worker,
-        { question: "continue the active task" },
-        { idempotencyKey: decodeIdempotencyKey("joined") },
-      ).pipe(Effect.provideService(SubagentHost, host)),
+    const sourceDeliveries = () =>
+      runInDurableObject(stubFor(source), (instance) =>
+        instance[DurableObject.RunSymbol](
+          Effect.flatMap(MessageDeliveryStore, (store) =>
+            store.list({ ownerThreadId: decodeThreadId(source), limit: 100 }),
+          ),
+        ),
+      );
+
+    // Older inputs can only be observed or remain refused; only the new input may be admitted.
+    await drainAlarmsUntil(source, async () => {
+      const rows = await sourceDeliveries();
+
+      expect(rows.next).toBeNull();
+
+      return rows.items.every((row) => row.receipt !== null || row.status === "refused");
+    });
+
+    // The original caller loses the new delivery claim to the real source alarm.
+    // Regression: https://github.com/danieljvdm/effect-agent/commit/cb1d297d3464850b5e4645a0d3b3a5062a1ba71b
+    signal.throwIfAborted();
+    controlArmed = true;
+    arming = runInDurableObject(stubFor(source), () => armWorkerInputContention(source));
+    void arming.catch(() => undefined);
+    await arming;
+    signal.throwIfAborted();
+
+    const invokeFollowUp = (parameters: { question: string }, key: string, controlled = false) =>
+      withOwner(source, (host) =>
+        Effect.gen(function* () {
+          if (controlled) {
+            controlledFollowUpInvocations++;
+            workerInputContentions.get(source)!.callerFiber = yield* Effect.fiberId;
+          }
+
+          return yield* Subagent.followUp(independentBudgetWorkers, started.worker, parameters, {
+            idempotencyKey: decodeIdempotencyKey(key),
+          }).pipe(
+            Effect.provideService(SubagentHost, host),
+            Effect.catchTag("WorkerError", (error) =>
+              error.operation === "followUp" && error.reason === "delivery-pending"
+                ? Effect.succeed(undefined)
+                : Effect.fail(error),
+            ),
+          );
+        }),
+      );
+
+    const retainedInput = async (parameters: { question: string }) => {
+      const rows = await sourceDeliveries();
+
+      expect(rows.next).toBeNull();
+
+      const matching = rows.items.filter(
+        (row) =>
+          row.envelope.threadId === started.worker.threadId &&
+          JSON.stringify(row.envelope.workerAdmission?.parameters) === JSON.stringify(parameters),
+      );
+
+      expect(matching).toHaveLength(1);
+      const row = matching[0]!;
+
+      expect(row.envelope.input).toEqual(parameters);
+      expect(row.envelope.workerAdmission?.origin.worker).toEqual(started.worker);
+      expect(row.status).not.toBe("refused");
+
+      return row;
+    };
+
+    const acceptFollowUp = async (
+      receipt: Receipt | undefined,
+      parameters: { question: string },
+    ) => {
+      signal.throwIfAborted();
+      if (receipt !== undefined) return receipt;
+      // delivery-pending promises retention; the existing alarm owns acceptance of this input.
+      const retained = await retainedInput(parameters);
+
+      await drainAlarmsUntil(source, async () => {
+        const current = await retainedInput(parameters);
+
+        expect(current.key).toEqual(retained.key);
+
+        return current.receipt !== null;
+      });
+      const accepted = await retainedInput(parameters);
+
+      expect(accepted.key).toEqual(retained.key);
+      expect(accepted.receipt?.threadId).toBe(started.worker.threadId);
+
+      return accepted.receipt!;
+    };
+
+    const parameters = { question: "continue the active task" };
+    const originalFollowUp = invokeFollowUp(parameters, "joined", true);
+
+    joining = originalFollowUp;
+    void originalFollowUp.catch(() => undefined);
+    await expect
+      .poll(() =>
+        runInDurableObject(stubFor(source), () => workerInputContentions.get(source)?.paused),
+      )
+      .toBe(true);
+    const retained = await retainedInput(parameters);
+
+    expect(retained.receipt).toBeNull();
+    signal.throwIfAborted();
+    sourceAlarm = runDurableObjectAlarm(stubFor(source));
+    void sourceAlarm.catch(() => undefined);
+    await expect
+      .poll(() =>
+        runInDurableObject(stubFor(source), () => workerInputContentions.get(source)?.admitted),
+      )
+      .toBe(true);
+    const claimed = await retainedInput(parameters);
+
+    expect(claimed.key).toEqual(retained.key);
+    expect(claimed.receipt).toBeNull();
+    expect(claimed.leaseUntilMillis).not.toBeNull();
+    await runInDurableObject(stubFor(source), () =>
+      workerInputContentions.get(source)?.releaseCaller(),
     );
+    const original = await originalFollowUp;
+
+    expect(original).toBeUndefined();
+    await runInDurableObject(stubFor(source), () => {
+      workerInputContentions.get(source)?.releaseAdmission();
+    });
+    await sourceAlarm;
+    const accepted = acceptFollowUp(original, parameters);
+
+    joining = accepted;
+    const joined = await accepted;
+
+    expect((await retainedInput(parameters)).key).toEqual(retained.key);
+    expect(
+      await runInDurableObject(stubFor(source), () => {
+        const control = workerInputContentions.get(source);
+
+        return { acquired: control?.acquired, released: control?.released };
+      }),
+    ).toEqual({ acquired: 1, released: 1 });
+    expect(controlledFollowUpInvocations).toBe(1);
 
     armRuntimeEviction(started.worker.threadId, "turn:after-response-append");
     independentBudgetGates.add(`${source}:task:1`);
@@ -904,6 +1097,14 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
     await finish();
     expect(armedEvictionsRemaining(started.worker.threadId)).toBe(0);
     const firstLog = await readCanonical(started.worker.threadId);
+
+    expect(
+      firstLog.filter(
+        ({ record }) =>
+          record.payload._tag === "UserInputRecorded" &&
+          record.payload.submissionId === joined.submissionId,
+      ),
+    ).toHaveLength(1);
 
     const starts = firstLog.flatMap(({ record }) =>
       record.payload._tag === "RunStarted" ? [record.payload] : [],
@@ -920,18 +1121,20 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
     expect(settled.map((row) => row.outcome)).toEqual(["completed", "completed"]);
     expect(settled.map((row) => row.submissionId)).toContain(joined.submissionId);
     for (const round of [2, 3]) {
+      signal.throwIfAborted();
       await evict(source);
       await evict(started.worker.threadId);
       independentBudgetGates.add(`${source}:task:${round}`);
 
-      const next = await withOwner(source, (host) =>
-        Subagent.followUp(
-          independentBudgetWorkers,
-          started.worker,
-          { question: `${source}:task:${round}` },
-          { idempotencyKey: decodeIdempotencyKey(`later-${round}`) },
-        ).pipe(Effect.provideService(SubagentHost, host)),
+      signal.throwIfAborted();
+      const parameters = { question: `${source}:task:${round}` };
+
+      const nextInput = invokeFollowUp(parameters, `later-${round}`).then((receipt) =>
+        acceptFollowUp(receipt, parameters),
       );
+
+      joining = nextInput;
+      const next = await nextInput;
 
       expect(next.threadId).toBe(started.worker.threadId);
       expect(next.submissionId).not.toBe(started.receipt.submissionId);
@@ -1007,15 +1210,19 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
     expect(
       rootLog.filter(({ record }) => record.payload._tag === "SubmissionSettled"),
     ).toHaveLength(2);
+  } catch (failure) {
+    primaryFailure = failure;
   } finally {
-    independentBudgetGrants.delete(source);
-    independentBudgetAuthorityCalls.delete(source);
-    for (const round of [1, 2, 3, 4]) independentBudgetGates.delete(`${source}:task:${round}`);
-    droppedMessageWakes.delete(sibling.worker.threadId);
-    backgroundWakeDropPrefixes.delete("worker:");
-    droppedMessageWakes.delete(source);
-    droppedMessageWakes.delete(started.worker.threadId);
+    try {
+      await cleanup();
+    } catch (failure) {
+      primaryFailure ??= failure;
+    } finally {
+      droppedMessageWakes.delete(sibling.worker.threadId);
+      droppedMessageWakes.delete(started.worker.threadId);
+    }
   }
+  if (primaryFailure !== undefined) throw primaryFailure;
 }, 30_000);
 
 // Regression: https://github.com/danieljvdm/effect-agent/pull/358

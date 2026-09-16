@@ -11,6 +11,7 @@ import { ThreadObjectIdentity } from "../src/CloudflareBindings.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import { threadMessageDeliveryLayer } from "../src/internal/message-delivery.ts";
 import { cloudflarePreparedInputAdmissionLayer } from "../src/internal/prepared-admission.ts";
+import { observeWorkerInputDelivery } from "./helpers/worker-input-contention.ts";
 
 export const messageClaimDelays = new Map<
   string,
@@ -116,6 +117,8 @@ export const messageDeliveryFaultLayer = Layer.effectContext(
       hit: (point) =>
         Effect.gen(function* () {
           const thread = state.raw.id.name ?? "";
+
+          yield* observeWorkerInputDelivery(thread, point);
 
           if (point === "message-delivery:admission:after" && messageInterruptions.delete(thread)) {
             return yield* Effect.interrupt;

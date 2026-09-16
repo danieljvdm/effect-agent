@@ -37,6 +37,7 @@ import {
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { layerFromBindings } from "../src/internal/layers.ts";
+import { pauseWorkerInputInsertion } from "./helpers/worker-input-contention.ts";
 
 /**
  * Workerd-safe eviction-harness fixtures (plan §3, §4 WP3). The vitest pool runs test files
@@ -246,6 +247,7 @@ export const maintenanceRaceFailpoint =
       const thread = ctx.id.name;
 
       if (thread === undefined) return;
+      yield* pauseWorkerInputInsertion(thread, location);
       const queue = maintenancePauses.get(thread);
 
       if (queue?.[0] !== location) return;
