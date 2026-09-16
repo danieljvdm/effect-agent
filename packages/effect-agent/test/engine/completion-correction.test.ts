@@ -15,7 +15,7 @@ import * as Agent from "effect-agent/agent";
 import { type AgentPolicyInput } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import { IdGenerator } from "effect-agent/id-generator";
-import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
+import { RunId, ThreadId, ToolCallId, TurnId } from "effect-agent/identifiers";
 import { type RunEvent } from "effect-agent/run-event";
 import { RunContextPreparationPassthrough, type RunUsageDelta } from "effect-agent/run-options";
 import { ThreadHistory } from "effect-agent/thread-history";
@@ -422,6 +422,9 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer, RunContextPreparationPass
                   : {
                       resumeUsage,
                       resume: {
+                        ...(mode === "settled"
+                          ? { settledCompletion: ToolCallId.make("final") }
+                          : {}),
                         turn: 1,
                         turnId: TurnId.make("resumed-provider"),
                         calls: [

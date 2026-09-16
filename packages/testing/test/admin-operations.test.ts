@@ -662,66 +662,64 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       }),
   );
 
-  it.effect("retry re-drives exactly one deferred decision with the RepairAnnotated audit", () =>
-    Effect.gen(function* () {
-      yield* resetAuthorizer;
-      const runtime = yield* DurableAgentRuntime;
-      const ledger = yield* SubmissionLedger;
-      const thread = "thread-admin-retry";
-      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"done"}'));
-      const agent = Agent.withModel(plainDefinition, scripted.model);
+  it.effect(
+    "retry materializes admitted work without appending an ownership-free repair annotation",
+    () =>
+      Effect.gen(function* () {
+        yield* resetAuthorizer;
+        const runtime = yield* DurableAgentRuntime;
+        const ledger = yield* SubmissionLedger;
+        const thread = "thread-admin-retry";
+        const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"done"}'));
+        const agent = Agent.withModel(plainDefinition, scripted.model);
 
-      // Crash between admission and materialization: the lane is admitted, nothing more.
-      yield* armFailpoint("submit:after-admit");
+        // Crash between admission and materialization: the lane is admitted, nothing more.
+        yield* armFailpoint("submit:after-admit");
 
-      const killed = yield* Effect.exit(
-        runtime.submit(agent, { question: "answer" }, submitOptions(thread, "retry-1")),
-      );
+        const killed = yield* Effect.exit(
+          runtime.submit(agent, { question: "answer" }, submitOptions(thread, "retry-1")),
+        );
 
-      expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-      yield* clearFailpoint;
+        expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
 
-      const row = yield* ledger.lookup(
-        SubmissionLookupByKey.make({
-          threadId: decodeThreadId(thread),
-          principal: PRINCIPAL,
-          idempotencyKey: decodeIdempotencyKey("retry-1"),
-        }),
-      );
+        const row = yield* ledger.lookup(
+          SubmissionLookupByKey.make({
+            threadId: decodeThreadId(thread),
+            principal: PRINCIPAL,
+            idempotencyKey: decodeIdempotencyKey("retry-1"),
+          }),
+        );
 
-      expect(Option.isSome(row)).toBe(true);
-      if (Option.isNone(row)) throw new Error("Expected the admitted Submission");
-      expect(row.value.state).toBe("admitted");
+        expect(Option.isSome(row)).toBe(true);
+        if (Option.isNone(row)) throw new Error("Expected the admitted Submission");
+        expect(row.value.state).toBe("admitted");
 
-      const report = yield* runtime.retry(
-        RetryCommand.make({
-          submissionId: row.value.submissionId,
-          author: "operator",
-          reason: "finish the interrupted admission",
-        }),
-      );
+        const report = yield* runtime.retry(
+          RetryCommand.make({
+            submissionId: row.value.submissionId,
+            author: "operator",
+            reason: "finish the interrupted admission",
+          }),
+        );
 
-      expect(report.decision._tag).toBe("CompleteMaterialization");
-      expect(report.disposition).toBe("repaired");
+        expect(report.decision._tag).toBe("CompleteMaterialization");
+        expect(report.disposition).toBe("repaired");
 
-      // DUR-013: the executed repair carries its deterministic RepairAnnotated audit record.
-      const records = yield* readLog(thread);
+        // Materialization does not acquire a Thread owner, so its repair must not append to a
+        // canonical tail that another Run may own.
+        const records = yield* readLog(thread);
 
-      const audit = records.find(
-        (envelope) =>
-          envelope.record.recordId === `repair:${row.value.submissionId}:CompleteMaterialization`,
-      )?.record.payload;
+        expect(records.map(({ record }) => record.payload._tag)).toEqual(["ThreadCreated"]);
+        expect(
+          yield* ledger.lookup(SubmissionLookupById.make({ submissionId: row.value.submissionId })),
+        ).toMatchObject({ value: { state: "ready" } });
 
-      expect(audit?._tag).toBe("RepairAnnotated");
-      if (audit?._tag === "RepairAnnotated") {
-        expect(audit.reason).toBe("recovery:CompleteMaterialization");
-      }
+        // The repaired lane finishes normally.
+        const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
 
-      // The repaired lane finishes normally.
-      const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
-
-      expect(settlements[0]?.outcome).toBe("completed");
-    }),
+        expect(settlements[0]?.outcome).toBe("completed");
+      }),
   );
 
   it.effect("retry refuses typed for settled, unknown-blocked, and approval-blocked lanes", () =>

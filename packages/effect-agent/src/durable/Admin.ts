@@ -1,7 +1,12 @@
-import { DateTime, Schema } from "effect";
+import { DateTime, Effect, Schema } from "effect";
 
 import { ThreadId, SubmissionId, ToolCallId } from "../core/Identifiers.ts";
-import { CanonicalSequence, SettlementOutcome, ToolCallUnknown } from "./Records.ts";
+import {
+  CanonicalSequence,
+  SettlementOutcome,
+  ToolCallPrepared,
+  ToolCallUnknown,
+} from "./Records.ts";
 import {
   OpenDelegationCallEvidence,
   OpenToolCallEvidence,
@@ -62,7 +67,7 @@ export class ExplainedSubmission extends Schema.Class<ExplainedSubmission>(
   parentLinkage: Schema.optionalKey(ParentLinkage),
 }) {}
 
-/** One durable Unknown Outcome and whether a covering resolution intent exists (DUR-017). */
+/** One durable Unknown Outcome and whether its result is canonical (DUR-017). */
 export class ExplainedUnknownCall extends Schema.Class<ExplainedUnknownCall>(
   "@effect-agent/thread/ExplainedUnknownCall",
 )({
@@ -70,7 +75,7 @@ export class ExplainedUnknownCall extends Schema.Class<ExplainedUnknownCall>(
   toolName: ToolCallUnknown.fields.toolName,
   reason: ToolCallUnknown.fields.reason,
   recordedAt: Schema.DateTimeUtcFromString,
-  /** A durable `resolveUnknown` intent covers this call. */
+  /** A real canonical ToolCallSettled closes this call; an intent alone is not an outcome. */
   resolved: Schema.Boolean,
 }) {}
 
@@ -88,6 +93,10 @@ export class ExplainedEvidence extends Schema.Class<ExplainedEvidence>(
   recordedSettlementOutcome: Schema.optionalKey(SettlementOutcome),
   /** Prepared ordinary Tool Calls without a canonical outcome (DUR-009). */
   openToolCalls: Schema.Array(OpenToolCallEvidence),
+  /** Original prepared operation identities, arguments and recovery contracts; settled calls are excluded. */
+  pendingOperations: Schema.Array(ToolCallPrepared).pipe(
+    Schema.withConstructorDefault(Effect.succeed([])),
+  ),
   /** Delegation Tool Calls with an open parent-side obligation. */
   openDelegationCalls: Schema.Array(OpenDelegationCallEvidence),
   /** Canonically requested approvals without a canonical decision. */
@@ -158,15 +167,15 @@ export const RECOVERY_DECISION_MEANINGS: Readonly<Record<RecoveryDecision["_tag"
   MarkUnknown:
     "Prepared ordinary Tool Calls have no canonical outcome: recovery reconciles each open call and marks the remainder Unknown — never an automatic replay (DUR-009/DUR-017).",
   ResumePendingToolBatch:
-    "A committed tool-declaring response has zero prepared and zero settled records: a claiming worker resumes the declared batch without model re-invocation and without Unknown (durability §15).",
+    "A committed tool-declaring response has zero prepared and zero settled records: a claiming worker checks unfinished operation contracts and resumes the declared batch without model re-invocation (durability §15).",
   AwaitApprovalDecision:
     "Canonically requested approvals lack decisions: the lane waits durably for the authorized resolveApproval path (recovery repairs a lost suspend transition from history).",
   ResumeSuspended:
     "Every pending approval has a durable decision: a claiming worker resumes the declared batch, appending the canonical ToolApprovalDecided records first.",
   AwaitUnknownResolution:
-    "Unknown Outcomes lack covering resolutions: the lane stays blocked awaiting the authorized DUR-017 resolveUnknown path; the obligation stays visible, nothing replays.",
+    "Unknown Outcomes lack covering resolutions: this Submission stays parked awaiting the authorized DUR-017 resolveUnknown path; later eligible input may run, and the original obligation stays visible.",
   ApplyUnknownResolutions:
-    "Durable resolution intents cover every open call: recovery applies them canonically and reopens the lane.",
+    "Durable resolution intents cover every open call: recovery wakes the original Submission when required retry contracts are supported; its next claim applies canonical outcomes.",
   RevertJoining:
     "The Submission is joining without a canonical input record: recovery reverts it to ready — the input was never consumed and will be delivered exactly once later (DUR-016).",
   RepairJoinMarker:
@@ -462,8 +471,8 @@ export const obligationSeverityOf = (
 /**
  * The mandatory-audit retry command (SEC-011): `author`/`reason` carry the same bounds as the
  * canonical abort command so every mutating administrative operation stays attributable. The
- * executed repair itself appends the deterministic `RepairAnnotated` audit record (DUR-013) —
- * retry adds no new canonical record type.
+ * operator and decision are logged. A repair with a claim also appends a best-effort
+ * `RepairAnnotated` attempt using that claim's epoch; state-only repairs do not append audits.
  */
 export class RetryCommand extends Schema.Class<RetryCommand>("@effect-agent/thread/RetryCommand")({
   submissionId: SubmissionId,
@@ -475,7 +484,7 @@ export class RetryCommand extends Schema.Class<RetryCommand>("@effect-agent/thre
 export const RetryRefusalReason = Schema.Literals([
   /** The Submission is settled; terminal outcomes are never revisited (DUR-002). */
   "settled",
-  /** The lane is durably blocked on Unknown Outcomes; use `resolveUnknown` (DUR-017). */
+  /** The Submission is parked on Unknown Outcomes; use `resolveUnknown` (DUR-017). */
   "await-unknown-resolution",
   /** The lane is durably waiting for approval decisions; use `resolveApproval`. */
   "await-approval-decision",
@@ -484,7 +493,7 @@ export const RetryRefusalReason = Schema.Literals([
 export type RetryRefusalReason = typeof RetryRefusalReason.Type;
 
 /**
- * Typed refusal of `retry` (plan §3): lanes blocked on `AwaitUnknownResolution` or
+ * Typed refusal of `retry` (plan §3): Submissions waiting on `AwaitUnknownResolution` or
  * `AwaitApprovalDecision` have their own authorized operations, and settled work is never
  * re-driven. The refusal names the classifier decision so the operator sees WHY.
  */

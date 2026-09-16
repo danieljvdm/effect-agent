@@ -10,6 +10,7 @@ import {
   type ProducerId,
   type RecordEnvelope,
 } from "./Records.ts";
+import { runIdForSubmission } from "./RunJournal.ts";
 import {
   submissionInputRecordId,
   submissionSettlementRecordId,
@@ -110,7 +111,9 @@ const batchRunsOf = (records: ReadonlyArray<CanonicalRecordEnvelope>): Array<Bat
  * 4. `digest-chain` — the tail digest recomputes from `EMPTY_TAIL_DIGEST` through every batch
  *    (requires the per-batch producer directory; skipped honestly otherwise).
  * 5. `fifo-input-order` / `fifo-settlement-order` — canonical input and settlement records
- *    follow the admitted queue order (DUR-004). Aborted settlements of never-run work (no
+ *    follow the admitted queue order (DUR-004), except a later input may settle before a Run
+ *    with canonically unresolved unknown calls when that input became active. Resolving those
+ *    calls later does not revoke the later Run's ownership. Aborted settlements of never-run work (no
  *    canonical `input:{sid}` record) are exempt from the settlement comparison: P7 §7(c)
  *    settles them immediately without waiting for the head, and DUR-004 bounds execution
  *    order, which never-run work has none of.
@@ -279,14 +282,65 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
   // 5b. fifo-settlement-order — P7 §7(c) exemption: an ABORTED settlement for never-run work
   // (no canonical `input:{sid}` record) settles immediately by design, without waiting to
   // head the lane, so it is excluded from the FIFO comparison. DUR-004 bounds EXECUTION
-  // order; the exempted rows provably never executed.
+  // order; the exempted rows provably never executed. Unknown work can also be bypassed,
+  // but only the inputs that became active while it was parked may settle ahead of it.
   {
     const recordIdSet = new Set<string>(recordIds);
     const abortedNeverRun = new Set<string>();
 
+    const settlementByRun = new Map<string, string>(
+      ordered.map((row) => [
+        runIdForSubmission(row.submissionId),
+        submissionSettlementRecordId(row.submissionId),
+      ]),
+    );
+
+    const inputSettlements = new Map(
+      ordered.map((row) => [
+        submissionInputRecordId(row.submissionId),
+        submissionSettlementRecordId(row.submissionId),
+      ]),
+    );
+
+    const unknownCalls = new Map<string, Set<string>>();
+    const abortsOrTerminals = new Set<string>();
+    const bypassedSettlements = new Map<string, Set<string>>();
+
     for (const envelope of records) {
       const payload = envelope.record.payload;
 
+      if (payload._tag === "ToolCallUnknown" && !abortsOrTerminals.has(payload.runId)) {
+        const calls = unknownCalls.get(payload.runId) ?? new Set<string>();
+
+        calls.add(payload.toolCallId);
+        unknownCalls.set(payload.runId, calls);
+      } else if (payload._tag === "ToolCallResolved" || payload._tag === "ToolCallSettled") {
+        const calls = unknownCalls.get(payload.runId);
+
+        calls?.delete(payload.toolCallId);
+        if (calls?.size === 0) unknownCalls.delete(payload.runId);
+      } else if (payload._tag === "AbortRequested" || payload._tag === "SubmissionSettled") {
+        const runId = runIdForSubmission(payload.submissionId);
+
+        abortsOrTerminals.add(runId);
+        unknownCalls.delete(runId);
+      } else if (payload._tag === "RunCompleted" || payload._tag === "RunFailed") {
+        abortsOrTerminals.add(payload.runId);
+        unknownCalls.delete(payload.runId);
+      } else if (payload._tag === "UserInputRecorded") {
+        const settlementId = inputSettlements.get(envelope.record.recordId);
+
+        if (settlementId !== undefined) {
+          const bypassed = new Set<string>();
+
+          for (const runId of unknownCalls.keys()) {
+            const earlier = settlementByRun.get(runId);
+
+            if (earlier !== undefined) bypassed.add(earlier);
+          }
+          bypassedSettlements.set(settlementId, bypassed);
+        }
+      }
       if (
         payload._tag === "SubmissionSettled" &&
         payload.outcome === "aborted" &&
@@ -309,9 +363,20 @@ export const verifyThreadInvariants = Effect.fn("Thread.verifyThreadInvariants")
       presentSettlements.has(expected),
     );
 
-    const matches =
-      settlementOrder.length === expectedPresent.length &&
-      settlementOrder.every((recordId, index) => recordId === expectedPresent[index]);
+    const remaining = new Set(expectedPresent);
+    let matches = settlementOrder.length === expectedPresent.length;
+
+    for (const recordId of settlementOrder) {
+      for (const earlier of remaining) {
+        if (earlier === recordId) break;
+        if (!bypassedSettlements.get(recordId)?.has(earlier)) {
+          matches = false;
+          break;
+        }
+      }
+      if (!matches) break;
+      remaining.delete(recordId);
+    }
 
     checks.push(
       matches

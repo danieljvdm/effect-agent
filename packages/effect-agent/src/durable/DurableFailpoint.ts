@@ -32,6 +32,8 @@ export const DurableRuntimeFailpointLocation = Schema.Literals([
   "checkpoint:after-save",
   "tools:after-prepared-append",
   "tools:before-prepared-append",
+  "tools:before-unavailable-append",
+  "tools:after-unavailable-append",
   "policy:before-reservation-append",
   "policy:after-reservation-append",
   "step:after-step-append",

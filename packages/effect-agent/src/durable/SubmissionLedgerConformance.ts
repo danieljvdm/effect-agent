@@ -2877,9 +2877,20 @@ const unknownAbortClaim = conformanceCase(
         }
         yield* advancePastLease(original.leaseExpiresAt);
         if (!abortFirst) {
+          const later = yield* expectSome(
+            "runnable follower behind unknown work",
+            yield* claimLane(threadId, PRODUCER_B),
+          );
+
           yield* ensure(
-            Option.isNone(yield* claimLane(threadId, PRODUCER_B)),
-            "Unknown work and its follower must wait without an authorized abort",
+            later.submissionId === follower.submissionId,
+            "Unknown work must preserve the queue order of runnable followers",
+          );
+          yield* ledger.releaseOwnership(
+            ReleaseOwnershipRequest.make({
+              submissionId: later.submissionId,
+              ownershipToken: later.ownershipToken,
+            }),
           );
         }
         const intent = yield* ledger.requestAbort(command);

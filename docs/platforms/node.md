@@ -79,9 +79,16 @@ when you run `host.runResolvedWorkers`. The module-level `NodeDurableHost.layer`
 owns worker startup and is the default for an application.
 
 Registrations carry application version declarations. Update them when behavior changes,
-including tool implementations that JSON cannot represent, and keep matching bindings available
-until their work settles. `digestDefinitions` computes the digests for explicit submissions;
+including tool implementations that JSON cannot represent. Register one current binding per
+stable `agentId`; queued and resumed work uses that binding without requiring historical agent
+or toolbox versions. Accepted inputs and prepared deliveries retain their original identities
+and payloads. `digestDefinitions` computes the digests for explicit submissions;
 `DurableWorkerBinding.make(agent, digests)` accepts precomputed digests.
+
+An unresolved tool effect remains a parked Unknown Outcome with its settlement obligation intact.
+Later input in the same Thread can run without replaying that effect. Approval waits and joined
+input still preserve their ordering barriers, and live ownership prevents another claim. Inspect
+the parked operation through `explainThread`, then use authorized resolution or abort when needed.
 
 ## Configure runtime services
 

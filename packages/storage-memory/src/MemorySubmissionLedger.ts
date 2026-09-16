@@ -350,9 +350,15 @@ const ownershipLost = (state: LedgerState, stored: StoredSubmission): OwnershipL
     actualEpoch: decodeProducerEpoch(laneEpoch(state, stored.row.threadId)),
   });
 
-/** The presented token owns the lane only while it matches the live ownership record. */
-const ownsLane = (stored: StoredSubmission, ownershipToken: OwnershipToken): boolean =>
-  stored.ownership !== undefined && stored.ownership.ownershipToken === ownershipToken;
+/** A retained row token cannot outlive a newer owner of the same Thread. */
+const ownsLane = (
+  state: LedgerState,
+  stored: StoredSubmission,
+  ownershipToken: OwnershipToken,
+): boolean =>
+  stored.ownership !== undefined &&
+  stored.ownership.ownershipToken === ownershipToken &&
+  stored.ownership.producerEpoch === laneEpoch(state, stored.row.threadId);
 
 const withSubmission = (state: LedgerState, stored: StoredSubmission): LedgerState => ({
   ...state,
@@ -371,7 +377,12 @@ const findHead = (state: LedgerState, threadId: ThreadId): StoredSubmission | un
   let head: StoredSubmission | undefined;
 
   for (const stored of state.submissions.values()) {
-    if (stored.row.threadId !== threadId || stored.row.state === "settled") continue;
+    if (
+      stored.row.threadId !== threadId ||
+      stored.row.state === "settled" ||
+      (stored.row.state === "unknown" && stored.abortIntent === undefined)
+    )
+      continue;
     if (head === undefined || stored.row.queueSequence < head.row.queueSequence) head = stored;
   }
 
@@ -380,7 +391,7 @@ const findHead = (state: LedgerState, threadId: ThreadId): StoredSubmission | un
 
 /**
  * Reference in-memory SubmissionLedger. It implements the full port contract — atomic idempotent
- * admission, FIFO-head claims, producer-epoch fencing, Clock-driven ownership leases, idempotent
+ * admission, eligible FIFO claims, producer-epoch fencing, Clock-driven ownership leases, idempotent
  * settlement reservation/finalization, and durable abort intent — with every transition applied
  * as one atomic `Ref.modify`, but its state does not survive the process (`non-durable`).
  *
@@ -390,8 +401,8 @@ const findHead = (state: LedgerState, threadId: ThreadId): StoredSubmission | un
  *   deterministically; no wall clock is consulted.
  * - The ownership lease is pinned to `DEFAULT_OWNERSHIP_LEASE_DURATION` (D5); durable adapters
  *   own the configuration seam.
- * - A live lease blocks claims from other producers only: the same `producerId` may reclaim its
- *   own live lease (restart recovery), which supersedes and fences the prior Attempt's token.
+ * - Any live lease in the Thread blocks every new claim, including the same `producerId`.
+ *   Unresolved unknown work is skipped only after ownership is released or expires.
  * - Claiming advances `ready` to `running` and otherwise preserves the recorded state, so
  *   progress markers from an earlier Attempt survive a reclaim.
  * - `renewOwnership` keeps the token stable (the port allows rotation); a replayed admission
@@ -777,21 +788,19 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           const decision = yield* Ref.modify(
             state,
             (current): readonly [Decision<Option.Option<Claim>, LedgerError>, LedgerState] => {
+              for (const stored of current.submissions.values()) {
+                if (
+                  stored.row.threadId === request.threadId &&
+                  stored.ownership !== undefined &&
+                  stored.ownership.leaseExpiresAtMillis > nowMillis
+                ) {
+                  return [success(Option.none()), current];
+                }
+              }
               const head = findHead(current, request.threadId);
 
               if (head === undefined) return [success(Option.none()), current];
-              if (
-                BLOCKED_HEAD_STATES.has(head.row.state) ||
-                (head.row.state === "unknown" && head.abortIntent === undefined)
-              )
-                return [success(Option.none()), current];
-              if (
-                head.ownership !== undefined &&
-                head.ownership.leaseExpiresAtMillis > nowMillis &&
-                head.ownership.ownerProducerId !== request.producerId
-              ) {
-                return [success(Option.none()), current];
-              }
+              if (BLOCKED_HEAD_STATES.has(head.row.state)) return [success(Option.none()), current];
               const lane = current.lanes.get(request.threadId);
 
               if (lane === undefined) {
@@ -867,7 +876,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
-            if (stored.ownership === undefined || !ownsLane(stored, request.ownershipToken)) {
+            if (
+              stored.ownership === undefined ||
+              !ownsLane(current, stored, request.ownershipToken)
+            ) {
               return [failure(ownershipLost(current, stored)), current];
             }
 
@@ -913,7 +925,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
-            if (!ownsLane(stored, request.ownershipToken)) {
+            if (!ownsLane(current, stored, request.ownershipToken)) {
               return [failure(ownershipLost(current, stored)), current];
             }
 
@@ -947,7 +959,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
-            if (!ownsLane(stored, request.ownershipToken)) {
+            if (!ownsLane(current, stored, request.ownershipToken)) {
               return [failure(ownershipLost(current, stored)), current];
             }
 
@@ -1035,7 +1047,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             if (
               !joinedSettlement &&
               !queuedAbortSettlement &&
-              !ownsLane(stored, request.ownershipToken)
+              !ownsLane(current, stored, request.ownershipToken)
             ) {
               return [failure(ownershipLost(current, stored)), current];
             }
@@ -1338,7 +1350,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
-            if (!ownsLane(host, request.ownershipToken)) {
+            if (!ownsLane(current, host, request.ownershipToken)) {
               return [failure(ownershipLost(current, host)), current];
             }
 
@@ -1439,7 +1451,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             }
             // The lane is host-owned: the presented token must own the HOST's ownership period,
             // which also lets a later host Attempt repair a lost marker from history (DUR-016).
-            if (!ownsLane(host, request.ownershipToken)) {
+            if (!ownsLane(current, host, request.ownershipToken)) {
               return [failure(ownershipLost(current, host)), current];
             }
             if (stored.inputApplied !== undefined) {
@@ -1587,7 +1599,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
-            if (!ownsLane(stored, request.ownershipToken)) {
+            if (!ownsLane(current, stored, request.ownershipToken)) {
               return [failure(ownershipLost(current, stored)), current];
             }
 
@@ -2122,7 +2134,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             }
             // Creation is fenced by the parent lane's live ownership (spec §12 step 2): a stale
             // parent Attempt can never create new reservation state.
-            if (!ownsLane(parent, request.ownershipToken)) {
+            if (!ownsLane(current, parent, request.ownershipToken)) {
               return [failure(ownershipLost(current, parent)), current];
             }
 
@@ -2221,7 +2233,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
-              if (!ownsLane(parent, request.ownershipToken)) {
+              if (!ownsLane(current, parent, request.ownershipToken)) {
                 return [failure(ownershipLost(current, parent)), current];
               }
               if (reservation.status !== "reserved") {

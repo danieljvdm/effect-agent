@@ -55,8 +55,9 @@ The runtime instructs the model to reply without JSON wrapping and decodes that 
 Whitespace, quotes, and empty replies are preserved. Use `Schema.NonEmptyString` when silence is
 invalid. Apply `Output.text` after composing the Schema. Required completion tools still take
 precedence; optional completion tools retain their own parameter contract. Durable records store
-the string as a JSON string value and replay it through the same Schema. Metadata does not select
-an output format.
+the validated string as a JSON string value. Metadata does not select an output format.
+Once `RunCompleted` records validated output, recovery preserves that stored
+value without decoding it through a later output Schema.
 
 ## Choose model-visible input
 
@@ -137,7 +138,7 @@ requirements. Provide every branch or narrow the selection before execution.
 
 Keep Thread identities independent of deployment fingerprints. The original admission, input,
 principal, digests, idempotency key and Receipt remain immutable. Register one current executable
-per Agent and declare its replay contract separately:
+per stable `agentId` and optionally declare each Tool's replay version:
 
 ```ts
 const registration = {
@@ -146,62 +147,57 @@ const registration = {
   definitions: deploymentDefinitions,
   continuity: {
     versions: {
-      agent: "conversation-contract",
       tools: { search: "search-command" },
     },
   },
 };
 ```
 
-Supply a semantic version for every Tool. Change it when handler meaning, durable Step codecs or
-names, external idempotency keys, authorization semantics, or child/report protocols change.
-Version the Agent when input interpretation, completion projection or orchestration semantics
-change. Registration automatically includes input/output/update schemas, completion declarations,
-Tool schemas, execution classes and kinds. JSON Schema cannot detect a changed implementation or
-codec transform; semantic versions are the host's explicit assertion, not inferred from code.
+When `continuity.versions` is supplied, include every current Tool. Each version is a JSON value;
+change it when handler meaning, durable Step codecs or names, external idempotency keys,
+authorization semantics, completion projection, or child/report protocols change. Registration hashes
+that version with the Tool's schemas, failure mode, approval policy, execution class, kind, and
+completion or context-rollover role. Without explicit
+versions, it uses the Tool definitions declaration as the version. JSON Schema cannot detect
+changed handler code or codec transforms, so keep those declarations accurate.
 
-New admissions retain this contract. After interruption, recovery compares the Agent contract and
-the Tools in the canonical pending batch, including results still needed for completion projection.
-Adding a Tool or changing model configuration does not invalidate an already committed operation.
-A pending Tool with a changed schema or semantic version cannot execute. It retains its original
-request and Receipt until compatible code returns. Existing durable action and delivery receipts
-continue to govern replay; a replay declaration does not create external idempotency.
+Queued and resumed work selects the current binding by `agentId`. Historical Agent or toolbox
+digests do not gate execution. A committed continuation retains its original input and prompt;
+static instructions do not require a future input codec to accept that value. Input-dependent
+instructions still decode their required input. Admission, lineage, and prepared delivery evidence
+remain exact and are never rewritten.
 
-Digest-only admissions contain insufficient information to prove replay compatibility. Export a
-`BindingManifest` with `makeBindingManifest(originalDefinition, originalDefinitions, versions)`
-from the original release, audit its semantics, and supply that data as
-`continuity.retainedManifests`. Registration recomputes the original fingerprints before matching
-an admission. This is metadata for retained work, not an old executable registration or a rewrite
-of stored digests. Do not construct it by assigning today's contract to an unexplained old digest.
-New admissions retain a separate fingerprint for Agent semantics and output/completion codecs.
-With that fingerprint unchanged, recovery validates the original saved input against the current
-Effect codec; future input additions do not require another historical manifest. Manifests retain
-the original Agent and Tool declarations for admissions that predate this proof. It can
-resume across optional input additions without changing the receipt. Tool codecs must still
-match, except for JSON Schema's `additionalProperties: false` becoming `true`; that widening
-accepts every previously valid value. Other Tool codec changes, changed execution classes and
-changed semantics stay pending until compatible code is available. This does not rewrite or
-replan the original request.
+Recovery checks each pending operation against its recorded execution contract. A changed or
+removed mutating Tool that was never dispatched receives `ToolUnavailable` with
+`execution: "not-executed"`, allowing the model to continue with current Tools. If an effect may
+have occurred, the call stays unknown unless reconciliation supplies proof. Absence of a prepared
+record does not prove that readonly work never ran. See
+[operation recovery](../concepts/durability#admission-and-recovery).
 
-Hosts with deferred bindings can compile this metadata without acquiring executable services:
+Hosts with deferred bindings can compile current metadata without acquiring executable services:
 
 ```ts
-const metadata =
-  yield * compileBindingManifest(definition, definitions, versions, retainedManifests);
-const registration = { ...deferredBinding, ...metadata };
+import { AgentRegistration } from "effect-agent";
+import { Effect } from "effect";
+
+const metadata = Effect.gen(function* () {
+  return yield* AgentRegistration.compileBindingContracts(definition, definitions, {
+    tools: { search: "search-command" },
+  });
+});
 ```
 
-When checking a retained admission directly, pass its original encoded input as the fourth
-argument to `bindingSupports`. A changed Agent schema needs that exact input; native recovery
-supplies the ledger's original payload. Bump the Agent semantic version if a newly interpreted
-field changes the meaning of a retained request, even when its value passes the new codec.
+The Effect returns `{ digests }` and requires Crypto. Use those digests in the deferred binding.
+There is no historical manifest or Agent replay-version registry to maintain.
 
-Keep each manifest until an authoritative inventory proves no outstanding admission, child,
-report, or delivery needs it. Without proof, recovery waits rather than substituting code.
+For a low-level binding without per-operation hashes, the Tool digest supplies the operation
+version. Direct `processThread` execution without a current registration uses `deploymentId`
+instead. Reusing that ID asserts unchanged handler, Durable Step, and idempotency semantics;
+unfinished mutations crossing deployments need registered per-operation versions or reconciliation.
 
-Cloudflare maintenance persists bounded per-lane binding retries and continues other eligible
-lanes. Reinstantiation retains the backoff; a restored compatible registration resumes the same
-Receipt. A dependency that never recovers cannot be made to succeed by the runtime.
+Cloudflare maintenance persists bounded per-lane retries for missing current bindings and
+continues other eligible lanes. Reinstantiation retains the backoff; registering the missing Agent
+resumes the same Receipt. Parked unknown operations do not block later input in their Thread.
 
 Durable `maxDuration` bounds each active Attempt using its original recorded allowance. Time
 spent evicted, waiting for a binding, or suspended does not consume execution time. An actual

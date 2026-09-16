@@ -17,14 +17,10 @@ import {
   Schema,
   Stream,
 } from "effect";
+import { RetryCommand } from "effect-agent/admin";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
-import {
-  compileRegistrations,
-  DurableWorkerBinding,
-  makeBindingManifest,
-  bindingSupports,
-} from "effect-agent/agent-registration";
+import { compileRegistrations, DurableWorkerBinding } from "effect-agent/agent-registration";
 import {
   COMPACTION_SUMMARY_PREFIX,
   CONTEXT_ROLLOVER_PREFIX,
@@ -85,7 +81,10 @@ import {
   Principal,
   QueueSequence,
   RecoverySnapshotRequest,
+  ReleaseOwnershipRequest,
   ResolutionCompletedWithResult,
+  ResolutionNeverHappened,
+  ResolutionSafeToRetry,
   UnknownResolutionCommand,
   Settlement,
   SubmissionLedger,
@@ -94,13 +93,25 @@ import {
   submissionInputRecordId,
   submissionSettlementRecordId,
   type AdmissionConflict,
+  type Claim,
   type SettlementConflict,
 } from "effect-agent/submission-ledger";
 import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
 import { replayThread } from "effect-agent/thread-projection";
-import { ThreadRead, ThreadStore, type FenceRejected } from "effect-agent/thread-store";
+import {
+  ThreadRead,
+  ThreadStore,
+  ThreadTailRequest,
+  type FenceRejected,
+} from "effect-agent/thread-store";
 import { ToolBroker } from "effect-agent/tool-broker";
-import { ToolReconciler } from "effect-agent/tool-reconciler";
+import {
+  ReconciliationCompleted,
+  ReconciliationNeverStarted,
+  ReconciliationSafeToRetry,
+  ReconciliationUncertain,
+  ToolReconciler,
+} from "effect-agent/tool-reconciler";
 import { WakeScheduler, makeWakeSubscriptionHub } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
 import {
@@ -385,7 +396,7 @@ const corruptCompletionEnvelope = (envelope: CanonicalRecordEnvelope): Canonical
     record: RecordEnvelope.make({
       ...envelope.record,
       payload: RunCompleted.make({
-        runId: payload.runId,
+        ...payload,
         output: corruptCompletionOutput(payload.output),
         ...(payload.runDisposition === undefined ? {} : { runDisposition: payload.runDisposition }),
         ...(payload.finishReason === undefined ? {} : { finishReason: payload.finishReason }),
@@ -506,8 +517,7 @@ const corruptRunDispositionEnvelope = (
     record: RecordEnvelope.make({
       ...envelope.record,
       payload: RunCompleted.make({
-        runId: payload.runId,
-        output: payload.output,
+        ...payload,
         runDisposition: "hostile-replacement",
         ...(payload.finishReason === undefined ? {} : { finishReason: payload.finishReason }),
         ...(payload.exhausted === undefined ? {} : { exhausted: payload.exhausted }),
@@ -763,8 +773,8 @@ const clearFailpoint = Effect.gen(function* () {
 });
 
 const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
-  expect(Exit.isFailure(exit)).toBe(true);
-  if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
+  if (Exit.isSuccess(exit))
+    throw new Error(`Expected the Effect to fail, received ${JSON.stringify(exit.value)}`);
   const failure = Cause.findErrorOption(exit.cause);
 
   expect(Option.isSome(failure)).toBe(true);
@@ -1327,11 +1337,11 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         expect(settled.result).toEqual({ answer: "Found." });
       }
 
-      // A later Run sees Thread history without replaying this Run's
-      // evaluated instruction/input prefix.
+      // A later Run retains the original request and results; its own instructions are current.
       const prompt = yield* promptFromCanonicalRecords(records);
 
       expect(prompt.content.map((message) => message.role)).toEqual([
+        "user",
         "assistant",
         "tool",
         "assistant",
@@ -2439,6 +2449,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         const prompt = yield* promptFromCanonicalRecords(records);
 
         expect(prompt.content.map((message) => message.role)).toEqual([
+          "user",
           "assistant",
           "tool",
           "assistant",
@@ -2800,9 +2811,8 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         submissionInputRecordId(second.submissionId),
       );
       expect(midTags.indexOf("AbortRequested")).toBeGreaterThanOrEqual(0);
-      expect(midRecords.map((envelope) => envelope.record.recordId)).toContain(
-        recoveryRepairRecordId(second.submissionId, "SettleAborted"),
-      );
+      // This ledger-owned inactive settlement has no Thread claim for an audit append.
+      expect(midTags).not.toContain("RepairAnnotated");
 
       // The head then runs normally and the THIRD Submission joins its Run across the
       // aborted-settled row — the joining-prefix gap rule treats it as a non-gap.
@@ -2895,95 +2905,126 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     }),
   );
 
-  it.effect("fences a superseded Attempt out of canonical history", () =>
-    Effect.gen(function* () {
-      const runtime = yield* DurableAgentRuntime;
-      const started = yield* Deferred.make<void>();
-      const latch = yield* Deferred.make<void>();
-      const calls = yield* Ref.make(0);
+  it.effect(
+    "keeps a live Attempt exclusive and fences it after ownership is explicitly released",
+    () =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const claims: Array<Claim> = [];
 
-      const model = Model.make(
-        "scripted",
-        "durable-fencing",
-        Layer.effect(
-          LanguageModel.LanguageModel,
-          LanguageModel.make({
-            generateText: () => Effect.succeed([]),
-            streamText: () =>
-              Stream.unwrap(
-                Ref.getAndUpdate(calls, (call) => call + 1).pipe(
-                  Effect.map((call) =>
-                    call === 0
-                      ? Stream.fromEffect(
-                          Deferred.succeed(started, void 0).pipe(
-                            Effect.andThen(Deferred.await(latch)),
-                          ),
-                        ).pipe(
-                          Stream.flatMap(() =>
-                            Stream.fromIterable(finalParts('{"answer":"stale"}')),
-                          ),
-                        )
-                      : Stream.fromIterable(finalParts('{"answer":"fresh"}')),
+        const runtime = yield* DurableAgentRuntime.pipe(
+          Effect.provide(
+            DurableAgentRuntime.layer.pipe(
+              Layer.fresh,
+              Layer.provide(
+                Layer.succeed(SubmissionLedger)({
+                  ...ledger,
+                  claim: (request) =>
+                    ledger.claim(request).pipe(
+                      Effect.tap((claim) =>
+                        Effect.sync(() => {
+                          if (Option.isSome(claim)) claims.push(claim.value);
+                        }),
+                      ),
+                    ),
+                }),
+              ),
+            ),
+          ),
+        );
+
+        const started = yield* Deferred.make<void>();
+        const latch = yield* Deferred.make<void>();
+        const calls = yield* Ref.make(0);
+
+        const model = Model.make(
+          "scripted",
+          "durable-fencing",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: () =>
+                Stream.unwrap(
+                  Ref.getAndUpdate(calls, (call) => call + 1).pipe(
+                    Effect.map((call) =>
+                      call === 0
+                        ? Stream.fromEffect(
+                            Deferred.succeed(started, void 0).pipe(
+                              Effect.andThen(Deferred.await(latch)),
+                            ),
+                          ).pipe(
+                            Stream.flatMap(() =>
+                              Stream.fromIterable(finalParts('{"answer":"stale"}')),
+                            ),
+                          )
+                        : Stream.fromIterable(finalParts('{"answer":"fresh"}')),
+                    ),
                   ),
                 ),
-              ),
+            }),
+          ),
+        );
+
+        const agent = Agent.withModel(plannerDefinition, model);
+        const thread = "thread-fencing";
+
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "who owns the lane?" },
+          submitOptions(thread, "fencing-1"),
+        );
+
+        const staleWorker = yield* Effect.forkChild(
+          runtime.processThread(agent, decodeThreadId(thread)),
+        );
+
+        yield* Deferred.await(started);
+
+        expect(yield* runtime.processThread(agent, decodeThreadId(thread))).toEqual([]);
+        yield* ledger.releaseOwnership(
+          ReleaseOwnershipRequest.make({
+            submissionId: receipt.submissionId,
+            ownershipToken: claims[0]!.ownershipToken,
           }),
-        ),
-      );
+        );
+        const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
 
-      const agent = Agent.withModel(plannerDefinition, model);
-      const thread = "thread-fencing";
+        expect(settlements).toHaveLength(1);
+        expect(settlements[0]?.outcome).toBe("completed");
 
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "who owns the lane?" },
-        submitOptions(thread, "fencing-1"),
-      );
+        // Unblock the stale Attempt: its canonical append must be fenced, not committed.
+        yield* Deferred.succeed(latch, void 0);
+        const staleExit = yield* Fiber.await(staleWorker);
 
-      const staleWorker = yield* Effect.forkChild(
-        runtime.processThread(agent, decodeThreadId(thread)),
-      );
+        expect(["FenceRejected", "OwnershipLost"]).toContain(failureTag(staleExit));
 
-      yield* Deferred.await(started);
+        const records = yield* readLog(thread);
+        const runId = runIdForSubmission(receipt.submissionId);
 
-      // A second Attempt (same producer restarting) supersedes the first: higher epoch.
-      const settlements = yield* runtime.processThread(agent, decodeThreadId(thread));
+        const turnRecords = records.filter(
+          (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1),
+        );
 
-      expect(settlements).toHaveLength(1);
-      expect(settlements[0]?.outcome).toBe("completed");
+        expect(turnRecords).toHaveLength(1);
+        const firstTurn = turnRecords[0]?.record.payload;
 
-      // Unblock the stale Attempt: its canonical append must be fenced, not committed.
-      yield* Deferred.succeed(latch, void 0);
-      const staleExit = yield* Fiber.await(staleWorker);
+        if (firstTurn?._tag === "ModelResponseRecorded") {
+          const messages = yield* Schema.decodeUnknownEffect(Prompt.Prompt)(firstTurn.messages);
 
-      expect(["FenceRejected", "OwnershipLost"]).toContain(failureTag(staleExit));
+          const text = messages.content
+            .filter((message) => message.role === "assistant")
+            .flatMap((message) => message.content)
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("");
 
-      const records = yield* readLog(thread);
-      const runId = runIdForSubmission(receipt.submissionId);
+          expect(text).toBe('{"answer":"fresh"}');
+        }
+        const settledRecords = logTags(records).filter((tag) => tag === "SubmissionSettled");
 
-      const turnRecords = records.filter(
-        (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1),
-      );
-
-      expect(turnRecords).toHaveLength(1);
-      const firstTurn = turnRecords[0]?.record.payload;
-
-      if (firstTurn?._tag === "ModelResponseRecorded") {
-        const messages = yield* Schema.decodeUnknownEffect(Prompt.Prompt)(firstTurn.messages);
-
-        const text = messages.content
-          .filter((message) => message.role === "assistant")
-          .flatMap((message) => message.content)
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("");
-
-        expect(text).toBe('{"answer":"fresh"}');
-      }
-      const settledRecords = logTags(records).filter((tag) => tag === "SubmissionSettled");
-
-      expect(settledRecords).toHaveLength(1);
-    }),
+        expect(settledRecords).toHaveLength(1);
+      }),
   );
 
   it.effect("a failpoint-interrupted submit resumes to the same Receipt", () =>
@@ -3510,7 +3551,6 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         const prompt = yield* promptFromCanonicalRecords(journalRecords);
 
         expect(prompt.content.map((message) => message.role)).toEqual([
-          "system",
           "user",
           "assistant",
           "tool",
@@ -4302,7 +4342,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
     "compaction:after-canonical-append",
   ] as const) {
     it.effect(
-      `explicit rollover survives ${barrier} with canonical instructions, input, and cumulative usage`,
+      `explicit rollover survives ${barrier} with current instructions, canonical input, and cumulative usage`,
       () =>
         Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
@@ -4374,8 +4414,8 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           expect(scripted.prompts).toHaveLength(2);
           const continued = promptTexts(scripted.prompts[1] ?? Prompt.empty);
 
-          expect(continued).toContain("Canonical instructions 1");
-          expect(continued).not.toContain("Canonical instructions 2");
+          expect(continued).toContain("Canonical instructions 2");
+          expect(continued).not.toContain("Canonical instructions 1");
           expect(continued).toContain("Keep the original request");
           expect(continued).toContain(CONTEXT_ROLLOVER_PREFIX);
           expect(continued).toContain("Continue the saved plan.");
@@ -4784,7 +4824,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
 
             return Stream.succeed({
               kind: "summarize",
-              through: 1,
+              through: source.content.findIndex((message) => message.role === "assistant") + 1,
               summary: "Prior recorded discussion",
             });
           },
@@ -4947,10 +4987,11 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
             Layer.provide(
               Layer.succeed(ContextCompactor, {
                 estimate: estimatePromptTokens,
-                compact: () =>
+                compact: ({ source }) =>
                   Stream.succeed({
                     kind: "summarize",
-                    through: 1,
+                    through:
+                      source.content.findIndex((message) => message.role === "assistant") + 1,
                     summary: "custom first-only summary",
                   }),
               }),
@@ -5041,7 +5082,10 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
                   compact: ({ source }) =>
                     Stream.succeed({
                       kind: "summarize",
-                      through: scenario === "partially mapped prefix" ? 2 : 1,
+                      through: Math.max(
+                        1,
+                        source.content.findIndex((message) => message.role === "assistant") + 1,
+                      ),
                       summary:
                         scenario === "replacement after recovery" &&
                         promptTexts(source).includes(COMPACTION_SUMMARY_PREFIX)
@@ -5534,7 +5578,7 @@ layer(testLayer)("RUN-030 durable execution duration", (it) => {
             ),
           );
 
-          const yieldingTools = Toolkit.make(Search.annotate(ToolExecutionClass, "ordinary"));
+          const yieldingTools = Toolkit.make(Search.annotate(ToolExecutionClass, "uncertain"));
 
           const definition = Agent.make("host-yield-search", {
             input: searchDefinition.input,
@@ -6341,278 +6385,1356 @@ layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
 });
 
 layer(testLayer)("deployment continuity", (it) => {
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/771498b1952794b8f2f19d1e35b604937bffcc3c
-  it.effect(
-    "resumes an interrupted request after an additive tool deploy without repeating its action",
-    () =>
+  for (const corruption of ["parameters", "turn", "response", "settled-name"] as const) {
+    it.effect(`rejects corrupt ${corruption} evidence before reconciliation or execution`, () =>
       Effect.gen(function* () {
-        const effects = yield* Ref.make(0);
+        const runtime = yield* DurableAgentRuntime;
+        const store = yield* ThreadStore;
 
-        const parameters = (additionalProperties: boolean) =>
-          Search.parametersSchema.check(
-            Schema.makeFilter(() => true, {
-              toJsonSchema: () => ({
-                ...Tool.getJsonSchemaFromSchema(Search.parametersSchema),
-                additionalProperties,
-              }),
-            }),
-          );
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0 ? toolCallParts : finalParts('{"answer":"done"}'),
+        );
 
-        const action = Search.setParameters(parameters(true))
-          .addDependency(DurableStep)
-          .setFailure(DurableStepError)
-          .annotate(ToolExecutionClass, "idempotent");
+        const agent = Agent.withModel(
+          {
+            ...searchDefinition,
+            toolkit: Toolkit.make(Search.annotate(ToolExecutionClass, "uncertain")),
+          },
+          scripted.model,
+        );
 
-        const extra = Tool.make("additional_lookup", {
-          parameters: Schema.Struct({}),
-          success: Schema.String,
-        }).annotate(ToolExecutionClass, "readonly");
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "original parameters" },
+          submitOptions(`corrupt-operation-${corruption}`, "original"),
+        );
 
-        // Older schema generation closed objects even though the Effect codec stripped excess keys.
-        const originalAction = action.setParameters(parameters(false));
-
-        class OriginalCapture extends Schema.Class<OriginalCapture>("ContinuityCapture")({
-          definitions: Schema.Struct({ agent: Schema.String }),
-        }) {}
-        class CurrentCapture extends Schema.Class<CurrentCapture>("ContinuityCapture")({
-          definitions: Schema.Struct({
-            agent: Schema.String,
-            replayMetadata: Schema.optionalKey(Schema.String),
-          }),
-        }) {}
-        const capture = OriginalCapture.make({ definitions: { agent: "original" } });
-        const oldTools = Toolkit.make(originalAction);
-        const newTools = Toolkit.make(action, extra);
-
-        const oldDefinition = {
-          ...searchDefinition,
-          toolkit: oldTools,
-          input: Schema.Struct({ question: Schema.String, capture: OriginalCapture }),
-          completionFromTools: [
-            { tool: "search", project: () => Option.some({ answer: "request preserved" }) },
-          ],
-        };
-
-        const newDefinition = {
-          ...oldDefinition,
-          toolkit: newTools,
-          input: Schema.Struct({
-            question: Schema.String,
-            capture: CurrentCapture,
-          }),
-        };
-
-        const scripted = yield* makeScriptedModel(() => toolCallParts);
-
-        const handlers = newTools.toLayer({
-          search: () =>
-            Effect.flatMap(DurableStep, (step) =>
-              step.do(
-                "accepted-action",
-                Search.successSchema,
-                Ref.update(effects, (count) => count + 1).pipe(Effect.as({ available: true })),
-              ),
+        yield* armFailpoint(
+          corruption === "settled-name"
+            ? "turn:after-results-append"
+            : "tools:after-prepared-append",
+        );
+        expect(
+          failureTag(
+            yield* Effect.exit(
+              runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(searchToolLayer)),
             ),
-          additional_lookup: () => Effect.succeed("unused"),
+          ),
+        ).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+        let reconciliations = 0;
+
+        const corrupted = ThreadStore.of({
+          ...store,
+          read: (request) =>
+            store.read(request).pipe(
+              Stream.map((envelope) => {
+                const payload = envelope.record.payload;
+
+                if (
+                  payload._tag === "ToolCallPrepared" &&
+                  (corruption === "parameters" || corruption === "turn")
+                )
+                  return CanonicalRecordEnvelope.make({
+                    ...envelope,
+                    record: RecordEnvelope.make({
+                      ...envelope.record,
+                      payload:
+                        corruption === "parameters"
+                          ? { ...payload, parameters: { query: "substituted" } }
+                          : { ...payload, turn: 2 },
+                    }),
+                  });
+                if (payload._tag === "ModelResponseRecorded" && corruption === "response")
+                  return CanonicalRecordEnvelope.make({
+                    ...envelope,
+                    record: RecordEnvelope.make({
+                      ...envelope.record,
+                      payload: {
+                        _tag: "RepairAnnotated",
+                        reason: "Missing response fixture",
+                        details: {},
+                      },
+                    }),
+                  });
+                if (payload._tag === "ToolCallSettled" && corruption === "settled-name")
+                  return CanonicalRecordEnvelope.make({
+                    ...envelope,
+                    record: RecordEnvelope.make({
+                      ...envelope.record,
+                      payload: { ...payload, toolName: "substituted" },
+                    }),
+                  });
+
+                return envelope;
+              }),
+            ),
         });
 
-        const oldBindings = yield* compileRegistrations([
+        const recovered = yield* DurableAgentRuntime.use((fresh) =>
+          fresh.processThread(agent, receipt.threadId),
+        ).pipe(
+          Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+          Effect.provideService(ThreadStore, corrupted),
+          Effect.provideService(ToolReconciler, {
+            reconcile: () =>
+              Effect.sync(() => {
+                reconciliations++;
+
+                return ReconciliationCompleted.make({
+                  result: { available: true },
+                  isFailure: false,
+                });
+              }),
+          }),
+          Effect.provide(searchToolLayer),
+          Effect.exit,
+        );
+
+        expect(failureTag(recovered)).toBe("RunJournalError");
+        expect(reconciliations).toBe(0);
+        expect(scripted.prompts).toHaveLength(1);
+        expect(yield* lookupState(receipt.submissionId)).not.toBe("settled");
+      }),
+    );
+  }
+
+  it.effect("a new rollover annotation cannot reinterpret a settled ordinary result", () =>
+    Effect.gen(function* () {
+      const operation = Tool.make("new_context", {
+        parameters: ContextRolloverRequest,
+        success: ContextRolloverRequest,
+      }).annotate(ToolExecutionClass, "readonly");
+
+      const originalTools = Toolkit.make(operation);
+      const currentTools = Toolkit.make(operation.annotate(ContextRolloverTool, true));
+
+      const definition = Agent.make("new-rollover-semantics", {
+        input: Schema.String,
+        output: Schema.String,
+        instructions: "Complete the saved request.",
+        toolkit: originalTools,
+        policy: { maxTurns: 3, maxToolCalls: 2, maxDuration: "30 seconds", toolConcurrency: 1 },
+      });
+
+      const currentDefinition = { ...definition, toolkit: currentTools };
+      let calls = 0;
+
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0
+          ? [
+              {
+                type: "tool-call",
+                id: "old-ordinary",
+                name: "new_context",
+                params: { handoff: "Original ordinary result" },
+              },
+              { type: "finish", reason: "tool-calls", usage },
+            ]
+          : finalParts('"original request completed"'),
+      );
+
+      const original = Agent.withModel(definition, scripted.model);
+
+      const receipt = yield* DurableAgentRuntime.use((runtime) =>
+        runtime.submit(
+          original,
+          "Keep the saved intent.",
+          submitOptions("new-rollover-semantics", "original"),
+        ),
+      );
+
+      yield* armFailpoint("turn:after-results-append");
+      expect(
+        failureTag(
+          yield* DurableAgentRuntime.use((runtime) =>
+            runtime.processThread(original, receipt.threadId),
+          ).pipe(
+            Effect.provide(
+              originalTools.toLayer({
+                new_context: (request) =>
+                  Effect.sync(() => {
+                    calls++;
+
+                    return request;
+                  }),
+              }),
+            ),
+            Effect.exit,
+          ),
+        ),
+      ).toBe("DurableRuntimeFailpointError");
+      yield* clearFailpoint;
+
+      const results = yield* DurableAgentRuntime.use((runtime) =>
+        runtime.processThread(Agent.withModel(currentDefinition, scripted.model), receipt.threadId),
+      ).pipe(
+        Effect.provide(
+          currentTools.toLayer({
+            new_context: () => Effect.die("A settled operation must not rerun"),
+          }),
+        ),
+      );
+
+      expect(results[0]).toMatchObject({
+        submissionId: receipt.submissionId,
+        outcome: "completed",
+      });
+      expect(calls).toBe(1);
+      expect(scripted.prompts).toHaveLength(2);
+      expect(JSON.stringify(scripted.prompts[1])).toContain("Keep the saved intent.");
+      expect(
+        (yield* readLog(receipt.threadId)).filter(
+          ({ record }) => record.payload._tag === "CompactionCreated",
+        ),
+      ).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "explains and retries unsupported SafeToRetry without touching a later live owner's canonical tail",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const modelCalls = yield* Ref.make(0);
+        const handlerCalls = yield* Ref.make(0);
+
+        const model = Model.make(
+          "scripted",
+          "unsupported-retry-admin",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: () =>
+                Stream.unwrap(
+                  Effect.gen(function* () {
+                    const call = yield* Ref.getAndUpdate(modelCalls, (count) => count + 1);
+
+                    if (call === 0) return Stream.fromIterable(toolCallParts);
+                    yield* Deferred.succeed(entered, undefined);
+                    yield* Deferred.await(release);
+
+                    return Stream.fromIterable(finalParts('{"answer":"later request completed"}'));
+                  }),
+                ),
+            }),
+          ),
+        );
+
+        const originalTools = Toolkit.make(Search.annotate(ToolExecutionClass, "uncertain"));
+        const originalDefinition = { ...searchDefinition, toolkit: originalTools };
+        const currentDefinition = { ...searchDefinition, toolkit: Toolkit.empty };
+
+        const originalBindings = yield* compileRegistrations([
           {
-            agent: Agent.withModel(oldDefinition, scripted.model),
-            definitions: { agent: "conversation", model: "scripted", tools: ["search"] },
+            agent: Agent.withModel(originalDefinition, model),
+            definitions: { agent: "original", model: "scripted", tools: ["search"] },
+            continuity: { versions: { tools: { search: "v1" } } },
           },
-        ]).pipe(Effect.provide(handlers));
+        ]).pipe(
+          Effect.provide(
+            originalTools.toLayer({
+              search: () =>
+                Ref.update(handlerCalls, (count) => count + 1).pipe(Effect.as({ available: true })),
+            }),
+          ),
+        );
 
         const currentBindings = yield* compileRegistrations([
           {
-            agent: Agent.withModel(newDefinition, scripted.model),
-            definitions: {
-              agent: "conversation",
-              model: "scripted",
-              tools: ["search", "additional_lookup"],
-            },
-            continuity: {
-              versions: {
-                agent: "conversation-semantics",
-                tools: { search: "search-command", additional_lookup: "lookup" },
-              },
-              retainedManifests: [
-                yield* makeBindingManifest(
-                  oldDefinition,
-                  { agent: "conversation", model: "scripted", tools: ["search"] },
-                  { agent: "conversation-semantics", tools: { search: "search-command" } },
-                ),
-              ],
-            },
+            agent: Agent.withModel(currentDefinition, model),
+            definitions: { agent: "current", model: "scripted", tools: [] },
           },
-        ]).pipe(Effect.provide(handlers));
+        ]);
 
-        // Optional schema additions need the actual retained payload when the old object was open.
-        expect(bindingSupports(currentBindings[0]!, oldBindings[0]!.digests)).toBe(false);
-        expect(
-          bindingSupports(currentBindings[0]!, oldBindings[0]!.digests, undefined, {
-            question: "preserve this request",
-            capture: { definitions: { agent: "original", replayMetadata: 123 } },
-          }),
-        ).toBe(false);
-        expect(
-          bindingSupports(currentBindings[0]!, oldBindings[0]!.digests, undefined, {
-            question: "preserve this request",
-            capture: { definitions: { agent: "original" } },
-          }),
-        ).toBe(true);
-
-        const receipt = yield* Effect.gen(function* () {
+        const original = yield* Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
 
           const receipt = yield* runtime.submitRegistered(
-            { definition: oldDefinition },
-            { question: "preserve this request", capture },
-            submitOptions("deploy-continuity", "original-request"),
+            { definition: originalDefinition },
+            { question: "original uncertain operation" },
+            submitOptions("unsupported-retry-admin", "original"),
           );
 
-          yield* armFailpoint("step:after-step-append");
-          const interrupted = yield* Effect.exit(runtime.processThreadHead(receipt.threadId));
-
-          expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
-          yield* clearFailpoint;
-
-          return receipt;
-        }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(oldBindings)));
-
-        expect(yield* Ref.get(effects)).toBe(1);
-        const retained = yield* readLog(receipt.threadId);
-
-        yield* TestClock.adjust("2 days");
-        const unproved = currentBindings.map((binding) => ({ ...binding, retainedManifests: [] }));
-
-        const noManifest = yield* DurableAgentRuntime.use((runtime) =>
-          runtime.processThreadHead(receipt.threadId),
-        ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(unproved)), Effect.exit);
-
-        expect(failureTag(noManifest)).toBe("BindingDigestMismatch");
-        expect(yield* Ref.get(effects)).toBe(1);
-
-        const followup = yield* Effect.gen(function* () {
-          const runtime = yield* DurableAgentRuntime;
-          const completed = yield* runtime.processThreadHead(receipt.threadId);
-
-          expect(Option.isSome(completed) && completed.value.outcome).toBe("completed");
-          expect(Option.isSome(completed) && completed.value.submissionId).toBe(
-            receipt.submissionId,
-          );
-          expect(
-            yield* runtime.submit(
-              { definition: oldDefinition },
-              { question: "preserve this request", capture },
-              {
-                ...submitOptions(receipt.threadId, "original-request"),
-                definitions: oldBindings[0]!.digests,
-              },
-            ),
-          ).toEqual(receipt);
-
-          const forged = yield* runtime
-            .submit(
-              { definition: newDefinition },
-              { question: "forged replay metadata", capture },
-              {
-                ...submitOptions(receipt.threadId, "forged"),
-                definitions: {
-                  ...currentBindings[0]!.digests,
-                  agent: oldBindings[0]!.digests.tools,
-                },
-              },
-            )
-            .pipe(Effect.exit);
-
-          expect(failureTag(forged)).toBe("AdmissionPolicyError");
-
-          const followup = yield* runtime.submitRegistered(
-            { definition: newDefinition },
-            { question: "follow up", capture },
-            submitOptions(receipt.threadId, "follow-up"),
-          );
-
-          expect(followup.threadId).toBe(receipt.threadId);
-          yield* armFailpoint("turn:after-response-append");
+          yield* armFailpoint("tools:after-prepared-append");
           expect(failureTag(yield* Effect.exit(runtime.processThreadHead(receipt.threadId)))).toBe(
             "DurableRuntimeFailpointError",
           );
           yield* clearFailpoint;
 
-          return followup;
-        }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(currentBindings)));
+          return receipt;
+        }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(originalBindings)));
+
+        const runtime = yield* DurableAgentRuntime.pipe(
+          Effect.provide(DurableAgentRuntime.layerWithBindings(currentBindings)),
+        );
+
+        yield* runtime.runRecovery;
+        expect(yield* lookupState(original.submissionId)).toBe("unknown");
+        yield* runtime.resolveUnknown(
+          UnknownResolutionCommand.make({
+            submissionId: original.submissionId,
+            toolCallId: Schema.decodeSync(ToolCallId)("search-1"),
+            author: "operator",
+            reason: "Only the original supplier operation may repeat",
+            resolution: ResolutionSafeToRetry.make({}),
+          }),
+        );
+        expect(Option.isNone(yield* runtime.processThreadHead(original.threadId))).toBe(true);
+        expect(yield* lookupState(original.submissionId)).toBe("unknown");
+
+        const later = yield* runtime.submitRegistered(
+          { definition: currentDefinition },
+          { question: "answer this later question" },
+          submitOptions(original.threadId, "later"),
+        );
+
+        const worker = yield* Effect.forkChild(runtime.processThreadHead(original.threadId));
+
+        yield* Deferred.await(entered);
+        const store = yield* ThreadStore;
+        const ledger = yield* SubmissionLedger;
+
+        const tailBefore = yield* store.inspectTail(
+          ThreadTailRequest.make({ threadId: original.threadId }),
+        );
+
+        const ownerBefore = yield* ledger.loadRecoverySnapshot(
+          RecoverySnapshotRequest.make({ submissionId: later.submissionId }),
+        );
+
+        expect(ownerBefore.ownership).toBeDefined();
+        const explanation = yield* runtime.explain(original.submissionId);
+
+        expect({
+          decision: explanation.decision._tag,
+          disposition: explanation.disposition,
+        }).toEqual({
+          decision: "ApplyUnknownResolutions",
+          disposition: "unknown",
+        });
+        expect(explanation.evidence.unknownCalls).toMatchObject([
+          { toolCallId: "search-1", resolved: false },
+        ]);
+        expect(explanation.evidence.pendingOperations).toMatchObject([
+          { toolCallId: "search-1", parameters: { query: "sea" } },
+        ]);
+
+        const retried = yield* runtime.retry(
+          RetryCommand.make({
+            submissionId: original.submissionId,
+            author: "operator",
+            reason: "Inspect the still unsupported original operation",
+          }),
+        );
+
+        expect(retried.disposition).toBe("unknown");
+        expect(
+          yield* store.inspectTail(ThreadTailRequest.make({ threadId: original.threadId })),
+        ).toEqual(tailBefore);
+        expect(
+          (yield* ledger.loadRecoverySnapshot(
+            RecoverySnapshotRequest.make({ submissionId: later.submissionId }),
+          )).ownership,
+        ).toEqual(ownerBefore.ownership);
+        expect(yield* lookupState(original.submissionId)).toBe("unknown");
+        yield* Deferred.succeed(release, undefined);
+        const completed = yield* Fiber.join(worker);
+
+        expect(Option.isSome(completed) && completed.value).toMatchObject({
+          submissionId: later.submissionId,
+          outcome: "completed",
+        });
+        expect(yield* Ref.get(handlerCalls)).toBe(0);
+        expect(yield* Ref.get(modelCalls)).toBe(2);
+        expect(
+          (yield* readLog(original.threadId)).filter(
+            ({ record }) => record.payload._tag === "ToolCallSettled",
+          ),
+        ).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "reenters a compatible current durable tool after deployment without repeating its committed step",
+    () =>
+      Effect.gen(function* () {
+        const effects = yield* Ref.make(0);
+        const currentEntries = yield* Ref.make(0);
+
+        const action = Search.addDependency(DurableStep)
+          .setFailure(DurableStepError)
+          .annotate(ToolExecutionClass, "idempotent");
+
+        const originalTools = Toolkit.make(action);
+
+        const added = Tool.make("new_lookup", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        }).annotate(ToolExecutionClass, "readonly");
+
+        const currentTools = Toolkit.make(action, added);
+        const originalDefinition = { ...searchDefinition, toolkit: originalTools };
+
+        const currentDefinition = {
+          ...searchDefinition,
+          toolkit: currentTools,
+          instructions: "Finish the original request with current tools.",
+        };
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0 ? toolCallParts : finalParts('{"answer":"committed step preserved"}'),
+        );
+
+        const actionHandler = () =>
+          Effect.flatMap(DurableStep, (step) =>
+            step.do(
+              "supplier-write",
+              Search.successSchema,
+              Ref.update(effects, (count) => count + 1).pipe(Effect.as({ available: true })),
+            ),
+          );
+
+        const originalBindings = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(originalDefinition, scripted.model),
+            definitions: { agent: "original-deploy", model: "scripted", tools: ["search"] },
+            continuity: { versions: { tools: { search: null } } },
+          },
+        ]).pipe(Effect.provide(originalTools.toLayer({ search: actionHandler })));
+
+        const currentBindings = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(currentDefinition, scripted.model),
+            definitions: {
+              agent: "current-deploy",
+              model: "scripted",
+              tools: ["search", "new_lookup"],
+            },
+            continuity: { versions: { tools: { search: null, new_lookup: "v1" } } },
+          },
+        ]).pipe(
+          Effect.provide(
+            currentTools.toLayer({
+              search: () =>
+                Ref.update(currentEntries, (count) => count + 1).pipe(
+                  Effect.andThen(actionHandler()),
+                ),
+              new_lookup: () => Effect.succeed("new capability"),
+            }),
+          ),
+        );
+
+        const receipt = yield* Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
+
+          const receipt = yield* runtime.submitRegistered(
+            { definition: originalDefinition },
+            { question: "preserve the supplier write" },
+            submitOptions("continuity-durable-step", "original"),
+          );
+
+          yield* armFailpoint("step:after-step-append");
+          expect(failureTag(yield* Effect.exit(runtime.processThreadHead(receipt.threadId)))).toBe(
+            "DurableRuntimeFailpointError",
+          );
+          yield* clearFailpoint;
+
+          return receipt;
+        }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(originalBindings)));
+
+        const retained = yield* readLog(receipt.threadId);
 
         expect(yield* Ref.get(effects)).toBe(1);
-        // Same wire shape with different meaning must be refused just like a changed codec.
-        for (const changedSchema of [false, true]) {
-          const changed = changedSchema
-            ? action.setParameters(Schema.Struct({ query: Schema.Number }))
-            : action;
-
-          const incompatible = { ...newDefinition, toolkit: Toolkit.make(changed) };
-
-          const bindings = yield* compileRegistrations([
-            {
-              agent: Agent.withModel(incompatible, scripted.model),
-              definitions: { agent: "new-deploy", model: "scripted", tools: ["search"] },
-              continuity: {
-                versions: {
-                  agent: "conversation-semantics",
-                  tools: { search: changedSchema ? "search-command" : "different-command" },
-                },
-              },
-            },
-          ]).pipe(Effect.provide(handlers));
-
-          const refused = yield* DurableAgentRuntime.use((runtime) =>
-            runtime.processThreadHead(receipt.threadId),
-          ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(bindings)), Effect.exit);
-
-          expect(failureTag(refused)).toBe("BindingDigestMismatch");
-          expect(yield* Ref.get(effects)).toBe(1);
-        }
         yield* TestClock.adjust("2 days");
 
-        // A later input addition needs no historical manifest; the pending Tool keeps its contract.
-        const restored = yield* compileRegistrations([
-          {
-            agent: Agent.withModel(
-              {
-                ...newDefinition,
-                input: Schema.Struct({
-                  question: Schema.String,
-                  capture: CurrentCapture,
-                  deploymentHint: Schema.optionalKey(Schema.Boolean),
-                }),
-                toolkit: Toolkit.make(action),
-              },
-              scripted.model,
-            ),
-            definitions: { agent: "restored-deploy", model: "scripted", tools: ["search"] },
-            continuity: {
-              versions: { agent: "conversation-semantics", tools: { search: "search-command" } },
-            },
-          },
-        ]).pipe(Effect.provide(handlers));
-
-        const completed = yield* DurableAgentRuntime.use((runtime) =>
+        const settled = yield* DurableAgentRuntime.use((runtime) =>
           runtime.processThreadHead(receipt.threadId),
-        ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(restored)));
+        ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(currentBindings)));
 
-        expect(Option.isSome(completed) && completed.value.submissionId).toBe(
-          followup.submissionId,
-        );
-        expect(Option.isSome(completed) && completed.value.outcome).toBe("completed");
-        expect(yield* Ref.get(effects)).toBe(2);
+        expect(Option.isSome(settled) && settled.value).toMatchObject({
+          submissionId: receipt.submissionId,
+          outcome: "completed",
+        });
+        expect(yield* Ref.get(effects)).toBe(1);
+        expect(yield* Ref.get(currentEntries)).toBe(1);
         expect(scripted.prompts).toHaveLength(2);
         const after = yield* readLog(receipt.threadId);
 
         expect(after.slice(0, retained.length)).toEqual(retained);
         expect(
           after.filter(({ record }) => record.payload._tag === "ToolCallSettled"),
-        ).toHaveLength(2);
+        ).toHaveLength(1);
+        expect(after.filter(({ record }) => record.payload._tag === "RunStarted")).toHaveLength(1);
+      }),
+  );
+
+  for (const change of [
+    "removed",
+    "parameters",
+    "semantics",
+    "execution-class",
+    "readonly",
+  ] as const) {
+    it.effect(
+      `retires an unstarted ${change} operation and completes the original request with current tools`,
+      () =>
+        Effect.gen(function* () {
+          const effects = yield* Ref.make(0);
+          const lookups = yield* Ref.make(0);
+
+          const original = Search.annotate(
+            ToolExecutionClass,
+            change === "readonly" ? "readonly" : "uncertain",
+          );
+
+          const originalTools = Toolkit.make(original);
+          const originalDefinition = { ...searchDefinition, toolkit: originalTools };
+
+          const lookup = Tool.make("current_lookup", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+          }).annotate(ToolExecutionClass, "readonly");
+
+          const replacement =
+            change === "parameters"
+              ? original.setParameters(Schema.Struct({ query: Schema.Number }))
+              : change === "execution-class"
+                ? original.annotate(ToolExecutionClass, "idempotent")
+                : original;
+
+          const currentTools =
+            change === "removed" || change === "readonly"
+              ? Toolkit.make(lookup)
+              : Toolkit.make(lookup, replacement);
+
+          const currentDefinition = {
+            ...searchDefinition,
+            instructions: "Use the current lookup to finish the original request.",
+            input: Schema.Struct({
+              question: Schema.String,
+              deploymentHint:
+                change === "removed" ? Schema.Boolean : Schema.optionalKey(Schema.Boolean),
+            }),
+            ...(change === "removed"
+              ? {
+                  inputPrompt: () =>
+                    Effect.die("A continued Run must retain its original input prompt"),
+                }
+              : {}),
+            toolkit: currentTools,
+          };
+
+          const scripted = yield* makeScriptedModel((call) =>
+            call === 0
+              ? toolCallParts
+              : call === 1
+                ? [
+                    {
+                      type: "tool-call",
+                      id: "current-lookup-1",
+                      name: "current_lookup",
+                      params: {},
+                      providerExecuted: false,
+                    },
+                    { type: "finish", reason: "tool-calls", usage },
+                  ]
+                : finalParts('{"answer":"original request completed"}'),
+          );
+
+          const originalBindings = yield* compileRegistrations([
+            {
+              agent: Agent.withModel(originalDefinition, scripted.model),
+              definitions: { agent: "original", model: "scripted", tools: ["search"] },
+              continuity: { versions: { tools: { search: "search-v1" } } },
+            },
+          ]).pipe(
+            Effect.provide(
+              originalTools.toLayer({
+                search: () =>
+                  Ref.update(effects, (count) => count + 1).pipe(Effect.as({ available: true })),
+              }),
+            ),
+          );
+
+          const currentBindings = yield* compileRegistrations([
+            {
+              agent: Agent.withModel(currentDefinition, scripted.model),
+              definitions: {
+                agent: "current",
+                model: "scripted",
+                tools: ["current_lookup", change],
+              },
+              continuity: {
+                versions: {
+                  tools: {
+                    search: change === "semantics" ? "search-v2" : "search-v1",
+                    current_lookup: "lookup-v1",
+                  },
+                },
+              },
+            },
+          ]).pipe(
+            Effect.provide(
+              Layer.merge(
+                Toolkit.make(replacement).toLayer({
+                  search: () =>
+                    Ref.update(effects, (count) => count + 1).pipe(Effect.as({ available: true })),
+                }),
+                Toolkit.make(lookup).toLayer({
+                  current_lookup: () =>
+                    Ref.update(lookups, (count) => count + 1).pipe(Effect.as("current evidence")),
+                }),
+              ),
+            ),
+          );
+
+          const receipt = yield* Effect.gen(function* () {
+            const runtime = yield* DurableAgentRuntime;
+
+            const receipt = yield* runtime.submitRegistered(
+              { definition: originalDefinition },
+              { question: "preserve this exact request" },
+              submitOptions(`continuity-unstarted-${change}`, "original"),
+            );
+
+            yield* armFailpoint("turn:after-response-append");
+            expect(
+              failureTag(yield* Effect.exit(runtime.processThreadHead(receipt.threadId))),
+            ).toBe("DurableRuntimeFailpointError");
+            yield* clearFailpoint;
+
+            return receipt;
+          }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(originalBindings)));
+
+          const retained = yield* readLog(receipt.threadId);
+
+          const process = DurableAgentRuntime.use((runtime) =>
+            runtime.processThreadHead(receipt.threadId),
+          ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(currentBindings)));
+
+          if (change === "removed" || change === "parameters") {
+            yield* armFailpoint(
+              change === "removed"
+                ? "tools:before-unavailable-append"
+                : "tools:after-unavailable-append",
+            );
+            expect(failureTag(yield* Effect.exit(process))).toBe("DurableRuntimeFailpointError");
+            yield* clearFailpoint;
+
+            const interruptedResults = (yield* readLog(receipt.threadId)).filter(
+              ({ record }) =>
+                record.payload._tag === "ToolCallSettled" &&
+                record.payload.toolCallId === "search-1",
+            );
+
+            expect(interruptedResults).toHaveLength(change === "removed" ? 0 : 1);
+            if (change === "parameters")
+              expect(interruptedResults[0]?.record.payload).toMatchObject({
+                result: { _tag: "ToolUnavailable", execution: "not-executed" },
+                isFailure: true,
+              });
+          }
+          const settled = yield* process;
+
+          expect(Option.isSome(settled) && settled.value).toMatchObject({
+            submissionId: receipt.submissionId,
+            outcome: "completed",
+          });
+          expect(yield* Ref.get(effects)).toBe(0);
+          expect(yield* Ref.get(lookups)).toBe(1);
+          expect(scripted.prompts).toHaveLength(3);
+          expect(JSON.stringify(scripted.prompts[1])).toContain("preserve this exact request");
+          expect(JSON.stringify(scripted.prompts[1])).toContain("ToolUnavailable");
+          expect(JSON.stringify(scripted.prompts[1])).toContain(
+            "Use the current lookup to finish the original request.",
+          );
+          const after = yield* readLog(receipt.threadId);
+
+          expect(after.slice(0, retained.length)).toEqual(retained);
+          const payloads = after.map(({ record }) => record.payload);
+
+          expect(payloads.filter((payload) => payload._tag === "RunStarted")).toHaveLength(1);
+          expect(payloads.filter((payload) => payload._tag === "RunCompleted")).toMatchObject([
+            {
+              runId: runIdForSubmission(receipt.submissionId),
+              output: { answer: "original request completed" },
+            },
+          ]);
+          expect(
+            payloads.filter(
+              (payload) => payload._tag === "ToolCallSettled" && payload.toolCallId === "search-1",
+            ),
+          ).toMatchObject([
+            {
+              runId: runIdForSubmission(receipt.submissionId),
+              toolCallId: "search-1",
+              isFailure: true,
+              result: {
+                _tag: "ToolUnavailable",
+                execution: change === "readonly" ? "unavailable" : "not-executed",
+              },
+            },
+          ]);
+          expect(
+            payloads.filter(
+              (payload) => payload._tag === "ToolCallPrepared" && payload.toolCallId === "search-1",
+            ),
+          ).toEqual([]);
+          expect(payloads.filter((payload) => payload._tag === "SubmissionSettled")).toHaveLength(
+            1,
+          );
+        }),
+    );
+  }
+
+  for (const shape of ["sibling", "sole"] as const) {
+    it.effect(
+      `does not reinterpret a settled ${shape} call as newly assigned completionFromTools`,
+      () =>
+        Effect.gen(function* () {
+          const completedTool = Tool.make("completed_operation", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+          }).annotate(ToolExecutionClass, "uncertain");
+
+          const pendingTool = Tool.make("pending_operation", {
+            parameters: Schema.Struct({}),
+            success: Schema.String,
+          }).annotate(ToolExecutionClass, "uncertain");
+
+          const tools = Toolkit.make(completedTool, pendingTool);
+          const definition = { ...searchDefinition, toolkit: tools };
+          let projections = 0;
+          const pendingCalls = yield* Ref.make(0);
+
+          const currentDefinition = {
+            ...definition,
+            completionFromTools: [
+              {
+                tool: "completed_operation" as const,
+                project: () => {
+                  projections += 1;
+                  throw new Error(
+                    "The current completion projector cannot reinterpret a settled ordinary call",
+                  );
+                },
+              },
+            ],
+          };
+
+          const scripted = yield* makeScriptedModel((call) =>
+            call === 0
+              ? [
+                  {
+                    type: "tool-call",
+                    id: "completed-original",
+                    name: "completed_operation",
+                    params: {},
+                    providerExecuted: false,
+                  },
+                  ...(shape === "sibling"
+                    ? [
+                        {
+                          type: "tool-call" as const,
+                          id: "pending-original",
+                          name: "pending_operation",
+                          params: {},
+                          providerExecuted: false,
+                        },
+                      ]
+                    : []),
+                  { type: "finish", reason: "tool-calls", usage },
+                ]
+              : finalParts('{"answer":"ordinary next turn completed"}'),
+          );
+
+          // Keep the exact Tool objects and explicit semantic versions. Only the Agent's
+          // completion role changes between deployments.
+          const continuity = {
+            versions: { tools: { completed_operation: "v1", pending_operation: "v1" } },
+          };
+
+          const originalBindings = yield* compileRegistrations([
+            {
+              agent: Agent.withModel(definition, scripted.model),
+              definitions: {
+                agent: "original",
+                model: "scripted",
+                tools: ["completed_operation", "pending_operation"],
+              },
+              continuity,
+            },
+          ]).pipe(
+            Effect.provide(
+              tools.toLayer({
+                completed_operation: () =>
+                  Effect.die("The original handler must remain interrupted before dispatch"),
+                pending_operation: () =>
+                  Effect.die("The original pending handler must not dispatch"),
+              }),
+            ),
+          );
+
+          const originalRuntime = yield* DurableAgentRuntime.pipe(
+            Effect.provide(
+              DurableAgentRuntime.layerWithBindings(originalBindings).pipe(
+                Layer.provide(
+                  Layer.succeed(ToolReconciler)({
+                    reconcile: (call) =>
+                      Effect.succeed(
+                        call.toolName === "completed_operation"
+                          ? ReconciliationCompleted.make({
+                              result: "original supplier receipt",
+                              isFailure: false,
+                            })
+                          : ReconciliationUncertain.make({
+                              reason: "The other operation still needs supplier proof",
+                            }),
+                      ),
+                  }),
+                ),
+              ),
+            ),
+          );
+
+          const receipt = yield* originalRuntime.submitRegistered(
+            { definition },
+            { question: "finish the original request" },
+            submitOptions(`changed-completion-role-${shape}`, "original"),
+          );
+
+          yield* armFailpoint("tools:after-prepared-append");
+          expect(
+            failureTag(yield* Effect.exit(originalRuntime.processThreadHead(receipt.threadId))),
+          ).toBe("DurableRuntimeFailpointError");
+          yield* clearFailpoint;
+          // Supplier recovery durably settles the original call before the deployment changes.
+          yield* originalRuntime.runRecovery;
+          const before = yield* readLog(receipt.threadId);
+
+          expect(
+            before
+              .filter(({ record }) => record.payload._tag === "ToolCallSettled")
+              .map(({ record }) => record.payload),
+          ).toMatchObject([
+            {
+              toolCallId: "completed-original",
+              result: "original supplier receipt",
+              isFailure: false,
+            },
+          ]);
+          expect(before.filter(({ record }) => record.payload._tag === "RunCompleted")).toEqual([]);
+          if (shape === "sibling") {
+            expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
+            yield* originalRuntime.resolveUnknown(
+              UnknownResolutionCommand.make({
+                submissionId: receipt.submissionId,
+                toolCallId: Schema.decodeSync(ToolCallId)("pending-original"),
+                author: "supplier",
+                reason: "The pending original operation never started",
+                resolution: ResolutionNeverHappened.make({}),
+              }),
+            );
+          }
+
+          const currentBindings = yield* compileRegistrations([
+            {
+              agent: Agent.withModel(currentDefinition, scripted.model),
+              definitions: {
+                agent: "current",
+                model: "scripted",
+                tools: ["completed_operation", "pending_operation"],
+              },
+              continuity,
+            },
+          ]).pipe(
+            Effect.provide(
+              tools.toLayer({
+                completed_operation: () =>
+                  Effect.die("A settled operation must not dispatch under current code"),
+                pending_operation: () =>
+                  Ref.update(pendingCalls, (count) => count + 1).pipe(
+                    Effect.as("remaining evidence"),
+                  ),
+              }),
+            ),
+          );
+
+          const settled = yield* DurableAgentRuntime.use((runtime) =>
+            runtime.processThreadHead(receipt.threadId),
+          ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(currentBindings)));
+
+          expect(Option.isSome(settled) && settled.value).toMatchObject({
+            submissionId: receipt.submissionId,
+            outcome: "completed",
+          });
+          expect(projections).toBe(0);
+          expect(yield* Ref.get(pendingCalls)).toBe(shape === "sibling" ? 1 : 0);
+          expect(scripted.prompts).toHaveLength(2);
+          expect(JSON.stringify(scripted.prompts[1])).toContain("original supplier receipt");
+          if (shape === "sibling")
+            expect(JSON.stringify(scripted.prompts[1])).toContain("remaining evidence");
+          const after = yield* readLog(receipt.threadId);
+
+          expect(after.slice(0, before.length)).toEqual(before);
+          const payloads = after.map(({ record }) => record.payload);
+
+          expect(payloads.filter((payload) => payload._tag === "RunStarted")).toHaveLength(1);
+          expect(payloads.filter((payload) => payload._tag === "RunCompleted")).toMatchObject([
+            {
+              runId: runIdForSubmission(receipt.submissionId),
+              output: { answer: "ordinary next turn completed" },
+            },
+          ]);
+          expect(
+            payloads.filter(
+              (payload) =>
+                payload._tag === "ToolCallSettled" && payload.toolCallId === "completed-original",
+            ),
+          ).toHaveLength(1);
+        }),
+    );
+  }
+
+  it.effect("keeps settled sibling results when a deployment permanently removes their tool", () =>
+    Effect.gen(function* () {
+      const starts = yield* Ref.make(0);
+
+      const sibling = Tool.make("sibling", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      }).annotate(ToolExecutionClass, "readonly");
+
+      const originalTools = Toolkit.make(Search, sibling);
+      const originalDefinition = { ...searchDefinition, toolkit: originalTools };
+      const currentTools = Toolkit.make(sibling);
+      const currentDefinition = { ...searchDefinition, toolkit: currentTools };
+
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0
+          ? [
+              toolCallParts[0]!,
+              {
+                type: "tool-call",
+                id: "sibling-1",
+                name: "sibling",
+                params: {},
+                providerExecuted: false,
+              },
+              { type: "finish", reason: "tool-calls", usage },
+            ]
+          : finalParts('{"answer":"both recorded results retained"}'),
+      );
+
+      const originalBindings = yield* compileRegistrations([
+        {
+          agent: Agent.withModel(originalDefinition, scripted.model),
+          definitions: { agent: "original", model: "scripted", tools: ["search", "sibling"] },
+          continuity: { versions: { tools: { search: "v1", sibling: "v1" } } },
+        },
+      ]).pipe(
+        Effect.provide(
+          originalTools.toLayer({
+            search: () =>
+              Ref.update(starts, (count) => count + 1).pipe(Effect.as({ available: true })),
+            sibling: () =>
+              Ref.update(starts, (count) => count + 1).pipe(Effect.as("sibling evidence")),
+          }),
+        ),
+      );
+
+      const currentBindings = yield* compileRegistrations([
+        {
+          agent: Agent.withModel(currentDefinition, scripted.model),
+          definitions: { agent: "current", model: "scripted", tools: ["sibling"] },
+          continuity: { versions: { tools: { sibling: "v1" } } },
+        },
+      ]).pipe(
+        Effect.provide(
+          currentTools.toLayer({
+            sibling: () => Effect.die("A settled sibling must not run again"),
+          }),
+        ),
+      );
+
+      const receipt = yield* Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+
+        const receipt = yield* runtime.submitRegistered(
+          { definition: originalDefinition },
+          { question: "combine both" },
+          submitOptions("continuity-settled-siblings", "original"),
+        );
+
+        yield* armFailpoint("turn:after-results-append");
+        expect(failureTag(yield* Effect.exit(runtime.processThreadHead(receipt.threadId)))).toBe(
+          "DurableRuntimeFailpointError",
+        );
+        yield* clearFailpoint;
+
+        return receipt;
+      }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(originalBindings)));
+
+      const before = yield* readLog(receipt.threadId);
+
+      const settled = yield* DurableAgentRuntime.use((runtime) =>
+        runtime.processThreadHead(receipt.threadId),
+      ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(currentBindings)));
+
+      expect(Option.isSome(settled) && settled.value.outcome).toBe("completed");
+      expect(yield* Ref.get(starts)).toBe(2);
+      expect(scripted.prompts).toHaveLength(2);
+      expect(JSON.stringify(scripted.prompts[1])).toContain("sibling evidence");
+      expect(JSON.stringify(scripted.prompts[1])).toContain("available");
+      const after = yield* readLog(receipt.threadId);
+
+      expect(after.slice(0, before.length)).toEqual(before);
+      expect(after.filter(({ record }) => record.payload._tag === "ToolCallSettled")).toHaveLength(
+        2,
+      );
+    }),
+  );
+
+  for (const proof of ["NeverStarted", "SafeToRetry"] as const) {
+    it.effect(`${proof} cannot execute a prepared operation with changed semantics`, () =>
+      Effect.gen(function* () {
+        const starts = yield* Ref.make(0);
+        const tools = Toolkit.make(Search.annotate(ToolExecutionClass, "uncertain"));
+        const definition = { ...searchDefinition, toolkit: tools };
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0 ? toolCallParts : finalParts('{"answer":"retired safely"}'),
+        );
+
+        const handlers = tools.toLayer({
+          search: () =>
+            Ref.update(starts, (count) => count + 1).pipe(Effect.as({ available: true })),
+        });
+
+        const originalBindings = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(definition, scripted.model),
+            definitions: { agent: "original", model: "scripted", tools: ["search"] },
+            continuity: { versions: { tools: { search: "v1" } } },
+          },
+        ]).pipe(Effect.provide(handlers));
+
+        const currentBindings = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(definition, scripted.model),
+            definitions: { agent: "current", model: "scripted", tools: ["search"] },
+            continuity: { versions: { tools: { search: "v2" } } },
+          },
+        ]).pipe(Effect.provide(handlers));
+
+        const receipt = yield* Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
+
+          const receipt = yield* runtime.submitRegistered(
+            { definition },
+            { question: "original operation" },
+            submitOptions(`continuity-proof-${proof}`, "original"),
+          );
+
+          yield* armFailpoint("tools:after-prepared-append");
+          expect(failureTag(yield* Effect.exit(runtime.processThreadHead(receipt.threadId)))).toBe(
+            "DurableRuntimeFailpointError",
+          );
+          yield* clearFailpoint;
+
+          return receipt;
+        }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(originalBindings)));
+
+        const retained = yield* readLog(receipt.threadId);
+        const reviewed: Array<unknown> = [];
+
+        const currentLayer = DurableAgentRuntime.layerWithBindings(currentBindings).pipe(
+          Layer.provide(
+            Layer.succeed(ToolReconciler)({
+              reconcile: (evidence) => {
+                reviewed.push(evidence);
+
+                return Effect.succeed(
+                  proof === "NeverStarted"
+                    ? ReconciliationNeverStarted.make({})
+                    : ReconciliationSafeToRetry.make({}),
+                );
+              },
+            }),
+          ),
+        );
+
+        const outcome = yield* DurableAgentRuntime.use((runtime) =>
+          runtime.processThreadHead(receipt.threadId),
+        ).pipe(Effect.provide(currentLayer));
+
+        expect(yield* Ref.get(starts)).toBe(0);
+        expect(reviewed).toMatchObject([
+          {
+            submissionId: receipt.submissionId,
+            toolCallId: "search-1",
+            parameters: { query: "sea" },
+          },
+        ]);
+        const after = yield* readLog(receipt.threadId);
+
+        expect(after.slice(0, retained.length)).toEqual(retained);
+        const payloads = after.map(({ record }) => record.payload);
+
+        if (proof === "NeverStarted") {
+          expect(Option.isSome(outcome) && outcome.value.outcome).toBe("completed");
+          expect(payloads.filter((payload) => payload._tag === "ToolCallSettled")).toMatchObject([
+            {
+              toolCallId: "search-1",
+              result: { _tag: "ToolUnavailable", execution: "not-executed" },
+            },
+          ]);
+          expect(scripted.prompts).toHaveLength(2);
+        } else {
+          expect(Option.isNone(outcome)).toBe(true);
+          expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
+          expect(payloads.filter((payload) => payload._tag === "ToolCallUnknown")).toMatchObject([
+            { toolCallId: "search-1" },
+          ]);
+          expect(payloads.filter((payload) => payload._tag === "ToolCallSettled")).toEqual([]);
+          expect(scripted.prompts).toHaveLength(1);
+        }
+      }),
+    );
+  }
+
+  it.effect(
+    "recovers a committed external result after its handler has been removed without repeating the effect",
+    () =>
+      Effect.gen(function* () {
+        const committed = yield* Deferred.make<void>();
+        const effects = yield* Ref.make(0);
+        const finalized = yield* Ref.make(0);
+        const tools = Toolkit.make(Search.annotate(ToolExecutionClass, "uncertain"));
+        const originalDefinition = { ...searchDefinition, toolkit: tools };
+        const currentDefinition = { ...searchDefinition, toolkit: Toolkit.empty };
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? toolCallParts
+            : finalParts('{"answer":"supplier confirmed the original effect"}'),
+        );
+
+        const originalBindings = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(originalDefinition, scripted.model),
+            definitions: { agent: "original", model: "scripted", tools: ["search"] },
+          },
+        ]).pipe(
+          Effect.provide(
+            tools.toLayer({
+              search: () =>
+                Ref.update(effects, (count) => count + 1).pipe(
+                  Effect.andThen(Deferred.succeed(committed, undefined)),
+                  Effect.andThen(Effect.never),
+                  Effect.ensuring(Ref.update(finalized, (count) => count + 1)),
+                ),
+            }),
+          ),
+        );
+
+        const currentBindings = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(currentDefinition, scripted.model),
+            definitions: { agent: "current", model: "scripted", tools: [] },
+          },
+        ]);
+
+        const receipt = yield* Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
+
+          const receipt = yield* runtime.submitRegistered(
+            { definition: originalDefinition },
+            { question: "keep the supplier receipt" },
+            submitOptions("continuity-committed-effect", "original"),
+          );
+
+          const worker = yield* Effect.forkChild(runtime.processThreadHead(receipt.threadId));
+
+          yield* Deferred.await(committed);
+          yield* Fiber.interrupt(worker);
+
+          return receipt;
+        }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(originalBindings)));
+
+        expect(yield* Ref.get(effects)).toBe(1);
+        expect(yield* Ref.get(finalized)).toBe(1);
+        const retained = yield* readLog(receipt.threadId);
+
+        expect(retained.filter(({ record }) => record.payload._tag === "ToolCallSettled")).toEqual(
+          [],
+        );
+
+        const currentLayer = DurableAgentRuntime.layerWithBindings(currentBindings).pipe(
+          Layer.provide(
+            Layer.succeed(ToolReconciler)({
+              reconcile: (evidence) => {
+                expect(evidence).toMatchObject({
+                  submissionId: receipt.submissionId,
+                  runId: runIdForSubmission(receipt.submissionId),
+                  toolCallId: "search-1",
+                  parameters: { query: "sea" },
+                });
+
+                return Effect.succeed(
+                  ReconciliationCompleted.make({
+                    result: { available: true, supplierReceipt: "external-1" },
+                    isFailure: false,
+                  }),
+                );
+              },
+            }),
+          ),
+        );
+
+        const settled = yield* DurableAgentRuntime.use((runtime) =>
+          runtime.processThreadHead(receipt.threadId),
+        ).pipe(Effect.provide(currentLayer));
+
+        expect(Option.isSome(settled) && settled.value).toMatchObject({
+          submissionId: receipt.submissionId,
+          outcome: "completed",
+        });
+        expect(yield* Ref.get(effects)).toBe(1);
+        expect(scripted.prompts).toHaveLength(2);
+        expect(JSON.stringify(scripted.prompts[1])).toContain("external-1");
+        const after = yield* readLog(receipt.threadId);
+
+        expect(after.slice(0, retained.length)).toEqual(retained);
+        expect(
+          after
+            .filter(({ record }) => record.payload._tag === "ToolCallSettled")
+            .map(({ record }) => record.payload),
+        ).toMatchObject([
+          {
+            toolCallId: "search-1",
+            isFailure: false,
+            result: { available: true, supplierReceipt: "external-1" },
+          },
+        ]);
+      }),
+  );
+
+  it.effect(
+    "settles an atomic completion under changed output, disposition, and completion codecs without running current code",
+    () =>
+      Effect.gen(function* () {
+        const fixture = makeReceiptCompletionFixture();
+        const calls = yield* Ref.make(0);
+
+        const originalDefinition = {
+          ...fixture.definition,
+          runDisposition: {
+            schema: Schema.Literal("original-complete"),
+            fromOutput: () => "original-complete",
+          },
+        };
+
+        const scripted = yield* makeScriptedModel(() => receiptCreateParts);
+
+        const originalBindings = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(originalDefinition, scripted.model),
+            definitions: { agent: "original", model: "scripted", tools: ["create", "respond"] },
+          },
+        ]).pipe(
+          Effect.provide(
+            fixture.tools.toLayer({
+              create: () =>
+                Ref.update(calls, (count) => count + 1).pipe(
+                  Effect.as({ name: "Original", href: "/original", complete: true }),
+                ),
+              respond: () => Effect.die("Completion must come from the action receipt"),
+            }),
+          ),
+        );
+
+        const receipt = yield* Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
+
+          const receipt = yield* runtime.submitRegistered(
+            { definition: originalDefinition },
+            { question: "create the original" },
+            submitOptions("continuity-canonical-completion", "original"),
+          );
+
+          yield* armFailpoint("turn:after-results-append");
+          expect(failureTag(yield* Effect.exit(runtime.processThreadHead(receipt.threadId)))).toBe(
+            "DurableRuntimeFailpointError",
+          );
+          yield* clearFailpoint;
+
+          return receipt;
+        }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(originalBindings)));
+
+        const retained = yield* readLog(receipt.threadId);
+
+        expect(
+          retained.filter(({ record }) => record.payload._tag === "RunCompleted"),
+        ).toHaveLength(1);
+
+        const currentDefinition = Agent.make(fixture.definition.id, {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ incompatible: Schema.Number }),
+          instructions: () => {
+            throw new Error("A canonical completion needs no new instructions");
+          },
+          toolkit: Toolkit.empty,
+          runDisposition: {
+            schema: Schema.Literal("current-complete"),
+            fromOutput: () => {
+              throw new Error("A canonical disposition must not be projected again");
+            },
+          },
+        });
+
+        const currentBindings = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(currentDefinition, scripted.model),
+            definitions: { agent: "current", model: "new-model", tools: [] },
+          },
+        ]);
+
+        const settled = yield* DurableAgentRuntime.use((runtime) =>
+          runtime.processThreadHead(receipt.threadId),
+        ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(currentBindings)));
+
+        expect(Option.isSome(settled) && settled.value).toMatchObject({
+          submissionId: receipt.submissionId,
+          outcome: "completed",
+          runDisposition: "original-complete",
+        });
+        expect(yield* Ref.get(calls)).toBe(1);
+        expect(scripted.prompts).toHaveLength(1);
+        const after = yield* readLog(receipt.threadId);
+
+        expect(after.slice(0, retained.length)).toEqual(retained);
+        expect(
+          after
+            .filter(({ record }) => record.payload._tag === "RunCompleted")
+            .map(({ record }) => record.payload),
+        ).toMatchObject([
+          {
+            output: { answer: "Created Original: /original" },
+            runDisposition: "original-complete",
+          },
+        ]);
+        expect(after.at(-1)?.record.payload).toMatchObject({
+          _tag: "SubmissionSettled",
+          result: { answer: "Created Original: /original" },
+          runDisposition: "original-complete",
+        });
+        expect(
+          after.filter(({ record }) => record.payload._tag === "SubmissionSettled"),
+        ).toHaveLength(1);
       }),
   );
 });

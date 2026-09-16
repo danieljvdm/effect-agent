@@ -249,21 +249,26 @@ const harness = Effect.fn("workerHostHarness")(function* (
       sourceAgent,
       target,
       ...(options.sourceRevisions ?? []).map((revision) => revision.definition),
-    ].map((definition) => ({
-      definition,
-      agentId: definition.id,
-      digests:
-        options.sourceRevisions?.find((revision) => revision.definition === definition)?.digests ??
-        definitions,
-      attempt: () => Effect.succeed(Option.none()),
-      reporting:
-        definition === sourceAgent
-          ? (options.sourceReports ?? [])
-          : (options.sourceRevisions?.find((revision) => revision.definition === definition)
-              ?.reporting ??
-            options.targetReports ??
-            []),
-    })),
+    ]
+      .filter(
+        (definition, index, entries) =>
+          entries.findLastIndex((entry) => entry.id === definition.id) === index,
+      )
+      .map((definition) => ({
+        definition,
+        agentId: definition.id,
+        digests:
+          options.sourceRevisions?.find((revision) => revision.definition === definition)
+            ?.digests ?? definitions,
+        attempt: () => Effect.succeed(Option.none()),
+        reporting:
+          definition === sourceAgent
+            ? (options.sourceReports ?? [])
+            : (options.sourceRevisions?.find((revision) => revision.definition === definition)
+                ?.reporting ??
+              options.targetReports ??
+              []),
+      })),
   }).pipe(
     Effect.flatMap((runtime) =>
       makeAgentUpdateRuntime({
@@ -1040,14 +1045,12 @@ layer(NodeCrypto.layer)((it) => {
         ThreadCreated.make({ agentId: sourceAgent.id, definitions }),
       );
 
-      // An exact registered owner is required; a different digest cannot fall back
-      // to the ThreadCreated agent or create a new canonical worker reservation.
+      // Current source code can retry the original worker despite older admission digests.
+      // The retry still carries the original worker identity and frozen delivery.
       const count = h.logs.get(sourceId)?.length;
 
       h.submissions.set(ownerId, SubmissionSnapshot.make({ ...owner, agentDigests: definitions }));
-      expect((yield* host.start(request("unregistered-upgrade")).pipe(Effect.flip)).reason).toBe(
-        "declaration-unavailable",
-      );
+      expect(yield* host.start(request("upgraded-scout"))).toEqual(started);
       expect(h.logs.get(sourceId)?.length).toBe(count);
       h.submissions.set(
         ownerId,
@@ -1244,242 +1247,222 @@ layer(NodeCrypto.layer)((it) => {
       }),
   );
   // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
-  it.effect(
-    "pins captured owner reporting across later owner revisions while preserving legacy context and reports",
-    () =>
-      Effect.gen(function* () {
-        const ownerId = Schema.decodeSync(SubmissionId)("source-owner");
-        const revisedDigest = Schema.decodeSync(Digest)("b".repeat(64));
-        const revisedDigests = DefinitionDigests.make({ ...definitions, agent: revisedDigest });
+  it.effect("uses current report code while preserving the original owner and worker origin", () =>
+    Effect.gen(function* () {
+      const ownerId = Schema.decodeSync(SubmissionId)("source-owner");
+      const revisedDigest = Schema.decodeSync(Digest)("b".repeat(64));
+      const revisedDigests = DefinitionDigests.make({ ...definitions, agent: revisedDigest });
 
-        const revised = Agent.make(sourceAgent.id, {
-          input: sourceAgent.input,
-          output: sourceAgent.output,
-          instructions: "Revised source",
-          toolkit: Toolkit.empty,
-          policy: AgentPolicy.make({ ...sourceAgent.policy, maxTurns: 30 }),
-        });
+      const revised = Agent.make(sourceAgent.id, {
+        input: sourceAgent.input,
+        output: sourceAgent.output,
+        instructions: "Revised source",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({ ...sourceAgent.policy, maxTurns: 30 }),
+      });
 
-        const snapshot = SubmissionSnapshot.make({
-          submissionId: ownerId,
-          threadId: sourceId,
-          queueSequence: Schema.decodeSync(QueueSequence)(1),
-          principal,
-          idempotencyKey: Schema.decodeSync(IdempotencyKey)("source-owner"),
-          agentId: sourceAgent.id,
-          agentDigests: revisedDigests,
-          deploymentId: Schema.decodeSync(DeploymentId)("test"),
-          inputPayload: "immutable capture",
-          inputDigest: digest,
-          receiptId: Schema.decodeSync(ReceiptId)("source-owner"),
-          state: "ready",
-          createdAt: DateTime.makeUnsafe(0),
-        });
+      const snapshot = SubmissionSnapshot.make({
+        submissionId: ownerId,
+        threadId: sourceId,
+        queueSequence: Schema.decodeSync(QueueSequence)(1),
+        principal,
+        idempotencyKey: Schema.decodeSync(IdempotencyKey)("source-owner"),
+        agentId: sourceAgent.id,
+        agentDigests: revisedDigests,
+        deploymentId: Schema.decodeSync(DeploymentId)("test"),
+        inputPayload: "immutable capture",
+        inputDigest: digest,
+        receiptId: Schema.decodeSync(ReceiptId)("source-owner"),
+        state: "ready",
+        createdAt: DateTime.makeUnsafe(0),
+      });
 
-        const reportsA = [reportWith(() => Effect.succeed({ encodedInput: "report:A" }))];
-        const legacy = yield* harness({ sourceReports: reportsA });
+      const reportsA = [reportWith(() => Effect.succeed({ encodedInput: "report:A" }))];
+      const legacy = yield* harness({ sourceReports: reportsA });
 
-        legacy.submissions.set(ownerId, snapshot);
+      legacy.submissions.set(ownerId, snapshot);
 
-        const context = {
-          source: { _tag: "programmatic" as const, threadId: sourceId, agentId: sourceAgent.id },
-          policy: revised.policy,
-          depth: 0,
-        };
+      const context = {
+        source: { _tag: "programmatic" as const, threadId: sourceId, agentId: sourceAgent.id },
+        policy: revised.policy,
+        depth: 0,
+      };
 
-        const legacyFacet = legacy.runtime.facet(context, principal, ownerId);
+      const legacyFacet = legacy.runtime.facet(context, principal, ownerId);
 
-        expect((yield* legacyFacet.context).policy).toEqual(revised.policy);
-        const started = yield* legacyFacet.start(request("legacy-owner"));
+      expect((yield* legacyFacet.context).policy).toEqual(revised.policy);
+      const started = yield* legacyFacet.start(request("legacy-owner"));
 
-        expect(started.receipt.threadId).toBe(started.worker.threadId);
-        yield* legacy.settle(started.receipt);
-        expect(
-          [...legacy.deliveries.values()]
-            .filter((row) => row.envelope.threadId === sourceId)
-            .map((row) => row.envelope),
-        ).toEqual([expect.objectContaining({ definitions, input: "report:A" })]);
+      expect(started.receipt.threadId).toBe(started.worker.threadId);
+      yield* legacy.settle(started.receipt);
+      expect(
+        [...legacy.deliveries.values()]
+          .filter((row) => row.envelope.threadId === sourceId)
+          .map((row) => row.envelope),
+      ).toEqual([expect.objectContaining({ definitions, input: "report:A" })]);
 
-        // A new, verified owner must not need the code that created the conversation years ago.
-        const recreated = yield* harness({
-          sourceRevisions: [{ definition: revised, digests: revisedDigests }],
-        });
+      // A new, verified owner must not need the code that created the conversation years ago.
+      const recreated = yield* harness({
+        sourceRevisions: [{ definition: revised, digests: revisedDigests }],
+      });
 
-        const history = recreated.logs.get(sourceId)!;
-        const first = history[0]!;
-        const created = first.record.payload;
+      const history = recreated.logs.get(sourceId)!;
+      const first = history[0]!;
+      const created = first.record.payload;
 
-        if (created._tag !== "ThreadCreated") throw new Error("Expected original Thread identity");
+      if (created._tag !== "ThreadCreated") throw new Error("Expected original Thread identity");
 
-        const original = {
-          ...first,
-          record: {
-            ...first.record,
-            payload: ThreadCreated.make({
-              ...created,
-              definitions: { ...definitions, agent: Schema.decodeSync(Digest)("d".repeat(64)) },
-            }),
+      const original = {
+        ...first,
+        record: {
+          ...first.record,
+          payload: ThreadCreated.make({
+            ...created,
+            definitions: { ...definitions, agent: Schema.decodeSync(Digest)("d".repeat(64)) },
+          }),
+        },
+      };
+
+      recreated.logs.set(sourceId, [original, ...history.slice(1)]);
+      recreated.submissions.set(ownerId, snapshot);
+
+      const currentOwner = yield* recreated.runtime.acquire({
+        sourceThreadId: sourceId,
+        sourceSubmissionId: ownerId,
+        principal,
+      });
+
+      expect((yield* currentOwner.context).policy).toEqual(revised.policy);
+      expect((yield* currentOwner.start(request("current-owner"))).receipt.threadId).toBeDefined();
+      expect(recreated.logs.get(sourceId)?.[0]).toEqual(original);
+
+      const laterOwnerId = Schema.decodeSync(SubmissionId)("later-source-owner");
+
+      const laterDigests = DefinitionDigests.make({
+        ...definitions,
+        agent: Schema.decodeSync(Digest)("c".repeat(64)),
+      });
+
+      const laterDefinition = Agent.make(sourceAgent.id, {
+        input: sourceAgent.input,
+        output: sourceAgent.output,
+        instructions: "Later source",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({ ...sourceAgent.policy, maxTurns: 40 }),
+      });
+
+      let reportsC = 0;
+      const reportOwners: Array<SubmissionId | undefined> = [];
+
+      const opted = yield* harness({
+        // Regression: https://github.com/danieljvdm/effect-agent/commit/4600d240f44b1ef1fe9b0fc58f39e293a6434f85
+        // A strict owner needs the original locator even after its Run is idle.
+        authorize: (request) =>
+          Effect.gen(function* () {
+            if (request.operation === "followUp") {
+              reportOwners.push(request.sourceSubmissionId);
+              if (request.sourceSubmissionId === undefined)
+                return yield* WorkerError.make({
+                  operation: request.operation,
+                  reason: "denied",
+                });
+            }
+
+            return principal;
+          }),
+        sourceReports: reportsA,
+        sourceRevisions: [
+          {
+            definition: laterDefinition,
+            digests: laterDigests,
+            reporting: [
+              reportWith(() =>
+                Effect.sync(() => {
+                  reportsC++;
+
+                  return { encodedInput: "report:C" };
+                }),
+              ),
+            ],
           },
-        };
-
-        recreated.logs.set(sourceId, [original, ...history.slice(1)]);
-        recreated.submissions.set(ownerId, snapshot);
-
-        const currentOwner = yield* recreated.runtime.acquire({
-          sourceThreadId: sourceId,
-          sourceSubmissionId: ownerId,
-          principal,
-        });
-
-        expect((yield* currentOwner.context).policy).toEqual(revised.policy);
-        expect(
-          (yield* currentOwner.start(request("current-owner"))).receipt.threadId,
-        ).toBeDefined();
-        expect(recreated.logs.get(sourceId)?.[0]).toEqual(original);
-
-        const laterOwnerId = Schema.decodeSync(SubmissionId)("later-source-owner");
-
-        const laterDigests = DefinitionDigests.make({
-          ...definitions,
-          agent: Schema.decodeSync(Digest)("c".repeat(64)),
-        });
-
-        const laterDefinition = Agent.make(sourceAgent.id, {
-          input: sourceAgent.input,
-          output: sourceAgent.output,
-          instructions: "Later source",
-          toolkit: Toolkit.empty,
-          policy: AgentPolicy.make({ ...sourceAgent.policy, maxTurns: 40 }),
-        });
-
-        let reportsB = 0;
-        let reportsC = 0;
-        const reportOwners: Array<SubmissionId | undefined> = [];
-
-        const opted = yield* harness({
-          // Regression: https://github.com/danieljvdm/effect-agent/commit/4600d240f44b1ef1fe9b0fc58f39e293a6434f85
-          // A strict owner needs the original locator even after its Run is idle.
-          authorize: (request) =>
+        ],
+      }).pipe(
+        Effect.provideService(WorkerPolicyResolver, {
+          resolveSource: (request) =>
             Effect.gen(function* () {
-              if (request.operation === "followUp") {
-                reportOwners.push(request.sourceSubmissionId);
-                if (request.sourceSubmissionId === undefined)
-                  return yield* WorkerError.make({
-                    operation: request.operation,
-                    reason: "denied",
-                  });
+              if (request.submission === undefined)
+                return yield* WorkerError.make({ operation: "start", reason: "unavailable" });
+              if (request.submission.submissionId === laterOwnerId) {
+                expect(request.definition).toBe(laterDefinition);
+                expect(request.definitions).toEqual(laterDigests);
+
+                return Option.some(laterDefinition.policy);
               }
+              expect(request.definition).toBe(laterDefinition);
+              expect(request.definitions).toEqual(revisedDigests);
+              expect(request.submission.inputPayload).toBe("immutable capture");
 
-              return principal;
+              return Option.some(revised.policy);
             }),
-          sourceReports: reportsA,
-          sourceRevisions: [
-            {
-              definition: revised,
-              digests: revisedDigests,
-              reporting: [
-                reportWith((report) =>
-                  Effect.sync(() => {
-                    reportsB++;
-                    expect(report.context.policy).toEqual(revised.policy);
+          resolveTarget: () => Effect.succeed(Option.none()),
+        }),
+      );
 
-                    return { encodedInput: "report:B" };
-                  }),
-                ),
-              ],
-            },
-            {
-              definition: laterDefinition,
-              digests: laterDigests,
-              reporting: [
-                reportWith(() =>
-                  Effect.sync(() => {
-                    reportsC++;
+      opted.submissions.set(ownerId, snapshot);
+      expect((yield* opted.host.context.pipe(Effect.flip)).reason).toBe("unavailable");
+      expect(
+        yield* opted.host.list({ target, delegationId: request("list").delegationId, limit: 10 }),
+      ).toEqual({ items: [], next: null });
 
-                    return { encodedInput: "report:C" };
-                  }),
-                ),
-              ],
-            },
-          ],
-        }).pipe(
-          Effect.provideService(WorkerPolicyResolver, {
-            resolveSource: (request) =>
-              Effect.gen(function* () {
-                if (request.submission === undefined)
-                  return yield* WorkerError.make({ operation: "start", reason: "unavailable" });
-                if (request.submission.submissionId === laterOwnerId) {
-                  expect(request.definition).toBe(laterDefinition);
-                  expect(request.definitions).toEqual(laterDigests);
+      const selected = yield* opted.runtime.acquire({
+        sourceThreadId: sourceId,
+        principal,
+        sourceSubmissionId: ownerId,
+      });
 
-                  return Option.some(laterDefinition.policy);
-                }
-                expect(request.definition).toBe(revised);
-                expect(request.definitions).toEqual(revisedDigests);
-                expect(request.submission.inputPayload).toBe("immutable capture");
+      expect((yield* selected.context).policy).toEqual(revised.policy);
+      const worker = yield* selected.start(request("owner-B-worker"));
+      const origin = opted.submissions.get(worker.receipt.submissionId)!.workerAdmission!.origin;
 
-                return Option.some(revised.policy);
-              }),
-            resolveTarget: () => Effect.succeed(Option.none()),
-          }),
-        );
+      expect(origin.reporting?.sourceDigests).toEqual(laterDigests);
+      yield* opted.settle(worker.receipt);
+      opted.submissions.set(
+        laterOwnerId,
+        SubmissionSnapshot.make({
+          ...snapshot,
+          submissionId: laterOwnerId,
+          agentDigests: laterDigests,
+          inputPayload: "later immutable capture",
+        }),
+      );
 
-        opted.submissions.set(ownerId, snapshot);
-        expect((yield* opted.host.context.pipe(Effect.flip)).reason).toBe("unavailable");
-        expect(
-          yield* opted.host.list({ target, delegationId: request("list").delegationId, limit: 10 }),
-        ).toEqual({ items: [], next: null });
+      const laterSource = yield* opted.runtime.acquire({
+        sourceThreadId: sourceId,
+        principal,
+        sourceSubmissionId: laterOwnerId,
+      });
 
-        const selected = yield* opted.runtime.acquire({
-          sourceThreadId: sourceId,
-          principal,
-          sourceSubmissionId: ownerId,
-        });
+      const next = yield* laterSource.followUp({
+        worker: worker.worker,
+        target,
+        idempotencyKey: Schema.decodeSync(IdempotencyKey)("owner-C-followup"),
+        encodedInput: { text: "next" },
+        encodedParameters: { note: "next" },
+      });
 
-        expect((yield* selected.context).policy).toEqual(revised.policy);
-        const worker = yield* selected.start(request("owner-B-worker"));
-        const origin = opted.submissions.get(worker.receipt.submissionId)!.workerAdmission!.origin;
-
-        expect(origin.reporting?.sourceDigests).toEqual(revisedDigests);
-        yield* opted.settle(worker.receipt);
-        opted.submissions.set(
-          laterOwnerId,
-          SubmissionSnapshot.make({
-            ...snapshot,
-            submissionId: laterOwnerId,
-            agentDigests: laterDigests,
-            inputPayload: "later immutable capture",
-          }),
-        );
-
-        const laterSource = yield* opted.runtime.acquire({
-          sourceThreadId: sourceId,
-          principal,
-          sourceSubmissionId: laterOwnerId,
-        });
-
-        const next = yield* laterSource.followUp({
-          worker: worker.worker,
-          target,
-          idempotencyKey: Schema.decodeSync(IdempotencyKey)("owner-C-followup"),
-          encodedInput: { text: "next" },
-          encodedParameters: { note: "next" },
-        });
-
-        yield* opted.settle(next);
-        expect(opted.submissions.get(next.submissionId)!.workerAdmission!.origin).toEqual(origin);
-        expect(reportsB).toBe(2);
-        expect(reportsC).toBe(0);
-        expect(reportOwners).toEqual([ownerId, laterOwnerId, ownerId]);
-        expect(
-          [...opted.deliveries.values()]
-            .filter((row) => row.envelope.threadId === sourceId)
-            .map((row) => row.envelope),
-        ).toEqual([
-          expect.objectContaining({ definitions: revisedDigests, input: "report:B" }),
-          expect.objectContaining({ definitions: revisedDigests, input: "report:B" }),
-        ]);
-      }),
+      yield* opted.settle(next);
+      expect(opted.submissions.get(next.submissionId)!.workerAdmission!.origin).toEqual(origin);
+      expect(reportsC).toBe(2);
+      expect(reportOwners).toEqual([ownerId, laterOwnerId, ownerId]);
+      expect(
+        [...opted.deliveries.values()]
+          .filter((row) => row.envelope.threadId === sourceId)
+          .map((row) => row.envelope),
+      ).toEqual([
+        expect.objectContaining({ definitions: laterDigests, input: "report:C" }),
+        expect.objectContaining({ definitions: laterDigests, input: "report:C" }),
+      ]);
+    }),
   );
 
   // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d

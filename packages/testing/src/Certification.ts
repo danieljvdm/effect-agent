@@ -187,6 +187,12 @@ export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLoc
   "policy:before-reservation-append",
   "policy:after-reservation-append",
   "resolve:after-intent",
+  // All six shapes retain their original Tool contracts, so none retires an unavailable
+  // operation. The deployment continuity matrix in durable-runtime.test.ts exercises the
+  // actual before/after-unavailable append boundaries, asserting absent/present canonical
+  // ToolUnavailable results at the crash and one original-call settlement after re-drive.
+  "tools:before-unavailable-append",
+  "tools:after-unavailable-append",
   "subagent:after-child-abort-intent",
   // Background workers use retained delivery, source capacity, and child-origin paths absent
   // from these six attached/ordinary scenarios. The before/after creation and completion

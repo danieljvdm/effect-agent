@@ -7,7 +7,7 @@ import {
 import { runInDurableObject } from "cloudflare:test";
 import { Cause, Clock, Effect, Exit, Layer, Option, Schema } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { DefinitionDigests, Digest, ProducerId } from "effect-agent/records";
+import { ProducerId } from "effect-agent/records";
 import {
   ClaimRequest,
   RecoverySnapshotRequest,
@@ -32,6 +32,7 @@ import {
   maintenanceClocks,
   decodeThreadId,
   makeTestBindings,
+  contextCompactorDefinition,
   plannerDefinition,
   submitOptions,
 } from "./fixtures.ts";
@@ -43,8 +44,8 @@ const Generation = Schema.Struct({
 });
 
 describe("maintenance retry deadlines", () => {
-  // Provenance: September 2026 Sentry incident — a root digest mismatch repeatedly claimed
-  // and released the same receipt behind a 50ms pre-arm. Private customer identifiers omitted.
+  // A missing root agent must not repeatedly claim and release the same receipt behind a
+  // 50ms pre-arm, even when auxiliary work fails or the Object is evicted.
   // This real SQLite/eviction sweep needs a wall-clock budget; deadlines still use TestClock.
   it("retains root binding backoff across auxiliary failures, ensureAlarm and eviction", ({
     signal,
@@ -70,7 +71,7 @@ describe("maintenance retry deadlines", () => {
         );
 
         const canonicalBefore = yield* Effect.promise(() => readCanonical(thread));
-        let compatible = false;
+        let available = false;
         let hostDeadline: number | undefined;
         let hostDrains = 0;
         let hostFailure = false;
@@ -90,15 +91,9 @@ describe("maintenance retry deadlines", () => {
                   const config = yield* CloudflareDurableRuntimeConfig;
                   const failpoint = yield* ThreadMaintenanceFailpoint;
 
-                  const changed = bindings.map((binding) => ({
-                    ...binding,
-                    digests: compatible
-                      ? binding.digests
-                      : DefinitionDigests.make({
-                          ...binding.digests,
-                          agent: Schema.decodeSync(Digest)("b".repeat(64)),
-                        }),
-                  }));
+                  const deployed = bindings.filter(
+                    (binding) => available || binding.agentId !== plannerDefinition.id,
+                  );
 
                   const ports = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
                     Layer.provide(
@@ -111,7 +106,7 @@ describe("maintenance retry deadlines", () => {
                   );
 
                   const maintenance = Layer.fresh(ThreadMaintenance.layer).pipe(
-                    Layer.provideMerge(DurableAgentRuntime.layerWithBindings(changed)),
+                    Layer.provideMerge(DurableAgentRuntime.layerWithBindings(deployed)),
                     Layer.provide(ports),
                   );
 
@@ -206,7 +201,7 @@ describe("maintenance retry deadlines", () => {
 
         expect(
           Exit.isFailure(refused) ? Cause.pretty(refused.cause) : "unexpected execution",
-        ).toContain("BindingDigestMismatch");
+        ).toContain("BindingUnavailable");
         expect((yield* snapshot()).ownership).toBeUndefined();
 
         // Exercise every doubling and two deliveries at the one-minute cap. Constructor
@@ -266,15 +261,15 @@ describe("maintenance retry deadlines", () => {
           expect(yield* snapshot()).toEqual(afterFailure);
 
           if (attempt === 0) {
-            // Admit a new request against the currently deployed contract in the same Object.
+            // Admit a new request for another deployed agent in the same Object.
             // Its durable mutation must bypass only the obsolete Object-wide wait; the old
-            // incompatible head keeps its own deadline and never blocks this eligible lane.
+            // unavailable head keeps its own deadline and never blocks this eligible lane.
             const fresh = yield* run(
               ThreadMaintenance.use((maintenance) =>
                 maintenance.withMutation(
                   DurableAgentRuntime.use((runtime) =>
                     runtime.submitRegistered(
-                      { definition: plannerDefinition },
+                      { definition: contextCompactorDefinition },
                       { question: "new compatible request", ref: thread },
                       submitOptions(`${thread}-new`, `${thread}-new`),
                     ),
@@ -334,7 +329,7 @@ describe("maintenance retry deadlines", () => {
           yield* TestClock.adjust(60_000);
         }
 
-        compatible = true;
+        available = true;
         const resumed = yield* run(pass);
 
         expect(Exit.isFailure(resumed) ? Cause.pretty(resumed.cause) : "success").toContain(
@@ -351,7 +346,7 @@ describe("maintenance retry deadlines", () => {
           ),
         );
 
-        // A compatible attempt clears its prior binding wait even if the host join fails.
+        // An available agent clears its prior binding wait even if the host join fails.
         expect(retainedRetries.bindingRetries.map((retry) => retry.submissionId)).not.toContain(
           receipt.submissionId,
         );
@@ -387,10 +382,10 @@ describe("maintenance retry deadlines", () => {
             ),
           );
 
-          compatible = false;
+          available = false;
           expect(Exit.isSuccess(yield* run(pass))).toBe(true);
           yield* TestClock.adjust(5_000);
-          compatible = true;
+          available = true;
           crashAt = location;
           yield* run(pass).pipe(Effect.exit);
           expect(crashAt).toBeUndefined();

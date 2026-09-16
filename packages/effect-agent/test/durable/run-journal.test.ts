@@ -15,7 +15,6 @@ import {
   ObservationOffset,
   ProducerId,
   RecordEnvelope,
-  RecordId,
 } from "effect-agent/records";
 import {
   childThreadIdFor,
@@ -201,6 +200,13 @@ const auditRecord = (
     deploymentId: "deployment-journal",
     payload,
   });
+
+const toolResults = (prompt: Prompt.Prompt): ReadonlyArray<unknown> =>
+  prompt.content.flatMap((message) =>
+    typeof message.content === "string"
+      ? []
+      : message.content.flatMap((part) => (part.type === "tool-result" ? [part.result] : [])),
+  );
 
 describe("run journal batch split (plan §2.1)", () => {
   layer(NodeCrypto.layer)((it) => {
@@ -452,7 +458,7 @@ describe("run journal batch split (plan §2.1)", () => {
       }),
     );
 
-    it.effect("does not replay an incomplete assistant Tool turn into a later Run", () =>
+    it.effect("closes an earlier incomplete Tool turn only in the later model view", () =>
       Effect.gen(function* () {
         const failedResponse = yield* turnResponseBatch(turnInput(toolTurnAppended));
         const records = envelopesOf([failedResponse]);
@@ -469,15 +475,93 @@ describe("run journal batch split (plan §2.1)", () => {
 
         const later = yield* projectRunJournal(records, LATER_RUN_ID);
 
-        expect(later.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
+        expect(later.prompt.content.map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+          "tool",
+        ]);
         expect(
           later.prompt.content.some(
             (message) =>
               message.role === "assistant" &&
               message.content.some((part) => part.type === "tool-call"),
           ),
-        ).toBe(false);
+        ).toBe(true);
+        expect(toolResults(later.prompt)).toEqual([
+          expect.objectContaining({ _tag: "ToolOutcomeUnknown" }),
+          expect.objectContaining({ _tag: "ToolOutcomeUnknown" }),
+        ]);
+        expect(
+          records.flatMap(({ record }) =>
+            record.payload._tag === "ToolCallSettled" ? [record] : [],
+          ),
+        ).toEqual([]);
+        expect(later.policyUsage.toolCalls).toBe(0);
         expect(later.historyBefore).toEqual(later.prompt);
+      }),
+    );
+
+    it.effect("replaces unknown history beside its original call after another Run completes", () =>
+      Effect.gen(function* () {
+        const original = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+
+        const later = yield* turnCanonicalBatch(
+          turnInput(
+            [
+              Prompt.makeMessage("user", {
+                content: [Prompt.makePart("text", { text: "Answer while I wait." })],
+              }),
+              ...completionTurnAppended,
+            ],
+            1,
+            LATER_RUN_ID,
+          ),
+        );
+
+        const prefix = [original.records[0]!, original.records[1]!, ...later.records].map(
+          (record, index) => envelopeAt(index + 1, record),
+        );
+
+        const pending = yield* projectRunJournal(prefix, RUN_NONE_ID);
+
+        expect(toolResults(pending.prompt)).toEqual([
+          { bookingRef: "flight-42" },
+          expect.objectContaining({ _tag: "ToolOutcomeUnknown" }),
+          { messageId: "message-42" },
+        ]);
+
+        const resolved = yield* projectRunJournal(
+          [...prefix, envelopeAt(prefix.length + 1, original.records[2]!)],
+          RUN_NONE_ID,
+        );
+
+        expect(resolved.prompt.content.map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+          "tool",
+          "user",
+          "assistant",
+          "tool",
+        ]);
+        expect(
+          resolved.prompt.content
+            .filter((message) => message.role === "tool")
+            .map((message) =>
+              message.content
+                .filter((part) => part.type === "tool-result")
+                .map((part) => [part.id, part.result]),
+            ),
+        ).toEqual([
+          [
+            ["call-1", { bookingRef: "flight-42" }],
+            ["call-2", { bookingRef: "lodging-7" }],
+          ],
+          [["call-1", { messageId: "message-42" }]],
+        ]);
+        expect(toolResults(pending.prompt)[1]).toMatchObject({ _tag: "ToolOutcomeUnknown" });
+        expect(
+          prefix.filter(({ record }) => record.payload._tag === "ToolCallSettled"),
+        ).toHaveLength(2);
       }),
     );
 
@@ -497,7 +581,11 @@ describe("run journal batch split (plan §2.1)", () => {
 
         const canonicalPrompt = yield* promptFromCanonicalRecords(records);
 
-        expect(canonicalPrompt.content.map((message) => message.role)).toEqual(["system", "user"]);
+        expect(canonicalPrompt.content.map((message) => message.role)).toEqual([
+          "user",
+          "assistant",
+          "tool",
+        ]);
       }),
     );
 
@@ -526,7 +614,7 @@ describe("run journal batch split (plan §2.1)", () => {
     );
 
     it.effect(
-      "omits a partially settled application Tool batch from later Runs without classifying provider calls",
+      "preserves settled siblings and keeps provider results separate from unknown application calls",
       () =>
         Effect.gen(function* () {
           const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
@@ -565,9 +653,15 @@ describe("run journal batch split (plan §2.1)", () => {
 
           const later = yield* projectRunJournal(partialRecords, LATER_RUN_ID);
 
-          expect(later.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
-          expect(later.prompt.content.some((message) => message.role === "assistant")).toBe(false);
-          expect(later.prompt.content.some((message) => message.role === "tool")).toBe(false);
+          expect(later.prompt.content.map((message) => message.role)).toEqual([
+            "user",
+            "assistant",
+            "tool",
+          ]);
+          expect(toolResults(later.prompt)).toEqual([
+            { bookingRef: "flight-42" },
+            expect.objectContaining({ _tag: "ToolOutcomeUnknown" }),
+          ]);
 
           const providerTurn: ReadonlyArray<Prompt.Message> = [
             Prompt.makeMessage("system", { content: "Answer as JSON." }),
@@ -582,6 +676,13 @@ describe("run journal batch split (plan §2.1)", () => {
                   params: { query: "Kyoto" },
                   providerExecuted: true,
                 }),
+                Prompt.makePart("tool-result", {
+                  id: "provider-call",
+                  name: "web_search",
+                  result: { found: "Kyoto" },
+                  isFailure: false,
+                  providerExecuted: true,
+                }),
               ],
             }),
           ];
@@ -594,10 +695,11 @@ describe("run journal batch split (plan §2.1)", () => {
           );
 
           expect(providerLater.prompt.content.map((message) => message.role)).toEqual([
-            "system",
             "user",
             "assistant",
           ]);
+          expect(toolResults(providerLater.prompt)).toEqual([{ found: "Kyoto" }]);
+          expect(JSON.stringify(providerLater.prompt)).toContain('"found":"Kyoto"');
         }),
     );
 
@@ -662,13 +764,14 @@ describe("run journal batch split (plan §2.1)", () => {
         const later = yield* projectRunJournal(records, LATER_RUN_ID);
 
         expect(later.prompt.content.map((message) => message.role)).toEqual([
-          "system",
           "user",
+          "assistant",
+          "tool",
           "assistant",
           "tool",
         ]);
         expect(later.prompt.content.filter((message) => message.role === "assistant")).toHaveLength(
-          1,
+          2,
         );
         expect(
           later.prompt.content.flatMap((message) =>
@@ -676,7 +779,7 @@ describe("run journal batch split (plan §2.1)", () => {
               ? message.content.filter((part) => part.type === "tool-result").map((part) => part.id)
               : [],
           ),
-        ).toEqual([CALL_ONE]);
+        ).toEqual([CALL_ONE, CALL_ONE]);
       }),
     );
 
@@ -716,7 +819,7 @@ describe("run journal batch split (plan §2.1)", () => {
           const laterText = textOfPrompt(later.historyBefore);
 
           expect(laterText).not.toContain("Answer as JSON.");
-          expect(laterText).not.toContain("book?");
+          expect(laterText).toContain("book?");
           expect(laterText).toContain("Please mention the cancellation terms.");
           expect(laterText).toContain("Cancellation terms added.");
           expect(resultsOfPrompt(later.historyBefore)).toEqual([
@@ -994,13 +1097,6 @@ describe("engine compaction records and projection (RUN-026)", () => {
           .join("");
 
   const promptText = (prompt: Prompt.Prompt): string => prompt.content.map(messageText).join("\n");
-
-  const toolResults = (prompt: Prompt.Prompt): ReadonlyArray<unknown> =>
-    prompt.content.flatMap((message) =>
-      typeof message.content === "string"
-        ? []
-        : message.content.flatMap((part) => (part.type === "tool-result" ? [part.result] : [])),
-    );
 
   interface CompactionOverrides {
     readonly kind?: "clear-tool-results" | "summarize" | "rollover";
@@ -1432,6 +1528,8 @@ describe("engine compaction records and projection (RUN-026)", () => {
                 } else {
                   expect(toolResults(replay.prompt)).toEqual([
                     "[tool result cleared by compaction]",
+                    expect.objectContaining({ _tag: "ToolOutcomeUnknown" }),
+                    "[tool result cleared by compaction]",
                   ]);
                 }
               } else {
@@ -1778,7 +1876,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
       () =>
         Effect.gen(function* () {
           const batch = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
-          const records = envelopesOf([batch]);
+          const records = envelopesOf([batch]).slice(0, 2);
 
           const replacement = envelopeAt(
             records.length + 1,
@@ -1790,18 +1888,12 @@ describe("engine compaction records and projection (RUN-026)", () => {
 
           for (const record of prefix) metadata.add(record);
           const captured = metadata.snapshot();
-          const settled = records.find(({ record }) => record.payload._tag === "ToolCallSettled");
+          const settled = envelopesOf([batch])[2];
 
           if (settled === undefined) return yield* Effect.die("Expected a settled Tool fixture");
 
           // Late settlement evidence would invalidate the summary in a newer prefix.
-          const late = envelopeAt(
-            prefix.length + 1,
-            RecordEnvelope.make({
-              ...settled.record,
-              recordId: RecordId.make("late-settlement"),
-            }),
-          );
+          const late = envelopeAt(prefix.length + 1, settled.record);
 
           metadata.add(late);
 

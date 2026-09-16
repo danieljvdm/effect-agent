@@ -731,6 +731,100 @@ describe("SqliteSubmissionLedger", () => {
     ),
   );
 
+  it.effect("preserves a later writer when unknown work is resolved after reopen", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const lane = "thread-unknown-writer-reopen";
+        const request = ClaimRequest.make({ threadId: thread(lane), producerId: TEST_PRODUCER });
+
+        const before = yield* withLedger(
+          filename,
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const older = yield* ledger.admit(yield* admission(lane, "older", { work: "older" }));
+            const later = yield* ledger.admit(yield* admission(lane, "later", { work: "later" }));
+
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: older.submissionId }));
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: later.submissionId }));
+            const first = yield* ledger.claim(request);
+
+            if (Option.isNone(first)) return yield* Effect.die("missing older claim");
+            yield* ledger.markUnknown(
+              MarkUnknownRequest.make({
+                submissionId: older.submissionId,
+                toolCallIds: [toolCall("unknown-reopen-call")],
+                reason: "ordinary Tool outcome is uncertain",
+              }),
+            );
+            yield* TestClock.adjust("30 seconds");
+            const second = yield* ledger.claim(request);
+
+            if (Option.isNone(second)) return yield* Effect.die("missing later claim");
+            expect(second.value.submissionId).toBe(later.submissionId);
+
+            return { older, first: first.value, second: second.value };
+          }),
+        );
+
+        yield* withLedger(
+          filename,
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+
+            yield* ledger.recordUnknownResolution(
+              UnknownResolutionCommand.make({
+                submissionId: before.older.submissionId,
+                toolCallId: toolCall("unknown-reopen-call"),
+                author: "operator",
+                reason: "external service confirmed no effect",
+                resolution: ResolutionNeverHappened.make(),
+              }),
+            );
+
+            const later = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: before.second.submissionId }),
+            );
+
+            expect(later.ownership?.producerEpoch).toBe(before.second.producerEpoch);
+            expect(Option.isNone(yield* ledger.claim(request))).toBe(true);
+            expect(
+              yield* ledger
+                .renewOwnership(
+                  RenewOwnershipRequest.make({
+                    submissionId: before.older.submissionId,
+                    ownershipToken: before.first.ownershipToken,
+                  }),
+                )
+                .pipe(Effect.flip),
+            ).toMatchObject({ _tag: "OwnershipLost", actualEpoch: before.second.producerEpoch });
+
+            const renewal = yield* ledger.renewOwnership(
+              RenewOwnershipRequest.make({
+                submissionId: before.second.submissionId,
+                ownershipToken: before.second.ownershipToken,
+              }),
+            );
+
+            expect(renewal.ownershipToken).toBe(before.second.ownershipToken);
+            yield* ledger.releaseOwnership(
+              ReleaseOwnershipRequest.make({
+                submissionId: before.second.submissionId,
+                ownershipToken: renewal.ownershipToken,
+              }),
+            );
+            const resumed = yield* ledger.claim(request);
+
+            expect(Option.isSome(resumed)).toBe(true);
+            if (Option.isSome(resumed)) {
+              expect(resumed.value.submissionId).toBe(before.older.submissionId);
+              expect(resumed.value.producerEpoch).toBeGreaterThan(before.second.producerEpoch);
+            }
+          }),
+        );
+      }),
+    ),
+  );
+
   it.effect("creates the thread fencing row when claiming pre-materialization work", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {

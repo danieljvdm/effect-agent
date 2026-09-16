@@ -73,7 +73,10 @@ the same reconciliation and unknown-outcome rules with or without a checkpoint.
 ## Track unfinished work {#operational-obligation}
 
 The submission ledger owns admission, FIFO readiness, attempt ownership, abort intent, recovery,
-and the obligation to settle accepted work.
+and the obligation to settle accepted work. An unknown Submission without abort intent is parked:
+later input can run in the same Thread while the original settlement obligation stays open.
+Suspended, joining, and joined work retain their ordering barriers. At most one live owner can
+claim a Thread; a wake hint does not acquire ownership or advance its fencing epoch.
 
 ```text
 thread log              submission ledger
@@ -136,27 +139,47 @@ readiness. Reusing an admission key with the same input returns the same Receipt
 conflicts. Admission sequence sets queue order.
 
 Each producer write checks its ownership token and epoch. A stale attempt cannot append after a
-replacement takes ownership. Recovery validates a strongly consistent canonical prefix, then
-classifies the last committed boundary:
+replacement takes ownership. Recovery uses one current binding per stable Agent ID and validates
+a strongly consistent canonical prefix before classifying the last committed boundary:
 
-| Last committed boundary                          | Recovery                                                        |
-| ------------------------------------------------ | --------------------------------------------------------------- |
-| admission without readiness                      | finish materialization and readiness                            |
-| ready input with no attempted execution          | leave input application to the normal worker claim              |
-| input appended without its ledger marker         | repair the marker without applying input twice                  |
-| `RunStarted`                                     | preserve the original deadline                                  |
-| incomplete model response                        | retry inference when policy allows; provider charges may repeat |
-| complete tool declaration without preparation    | reauthorize and resume the batch without another model call     |
-| ordinary tool prepared without a result          | reconcile or record `UnknownToolOutcome`                        |
-| canonical tool or Durable Step result            | reuse the recorded result                                       |
-| reserved settlement                              | append that outcome, then finalize the ledger idempotently      |
-| canonical settlement without ledger finalization | finalize from history                                           |
+| Last committed boundary                          | Recovery                                                                     |
+| ------------------------------------------------ | ---------------------------------------------------------------------------- |
+| admission without readiness                      | finish materialization and readiness                                         |
+| ready input with no attempted execution          | leave input application to the normal worker claim                           |
+| input appended without its ledger marker         | repair the marker without applying input twice                               |
+| `RunStarted`                                     | preserve the original deadline                                               |
+| incomplete model response                        | retry inference when policy allows; provider charges may repeat              |
+| complete tool declaration without preparation    | check the original operation contract, then resume or record unavailability  |
+| ordinary tool prepared without a result          | reconcile or record `UnknownToolOutcome`                                     |
+| canonical tool or Durable Step result            | reuse the recorded result                                                    |
+| `RunCompleted`                                   | preserve stored output and disposition; validate `resultDigest` when present |
+| reserved settlement                              | append that outcome, then finalize the ledger idempotently                   |
+| canonical settlement without ledger finalization | finalize from history                                                        |
 
 Joined input follows the same rule. Claimed input without a canonical append returns to ready.
 Appended input rejoins its host run and settles with it. Approval must be canonical before work
 resumes. Unknown work releases execution permits while keeping its accepted obligation open.
 Abort preserves evidence and cannot roll back external effects or replace a settlement that won.
 See [Operations](../guide/operations).
+
+`ModelResponseRecorded.toolOperations` retains compact per-call identity, execution class, kind,
+and replay hash. `ToolCallPrepared` retains the original parameters and may also carry the class,
+kind, and hash. These facts govern pending operation replay independently of later Agent or
+toolbox changes; old records without proof do not authorize a changed handler.
+
+An incompatible mutating call with proof that dispatch never started receives `ToolUnavailable`
+with `execution: "not-executed"`. Readonly calls can run without a prepared record, so that
+absence alone yields no never-started proof; an unavailable readonly result uses
+`execution: "unavailable"`. Prepared calls require their original execution semantics before
+retry. Reconciliation's `CompletedWithResult` injects a confirmed result; `NeverStarted` can retire an unavailable
+call without executing it. `SafeToRetry` does not authorize changed code or erase uncertainty
+about an unsupported operation. Unproven effects stay unknown.
+
+Later model requests preserve earlier user intent, assistant text, and settled sibling results.
+For an incomplete earlier batch, the model-facing history supplies an explicit unknown result for
+each missing call. That explanatory view creates no canonical tool settlement or compaction
+coverage and does not resolve the original operation. A committed `RunCompleted` output and
+disposition remain authoritative across later codec or completion-projector changes.
 
 ## Attached subagents
 

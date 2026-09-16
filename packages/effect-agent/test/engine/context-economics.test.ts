@@ -7,7 +7,7 @@ import { AgentPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import { ModelCallContext } from "effect-agent/context-window";
 import { IdGenerator } from "effect-agent/id-generator";
-import { ThreadId, RunId, TurnId } from "effect-agent/identifiers";
+import { ThreadId, RunId, ToolCallId, TurnId } from "effect-agent/identifiers";
 import { type RunCompleted, type RunEvent } from "effect-agent/run-event";
 import {
   type RunDurabilityHook,
@@ -1578,6 +1578,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
             finalizationUsed: true,
           },
           resume: {
+            settledCompletion: ToolCallId.make("delivery"),
             turn,
             turnId,
             calls: [{ id: "delivery", name: "post_message", params: { message: "delivered" } }],

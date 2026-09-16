@@ -1472,8 +1472,8 @@ describe("NodeDurableAgentRuntime", () => {
               "RunStarted",
               "ModelResponseRecorded",
               "RunCompleted",
-              "SubmissionSettled",
               "RepairAnnotated",
+              "SubmissionSettled",
             ]);
           }),
         );

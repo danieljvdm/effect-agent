@@ -17,9 +17,11 @@ administration contract applies to Node and SQLite class `DN` and Cloudflare Dur
   operator meaning, and expected disposition. They write nothing.
 - `verify(threadId)` runs read-only integrity checks. The digest-chain check reports
   `skipped` unless the host supplies producer identity.
-- `retry(RetryCommand.make({ submissionId, author, reason }))` records an audit entry and repeats the classifier's
-  decision. It refuses settled work and lanes owned by `resolveUnknown` or `resolveApproval`.
-- `wake(threadId)` sends a droppable liveness hint.
+- `retry(RetryCommand.make({ submissionId, author, reason }))` logs the operator and repeats the classifier's
+  decision. Repairs with a claim annotate their attempt using that claim's epoch; state-only wakes
+  and marker repairs do not append canonical audit records. Retry refuses settled work and requests
+  awaiting `resolveUnknown` or `resolveApproval`.
+- `wake(threadId)` sends a droppable liveness hint without taking ownership or advancing an epoch.
 - `scanObligations(thresholds)` reports blocked or aging accepted work.
 
 `NodeDurableHost` exposes all five. Use
@@ -30,6 +32,11 @@ Worker.
 The `explain --thread <id> --json` payload is an array of recovery explanations, including `[]`
 when the lane has no nonterminal work. `explain --submission <id> --json` returns one explanation
 object.
+
+`evidence.pendingOperations` exposes original unresolved `ToolCallPrepared` facts, including
+parameters and any recorded execution class, kind, and replay hash. `unknownCalls[].resolved`
+means a canonical `ToolCallSettled` exists. Accepted resolution intents appear separately in
+`unknownResolutions`; an intent alone is not a recorded result.
 
 The administrative methods above, observation, settlement waits, abort, and unknown or approval
 resolution consult `OperationAuthorizer`. Its default allows trusted service holders. Install a
@@ -66,8 +73,8 @@ On Cloudflare, obtain `client` from `yield* CloudflareThreadClient`, then call
 `client.abort(receipt.threadId, command)`.
 The runtime checks authorization before reading or mutating the target.
 
-Recovery claims the unknown head with its abort intent, handles attached children, records an
-aborted settlement, and releases queued followers. It does not replay uncertain ordinary tools.
+Recovery claims the unknown Submission with its abort intent, handles attached children, and
+records an aborted settlement. It does not replay uncertain ordinary tools.
 The unknown evidence and first abort audit remain. Abort cannot roll back an external effect. A
 `SettlementConflict` reports a terminal result that won before the abort.
 
@@ -75,8 +82,10 @@ Do not edit ledger state, wake the lane in a loop, resolve every open call separ
 children by hand. The runtime owns those steps after it durably accepts the parent abort. It never
 chooses parent abort merely because a child is unknown. The host makes that decision.
 
-There is no automatic inactivity timeout. Unknown and approval-waiting heads stay quiet until an
-authorized mutation restores maintenance.
+There is no automatic inactivity timeout. A parked unknown Submission stays quiet while later
+input in the same Thread can run. Approval, joining, and joined states retain their ordering
+barriers. Authorized resolution or abort restores maintenance for the parked work; a live owner
+still prevents another claim in that Thread.
 
 <a id="observe-a-submission-outcome"></a>
 

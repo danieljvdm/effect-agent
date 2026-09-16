@@ -417,7 +417,8 @@ const stableExternalWait = (
   snapshot: SubmissionSnapshot,
   reports: ReadonlyMap<string, RecoveryReport>,
 ): boolean => {
-  const decision = reports.get(snapshot.submissionId)?.decision._tag;
+  const report = reports.get(snapshot.submissionId);
+  const decision = report?.decision._tag;
 
   // An accepted abort still owes cleanup/settlement even if its claim was deferred this pass.
   if (decision === "SettleAborted") return false;
@@ -426,7 +427,7 @@ const stableExternalWait = (
     case "joined":
       return true;
     case "unknown":
-      return decision === "AwaitUnknownResolution" || decision === "MarkUnknown";
+      return report?.disposition === "unknown";
     case "admitted":
       return reports.get(snapshot.submissionId)?.decision._tag === "AwaitParentEstablishment";
     case "input-applied":
@@ -948,6 +949,9 @@ export class ThreadMaintenance extends Context.Service<
         const heads = new Map<ThreadId, SubmissionSnapshot>();
 
         for (const row of current) {
+          // Parked uncertainty keeps its settlement obligation, but later input can run.
+          // Accepted aborts and every other wait remain subject to the lane's FIFO barrier.
+          if (row.state === "unknown" && stableExternalWait(row, reports)) continue;
           if (!heads.has(row.threadId)) heads.set(row.threadId, row);
         }
 
@@ -1002,13 +1006,13 @@ export class ThreadMaintenance extends Context.Service<
         let retries = selection.retries;
         let bindingFailure: DurableBindingFailure | undefined;
 
-        // One FIFO head per event. An unavailable contract is a durable wait for compatible code,
+        // One runnable FIFO head per event. An absent agent is a durable wait for a deployment,
         // including for children; other local lanes and host deliveries remain independently due.
         const settlement =
           selected === undefined
             ? Option.none()
             : yield* runtime.processThreadHead(selected.threadId, { yieldAfter }).pipe(
-                Effect.catchTag(["BindingUnavailable", "BindingDigestMismatch"], (failure) => {
+                Effect.catchTag("BindingUnavailable", (failure) => {
                   bindingFailure = failure;
 
                   return Effect.succeed(Option.none());
@@ -1063,7 +1067,7 @@ export class ThreadMaintenance extends Context.Service<
           if (bindingFailure !== undefined) {
             yield* reportBindingFailure
               ? Effect.logError(
-                  "Thread awaits a compatible binding; original work remains pending",
+                  "Thread awaits a current agent binding; original work remains pending",
                   Cause.fail(bindingFailure),
                 )
               : Effect.logDebug("Thread binding retry remains pending", Cause.fail(bindingFailure));
@@ -1076,6 +1080,7 @@ export class ThreadMaintenance extends Context.Service<
         const waitingHeads = new Map<ThreadId, boolean>();
 
         const autonomous = remaining.some((snapshot) => {
+          if (snapshot.state === "unknown" && stableExternalWait(snapshot, reports)) return false;
           const headWaiting = waitingHeads.get(snapshot.threadId);
 
           if (headWaiting === undefined)

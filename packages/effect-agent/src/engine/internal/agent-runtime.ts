@@ -102,6 +102,7 @@ import type { Selection } from "../../core/ToolExposure.ts";
 import { AdditionalToolCatalog, DiscoveryTool, Snapshot } from "../../core/ToolExposure.ts";
 import {
   ToolParameterRejection,
+  TruncatedToolResult,
   applyToolResultBounds,
   unserializableToolResult,
   type ToolResultBounds,
@@ -697,6 +698,8 @@ type ProviderResultEventPayload =
 // fail-closed only while the additional staging allocation itself is deterministic and bounded.
 const MAX_STAGED_PROVIDER_EVENTS = 256;
 const MAX_STAGED_PROVIDER_BYTES = 1024 * 1024;
+/** Saved outcomes obey the canonical JSON ceiling, independently of today's display policy. */
+const MAX_RESUMED_RESULT_BYTES = 1024 * 1024;
 
 const DEFAULT_RUN_BUFFER_LIMITS = {
   maxModelResponseParts: 16_384,
@@ -1278,7 +1281,7 @@ const effectiveRunBounds = (
 });
 
 const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCall")(
-  (input: unknown, maxResultBytes: number, providerCallIds: ReadonlySet<string>) =>
+  (input: unknown) =>
     Effect.gen(function* () {
       const raw = yield* Effect.try({
         try: () => {
@@ -1320,12 +1323,7 @@ const decodeResumedSettledCall = Effect.fn("AgentRuntime.decodeResumedSettledCal
           }),
       });
 
-      const result = boundedCanonicalJsonSnapshot(
-        raw.result,
-        typeof raw.id === "string" && providerCallIds.has(raw.id)
-          ? MAX_STAGED_PROVIDER_BYTES
-          : maxResultBytes,
-      );
+      const result = boundedCanonicalJsonSnapshot(raw.result, MAX_RESUMED_RESULT_BYTES);
 
       if (result === undefined) {
         return yield* ModelProtocolError.make({
@@ -2471,13 +2469,17 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
 
       // Resolve the whole batch before constructing streams. Only calls with recorded
       // parameter rejection evidence bypass executable-parameter decoding and approval.
-      const prepared = yield* Effect.forEach(calls, (call, declarationIndex) =>
-        prepareToolCall(
-          toolkit,
-          call,
-          declarationIndex,
-          trace.toolParameterRejections.get(call.id),
+      const prepared = yield* Effect.forEach(
+        calls.flatMap((call, declarationIndex) =>
+          settledCallIds?.has(call.id) ? [] : [{ call, declarationIndex }],
         ),
+        ({ call, declarationIndex }) =>
+          prepareToolCall(
+            toolkit,
+            call,
+            declarationIndex,
+            trace.toolParameterRejections.get(call.id),
+          ),
       );
 
       if (
@@ -7038,6 +7040,7 @@ const toolBatchContinuation = <
       if (
         rolloverResult !== undefined &&
         !rolloverResult.isFailure &&
+        trace.applicationCallDescriptors.some((call) => call.toolCallId === rolloverResult.id) &&
         hasTool(agent.definition.toolkit.tools, rolloverResult.name) &&
         Context.get(
           agent.definition.toolkit.tools[rolloverResult.name].annotations,
@@ -7067,6 +7070,7 @@ const toolBatchContinuation = <
 
       if (
         successfulResult !== undefined &&
+        trace.applicationCallDescriptors.some((call) => call.toolCallId === successfulResult.id) &&
         (successfulResult.name === completion?.tool || actionCompletion !== undefined)
       ) {
         const call = trace.applicationCallDescriptors[0];
@@ -7146,13 +7150,10 @@ const toolBatchContinuation = <
  * Resume one canonically declared Tool batch without re-invoking the model
  * (the durable batch-resume seam consumed via `RunOptions.resume`).
  *
- * The declared calls are re-validated through their Tool parameter Schemas
- * before anything executes; a decode failure is a strict no-start boundary
- * (RUN-004/STORE-006). The resumed Turn's response messages are rebuilt in
- * canonical encoded form so official history matches the recorded response.
- * Calls listed in `settled` are injected as final results without starting
- * their handlers — recorded Tool outcomes never rerun — while approval
- * preflight and durable preparation still cover the complete declared batch.
+ * Only unfinished calls are validated through their current parameter Schemas before
+ * execution. Settled siblings retain bounded canonical JSON without looking up old Tools.
+ * The original response and declaration order remain intact; approval, authorization and
+ * durable preparation cover only calls that can still execute.
  * No model request is made and no usage is consumed for the resumed Turn.
  */
 const makeResumeTurn = <
@@ -7197,10 +7198,14 @@ const makeResumeTurn = <
       const tools = agent.definition.toolkit.tools;
       const turn = resume.turn;
       const turnId = resume.turnId;
+      const settledInputs = yield* snapshotResumedSettledCalls(resume, resume.calls.length);
+      const settledCalls = yield* Effect.forEach(settledInputs, decodeResumedSettledCall);
+      const recordedSettledIds = new Set(settledCalls.map((call) => call.id));
       const visibility = yield* RunToolVisibility;
 
       if (
         resume.toolExposure === undefined &&
+        resume.calls.some((call) => !call.providerExecuted && !recordedSettledIds.has(call.id)) &&
         (agent.definition.toolExposure !== undefined ||
           context.toolSelection !== undefined ||
           visibility !== undefined)
@@ -7208,6 +7213,7 @@ const makeResumeTurn = <
         return yield* ModelProtocolError.make({
           message: "Resumed progressive Turn is missing its original Tool exposure",
         });
+
       context.toolCatalog = yield* eligibleCatalog(
         agent.definition,
         { threadId: context.threadId, runId: context.runId, turn, input: context.input },
@@ -7219,24 +7225,19 @@ const makeResumeTurn = <
       const originalExposure = context.toolExposure;
 
       if (originalExposure !== undefined) {
-        yield* validateSelection(
-          { toolNames: originalExposure.exposedToolNames },
-          agent.definition,
-          context.toolCatalog,
-          false,
-        );
-        if (originalExposure.selection !== undefined)
-          yield* validateSelection(
-            originalExposure.selection,
-            agent.definition,
-            context.toolCatalog,
-            false,
-          );
         if (resume.calls.some((call) => !originalExposure.exposedToolNames.includes(call.name)))
           return yield* ModelProtocolError.make({
             message: "Resumed Tool call was not exposed in its original model request",
           });
-        context.toolSelection = originalExposure.selection;
+        context.toolSelection =
+          originalExposure.selection === undefined
+            ? undefined
+            : {
+                ...originalExposure.selection,
+                toolNames: originalExposure.selection.toolNames.filter((name) =>
+                  hasTool(tools, name),
+                ),
+              };
       }
 
       if (!Number.isInteger(turn) || turn <= 0) {
@@ -7300,35 +7301,33 @@ const makeResumeTurn = <
           call.providerExecuted ||
           call.name !== rejection.error.reason.toolName ||
           !sameJson(yield* decodeEventJson(call.params, "Tool parameters"), rejection.parameters) ||
-          trace.toolParameterRejections.has(call.id) ||
-          tools[call.name]?.failureMode !== "return"
+          trace.toolParameterRejections.has(call.id)
         ) {
           return yield* ModelProtocolError.make({
             message: "Parameter rejection does not match recorded Tool Call on resume",
           });
         }
 
-        const validation = yield* Effect.result(
-          decodeToolCallParameters<Tools>(
-            tools[call.name] as ToolUnion<Tools>,
-            call.name,
-            call.params,
-            "resume",
-          ),
-        );
-
-        if (Result.isSuccess(validation)) {
-          return yield* ModelProtocolError.make({
-            message: "Recorded parameter rejection contains valid arguments on resume",
-          });
-        }
         trace.toolParameterRejections.set(call.id, rejection);
+        if (!recordedSettledIds.has(call.id)) {
+          settledCalls.push({
+            id: call.id,
+            isFailure: true,
+            result: yield* decodeEventJson(
+              boundEncodedToolResult(rejection.error, agent.definition.policy.toolResultBounds),
+              "Rejected Tool result",
+            ),
+          });
+          recordedSettledIds.add(call.id);
+        }
       }
 
       for (const call of resume.calls) {
-        if (!hasTool(tools, call.name)) {
+        if (!recordedSettledIds.has(call.id) && !hasTool(tools, call.name)) {
           return failRunEventStream(
-            ModelProtocolError.make({ message: `Turn resume declared unknown Tool ${call.name}` }),
+            ModelProtocolError.make({
+              message: `Turn resume declared unknown unfinished Tool ${call.name}`,
+            }),
           );
         }
         if (trace.toolCalls.has(call.id)) {
@@ -7339,7 +7338,7 @@ const makeResumeTurn = <
         const tool = tools[call.name] as ToolUnion<Tools>;
         const toolCallId = yield* decodeToolCallId(call.id);
 
-        if (!trace.toolParameterRejections.has(call.id)) {
+        if (!recordedSettledIds.has(call.id)) {
           yield* decodeToolCallParameters<Tools>(tool, call.name, call.params, "resume");
         }
         const parameters = yield* decodeEventJson(call.params, "Tool parameters");
@@ -7368,24 +7367,32 @@ const makeResumeTurn = <
             providerExecuted: false,
           }),
         );
-        trace.applicationCallDescriptors.push({
-          toolCallId,
-          toolName: call.name,
-          parameters,
-          executionClass: getToolExecutionClass(tool),
-          executionKind: getToolExecutionKind(tool.annotations),
-        });
+        if (
+          (!recordedSettledIds.has(call.id) || resume.settledCompletion === call.id) &&
+          hasTool(tools, call.name)
+        )
+          trace.applicationCallDescriptors.push({
+            toolCallId,
+            toolName: call.name,
+            parameters,
+            executionClass: getToolExecutionClass(tool),
+            executionKind: getToolExecutionKind(tool.annotations),
+          });
       }
       const completionTool = agent.definition.completion?.tool;
 
-      const actionCompletionCall = trace.applicationToolCalls.find((call) =>
+      const completionCandidates = trace.applicationToolCalls.filter(
+        (call) => !recordedSettledIds.has(call.id) || resume.settledCompletion === call.id,
+      );
+
+      const actionCompletionCall = completionCandidates.find((call) =>
         agent.definition.completionFromTools?.some((declaration) => declaration.tool === call.name),
       );
 
       if (
         (actionCompletionCall !== undefined ||
           (completionTool !== undefined &&
-            trace.applicationToolCalls.some((call) => call.name === completionTool))) &&
+            completionCandidates.some((call) => call.name === completionTool))) &&
         trace.applicationToolCalls.length !== 1
       ) {
         return failRunEventStream(
@@ -7398,7 +7405,7 @@ const makeResumeTurn = <
       const completionBatch =
         completionTool !== undefined &&
         trace.applicationToolCalls.length === 1 &&
-        trace.applicationToolCalls[0]?.name === completionTool;
+        completionCandidates[0]?.name === completionTool;
 
       if (
         (completionBatch &&
@@ -7421,33 +7428,26 @@ const makeResumeTurn = <
       }
       const settledIds = new Set<string>();
 
-      const providerCallIds = new Set(
-        [...declarationByCallId].filter(([, call]) => call.providerExecuted).map(([id]) => id),
-      );
-
-      const settledInputs = yield* snapshotResumedSettledCalls(resume, declarationByCallId.size);
-
-      for (const settledInput of settledInputs) {
-        const settledCall = yield* decodeResumedSettledCall(
-          settledInput,
-          agent.definition.policy.toolResultBounds.maxBytes,
-          providerCallIds,
-        );
-
+      for (const settledCall of settledCalls) {
         const rejection = trace.toolParameterRejections.get(settledCall.id);
+        const rejectionJson = rejection === undefined ? undefined : JSON.stringify(rejection.error);
+
+        // An old policy may have truncated this already-settled error. Verify its exact
+        // retained slices against the canonical rejection, without imposing today's bound.
+        const matchesRejection =
+          rejection === undefined ||
+          sameJson(settledCall.result, rejection.error) ||
+          (Schema.is(Schema.toEncoded(TruncatedToolResult))(settledCall.result) &&
+            rejectionJson !== undefined &&
+            settledCall.result.originalBytes === utf8ByteLength(rejectionJson) &&
+            rejectionJson.startsWith(settledCall.result.head) &&
+            rejectionJson.endsWith(settledCall.result.tail));
 
         if (
           rejection !== undefined &&
           (!settledCall.isFailure ||
             settledCall.toolSelection !== undefined ||
-            (settledCall.budgetRejected !== true &&
-              !sameJson(
-                settledCall.result,
-                yield* decodeEventJson(
-                  boundEncodedToolResult(rejection.error, agent.definition.policy.toolResultBounds),
-                  "Rejected Tool result",
-                ),
-              )))
+            (settledCall.budgetRejected !== true && !matchesRejection))
         ) {
           return yield* ModelProtocolError.make({
             message: "Settled result contradicts parameter rejection on resume",
@@ -7490,12 +7490,12 @@ const makeResumeTurn = <
           ...(settledCall.toolSelection === undefined
             ? {}
             : {
-                toolSelection: yield* validateSelection(
-                  settledCall.toolSelection,
-                  agent.definition,
-                  context.toolCatalog,
-                  false,
-                ),
+                toolSelection: {
+                  ...settledCall.toolSelection,
+                  toolNames: settledCall.toolSelection.toolNames.filter((name) =>
+                    hasTool(tools, name),
+                  ),
+                },
               }),
           id: settledCall.id,
           name: declared.name,
@@ -8116,26 +8116,71 @@ function streamWithCompletion<
 
           const execution = Stream.unwrap(
             Effect.gen(function* () {
-              const decodedInput = yield* decodeInput(agent, input);
+              const initial = yield* Effect.gen(function* () {
+                if (options.retainedInput !== undefined) {
+                  const encodedInput = yield* Schema.decodeEffect(Schema.Json)(
+                    options.retainedInput,
+                  ).pipe(
+                    Effect.mapError((cause) =>
+                      AgentInputError.make({
+                        message: `Invalid retained Agent input: ${cause.message}`,
+                      }),
+                    ),
+                  );
 
-              const instructions = yield* evaluateInstructions<
-                InputSchema["Type"],
-                InstructionError,
-                InstructionRequirements
-              >(agent.definition.instructions, decodedInput);
+                  const source = agent.definition.instructions;
 
-              const encodedInput = yield* encodeInput(agent, decodedInput);
+                  const instructions =
+                    typeof source === "function"
+                      ? yield* evaluateInstructions<
+                          InputSchema["Type"],
+                          InstructionError,
+                          InstructionRequirements
+                        >(source, yield* decodeInput(agent, encodedInput))
+                      : yield* evaluateInstructions<
+                          undefined,
+                          InstructionError,
+                          InstructionRequirements
+                        >(source, undefined);
+
+                  return {
+                    instructions,
+                    encodedInput,
+                    inputPrompt: yield* renderInputPrompt(undefined, undefined, encodedInput),
+                  };
+                }
+                const decodedInput = yield* decodeInput(agent, input);
+
+                const instructions = yield* evaluateInstructions<
+                  InputSchema["Type"],
+                  InstructionError,
+                  InstructionRequirements
+                >(agent.definition.instructions, decodedInput);
+
+                const encodedInput = yield* encodeInput(agent, decodedInput);
+
+                return {
+                  instructions,
+                  encodedInput,
+                  inputPrompt:
+                    options.frameworkMessage === undefined
+                      ? yield* renderInputPrompt(
+                          agent.definition.inputPrompt,
+                          decodedInput,
+                          encodedInput,
+                        )
+                      : undefined,
+                };
+              });
+
+              const { instructions, encodedInput } = initial;
 
               context.input = encodedInput;
               if (retained !== undefined) yield* retained.stageInput(encodedInput);
 
               const inputPrompt =
                 options.frameworkMessage === undefined
-                  ? yield* renderInputPrompt(
-                      agent.definition.inputPrompt,
-                      decodedInput,
-                      encodedInput,
-                    )
+                  ? (initial.inputPrompt ?? "")
                   : yield* Schema.encodeEffect(Schema.fromJsonString(FrameworkMessage))(
                       options.frameworkMessage,
                     ).pipe(
@@ -8153,12 +8198,21 @@ function streamWithCompletion<
                 context.compaction.protectedStart = priorHistoryLength;
                 context.compaction.protectedEnd = prompt.content.length;
               } else {
+                const currentPrefix = prompt.content.slice(priorHistoryLength);
+
+                const protectedMessages =
+                  options.protectedContext === undefined
+                    ? currentPrefix
+                    : [
+                        ...currentPrefix.filter((message) => message.role === "system"),
+                        ...options.protectedContext.content.filter(
+                          (message) => message.role !== "system",
+                        ),
+                      ];
+
                 context.preparedCompactionSource = {
-                  protectedReferences:
-                    options.protectedContext?.content ?? prompt.content.slice(priorHistoryLength),
-                  protectedMessages: yield* snapshotCompactionMessages(
-                    options.protectedContext?.content ?? prompt.content.slice(priorHistoryLength),
-                  ),
+                  protectedReferences: protectedMessages,
+                  protectedMessages: yield* snapshotCompactionMessages(protectedMessages),
                   prefix: [],
                 };
               }

@@ -150,7 +150,10 @@ export class TravelThread extends ThreadObject.make(RuntimeLive, {
 Each registration pairs a model-bound agent with explicit agent, model, and tool versions. The
 submitter passes `digestDefinitions(travelDefinitions)` through
 `DurableSubmitOptions.definitions`. Bump the agent revision when instructions, schemas, or policy
-change. Version tool implementations and model configuration when they change.
+change. Version tool implementations and model configuration when they change. Register one
+current binding per stable `agentId`: queued and resumed work uses the current binding without
+requiring historical agent or toolbox versions. Accepted inputs and prepared deliveries keep
+their original identities and payloads.
 
 Application layers can use `WorkerEnvironment`, `DurableObjectState`,
 `ThreadObjectIdentity`, and Crypto. Scalar Worker vars and secrets are available through Effect
@@ -274,16 +277,23 @@ their own migration history, leaving the application's migration rows intact. Ca
 `ThreadMaintenance.pass` from `alarm()`. A pass recovers all local lanes and serves one eligible
 FIFO head, with a durable cursor rotating between Threads. Later work retains the alarm.
 
+An unresolved tool effect stays parked as an Unknown Outcome while later input in the same Thread
+can run. The unknown record and settlement obligation remain intact across eviction, and the effect
+is not replayed. Approval waits and joined input remain ordering barriers; live ownership still
+prevents another claim. `explainThread` exposes parked operations for authorized resolution or abort.
+
 Failed and no-progress passes preserve the dirty generation and use jittered exponential
 backoff up to `alarmBackoffCap` (5 seconds by default), independently of `wakeScanInterval`.
-Missing or incompatible bindings wait 5, 10, 20, 40, then 60 seconds between attempts;
+Missing agent bindings wait 5, 10, 20, 40, then 60 seconds between attempts;
 further attempts remain one minute apart. The retry deadline survives eviction:
 `ensureAlarm` and early alarm deliveries cannot accelerate native recovery for the same
 generation. A newer durable mutation can wake it immediately, and host deadlines remain
 independently serviceable. Each blocked Thread retains its own waiting period, so it cannot
 monopolize other Threads. Binding refusals still fail closed and retain the original submission.
 There is no terminal retry-count limit: dropping the alarm would strand accepted work after a
-later compatible deployment. Waiting never authorizes incompatible code to execute.
+later deployment that registers the agent. An obsolete pending tool operation does not wait for
+historical code: it receives an unavailable result when no mutation was dispatched, or stays
+unknown when an external effect may have occurred.
 
 Application outboxes can supply `ThreadHostMaintenance` from the application Layer:
 

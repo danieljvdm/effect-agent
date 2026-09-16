@@ -67,9 +67,9 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: bool
   // Startup gate (deployment §5, plan §host): configuration decoding and storage compatibility
   // already gated this Layer's dependencies; the last gate before admission opens is recovering
   // EVERY nonterminal Submission. Work needing a live Agent Binding is reported `deferred` and
-  // stays a visible obligation for `runWorkers`; lanes durably blocked on an Unknown Outcome are
+  // stays a visible obligation for `runWorkers`; submissions parked on an Unknown Outcome are
   // reported `unknown` and wait for the authorized `resolveUnknown` path (DUR-017) — they consume
-  // no worker permit while the settlement obligation stays owed.
+  // no worker permit while the settlement obligation stays owed and later input can run.
   const startupRecovery = yield* runtime.runRecovery;
 
   const admission = yield* Ref.make(true);
@@ -130,8 +130,7 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: bool
       ),
     );
 
-  // S2 multi-binding pool: every claimed head resolves its exact registered Binding through
-  // the host's exact registrations, so one bounded
+  // Every claimed head resolves the current Binding for its stable agentId, so one bounded
   // pool serves parent and child lanes — the spec §12 smallest-pool suspension/wakeup proof
   // runs `workerConcurrency: 1` over exactly this loop.
   const runResolvedWorkers = runWorkers(runtime.runResolvedWorker);
@@ -189,8 +188,9 @@ export class NodeDurableHost extends Context.Service<
   {
     /**
      * The recovery decisions executed (or deferred) by this host's startup reconciliation.
-     * Reports with the `unknown` disposition identify lanes blocked on Unknown Outcomes that
-     * only the authorized DUR-017 resolution path can release.
+     * Reports with the `unknown` disposition identify parked Submissions with Unknown Outcomes.
+     * They retain their settlement obligation while later input can run; authorized resolution
+     * or abort advances the parked Submission.
      */
     readonly startupRecovery: ReadonlyArray<RecoveryReport>;
     /** Admission-role readiness (deployment §7): true until shutdown begins. */
@@ -244,8 +244,8 @@ export class NodeDurableHost extends Context.Service<
     readonly runWorkers: <A, E, R>(worker: Effect.Effect<A, E, R>) => Effect.Effect<void, E, R>;
     /**
      * Run `workerConcurrency` copies of `DurableAgentRuntime.runResolvedWorker` over the host's
-     * registered Bindings (S2): every claimed head resolves its exact stored Binding before any
-     * code runs (SUB-023), so one bounded pool serves parent and attached-child lanes.
+     * registered Bindings: every claimed head resolves the current Binding for its stable
+     * agentId, so one bounded pool serves parent and attached-child lanes.
      * Hosts built with the module-level `layer` instead join their existing pool.
      */
     readonly runResolvedWorkers: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;

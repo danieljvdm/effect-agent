@@ -105,7 +105,6 @@ import {
 } from "../WorkerHost.ts";
 import {
   definitionDigestsEqual,
-  bindingSupports,
   resolveDefinitionBinding,
   type ResolvedBinding,
 } from "./agent-registration.ts";
@@ -381,11 +380,10 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     };
   });
 
-  const firstThreadInput = (history: Effect.Success<ReturnType<typeof read>>) => {
-    const first = history.records.find(({ record }) => record.payload._tag === "UserInputRecorded")
-      ?.record.payload;
+  const currentBinding = (agentId: AgentId): ResolvedBinding | undefined => {
+    const matches = deps.bindings.filter((entry) => entry.agentId === agentId);
 
-    return first?._tag === "UserInputRecorded" ? first.input : undefined;
+    return matches.length === 1 ? matches[0] : undefined;
   };
 
   const sourceAuthority = Effect.fn("WorkerHost.sourceAuthority")(function* (
@@ -397,11 +395,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
     if (created?._tag !== "ThreadCreated") return yield* failure("start", "not-found");
 
-    const binding = deps.bindings.find(
-      (entry) =>
-        entry.agentId === created.agentId &&
-        bindingSupports(entry, created.definitions, undefined, firstThreadInput(current)),
-    );
+    const binding = currentBinding(created.agentId);
 
     const worker = current.records.find(
       ({ record }) => record.payload._tag === "WorkerOriginRecorded",
@@ -444,18 +438,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     }
 
     const ownerBinding =
-      ownerSubmission === undefined
-        ? undefined
-        : deps.bindings.find(
-            (entry) =>
-              entry.agentId === ownerSubmission.agentId &&
-              bindingSupports(
-                entry,
-                ownerSubmission.agentDigests,
-                undefined,
-                ownerSubmission.inputPayload,
-              ),
-          );
+      ownerSubmission === undefined ? undefined : currentBinding(ownerSubmission.agentId);
 
     const selectedBinding = ownerBinding ?? binding;
 
@@ -734,6 +717,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     inputDigest: Digest,
     input: PersistedJson,
     principal: Principal,
+    retainedFrameworkInput: boolean,
   ): Effect.fn.Return<void, WorkerError> {
     const origin = admission.origin;
     const id = `worker-input:${admission.messageId}`;
@@ -779,17 +763,16 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       const sourceBinding = source.binding;
 
-      const targetBinding = deps.bindings.find(
-        (entry) =>
-          entry.agentId === origin.worker.targetAgentId &&
-          bindingSupports(entry, origin.targetDigests, undefined, input),
-      );
+      const targetBinding = currentBinding(origin.worker.targetAgentId);
 
       if (sourceBinding === undefined || targetBinding === undefined)
         return yield* failure("start", "declaration-unavailable");
-      yield* Schema.decodeEffect(Schema.toEncoded(targetBinding.definition.input))(input).pipe(
-        Effect.mapError(() => failure("start", "corrupt")),
-      );
+      // Standard reports and updates retain the owner's original input bytes. Their
+      // framework message carries the new information independently of the current input codec.
+      if (!retainedFrameworkInput)
+        yield* Schema.decodeEffect(Schema.toEncoded(targetBinding.definition.input))(input).pipe(
+          Effect.mapError(() => failure("start", "corrupt")),
+        );
 
       const targetRequest = {
         definition: targetBinding.definition,
@@ -1040,7 +1023,11 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         admission.deliveryPrincipal !== options.principal)
     )
       return yield* failure("start", "worker-mismatch");
-    yield* reservation(admission, inputDigest, input, options.principal);
+    const retainedFrameworkInput = Schema.is(FrameworkMessage)(options.messageAdmission);
+
+    if (retainedFrameworkInput && admission.reportKind !== "update")
+      yield* validateCompletion(options.messageAdmission, options, agentId, inputDigest);
+    yield* reservation(admission, inputDigest, input, options.principal, retainedFrameworkInput);
 
     return admission;
   });
@@ -1068,29 +1055,11 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         first.admission.sourceSubmissionId,
       );
 
-      if (
-        source.binding === undefined ||
-        source.submission === undefined ||
-        !bindingSupports(
-          source.binding,
-          intent.sourceDigests,
-          undefined,
-          source.submission?.inputPayload,
-        )
-      )
+      if (source.binding === undefined || source.submission === undefined)
         return yield* failure("followUp", "declaration-unavailable");
 
-      const sourceBinding = deps.bindings.find(
-        (entry) =>
-          entry.agentId === origin.source.agentId &&
-          bindingSupports(entry, intent.sourceDigests, undefined, source.submission?.inputPayload),
-      );
-
-      const targetBinding = deps.bindings.find(
-        (entry) =>
-          entry.agentId === origin.worker.targetAgentId &&
-          bindingSupports(entry, origin.targetDigests, undefined, submission.inputPayload),
-      );
+      const sourceBinding = currentBinding(origin.source.agentId);
+      const targetBinding = currentBinding(origin.worker.targetAgentId);
 
       const reports =
         sourceBinding?.reporting?.filter(
@@ -1124,14 +1093,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       );
 
       if (now >= deadlineAtMillis) return yield* failure("followUp", "denied");
-      const sourceSubmission = source.submission;
-
-      const input = yield* Schema.decodeEffect(Schema.toEncoded(sourceBinding.definition.input))(
-        source.submission.inputPayload,
-      ).pipe(
-        Effect.flatMap(() => Schema.decodeEffect(PersistedJson)(sourceSubmission.inputPayload)),
-        Effect.mapError(() => failure("followUp", "corrupt")),
-      );
+      const input = source.submission.inputPayload;
 
       let workerAdmission: WorkerAdmission | undefined;
       let principal = submission.principal;
@@ -1283,28 +1245,10 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         firstInput.admission.sourceSubmissionId,
       );
 
-      if (
-        source.binding === undefined ||
-        !bindingSupports(
-          source.binding,
-          intent.sourceDigests,
-          undefined,
-          source.submission?.inputPayload,
-        )
-      )
-        return refused("declaration-unavailable");
+      if (source.binding === undefined) return refused("declaration-unavailable");
 
-      const sourceBinding = deps.bindings.find(
-        (entry) =>
-          entry.agentId === origin.source.agentId &&
-          bindingSupports(entry, intent.sourceDigests, undefined, source.submission?.inputPayload),
-      );
-
-      const targetBinding = deps.bindings.find(
-        (entry) =>
-          entry.agentId === origin.worker.targetAgentId &&
-          bindingSupports(entry, origin.targetDigests, undefined, hostSubmission.inputPayload),
-      );
+      const sourceBinding = currentBinding(origin.source.agentId);
+      const targetBinding = currentBinding(origin.worker.targetAgentId);
 
       const reports =
         sourceBinding?.reporting?.filter(
@@ -1420,12 +1364,13 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           ? source.submission?.inputPayload
           : projection.value.encodedInput;
 
-      const validated = yield* Schema.decodeEffect(
-        Schema.toEncoded(sourceBinding.definition.input),
-      )(reportInput).pipe(
-        Effect.flatMap(() => Schema.decodeUnknownEffect(PersistedJson)(reportInput)),
-        Effect.option,
-      );
+      const validated = yield* (
+        descriptor.mode === "standard"
+          ? Schema.decodeUnknownEffect(PersistedJson)(reportInput)
+          : Schema.decodeEffect(Schema.toEncoded(sourceBinding.definition.input))(reportInput).pipe(
+              Effect.flatMap(() => Schema.decodeUnknownEffect(PersistedJson)(reportInput)),
+            )
+      ).pipe(Effect.option);
 
       if (Option.isNone(validated)) return refused("input");
       const input = validated.value;
@@ -2084,7 +2029,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
               threadId: Schema.decodeSync(ThreadId)(messageId),
             },
             source: existing?.envelope.workerAdmission?.origin.source ?? context.source,
-            targetDigests: resolved.digests,
+            targetDigests: previousOrigin?.targetDigests ?? resolved.digests,
             policy: request.policy,
             budget: request.budget,
             ...(request.budgetScope === undefined ? {} : { budgetScope: request.budgetScope }),
@@ -2432,14 +2377,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         ? undefined
         : yield* sourceAuthority(sourceThreadId, request.sourceSubmissionId);
 
-    const resolved =
-      selected === undefined
-        ? deps.bindings.find(
-            (entry) =>
-              entry.agentId === created.agentId &&
-              bindingSupports(entry, created.definitions, undefined, firstThreadInput(current)),
-          )
-        : selected.binding;
+    const resolved = selected === undefined ? currentBinding(created.agentId) : selected.binding;
 
     if (resolved === undefined) return yield* failure("context", "declaration-unavailable");
 

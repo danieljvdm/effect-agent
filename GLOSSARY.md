@@ -20,7 +20,8 @@ construction without hiding Layer requirements or acquiring provider resources.
 An Agent Definition and model Layer, or an existing Agent Binding, paired with explicit Agent,
 Model, and Tool version declarations. Runtime
 construction hashes the declarations and captures the Binding's required services in its Scope.
-Durable workers match the registered identity and hashes before executing queued work.
+Durable workers select one current Binding by stable Agent ID; pending operations retain their
+own replay contracts. Admission, lineage, and delivery digests remain immutable evidence.
 An optional `attemptLayer` builds invocation-specific services for one fenced Attempt, rather than
 capturing caller authority or live resources in the runtime's long-lived Scope.
 
@@ -444,8 +445,9 @@ A fencing token that grants one owner permission to append. A stale owner with a
 cannot mutate canonical state even if it resumes.
 
 **Unknown Outcome**  
-A durable Tool result stating that an external effect may have occurred but was not confirmed
-canonically. It is neither success nor ordinary failure.
+A durable record that an external Tool effect may have occurred but was not confirmed
+canonically. It is neither success nor ordinary failure. Its Submission remains parked with an
+open settlement obligation while later input can run.
 
 **Accepted-work Contract**  
 Once a Submission is durably acknowledged, the runtime owes it exactly one durable Settlement.

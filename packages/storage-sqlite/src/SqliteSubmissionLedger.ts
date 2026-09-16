@@ -510,10 +510,13 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     ownershipToken: string,
   ): Effect.fn.Return<OwnershipRow, OwnershipLost | LedgerError> {
     const ownership = yield* readOwnership(operation, submission.submission_id);
+    const actualEpoch = yield* threadEpoch(operation, submission.thread_id);
 
-    if (Option.isNone(ownership) || ownership.value.ownership_token !== ownershipToken) {
-      const actualEpoch = yield* threadEpoch(operation, submission.thread_id);
-
+    if (
+      Option.isNone(ownership) ||
+      ownership.value.ownership_token !== ownershipToken ||
+      ownership.value.producer_epoch !== actualEpoch
+    ) {
       const submissionId = yield* Schema.decodeEffect(SubmissionSnapshot.fields.submissionId)(
         submission.submission_id,
       ).pipe(Effect.mapError(internalFailure(operation)));
@@ -1399,11 +1402,48 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       const claimed = yield* inWriteTransaction(
         operation,
         Effect.gen(function* () {
+          const now = yield* currentInstant;
+
+          // Ownership belongs to the whole Thread, including unknown work skipped below.
+          // Stored lease instants are normalized UTC strings, so the latest expiry covers
+          // every live lease. This check and the epoch grant share one write transaction.
+          const ownershipRows = yield* sql<Record<string, unknown>>`
+            SELECT ownership.*
+            FROM effect_agent_submission_ownership AS ownership
+            JOIN effect_agent_submissions AS submission
+              ON submission.submission_id = ownership.submission_id
+            WHERE submission.thread_id = ${validated.threadId}
+            ORDER BY ownership.lease_expires_at DESC
+            LIMIT 1
+          `.pipe(Effect.mapError(sqlFailure(operation)));
+
+          const ownership = yield* decodeRows(
+            Schema.Array(OwnershipRow),
+            "effect_agent_submission_ownership",
+            validated.threadId,
+            ownershipRows,
+          ).pipe(Effect.mapError(internalFailure(operation)));
+
+          if (ownership.length > 0) {
+            const expiresAt = yield* timestampMillis(
+              operation,
+              ownership[0].submission_id,
+            )(ownership[0].lease_expires_at);
+
+            if (expiresAt > now.millis) return Option.none<Claim>();
+          }
+
           const headRows = yield* sql<Record<string, unknown>>`
             SELECT ${sql.literal(SUBMISSION_COLUMNS)}
             FROM effect_agent_submissions
             WHERE thread_id = ${validated.threadId}
               AND state <> 'settled'
+              AND (
+                state <> 'unknown' OR EXISTS (
+                  SELECT 1 FROM effect_agent_abort_intents
+                  WHERE submission_id = effect_agent_submissions.submission_id
+                )
+              )
             ORDER BY queue_sequence ASC
             LIMIT 1
           `.pipe(Effect.mapError(sqlFailure(operation)));
@@ -1413,9 +1453,8 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           if (heads.length === 0) return Option.none<Claim>();
           const head = heads[0];
 
-          // Unknown work is claimable only for a durably requested abort: the coordinator
-          // cleans up children and settles without replaying ordinary Tools. Read the intent
-          // in this claim transaction; retain uncertainty evidence and all ownership fencing.
+          // Approval/delegation suspension and joined work retain their queue barrier.
+          // Unknown work with an abort intent is selected for cleanup without Tool replay.
           if (
             head.state === "joining" ||
             head.state === "joined" ||
@@ -1424,20 +1463,6 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               Option.isNone(yield* readAbortIntent(operation, head.submission_id)))
           ) {
             return Option.none<Claim>();
-          }
-
-          const now = yield* currentInstant;
-          const ownership = yield* readOwnership(operation, head.submission_id);
-
-          if (Option.isSome(ownership)) {
-            const expiresAt = yield* timestampMillis(
-              operation,
-              head.submission_id,
-            )(ownership.value.lease_expires_at);
-
-            // A live lease blocks every new claim; expiry alone only revokes the liveness
-            // assumption — correctness stays with producer-epoch fencing (D5).
-            if (expiresAt > now.millis) return Option.none<Claim>();
           }
 
           // Bump the Thread's producer epoch atomically with the claim so every stale

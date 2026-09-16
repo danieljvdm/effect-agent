@@ -34,7 +34,12 @@ it.effect("pins update wire contracts while preserving registrations without upd
 
     const legacy = yield* compileRegistrations([{ agent: legacyAgent, model, definitions }]);
 
-    expect(legacy[0]?.digests).toEqual(yield* digestDefinitions(definitions));
+    const expected = yield* digestDefinitions(definitions);
+
+    expect(legacy[0]?.digests).toMatchObject({
+      ...expected,
+      replay: { agent: expected.agent, tools: {} },
+    });
 
     const first = yield* compileRegistrations([
       { agent: agent(Schema.Struct({ finding: Schema.String })), model, definitions },

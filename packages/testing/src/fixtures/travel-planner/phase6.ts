@@ -250,7 +250,13 @@ const plannerDecide = (promptJson: string): Stream.Stream<Response.StreamPartEnc
  * batch is committed history, every later request gets the plan — identical parts, so the DC
  * canonical evidence is byte-equivalent to the DN ScriptedModel run after normalization.
  */
-export const phase6PlannerModel = promptAwareModel("travel-planner-phase-4", plannerDecide);
+export const phase6PlannerModel = promptAwareModel("travel-planner-phase-4", (promptJson) =>
+  promptJson.includes("[gate:") && !promptJson.includes(phase6FlightCallId)
+    ? Stream.fromEffectDrain(awaitPlannerGate(gateMarkerFromPrompt(promptJson))).pipe(
+        Stream.concat(plannerDecide(promptJson)),
+      )
+    : plannerDecide(promptJson),
+);
 
 // ---------------------------------------------------------------------------
 // Deterministic test gate for the admission-limits rows. Module state is
@@ -548,7 +554,7 @@ export const phase6ResearcherModel = promptAwareModel("destination-researcher-p6
 
 /**
  * Every phase-6 Travel Planner worker Binding, captured with its requirement Contexts:
- * the P4 planner and its gated twin, the P5 booking agent over the
+ * one P4 planner whose prompt selects the optional test gate, the P5 booking agent over the
  * shared supplier desk, and the S2 coordinator/researcher pair wired through the durable
  * delegation Layer. A Thread Object registers these via its `bindings` option; the
  * capture runs once per incarnation, and everything stateful the assertions rely on (desk,
@@ -559,11 +565,6 @@ export const makePhase6TravelPlannerBindings: Effect.Effect<ReadonlyArray<Resolv
     const planner: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(TravelPlannerPhase4, phase6PlannerModel),
       phase4TravelPlannerDefinitionDigests,
-    ).pipe(Effect.provide(phase4TravelPlannerWorkerLayer));
-
-    const gatedPlanner: ResolvedBinding = yield* DurableWorkerBinding.make(
-      Agent.withModel(TravelPlannerPhase4, phase6GatedPlannerModel),
-      phase6GatedPlannerDefinitionDigests,
     ).pipe(Effect.provide(phase4TravelPlannerWorkerLayer));
 
     const booking: ResolvedBinding = yield* DurableWorkerBinding.make(
@@ -604,7 +605,7 @@ export const makePhase6TravelPlannerBindings: Effect.Effect<ReadonlyArray<Resolv
       s2ResearcherDigests,
     ).pipe(Effect.provide(childToolkitLayer));
 
-    return [planner, gatedPlanner, booking, coordinator, researcher];
+    return [planner, booking, coordinator, researcher];
   });
 
 // ---------------------------------------------------------------------------
@@ -619,7 +620,7 @@ export const makePhase6TravelPlannerBindings: Effect.Effect<ReadonlyArray<Resolv
  * value, so the two platforms' canonical outcomes are byte-equivalent transitively — the P6
  * exit gate "Travel Planner produces equivalent canonical outcomes under DN and DC".
  *
- * Regenerate ONLY when the Travel Planner scenario itself changes, by printing either suite's
+ * Regenerate ONLY when the Travel Planner scenario or canonical protocol changes, by printing either suite's
  * normalized value; both suites must then agree on the new golden.
  */
 export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
@@ -699,6 +700,29 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
       deploymentId: "{deploymentId}",
       payload: {
         _tag: "ModelResponseRecorded",
+        toolOperations: [
+          {
+            toolCallId: "flight-call-1",
+            toolName: "search_flights",
+            executionClass: "readonly",
+            executionKind: "ordinary",
+            replay: "{digest}",
+          },
+          {
+            toolCallId: "lodging-call-1",
+            toolName: "search_lodging",
+            executionClass: "readonly",
+            executionKind: "ordinary",
+            replay: "{digest}",
+          },
+          {
+            toolCallId: "activity-call-1",
+            toolName: "search_activities",
+            executionClass: "readonly",
+            executionKind: "ordinary",
+            replay: "{digest}",
+          },
+        ],
         runId: "run:{submissionId}",
         turnId: "turn:run:{submissionId}:1",
         turn: 1,
@@ -921,6 +945,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
       deploymentId: "{deploymentId}",
       payload: {
         _tag: "RunCompleted",
+        resultDigest: "{digest}",
         runId: "run:{submissionId}",
         output: {
           itineraries: [

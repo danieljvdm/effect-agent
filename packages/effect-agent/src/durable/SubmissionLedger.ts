@@ -61,12 +61,12 @@ export type OwnershipToken = typeof OwnershipToken.Type;
  *   host Run's outcome.
  * - `suspended` — durably waiting for explicit approval decisions; the ownership period has
  *   ended and the lane consumes no worker permit while the obligation stays owed.
- * - `unknown` — at least one ordinary Tool Call has a durable Unknown Outcome; the lane is
- *   blocked until an authorized resolution covers every open call or a durable abort intent
- *   authorizes cleanup and aborted settlement without Tool replay (DUR-012/DUR-017).
+ * - `unknown` — at least one Tool Call has a durable Unknown Outcome; this Submission is
+ *   parked until an authorized resolution covers every open call or a durable abort intent
+ *   authorizes cleanup without Tool replay. Later eligible input may run (DUR-012/DUR-017).
  *
- * `claim` never grants a `joining`, `joined`, or `suspended` head. An `unknown` head is
- * claimable only with a durable abort intent, under the ordinary lease and fencing rules.
+ * `claim` never grants or bypasses a `joining`, `joined`, or `suspended` head. It skips unknown
+ * work without an abort intent. Any live ownership in the Thread prevents another claim.
  */
 export const SubmissionState = Schema.Literals([
   "admitted",
@@ -676,7 +676,7 @@ export class ApprovalDecisionIntent extends Schema.Class<ApprovalDecisionIntent>
 
 /**
  * Durable Unknown marking for one Submission's open ordinary Tool Calls (DUR-009): state →
- * `unknown`, the lane blocks, ownership-free (recovery may mark without a claim). Idempotent.
+ * `unknown`, parking that Submission without changing ownership or the Thread epoch. Idempotent.
  */
 export class MarkUnknownRequest extends Schema.Class<MarkUnknownRequest>(
   "@effect-agent/thread/MarkUnknownRequest",
@@ -954,10 +954,10 @@ export type SubmissionLedgerFailure =
  *   Marking an already-ready (or later-state) Submission is a no-op.
  * - `lookup` — read one Submission by identity or scoped idempotency key; strongly consistent
  *   with prior ledger writes.
- * - `claim` — FIFO-head claim rule: claims ONLY the lowest unsettled `queueSequence` of the
- *   requested Thread lane (DUR-004/DUR-005), regardless of that head's nonterminal state,
- *   and returns `Option.none` when the lane has no unsettled work or the head's lease is still
- *   live under another owner. A successful claim atomically bumps the Thread's producer
+ * - `claim` — claims the lowest unsettled `queueSequence` after skipping only unknown rows
+ *   without abort intent. Approval, joining and child-wait barriers remain ordered. Returns
+ *   `Option.none` when no eligible work exists or ANY lease in the Thread is live, including
+ *   a lease belonging to the same producer. A successful claim atomically bumps the Thread's producer
  *   epoch — fencing every stale Attempt out of canonical appends (DUR-006) — mints a fresh
  *   `attemptId` and `ownershipToken`, and starts the ownership lease (D5: adapters default to
  *   `DEFAULT_OWNERSHIP_LEASE_DURATION`, configurable). An expired lease makes the head
@@ -1040,8 +1040,9 @@ export type SubmissionLedgerFailure =
  *   with `ChildReservationConflict`. "A crash before release leaves budget unavailable until
  *   repair, never available twice" (spec §12).
  * - `markUnknown` — idempotent, ownership-free (canonical evidence authorizes it): state →
- *   `unknown`, the lane blocks and stops consuming worker permits while the accepted settlement
- *   obligation stays visible (DUR-009/DUR-017). Fails with `SettlementConflict` once settled.
+ *   `unknown`, parking the Submission while its accepted settlement obligation stays visible.
+ *   Existing ownership must release or expire before another claim (DUR-009/DUR-017).
+ *   Fails with `SettlementConflict` once settled.
  * - `recordUnknownResolution` — durable, idempotent per `(submissionId, toolCallId)`; a
  *   divergent re-resolution fails with `UnknownResolutionConflict`. Transitions
  *   `unknown → input-applied` once no open call remains, waking the lane. Fails with

@@ -1044,7 +1044,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 // Never claimed: no canonical input, no model call; abort precedes settlement.
                 expect(midIds).not.toContain(submissionInputRecordId(queued.submissionId));
-                expect(midIds).toContain(
+                // A repair without a claim cannot append an audit under another writer's epoch.
+                expect(midIds).not.toContain(
                   recoveryRepairRecordId(queued.submissionId, "SettleAborted"),
                 );
 
@@ -1342,7 +1343,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "kill at tools:after-prepared-append under the default reconciler: Unknown blocks the lane until resolveUnknown from a second process",
+      "kill at tools:after-prepared-append under the default reconciler: Unknown parks work until resolveUnknown from a second process",
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
@@ -1374,7 +1375,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 );
 
                 // Fail-closed default (AGENTS rule 11): no registered policy proves anything, so
-                // the open call becomes a durable Unknown Outcome and the lane blocks.
+                // the open call becomes a durable Unknown Outcome and its Submission is parked.
                 expect(report?.decision._tag).toBe("MarkUnknown");
                 expect(report?.disposition).toBe("unknown");
                 expect(yield* lookupState(snapshot.submissionId)).toBe("unknown");
@@ -1387,6 +1388,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 expect(blocked).toEqual([]);
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(0);
+                const retained = yield* readLog(thread);
 
                 // Authorized DUR-017 resolution arrives from a SECOND real process through the
                 // shared durable ledger.
@@ -1397,6 +1399,21 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   key,
                 });
                 expect(yield* lookupState(snapshot.submissionId)).toBe("input-applied");
+                expect(yield* readLog(thread)).toEqual(retained);
+                const ledger = yield* SubmissionLedger;
+
+                const resolved = yield* ledger.loadRecoverySnapshot(
+                  RecoverySnapshotRequest.make({ submissionId: snapshot.submissionId }),
+                );
+
+                expect(resolved.unknownResolutions).toMatchObject([
+                  {
+                    toolCallId: BOOK_CALL_ID,
+                    author: "operator",
+                    reason: "the supplier store shows the call never started",
+                    resolution: { _tag: "NeverHappened" },
+                  },
+                ]);
 
                 const settlements = yield* drainUncertainBook(site, thread, FRESH_ANSWER);
 
@@ -1406,17 +1423,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 const records = yield* readLog(thread);
 
-                const resolved = records.find(
-                  (envelope) =>
-                    envelope.record.recordId ===
-                    toolCallResolvedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
-                )?.record.payload;
-
-                expect(resolved?._tag).toBe("ToolCallResolved");
-                if (resolved?._tag === "ToolCallResolved") {
-                  expect(resolved.resolution).toBe("never-started");
-                  expect(resolved.author).toBe("operator");
-                }
+                expect(records.slice(0, retained.length)).toEqual(retained);
                 expect(
                   records.filter(
                     (envelope) =>

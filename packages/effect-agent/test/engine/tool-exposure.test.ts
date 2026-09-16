@@ -780,72 +780,81 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", 
   for (const [label, snapshot] of [
     ["missing", undefined],
     [
-      "unknown selection",
+      "retired selection",
       Snapshot.make({
         exposedToolNames: ["read"],
-        selection: Selection.make({ toolNames: ["missing"] }),
+        selection: Selection.make({ toolNames: ["retired"] }),
       }),
     ],
-    ["unknown exposure", Snapshot.make({ exposedToolNames: ["read", "toString"] })],
+    ["retired exposure", Snapshot.make({ exposedToolNames: ["read", "retired"] })],
+    ["unexposed call", Snapshot.make({ exposedToolNames: ["retired"] })],
   ] as const) {
-    it.effect(`rejects ${label} in a visibility-only resumed request before execution`, () =>
-      Effect.gen(function* () {
-        const native = Toolkit.make(Read);
+    it.effect(
+      `preserves original authority with ${label} in a visibility-only resumed request`,
+      () =>
+        Effect.gen(function* () {
+          const native = Toolkit.make(Read);
 
-        const agent = Agent.make("invalid-resume-exposure", {
-          input: Schema.String,
-          output: Schema.String,
-          instructions: "Answer.",
-          toolkit: native,
-        });
+          const agent = Agent.make("invalid-resume-exposure", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Answer.",
+            toolkit: native,
+          });
 
-        const requests: Array<ReadonlyArray<string>> = [];
-        let starts = 0;
+          const requests: Array<ReadonlyArray<string>> = [];
+          let starts = 0;
 
-        const exit = yield* AgentRuntime.run(
-          Agent.withModel(agent, scripted([done], requests)),
-          "go",
-          {
-            resume: {
-              turn: 1,
-              turnId: TurnId.make("original"),
-              calls: [{ id: "read-1", name: "read", params: {} }],
-              settled: [],
-              ...(snapshot === undefined ? {} : { toolExposure: snapshot }),
+          const exit = yield* AgentRuntime.run(
+            Agent.withModel(agent, scripted([done], requests)),
+            "go",
+            {
+              resume: {
+                turn: 1,
+                turnId: TurnId.make("original"),
+                calls: [{ id: "read-1", name: "read", params: {} }],
+                settled: [],
+                ...(snapshot === undefined ? {} : { toolExposure: snapshot }),
+              },
+              resumeUsage: {
+                committedTurns: 1,
+                toolCalls: 1,
+                modelCalls: 1,
+                inputTokens: 0,
+                outputTokens: 0,
+                lastInputTokens: 0,
+                lastOutputTokens: 0,
+                costMicrousd: 0,
+                consecutiveToolFailures: 0,
+                programmaticToolCalls: 0,
+                finalizationUsed: false,
+              },
             },
-            resumeUsage: {
-              committedTurns: 1,
-              toolCalls: 1,
-              modelCalls: 1,
-              inputTokens: 0,
-              outputTokens: 0,
-              lastInputTokens: 0,
-              lastOutputTokens: 0,
-              costMicrousd: 0,
-              consecutiveToolFailures: 0,
-              programmaticToolCalls: 0,
-              finalizationUsed: false,
-            },
-          },
-        ).pipe(
-          Effect.provideService(RunToolVisibility, { visible: () => Effect.succeed(["read"]) }),
-          Effect.provide(
-            native.toLayer({
-              read: () =>
-                Effect.sync(() => {
-                  starts++;
+          ).pipe(
+            Effect.provideService(RunToolVisibility, { visible: () => Effect.succeed(["read"]) }),
+            Effect.provide(
+              native.toLayer({
+                read: () =>
+                  Effect.sync(() => {
+                    starts++;
 
-                  return "";
-                }),
-            }),
-          ),
-          Effect.exit,
-        );
+                    return "";
+                  }),
+              }),
+            ),
+            Effect.exit,
+          );
 
-        expect(failure(exit)).toMatchObject({ _tag: "ModelProtocolError" });
-        expect(starts).toBe(0);
-        expect(requests).toEqual([]);
-      }),
+          if (label === "missing" || label === "unexposed call") {
+            expect(failure(exit)).toMatchObject({ _tag: "ModelProtocolError" });
+            expect(starts).toBe(0);
+            expect(requests).toEqual([]);
+          } else {
+            expect(Exit.isSuccess(exit)).toBe(true);
+            expect(starts).toBe(1);
+            expect(requests).toEqual([label === "retired selection" ? [] : ["read"]]);
+          }
+        }),
     );
   }
 

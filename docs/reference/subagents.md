@@ -274,19 +274,20 @@ Later inputs, joined receipts, retries, and replacement Attempts never select a 
 Application follow-up preparation must retain the original authorized capture and change only
 the intended task input. Receiving a new payload does not authorize changing its capture.
 
-Root source resolution receives the exact explicitly selected owner Submission and its registered
-binding, when retained. It never selects the latest input. Programmatic callers can pass
+Root source resolution receives the exact explicitly selected owner Submission and the current
+binding for its Agent ID. It never selects the latest input. Programmatic callers can pass
 `sourceSubmissionId` to `durableRuntime.workerHost`; `WorkerHostAuthorizer` receives that locator
 for authorization. Worker and attached source policies continue to come from stored lineage.
 Inspection, listing, observation, and cancellation do not require resolving a source policy.
-Keep retained binding versions available; a policy resolver cannot repair ambiguous historical
-definition identities or reconstruct a missing capture.
+A policy resolver cannot reconstruct a missing capture or change immutable worker authority.
+Executable selection uses the current binding for the retained Agent ID; it does not require
+historical binding versions.
 
 A root conversation can admit a new registered Agent ID after an application upgrade. When
-an explicit owner Submission selects that Agent, worker creation and reporting use its exact
-retained binding, while the original `ThreadCreated` record stays unchanged. An unregistered
-Agent/digest pair is rejected. Existing workers retain their original lineage and reporting
-binding when the upgraded root sends follow-ups; worker and attached child Agent IDs cannot
+an explicit owner Submission selects that Agent, worker creation and reporting use its current
+binding, while the original `ThreadCreated` record stays unchanged. Missing or ambiguous current
+bindings are rejected. Existing workers retain their original lineage and reporting evidence
+when the upgraded root sends follow-ups; worker and attached child Agent IDs cannot
 be replaced this way. Without an explicit owner Submission, programmatic hosts continue to
 use the thread's original Agent.
 

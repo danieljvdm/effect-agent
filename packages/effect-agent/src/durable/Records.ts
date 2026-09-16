@@ -200,17 +200,17 @@ export class DefinitionDigestInput extends Schema.Class<DefinitionDigestInput>(
   tools: PersistedJson,
 }) {}
 
-/** The contracts a retained Run may decode or execute, independent of its deployment. */
+/** Admission-time operation fingerprints. Agent fingerprints remain immutable evidence only. */
 export class ReplayContract extends Schema.Class<ReplayContract>(
   "@effect-agent/thread/ReplayContract",
 )({
   agent: Digest,
-  /** Agent semantics and output/completion codecs; the saved input is checked separately. */
+  /** Retained for reading earlier admissions; never selects executable code. */
   agentBehavior: Schema.optionalKey(Digest),
   tools: Schema.Record(Schema.String, Digest),
 }) {}
 
-/** Digests identify admission exactly; replay contracts separately authorize continuation. */
+/** Digests identify admission exactly; only an unfinished operation needs replay compatibility. */
 export class DefinitionDigests extends Schema.Class<DefinitionDigests>(
   "@effect-agent/thread/DefinitionDigests",
 )({
@@ -292,6 +292,24 @@ export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
   budgetRejected: Schema.optionalKey(Schema.Literal(true)),
 }) {}
 
+/** Compact execution evidence committed with a declaration, before any handler can start. */
+export class ToolOperation extends Schema.Class<ToolOperation>(
+  "@effect-agent/thread/ToolOperation",
+)({
+  toolCallId: ToolCallId,
+  toolName: BoundedName,
+  executionClass: Schema.Literals(["readonly", "idempotent", "uncertain"]),
+  executionKind: ToolExecutionKind,
+  replay: Digest,
+}) {}
+
+/** A retired call's runtime result. Unavailable readonly work may already have been observed. */
+export class ToolUnavailable extends Schema.TaggedClass<ToolUnavailable>()("ToolUnavailable", {
+  toolName: BoundedName,
+  execution: Schema.Literals(["not-executed", "unavailable"]),
+  message: BoundedText,
+}) {}
+
 /**
  * One committed model Turn. `messages` carries the Schema-encoded Effect AI Prompt messages this
  * Turn appended (assistant response plus any tool-call declarations), committed atomically at the
@@ -299,6 +317,8 @@ export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
  * `messagesDigest` pins the exact encoded content.
  */
 const ModelResponseRecordedFields = Schema.Struct({
+  /** Original operation identity/semantics, independent of later Agent and toolbox changes. */
+  toolOperations: Schema.optionalKey(Schema.Array(ToolOperation)),
   /** Explicit pre-execution failures, committed with the original arguments before any approval. */
   toolParameterRejections: Schema.optionalKey(Schema.Array(ToolParameterRejection)),
   toolExposure: Schema.optionalKey(Snapshot),
@@ -309,8 +329,9 @@ const ModelResponseRecordedFields = Schema.Struct({
   messagesDigest: Digest,
   /**
    * Number of leading messages that belong only to this Run's evaluated instructions and wake
-   * input. They remain canonical and are visible while recovering this Run, but later Runs omit
-   * them from their model-facing history. Records without this field retain their full history.
+   * input. They remain canonical. Continuations replace the instruction messages with current
+   * instructions while retaining user input; later Runs also retain that original user intent.
+   * Records without this field retain their full history.
    */
   runScopedPrefixLength: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   /**
@@ -366,6 +387,8 @@ export class ToolCallPrepared extends Schema.TaggedClass<ToolCallPrepared>(
   parametersDigest: Digest,
   /** Absent legacy evidence grants no delegation replay authority. */
   executionKind: Schema.optionalKey(ToolExecutionKind),
+  executionClass: Schema.optionalKey(ToolOperation.fields.executionClass),
+  replay: Schema.optionalKey(Digest),
 }) {}
 
 /** Monotonic reservations charged before programmatic execution or grace finalization. */
@@ -520,6 +543,8 @@ export class RunFailed extends Schema.TaggedClass<RunFailed>("@effect-agent/thre
 const RunCompletedFields = Schema.Struct({
   runId: RunId,
   output: PersistedJson,
+  /** Integrity of validated terminal values, independent of future application codecs. */
+  resultDigest: Schema.optionalKey(Digest),
   /** Application disposition captured with an ordinary completion. */
   runDisposition: Schema.optionalKey(PersistedJson),
   /** Honest soft-landing marker, present exactly when `exhausted` is present. */

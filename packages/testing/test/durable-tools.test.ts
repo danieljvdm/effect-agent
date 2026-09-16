@@ -1530,15 +1530,17 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(prepared.toolName).toBe("book");
       }
 
-      // The canonical journal rebuilds the next-Run prompt without replaying the prior Run's
-      // instruction and wake prefix.
+      // The next Run retains the original user request and canonical results; prior system
+      // instructions do not regain authority.
       const prompt = yield* promptFromCanonicalRecords(records);
 
       expect(prompt.content.map((message) => message.role)).toEqual([
+        "user",
         "assistant",
         "tool",
         "assistant",
       ]);
+      expect(JSON.stringify(prompt.content[0])).toContain("book it");
     }),
   );
 
@@ -2103,7 +2105,13 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         );
 
         expect(intent.toolCallId).toBe("book-1");
+        expect(intent).toMatchObject({
+          author: "operator",
+          reason: "the supplier confirmed the call never started",
+          resolution: { _tag: "NeverHappened" },
+        });
         expect(yield* lookupState(receipt.submissionId)).toBe("input-applied");
+        expect(yield* readLog(thread)).toEqual(records);
 
         const resumed = yield* runtime
           .processThread(agent, decodeThreadId(thread))
@@ -2115,15 +2123,9 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
         const finalRecords = yield* readLog(thread);
 
-        const resolved = finalRecords.find(
-          (envelope) => envelope.record.recordId === `tool-resolved:${runId}:1:book-1`,
-        )?.record.payload;
-
-        expect(resolved?._tag).toBe("ToolCallResolved");
-        if (resolved?._tag === "ToolCallResolved") {
-          expect(resolved.resolution).toBe("never-started");
-          expect(resolved.author).toBe("operator");
-        }
+        // The durable intent authorizes re-entry; the original call's actual settlement
+        // closes it. Its earlier Unknown evidence remains immutable in canonical history.
+        expect(finalRecords.slice(0, records.length)).toEqual(records);
         expect(
           finalRecords.filter(
             (envelope) => envelope.record.recordId === `tool-settled:${runId}:1:book-1`,
@@ -2218,15 +2220,17 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ).toHaveLength(2);
 
         // The audit tags stay prompt-transparent: the journal replays one contiguous tool
-        // message for the Turn regardless of the late per-call settles, while omitting the
-        // prior Run's instruction and wake prefix.
+        // message for the Turn regardless of late per-call settlements, while retaining the
+        // original user request and omitting the prior system instruction.
         const prompt = yield* promptFromCanonicalRecords(records);
 
         expect(prompt.content.map((message) => message.role)).toEqual([
+          "user",
           "assistant",
           "tool",
           "assistant",
         ]);
+        expect(JSON.stringify(prompt.content[0])).toContain("book both");
         const toolMessage = prompt.content.find((message) => message.role === "tool");
 
         expect(
@@ -2629,6 +2633,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       const prompt = yield* promptFromCanonicalRecords(records);
 
       expect(prompt.content.map((message) => message.role)).toEqual([
+        "user",
         "assistant",
         "tool",
         "assistant",

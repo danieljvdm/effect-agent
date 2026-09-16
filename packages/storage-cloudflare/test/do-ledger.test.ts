@@ -32,7 +32,11 @@ import {
   LedgerError,
   MarkReadyRequest,
   MarkUnknownRequest,
+  RecoverySnapshotRequest,
+  ReleaseOwnershipRequest,
+  RenewOwnershipRequest,
   ResolutionCompletedWithResult,
+  ResolutionNeverHappened,
   SubmissionLedger,
   SubmissionLookupByKey,
   IdempotencyKey,
@@ -448,6 +452,117 @@ describe("DoSubmissionLedger", () => {
     expect(reread.nonterminal.map((snapshot) => snapshot.submissionId)).toEqual([
       reread.replayed.submissionId,
     ]);
+  });
+
+  it("preserves a later writer across eviction after an unknown-resolution wake", async () => {
+    const objectName = "unknown-writer-resolution-eviction";
+    const lane = "thread-unknown-writer-resolution";
+    const request = ClaimRequest.make({ threadId: thread(lane), producerId: TEST_PRODUCER });
+
+    const before = await withThreadStorage(objectName, (storage) =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const older = yield* ledger.admit(yield* admission(lane, "older", { work: "older" }));
+        const later = yield* ledger.admit(yield* admission(lane, "later", { work: "later" }));
+
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: older.submissionId }));
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: later.submissionId }));
+        const first = yield* ledger.claim(request);
+
+        if (Option.isNone(first)) return yield* Effect.die("missing older claim");
+        yield* ledger.markUnknown(
+          MarkUnknownRequest.make({
+            submissionId: older.submissionId,
+            toolCallIds: [toolCall("unknown-eviction-call")],
+            reason: "ordinary Tool outcome is uncertain",
+          }),
+        );
+        yield* ledger.releaseOwnership(
+          ReleaseOwnershipRequest.make({
+            submissionId: older.submissionId,
+            ownershipToken: first.value.ownershipToken,
+          }),
+        );
+        const second = yield* ledger.claim(request);
+
+        if (Option.isNone(second)) return yield* Effect.die("missing later claim");
+        expect(second.value.submissionId).toBe(later.submissionId);
+
+        return { older, second: second.value };
+      }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
+    );
+
+    const outcome = await withThreadStorage(objectName, (storage, state) =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+
+        yield* ledger.recordUnknownResolution(
+          UnknownResolutionCommand.make({
+            submissionId: before.older.submissionId,
+            toolCallId: toolCall("unknown-eviction-call"),
+            author: "operator",
+            reason: "external service confirmed no effect",
+            resolution: ResolutionNeverHappened.make(),
+          }),
+        );
+      }).pipe(
+        Effect.provide([
+          ledgerLayer({
+            storage,
+            failpoint: evictionFailpointHandler({
+              isArmed: (location) => Effect.succeed(location === "ledger:unknown-resolution:after"),
+              evict: () => state.abort("eviction after unknown resolution committed"),
+            }),
+          }),
+          BrowserCrypto.layer,
+        ]),
+      ),
+    ).then(
+      () => "returned" as const,
+      () => "evicted" as const,
+    );
+
+    expect(outcome).toBe("evicted");
+
+    await withThreadStorage(objectName, (storage) =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+
+        const older = yield* ledger.loadRecoverySnapshot(
+          RecoverySnapshotRequest.make({ submissionId: before.older.submissionId }),
+        );
+
+        const later = yield* ledger.loadRecoverySnapshot(
+          RecoverySnapshotRequest.make({ submissionId: before.second.submissionId }),
+        );
+
+        expect(older.submission.state).toBe("input-applied");
+        expect(later.ownership?.producerEpoch).toBe(before.second.producerEpoch);
+        expect(Option.isNone(yield* ledger.claim(request))).toBe(true);
+
+        const renewal = yield* ledger.renewOwnership(
+          RenewOwnershipRequest.make({
+            submissionId: before.second.submissionId,
+            ownershipToken: before.second.ownershipToken,
+          }),
+        );
+
+        expect(renewal.ownershipToken).toBe(before.second.ownershipToken);
+        yield* ledger.releaseOwnership(
+          ReleaseOwnershipRequest.make({
+            submissionId: before.second.submissionId,
+            ownershipToken: renewal.ownershipToken,
+          }),
+        );
+        const resumed = yield* ledger.claim(request);
+
+        expect(Option.isSome(resumed)).toBe(true);
+        if (Option.isSome(resumed)) {
+          expect(resumed.value.submissionId).toBe(before.older.submissionId);
+          expect(resumed.value.producerEpoch).toBeGreaterThan(before.second.producerEpoch);
+        }
+      }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
+    );
   });
 
   it("mints routable Submission identities that carry the Thread identity", () =>

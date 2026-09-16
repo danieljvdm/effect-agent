@@ -372,7 +372,7 @@ export interface RunJournalProjection {
   readonly policyUsage: RunPolicyUsage;
   /** Canonical projection for the requested Run; may end at its resumable Tool declaration. */
   readonly prompt: Prompt.Prompt;
-  /** Valid prior-Run history excluding the projected Run's records and orphan Tool batches. */
+  /** Prior-Run history with model-only unknown results closing incomplete application calls. */
   readonly historyBefore: Prompt.Prompt;
   /** Number of canonical Turns already committed for the projected Run. */
   readonly committedTurns: number;
@@ -471,13 +471,6 @@ const declaredApplicationToolCallIds = (prompt: Prompt.Prompt): ReadonlyArray<st
   return ids;
 };
 
-const withoutApplicationToolCallMessages = (prompt: Prompt.Prompt): ReadonlyArray<Prompt.Message> =>
-  prompt.content.filter(
-    (message) =>
-      message.role !== "assistant" ||
-      !message.content.some((part) => part.type === "tool-call" && !part.providerExecuted),
-  );
-
 /**
  * Phase 5 audit tags that are prompt-transparent: they carry durability evidence (preparation,
  * unknown marking, resolution, Step results, approvals, interruption) but contribute nothing to
@@ -517,9 +510,8 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
 
 /**
  * Pure projection: rebuild one Run's resume state from canonical records (DUR-015). Canonical
- * order is authoritative; the fold projects each complete `ModelResponseRecorded` Turn and the
- * owning Run's resumable incomplete Tool Turn, while excluding incomplete Tool batches from prior
- * Runs. It flushes each contiguous group of valid `ToolCallSettled` records into one Tool message,
+ * order is authoritative; the fold projects each `ModelResponseRecorded` Turn and the
+ * owning Run's resumable incomplete Tool Turn. It flushes each contiguous group of valid `ToolCallSettled` records into one Tool message,
  * exactly mirroring the per-Turn commit shape produced by `turnCanonicalBatch` (no-tool Turns) and
  * by the
  * `turnResponseBatch`/`turnResultsBatch` split (tool-declaring Turns). The Phase 5 audit tags
@@ -528,8 +520,10 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
  *
  * An incomplete application Tool turn remains visible while projecting its owning Run so active
  * recovery can resume the declared batch. It is not a valid model-visible Turn boundary for a
- * later Run: the orphan assistant Tool declaration and any partial Tool results from that Turn
- * are excluded, while preceding instruction/user messages in the response record remain history.
+ * later Run until model-only unknown results close its missing calls. Those explanatory results
+ * are never canonical settlements or evidence for compaction, recovery or accounting. Real
+ * results replace them at the original declaration, including results appended after another Run.
+ * Prior user intent and assistant text remain visible; prior system instructions do not.
  */
 /** @internal Lightweight canonical boundaries collected without retaining record payloads. */
 export interface JournalBoundary {
@@ -921,6 +915,18 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     }
   });
 
+  // Slots refer to the retained Prompt itself, not an additional history payload index.
+  // Only still-unseen results retain a slot; late results fill the original declaration in place.
+  const historicalResults = new Map<
+    string,
+    {
+      readonly allIndex: number;
+      readonly beforeIndex: number;
+      readonly parts: Array<Prompt.ToolResultPart>;
+      readonly partIndex: number;
+    }
+  >();
+
   let pendingToolOrder = new Map<string, number>();
 
   const flushTools = Effect.fn("RunJournal.flushTools")(function* (
@@ -1009,12 +1015,32 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       }
       emitSummary();
       if (payload._tag === "ToolCallSettled") {
-        if (payload.runId !== ownerRunId && incompleteToolCalls.has(envelope.record.recordId)) {
+        if (payload.runId !== ownerRunId) {
+          const slot = historicalResults.get(envelope.record.recordId);
+
+          if (slot === undefined)
+            return yield* journalError("Historical Tool result has no matching declaration");
+          const declared = slot.parts[slot.partIndex];
+
+          if (declared?.id !== payload.toolCallId || declared.name !== payload.toolName)
+            return yield* journalError("Historical Tool result differs from its declaration");
+          slot.parts[slot.partIndex] = Prompt.makePart("tool-result", {
+            id: payload.toolCallId,
+            name: payload.toolName,
+            result: envelope.sequence <= clearBound ? CLEARED_TOOL_RESULT : payload.result,
+            isFailure: payload.isFailure,
+            providerExecuted: false,
+          });
+          const message = Prompt.makeMessage("tool", { content: [...slot.parts] });
+
+          state.all[slot.allIndex] = message;
+          state.before[slot.beforeIndex] = message;
+          historicalResults.delete(envelope.record.recordId);
           onBoundary?.({
             sequence: envelope.sequence,
             tag: payload._tag,
-            promptLength: state.all.length + (state.pendingTools.length === 0 ? 0 : 1),
-            incomplete: true,
+            promptLength: state.all.length,
+            ...(incompleteToolCalls.has(envelope.record.recordId) ? { incomplete: true } : {}),
             ...(isTerminalPriorRun(payload.runId, ownerRunId, Number.POSITIVE_INFINITY)
               ? { terminalPriorRun: true }
               : {}),
@@ -1066,19 +1092,58 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
 
       yield* accountResponse(envelope, payload, messages);
 
-      const modelVisible =
-        !forRun && payload.runScopedPrefixLength !== undefined
-          ? Prompt.fromMessages(messages.content.slice(payload.runScopedPrefixLength))
-          : messages;
-
-      const visibleMessages =
-        !forRun && incompleteToolTurns.has(envelope.record.recordId)
-          ? withoutApplicationToolCallMessages(modelVisible)
-          : modelVisible.content;
+      const visibleMessages = forRun
+        ? messages.content
+        : messages.content.filter((message) => message.role !== "system");
 
       for (const message of visibleMessages) {
         state.all.push(message);
         if (!forRun) state.before.push(message);
+      }
+      if (!forRun) {
+        const calls = messages.content.flatMap((message) =>
+          message.role === "assistant"
+            ? message.content.filter(
+                (part): part is Prompt.ToolCallPart =>
+                  part.type === "tool-call" && !part.providerExecuted,
+              )
+            : [],
+        );
+
+        if (calls.length > 0) {
+          const parts = calls.map((call) =>
+            Prompt.makePart("tool-result", {
+              id: call.id,
+              name: call.name,
+              result: {
+                _tag: "ToolOutcomeUnknown",
+                message:
+                  "This earlier operation has no recorded outcome. It may have executed. Do not assume success or retry it; its original operation remains unresolved.",
+              },
+              isFailure: true,
+              providerExecuted: false,
+            }),
+          );
+
+          const allIndex = state.all.length;
+          const beforeIndex = state.before.length;
+          const message = Prompt.makeMessage("tool", { content: parts });
+
+          state.all.push(message);
+          state.before.push(message);
+          for (const [partIndex, call] of calls.entries()) {
+            const callId = yield* Schema.decodeEffect(ToolCallId)(call.id).pipe(
+              Effect.mapError((cause) => journalError("Invalid historical Tool Call ID", cause)),
+            );
+
+            historicalResults.set(toolCallSettledRecordId(payload.runId, payload.turn, callId), {
+              allIndex,
+              beforeIndex,
+              parts,
+              partIndex,
+            });
+          }
+        }
       }
       state = {
         ...state,
@@ -1158,6 +1223,7 @@ const validStagedUsage = (label: string, value: number): Effect.Effect<number, R
       );
 
 export interface TurnCommitInput {
+  readonly toolOperations?: ModelResponseRecorded["toolOperations"] | undefined;
   readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;
   readonly toolSelections?: ReadonlyMap<string, Selection> | undefined;
@@ -1300,6 +1366,7 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
     createdAt: input.createdAt,
     deploymentId: input.deploymentId,
     payload: ModelResponseRecorded.make({
+      ...(input.toolOperations === undefined ? {} : { toolOperations: input.toolOperations }),
       ...(input.toolParameterRejections === undefined || input.toolParameterRejections.length === 0
         ? {}
         : { toolParameterRejections: input.toolParameterRejections }),
@@ -1379,29 +1446,39 @@ const toolSettledRecords = Effect.fn("RunJournal.toolSettledRecords")(function* 
   return toolRecords;
 });
 
-const runCompletionRecord = (input: TurnCommitInput): RecordEnvelope | undefined =>
-  input.runCompletion === undefined
-    ? undefined
-    : RecordEnvelope.make({
-        recordId: runCompletedRecordId(input.runId),
-        family: "thread",
-        schemaVersion: 1,
-        createdAt: input.createdAt,
-        deploymentId: input.deploymentId,
-        payload: RunCompleted.make({
-          runId: input.runId,
-          output: input.runCompletion.output,
-          ...(input.runCompletion.runDisposition === undefined
-            ? {}
-            : { runDisposition: input.runCompletion.runDisposition }),
-          ...(input.runCompletion.finishReason === undefined
-            ? {}
-            : { finishReason: input.runCompletion.finishReason }),
-          ...(input.runCompletion.exhausted === undefined
-            ? {}
-            : { exhausted: input.runCompletion.exhausted }),
-        }),
-      });
+/** Integrity of the original validated terminal values; never a current-code projection. */
+export const runCompletionDigest = (
+  completion: Pick<
+    RunCompleted,
+    "runId" | "output" | "runDisposition" | "finishReason" | "exhausted"
+  >,
+) =>
+  digestJson({
+    runId: completion.runId,
+    output: completion.output,
+    runDisposition: completion.runDisposition ?? null,
+    finishReason: completion.finishReason ?? null,
+    exhausted: completion.exhausted ?? null,
+  });
+
+const runCompletionRecord = Effect.fn("RunJournal.runCompletionRecord")(function* (
+  input: TurnCommitInput,
+) {
+  if (input.runCompletion === undefined) return undefined;
+  const completion = { runId: input.runId, ...input.runCompletion };
+
+  return RecordEnvelope.make({
+    recordId: runCompletedRecordId(input.runId),
+    family: "thread",
+    schemaVersion: 1,
+    createdAt: input.createdAt,
+    deploymentId: input.deploymentId,
+    payload: RunCompleted.make({
+      ...completion,
+      resultDigest: yield* runCompletionDigest(completion),
+    }),
+  });
+});
 
 /**
  * Pure per-Turn canonical batch builder (TurnCompleted seam fold, D6/D8): one
@@ -1420,7 +1497,7 @@ export const turnCanonicalBatch = Effect.fn("RunJournal.turnCanonicalBatch")(fun
   const { promptMessages, toolParts } = splitTurnMessages(input.appended);
   const modelResponse = yield* modelResponseRecord(input, promptMessages);
   const toolRecords = yield* toolSettledRecords(input, toolParts);
-  const completionRecord = runCompletionRecord(input);
+  const completionRecord = yield* runCompletionRecord(input);
 
   return CanonicalBatch.make({
     batchId: turnBatchId(input.runId, input.turn),
@@ -1465,7 +1542,7 @@ export const turnResponseBatch = Effect.fn("RunJournal.turnResponseBatch")(funct
  */
 export const turnResultsBatch = Effect.fn("RunJournal.turnResultsBatch")(function* (
   input: TurnCommitInput,
-): Effect.fn.Return<CanonicalBatch, RunJournalError> {
+): Effect.fn.Return<CanonicalBatch, RunJournalError | DigestError, Crypto.Crypto> {
   yield* requireCanonicalTurn(input.turn);
   const { toolParts } = splitTurnMessages(input.appended);
   const toolRecords = yield* toolSettledRecords(input, toolParts);
@@ -1477,7 +1554,7 @@ export const turnResultsBatch = Effect.fn("RunJournal.turnResultsBatch")(functio
   if (input.runCompletion !== undefined && toolRecords.length !== 1) {
     return yield* journalError("A terminal Tool completion requires exactly one settled result");
   }
-  const completionRecord = runCompletionRecord(input);
+  const completionRecord = yield* runCompletionRecord(input);
 
   return CanonicalBatch.make({
     batchId: turnResultsBatchId(input.runId, input.turn),

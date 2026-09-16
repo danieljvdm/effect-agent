@@ -38,6 +38,7 @@ import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";
 import {
+  DurableAgentRuntime,
   type DurableSubmitAgent,
   type DurableSubmitOptions,
   type Receipt,
@@ -49,6 +50,7 @@ import {
   ResolutionNeverHappened,
   UnknownResolutionCommand,
 } from "effect-agent/submission-ledger";
+import { DurableObject } from "effect-cf";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -414,7 +416,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     );
   }, 30_000);
 
-  it("unknown supplier outcome under eviction never fabricates a booking result and wakes only through resolveUnknown", async () => {
+  it("unknown supplier outcome under eviction retains resolution authority and records only supplier-backed results", async () => {
     const thread = lane("unknown");
     const bookKey = bookFlightIdempotencyKey(phase6BookingToolCallId(thread));
 
@@ -461,7 +463,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     expect(logTags(blocked)).toContain("ToolCallUnknown");
     expect(logTags(blocked)).not.toContain("SubmissionSettled");
 
-    // Only the authorized resolution path releases the lane: never-happened is supplier
+    // The authorized resolution path resumes this submission: never-happened is supplier
     // truth here (the desk holds no booking), so the call may honestly execute once.
     await runClient(
       Effect.gen(function* () {
@@ -484,8 +486,41 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
 
     const records = await readCanonical(thread);
 
-    expect(logTags(records)).toContain("ToolCallResolved");
-    expect(settledPayloadOf(records).outcome).toBe("completed");
+    // Permission to retry remains an intent; the eventual ToolCallSettled is the outcome.
+    const explanation = await runInDurableObject(stubFor(thread), (instance) =>
+      instance[DurableObject.RunSymbol](
+        DurableAgentRuntime.use((runtime) => runtime.explain(receipt.submissionId)),
+      ),
+    );
+
+    expect(explanation.evidence.unknownResolutions).toEqual([
+      expect.objectContaining({
+        submissionId: receipt.submissionId,
+        toolCallId: phase6BookingToolCallId(thread),
+        author: "travel-desk-operator",
+        reason: "phase-6 unknown row: the desk shows no booking under this key",
+        resolution: { _tag: "NeverHappened" },
+      }),
+    ]);
+    expect(explanation.evidence.unknownCalls).toEqual([
+      expect.objectContaining({ toolCallId: phase6BookingToolCallId(thread), resolved: true }),
+    ]);
+    expect(
+      records.flatMap(({ record }) =>
+        record.payload._tag === "ToolCallSettled" &&
+        record.payload.toolCallId === phase6BookingToolCallId(thread)
+          ? [record.payload]
+          : [],
+      ),
+    ).toEqual([expect.objectContaining({ isFailure: false })]);
+    expect(records.filter(({ record }) => record.payload._tag === "ToolCallUnknown")).toEqual(
+      blocked.filter(({ record }) => record.payload._tag === "ToolCallUnknown"),
+    );
+    expect(settledPayloadOf(records)).toMatchObject({
+      submissionId: receipt.submissionId,
+      receiptId: receipt.receiptId,
+      outcome: "completed",
+    });
     expect(await supplierCallCount(bookKey)).toBe(1);
     await Effect.runPromise(
       assertSettledBookingsExistAtSupplier(records).pipe(Effect.provide(phase6SupplierDeskLayer)),

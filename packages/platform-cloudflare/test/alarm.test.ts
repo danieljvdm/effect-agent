@@ -2,13 +2,14 @@ import { DurableAlarmService, ThreadMutationGate } from "@effect-agent/platform-
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Schema } from "effect";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
-  ResolutionNeverHappened,
-  UnknownResolutionCommand,
   RecoverySnapshotRequest,
+  ResolutionSafeToRetry,
   SubmissionLedger,
+  UnknownResolutionCommand,
 } from "effect-agent/submission-ledger";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
@@ -34,6 +35,7 @@ import {
   alarmAttemptHolds,
   maintenanceClocks,
   unavailableBindingThreads,
+  upgradedBookBindingThreads,
 } from "./fixtures.ts";
 import {
   allSettled,
@@ -631,42 +633,118 @@ describe("DC alarm semantics", () => {
     await assertConvergence(thread);
   }, 30_000);
 
-  it("double-fired alarms are idempotent on a lane blocked by an Unknown Outcome", async () => {
-    const thread = lane("unknown-double");
+  it.each([false, true])(
+    "completes later input past a parked Unknown Outcome without replay after eviction (unsupported retry=%s)",
+    async (unsupportedRetry) => {
+      const thread = lane("unknown-double");
 
-    armRuntimeEviction(thread, "tools:after-prepared-append");
-    const receipt = await submitTo(bookDefinition, thread);
+      lostBookReplies.add(thread);
+      armStorageEviction(thread, "ledger:mark-unknown:after");
+      const receipt = await submitTo(bookDefinition, thread);
 
-    await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
-    await submitTo(plannerDefinition, thread, `${thread}-follower`);
-    await drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread)) === null);
-    const blockedFingerprint = await canonicalFingerprint(thread);
+      await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
 
-    await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
-    await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
-    // DUR-009: the unresolved ordinary call is never auto-replayed by redelivered alarms.
-    expect(await canonicalFingerprint(thread)).toBe(blockedFingerprint);
-    expect((await laneRows(thread))[0]?.state).toBe("unknown");
-    expect(await scheduledAlarm(thread), "AwaitUnknownResolution must quiesce (#93)").toBeNull();
-    await runClient(
-      Effect.gen(function* () {
-        const client = yield* CloudflareThreadClient;
+      const unknownBefore = (await readCanonical(thread)).filter(
+        ({ record }) => record.payload._tag === "ToolCallUnknown",
+      );
 
-        return yield* client.resolveUnknown(
-          decodeThreadId(thread),
-          UnknownResolutionCommand.make({
-            submissionId: receipt.submissionId,
-            toolCallId: BOOK_TOOL_CALL_ID,
-            author: "operator",
-            reason: "double-fire idempotency row",
-            resolution: ResolutionNeverHappened.make(),
-          }),
+      expect(unknownBefore).toHaveLength(1);
+      expect(supplierCountsFor(thread)).toEqual({ book: 1 });
+
+      if (unsupportedRetry) {
+        upgradedBookBindingThreads.add(thread);
+        await runInDurableObject(stubFor(thread), (_instance, state) => {
+          state.abort("upgrade booking semantics before retry intent");
+        }).catch(() => undefined);
+        await runClient(
+          CloudflareThreadClient.use((client) =>
+            client.resolveUnknown(
+              decodeThreadId(thread),
+              UnknownResolutionCommand.make({
+                submissionId: receipt.submissionId,
+                toolCallId: BOOK_TOOL_CALL_ID,
+                author: "operator",
+                reason: "retry is safe only under the original booking contract",
+                resolution: ResolutionSafeToRetry.make(),
+              }),
+            ),
+          ),
         );
-      }),
-    );
-    await drainAlarmsUntil(thread, allSettled(thread));
-    await assertConvergence(thread);
-  }, 30_000);
+        await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
+      }
+
+      const recovery = await runInDurableObject(stubFor(thread), (instance) =>
+        instance[DurableObject.RunSymbol](
+          DurableAgentRuntime.use((runtime) => runtime.runRecovery),
+        ),
+      );
+
+      expect(recovery.find((report) => report.submissionId === receipt.submissionId)).toMatchObject(
+        {
+          decision: {
+            _tag: unsupportedRetry ? "ApplyUnknownResolutions" : "AwaitUnknownResolution",
+          },
+          disposition: "unknown",
+        },
+      );
+
+      const follower = await submitTo(plannerDefinition, thread, `${thread}-follower`);
+
+      await drainAlarmsUntil(thread, async () =>
+        (await laneRows(thread)).some(
+          (row) => row.submission_id === follower.submissionId && row.state === "settled",
+        ),
+      );
+
+      const settlement = await runClient(
+        CloudflareThreadClient.use((client) => client.awaitSettlement(follower)),
+      );
+
+      expect(settlement).toMatchObject({
+        submissionId: follower.submissionId,
+        outcome: "completed",
+      });
+      expect((await readCanonical(thread)).map(({ record }) => record.payload)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            _tag: "RunCompleted",
+            runId: `run:${follower.submissionId}`,
+            output: { answer: "done" },
+          }),
+          expect.objectContaining({
+            _tag: "SubmissionSettled",
+            submissionId: follower.submissionId,
+            outcome: "completed",
+            result: { answer: "done" },
+            usageSummary: expect.objectContaining({ modelCalls: 1 }),
+          }),
+        ]),
+      );
+      await drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread)) === null);
+      const parkedFingerprint = await canonicalFingerprint(thread);
+
+      await runInDurableObject(stubFor(thread), (_instance, state) => {
+        state.abort("parked unknown with completed follower");
+      }).catch(() => undefined);
+
+      await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
+      await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
+      // DUR-009: the unresolved ordinary call is never auto-replayed by redelivered alarms.
+      expect(await canonicalFingerprint(thread)).toBe(parkedFingerprint);
+      expect(
+        (await laneRows(thread)).find((row) => row.submission_id === receipt.submissionId)?.state,
+      ).toBe("unknown");
+      expect(
+        (await readCanonical(thread)).filter(
+          ({ record }) => record.payload._tag === "ToolCallUnknown",
+        ),
+      ).toEqual(unknownBefore);
+      expect(supplierCountsFor(thread)).toEqual({ book: 1 });
+      expect(await scheduledAlarm(thread), "parked unknown recovery must quiesce (#93)").toBeNull();
+      upgradedBookBindingThreads.delete(thread);
+    },
+    30_000,
+  );
 
   it.each([
     undefined,

@@ -52,7 +52,6 @@ import {
 } from "../ThreadStore.ts";
 import {
   definitionDigestsEqual,
-  bindingSupports,
   resolveDefinitionBinding,
   type ResolvedBinding,
 } from "./agent-registration.ts";
@@ -307,7 +306,6 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
             !Schema.is(MessageAdmission)(metadata) ||
             metadata.peerName !== request.name ||
             saved.envelope.agentId !== target.agentId ||
-            !bindingSupports(target, saved.envelope.definitions, undefined, saved.envelope.input) ||
             !sameJson(saved.envelope.input, input) ||
             (inReplyTo === undefined || metadata.inReplyTo === undefined
               ? inReplyTo !== metadata.inReplyTo

@@ -36,6 +36,7 @@ import {
   Principal,
   RecoverySnapshotRequest,
   ReleaseChildBudgetRequest,
+  ReleaseOwnershipRequest,
   RenewOwnershipRequest,
   ResolutionCompletedWithResult,
   ResolutionNeverHappened,
@@ -334,7 +335,7 @@ describe("MemorySubmissionLedger", () => {
   });
 
   it.layer(testLayer)((it) => {
-    it.effect("lets the same producer reclaim its own live lease and fences the old token", () =>
+    it.effect("blocks same-producer reclaim until release and fences the released token", () =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const admitted = yield* ledger.admit(admissionRequest("same-producer-key", "ac"));
@@ -345,6 +346,19 @@ describe("MemorySubmissionLedger", () => {
 
         expect(Option.isSome(first)).toBe(true);
         if (Option.isNone(first)) return;
+
+        expect(
+          Option.isNone(
+            yield* ledger.claim(ClaimRequest.make({ threadId, producerId: producerA })),
+          ),
+        ).toBe(true);
+
+        yield* ledger.releaseOwnership(
+          ReleaseOwnershipRequest.make({
+            submissionId: admitted.submissionId,
+            ownershipToken: first.value.ownershipToken,
+          }),
+        );
 
         const reclaimed = yield* ledger.claim(
           ClaimRequest.make({ threadId, producerId: producerA }),

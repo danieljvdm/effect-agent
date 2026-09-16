@@ -14,12 +14,14 @@ import {
   phase6TravelPlannerGoldenEvidence,
   travelPlanFromDurableSettlement,
 } from "@effect-agent/testing/travel-planner";
-import { NodeFileSystem } from "@effect/platform-node";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import { Effect, FileSystem, Layer, Schema, Stream } from "effect";
+import { compileBindingContracts } from "effect-agent/agent-registration";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
+import { runCompletionDigest } from "effect-agent/run-journal";
 import { IdempotencyKey } from "effect-agent/submission-ledger";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 
@@ -87,6 +89,29 @@ describe("TEST-014 P6 Travel Planner DN/DC equivalence — the DN half", () => {
           );
 
           expect(yield* travelPlanFromDurableSettlement(records)).toEqual(expectedTravelPlan);
+
+          // The cross-platform normal form scrubs raw digests. Verify the new operation
+          // evidence against this direct runtime's deployment-scoped contract first, and
+          // verify the completion digest against its original unnormalized Run identity.
+          const contracts = yield* compileBindingContracts(agent.definition, {
+            agent: "phase6-planner",
+            model: "scripted",
+            tools: phase4TravelPlannerDeploymentId,
+          }).pipe(Effect.provide(NodeCrypto.layer));
+
+          for (const {
+            record: { payload },
+          } of records) {
+            if (payload._tag === "ModelResponseRecorded") {
+              for (const operation of payload.toolOperations ?? []) {
+                expect(operation.replay).toBe(contracts.digests.replay?.tools[operation.toolName]);
+              }
+            } else if (payload._tag === "RunCompleted") {
+              expect(payload.resultDigest).toBe(
+                yield* runCompletionDigest(payload).pipe(Effect.provide(NodeCrypto.layer)),
+              );
+            }
+          }
 
           const normalized = yield* normalizeCrossPlatformTravelPlannerEvidence(records, receipt, {
             threadId,

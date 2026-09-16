@@ -40,6 +40,8 @@ import {
   maintenanceRaceFailpoint,
   maintenanceClocks,
   unavailableBindingThreads,
+  upgradedBookBindingThreads,
+  upgradedBookBinding,
   makeContextCompactorLayer,
   makeContextAuthorizationLayer,
   plannerDefinition,
@@ -388,19 +390,29 @@ export class TestThreadObject extends ThreadObject.make(
         Effect.map(ThreadObjectIdentity, ({ threadId }) =>
           unavailableBindingThreads.has(threadId)
             ? layerFromBindings([])
-            : threadId.startsWith("background-cf-custom-") || customRuntimeThreads.has(threadId)
-              ? Layer.fresh(ThreadMaintenance.layer).pipe(
-                  Layer.provideMerge(
-                    DurableAgentRuntime.layerWithBindings([...existing, ...workers]),
+            : upgradedBookBindingThreads.has(threadId)
+              ? Layer.unwrap(
+                  Effect.map(upgradedBookBinding, (replacement) =>
+                    layerFromBindings([
+                      ...existing.filter((binding) => binding.agentId !== replacement.agentId),
+                      replacement,
+                      ...workers,
+                    ]),
                   ),
-                  Layer.provideMerge(layerFromBindings([])),
                 )
-              : threadId.startsWith("messages-")
+              : threadId.startsWith("background-cf-custom-") || customRuntimeThreads.has(threadId)
                 ? Layer.fresh(ThreadMaintenance.layer).pipe(
-                    Layer.provide(testMessageRecovery),
-                    Layer.provideMerge(layerFromBindings([...existing, ...workers])),
+                    Layer.provideMerge(
+                      DurableAgentRuntime.layerWithBindings([...existing, ...workers]),
+                    ),
+                    Layer.provideMerge(layerFromBindings([])),
                   )
-                : layerFromBindings([...existing, ...workers]),
+                : threadId.startsWith("messages-")
+                  ? Layer.fresh(ThreadMaintenance.layer).pipe(
+                      Layer.provide(testMessageRecovery),
+                      Layer.provideMerge(layerFromBindings([...existing, ...workers])),
+                    )
+                  : layerFromBindings([...existing, ...workers]),
         ),
       ),
     ),

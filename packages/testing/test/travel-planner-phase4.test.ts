@@ -25,7 +25,14 @@ import {
   DurableRuntimeFailpointError,
 } from "effect-agent/durable-failpoint";
 import { ThreadId, type SubmissionId } from "effect-agent/identifiers";
-import { ProducerId, type CanonicalRecordEnvelope } from "effect-agent/records";
+import {
+  CanonicalRecordEnvelope,
+  CanonicalSequence,
+  ProducerId,
+  RecordEnvelope,
+  RunCompleted,
+} from "effect-agent/records";
+import { runCompletionDigest } from "effect-agent/run-journal";
 import {
   AbortCommand,
   ClaimRequest,
@@ -371,15 +378,18 @@ describe("Travel Planner durable admission and recovery", () => {
           );
 
           expect(settledEnvelope?.record).toEqual(crashed.reservation?.record);
-          const audit = recovered.at(-1);
 
-          expect(audit?.record.payload._tag).toBe("RepairAnnotated");
-          if (audit?.record.payload._tag === "RepairAnnotated") {
-            expect(audit.record.payload.reason).toBe("recovery:AppendReservedSettlement");
-          }
+          const audits = recovered.filter(
+            ({ record }) =>
+              record.payload._tag === "RepairAnnotated" &&
+              record.payload.reason === "recovery:AppendReservedSettlement",
+          );
+
+          expect(audits).toHaveLength(1);
+          expect(audits[0]?.sequence).toBeLessThan(settledEnvelope?.sequence ?? 0);
 
           // Control: the same Submission runs uninterrupted on a separate database. Modulo the
-          // ledger-minted Submission identity and the trailing recovery audit record, the
+          // ledger-minted Submission identity and owned recovery attempt annotation, the
           // recovered Thread projects to the same canonical evidence.
           const control = yield* Effect.gen(function* () {
             const runtime = yield* DurableAgentRuntime;
@@ -397,13 +407,52 @@ describe("Travel Planner durable admission and recovery", () => {
             return { receipt, records: yield* readLog(threadId) };
           }).pipe(Effect.provide(dnLayer(runtimeOptions(`${directory}/control.sqlite`))));
 
+          // Hashes include each database's minted Run identity. Validate them before comparing
+          // the normalized identities, and subtract only sequence slots occupied by audits.
+          const comparableEvidence = (records: ReadonlyArray<CanonicalRecordEnvelope>) =>
+            Effect.gen(function* () {
+              let annotations = 0;
+              const comparable: Array<CanonicalRecordEnvelope> = [];
+
+              for (const envelope of records) {
+                if (envelope.record.payload._tag === "RepairAnnotated") {
+                  annotations += 1;
+                  continue;
+                }
+                let record = envelope.record;
+
+                if (record.payload._tag === "RunCompleted") {
+                  const { resultDigest, ...completion } = record.payload;
+
+                  expect(resultDigest).toBe(
+                    yield* runCompletionDigest(completion).pipe(Effect.provide(NodeCrypto.layer)),
+                  );
+                  record = RecordEnvelope.make({
+                    ...record,
+                    payload: RunCompleted.make(completion),
+                  });
+                }
+                comparable.push(
+                  CanonicalRecordEnvelope.make({
+                    ...envelope,
+                    sequence: yield* Schema.decodeEffect(CanonicalSequence)(
+                      envelope.sequence - annotations,
+                    ),
+                    record,
+                  }),
+                );
+              }
+
+              return comparable;
+            });
+
           const normalizedRecovered = yield* normalizeDurableTravelPlannerEvidence(
-            recovered.slice(0, -1),
+            yield* comparableEvidence(recovered),
             crashed.receipt,
           );
 
           const normalizedControl = yield* normalizeDurableTravelPlannerEvidence(
-            control.records,
+            yield* comparableEvidence(control.records),
             control.receipt,
           );
 
@@ -462,9 +511,9 @@ describe("Travel Planner durable admission and recovery", () => {
 
           expect(logTags(records)).toEqual([
             "ThreadCreated",
+            "RepairAnnotated",
             "AbortRequested",
             "SubmissionSettled",
-            "RepairAnnotated",
           ]);
         }).pipe(Effect.provide(dnLayer(runtimeOptions(`${directory}/abort.sqlite`)))),
       ),

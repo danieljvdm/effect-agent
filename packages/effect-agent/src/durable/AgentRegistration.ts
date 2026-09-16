@@ -1,14 +1,10 @@
 /** Public AgentRegistration API. Implementation helpers remain private. */
 export {
   BindingUnavailable,
-  BindingDigestMismatch,
   DurableWorkerBinding,
   compileRegistrations,
   definitionDigestsEqual,
-  bindingSupports,
-  BindingManifest,
-  makeBindingManifest,
-  compileBindingManifest,
+  compileBindingContracts,
   type ReplayVersions,
   type AgentRegistration,
   type AgentAttemptContext,

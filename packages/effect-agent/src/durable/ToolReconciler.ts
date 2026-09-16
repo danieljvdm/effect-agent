@@ -20,9 +20,12 @@ export class PreparedToolCallEvidence extends Schema.Class<PreparedToolCallEvide
   toolName: ToolCallPrepared.fields.toolName,
   parameters: PersistedJson,
   parametersDigest: Digest,
+  executionKind: ToolCallPrepared.fields.executionKind,
+  executionClass: ToolCallPrepared.fields.executionClass,
+  replay: ToolCallPrepared.fields.replay,
 }) {}
 
-/** Proof that the external execution never started: the call may re-execute on resume. */
+/** Proof of nonexecution: resume the original operation or report it unavailable. */
 export class ReconciliationNeverStarted extends Schema.TaggedClass<ReconciliationNeverStarted>(
   "@effect-agent/thread/ReconciliationNeverStarted",
 )("NeverStarted", {}) {}
@@ -38,7 +41,7 @@ export class ReconciliationCompleted extends Schema.TaggedClass<ReconciliationCo
   isFailure: Schema.Boolean,
 }) {}
 
-/** The call is safe to repeat under a stable external idempotency contract. */
+/** Only the original operation, identity and parameters may repeat under supported semantics. */
 export class ReconciliationSafeToRetry extends Schema.TaggedClass<ReconciliationSafeToRetry>(
   "@effect-agent/thread/ReconciliationSafeToRetry",
 )("SafeToRetry", {}) {}
@@ -54,7 +57,8 @@ export class ReconciliationUncertain extends Schema.TaggedClass<ReconciliationUn
  * What a reconciliation policy can prove about one prepared-but-unsettled ordinary Tool Call
  * (durability §10): execution never started, execution completed with a recoverable result,
  * execution is safe to repeat, or nothing — in which case the Run enters Unknown. The engine
- * never manufactures an error result and continues.
+ * never invents an external result. Proven nonexecution can close a retired operation with
+ * an explicit not-executed result; uncertainty stays parked.
  */
 export const ReconciliationDecision = Schema.Union([
   ReconciliationNeverStarted,

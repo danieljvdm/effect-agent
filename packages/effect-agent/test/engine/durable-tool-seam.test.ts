@@ -44,7 +44,11 @@ import {
   type RunTurnResume,
 } from "effect-agent/run-options";
 import { DelegationTool } from "effect-agent/subagent-contract";
-import { ToolParameterRejection } from "effect-agent/tool-result";
+import {
+  applyToolResultBounds,
+  ToolParameterRejection,
+  ToolResultBounds,
+} from "effect-agent/tool-result";
 import { TestClock } from "effect/testing";
 import {
   AiError,
@@ -993,14 +997,25 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           success: Schema.String,
         });
 
-        const tools = Toolkit.make(Lookup);
+        const CurrentCompletion = Tool.make("old_lookup", {
+          parameters: Schema.Struct({ replacement: Schema.Boolean }),
+          success: Schema.Struct({ newReceipt: Schema.String }),
+        });
+
+        const tools = Toolkit.make(Lookup, CurrentCompletion);
 
         const definition = Agent.make("resume-open-calls", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
           instructions: "Look everything up.",
           toolkit: tools,
-          policy: policy(),
+          policy: policy({ toolResultBounds: ToolResultBounds.make({ maxBytes: 256 }) }),
+          completion: {
+            tool: "old_lookup",
+            project: () => {
+              throw new Error("A settled result cannot invoke today's completion projection");
+            },
+          },
         });
 
         const model = Model.make(
@@ -1021,14 +1036,16 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         );
 
         const toolLayer = tools.toLayer({
+          old_lookup: () => Effect.die("A settled sibling cannot execute today's handler"),
           lookup: ({ key }) =>
             Ref.update(handled, (all) => [...all, key]).pipe(Effect.as(`handled-${key}`)),
         });
 
         let settledIteratorReads = 0;
+        const originalResult = "r".repeat(512);
 
         const settled: RunTurnResume["settled"] = [
-          { id: "call-a", result: "recorded-a", isFailure: false },
+          { id: "call-a", result: originalResult, isFailure: false },
         ];
 
         Object.defineProperty(settled, Symbol.iterator, {
@@ -1042,7 +1059,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           turn: 1,
           turnId: resumeTurnId,
           calls: [
-            { id: "call-a", name: "lookup", params: { key: "a" } },
+            { id: "call-a", name: "old_lookup", params: { key: "a" } },
             { id: "call-b", name: "lookup", params: { key: "b" } },
           ],
           settled,
@@ -1088,9 +1105,8 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         );
 
         expect(started.map((event) => event.toolCallId)).toEqual(["call-b"]);
-        // The prepared batch replays with the identical full descriptor list;
-        // the resumed Turn's response never re-commits.
-        expect(yield* Ref.get(marks)).toEqual(["prepare:call-a,call-b"]);
+        // Only the unfinished descriptor is prepared; the original response never recommits.
+        expect(yield* Ref.get(marks)).toEqual(["prepare:call-b"]);
         // The next model request carries the rebuilt assistant response and the
         // Tool message in declaration order: injected first, executed second.
         expect(secondRequestPrompt).toBeDefined();
@@ -1111,7 +1127,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           .filter((part) => part.type === "tool-result");
 
         expect(toolResults.map((part) => [part.id, part.result])).toEqual([
-          ["call-a", "recorded-a"],
+          ["call-a", originalResult],
           ["call-b", "handled-b"],
         ]);
       }),
@@ -1166,7 +1182,12 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       const cyclic: Record<string, Schema.Json> = {};
 
       cyclic.self = cyclic;
-      const invalidResults: ReadonlyArray<Schema.Json> = [Number.NaN, cyclic];
+
+      const invalidResults: ReadonlyArray<Schema.Json> = [
+        Number.NaN,
+        cyclic,
+        "x".repeat(1024 * 1024 + 1),
+      ];
 
       for (const result of invalidResults) {
         const resume: RunTurnResume = {
@@ -1536,7 +1557,7 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           method: "lookup.handle",
           reason: new AiError.ToolParameterValidationError({
             toolName: "lookup",
-            description: "Expected string",
+            description: "Expected string. ".repeat(40),
           }),
         }),
       );
@@ -1547,12 +1568,12 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         error,
       });
 
+      const originalTruncatedError = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(
+        applyToolResultBounds(JSON.stringify(error), ToolResultBounds.make({ maxBytes: 256 })),
+      );
+
       const cases: ReadonlyArray<{ readonly resume: RunTurnResume; readonly message: string }> = [
         { resume, message: "failed validation on resume" },
-        {
-          resume: { ...resume, settled: [{ id: "call-x", result: error, isFailure: true }] },
-          message: "failed validation on resume",
-        },
         {
           resume: {
             ...resume,
@@ -1583,14 +1604,6 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
           },
           message: "contradicts parameter rejection",
         },
-        {
-          resume: {
-            ...resume,
-            calls: [{ id: "call-x", name: "lookup", params: { key: "valid" } }],
-            toolParameterRejections: [{ ...rejection, parameters: { key: "valid" } }],
-          },
-          message: "contains valid arguments",
-        },
       ];
 
       for (const scenario of cases) {
@@ -1612,6 +1625,32 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       expect(handlerStarted).toBe(false);
       expect(modelCalls).toBe(0);
       expect(yield* Ref.get(marks)).toEqual([]);
+      // Settled results and recorded rejections are historical facts, independent of today's codec.
+      for (const retained of [
+        { ...resume, settled: [{ id: "call-x", result: error, isFailure: true }] },
+        {
+          ...resume,
+          toolParameterRejections: [rejection],
+          settled: [{ id: "call-x", result: originalTruncatedError, isFailure: true }],
+        },
+        {
+          ...resume,
+          calls: [{ id: "call-x", name: "lookup", params: { key: "valid" } }],
+          toolParameterRejections: [{ ...rejection, parameters: { key: "valid" } }],
+        },
+      ]) {
+        yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          { question: "resume" },
+          {
+            resume: retained,
+            resumeUsage: oneCallResumeUsage,
+            durability: markingDurability(marks),
+          },
+        ).pipe(Effect.provide(toolLayer), Effect.scoped);
+      }
+      expect(handlerStarted).toBe(false);
+      expect(modelCalls).toBe(3);
     }),
   );
 
@@ -2099,6 +2138,23 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
       },
     );
 
+    const continuationProgram = AgentRuntime.run(
+      Agent.withModel(
+        {
+          ...definition,
+          instructions: () =>
+            Effect.gen(function* () {
+              yield* TypedHookService;
+
+              return yield* HookFailure.make({ message: "Current instructions failed" });
+            }),
+        },
+        scriptedModel([], '{"answer":"typed"}'),
+      ),
+      { question: "typed" },
+      { retainedInput: { legacyRequest: true }, resumeUsage: oneCallResumeUsage },
+    );
+
     const reservationProgram = AgentRuntime.run(
       Agent.withModel(definition, scriptedModel([], '{"answer":"typed"}')),
       { question: "typed" },
@@ -2142,12 +2198,24 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
     const authorizationErrorProof: AuthorizationErrorProof = true;
     const authorizationRequirementsProof: AuthorizationRequirementsProof = true;
 
+    const continuationErrorProof: HookFailure extends Effect.Error<typeof continuationProgram>
+      ? true
+      : false = true;
+
+    const continuationRequirementsProof: TypedHookService extends Effect.Services<
+      typeof continuationProgram
+    >
+      ? true
+      : false = true;
+
     expect(errorProof).toBe(true);
     expect(requirementsProof).toBe(true);
     expect(reservationErrorProof).toBe(true);
     expect(reservationRequirementsProof).toBe(true);
     expect(authorizationErrorProof).toBe(true);
     expect(authorizationRequirementsProof).toBe(true);
+    expect(continuationErrorProof).toBe(true);
+    expect(continuationRequirementsProof).toBe(true);
 
     return Effect.void;
   });

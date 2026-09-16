@@ -62,6 +62,9 @@ export const armedRuntimeFailures = new Map<string, DurableRuntimeFailpointLocat
 /** Virtual event clocks and a scoped post-claim hold for native alarm deadline evidence. */
 export const unavailableBindingThreads = new Set<string>();
 
+/** Reconstruct selected Objects with the changed booking result contract. */
+export const upgradedBookBindingThreads = new Set<string>();
+
 export const maintenanceClocks = new Map<string, Clock.Clock>();
 
 export const alarmAttemptHolds = new Map<
@@ -696,7 +699,9 @@ export const makeContextCompactorLayer = (threadId: string) =>
                   kind: "summarize" as const,
                   through:
                     request.source.content.findLastIndex(
-                      (message) => message.role === "assistant",
+                      // Earlier denied calls retain explanatory Tool results in model history.
+                      // Summarize the complete pair, preserving the current input after it.
+                      (message) => message.role === "assistant" || message.role === "tool",
                     ) + 1,
                   summary: COMPACTION_MARKER,
                 };
@@ -1026,6 +1031,40 @@ const bookModel = promptAwareModel("cf-book", (promptJson) =>
     : Stream.fromIterable(bookToolCallParts(refFromPrompt(promptJson))),
 );
 
+const upgradedBookTools = Toolkit.make(
+  Tool.make("book", {
+    parameters: Schema.Struct({ ref: Schema.String }),
+    success: Schema.Struct({ confirmation: Schema.String, revision: Schema.Literal(2) }),
+  }),
+);
+
+export const upgradedBookBinding = DurableWorkerBinding.make(
+  Agent.withModel(
+    Agent.make(bookDefinition.id, {
+      input: FixtureInput,
+      output: FixtureOutput,
+      instructions: bookDefinition.instructions,
+      toolkit: upgradedBookTools,
+      policy: fixturePolicy,
+    }),
+    bookModel,
+  ),
+  TEST_DIGESTS,
+).pipe(
+  Effect.provide(
+    upgradedBookTools.toLayer({
+      book: ({ ref }) =>
+        Effect.sync(() => {
+          const confirmation = `confirmed-v2-${ref}`;
+
+          recordSupplierCall("book-upgraded", ref, confirmation);
+
+          return { confirmation, revision: 2 };
+        }),
+    }),
+  ),
+);
+
 const approvalModel = promptAwareModel("cf-book-approval", (promptJson) =>
   promptJson.includes(BOOK_CALL_ID)
     ? Stream.fromIterable(finalParts(FINAL_ANSWER))
@@ -1051,7 +1090,7 @@ const joinModel = promptAwareModel("cf-join-host", (promptJson) =>
  * Reconciliation policy for the fixture toolkits (durability §10): the re-enterable Durable
  * Tool `itinerary` is `SafeToRetry` (its Steps replay from their exactly-once records);
  * every ordinary call keeps the fail-closed default answer — no proof means Uncertain, so
- * the `book` rows still block on a durable Unknown Outcome until `resolveUnknown`.
+ * the `book` rows remain parked with a durable Unknown Outcome until resolution or abort.
  */
 export const fixtureReconcilerLayer: Layer.Layer<ToolReconciler> = Layer.succeed(ToolReconciler)({
   reconcile: (evidence) =>
@@ -1070,8 +1109,7 @@ export const fixtureReconcilerLayer: Layer.Layer<ToolReconciler> = Layer.succeed
 
 /**
  * Every fixture Binding, captured with its tool layers: the
- * Thread Object resolves each claimed head's stored `(agentId, digests)` to exactly
- * one of these before any code runs (SUB-023).
+ * Thread Object resolves each claimed head's stable agentId to its current Binding.
  */
 export const makeTestBindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> = Effect.gen(
   function* () {

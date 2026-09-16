@@ -57,7 +57,7 @@ import {
   getToolExecutionKind,
   SubagentParentLink,
 } from "../core/SubagentContract.ts";
-import { Selection, type Snapshot } from "../core/ToolExposure.ts";
+import { Selection, Snapshot } from "../core/ToolExposure.ts";
 import type { ToolParameterRejection } from "../core/ToolResult.ts";
 import {
   type ModelCallUsage,
@@ -84,7 +84,8 @@ import {
   type RuntimeBinding,
 } from "../engine/AgentRuntime.ts";
 import { ContextCompactor, CompactionError } from "../engine/ContextCompactor.ts";
-import { getToolExecutionClass, type ToolExecutionClassValue } from "../engine/DurableStep.ts";
+import { ContextRolloverTool } from "../engine/ContextWindow.ts";
+import { getToolExecutionClass } from "../engine/DurableStep.ts";
 import { MessagingHost } from "../engine/MessagingHost.ts";
 import {
   CurrentToolFailureObserver,
@@ -139,7 +140,7 @@ import {
   BindingUnavailable,
   compileRegistrations,
   definitionDigestsEqual,
-  bindingSupports,
+  toolReplayContracts,
   type AgentRegistration,
   type DurableBindingFailure,
   makeLegacyWorkerBinding,
@@ -197,6 +198,8 @@ import {
   ToolApprovalDecided,
   ToolApprovalRequested,
   ToolCallPrepared,
+  ToolOperation,
+  ToolUnavailable,
   RunPolicyUsageReserved,
   ToolCallResolved,
   ToolCallSettled,
@@ -234,6 +237,7 @@ import {
   projectRunJournalStream,
   type JournalBoundary,
   runCompletedRecordId,
+  runCompletionDigest,
   runIdForSubmission,
   runStartedBatchId,
   runStartedRecordId,
@@ -557,7 +561,7 @@ export class RecoveryReport extends Schema.Class<RecoveryReport>(
   decision: RecoveryDecision,
   /**
    * `repaired` = executed; `deferred` = a claiming worker must finish it; `none` = settled;
-   * `unknown` = the lane is durably blocked on an Unknown Outcome awaiting the authorized
+   * `unknown` = this Submission is parked on an Unknown Outcome awaiting the authorized
    * DUR-017 resolution path — the settlement obligation stays visible while no worker permit
    * is consumed (durability §16).
    */
@@ -713,6 +717,10 @@ export type DurableWorkerRequirements<
   | AgentCompletionProjectionRequirements<AgentValue>;
 
 export interface DurableRuntimeConfigOptions {
+  /**
+   * Deployment identity and the conservative operation version for direct execution without
+   * a registered binding. Reuse asserts unchanged handler, Step, and idempotency semantics.
+   */
   readonly deploymentId: DeploymentId;
   readonly producerId: ProducerId;
   /** `awaitSettlement` ledger re-check cadence when no wake arrives (default 500ms). */
@@ -954,31 +962,6 @@ const declaredApplicationCalls = Effect.fn("DurableAgentRuntime.declaredApplicat
     declaredToolCalls(messages).pipe(Effect.map(({ application }) => application)),
 );
 
-/** Rebuild the exact JSON text that the engine decoded from one terminal no-Tool response. */
-const terminalAssistantText = Effect.fn("DurableAgentRuntime.terminalAssistantText")(
-  (messages: PersistedJson): Effect.Effect<string, RunJournalError> =>
-    decodePrompt(messages).pipe(
-      Effect.mapError((cause) =>
-        RunJournalError.make({
-          message: "ModelResponseRecorded messages are not Schema-encoded Prompt messages",
-          cause,
-        }),
-      ),
-      Effect.map((prompt) => {
-        let text = "";
-
-        for (const message of prompt.content) {
-          if (message.role !== "assistant") continue;
-          for (const part of message.content) {
-            if (part.type === "text") text += part.text;
-          }
-        }
-
-        return text;
-      }),
-    ),
-);
-
 /**
  * The declared-but-unsettled Tool batch of one Run's last committed Turn (§2.4 batch resume):
  * every declared call in canonical encoded form plus the recorded results of the calls that
@@ -986,6 +969,7 @@ const terminalAssistantText = Effect.fn("DurableAgentRuntime.terminalAssistantTe
  * path). `undefined` when the Run's journal ends at a complete Turn boundary.
  */
 interface PendingToolBatch {
+  readonly toolOperations?: ReadonlyArray<ToolOperation> | undefined;
   readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;
   readonly turn: number;
@@ -1025,7 +1009,7 @@ interface AttemptLineage {
 interface OpenCallReview {
   /** No proof either way: these calls must become Unknown Outcomes (never auto-replayed). */
   readonly uncertain: Array<OpenToolCallEvidence>;
-  /** The reconciliation policy itself failed: stay open and blocked WITHOUT marking; retry later. */
+  /** Reconciliation or current execution support is unproven: defer without marking Unknown. */
   readonly unproven: Array<OpenToolCallEvidence>;
   /** Proven safe to re-execute (never-started / safe-retry / declared idempotent contract). */
   readonly retryable: Array<OpenToolCallEvidence>;
@@ -1076,6 +1060,78 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
   const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>): Effect.Effect<A, E> =>
     Effect.provideService(effect, Crypto.Crypto, crypto);
+
+  const contractsFor = (definition: Agent.AnyDefinition) => {
+    const registered = registeredBindings.filter((binding) => binding.agentId === definition.id);
+    const binding = registered.length === 1 ? registered[0] : undefined;
+    const current = binding?.definition === definition ? binding : undefined;
+    const contracts = current?.digests.replay?.tools;
+
+    return contracts === undefined
+      ? withCrypto(
+          toolReplayContracts(definition, undefined, current?.digests.tools ?? config.deploymentId),
+        )
+      : Effect.succeed(contracts);
+  };
+
+  const currentOperationsFor = Effect.fnUntraced(function* (agentId: AgentId) {
+    const registered = registeredBindings.filter((binding) => binding.agentId === agentId);
+    const binding = registered.length === 1 ? registered[0] : undefined;
+
+    return binding === undefined
+      ? undefined
+      : {
+          definition: binding.definition,
+          contracts: yield* contractsFor(binding.definition),
+        };
+  });
+
+  const operationsFor = (records: ReadonlyArray<CanonicalRecordEnvelope>, runId: RunId) => {
+    const operations = new Map<string, ToolOperation>();
+
+    for (const {
+      record: { payload },
+    } of records) {
+      if (payload._tag !== "ModelResponseRecorded" || payload.runId !== runId) continue;
+      for (const operation of payload.toolOperations ?? [])
+        operations.set(operation.toolCallId, operation);
+    }
+
+    return operations;
+  };
+
+  const supportsOperation = (
+    submission: SubmissionSnapshot,
+    call: OpenToolCallEvidence,
+    operation: ToolOperation | undefined,
+    prepared: ToolCallPrepared | undefined,
+    current:
+      | {
+          readonly definition: Agent.AnyDefinition;
+          readonly contracts: Readonly<Record<string, Digest>>;
+        }
+      | undefined,
+  ): boolean => {
+    const tool = current?.definition.toolkit.tools[call.toolName];
+
+    const replay =
+      operation?.replay ?? prepared?.replay ?? submission.agentDigests.replay?.tools[call.toolName];
+
+    return (
+      tool !== undefined &&
+      replay !== undefined &&
+      current?.contracts[call.toolName] === replay &&
+      (operation === undefined ||
+        (operation.toolName === call.toolName &&
+          operation.executionClass === getToolExecutionClass(tool) &&
+          operation.executionKind === getToolExecutionKind(tool.annotations))) &&
+      (prepared === undefined ||
+        (prepared.toolName === call.toolName &&
+          (prepared.executionClass === undefined ||
+            prepared.executionClass === getToolExecutionClass(tool)) &&
+          (prepared.executionKind ?? "ordinary") === getToolExecutionKind(tool.annotations)))
+    );
+  };
 
   const hit = (
     location: DurableRuntimeFailpointLocation,
@@ -1245,6 +1301,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     threadId: ThreadId,
     throughSequence: CanonicalSequence,
     submissionIds: ReadonlyArray<SubmissionId>,
+    journalOwner?: RunId,
   ): Effect.fn.Return<
     {
       readonly canonical: Stream.Stream<
@@ -1283,7 +1340,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     if (
       !submissionIds.every((id) => state.submissionIds.includes(id)) ||
-      state.seed.runId !== runIdForSubmission(state.submissionId)
+      state.seed.runId !== runIdForSubmission(state.submissionId) ||
+      (journalOwner !== undefined && state.seed.runId !== journalOwner)
     )
       return full;
 
@@ -1550,6 +1608,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const preparedTurns = new Set<number>();
     const settledIds = new Set<string>();
     const resolvedIds = new Set<string>();
+    const unknownIds = new Set<string>();
     const requested: Array<PendingApprovalEvidence> = [];
     const decidedIds = new Set<string>();
 
@@ -1611,8 +1670,17 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           if (payload.runId === runId) settledIds.add(payload.toolCallId);
           break;
         }
+        case "ToolCallUnknown": {
+          if (payload.runId === runId) unknownIds.add(payload.toolCallId);
+          break;
+        }
         case "ToolCallResolved": {
-          if (payload.runId === runId) resolvedIds.add(payload.toolCallId);
+          if (
+            payload.runId === runId &&
+            (payload.resolution === "completed-with-result" ||
+              payload.resolution === "failed-with-error")
+          )
+            resolvedIds.add(payload.toolCallId);
           break;
         }
         case "ToolApprovalRequested": {
@@ -1766,10 +1834,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       preparedKinds.get(toolCallPreparedRecordId(runId, call.turn, call.toolCallId)) ===
       "orchestration";
 
-    const openWorkerCalls = allOpenCalls.filter(isPreparedWorker);
+    const openWorkerCalls = allOpenCalls.filter(
+      (call) => isPreparedWorker(call) && !unknownIds.has(call.toolCallId),
+    );
 
     const openToolCalls = allOpenCalls.filter(
-      (call) => !isPreparedDelegation(call) && !isPreparedWorker(call),
+      (call) =>
+        unknownIds.has(call.toolCallId) || (!isPreparedDelegation(call) && !isPreparedWorker(call)),
     );
 
     let declaredPendingBatch: DeclaredPendingBatchEvidence | undefined;
@@ -1802,6 +1873,53 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     });
   });
 
+  /** Verify immutable preparation against the original declaration before any recovery side effect. */
+  const validatePreparedCall = Effect.fnUntraced(function* (
+    prepared: ToolCallPrepared,
+    declared: Effect.Success<ReturnType<typeof declaredToolCalls>>,
+    operations: ReadonlyArray<ToolOperation> | undefined,
+  ) {
+    const call = declared.application.find((call) => call.id === prepared.toolCallId);
+
+    if (call === undefined || prepared.toolName !== call.name)
+      return yield* RunJournalError.make({
+        message: `Prepared Tool ${prepared.toolCallId} differs from its original declaration`,
+      });
+
+    const parameters = yield* decodePersisted(call.params).pipe(
+      Effect.mapError((cause) =>
+        RunJournalError.make({ message: "Invalid canonical Tool parameters", cause }),
+      ),
+    );
+
+    const declarationDigest = yield* withCrypto(digestJson(parameters)).pipe(
+      Effect.mapError((cause) =>
+        RunJournalError.make({ message: "Cannot verify declared Tool parameters", cause }),
+      ),
+    );
+
+    const preparedDigest = yield* withCrypto(digestJson(prepared.parameters)).pipe(
+      Effect.mapError((cause) =>
+        RunJournalError.make({ message: "Cannot verify prepared Tool parameters", cause }),
+      ),
+    );
+
+    const operation = operations?.find((entry) => entry.toolCallId === prepared.toolCallId);
+
+    if (
+      prepared.parametersDigest !== declarationDigest ||
+      preparedDigest !== declarationDigest ||
+      (operation !== undefined &&
+        ((prepared.executionClass !== undefined &&
+          prepared.executionClass !== operation.executionClass) ||
+          (prepared.executionKind ?? "ordinary") !== operation.executionKind ||
+          (prepared.replay !== undefined && prepared.replay !== operation.replay)))
+    )
+      return yield* RunJournalError.make({
+        message: `Prepared Tool ${prepared.toolCallId} differs from its original operation`,
+      });
+  });
+
   /**
    * The declared-but-unsettled Tool batch of the Run's LAST committed Turn (§2.4). Keyed on
    * SETTLED coverage deliberately: a call closed by a never-started/safe-retry `ToolCallResolved`
@@ -1817,6 +1935,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       | {
           readonly turn: number;
           readonly messages: PersistedJson;
+          readonly toolOperations?: ReadonlyArray<ToolOperation> | undefined;
           readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
           readonly toolExposure?: Snapshot | undefined;
         }
@@ -1825,6 +1944,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const settledByCallId = new Map<
       string,
       {
+        readonly recordId?: RecordId;
+        readonly toolName?: string;
         readonly result: PersistedJson;
         readonly isFailure: boolean;
         readonly budgetRejected?: true;
@@ -1842,6 +1963,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             turn: payload.turn,
             messages: payload.messages,
             toolParameterRejections: payload.toolParameterRejections,
+            toolOperations: payload.toolOperations,
             ...(payload.toolExposure === undefined ? {} : { toolExposure: payload.toolExposure }),
           };
         }
@@ -1849,6 +1971,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }
       if (payload._tag === "ToolCallSettled" && payload.runId === runId) {
         settledByCallId.set(payload.toolCallId, {
+          recordId: envelope.record.recordId,
+          toolName: payload.toolName,
           result: payload.result,
           isFailure: payload.isFailure,
           ...(payload.budgetRejected === true ? { budgetRejected: true } : {}),
@@ -1861,6 +1985,39 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     if (declared.application.length === 0) return undefined;
     const calls = declared.all;
+
+    if (lastResponse.toolOperations !== undefined) {
+      const identities = new Set<string>();
+
+      for (const operation of lastResponse.toolOperations) {
+        if (
+          identities.has(operation.toolCallId) ||
+          !declared.application.some(
+            (call) => call.id === operation.toolCallId && call.name === operation.toolName,
+          )
+        )
+          return yield* RunJournalError.make({
+            message: "Operation evidence differs from the declared Tool batch",
+          });
+        identities.add(operation.toolCallId);
+      }
+      if (identities.size !== declared.application.length)
+        return yield* RunJournalError.make({
+          message: "Declared Tool batch has incomplete operation evidence",
+        });
+    }
+
+    for (const {
+      record: { payload },
+    } of records) {
+      if (
+        payload._tag !== "ToolCallPrepared" ||
+        payload.runId !== runId ||
+        payload.turn !== lastResponse.turn
+      )
+        continue;
+      yield* validatePreparedCall(payload, declared, lastResponse.toolOperations);
+    }
 
     for (const part of declared.providerResults) {
       const result = yield* decodePersisted(part.result).pipe(
@@ -1889,7 +2046,22 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         });
       }
       if (recorded !== undefined) {
-        settled.push({ id: call.id, ...recorded });
+        const { recordId, toolName, ...result } = recorded;
+
+        if (
+          call.providerExecuted !== true &&
+          (toolName !== call.name ||
+            recordId !==
+              toolCallSettledRecordId(
+                runId,
+                lastResponse.turn,
+                Schema.decodeSync(ToolCallId)(call.id),
+              ))
+        )
+          return yield* RunJournalError.make({
+            message: `Settled Tool ${call.id} differs from its original declaration`,
+          });
+        settled.push({ id: call.id, ...result });
       }
     }
 
@@ -1915,6 +2087,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       responseRecordId: modelResponseRecordId(runId, lastResponse.turn),
       messages: lastResponse.messages,
       toolParameterRejections: lastResponse.toolParameterRejections,
+      toolOperations: lastResponse.toolOperations,
       ...(lastResponse.toolExposure === undefined
         ? {}
         : { toolExposure: lastResponse.toolExposure }),
@@ -2027,9 +2200,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   });
 
   /**
-   * Append context at the Thread's CURRENT fence, without a claim. Used only where no live
-   * owner can exist (an `unknown` head is never claimable, WP2 claim rule): record-identity
-   * dedupe absorbs a racing recovery process, and a fence advance defers to the advancing owner.
+   * Existing ownership-free settlement protocol for queued aborts and joined outcomes.
+   * Its canonical settlement reservation authorizes the append; it never authorizes tool
+   * execution, unknown-resolution appends, or repair audits beside a live writer.
    */
   const attemptContextAtTail = Effect.fn("DurableAgentRuntime.attemptContextAtTail")(function* (
     threadId: ThreadId,
@@ -2295,83 +2468,174 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     openCalls: ReadonlyArray<OpenToolCallEvidence>,
     knownIds: Set<string>,
-    executionClassFor: (toolName: string) => ToolExecutionClassValue | undefined,
+    current?: {
+      readonly definition: Agent.AnyDefinition;
+      readonly contracts: Readonly<Record<string, Digest>>;
+    },
   ): Effect.fn.Return<OpenCallReview, DurableWorkerFailure> {
     const submissionId = submission.submissionId;
     const runId = runIdForSubmission(submissionId);
+
+    yield* pendingToolBatchFor(records, runId);
+    const operations = operationsFor(records, runId);
     const preparedByCallId = new Map<string, ToolCallPrepared>();
 
-    for (const envelope of records) {
-      const payload = envelope.record.payload;
+    for (const { record } of records) {
+      const payload = record.payload;
 
-      if (payload._tag === "ToolCallPrepared" && payload.runId === runId) {
+      if (
+        payload._tag === "ToolCallPrepared" &&
+        payload.runId === runId &&
+        openCalls.some(
+          (call) => call.toolCallId === payload.toolCallId && call.turn === payload.turn,
+        )
+      ) {
+        if (
+          preparedByCallId.has(payload.toolCallId) ||
+          record.recordId !== toolCallPreparedRecordId(runId, payload.turn, payload.toolCallId)
+        )
+          return yield* RunJournalError.make({
+            message: `Prepared Tool ${payload.toolCallId} has inconsistent canonical identity`,
+          });
         preparedByCallId.set(payload.toolCallId, payload);
       }
     }
-    const intents = new Map<string, UnknownResolutionIntent>();
+    // Validate all open declarations before the first reconciler call. A missing response or
+    // a damaged turn number must never bypass the original parameters/identity checks.
+    for (const call of openCalls) {
+      const prepared = preparedByCallId.get(call.toolCallId);
 
-    for (const intent of snapshot.unknownResolutions) {
-      intents.set(intent.toolCallId, intent);
+      const responses = records.filter(
+        ({ record }) =>
+          record.payload._tag === "ModelResponseRecorded" &&
+          record.payload.runId === runId &&
+          record.payload.turn === call.turn,
+      );
+
+      const response = responses[0]?.record;
+
+      if (
+        prepared === undefined ||
+        prepared.turn !== call.turn ||
+        prepared.toolName !== call.toolName ||
+        responses.length !== 1 ||
+        response?.payload._tag !== "ModelResponseRecorded" ||
+        response.recordId !== modelResponseRecordId(runId, call.turn) ||
+        response.payload.turnId !== turnIdForRun(runId, call.turn)
+      )
+        return yield* RunJournalError.make({
+          message: `Prepared Tool ${call.toolCallId} has no unique original response`,
+        });
+      if (
+        (yield* withCrypto(digestJson(response.payload.messages))) !==
+        response.payload.messagesDigest
+      )
+        return yield* RunJournalError.make({
+          message: `Original response for Tool ${call.toolCallId} has an invalid digest`,
+        });
+      yield* validatePreparedCall(
+        prepared,
+        yield* declaredToolCalls(response.payload.messages),
+        response.payload.toolOperations,
+      );
     }
+
+    const intents = new Map(
+      snapshot.unknownResolutions.map((intent) => [intent.toolCallId, intent]),
+    );
+
     const review: OpenCallReview = { uncertain: [], unproven: [], retryable: [], recovered: 0 };
     let recovered = 0;
 
     for (const call of openCalls) {
+      const prepared = preparedByCallId.get(call.toolCallId);
+      const operation = operations.get(call.toolCallId);
+
+      const supported = supportsOperation(submission, call, operation, prepared, current);
+
       const intent = intents.get(call.toolCallId);
+      const author = intent?.author ?? RECONCILER_AUTHOR;
+
+      const reason =
+        intent?.reason ?? "A registered reconciliation policy recovered the external outcome";
+
+      const neverStarted = Effect.gen(function* () {
+        if (current === undefined) {
+          // Low-level drivers supply their current Agent only when claiming. Missing metadata
+          // cannot prove retirement or authorize execution; the claimant checks the contract.
+          review.unproven.push(call);
+
+          return;
+        }
+        if (supported) {
+          review.retryable.push(call);
+
+          return;
+        }
+
+        const unavailable = yield* Schema.encodeEffect(ToolUnavailable)(
+          ToolUnavailable.make({
+            toolName: call.toolName,
+            execution: "not-executed",
+            message:
+              "This operation never started and its original implementation is unavailable. Continue with the current tools.",
+          }),
+        ).pipe(Effect.flatMap(decodePersisted), Effect.orDie);
+
+        yield* hit("tools:before-unavailable-append");
+        yield* appendClosedCall(ctx, submissionId, knownIds, call, {
+          result: { value: unavailable, isFailure: true },
+          resolution: "never-started",
+          author,
+          reason,
+        });
+        yield* hit("tools:after-unavailable-append");
+        recovered += 1;
+      });
 
       if (intent !== undefined) {
         switch (intent.resolution._tag) {
-          case "AbortSubmission": {
-            // The paired abort intent settles the Submission; the SettleAborted executor
-            // records the `ToolCallUnknown` audit — nothing resolves here (durability §13).
+          case "AbortSubmission":
             continue;
-          }
           case "CompletedWithResult": {
             yield* appendClosedCall(ctx, submissionId, knownIds, call, {
-              result: {
-                value: intent.resolution.result,
-                isFailure: intent.resolution.isFailure,
-              },
+              result: { value: intent.resolution.result, isFailure: intent.resolution.isFailure },
               resolution: intent.resolution.isFailure
                 ? "failed-with-error"
                 : "completed-with-result",
-              author: intent.author,
-              reason: intent.reason,
+              author,
+              reason,
             });
             recovered += 1;
             continue;
           }
           case "NeverHappened": {
-            yield* appendClosedCall(ctx, submissionId, knownIds, call, {
-              resolution: "never-started",
-              author: intent.author,
-              reason: intent.reason,
-            });
-            review.retryable.push(call);
+            yield* neverStarted;
             continue;
           }
           case "SafeToRetry": {
-            yield* appendClosedCall(ctx, submissionId, knownIds, call, {
-              resolution: "safe-retry",
-              author: intent.author,
-              reason: intent.reason,
-            });
-            review.retryable.push(call);
+            // Permission to repeat the original operation is not proof it never happened.
+            if (current === undefined) review.unproven.push(call);
+            else if (supported) review.retryable.push(call);
+            else review.uncertain.push(call);
             continue;
           }
         }
       }
-      if (executionClassFor(call.toolName) === "idempotent") {
-        // The annotation IS the declared external idempotency contract (ADR-0004): recovery may
-        // re-execute without reconciliation proof; duplicate external effects stay observable.
+      const tool = current?.definition.toolkit.tools[call.toolName];
+
+      if (
+        current === undefined &&
+        (operation?.executionClass ?? prepared?.executionClass) === "idempotent"
+      ) {
+        review.unproven.push(call);
+        continue;
+      }
+      if (supported && tool !== undefined && getToolExecutionClass(tool) === "idempotent") {
         review.retryable.push(call);
         continue;
       }
-      const prepared = preparedByCallId.get(call.toolCallId);
-
       if (prepared === undefined) {
-        // Open evidence without its prepared record is unreadable state: stay blocked,
-        // never guess (fail-closed).
         review.unproven.push(call);
         continue;
       }
@@ -2387,6 +2651,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             toolName: prepared.toolName,
             parameters: prepared.parameters,
             parametersDigest: prepared.parametersDigest,
+            ...(prepared.executionKind === undefined
+              ? {}
+              : { executionKind: prepared.executionKind }),
+            ...(prepared.executionClass === undefined
+              ? {}
+              : { executionClass: prepared.executionClass }),
+            ...(prepared.replay === undefined ? {} : { replay: prepared.replay }),
           }),
         )
         .pipe(
@@ -2405,15 +2676,20 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           yield* appendClosedCall(ctx, submissionId, knownIds, call, {
             result: { value: decision.result, isFailure: decision.isFailure },
             resolution: decision.isFailure ? "failed-with-error" : "completed-with-result",
-            author: RECONCILER_AUTHOR,
-            reason: "A registered reconciliation policy recovered the external outcome",
+            author,
+            reason,
           });
           recovered += 1;
           continue;
         }
-        case "NeverStarted":
+        case "NeverStarted": {
+          yield* neverStarted;
+          continue;
+        }
         case "SafeToRetry": {
-          review.retryable.push(call);
+          if (current === undefined) review.unproven.push(call);
+          else if (supported) review.retryable.push(call);
+          else review.uncertain.push(call);
           continue;
         }
         case "Uncertain": {
@@ -3445,8 +3721,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
    * Join a settled child after parent abort or expiry without running application handlers.
    * The canonical child outcome stays intact; the parent result records why it cannot continue.
    */
-  const joinSettledChildForClosedParent = Effect.fn(
-    "DurableAgentRuntime.joinSettledChildForClosedParent",
+  const joinSettledChildWithoutHandler = Effect.fn(
+    "DurableAgentRuntime.joinSettledChildWithoutHandler",
   )(function* (
     ctx: AttemptAppendContext,
     parent: SubmissionSnapshot,
@@ -3455,14 +3731,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     reservation: ChildBudgetReservationSnapshot,
     toolCallId: ToolCallId,
     childSubmissionId: SubmissionId,
-    reason: "aborted" | "duration",
+    reason: "aborted" | "duration" | "unavailable",
   ): Effect.fn.Return<void, DurableWorkerFailure> {
     const runId = runIdForSubmission(parent.submissionId);
     const request = subagent.requested.get(toolCallId);
 
     if (request === undefined) {
       return yield* LedgerError.make({
-        operation: "joinSettledChildForClosedParent",
+        operation: "joinSettledChildWithoutHandler",
         message: `Tool Call ${toolCallId} has an attached child but no canonical SubagentRequested record`,
       });
     }
@@ -3477,22 +3753,33 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       if (verification._tag === "mismatch") {
         return yield* LedgerError.make({
-          operation: "joinSettledChildForClosedParent",
+          operation: "joinSettledChildWithoutHandler",
           message: `Child Settlement verification failed for Tool Call ${toolCallId}: ${verification.message}`,
         });
       }
       const verified = verification.value;
 
-      // Static-shape projections; a bounds failure is a defect, matching `annotateRepair`.
-      const boundedResult = yield* decodePersisted({
-        errorTag: reason === "aborted" ? "SubagentParentAborted" : "SubagentParentDurationExceeded",
-        message: boundedText(
-          `The parent Submission ${reason === "aborted" ? "aborted" : "exceeded its duration"}; attached child ${childSubmissionId} settled ${verified.outcome}`,
-        ),
-      }).pipe(Effect.orDie);
+      // The child's actual outcome and usage remain authoritative even when the parent can
+      // no longer project it with the original delegation implementation.
+      const boundedResult = yield* decodePersisted(
+        reason === "unavailable"
+          ? {
+              _tag: "ToolUnavailable",
+              toolName: subagent.preparedNames.get(toolCallId) ?? request.delegationId,
+              execution: "unavailable",
+              message: `The original delegation implementation is unavailable. Its original child settled ${verified.outcome}; no replacement child was started.`,
+            }
+          : {
+              errorTag:
+                reason === "aborted" ? "SubagentParentAborted" : "SubagentParentDurationExceeded",
+              message: boundedText(
+                `The parent Submission ${reason === "aborted" ? "aborted" : "exceeded its duration"}; attached child ${childSubmissionId} settled ${verified.outcome}`,
+              ),
+            },
+      ).pipe(Effect.orDie);
 
       finalAccounting = yield* decodePersisted({
-        basis: reason === "aborted" ? "aborted-conservative" : "duration-conservative",
+        basis: `${reason}-conservative`,
         allocation: reservation.allocation,
       }).pipe(Effect.orDie);
       const childRunId = runIdForSubmission(childSubmissionId);
@@ -3587,11 +3874,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   });
 
   /** Release unused reservations or repair and join existing children, never admit new work. */
-  const reconcileExpiredChildren = Effect.fn("DurableAgentRuntime.reconcileExpiredChildren")(
+  const reconcileRetainedChildren = Effect.fn("DurableAgentRuntime.reconcileRetainedChildren")(
     function* (
       ctx: AttemptAppendContext,
       parent: SubmissionSnapshot,
       ownershipToken: OwnershipToken,
+      unavailableCalls?: ReadonlySet<ToolCallId>,
     ) {
       const snapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
@@ -3603,10 +3891,46 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const knownIds = knownRecordIdsOf(records);
       const subagent = subagentRecordsOf(records, runId);
 
+      const notExecuted = new Set<ToolCallId>();
+      const waiting: Array<WaitingChild> = [];
+      const indeterminate = new Set<ToolCallId>();
+
+      for (const toolCallId of unavailableCalls ?? []) {
+        if (
+          snapshot.childReservations.some(
+            (reservation) => reservation.parentToolCallId === toolCallId,
+          )
+        )
+          continue;
+        if (subagent.requested.has(toolCallId) || subagent.started.has(toolCallId))
+          return yield* LedgerError.make({
+            operation: "reconcileRetainedChildren",
+            message: "Child request has no original reservation",
+          });
+        notExecuted.add(toolCallId);
+      }
       for (const reservation of snapshot.childReservations) {
         const toolCallId = reservation.parentToolCallId;
 
-        if (reservation.status !== "reserved" || subagent.joined.has(toolCallId)) continue;
+        if (unavailableCalls !== undefined && !unavailableCalls.has(toolCallId)) continue;
+        const joined = subagent.joined.get(toolCallId);
+
+        if (joined !== undefined) {
+          yield* applyReservationRelease(reservation.reservationId, joined.finalAccounting);
+          continue;
+        }
+        if (reservation.status !== "reserved") {
+          if (reservation.accounting !== undefined)
+            yield* applyReservationRelease(reservation.reservationId, reservation.accounting);
+          // An orphan release proves non-admission; it never hides an attached child.
+          if (reservation.childSubmissionId !== undefined || subagent.started.has(toolCallId))
+            return yield* LedgerError.make({
+              operation: "reconcileRetainedChildren",
+              message: "Unjoined child reservation was already released",
+            });
+          notExecuted.add(toolCallId);
+          continue;
+        }
         let started = subagent.started.get(toolCallId);
         const request = subagent.requested.get(toolCallId);
 
@@ -3616,6 +3940,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           reservation.childSubmissionId === undefined
         ) {
           yield* releaseOrphanReservation(reservation.reservationId);
+          notExecuted.add(toolCallId);
           continue;
         }
         const call = pending?.calls.find((candidate) => candidate.id === toolCallId);
@@ -3633,7 +3958,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           request.turnId !== pending.turnId
         ) {
           return yield* LedgerError.make({
-            operation: "reconcileExpiredChildren",
+            operation: "reconcileRetainedChildren",
             message: `Tool Call ${toolCallId} has inconsistent canonical child request evidence`,
           });
         }
@@ -3646,22 +3971,37 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             }),
           );
 
-          if (resolution._tag === "Indeterminate") continue;
+          if (resolution._tag === "Indeterminate") {
+            indeterminate.add(toolCallId);
+            continue;
+          }
           if (resolution._tag === "NotAdmitted") {
             if (reservation.childSubmissionId !== undefined) {
               return yield* LedgerError.make({
-                operation: "reconcileExpiredChildren",
+                operation: "reconcileRetainedChildren",
                 message: `Tool Call ${toolCallId} has an attachment but no admitted child`,
               });
             }
-            yield* releaseOrphanReservation(reservation.reservationId);
+            if (unavailableCalls === undefined) {
+              yield* releaseOrphanReservation(reservation.reservationId);
+              notExecuted.add(toolCallId);
+              continue;
+            }
+          }
+
+          // A canonical request already authorized this exact idempotent admission. Finish it
+          // when its handler is unavailable: a stale admission can still arrive after the lookup,
+          // so NotAdmitted cannot justify releasing its reservation. Expiry keeps admission closed.
+          const admission = yield* establishChildFromRequest(
+            parent,
+            request,
+            unavailableCalls !== undefined,
+          );
+
+          if (admission._tag === "indeterminate") {
+            indeterminate.add(toolCallId);
             continue;
           }
-          // Finish only the already-admitted child's materialization and readiness. A second
-          // authoritative lookup must still never turn a stale observation into a new admission.
-          const admission = yield* establishChildFromRequest(parent, request, false);
-
-          if (admission._tag === "indeterminate") continue;
           started = SubagentStarted.make({
             runId,
             toolCallId,
@@ -3700,7 +4040,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           started.childRunId !== runIdForSubmission(started.childSubmissionId)
         ) {
           return yield* LedgerError.make({
-            operation: "reconcileExpiredChildren",
+            operation: "reconcileRetainedChildren",
             message: `Tool Call ${call.id} has inconsistent canonical child attachment evidence`,
           });
         }
@@ -3718,8 +4058,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               conflictToLedgerError("attachChildToReservation"),
             ),
           );
-        if (child.value.state !== "settled") continue;
-        yield* joinSettledChildForClosedParent(
+        if (child.value.state !== "settled") {
+          waiting.push(
+            WaitingChild.make({ toolCallId, childSubmissionId: started.childSubmissionId }),
+          );
+          yield* wake.notify(child.value.threadId);
+          continue;
+        }
+        yield* joinSettledChildWithoutHandler(
           ctx,
           parent,
           knownIds,
@@ -3727,9 +4073,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           reservation,
           started.toolCallId,
           started.childSubmissionId,
-          "duration",
+          unavailableCalls === undefined ? "duration" : "unavailable",
         );
       }
+
+      return { notExecuted, waiting, indeterminate };
     },
   );
 
@@ -3819,7 +4167,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           });
         }
         if (child.value.state === "settled") {
-          yield* joinSettledChildForClosedParent(
+          yield* joinSettledChildWithoutHandler(
             ctx,
             parent,
             knownIds,
@@ -4316,22 +4664,60 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               journalSeed,
             );
 
-      const tools: Record<string, Tool.Any> = agent.definition.toolkit.tools;
+      const currentContracts = yield* contractsFor(agent.definition);
 
-      for (const envelope of records) {
-        const payload = envelope.record.payload;
+      const rolloverOperation =
+        journal.pendingContextToolCallId === undefined
+          ? undefined
+          : operationsFor(records, runId).get(journal.pendingContextToolCallId);
 
-        if (payload._tag !== "ToolCallPrepared" || payload.runId !== runId) continue;
-        const tool = tools[payload.toolName];
+      const rolloverTool =
+        rolloverOperation === undefined
+          ? undefined
+          : agent.definition.toolkit.tools[rolloverOperation.toolName];
 
-        const kind = tool === undefined ? "ordinary" : getToolExecutionKind(tool.annotations);
+      // A current annotation cannot reinterpret a formerly ordinary settled result as control.
+      const pendingContextToolCallId =
+        rolloverOperation !== undefined &&
+        rolloverTool !== undefined &&
+        Context.get(rolloverTool.annotations, ContextRolloverTool) &&
+        currentContracts[rolloverOperation.toolName] === rolloverOperation.replay
+          ? journal.pendingContextToolCallId
+          : undefined;
 
-        if (tool === undefined || (payload.executionKind ?? "ordinary") !== kind) {
-          return yield* RunJournalError.make({
-            message: `Prepared Tool ${payload.toolCallId} classification conflicts with the resolved binding`,
-          });
-        }
-      }
+      const applicationCalls = pending?.calls.filter((call) => !call.providerExecuted);
+
+      // Only the original single-call action-completion case may project a reconciled receipt.
+      // Other settled calls are historical outcomes, regardless of their current completion role.
+      const completionCandidate =
+        applicationCalls?.length === 1 &&
+        agent.definition.completionFromTools?.some(
+          (declaration) => declaration.tool === applicationCalls[0]?.name,
+        ) &&
+        pending?.settled.some(
+          (result) => result.id === applicationCalls[0]?.id && !result.isFailure,
+        )
+          ? applicationCalls[0]
+          : undefined;
+
+      const settledCompletion =
+        pending !== undefined &&
+        completionCandidate !== undefined &&
+        supportsOperation(
+          submission,
+          OpenToolCallEvidence.make({
+            toolCallId: Schema.decodeSync(ToolCallId)(completionCandidate.id),
+            toolName: completionCandidate.name,
+            turn: pending.turn,
+          }),
+          pending.toolOperations?.find(
+            (operation) => operation.toolCallId === completionCandidate.id,
+          ),
+          undefined,
+          { definition: agent.definition, contracts: currentContracts },
+        )
+          ? Schema.decodeSync(ToolCallId)(completionCandidate.id)
+          : undefined;
 
       const knownIds = knownRecordIdsOf(records);
       const stepOutputs = new Map<string, PersistedJson>();
@@ -4661,167 +5047,41 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         const declared = yield* declaredToolCalls(response.messages);
         const calls = declared.application;
 
-        let expectedOutput: {
-          readonly encoded: Schema.Json;
-          readonly decoded: OutputSchema["Type"];
-        };
-
         if (calls.length > 0) {
-          const completion = agent.definition.completion;
           const call = calls[0];
-
-          const actionCompletion = agent.definition.completionFromTools?.find(
-            (declaration) => declaration.tool === call?.name,
-          );
 
           const settled =
             call === undefined
               ? undefined
               : records.find(
-                  (envelope) =>
-                    envelope.record.payload._tag === "ToolCallSettled" &&
-                    envelope.record.payload.runId === runId &&
-                    envelope.record.payload.toolCallId === call.id,
+                  ({ record }) =>
+                    record.payload._tag === "ToolCallSettled" &&
+                    record.payload.runId === runId &&
+                    record.payload.toolCallId === call.id,
                 )?.record.payload;
 
           if (
             calls.length !== 1 ||
             call === undefined ||
-            (call.name !== completion?.tool && actionCompletion === undefined) ||
             settled?._tag !== "ToolCallSettled" ||
             settled.toolName !== call.name ||
             settled.isFailure
           ) {
             return yield* RunJournalError.make({
-              message: `Run ${runId} has a terminal completion marker without one successful declared completion Tool result`,
+              message: `Run ${runId} has a terminal completion marker without one successful declared Tool result`,
             });
           }
-
-          const projected = yield* (
-            actionCompletion !== undefined
-              ? AgentRuntime.projectCompletionFromToolOutput(
-                  agent,
-                  actionCompletion,
-                  call.params,
-                  settled.result,
-                )
-              : completion !== undefined
-                ? Effect.map(
-                    AgentRuntime.projectCompletionOutput(
-                      agent,
-                      completion,
-                      call.params,
-                      settled.result,
-                    ),
-                    Option.some,
-                  )
-                : Effect.succeed(Option.none())
-          ).pipe(
-            Effect.mapError((cause) =>
-              RunJournalError.make({
-                message: `Run ${runId} completion Tool output failed recovery projection`,
-                cause,
-              }),
-            ),
-          );
-
-          if (Option.isNone(projected)) {
-            return yield* RunJournalError.make({
-              message: `Run ${runId} completion Tool declined its recorded terminal output`,
-            });
-          }
-          expectedOutput = projected.value;
-        } else {
-          const responseText = yield* terminalAssistantText(response.messages);
-
-          expectedOutput = yield* AgentRuntime.decodeFinalOutput(agent, responseText).pipe(
-            Effect.mapError((cause) =>
-              RunJournalError.make({
-                message: `Run ${runId} final response output failed recovery decoding`,
-                cause,
-              }),
-            ),
-          );
-        }
-
-        const boundedExpectedOutput = yield* decodePersisted(expectedOutput.encoded).pipe(
-          Effect.mapError((cause) =>
-            RunJournalError.make({
-              message: `Run ${runId} reconstructed output exceeds canonical persistence bounds`,
-              cause,
-            }),
-          ),
-        );
-
-        const [expectedOutputDigest, recordedOutputDigest] = yield* Effect.all([
-          withCrypto(digestJson(boundedExpectedOutput)),
-          withCrypto(digestJson(recordedCompletion.output)),
-        ]).pipe(
-          Effect.mapError((cause) =>
-            RunJournalError.make({
-              message: `Run ${runId} completion output comparison failed`,
-              cause,
-            }),
-          ),
-        );
-
-        if (expectedOutputDigest !== recordedOutputDigest) {
-          return yield* RunJournalError.make({
-            message: `Run ${runId} terminal completion output disagrees with its canonical response or Tool result`,
-          });
-        }
-
-        const expectedRunDisposition =
-          recordedCompletion.finishReason === "budget-exhausted"
-            ? undefined
-            : yield* AgentRuntime.encodeRunDisposition(agent, expectedOutput.decoded).pipe(
-                Effect.mapError((cause) =>
-                  RunJournalError.make({
-                    message: `Run ${runId} run disposition failed recovery projection`,
-                    cause,
-                  }),
-                ),
-              );
-
-        if (
-          (expectedRunDisposition === undefined) !==
-          (recordedCompletion.runDisposition === undefined)
-        ) {
-          return yield* RunJournalError.make({
-            message: `Run ${runId} terminal run disposition disagrees with its reconstructed output`,
-          });
         }
         if (
-          expectedRunDisposition !== undefined &&
-          recordedCompletion.runDisposition !== undefined
-        ) {
-          const boundedExpectedRunDisposition = yield* decodePersisted(expectedRunDisposition).pipe(
-            Effect.mapError((cause) =>
-              RunJournalError.make({
-                message: `Run ${runId} reconstructed run disposition exceeds canonical persistence bounds`,
-                cause,
-              }),
-            ),
-          );
-
-          const [expectedRunDispositionDigest, recordedRunDispositionDigest] = yield* Effect.all([
-            withCrypto(digestJson(boundedExpectedRunDisposition)),
-            withCrypto(digestJson(recordedCompletion.runDisposition)),
-          ]).pipe(
-            Effect.mapError((cause) =>
-              RunJournalError.make({
-                message: `Run ${runId} run disposition comparison failed`,
-                cause,
-              }),
-            ),
-          );
-
-          if (expectedRunDispositionDigest !== recordedRunDispositionDigest) {
-            return yield* RunJournalError.make({
-              message: `Run ${runId} terminal run disposition disagrees with its reconstructed output`,
-            });
-          }
-        }
+          recordedCompletion.resultDigest !== undefined &&
+          recordedCompletion.resultDigest !==
+            (yield* withCrypto(runCompletionDigest(recordedCompletion)))
+        )
+          return yield* RunJournalError.make({
+            message: "RunCompleted terminal values failed their integrity check",
+          });
+        // Output and disposition were validated before the atomic RunCompleted commit.
+        // Future application codecs and completion functions have no authority to reinterpret it.
 
         return {
           _tag: "completed" as const,
@@ -4901,7 +5161,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
         if (firstAssistant > 0) {
           resumeLeadingMessages = Prompt.fromMessages(
-            pendingMessages.content.slice(0, firstAssistant),
+            pendingMessages.content
+              .slice(0, firstAssistant)
+              .filter((message) => message.role !== "system"),
           );
         }
         if (firstAssistant >= 0) {
@@ -4989,16 +5251,45 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             : { ...state, history },
         );
 
-      // On resume the model must see the canonical prompt (committed Turns included) plus what
-      // THIS Attempt appended — never the engine's re-appended instructions + input. For a batch
-      // resume the canonical boundary excludes the pending Turn: its messages re-enter official
-      // history through the engine's continuation and ride the slice after `baseLen`.
+      // Current instructions govern the continuation; the original user intent, steering and
+      // committed history survive. The pending Turn re-enters through the batch continuation,
+      // without duplicating the engine's freshly rendered input.
+      const instructionView = (
+        messages: ReadonlyArray<Prompt.Message>,
+        instructions: ReadonlyArray<Prompt.Message>,
+        insertWhenAbsent: boolean,
+      ) => {
+        const projected: Array<Prompt.Message> = [];
+        const lengths = [0];
+        let inserted = false;
+
+        for (const message of messages) {
+          if (message.role === "system") {
+            if (!inserted) projected.push(...instructions);
+            inserted = true;
+          } else projected.push(message);
+          lengths.push(projected.length);
+        }
+        if (!inserted && insertWhenAbsent) projected.push(...instructions);
+
+        return {
+          messages: projected,
+          prefixLength: (length: number) => lengths[length] ?? projected.length,
+        };
+      };
+
       const resumeContext: RunContextHook<never, never> = {
         prepare: ({ source }) =>
           Ref.get(stateRef).pipe(
             Effect.map((state) => ({
               prompt: Prompt.fromMessages([
-                ...resumeProjection.prompt.content,
+                ...instructionView(
+                  resumeProjection.prompt.content,
+                  source.content
+                    .slice(0, state.baseLen)
+                    .filter((message) => message.role === "system"),
+                  true,
+                ).messages,
                 ...source.content.slice(state.baseLen ?? source.content.length),
               ]),
             })),
@@ -5089,6 +5380,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               const batch = yield* withCrypto(
                 turnResponseBatch({
                   toolExposure: commit.toolExposure,
+                  toolOperations: commit.calls.map((call) =>
+                    ToolOperation.make({
+                      toolCallId: call.toolCallId,
+                      toolName: call.toolName,
+                      executionClass: call.executionClass,
+                      executionKind: call.executionKind,
+                      replay: currentContracts[call.toolName]!,
+                    }),
+                  ),
                   toolParameterRejections: commit.toolParameterRejections,
                   runId,
                   turn: canonicalTurn,
@@ -5155,6 +5455,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                       parameters,
                       parametersDigest,
                       executionKind: call.executionKind,
+                      executionClass: call.executionClass,
+                      replay: currentContracts[call.toolName]!,
                     }),
                   ),
                 );
@@ -5300,11 +5602,21 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               });
             }
 
+            const state = yield* Ref.get(stateRef);
+
+            const comparisonView = instructionView(
+              sourceJournal.prompt.content,
+              state.history?.content
+                .slice(0, state.baseLen)
+                .filter((message) => message.role === "system") ?? [],
+              false,
+            );
+
             // Compare each visible message once. A transformed source can authorize only its
             // exact canonical prefix; no per-candidate rereads or full encoded Prompt copies.
             let matchingPrefix = 0;
             let requiredThrough = 0;
-            const comparisonLimit = Math.min(sourceJournal.prompt.content.length, commit.through);
+            const comparisonLimit = Math.min(comparisonView.messages.length, commit.through);
 
             for (let index = 0; index < commit.through; index += 1) {
               const message = commit.source.content[index];
@@ -5318,7 +5630,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 requiredThrough = index + 1;
               if (index >= comparisonLimit || index !== matchingPrefix || message === undefined)
                 continue;
-              const canonicalMessage = sourceJournal.prompt.content[index];
+              const canonicalMessage = comparisonView.messages[index];
 
               if (canonicalMessage === undefined) continue;
 
@@ -5348,7 +5660,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
               if (following !== undefined && following.tag !== "ModelResponseRecorded") continue;
 
-              const length = candidate.promptLength;
+              const length = comparisonView.prefixLength(candidate.promptLength);
 
               if (length === 0 || length > commit.through) continue;
               if (length < requiredThrough || length > matchingPrefix) continue;
@@ -6437,6 +6749,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         history: pending === undefined ? journal.historyBefore : resumeProjection.historyBefore,
         onHistory,
         input,
+        ...(journal.committedTurns > 0 || Schema.is(FrameworkMessage)(submission.messageAdmission)
+          ? { retainedInput: submission.inputPayload }
+          : {}),
         ...(Schema.is(FrameworkMessage)(submission.messageAdmission)
           ? { frameworkMessage: submission.messageAdmission }
           : {}),
@@ -6466,14 +6781,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           ? {}
           : {
               resume: {
+                ...(settledCompletion === undefined ? {} : { settledCompletion }),
                 turn: pending.turn,
                 turnId: pending.turnId,
                 calls: pending.calls,
                 toolParameterRejections: pending.toolParameterRejections,
                 settled: pending.settled,
-                ...(pending.toolExposure === undefined
-                  ? {}
-                  : { toolExposure: pending.toolExposure }),
+                // Legacy eager requests have no exposure snapshot. Their validated canonical
+                // declarations establish the minimal original exposure needed for batch resume.
+                toolExposure:
+                  pending.toolExposure ??
+                  Snapshot.make({
+                    exposedToolNames: [...new Set(pending.calls.map((call) => call.name))],
+                  }),
                 ...(resumeLeadingMessages === undefined
                   ? {}
                   : { leadingMessages: resumeLeadingMessages }),
@@ -6525,9 +6845,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         ...(journal.protectedContext === undefined
           ? {}
           : { protectedContext: journal.protectedContext }),
-        ...(journal.pendingContextToolCallId === undefined
-          ? {}
-          : { pendingContextToolCallId: journal.pendingContextToolCallId }),
+        ...(pendingContextToolCallId === undefined ? {} : { pendingContextToolCallId }),
       };
 
       const commitPendingTurn: Effect.Effect<void, DurableWorkerFailure> = Effect.gen(function* () {
@@ -6629,18 +6947,20 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 ? completedRun
                 : undefined;
 
-            const batch = yield* turnResultsBatch({
-              toolSelections: stagedToolSelections,
-              budgetRejectedCalls,
-              runId,
-              turn: canonicalTurn,
-              turnId: state.pendingTurn.turnId,
-              appended: remaining,
-              producerId: config.producerId,
-              deploymentId: config.deploymentId,
-              createdAt,
-              ...(runCompletion === undefined ? {} : { runCompletion }),
-            });
+            const batch = yield* withCrypto(
+              turnResultsBatch({
+                toolSelections: stagedToolSelections,
+                budgetRejectedCalls,
+                runId,
+                turn: canonicalTurn,
+                turnId: state.pendingTurn.turnId,
+                appended: remaining,
+                producerId: config.producerId,
+                deploymentId: config.deploymentId,
+                createdAt,
+                ...(runCompletion === undefined ? {} : { runCompletion }),
+              }),
+            );
 
             // A recovered external receipt is already canonical. Commit only the terminal
             // marker at the same results boundary; never duplicate or rewrite its result.
@@ -7241,7 +7561,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         .tailSequence;
 
       const initialThrough = controlThrough;
-      const initialView = yield* recoveryView(threadId, initialThrough, [submissionId]);
+
+      const initialView = yield* recoveryView(
+        threadId,
+        initialThrough,
+        [submissionId],
+        runIdForSubmission(submissionId),
+      );
 
       let journalMetadata =
         initialView.seed === undefined
@@ -7384,7 +7710,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       let expiredChildObligation = false;
 
       if ((yield* Clock.currentTimeMillis) >= DateTime.toEpochMillis(runTiming.deadline)) {
-        yield* reconcileExpiredChildren(ctx, submission, yield* Ref.get(tokenRef));
+        yield* reconcileRetainedChildren(ctx, submission, yield* Ref.get(tokenRef));
         expiredChildObligation = yield* completeJoinedReleases(submission);
       }
 
@@ -7405,7 +7731,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
         if (reconciliationEvidence.openToolCalls.length === 0) return true;
         for (const envelope of reconciliationRecords) knownIds.add(envelope.record.recordId);
-        const tools: Record<string, Tool.Any> = agent.definition.toolkit.tools;
 
         const review = yield* reconcileOpenCalls(
           ctx,
@@ -7414,11 +7739,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           reconciliationRecords,
           reconciliationEvidence.openToolCalls,
           knownIds,
-          (toolName) => {
-            const tool = tools[toolName];
-
-            return tool === undefined ? undefined : getToolExecutionClass(tool);
-          },
+          { definition: agent.definition, contracts: yield* contractsFor(agent.definition) },
         );
 
         if (review.uncertain.length > 0 || review.unproven.length > 0) {
@@ -7431,7 +7752,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               "An ordinary Tool call may have executed without a canonical outcome",
             );
           }
-          // The lane is blocked (marked Unknown, or the reconciliation policy itself failed):
+          // This Submission is parked (marked Unknown, or reconciliation itself failed):
           // release the claim without settling — the accepted-work obligation stays owed.
           const ownershipToken = yield* Ref.get(tokenRef);
 
@@ -7447,6 +7768,161 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       if (!expiredChildObligation && !(yield* ordinaryCallsResolved))
         return Option.none<Settlement>();
+
+      const continuationRecords = yield* refreshControl();
+
+      const continuation = yield* pendingToolBatchFor(
+        continuationRecords,
+        runIdForSubmission(submissionId),
+      );
+
+      if (continuation !== undefined) {
+        const current = {
+          definition: agent.definition,
+          contracts: yield* contractsFor(agent.definition),
+        };
+
+        const operations = operationsFor(continuationRecords, runIdForSubmission(submissionId));
+        const settled = new Set(continuation.settled.map((call) => call.id));
+
+        const rejected = new Set(
+          continuation.toolParameterRejections?.map((call) => call.toolCallId),
+        );
+
+        const unsupported: Array<OpenToolCallEvidence> = [];
+        const unavailableDelegations = new Set<ToolCallId>();
+
+        for (const call of continuation.calls) {
+          const original = continuationRecords
+            .map(({ record }) => record.payload)
+            .find(
+              (payload) =>
+                payload._tag === "ToolCallPrepared" &&
+                payload.runId === runIdForSubmission(submissionId) &&
+                payload.toolCallId === call.id,
+            );
+
+          if (
+            original?._tag === "ToolCallPrepared" &&
+            original.executionKind === "delegation" &&
+            !settled.has(call.id) &&
+            !supportsOperation(
+              submission,
+              OpenToolCallEvidence.make(original),
+              operations.get(call.id),
+              original,
+              current,
+            )
+          )
+            unavailableDelegations.add(original.toolCallId);
+        }
+
+        const children =
+          unavailableDelegations.size === 0
+            ? undefined
+            : yield* reconcileRetainedChildren(
+                ctx,
+                submission,
+                yield* Ref.get(tokenRef),
+                unavailableDelegations,
+              );
+
+        for (const envelope of yield* refreshControl()) knownIds.add(envelope.record.recordId);
+
+        for (const call of continuation.calls) {
+          if (
+            call.providerExecuted ||
+            settled.has(call.id) ||
+            rejected.has(Schema.decodeSync(ToolCallId)(call.id))
+          )
+            continue;
+
+          const evidence = OpenToolCallEvidence.make({
+            toolCallId: Schema.decodeSync(ToolCallId)(call.id),
+            toolName: call.name,
+            turn: continuation.turn,
+          });
+
+          const operation = operations.get(call.id);
+
+          const prepared = continuationRecords
+            .map(({ record }) => record.payload)
+            .find(
+              (payload) =>
+                payload._tag === "ToolCallPrepared" &&
+                payload.runId === runIdForSubmission(submissionId) &&
+                payload.turn === continuation.turn &&
+                payload.toolCallId === call.id,
+            );
+
+          const preparation = prepared?._tag === "ToolCallPrepared" ? prepared : undefined;
+
+          if (supportsOperation(submission, evidence, operation, preparation, current)) continue;
+          if (preparation !== undefined && !children?.notExecuted.has(evidence.toolCallId)) {
+            if (!unavailableDelegations.has(evidence.toolCallId)) unsupported.push(evidence);
+            continue;
+          }
+
+          // Mutating handlers cannot cross this protocol boundary without preparation.
+          // Readonly handlers may already have run; their unavailable result makes no nonexecution claim.
+          const execution =
+            children?.notExecuted.has(evidence.toolCallId) ||
+            (operation !== undefined &&
+              (operation.executionClass !== "readonly" || operation.executionKind !== "ordinary"))
+              ? "not-executed"
+              : "unavailable";
+
+          const result = yield* Schema.encodeEffect(ToolUnavailable)(
+            ToolUnavailable.make({
+              toolName: call.name,
+              execution,
+              message:
+                execution === "not-executed"
+                  ? "This operation was not executed and its original implementation is unavailable. Continue with the current tools."
+                  : "The original operation is unavailable. No mutating handler was dispatched; readonly work may have run without a recorded result.",
+            }),
+          ).pipe(Effect.flatMap(decodePersisted), Effect.orDie);
+
+          yield* hit("tools:before-unavailable-append");
+          yield* appendClosedCall(ctx, submissionId, knownIds, evidence, {
+            result: { value: result, isFailure: true },
+            resolution: execution === "not-executed" ? "never-started" : "failed-with-error",
+            author: "runtime",
+            reason: "The declared operation cannot execute under its original contract",
+          });
+          yield* hit("tools:after-unavailable-append");
+        }
+        const firstWaiting = children?.waiting[0];
+
+        if (children !== undefined && firstWaiting !== undefined) {
+          const disposition = yield* ledger.suspend(
+            SuspendRequest.make({
+              submissionId,
+              ownershipToken: yield* Ref.get(tokenRef),
+              reason: WaitingForChildSuspension.make({
+                children: [firstWaiting, ...children.waiting.slice(1)],
+              }),
+            }),
+          );
+
+          yield* hit("subagent:after-suspend");
+          if (disposition === "resume-immediately") yield* wake.notify(threadId);
+
+          return Option.none<Settlement>();
+        }
+        if ((children?.indeterminate.size ?? 0) > 0) return Option.none<Settlement>();
+        if (unsupported.length > 0) {
+          yield* markCallsUnknown(
+            ctx,
+            submissionId,
+            knownIds,
+            unsupported,
+            "The unfinished operation has no supported recovery implementation; its original identity and evidence remain unresolved",
+          );
+
+          return Option.none<Settlement>();
+        }
+      }
 
       const lineage: AttemptLineage = {
         attemptId: claim.attemptId,
@@ -7594,7 +8070,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             );
             yield* hit("run:after-duration-append");
           }
-          yield* reconcileExpiredChildren(ctx, submission, yield* Ref.get(tokenRef));
+          yield* reconcileRetainedChildren(ctx, submission, yield* Ref.get(tokenRef));
         }
         const openObligation = yield* completeJoinedReleases(submission);
 
@@ -7630,7 +8106,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }
     }).pipe(Effect.scoped);
 
-  /** A missing compatible binding leaves both roots and children owed, with their claims released. */
+  /** A missing current binding leaves both roots and children owed, with their claims released. */
   type CapturedWorkerBinding = Effect.Success<ReturnType<typeof makeLegacyWorkerBinding>>;
 
   // Register cleanup before any interruptible work can observe a granted claim. The token
@@ -7742,8 +8218,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           Effect.map((binding) => ({ _tag: "resolved" as const, binding })),
           Effect.catchTags({
             BindingUnavailable: (failure) => Effect.succeed({ _tag: "refused" as const, failure }),
-            BindingDigestMismatch: (failure) =>
-              Effect.succeed({ _tag: "refused" as const, failure }),
           }),
         );
 
@@ -7760,6 +8234,22 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }),
     ).pipe(withThreadHeadSpan);
 
+  const eligibleThreadHead = (threadId: ThreadId) =>
+    Stream.runHead(
+      ledger.scanNonterminal.pipe(
+        Stream.filter((entry) => entry.threadId === threadId),
+        Stream.filterEffect((entry) =>
+          entry.state !== "unknown"
+            ? Effect.succeed(true)
+            : ledger
+                .loadRecoverySnapshot(
+                  RecoverySnapshotRequest.make({ submissionId: entry.submissionId }),
+                )
+                .pipe(Effect.map((snapshot) => snapshot.abortIntent !== undefined)),
+        ),
+      ),
+    );
+
   const drainThread = (
     resolve: (
       submission: SubmissionSnapshot,
@@ -7770,12 +8260,21 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const settlements: Array<Settlement> = [];
 
       while (true) {
+        const before = yield* eligibleThreadHead(threadId);
         const settlement = yield* processThreadHead(resolve, threadId);
 
         if (Option.isNone(settlement)) {
-          // The head is durably blocked (Unknown Outcome, approval suspension, or a
-          // waitingForChild suspension): the lane frees its worker permit while the settlement
-          // obligation stays visible (durability §16, plan §2.6, SUB-030).
+          const after = yield* eligibleThreadHead(threadId);
+
+          // Parking an unknown operation exposes later runnable work. Other suspensions,
+          // live ownership and a transiently unproven operation retain the existing barrier.
+          if (
+            Option.isSome(before) &&
+            Option.isSome(after) &&
+            before.value.submissionId !== after.value.submissionId
+          )
+            continue;
+
           return settlements;
         }
         settlements.push(settlement.value);
@@ -7835,92 +8334,25 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       );
     });
 
-  const resolveRetainedBinding = Effect.fn("DurableAgentRuntime.resolveRetainedBinding")(function* (
-    submission: SubmissionSnapshot,
-  ) {
-    const exact = registeredBindings.find(
-      (binding) =>
-        binding.agentId === submission.agentId &&
-        definitionDigestsEqual(binding.digests, submission.agentDigests),
-    );
-
-    if (exact !== undefined) return exact;
-
-    const candidates = registeredBindings.filter(
-      (binding) => binding.agentId === submission.agentId,
-    );
-
-    const candidate = candidates[0];
-
-    // A missing/ambiguous registration needs no history read. If every retained Tool contract
-    // is supported, neither does an ordinary additive deployment.
-    if (candidate === undefined || candidates.length !== 1)
-      return yield* resolveWorkerBinding(
-        registeredBindings,
-        submission.agentId,
-        submission.agentDigests,
-      );
-    if (bindingSupports(candidate, submission.agentDigests, undefined, submission.inputPayload))
-      return candidate;
-
-    // A checkpoint can omit a settled batch that still supplies completion projection.
-    // Compatibility reads the bounded authoritative prefix, never a reduced checkpoint.
-    const records = yield* Effect.gen(function* () {
-      const tail = yield* store.inspectTail(
-        ThreadTailRequest.make({ threadId: submission.threadId }),
-      );
-
-      return yield* Stream.runCollect(
-        canonicalRange(submission.threadId, tail.tailSequence).pipe(
-          Stream.filter(controlRecords([submission.submissionId])),
-        ),
-      );
-    }).pipe(Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed([])));
-
-    const completionTools =
-      candidate === undefined
-        ? []
-        : [
-            ...(candidate.definition.completion === undefined
-              ? []
-              : [candidate.definition.completion.tool]),
-            ...(candidate.definition.completionFromTools?.map((entry) => entry.tool) ?? []),
-          ];
-
-    const pending = yield* pendingToolBatchFor(
-      records,
-      runIdForSubmission(submission.submissionId),
-      completionTools,
-    );
-
-    return yield* resolveWorkerBinding(
-      registeredBindings,
-      submission.agentId,
-      submission.agentDigests,
-      pending?.calls
-        .filter((call) => call.providerExecuted !== true || completionTools.includes(call.name))
-        .map((call) => call.name) ?? [],
-      submission.inputPayload,
-    );
-  });
+  const resolveCurrentBinding = (submission: SubmissionSnapshot) =>
+    resolveWorkerBinding(registeredBindings, submission.agentId);
 
   const processThreadResolvedImpl = (
     threadId: ThreadId,
   ): Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
-    drainThread(resolveRetainedBinding, threadId);
+    drainThread(resolveCurrentBinding, threadId);
 
   const processThreadHeadImpl = (
     threadId: ThreadId,
     options?: { readonly yieldAfter?: DateTime.Utc },
   ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
-    processThreadHead(resolveRetainedBinding, threadId, options);
+    processThreadHead(resolveCurrentBinding, threadId, options);
 
   const claimFor = Effect.fn("DurableAgentRuntime.claimFor")(function* (
     submission: SubmissionSnapshot,
+    decision: RecoveryDecision,
   ): Effect.fn.Return<Option.Option<Claim>, LedgerError | OwnershipLost, Scope.Scope> {
-    const head = yield* Stream.runHead(
-      ledger.scanNonterminal.pipe(Stream.filter((entry) => entry.threadId === submission.threadId)),
-    );
+    const head = yield* eligibleThreadHead(submission.threadId);
 
     if (Option.isNone(head) || head.value.submissionId !== submission.submissionId) {
       return Option.none();
@@ -7929,7 +8361,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     if (Option.isNone(claimed)) return Option.none();
     if (claimed.value.claim.submissionId !== submission.submissionId) {
-      // FIFO: only the lane head is claimable; this Submission must wait for the head.
+      // Only the first eligible Submission is claimable; selection may have changed since the read.
       yield* ledger
         .releaseOwnership(
           ReleaseOwnershipRequest.make({
@@ -7942,20 +8374,28 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       return Option.none();
     }
 
+    yield* annotateRepair(submission.threadId, decision, claimed.value.claim.producerEpoch);
+
     return Option.some(claimed.value.claim);
   });
 
   /**
-   * DUR-013 audit: one deterministic `RepairAnnotated` record per executed (submission, decision)
-   * pair. Conflicts mean the annotation is already canonical (or a newer epoch owns the lane), so
-   * they never fail the already-idempotent repair itself.
+   * Best-effort DUR-013 audit of an owned repair attempt, before it can release its claim.
+   * The fixed granted epoch never borrows a later writer's authority. State-only repairs
+   * omit canonical annotations; their decision and operator author/reason remain in telemetry.
    */
   const annotateRepair = (
     threadId: ThreadId,
-    submissionId: SubmissionId,
     decision: RecoveryDecision,
+    producerEpoch: ProducerEpoch,
   ): Effect.Effect<void> =>
     Effect.gen(function* () {
+      yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch }));
+      const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+
+      // ThreadCreated must remain the first canonical record of a new Thread.
+      if (tail.tailSequence === ZERO_SEQUENCE) return;
+
       const encodedDecision = yield* Schema.encodeEffect(RecoveryDecision)(decision).pipe(
         Effect.orDie,
       );
@@ -7963,26 +8403,23 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const details = yield* Schema.decodeEffect(PersistedJson)(encodedDecision).pipe(Effect.orDie);
 
       const envelope = yield* makeEnvelope(
-        recoveryRepairRecordId(submissionId, decision._tag),
+        recoveryRepairRecordId(decision.submissionId, decision._tag),
         RepairAnnotated.make({ reason: `recovery:${decision._tag}`, details }),
       );
-
-      const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
 
       yield* store.append(
         FencedAppendRequest.make({
           threadId,
           batch: CanonicalBatch.make({
-            batchId: recoveryRepairBatchId(submissionId, decision._tag),
+            batchId: recoveryRepairBatchId(decision.submissionId, decision._tag),
             producerId: config.producerId,
             records: [envelope],
           }),
           expectedTailSequence: tail.tailSequence,
           expectedTailDigest: tail.tailDigest,
-          producerEpoch: tail.producerEpoch,
+          producerEpoch,
         }),
       );
-      yield* wake.notify(threadId);
     }).pipe(Effect.ignore);
 
   const settleAbortedForRecovery = Effect.fn("DurableAgentRuntime.settleAbortedForRecovery")(
@@ -7990,7 +8427,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       snapshot: RecoverySnapshot,
       evidence: RecoveryEvidence,
       records: ReadonlyArray<CanonicalRecordEnvelope>,
-      _decision: SettleAbortedDecision,
+      decision: SettleAbortedDecision,
     ): Effect.fn.Return<"repaired" | "deferred", DurableWorkerFailure, Scope.Scope> {
       const intent = snapshot.abortIntent;
 
@@ -8051,7 +8488,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           }
         }
       }
-      const claimed = yield* claimFor(submission);
+      const claimed = yield* claimFor(submission, decision);
 
       if (Option.isNone(claimed)) {
         // P7 §7(c): an aborted, never-claimed, still-queued `ready` Submission settles NOW
@@ -8111,11 +8548,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   );
 
   /**
-   * Execute the reconcile-then-mark flow for a `MarkUnknown` decision (plan §2.2). The recovery
-   * pass has no Agent Binding, so no execution-class annotation is visible here — every call
-   * without a durable intent or reconciler proof stays fail-closed uncertain. A lane whose open
-   * calls all closed reports `repaired`; provably-retryable calls defer to a worker's batch
-   * resume; the rest become Unknown Outcomes and report the `unknown` disposition.
+   * Execute the reconcile-then-mark flow for a `MarkUnknown` decision (plan §2.2). Current
+   * registration metadata checks retry support when available. Low-level drivers supply their
+   * Agent at claim time, so retry proofs defer that check without permitting execution. Calls
+   * without a durable intent, original idempotent declaration, or reconciler proof stay uncertain.
+   * Closed calls report `repaired`; deferred checks report `deferred`; uncertain calls become Unknown.
    */
   const markUnknownForRecovery = Effect.fn("DurableAgentRuntime.markUnknownForRecovery")(function* (
     snapshot: RecoverySnapshot,
@@ -8124,7 +8561,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     decision: MarkUnknownDecision,
   ): Effect.fn.Return<"repaired" | "deferred" | "unknown", DurableWorkerFailure, Scope.Scope> {
     const submission = snapshot.submission;
-    const claimed = yield* claimFor(submission);
+    const claimed = yield* claimFor(submission, decision);
 
     if (Option.isNone(claimed)) return "deferred";
     const claim = claimed.value;
@@ -8149,7 +8586,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       records,
       evidence.openToolCalls.filter((call) => markableIds.has(call.toolCallId)),
       knownIds,
-      () => undefined,
+      yield* currentOperationsFor(submission.agentId),
     );
 
     let disposition: "repaired" | "deferred" | "unknown";
@@ -8180,40 +8617,61 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     return disposition;
   });
 
+  /** A retry intent permits only the saved operation under its supported current contract. */
+  const hasUnsupportedRetry = Effect.fnUntraced(function* (
+    snapshot: RecoverySnapshot,
+    records: ReadonlyArray<CanonicalRecordEnvelope>,
+  ) {
+    if (!snapshot.unknownResolutions.some((intent) => intent.resolution._tag === "SafeToRetry"))
+      return false;
+    const submission = snapshot.submission;
+    const current = yield* currentOperationsFor(submission.agentId);
+    const operations = operationsFor(records, runIdForSubmission(submission.submissionId));
+
+    for (const intent of snapshot.unknownResolutions) {
+      if (intent.resolution._tag === "SafeToRetry") {
+        const prepared = records
+          .map(({ record }) => record.payload)
+          .find(
+            (payload) =>
+              payload._tag === "ToolCallPrepared" &&
+              payload.runId === runIdForSubmission(submission.submissionId) &&
+              payload.toolCallId === intent.toolCallId,
+          );
+
+        if (
+          prepared?._tag !== "ToolCallPrepared" ||
+          (current !== undefined &&
+            !supportsOperation(
+              submission,
+              OpenToolCallEvidence.make(prepared),
+              operations.get(intent.toolCallId),
+              prepared,
+              current,
+            ))
+        )
+          return true;
+      }
+    }
+
+    return false;
+  });
+
   /**
-   * Apply covering DUR-017 resolution intents canonically and wake the lane. The `unknown` head
-   * is never claimable, so the appends run unfenced at the current tail (no live owner can
-   * exist); the wake itself is the ledger's idempotent re-check on intent replay (WP2), so a
-   * crash anywhere in this pass converges on the next one.
+   * Replay covering resolution intents as state-only wakes. Canonical outcomes wait for an
+   * actual claim, so resolving an older request cannot append using a later writer's epoch.
    */
   const applyUnknownResolutionsForRecovery = Effect.fn(
     "DurableAgentRuntime.applyUnknownResolutionsForRecovery",
   )(function* (
     snapshot: RecoverySnapshot,
-    evidence: RecoveryEvidence,
+    _evidence: RecoveryEvidence,
     records: ReadonlyArray<CanonicalRecordEnvelope>,
-  ): Effect.fn.Return<"repaired" | "deferred", DurableWorkerFailure> {
+  ): Effect.fn.Return<"repaired" | "deferred" | "unknown", DurableWorkerFailure> {
+    if (yield* hasUnsupportedRetry(snapshot, records)) return "unknown";
     const submission = snapshot.submission;
-    const ctx = yield* attemptContextAtTail(submission.threadId);
-    const knownIds = knownRecordIdsOf(records);
 
-    const applied = yield* reconcileOpenCalls(
-      ctx,
-      submission,
-      snapshot,
-      records,
-      evidence.openToolCalls,
-      knownIds,
-      () => undefined,
-    ).pipe(
-      Effect.as(true),
-      // A fence advance mid-pass means another owner took the Thread: defer to it.
-      Effect.catchTag("FenceRejected", () => Effect.succeed(false)),
-    );
-
-    if (!applied) return "deferred";
     for (const intent of snapshot.unknownResolutions) {
-      // Replaying the stored intent re-checks the covering wake idempotently (WP2 contract).
       yield* ledger
         .recordUnknownResolution(
           UnknownResolutionCommand.make({
@@ -8234,6 +8692,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           ),
         );
     }
+    // Canonical outcomes are applied by the next claim. A wake never takes an active epoch.
     yield* wake.notify(submission.threadId);
 
     return "repaired";
@@ -8253,6 +8712,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     function* (
       snapshot: RecoverySnapshot,
       evidence: RecoveryEvidence,
+      decision: RecoveryDecision,
     ): Effect.fn.Return<"repaired" | "deferred", DurableWorkerFailure, Scope.Scope> {
       const submission = snapshot.submission;
 
@@ -8266,7 +8726,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const first = undecided[0];
 
       if (first === undefined) return "deferred";
-      const claimed = yield* claimFor(submission);
+      const claimed = yield* claimFor(submission, decision);
 
       if (Option.isNone(claimed)) return "deferred";
       const claim = claimed.value;
@@ -8355,7 +8815,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         // A closed admission window must release provably-unused reservations or restore the
         // existing child's link. Do this before ordinary Unknown Outcomes make the lane
         // unclaimable, and never let binding-free recovery admit new work after expiry.
-        const claimed = yield* claimFor(submission);
+        const claimed = yield* claimFor(submission, decision);
 
         if (Option.isNone(claimed)) return "deferred";
         const claim = claimed.value;
@@ -8368,7 +8828,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         );
         const ctx = yield* attemptContextFor(submission.threadId, claim.producerEpoch);
 
-        yield* reconcileExpiredChildren(ctx, submission, claim.ownershipToken);
+        yield* reconcileRetainedChildren(ctx, submission, claim.ownershipToken);
         const open = yield* completeJoinedReleases(submission);
 
         yield* ledger
@@ -8399,12 +8859,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           return yield* applyUnknownResolutionsForRecovery(snapshot, evidence, records);
         }
         case "AwaitUnknownResolution": {
-          // The lane stays durably blocked awaiting the authorized DUR-017 resolution path;
+          // This Submission stays parked awaiting the authorized DUR-017 resolution path;
           // the settlement obligation stays visible, nothing replays.
           return "unknown";
         }
         case "AwaitApprovalDecision": {
-          return yield* awaitApprovalForRecovery(snapshot, evidence);
+          return yield* awaitApprovalForRecovery(snapshot, evidence, decision);
         }
         case "ResumeSuspended": {
           return yield* resumeSuspendedForRecovery(snapshot);
@@ -8458,7 +8918,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           );
 
           if (Option.isNone(host)) return "deferred";
-          const claimed = yield* claimFor(host.value);
+          const claimed = yield* claimFor(host.value, decision);
 
           if (Option.isNone(claimed)) return "deferred";
           const claim = claimed.value;
@@ -8531,7 +8991,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         }
         case "ApplyInput":
         case "RepairInputMarker": {
-          const claimed = yield* claimFor(submission);
+          const claimed = yield* claimFor(submission, decision);
 
           if (Option.isNone(claimed)) return "deferred";
           const claim = claimed.value;
@@ -8581,7 +9041,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           const reservation = snapshot.reservation;
 
           if (reservation === undefined) return "deferred";
-          const claimed = yield* claimFor(submission);
+          const claimed = yield* claimFor(submission, decision);
 
           if (Option.isNone(claimed)) {
             // P7 §7(c) crash replay: a queued-abort settlement that committed its reservation
@@ -8665,7 +9125,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           const admission = yield* establishChildFromRequest(submission, requestedPayload);
 
           if (admission._tag === "indeterminate") return "deferred";
-          const claimed = yield* claimFor(submission);
+          const claimed = yield* claimFor(submission, decision);
 
           if (Option.isNone(claimed)) return "deferred";
           const claim = claimed.value;
@@ -8738,7 +9198,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           // waitingForChild checkpoint"): claim the lane and suspend it — the ledger op ends the
           // ownership period itself, so the lane holds no worker permit while each child runs
           // on its own lane. Never spawns a replacement invocation (SUB-018/SUB-030).
-          const claimed = yield* claimFor(submission);
+          const claimed = yield* claimFor(submission, decision);
 
           if (Option.isNone(claimed)) return "deferred";
           const claim = claimed.value;
@@ -8845,7 +9305,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             }
           }
           if (submission.state !== "suspended") {
-            const claimed = yield* claimFor(submission);
+            const claimed = yield* claimFor(submission, decision);
 
             if (Option.isNone(claimed)) return "deferred";
             const claim = claimed.value;
@@ -8964,10 +9424,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         : yield* Effect.scoped(
             executeRecoveryDecision(snapshot, evidence, decision, history.records, history),
           );
-
-    if (disposition === "repaired") {
-      yield* annotateRepair(submission.threadId, submission.submissionId, decision);
-    }
 
     return RecoveryReport.make({
       submissionId: submission.submissionId,
@@ -9131,13 +9587,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       !registeredBindings.some(
         (binding) =>
           binding.agentId === agent.definition.id &&
-          (definitionDigestsEqual(binding.digests, options.definitions) ||
-            binding.retainedManifests?.some((retained) =>
-              definitionDigestsEqual(
-                DefinitionDigests.make({ ...retained.digests, replay: retained.replay }),
-                options.definitions,
-              ),
-            )),
+          definitionDigestsEqual(binding.digests, options.definitions),
       )
     ) {
       const retained = yield* ledger.lookup(
@@ -9574,7 +10024,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const nowMillis = yield* Clock.currentTimeMillis;
     const explainedAt = yield* nowUtc;
     const runId = runIdForSubmission(submission.submissionId);
-    const resolvedIds = new Set(snapshot.unknownResolutions.map((intent) => intent.toolCallId));
+
+    const resolvedIds = new Set(
+      read.records.flatMap(({ record }) =>
+        record.payload._tag === "ToolCallSettled" && record.payload.runId === runId
+          ? [record.payload.toolCallId]
+          : [],
+      ),
+    );
+
     const unknownCalls: Array<ExplainedUnknownCall> = [];
 
     for (const envelope of read.records) {
@@ -9611,6 +10069,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         inputRecorded: evidence.inputRecorded,
         abortRecorded: evidence.abortRecorded,
         openToolCalls: evidence.openToolCalls,
+        pendingOperations: read.records.flatMap(({ record }) =>
+          record.payload._tag === "ToolCallPrepared" &&
+          record.payload.runId === runId &&
+          !resolvedIds.has(record.payload.toolCallId)
+            ? [record.payload]
+            : [],
+        ),
         openDelegationCalls: evidence.openDelegationCalls,
         approvalsPending: evidence.approvalsPending,
         unknownCalls,
@@ -9629,7 +10094,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }),
       decision,
       decisionMeaning: recoveryDecisionMeaning(decision._tag),
-      disposition: predictRecoveryDisposition(decision, snapshot),
+      disposition:
+        decision._tag === "ApplyUnknownResolutions" &&
+        (yield* hasUnsupportedRetry(snapshot, read.records).pipe(
+          Effect.mapError((cause) =>
+            RunJournalError.make({ message: "Cannot verify the pending retry contract", cause }),
+          ),
+        ))
+          ? "unknown"
+          : predictRecoveryDisposition(decision, snapshot),
       explainedAt,
     });
   });
@@ -9754,9 +10227,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
   /**
    * Safe re-drive of exactly one Submission's recovery decision (plan §3): classify, execute
-   * the ONE repair the classifier names, append the deterministic `RepairAnnotated` audit when
-   * it repairs (DUR-013 — retry adds no new record type), and wake the lane. Typed refusals
-   * protect the paths that own their own operations: settled work (`NoAction`), lanes blocked
+   * the ONE repair the classifier names, annotate owned repair attempts with their actual
+   * claim epoch (DUR-013), and wake the lane. Typed refusals
+   * protect the paths that own their own operations: settled work (`NoAction`), requests parked
    * on Unknown Outcomes (`resolveUnknown`, DUR-017), and lanes awaiting approval decisions
    * (`resolveApproval`). The mandatory `author`/`reason` audit fields (SEC-011) annotate the
    * structured operator log.
@@ -9804,7 +10277,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         refusal: "await-unknown-resolution",
         decisionTag: decision._tag,
         message:
-          "The lane is durably blocked on Unknown Outcomes; resolve them through the authorized resolveUnknown path (DUR-017) instead of retrying.",
+          "This Submission is parked on Unknown Outcomes; resolve them through the authorized resolveUnknown path (DUR-017) instead of retrying.",
       });
     }
     if (decision._tag === "AwaitApprovalDecision") {
@@ -9830,9 +10303,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       executeRecoveryDecision(snapshot, evidence, decision, read.records, read),
     );
 
-    if (disposition === "repaired") {
-      yield* annotateRepair(submission.threadId, command.submissionId, decision);
-    }
     yield* wake.notify(submission.threadId);
 
     return RecoveryReport.make({
@@ -9885,11 +10355,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           const records = (yield* readAllTolerant(submission.threadId, [submission.submissionId]))
             .records;
 
+          const runId = runIdForSubmission(submission.submissionId);
+
           const resolvedIds = new Set(
-            snapshot.unknownResolutions.map((intent) => intent.toolCallId),
+            records.flatMap(({ record }) =>
+              record.payload._tag === "ToolCallSettled" && record.payload.runId === runId
+                ? [record.payload.toolCallId]
+                : [],
+            ),
           );
 
-          const runId = runIdForSubmission(submission.submissionId);
           let earliest: DateTime.Utc | undefined;
 
           for (const envelope of records) {
@@ -10104,19 +10579,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
  *   the next model request, reattaches through the prompt-coverage rule after a crash, and the
  *   joined Submissions settle with the host outcome (DUR-002/DUR-016).
  * - `runWorker(agent)` — scan-seeded, wake-driven worker loop over every lane (WP4's host driver),
- *   reimplemented over a singleton identity-exact (digest-transparent) Binding resolution: a
- *   claimed head belonging to a different Agent never runs against this binding (SUB-023); a
- *   parent-linked head refused this way settles with the framework `ChildCompatibilityFailure`.
+ *   over a singleton current Binding: a claimed head belonging to a different Agent never
+ *   runs against this binding. Missing bindings leave accepted roots and children owed.
  * - `processThreadResolved(threadId)` / `runResolvedWorker` — the
- *   S2 multi-binding equivalents over registrations owned by the runtime Layer (spec §11, D7): every claimed
- *   head's stored `(agentId, agentDigests)` resolves to the exact registered Binding before any
- *   code runs; an unresolvable parent-linked child settles with the Schema-stable framework
- *   `ChildCompatibilityFailure` (no application code, the child never executes), and an
- *   unresolvable root surfaces the typed refusal after releasing the claim.
+ *   equivalents over registrations owned by the runtime Layer: each stable `agentId` selects
+ *   one current Binding. Unfinished operation contracts gate handler execution independently
+ *   of immutable admission evidence; missing bindings release the claim with a typed refusal.
  * - `runRecovery()` — classify every nonterminal Submission with the pure `classifyRecovery` and
- *   execute the repair decisions, appending a `RepairAnnotated` audit record per executed decision
+ *   execute repair decisions, annotating owned repair attempts with their granted epochs
  *   (DUR-013). Untouched ready input and model-resuming work are reported `deferred` for a
- *   worker claim; lanes blocked on
+ *   worker claim; Submissions parked on
  *   Unknown Outcomes are reported `unknown`. The S2 binding-free Subagent executors (admission
  *   completion, start-link repair, waiting restoration, wake replay, canonical join accounting,
  *   abort propagation, orphan reservation release) run here; the settlement join itself is
@@ -10223,8 +10695,8 @@ export class DurableAgentRuntime extends Context.Service<
     readonly verify: (threadId: ThreadId) => Effect.Effect<IntegrityReport, DurableVerifyFailure>;
     /**
      * Safe re-drive of one Submission's recovery decision with mandatory author/reason audit
-     * (SEC-011): executes exactly the repair the classifier names and appends the
-     * deterministic `RepairAnnotated` record when it repairs (DUR-013). Typed `RetryRefused`
+     * (SEC-011): executes exactly the repair the classifier names; owned repair attempts
+     * append a best-effort `RepairAnnotated` with their actual claim epoch (DUR-013). Typed `RetryRefused`
      * for settled work and for lanes owned by the resolveUnknown/resolveApproval paths.
      */
     readonly retry: (command: RetryCommand) => Effect.Effect<RecoveryReport, DurableRetryFailure>;

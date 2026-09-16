@@ -1289,15 +1289,17 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
             ).toBe(1);
           }
 
-          // The canonical journal rebuilds the next-Run prompt without the prior instruction/wake
-          // prefix (encoded params remain Prompt-valid; the P4 Struct workaround is unnecessary).
+          // The next Run retains the original user intent and result messages, while prior
+          // instructions do not regain authority. Encoded parameters remain Prompt-valid.
           const prompt = yield* promptFromCanonicalRecords(records);
 
           expect(prompt.content.map((message) => message.role)).toEqual([
+            "user",
             "assistant",
             "tool",
             "assistant",
           ]);
+          expect(JSON.stringify(prompt.content[0])).toContain(phase1Trip.request);
           yield* assertSettledBookingsExistAtSupplier(records);
         }).pipe(
           Effect.provide(

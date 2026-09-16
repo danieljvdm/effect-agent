@@ -44,8 +44,9 @@ The parent's next model call waits until its current tool batch settles. Childre
 concurrently; the waiting parent releases its execution slot for other work.
 
 After a restart, recovery reconnects to the same child and restores recorded results, policy,
-and budget reservations. Uncertain admission does not launch a replacement child. Keep the
-registered code versions needed by pending work available.
+and budget reservations. Uncertain admission does not launch a replacement child. Register one
+current binding per stable Agent ID. Pending delegation operations retain their original replay
+contract, while child identity, lineage, and accepted delivery evidence remain unchanged.
 
 Aborting the parent propagates cancellation to its children and joins their terminal outcomes.
 Cancellation cannot undo external effects. See [recovery details](../../concepts/durability#attached-subagents)

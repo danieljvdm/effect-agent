@@ -611,9 +611,9 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
 /**
  * `DefinitionDigests`-shaped digests of one child Agent Binding in plain
  * string form. The durable coordinator's thread-owned digest Schema never
- * crosses inward: the coordinator resolves these digests from the exact
- * registered target and stores and verifies them
- * byte-for-byte (SUB-023 exact-digest binding resolution).
+ * crosses inward: the coordinator captures these digests from the admitted target
+ * and verifies them byte-for-byte as immutable provenance. Current executable
+ * selection uses the stable Agent identity, independently of historical definitions.
  */
 export interface RunSubagentDigests {
   readonly agent: string;
@@ -829,6 +829,8 @@ export type RunResumeUsage = typeof RunResumeUsageSchema.Type;
  * proceeds through the normal continuation.
  */
 export interface RunTurnResume {
+  /** A successful settled call whose original operation contract still supports completion projection. */
+  readonly settledCompletion?: ToolCallId | undefined;
   /** Canonical rejection evidence, matched to the exact call; never permits handler execution. */
   readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;
@@ -918,6 +920,14 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
 
   /** Host-validated worker message; application input still supplies instructions and policy context. */
   readonly frameworkMessage?: FrameworkMessage;
+
+  /**
+   * Original admitted JSON for a durable continuation or verified framework message. Static
+   * instructions can resume without decoding a future input Schema; input-dependent instructions
+   * still require that Schema. The original value remains the policy input, and a saved prompt
+   * is restored through `context` instead of rerendering the application's input prompt.
+   */
+  readonly retainedInput?: Schema.Json | undefined;
 
   /** Initial or canonically restored run-scoped native selection. */
   readonly toolSelection?: Selection | undefined;

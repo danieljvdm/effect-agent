@@ -22,8 +22,8 @@ export class OpenToolCallEvidence extends Schema.Class<OpenToolCallEvidence>(
 
 /**
  * A committed tool-declaring response with ZERO prepared and ZERO settled records for its Turn:
- * the provably-safe durability §15 window — no prepared records means no handler ran, so the
- * declared batch resumes without model re-invocation and without Unknown.
+ * the durability §15 batch-resume window. Mutation preparation has not committed; readonly
+ * handlers may already have run. The worker checks each unfinished operation before execution.
  */
 export class DeclaredPendingBatchEvidence extends Schema.Class<DeclaredPendingBatchEvidence>(
   "@effect-agent/thread/DeclaredPendingBatchEvidence",
@@ -217,7 +217,7 @@ export class MarkUnknown extends Schema.TaggedClass<MarkUnknown>(
 }) {}
 
 /** A committed tool-declaring response has zero prepared and zero settled records: a worker
- * resumes the declared batch — no model re-invocation, no Unknown (durability §15). S2 also
+ * checks unfinished contracts and resumes the declared batch without model re-invocation. S2 also
  * routes an open delegation call WITHOUT establishment evidence here (spec §13 row 1): the
  * declared batch re-executes and the idempotent establishment converges on one child. */
 export class ResumePendingToolBatch extends Schema.TaggedClass<ResumePendingToolBatch>(
@@ -239,14 +239,14 @@ export class ResumeSuspended extends Schema.TaggedClass<ResumeSuspended>(
   "@effect-agent/thread/ResumeSuspended",
 )("ResumeSuspended", { submissionId: SubmissionId }) {}
 
-/** Unknown Outcomes lack covering resolutions: the lane stays blocked awaiting the authorized
+/** Unknown Outcomes lack covering resolutions: this Submission stays parked awaiting the authorized
  * DUR-017 resolution path; the obligation stays visible, nothing replays. */
 export class AwaitUnknownResolution extends Schema.TaggedClass<AwaitUnknownResolution>(
   "@effect-agent/thread/AwaitUnknownResolution",
 )("AwaitUnknownResolution", { submissionId: SubmissionId }) {}
 
-/** Durable resolution intents cover every open call: apply them canonically
- * (`ToolCallResolved` + `ToolCallSettled` for recovered results) and reopen the lane. */
+/** Durable resolution intents cover every open call: wake the original Submission when its
+ * required retry contract is supported. Canonical outcomes are applied by the next claim. */
 export class ApplyUnknownResolutions extends Schema.TaggedClass<ApplyUnknownResolutions>(
   "@effect-agent/thread/ApplyUnknownResolutions",
 )("ApplyUnknownResolutions", { submissionId: SubmissionId }) {}
@@ -843,8 +843,8 @@ const classifyDelegationAbort = (
  *    ApplyJoinAccounting → CompleteChildAdmission → RepairSubagentStartLink →
  *    AwaitChildAdmissionResolution → ResumePendingToolBatch (idempotent handler re-entry) →
  *    EnsureWaitingForChild → ResumeWaitingParent → ReleaseOrphanChildReservation.
- * 10. declared-but-unprepared tool batch → ResumePendingToolBatch — no handler ran (no prepared
- *     records), so the batch resumes with no model re-invocation and no Unknown (§15).
+ * 10. declared-but-unprepared tool batch → ResumePendingToolBatch — the worker checks original
+ *     operation contracts; missing preparation proves no mutation dispatch, not readonly nonexecution (§15).
  * 11. `admitted` → a parent-linked Submission whose Thread lacks the canonical lineage
  *     record defers (AwaitParentEstablishment: the parent's idempotent establishment
  *     completes it); otherwise
