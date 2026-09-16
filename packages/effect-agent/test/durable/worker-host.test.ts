@@ -1300,6 +1300,43 @@ layer(NodeCrypto.layer)((it) => {
             .map((row) => row.envelope),
         ).toEqual([expect.objectContaining({ definitions, input: "report:A" })]);
 
+        // A new, verified owner must not need the code that created the conversation years ago.
+        const recreated = yield* harness({
+          sourceRevisions: [{ definition: revised, digests: revisedDigests }],
+        });
+
+        const history = recreated.logs.get(sourceId)!;
+        const first = history[0]!;
+        const created = first.record.payload;
+
+        if (created._tag !== "ThreadCreated") throw new Error("Expected original Thread identity");
+
+        const original = {
+          ...first,
+          record: {
+            ...first.record,
+            payload: ThreadCreated.make({
+              ...created,
+              definitions: { ...definitions, agent: Schema.decodeSync(Digest)("d".repeat(64)) },
+            }),
+          },
+        };
+
+        recreated.logs.set(sourceId, [original, ...history.slice(1)]);
+        recreated.submissions.set(ownerId, snapshot);
+
+        const currentOwner = yield* recreated.runtime.acquire({
+          sourceThreadId: sourceId,
+          sourceSubmissionId: ownerId,
+          principal,
+        });
+
+        expect((yield* currentOwner.context).policy).toEqual(revised.policy);
+        expect(
+          (yield* currentOwner.start(request("current-owner"))).receipt.threadId,
+        ).toBeDefined();
+        expect(recreated.logs.get(sourceId)?.[0]).toEqual(original);
+
         const laterOwnerId = Schema.decodeSync(SubmissionId)("later-source-owner");
 
         const laterDigests = DefinitionDigests.make({

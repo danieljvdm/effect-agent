@@ -511,7 +511,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       return yield* failure("start", "declaration-unavailable");
 
     const effectiveBinding =
-      Option.isSome(selected) || changedRootAgent ? selectedBinding : binding;
+      Option.isSome(selected) || changedRootAgent || binding === undefined
+        ? selectedBinding
+        : binding;
 
     if (effectiveBinding === undefined) return yield* failure("start", "declaration-unavailable");
 
