@@ -94,7 +94,7 @@ need to inspect an active page, follow a known flow, or perform host-approved UI
 a general browsing session and cannot become an agent Tool.
 
 Install `@cloudflare/puppeteer@^1.1.0` alongside
-`@effect-agent/platform-cloudflare@beta`, `effect@^4.0.0-rc.115`, and `effect-cf@^0.44.0`. Then provide
+`@effect-agent/platform-cloudflare@beta`, `effect@^4.0.0-rc.115`, and `effect-cf@^0.44.1`. Then provide
 `CloudflareInteractiveBrowser.layer({ browser: env.BROWSER, accountId, apiToken })` with
 `FetchHttpClient.layer` for browser actions. `CloudflareInteractiveBrowser.hostLayer` opts into
 trusted host controls for Live View and handoff. Both variants assemble the browser binding and

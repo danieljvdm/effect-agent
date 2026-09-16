@@ -14,7 +14,7 @@ SQLite-backed Durable Object. RPC calls and alarms drive execution and recovery.
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Also install `effect@4.0.0-rc.115`, `effect-cf@^0.44.0`, `effect-agent@beta`,
+Also install `effect@4.0.0-rc.115`, `effect-cf@^0.44.1`, `effect-agent@beta`,
 `@effect/ai-openai@4.0.0-rc.115` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
