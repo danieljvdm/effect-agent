@@ -42,7 +42,8 @@ import {
   makeExactPatch,
   makeGitHubClient,
   type RepositorySnapshot,
-  type StaleReviewHead,
+  type ReviewCheckCompletion,
+  StaleReviewHead,
 } from "./github.ts";
 import {
   type ReviewCostEstimate,
@@ -67,6 +68,7 @@ import {
 import {
   reviewModeFromCommand,
   selectReview,
+  type ReviewSelection,
   unresolvedChangeRequestCount,
   unresolvedChangeRequests as selectUnresolvedChangeRequests,
 } from "./selection.ts";
@@ -91,6 +93,8 @@ const ACTION_INPUT_BY_CONFIG: Readonly<Record<string, string>> = {
   PR_REVIEW_BASE_COST_USD: "INPUT_BASE-COST-USD",
   PR_REVIEW_GUIDANCE_FILE: "INPUT_GUIDANCE-FILE",
   PR_REVIEW_IGNORE: "INPUT_IGNORE",
+  PR_REVIEW_CHECK_NAME: "INPUT_CHECK-NAME",
+  PR_REVIEW_CHECKS_TOKEN: "INPUT_CHECKS-TOKEN",
 };
 
 /** Prefer local environment configuration, then read the matching GitHub Action input. */
@@ -136,6 +140,105 @@ export class IncrementalScopeUnavailable extends Schema.TaggedError<IncrementalS
     currentMergeBase: Schema.String,
   },
 ) {}
+
+const isReviewResult = Schema.is(
+  Schema.Union([
+    BlockingFindings,
+    UnresolvedChangeRequests,
+    IncompleteReview,
+    ReviewAttemptIncomplete,
+    IncrementalScopeUnavailable,
+  ]),
+);
+
+const reviewCheckCompletion = (
+  exit: Exit.Exit<unknown, unknown>,
+  selection: ReviewSelection,
+  reviewUrl: string | undefined,
+): ReviewCheckCompletion => {
+  const result = (
+    conclusion: ReviewCheckCompletion["conclusion"],
+    title: string,
+    summary: string,
+  ): ReviewCheckCompletion => ({
+    status: "completed",
+    conclusion,
+    output: { title, summary },
+    ...(reviewUrl === undefined ? {} : { details_url: reviewUrl }),
+  });
+
+  if (Exit.isFailure(exit)) {
+    if (Cause.hasInterruptsOnly(exit.cause)) {
+      return result(
+        "cancelled",
+        "Review cancelled",
+        "The review was interrupted before it completed. Request another review to retry.",
+      );
+    }
+    if (!Cause.hasDies(exit.cause)) {
+      for (const reason of exit.cause.reasons) {
+        if (!Cause.isFailReason(reason)) continue;
+        const error = reason.error;
+
+        if (isReviewResult(error)) {
+          switch (error._tag) {
+            case "BlockingFindings":
+              return result(
+                "failure",
+                `${String(error.count)} blocking finding(s)`,
+                "Address the blocking findings in the linked review, then request another review.",
+              );
+            case "UnresolvedChangeRequests":
+              return result(
+                "failure",
+                `${String(error.count)} earlier change request(s) unresolved`,
+                "An earlier blocking review remains open. Request @effect-agent review full to verify the fixes.",
+              );
+            case "IncompleteReview":
+            case "ReviewAttemptIncomplete":
+              return result(
+                "failure",
+                "Review incomplete",
+                "The attempt did not complete coverage. See the linked review and request @effect-agent review full to retry.",
+              );
+            case "IncrementalScopeUnavailable":
+              return result(
+                "action_required",
+                "Full review required",
+                "The incremental baseline is unavailable. Request @effect-agent review full.",
+              );
+          }
+        }
+        if (Schema.is(StaleReviewHead)(error)) {
+          return result(
+            "cancelled",
+            "Pull request changed during review",
+            "This attempt reviewed an older commit. The new commit needs its own review.",
+          );
+        }
+      }
+    }
+
+    return result(
+      "failure",
+      "Review execution failed",
+      "The review could not finish. See the workflow logs for diagnostics and request another review to retry.",
+    );
+  }
+  if (selection._tag !== "review" && selection.reason !== "head-already-reviewed") {
+    return result(
+      "action_required",
+      "Review required",
+      `${selection.reason}. Request @effect-agent review full to review this commit. Automatic review limits do not prevent manual reviews.`,
+    );
+  }
+
+  return result(
+    "success",
+    "Review complete",
+    "The reviewed commit has no unresolved blocking findings.",
+  );
+};
 
 export const reviewPublicationFailure = (input: {
   readonly blockingFindings: number;
@@ -797,10 +900,21 @@ export const reviewActionProgram = Effect.gen(function* () {
 
   const graphqlUrl = yield* Config.NonEmptyString("GITHUB_GRAPHQL_URL").pipe(Config.option);
 
+  const checkName = yield* Config.schema(
+    Schema.String.check(Schema.isMaxLength(100)),
+    "PR_REVIEW_CHECK_NAME",
+  ).pipe(Config.withDefault(""));
+
+  const checksToken =
+    checkName.length === 0
+      ? undefined
+      : Option.getOrUndefined(yield* Config.Redacted("PR_REVIEW_CHECKS_TOKEN").pipe(Config.option));
+
   const github = yield* makeGitHubClient({
     repository,
     pullRequest: pullRequestNumber,
     token,
+    checksToken,
     apiUrl,
     graphqlUrl: Option.getOrUndefined(graphqlUrl),
   });
@@ -824,464 +938,517 @@ export const reviewActionProgram = Effect.gen(function* () {
     history,
   });
 
-  if (selection._tag === "skip") {
-    yield* skip(selection.reason, undefined, unresolvedChangeRequests);
-    if (selection.reason === "head-review-incomplete") {
-      return yield* ReviewAttemptIncomplete.make({});
-    }
-    if (unresolvedChangeRequests > 0) {
-      return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
-    }
+  let checkReviewUrl: string | undefined;
 
-    return;
-  }
-  if (selection._tag === "pause") {
-    const reviewUrl = yield* github.publishReview({
-      commitId: pull.headRevision,
-      event: "COMMENT",
-      body: withReviewPauseMarker(
-        renderReviewPauseBody({
-          automaticReviewLimit: selection.automaticReviewLimit,
-          automaticAttempts: selection.automaticAttempts,
-          lastCompletedRevision: selection.lastCompletedRevision,
-          headRevision: pull.headRevision,
-          unresolvedChangeRequests,
-        }),
-        selection.automaticReviewLimit,
-      ),
-      comments: [],
-    });
-
-    yield* skip(selection.reason, reviewUrl, unresolvedChangeRequests);
-    if (unresolvedChangeRequests > 0) {
-      return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
-    }
-
-    return;
-  }
-
-  let scope = selection.scope;
-
-  const attemptExit = yield* Effect.gen(function* () {
-    const fullFiles = yield* github.listFiles;
-    const currentMergeBase = yield* github.getMergeBase(pull.baseRevision, pull.headRevision);
-
-    let reviewBase =
-      scope === "incremental" && selection.baseRevision !== undefined
-        ? selection.baseRevision
-        : currentMergeBase;
-
-    if (scope === "incremental") {
-      const priorMergeBase = yield* github.getMergeBase(pull.baseRevision, reviewBase);
-
-      if (priorMergeBase !== currentMergeBase) {
-        if (!selection.automatic) {
-          return yield* IncrementalScopeUnavailable.make({
-            priorMergeBase,
-            currentMergeBase,
-          });
-        }
-        scope = "full";
-        reviewBase = currentMergeBase;
-        yield* Effect.logInfo("Reviewing the full diff after the merge base changed");
+  const review = Effect.gen(function* () {
+    if (selection._tag === "skip") {
+      yield* skip(selection.reason, undefined, unresolvedChangeRequests);
+      if (selection.reason === "head-review-incomplete") {
+        return yield* ReviewAttemptIncomplete.make({});
       }
+      if (unresolvedChangeRequests > 0) {
+        return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
+      }
+
+      return;
     }
-    const comparison = yield* github.compareTrees(reviewBase, pull.headRevision);
-
-    // A completed incremental baseline is still PR-controlled. Only the merge
-    // base with the target branch may authorize automatic generated exclusions.
-    const generatedAt = yield* Effect.cached(
-      reviewBase === currentMergeBase
-        ? Effect.succeed(comparison.base)
-        : github.readTreeSnapshot(currentMergeBase),
-    );
-
-    const surface = yield* hydrateExactChanges({
-      files: fullFiles,
-      changedPaths: comparison.changedPaths,
-      base: comparison.base,
-      head: comparison.head,
-      ignore,
-    }).pipe(
-      Effect.provideService(GeneratedFileClassification, {
-        isGenerated: (path) =>
-          generatedAt.pipe(Effect.flatMap((snapshot) => github.isGenerated(snapshot, path))),
-      }),
-    );
-
-    for (const omission of surface.generatedContent) {
-      yield* Effect.logInfo("Generated source-map payloads omitted", { ...omission });
-    }
-
-    const reviewRepository = makeReviewRepository({
-      base: comparison.base,
-      head: comparison.head,
-      ignore,
-      unavailablePaths: surface.unavailablePaths,
-    });
-
-    const fs = yield* FileSystem.FileSystem;
-
-    const guidance =
-      guidanceFile.length === 0
-        ? undefined
-        : (yield* fs.readFileString(guidanceFile)).slice(0, 20_000);
-
-    if (surface.changes.length === 0) {
-      const resolutions: ReadonlyArray<ReviewResolution> = [];
-
-      return {
-        resolutions,
-        followUps: [],
-        surface,
-        modelTurns: 0,
-        exhausted: undefined,
-        incomplete: false,
-        inputTokens: 0,
-        uncachedInputTokens: 0,
-        cachedInputTokens: 0,
-        cacheWriteInputTokens: 0,
-        outputTokens: 0,
-        estimatedCostMicrousd: undefined,
-        reservedCostMicrousd: 0,
-        costLimitMicrousd: 0,
-        report: ReviewReport.make({
-          summary:
-            scope === "incremental" &&
-            surface.ignoredPaths.length === 0 &&
-            surface.unreviewedPaths.length === 0
-              ? "No pull-request files changed since the last completed review."
-              : surface.ignoredPaths.length > 0 && surface.unreviewedPaths.length === 0
-                ? "No changed files matched the configured review scope."
-                : "No textual patch fit within the review input bound.",
-          findings: [],
-        }),
-      };
-    }
-
-    const followUps = yield* github.loadReviewFollowUps({
-      reviewAuthor,
-      history,
-    });
-
-    const request = ReviewRequest.make({
-      title: pull.title.slice(0, 1_000),
-      description: pull.description.slice(0, 20_000),
-      baseRevision: reviewBase,
-      headRevision: pull.headRevision,
-      scope,
-      changes: surface.changes,
-      unreviewedPaths: surface.unreviewedPaths.filter((path) => path.length <= 512).slice(0, 300),
-      followUps,
-    });
-
-    const costLimitMicrousd = reviewCostLimitMicrousd(request, maxCostUsd, baseCostUsd);
-
-    const provider = yield* makeReviewOpenAi({
-      model: modelName,
-      serviceTier: priority === "" ? "auto" : priority,
-      cacheKey: `pr-review:${pull.headRevision}`,
-      costLimitMicrousd,
-    }).pipe(
-      Effect.provideServiceEffect(
-        OpenAiClient.OpenAiClient,
-        OpenAiClient.make({ apiKey: yield* Config.Redacted("OPENAI_API_KEY") }),
-      ),
-    );
-
-    const reviewer = makeReviewer({
-      model: OpenAiLanguageModel.model(modelName, {
-        max_output_tokens: 32_000,
-        store: false,
-        ...(priority === "" ? {} : { service_tier: priority }),
-        strictJsonSchema: true,
-        reasoning: { effort },
-      }),
-      costControl: provider.costControl,
-      ...(guidance === undefined ? {} : { guidance }),
-    });
-
-    const result = yield* reviewer.review(request).pipe(
-      Effect.provideService(ReviewRepository, reviewRepository),
-      Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
-      Effect.onExit(() =>
-        provider.costControl.snapshot.pipe(
-          Effect.flatMap((snapshot) =>
-            Effect.logInfo("Review accounting totals", {
-              modelCalls: snapshot.modelCalls,
-              costLimited: snapshot.stopped,
-              inputLimited: snapshot.inputLimitExceeded === true,
-              ...snapshot.usage,
-              costLimitMicrousd,
-            }),
-          ),
-        ),
-      ),
-    );
-
-    const pending = new Set(result.pendingPaths ?? []);
-
-    surface.unreviewedPaths.push(...pending);
-    surface.exclusions.push(
-      ...[...pending].map((path) => ReviewExclusion.make({ path, reason: "review-stopped" })),
-    );
-
-    return {
-      resolutions: result.resolutions ?? [],
-      followUps,
-      surface: {
-        ...surface,
-        changes: surface.changes.filter((change) => !pending.has(change.path)),
-      },
-      modelTurns: result.turns,
-      exhausted: result.exhausted,
-      incomplete: result.incomplete === true,
-      inputTokens: result.usage.inputTokens,
-      uncachedInputTokens: result.usage.uncachedInputTokens,
-      cachedInputTokens: result.usage.cachedInputTokens,
-      cacheWriteInputTokens: result.usage.cacheWriteInputTokens,
-      outputTokens: result.usage.outputTokens,
-      estimatedCostMicrousd: result.usage.estimatedCostMicrousd,
-      reservedCostMicrousd: result.usage.reservedCostMicrousd ?? 0,
-      costLimitMicrousd,
-      report: reanchorToFullPullRequest(fullFiles, result.report),
-    };
-  }).pipe(Effect.exit);
-
-  if (Exit.isFailure(attemptExit)) {
-    const failureSummary = attemptExit.cause.reasons
-      .flatMap((reason) => {
-        if (!Cause.isFailReason(reason)) return [];
-        const failure = reason.error;
-
-        switch (failure._tag) {
-          case "BudgetExceeded":
-            return [
-              `Review budget exceeded (${failure.limit}): observed ${String(failure.observedValue)}, limit ${String(failure.limitValue)}.`,
-            ];
-          case "IncrementalScopeUnavailable":
-            return [
-              "The merge base changed. Request a full review before incremental reviews can resume.",
-            ];
-          case "GitHubApiFailure":
-            return ["A GitHub repository request failed."];
-          default:
-            return [];
-        }
-      })
-      .at(0);
-
-    yield* Console.error(
-      `PR review attempt failed${failureSummary === undefined ? "" : `: ${failureSummary}`}`,
-    );
-    yield* Effect.logError("Review failure", {
-      failureTypes: attemptExit.cause.reasons.flatMap((reason) =>
-        Cause.isFailReason(reason) ? [reason.error._tag] : [reason._tag],
-      ),
-    });
-
-    const reviewUrl = yield* publishHeadBoundReview(
-      github.publishReview({
+    if (selection._tag === "pause") {
+      const reviewUrl = yield* github.publishReview({
         commitId: pull.headRevision,
         event: "COMMENT",
-        body: withReviewMarker(
-          renderReviewFailureBody({
-            automaticReviewsRemaining: selection.automaticReviewsRemaining,
-            failureSummary,
+        body: withReviewPauseMarker(
+          renderReviewPauseBody({
+            automaticReviewLimit: selection.automaticReviewLimit,
+            automaticAttempts: selection.automaticAttempts,
+            lastCompletedRevision: selection.lastCompletedRevision,
+            headRevision: pull.headRevision,
+            unresolvedChangeRequests,
           }),
-          selection.automatic,
-          false,
+          selection.automaticReviewLimit,
         ),
         comments: [],
-      }),
-      { publish: github.publishAttemptMarker, automatic: selection.automatic, failureSummary },
-    ).pipe(Effect.catchTag("StaleReviewHead", () => Effect.failCause(attemptExit.cause)));
+      });
 
-    yield* writeOutputs([
-      ["skipped", "false"],
-      ["reason", "review-failed"],
-      ["blocking-findings", 0],
-      ["unresolved-change-requests", unresolvedChangeRequests],
-      ["review-url", reviewUrl],
-    ]);
+      checkReviewUrl = reviewUrl;
 
-    return yield* Effect.failCause(attemptExit.cause);
-  }
+      yield* skip(selection.reason, reviewUrl, unresolvedChangeRequests);
+      if (unresolvedChangeRequests > 0) {
+        return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
+      }
 
-  const {
-    surface,
-    modelTurns,
-    inputTokens,
-    uncachedInputTokens,
-    cachedInputTokens,
-    cacheWriteInputTokens,
-    outputTokens,
-    estimatedCostMicrousd,
-    reservedCostMicrousd,
-    costLimitMicrousd,
-    report,
-    exhausted,
-    incomplete,
-    resolutions,
-    followUps,
-  } = attemptExit.value;
+      return;
+    }
 
-  const complete = surface.unreviewedPaths.length === 0 && exhausted === undefined && !incomplete;
+    let scope = selection.scope;
 
-  const pricing = reviewModelPricing(modelName);
+    const attemptExit = yield* Effect.gen(function* () {
+      const fullFiles = yield* github.listFiles;
+      const currentMergeBase = yield* github.getMergeBase(pull.baseRevision, pull.headRevision);
 
-  const estimatedCost: ReviewCostEstimate | undefined =
-    estimatedCostMicrousd === undefined || pricing === undefined
-      ? undefined
-      : {
-          microusd: estimatedCostMicrousd,
-          label: pricing.label,
-          url: "https://developers.openai.com/api/docs/pricing",
-        };
+      let reviewBase =
+        scope === "incremental" && selection.baseRevision !== undefined
+          ? selection.baseRevision
+          : currentMergeBase;
 
-  const blocking = report.findings.filter((finding) => finding.severity === "blocking").length;
+      if (scope === "incremental") {
+        const priorMergeBase = yield* github.getMergeBase(pull.baseRevision, reviewBase);
 
-  // Only positive verification from a complete, nonblocking pass can retire prior feedback.
-  // Dismissals retain the inspected commit and evidence even if later publication fails.
-  if (complete && blocking === 0 && resolutions.length > 0) {
-    const owned = selectUnresolvedChangeRequests({ reviewAuthor, history });
-
-    yield* publishHeadBoundReview(
-      Effect.gen(function* () {
-        for (const resolution of resolutions) {
-          const review = owned.find(({ id }) => String(id) === resolution.id);
-          const followUp = followUps.find(({ id }) => id === resolution.id);
-
-          if (review === undefined || followUp === undefined) {
-            return yield* GitHubApiFailure.make({
-              operation: "dismiss review",
-              reason: "Resolution identified an unowned review",
+        if (priorMergeBase !== currentMergeBase) {
+          if (!selection.automatic) {
+            return yield* IncrementalScopeUnavailable.make({
+              priorMergeBase,
+              currentMergeBase,
             });
           }
-          yield* github.dismissReview({
-            review,
-            followUp,
-            reviewAuthor,
-            commitId: pull.headRevision,
-            evidence: resolution.evidence,
-          });
-          yield* Effect.logInfo("Dismissed addressed review", {
-            reviewId: review.id,
-            headRevision: pull.headRevision,
-          });
+          scope = "full";
+          reviewBase = currentMergeBase;
+          yield* Effect.logInfo("Reviewing the full diff after the merge base changed");
         }
-        unresolvedChangeRequests = unresolvedChangeRequestCount({
-          reviewAuthor,
-          history: yield* github.listReviews,
-        });
+      }
+      const comparison = yield* github.compareTrees(reviewBase, pull.headRevision);
 
-        return "";
+      // A completed incremental baseline is still PR-controlled. Only the merge
+      // base with the target branch may authorize automatic generated exclusions.
+      const generatedAt = yield* Effect.cached(
+        reviewBase === currentMergeBase
+          ? Effect.succeed(comparison.base)
+          : github.readTreeSnapshot(currentMergeBase),
+      );
+
+      const surface = yield* hydrateExactChanges({
+        files: fullFiles,
+        changedPaths: comparison.changedPaths,
+        base: comparison.base,
+        head: comparison.head,
+        ignore,
       }).pipe(
-        Effect.tapErrorTag("GitHubApiFailure", () =>
-          github.publishAttemptMarker({
-            commitId: pull.headRevision,
-            body: withReviewMarker(
-              renderReviewFailureBody({
-                automaticReviewsRemaining: selection.automaticReviewsRemaining,
-                failureSummary:
-                  "GitHub could not confirm dismissal of the verified reviews. Check the review timeline and request a full review to retry.",
-              }),
-              selection.automatic,
-              false,
-            ),
-          }),
-        ),
-      ),
-      { publish: github.publishAttemptMarker, automatic: selection.automatic },
-    );
-  }
+        Effect.provideService(GeneratedFileClassification, {
+          isGenerated: (path) =>
+            generatedAt.pipe(Effect.flatMap((snapshot) => github.isGenerated(snapshot, path))),
+        }),
+      );
 
-  const body = withReviewMarker(
-    renderReviewBody({
-      report,
-      automaticReviewsRemaining: selection.automaticReviewsRemaining,
-      scope,
-      reviewedFiles: surface.changes.length,
-      unreviewedFiles: surface.unreviewedPaths.length,
-      exclusions: surface.exclusions,
-      generatedContent: surface.generatedContent,
-      ignoredFiles: surface.ignoredPaths.length,
+      for (const omission of surface.generatedContent) {
+        yield* Effect.logInfo("Generated source-map payloads omitted", { ...omission });
+      }
+
+      const reviewRepository = makeReviewRepository({
+        base: comparison.base,
+        head: comparison.head,
+        ignore,
+        unavailablePaths: surface.unavailablePaths,
+      });
+
+      const fs = yield* FileSystem.FileSystem;
+
+      const guidance =
+        guidanceFile.length === 0
+          ? undefined
+          : (yield* fs.readFileString(guidanceFile)).slice(0, 20_000);
+
+      if (surface.changes.length === 0) {
+        const resolutions: ReadonlyArray<ReviewResolution> = [];
+
+        return {
+          resolutions,
+          followUps: [],
+          surface,
+          modelTurns: 0,
+          exhausted: undefined,
+          incomplete: false,
+          inputTokens: 0,
+          uncachedInputTokens: 0,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          outputTokens: 0,
+          estimatedCostMicrousd: undefined,
+          reservedCostMicrousd: 0,
+          costLimitMicrousd: 0,
+          report: ReviewReport.make({
+            summary:
+              scope === "incremental" &&
+              surface.ignoredPaths.length === 0 &&
+              surface.unreviewedPaths.length === 0
+                ? "No pull-request files changed since the last completed review."
+                : surface.ignoredPaths.length > 0 && surface.unreviewedPaths.length === 0
+                  ? "No changed files matched the configured review scope."
+                  : "No textual patch fit within the review input bound.",
+            findings: [],
+          }),
+        };
+      }
+
+      const followUps = yield* github.loadReviewFollowUps({
+        reviewAuthor,
+        history,
+      });
+
+      const request = ReviewRequest.make({
+        title: pull.title.slice(0, 1_000),
+        description: pull.description.slice(0, 20_000),
+        baseRevision: reviewBase,
+        headRevision: pull.headRevision,
+        scope,
+        changes: surface.changes,
+        unreviewedPaths: surface.unreviewedPaths.filter((path) => path.length <= 512).slice(0, 300),
+        followUps,
+      });
+
+      const costLimitMicrousd = reviewCostLimitMicrousd(request, maxCostUsd, baseCostUsd);
+
+      const provider = yield* makeReviewOpenAi({
+        model: modelName,
+        serviceTier: priority === "" ? "auto" : priority,
+        cacheKey: `pr-review:${pull.headRevision}`,
+        costLimitMicrousd,
+      }).pipe(
+        Effect.provideServiceEffect(
+          OpenAiClient.OpenAiClient,
+          OpenAiClient.make({ apiKey: yield* Config.Redacted("OPENAI_API_KEY") }),
+        ),
+      );
+
+      const reviewer = makeReviewer({
+        model: OpenAiLanguageModel.model(modelName, {
+          max_output_tokens: 32_000,
+          store: false,
+          ...(priority === "" ? {} : { service_tier: priority }),
+          strictJsonSchema: true,
+          reasoning: { effort },
+        }),
+        costControl: provider.costControl,
+        ...(guidance === undefined ? {} : { guidance }),
+      });
+
+      const result = yield* reviewer.review(request).pipe(
+        Effect.provideService(ReviewRepository, reviewRepository),
+        Effect.provideService(OpenAiClient.OpenAiClient, provider.client),
+        Effect.onExit(() =>
+          provider.costControl.snapshot.pipe(
+            Effect.flatMap((snapshot) =>
+              Effect.logInfo("Review accounting totals", {
+                modelCalls: snapshot.modelCalls,
+                costLimited: snapshot.stopped,
+                inputLimited: snapshot.inputLimitExceeded === true,
+                ...snapshot.usage,
+                costLimitMicrousd,
+              }),
+            ),
+          ),
+        ),
+      );
+
+      const pending = new Set(result.pendingPaths ?? []);
+
+      surface.unreviewedPaths.push(...pending);
+      surface.exclusions.push(
+        ...[...pending].map((path) => ReviewExclusion.make({ path, reason: "review-stopped" })),
+      );
+
+      return {
+        resolutions: result.resolutions ?? [],
+        followUps,
+        surface: {
+          ...surface,
+          changes: surface.changes.filter((change) => !pending.has(change.path)),
+        },
+        modelTurns: result.turns,
+        exhausted: result.exhausted,
+        incomplete: result.incomplete === true,
+        inputTokens: result.usage.inputTokens,
+        uncachedInputTokens: result.usage.uncachedInputTokens,
+        cachedInputTokens: result.usage.cachedInputTokens,
+        cacheWriteInputTokens: result.usage.cacheWriteInputTokens,
+        outputTokens: result.usage.outputTokens,
+        estimatedCostMicrousd: result.usage.estimatedCostMicrousd,
+        reservedCostMicrousd: result.usage.reservedCostMicrousd ?? 0,
+        costLimitMicrousd,
+        report: reanchorToFullPullRequest(fullFiles, result.report),
+      };
+    }).pipe(Effect.exit);
+
+    if (Exit.isFailure(attemptExit)) {
+      const failureSummary = attemptExit.cause.reasons
+        .flatMap((reason) => {
+          if (!Cause.isFailReason(reason)) return [];
+          const failure = reason.error;
+
+          switch (failure._tag) {
+            case "BudgetExceeded":
+              return [
+                `Review budget exceeded (${failure.limit}): observed ${String(failure.observedValue)}, limit ${String(failure.limitValue)}.`,
+              ];
+            case "IncrementalScopeUnavailable":
+              return [
+                "The merge base changed. Request a full review before incremental reviews can resume.",
+              ];
+            case "GitHubApiFailure":
+              return ["A GitHub repository request failed."];
+            default:
+              return [];
+          }
+        })
+        .at(0);
+
+      yield* Console.error(
+        `PR review attempt failed${failureSummary === undefined ? "" : `: ${failureSummary}`}`,
+      );
+      yield* Effect.logError("Review failure", {
+        failureTypes: attemptExit.cause.reasons.flatMap((reason) =>
+          Cause.isFailReason(reason) ? [reason.error._tag] : [reason._tag],
+        ),
+      });
+
+      const reviewUrl = yield* publishHeadBoundReview(
+        github.publishReview({
+          commitId: pull.headRevision,
+          event: "COMMENT",
+          body: withReviewMarker(
+            renderReviewFailureBody({
+              automaticReviewsRemaining: selection.automaticReviewsRemaining,
+              failureSummary,
+            }),
+            selection.automatic,
+            false,
+          ),
+          comments: [],
+        }),
+        { publish: github.publishAttemptMarker, automatic: selection.automatic, failureSummary },
+      ).pipe(Effect.catchTag("StaleReviewHead", () => Effect.failCause(attemptExit.cause)));
+
+      checkReviewUrl = reviewUrl;
+
+      yield* writeOutputs([
+        ["skipped", "false"],
+        ["reason", "review-failed"],
+        ["blocking-findings", 0],
+        ["unresolved-change-requests", unresolvedChangeRequests],
+        ["review-url", reviewUrl],
+      ]);
+
+      return yield* Effect.failCause(attemptExit.cause);
+    }
+
+    const {
+      surface,
       modelTurns,
-      complete,
-      exhausted,
-      unresolvedChangeRequests,
       inputTokens,
       uncachedInputTokens,
       cachedInputTokens,
       cacheWriteInputTokens,
       outputTokens,
-      estimatedCost,
+      estimatedCostMicrousd,
       reservedCostMicrousd,
       costLimitMicrousd,
-      headRevision: pull.headRevision,
-    }),
-    selection.automatic,
-    complete,
-  );
+      report,
+      exhausted,
+      incomplete,
+      resolutions,
+      followUps,
+    } = attemptExit.value;
 
-  const reviewUrl = yield* publishHeadBoundReview(
-    github.publishReview({
-      commitId: pull.headRevision,
-      event: reviewEventFor(blocking),
-      body,
-      comments: report.findings.flatMap((finding) =>
-        finding.line === undefined
-          ? []
-          : [
-              {
-                path: finding.path,
-                line: finding.line,
-                body: renderFindingBody(finding),
-              },
-            ],
-      ),
-    }),
-    { publish: github.publishAttemptMarker, automatic: selection.automatic },
-  );
+    const complete = surface.unreviewedPaths.length === 0 && exhausted === undefined && !incomplete;
 
-  yield* writeOutputs([
-    ["skipped", "false"],
-    [
-      "reason",
-      scope === selection.scope
-        ? selection.reason
-        : "automatic full review after merge-base change",
-    ],
-    ["input-tokens", inputTokens],
-    ["uncached-input-tokens", uncachedInputTokens],
-    ["cached-input-tokens", cachedInputTokens],
-    ["cache-write-input-tokens", cacheWriteInputTokens],
-    ["output-tokens", outputTokens],
-    ["reserved-cost-usd", (reservedCostMicrousd / 1_000_000).toFixed(6)],
-    ["cost-limit-usd", (costLimitMicrousd / 1_000_000).toFixed(6)],
-    [
-      "estimated-cost-usd",
-      estimatedCost === undefined ? "" : (estimatedCost.microusd / 1_000_000).toFixed(6),
-    ],
-    ["blocking-findings", blocking],
-    ["unresolved-change-requests", unresolvedChangeRequests],
-    ["review-url", reviewUrl],
-  ]);
-  yield* Console.log(`Posted PR review: ${reviewUrl}`);
-  for (const exclusion of surface.exclusions) {
-    yield* Effect.logInfo("Review input excluded", {
-      path: exclusion.path,
-      reason: exclusion.reason,
+    const pricing = reviewModelPricing(modelName);
+
+    const estimatedCost: ReviewCostEstimate | undefined =
+      estimatedCostMicrousd === undefined || pricing === undefined
+        ? undefined
+        : {
+            microusd: estimatedCostMicrousd,
+            label: pricing.label,
+            url: "https://developers.openai.com/api/docs/pricing",
+          };
+
+    const blocking = report.findings.filter((finding) => finding.severity === "blocking").length;
+
+    // Only positive verification from a complete, nonblocking pass can retire prior feedback.
+    // Dismissals retain the inspected commit and evidence even if later publication fails.
+    if (complete && blocking === 0 && resolutions.length > 0) {
+      const owned = selectUnresolvedChangeRequests({ reviewAuthor, history });
+
+      yield* publishHeadBoundReview(
+        Effect.gen(function* () {
+          for (const resolution of resolutions) {
+            const review = owned.find(({ id }) => String(id) === resolution.id);
+            const followUp = followUps.find(({ id }) => id === resolution.id);
+
+            if (review === undefined || followUp === undefined) {
+              return yield* GitHubApiFailure.make({
+                operation: "dismiss review",
+                reason: "Resolution identified an unowned review",
+              });
+            }
+            yield* github.dismissReview({
+              review,
+              followUp,
+              reviewAuthor,
+              commitId: pull.headRevision,
+              evidence: resolution.evidence,
+            });
+            yield* Effect.logInfo("Dismissed addressed review", {
+              reviewId: review.id,
+              headRevision: pull.headRevision,
+            });
+          }
+          unresolvedChangeRequests = unresolvedChangeRequestCount({
+            reviewAuthor,
+            history: yield* github.listReviews,
+          });
+
+          return "";
+        }).pipe(
+          Effect.tapErrorTag("GitHubApiFailure", () =>
+            github.publishAttemptMarker({
+              commitId: pull.headRevision,
+              body: withReviewMarker(
+                renderReviewFailureBody({
+                  automaticReviewsRemaining: selection.automaticReviewsRemaining,
+                  failureSummary:
+                    "GitHub could not confirm dismissal of the verified reviews. Check the review timeline and request a full review to retry.",
+                }),
+                selection.automatic,
+                false,
+              ),
+            }),
+          ),
+        ),
+        { publish: github.publishAttemptMarker, automatic: selection.automatic },
+      );
+    }
+
+    const body = withReviewMarker(
+      renderReviewBody({
+        report,
+        automaticReviewsRemaining: selection.automaticReviewsRemaining,
+        scope,
+        reviewedFiles: surface.changes.length,
+        unreviewedFiles: surface.unreviewedPaths.length,
+        exclusions: surface.exclusions,
+        generatedContent: surface.generatedContent,
+        ignoredFiles: surface.ignoredPaths.length,
+        modelTurns,
+        complete,
+        exhausted,
+        unresolvedChangeRequests,
+        inputTokens,
+        uncachedInputTokens,
+        cachedInputTokens,
+        cacheWriteInputTokens,
+        outputTokens,
+        estimatedCost,
+        reservedCostMicrousd,
+        costLimitMicrousd,
+        headRevision: pull.headRevision,
+      }),
+      selection.automatic,
+      complete,
+    );
+
+    const reviewUrl = yield* publishHeadBoundReview(
+      github.publishReview({
+        commitId: pull.headRevision,
+        event: reviewEventFor(blocking),
+        body,
+        comments: report.findings.flatMap((finding) =>
+          finding.line === undefined
+            ? []
+            : [
+                {
+                  path: finding.path,
+                  line: finding.line,
+                  body: renderFindingBody(finding),
+                },
+              ],
+        ),
+      }),
+      { publish: github.publishAttemptMarker, automatic: selection.automatic },
+    );
+
+    checkReviewUrl = reviewUrl;
+
+    yield* writeOutputs([
+      ["skipped", "false"],
+      [
+        "reason",
+        scope === selection.scope
+          ? selection.reason
+          : "automatic full review after merge-base change",
+      ],
+      ["input-tokens", inputTokens],
+      ["uncached-input-tokens", uncachedInputTokens],
+      ["cached-input-tokens", cachedInputTokens],
+      ["cache-write-input-tokens", cacheWriteInputTokens],
+      ["output-tokens", outputTokens],
+      ["reserved-cost-usd", (reservedCostMicrousd / 1_000_000).toFixed(6)],
+      ["cost-limit-usd", (costLimitMicrousd / 1_000_000).toFixed(6)],
+      [
+        "estimated-cost-usd",
+        estimatedCost === undefined ? "" : (estimatedCost.microusd / 1_000_000).toFixed(6),
+      ],
+      ["blocking-findings", blocking],
+      ["unresolved-change-requests", unresolvedChangeRequests],
+      ["review-url", reviewUrl],
+    ]);
+    yield* Console.log(`Posted PR review: ${reviewUrl}`);
+    for (const exclusion of surface.exclusions) {
+      yield* Effect.logInfo("Review input excluded", {
+        path: exclusion.path,
+        reason: exclusion.reason,
+      });
+    }
+
+    const publicationFailure = reviewPublicationFailure({
+      blockingFindings: blocking,
+      unreviewedPaths: surface.unreviewedPaths.length,
+      unresolvedChangeRequests,
+      exhausted,
+      incomplete,
     });
-  }
 
-  const publicationFailure = reviewPublicationFailure({
-    blockingFindings: blocking,
-    unreviewedPaths: surface.unreviewedPaths.length,
-    unresolvedChangeRequests,
-    exhausted,
-    incomplete,
+    if (publicationFailure !== undefined) return yield* publicationFailure;
   });
 
-  if (publicationFailure !== undefined) return yield* publicationFailure;
+  if (checkName.length === 0) return yield* review;
+
+  const identity = { name: checkName, headRevision: pull.headRevision };
+  const existing = selection._tag !== "review" && (yield* github.hasReviewCheck(identity));
+  const runId = yield* Config.schema(Schema.Natural, "GITHUB_RUN_ID").pipe(Config.option);
+
+  const serverUrl = yield* Config.NonEmptyString("GITHUB_SERVER_URL").pipe(
+    Config.withDefault("https://github.com"),
+  );
+
+  const detailsUrl = Option.isSome(runId)
+    ? `${serverUrl}/${repository}/actions/runs/${String(runId.value)}`
+    : undefined;
+
+  // The acquire/release boundary closes the exact attempt on success, failure,
+  // defect, or interruption. Check writes are bounded and are never retried.
+  // Capture the review Exit so a failed completion write cannot be swallowed
+  // while translating a published review result into workflow success.
+  const reviewExit = yield* existing
+    ? Effect.exit(review)
+    : Effect.acquireUseRelease(
+        github.startReviewCheck({ ...identity, detailsUrl }),
+        () => Effect.exit(review),
+        (check, exit) =>
+          github.completeReviewCheck(
+            check,
+            reviewCheckCompletion(
+              Exit.isSuccess(exit) ? exit.value : exit,
+              selection,
+              checkReviewUrl,
+            ),
+          ),
+      );
+
+  if (
+    Exit.isFailure(reviewExit) &&
+    !reviewExit.cause.reasons.every(
+      (reason) => Cause.isFailReason(reason) && isReviewResult(reason.error),
+    )
+  ) {
+    return yield* Effect.failCause(reviewExit.cause);
+  }
 });

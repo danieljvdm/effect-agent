@@ -1381,6 +1381,8 @@ describe("review provider boundary", () => {
         const protocolFailure = outcome.startsWith("protocol");
         const hasFinding = outcome.endsWith("finding");
         const logs: Array<unknown> = [];
+        const checkEnabled = fast || outcome.startsWith("cost");
+        const checkWrites: Array<Schema.Json> = [];
 
         // Keep this publication/protocol probe below context pressure.
         const protocolUsage = [
@@ -1406,6 +1408,21 @@ describe("review provider boundary", () => {
 
         const client = HttpClient.make((httpRequest, url) =>
           Effect.sync(() => {
+            if (url.pathname.includes("/check-runs")) {
+              if (httpRequest.body._tag !== "Uint8Array") throw new Error("Expected check JSON");
+              checkWrites.push(
+                Schema.decodeSync(Schema.fromJsonString(Schema.Json))(
+                  new TextDecoder().decode(httpRequest.body.body),
+                ),
+              );
+
+              return json(httpRequest, {
+                id: 100,
+                name: "Effect Agent review",
+                head_sha: "head",
+                external_id: "effect-agent-pr-review:v1:12",
+              });
+            }
             if (url.pathname === "/v1/responses/input_tokens")
               return json(httpRequest, {
                 object: "response.input_tokens",
@@ -1415,6 +1432,10 @@ describe("review provider boundary", () => {
               });
             if (url.pathname === "/v1/responses") {
               modelCalls += 1;
+              if (checkEnabled)
+                expect(checkWrites).toEqual([
+                  expect.objectContaining({ head_sha: "head", status: "in_progress" }),
+                ]);
 
               expect(decodeWire(httpRequest)).toMatchObject({
                 model: fast ? "gpt-6-astra" : "gpt-5.6-sol",
@@ -1571,6 +1592,7 @@ describe("review provider boundary", () => {
                 PR_REVIEW_MAX_COST_USD: "0.99",
                 PR_REVIEW_MODEL: fast ? "gpt-6-astra" : "gpt-5.6-sol",
                 PR_REVIEW_PRIORITY: fast ? "fast" : "default",
+                ...(checkEnabled ? { PR_REVIEW_CHECK_NAME: "Effect Agent review" } : {}),
               },
             }),
           ),
@@ -1586,7 +1608,23 @@ describe("review provider boundary", () => {
           Effect.exit,
         );
 
-        expect(Exit.isSuccess(exit)).toBe(complete);
+        expect(Exit.isSuccess(exit)).toBe(complete || checkEnabled);
+        if (checkEnabled)
+          expect(checkWrites).toEqual([
+            expect.objectContaining({ head_sha: "head", status: "in_progress" }),
+            expect.objectContaining({
+              status: "completed",
+              conclusion: complete ? "success" : "failure",
+              details_url: "https://github.test/fixtures/example/pull/12#review",
+              output: expect.objectContaining({
+                title: complete
+                  ? "Review complete"
+                  : hasFinding
+                    ? "1 blocking finding(s)"
+                    : "Review incomplete",
+              }),
+            }),
+          ]);
         if (Exit.isFailure(exit)) {
           expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
             _tag: hasFinding ? "BlockingFindings" : "ReviewAttemptIncomplete",

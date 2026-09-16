@@ -464,6 +464,11 @@ The generated Changesets PR runs ordinary CI like other PRs.
 Explicit `@effect-agent review` comments still request review.
 
 PR Review uses `pull_request_target` and runs only trusted default-branch code.
+It publishes the shared `Effect Agent review` check on the inspected PR head using the workflow
+token's `checks: write` permission. Automatic and manual reviews use the same check name;
+manual retries show progress in the PR checks panel. Published findings and incomplete coverage
+fail that check, while setup, execution, and check publication failures also fail the workflow job.
+See the [Action check configuration](../action/README.md#pr-check-status) for consumer setup.
 Fork reviews wait for approval before checkout, token creation, or model execution.
 Open the PR Review run from the PR's checks, select **Review deployments**, select
 `pr-review-forks`, then **Approve and deploy**. GitHub uses deployment wording for

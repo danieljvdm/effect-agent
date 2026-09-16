@@ -18,6 +18,12 @@ inputs:
     description: "GitHub bot login used to recognize this channel's prior reviews."
     required: false
     default: "github-actions[bot]"
+  check-name:
+    description: "Optional shared review check name on the PR head commit. When set, published review findings and incomplete coverage fail this check instead of the workflow job. Setup, execution, and check publication errors still fail the job."
+    required: false
+  checks-token:
+    description: "Token with checks:write for publishing the shared review check. Defaults to github-token. Use the same token identity for automatic and manual runs."
+    required: false
   mode:
     description: 'Scope policy: "auto", "incremental", or "full". Auto falls back to the full diff after merge-base movement. Explicit incremental review stops and requires full to establish a new baseline.'
     required: false

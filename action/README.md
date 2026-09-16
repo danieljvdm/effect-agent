@@ -26,6 +26,59 @@ tag and advances `action-v1` atomically. Failed or superseded runs leave the
 previous release available. Publication installs no dependencies and runs no
 project code with repository write permission. Package releases remain separate.
 
+## PR check status
+
+Set `check-name` to show both automatic and comment-triggered reviews on the PR's current
+commit. Keep the name and check-token identity the same for every trigger. Add these fields
+to a workflow that already authorizes review commands:
+
+```yaml
+permissions:
+  contents: read
+  checks: write
+  issues: write
+  pull-requests: write
+```
+
+In the existing review action's `with` block, add:
+
+```yaml
+check-name: Effect Agent review
+checks-token: ${{ github.token }}
+```
+
+`checks-token` defaults to `github-token`. Supplying `github.token` separately lets the
+reviewer continue posting reviews as its existing GitHub App without adding Checks permissions
+to that App. Alternatively, grant the reviewer App Checks write permission and omit
+`checks-token`. Existing workflows that omit `check-name` retain their current behavior and
+need no new permissions.
+
+An admitted review creates an **in progress** check on the inspected PR head, even when an
+`issue_comment` workflow runs on the default branch. It links to that workflow while running
+and to the published review when available. Every attempt creates a new run under the same
+name, so manual retries replace the displayed result while preserving earlier attempt history.
+Completion updates only that attempt's ID; it cannot complete a newer attempt or another commit.
+Keep the existing per-PR workflow concurrency group to serialize review publication.
+
+Completed reviews with no unresolved blockers pass. New blockers, unresolved earlier change
+requests, and incomplete coverage fail the review check. A paused, unreviewed commit requires
+action: `@effect-agent review full` starts a new check regardless of the automatic allowance.
+Skipped events preserve an existing check on the same head; they cannot turn an unfinished or
+failed manual review green. If no check exists yet, the Action reports the trusted review history
+or that a review is required, without calling a model.
+
+When enabled, these published review outcomes no longer fail the workflow job. Setup, execution,
+and check API failures still fail the job. A cancelled run closes its check as cancelled when
+the runner can execute cleanup; a push during publication cancels only the inspected head's
+check. Check writes have a ten-second timeout and are never retried. Runner loss or an uncertain
+GitHub write can leave a check in progress; request another review to replace that attempt.
+
+If reviews are required for merging, configure branch protection to require the chosen check
+name from its publishing app instead of the workflow job. Enabling this does not rewrite old
+workflow results or change branch protection automatically. Existing failed jobs remain in their
+history. A new push after the workflow upgrade refreshes the PR's workflow job; subsequent manual
+reviews update the shared check on that commit.
+
 ## Review behavior
 
 The reviewer automatically ignores known binary asset formats, including raster images,
@@ -57,6 +110,8 @@ The host tracks unread diff ranges, validates finding paths and
 RIGHT-side anchors and publishes against the inspected head. A stopped run preserves findings
 recorded before research ended. Preparation failures publish a failure marker. Blocking findings
 request changes and fail the Action after publication; other outcomes remain comments.
+With `check-name` configured, published review outcomes instead determine the shared PR check
+described above.
 
 Reviews with findings include a **Copy all findings** dropdown. Expand it and use the code
 block's copy button to copy every finding from that review, including paths, inline line numbers
