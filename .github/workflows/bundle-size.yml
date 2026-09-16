@@ -33,7 +33,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.0
+          bun-version: 1.4.2
 
       # Bootstrap the repository-owned vp, as in CI. Each checkout installs its
       # own lockfile so workspace links and dependency changes are measured too.

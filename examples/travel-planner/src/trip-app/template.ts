@@ -20,10 +20,10 @@ export const TRIP_APP_TEMPLATE_FILES: Readonly<Record<string, string>> = {
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.4",
     "typescript": "7.0.2",
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
-    "vite-plus": "0.3.0"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.2",
+    "vite-plus": "0.3.2"
   },
-  "packageManager": "bun@1.4.0"
+  "packageManager": "bun@1.4.2"
 }
 `,
   "tsconfig.json": `{
@@ -493,7 +493,7 @@ footer {
 
 This is real source: change packages/web/src/App.tsx for layouts, styles.css for the visual design,
 packages/server/src/index.ts for server behavior, and packages/contracts/src/index.ts for shared schemas/API.
-Run vp install, vp check, and vp run build. Bun 1.4.0 and Vite+ 0.3.0 are pinned.
+Run vp install, vp check, and vp run build. Bun 1.4.2 and Vite+ 0.3.2 are pinned.
 The web output is dist/web; the bundled Worker entry is dist/server/index.js.
 vp dev previews the web UI; it requires the host's same-origin /api/trip route to load trip data.
 
