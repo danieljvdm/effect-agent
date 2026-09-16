@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.99
+
+### Patch Changes
+
+- [#511](https://github.com/danieljvdm/effect-agent/pull/511) [`812410b`](https://github.com/danieljvdm/effect-agent/commit/812410b862e1c64090a47b29bd09c5cccb6cebf1) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose safe review failure and navigation diagnostics, identify deadline stops, and direct context recovery to unread diff ranges.
+
+- Updated dependencies [[`e1f06bb`](https://github.com/danieljvdm/effect-agent/commit/e1f06bbd3f66478c9223c5888696cd8c6e75fc37)]:
+  - effect-agent@0.1.0-beta.99
+
 ## 0.1.0-beta.98
 
 ### Patch Changes

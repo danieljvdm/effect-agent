@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.99
+
+### Patch Changes
+
+- [#513](https://github.com/danieljvdm/effect-agent/pull/513) [`e1f06bb`](https://github.com/danieljvdm/effect-agent/commit/e1f06bbd3f66478c9223c5888696cd8c6e75fc37) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve registered tool replay contracts when an attempt copies its Agent Definition to restore accepted execution limits. Keep interrupted idempotent operations recoverable without repeating their committed durable steps.
+
 ## 0.1.0-beta.98
 
 ### Patch Changes

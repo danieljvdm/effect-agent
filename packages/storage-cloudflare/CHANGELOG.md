@@ -1,5 +1,12 @@
 # @effect-agent/storage-cloudflare
 
+## 0.1.0-beta.99
+
+### Patch Changes
+
+- Updated dependencies [[`e1f06bb`](https://github.com/danieljvdm/effect-agent/commit/e1f06bbd3f66478c9223c5888696cd8c6e75fc37)]:
+  - effect-agent@0.1.0-beta.99
+
 ## 0.1.0-beta.98
 
 ### Patch Changes
