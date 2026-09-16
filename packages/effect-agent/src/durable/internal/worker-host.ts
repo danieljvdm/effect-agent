@@ -381,6 +381,13 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     };
   });
 
+  const firstThreadInput = (history: Effect.Success<ReturnType<typeof read>>) => {
+    const first = history.records.find(({ record }) => record.payload._tag === "UserInputRecorded")
+      ?.record.payload;
+
+    return first?._tag === "UserInputRecorded" ? first.input : undefined;
+  };
+
   const sourceAuthority = Effect.fn("WorkerHost.sourceAuthority")(function* (
     threadId: ThreadId,
     submissionId?: SubmissionId,
@@ -391,7 +398,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     if (created?._tag !== "ThreadCreated") return yield* failure("start", "not-found");
 
     const binding = deps.bindings.find(
-      (entry) => entry.agentId === created.agentId && bindingSupports(entry, created.definitions),
+      (entry) =>
+        entry.agentId === created.agentId &&
+        bindingSupports(entry, created.definitions, undefined, firstThreadInput(current)),
     );
 
     const worker = current.records.find(
@@ -434,10 +443,26 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         return yield* failure("start", "denied");
     }
 
+    const ownerBinding =
+      ownerSubmission === undefined
+        ? undefined
+        : deps.bindings.find(
+            (entry) =>
+              entry.agentId === ownerSubmission.agentId &&
+              bindingSupports(
+                entry,
+                ownerSubmission.agentDigests,
+                undefined,
+                ownerSubmission.inputPayload,
+              ),
+          );
+
+    const selectedBinding = ownerBinding ?? binding;
+
     if (worker?._tag === "WorkerOriginRecorded")
       return {
         current,
-        binding,
+        binding: selectedBinding,
         submission: ownerSubmission,
         policyOverride: Option.none<AgentPolicy>(),
         policy: worker.origin.policy,
@@ -456,7 +481,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       return {
         current,
-        binding,
+        binding: selectedBinding,
         submission: ownerSubmission,
         policyOverride: Option.none<AgentPolicy>(),
         policy: attached.policy,
@@ -466,17 +491,6 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         depth: attached.parentLink.depth,
       };
     }
-
-    const ownerBinding =
-      ownerSubmission === undefined
-        ? undefined
-        : deps.bindings.find(
-            (entry) =>
-              entry.agentId === ownerSubmission.agentId &&
-              bindingSupports(entry, ownerSubmission.agentDigests),
-          );
-
-    const selectedBinding = ownerBinding ?? binding;
 
     const changedRootAgent =
       ownerSubmission !== undefined && ownerSubmission.agentId !== created.agentId;
@@ -766,7 +780,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       const targetBinding = deps.bindings.find(
         (entry) =>
           entry.agentId === origin.worker.targetAgentId &&
-          bindingSupports(entry, origin.targetDigests),
+          bindingSupports(entry, origin.targetDigests, undefined, input),
       );
 
       if (sourceBinding === undefined || targetBinding === undefined)
@@ -1038,31 +1052,6 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (update.threadId !== submission.threadId || update.agentId !== origin.worker.targetAgentId)
         return yield* failure("followUp", "worker-mismatch");
 
-      const sourceBinding = deps.bindings.find(
-        (entry) =>
-          entry.agentId === origin.source.agentId && bindingSupports(entry, intent.sourceDigests),
-      );
-
-      const targetBinding = deps.bindings.find(
-        (entry) =>
-          entry.agentId === origin.worker.targetAgentId &&
-          bindingSupports(entry, origin.targetDigests),
-      );
-
-      const reports =
-        sourceBinding?.reporting?.filter(
-          (entry) => entry.delegationId === origin.worker.delegationId,
-        ) ?? [];
-
-      if (
-        sourceBinding === undefined ||
-        targetBinding === undefined ||
-        reports.length !== 1 ||
-        reports[0]?.mode !== "standard" ||
-        reports[0].target !== targetBinding.definition ||
-        !definitionDigestsEqual(submission.agentDigests, origin.targetDigests)
-      )
-        return yield* failure("followUp", "declaration-unavailable");
       const sourceHistory = yield* read(origin.source.threadId, "followUp");
 
       const first = requests(sourceHistory.records).find(
@@ -1080,7 +1069,39 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (
         source.binding === undefined ||
         source.submission === undefined ||
-        !bindingSupports(source.binding, intent.sourceDigests)
+        !bindingSupports(
+          source.binding,
+          intent.sourceDigests,
+          undefined,
+          source.submission?.inputPayload,
+        )
+      )
+        return yield* failure("followUp", "declaration-unavailable");
+
+      const sourceBinding = deps.bindings.find(
+        (entry) =>
+          entry.agentId === origin.source.agentId &&
+          bindingSupports(entry, intent.sourceDigests, undefined, source.submission?.inputPayload),
+      );
+
+      const targetBinding = deps.bindings.find(
+        (entry) =>
+          entry.agentId === origin.worker.targetAgentId &&
+          bindingSupports(entry, origin.targetDigests, undefined, submission.inputPayload),
+      );
+
+      const reports =
+        sourceBinding?.reporting?.filter(
+          (entry) => entry.delegationId === origin.worker.delegationId,
+        ) ?? [];
+
+      if (
+        sourceBinding === undefined ||
+        targetBinding === undefined ||
+        reports.length !== 1 ||
+        reports[0]?.mode !== "standard" ||
+        reports[0].target !== targetBinding.definition ||
+        !definitionDigestsEqual(submission.agentDigests, origin.targetDigests)
       )
         return yield* failure("followUp", "declaration-unavailable");
 
@@ -1229,39 +1250,6 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       const refused = (reason: WorkerReportRefused["reason"]) =>
         WorkerReportRefused.make({ runId, messageId, reason });
 
-      const sourceBinding = deps.bindings.find(
-        (entry) =>
-          entry.agentId === origin.source.agentId && bindingSupports(entry, intent.sourceDigests),
-      );
-
-      const targetBinding = deps.bindings.find(
-        (entry) =>
-          entry.agentId === origin.worker.targetAgentId &&
-          bindingSupports(entry, origin.targetDigests),
-      );
-
-      const reports =
-        sourceBinding?.reporting?.filter(
-          (entry) => entry.delegationId === origin.worker.delegationId,
-        ) ?? [];
-
-      const descriptor = reports[0];
-
-      if (
-        sourceBinding === undefined ||
-        targetBinding === undefined ||
-        descriptor === undefined ||
-        reports.length !== 1 ||
-        !Object.is(descriptor.target, targetBinding.definition) ||
-        (descriptor.mode !== "standard" &&
-          !Object.is(descriptor.input, sourceBinding.definition.input)) ||
-        descriptor.mode !== intent.mode ||
-        descriptor.destination?.delegationId !== intent.destinationDelegationId ||
-        (descriptor.destination !== undefined &&
-          !Object.is(descriptor.destination.target, sourceBinding.definition))
-      )
-        return refused("declaration-unavailable");
-
       const selected = yield* deps.ledger
         .lookup(SubmissionLookupById.make({ submissionId: host.submissionId }))
         .pipe(Effect.mapError(storageFailure("inspect")));
@@ -1293,7 +1281,49 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         firstInput.admission.sourceSubmissionId,
       );
 
-      if (source.binding === undefined || !bindingSupports(source.binding, intent.sourceDigests))
+      if (
+        source.binding === undefined ||
+        !bindingSupports(
+          source.binding,
+          intent.sourceDigests,
+          undefined,
+          source.submission?.inputPayload,
+        )
+      )
+        return refused("declaration-unavailable");
+
+      const sourceBinding = deps.bindings.find(
+        (entry) =>
+          entry.agentId === origin.source.agentId &&
+          bindingSupports(entry, intent.sourceDigests, undefined, source.submission?.inputPayload),
+      );
+
+      const targetBinding = deps.bindings.find(
+        (entry) =>
+          entry.agentId === origin.worker.targetAgentId &&
+          bindingSupports(entry, origin.targetDigests, undefined, hostSubmission.inputPayload),
+      );
+
+      const reports =
+        sourceBinding?.reporting?.filter(
+          (entry) => entry.delegationId === origin.worker.delegationId,
+        ) ?? [];
+
+      const descriptor = reports[0];
+
+      if (
+        sourceBinding === undefined ||
+        targetBinding === undefined ||
+        descriptor === undefined ||
+        reports.length !== 1 ||
+        !Object.is(descriptor.target, targetBinding.definition) ||
+        (descriptor.mode !== "standard" &&
+          !Object.is(descriptor.input, sourceBinding.definition.input)) ||
+        descriptor.mode !== intent.mode ||
+        descriptor.destination?.delegationId !== intent.destinationDelegationId ||
+        (descriptor.destination !== undefined &&
+          !Object.is(descriptor.destination.target, sourceBinding.definition))
+      )
         return refused("declaration-unavailable");
 
       const sourceOriginRecord = source.current.records.find(
@@ -1680,7 +1710,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       target: Agent.AnyDefinition,
       operation: WorkerError["operation"],
     ) {
-      const resolved = yield* binding(target, operation);
+      yield* binding(target, operation);
 
       if (worker.targetAgentId !== target.id) return yield* failure(operation, "worker-mismatch");
       const source = yield* read(context.source.threadId, operation);
@@ -1690,10 +1720,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       )?.admission.origin;
 
       if (origin === undefined) return yield* failure(operation, "not-found");
-      if (
-        origin.worker.delegationId !== worker.delegationId ||
-        !bindingSupports(resolved, origin.targetDigests)
-      )
+      if (origin.worker.delegationId !== worker.delegationId)
         return yield* failure(operation, "worker-mismatch");
 
       return origin;
@@ -2398,9 +2425,19 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
     if (created?._tag !== "ThreadCreated") return yield* failure("context", "not-found");
 
-    const resolved = deps.bindings.find(
-      (entry) => entry.agentId === created.agentId && bindingSupports(entry, created.definitions),
-    );
+    const selected =
+      request.sourceSubmissionId === undefined
+        ? undefined
+        : yield* sourceAuthority(sourceThreadId, request.sourceSubmissionId);
+
+    const resolved =
+      selected === undefined
+        ? deps.bindings.find(
+            (entry) =>
+              entry.agentId === created.agentId &&
+              bindingSupports(entry, created.definitions, undefined, firstThreadInput(current)),
+          )
+        : selected.binding;
 
     if (resolved === undefined) return yield* failure("context", "declaration-unavailable");
 
@@ -2418,11 +2455,6 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         : attached?._tag === "SubagentLineageRecorded"
           ? attached
           : undefined;
-
-    const selected =
-      request.sourceSubmissionId === undefined
-        ? undefined
-        : yield* sourceAuthority(sourceThreadId, request.sourceSubmissionId);
 
     return facet(
       {

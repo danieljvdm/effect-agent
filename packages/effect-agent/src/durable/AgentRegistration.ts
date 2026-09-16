@@ -8,6 +8,7 @@ export {
   bindingSupports,
   BindingManifest,
   makeBindingManifest,
+  compileBindingManifest,
   type ReplayVersions,
   type AgentRegistration,
   type AgentAttemptContext,

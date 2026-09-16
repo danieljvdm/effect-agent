@@ -7860,7 +7860,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         submission.agentId,
         submission.agentDigests,
       );
-    if (bindingSupports(candidate, submission.agentDigests)) return candidate;
+    if (bindingSupports(candidate, submission.agentDigests, undefined, submission.inputPayload))
+      return candidate;
 
     // A checkpoint can omit a settled batch that still supplies completion projection.
     // Compatibility reads the bounded authoritative prefix, never a reduced checkpoint.
@@ -7899,6 +7900,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       pending?.calls
         .filter((call) => call.providerExecuted !== true || completionTools.includes(call.name))
         .map((call) => call.name) ?? [],
+      submission.inputPayload,
     );
   });
 

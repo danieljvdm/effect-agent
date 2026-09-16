@@ -103,10 +103,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
 
     if (created?._tag !== "ThreadCreated") return yield* failure("context", "not-found");
 
-    const matching = deps.bindings.filter(
-      (binding) =>
-        binding.agentId === created.agentId && bindingSupports(binding, created.definitions),
-    );
+    const matching = deps.bindings.filter((binding) => binding.agentId === created.agentId);
 
     if (matching.length !== 1) return yield* failure("context", "binding-mismatch");
 
@@ -310,7 +307,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
             !Schema.is(MessageAdmission)(metadata) ||
             metadata.peerName !== request.name ||
             saved.envelope.agentId !== target.agentId ||
-            !bindingSupports(target, saved.envelope.definitions) ||
+            !bindingSupports(target, saved.envelope.definitions, undefined, saved.envelope.input) ||
             !sameJson(saved.envelope.input, input) ||
             (inReplyTo === undefined || metadata.inReplyTo === undefined
               ? inReplyTo !== metadata.inReplyTo

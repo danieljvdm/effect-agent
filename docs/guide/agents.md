@@ -173,6 +173,27 @@ from the original release, audit its semantics, and supply that data as
 `continuity.retainedManifests`. Registration recomputes the original fingerprints before matching
 an admission. This is metadata for retained work, not an old executable registration or a rewrite
 of stored digests. Do not construct it by assigning today's contract to an unexplained old digest.
+Manifests also retain the original Agent and Tool declarations. With unchanged semantic
+versions, recovery validates the original saved input against the current Effect codec. It can
+resume across optional input additions without changing the receipt. Tool codecs must still
+match, except for JSON Schema's `additionalProperties: false` becoming `true`; that widening
+accepts every previously valid value. Other Tool codec changes, changed execution classes and
+changed semantics stay pending until compatible code is available. This does not rewrite or
+replan the original request.
+
+Hosts with deferred bindings can compile this metadata without acquiring executable services:
+
+```ts
+const metadata =
+  yield * compileBindingManifest(definition, definitions, versions, retainedManifests);
+const registration = { ...deferredBinding, ...metadata };
+```
+
+When checking a retained admission directly, pass its original encoded input as the fourth
+argument to `bindingSupports`. A changed Agent schema needs that exact input; native recovery
+supplies the ledger's original payload. Bump the Agent semantic version if a newly interpreted
+field changes the meaning of a retained request, even when its value passes the new codec.
+
 Keep each manifest until an authoritative inventory proves no outstanding admission, child,
 report, or delivery needs it. Without proof, recovery waits rather than substituting code.
 

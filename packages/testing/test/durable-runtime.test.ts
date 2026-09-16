@@ -23,6 +23,7 @@ import {
   compileRegistrations,
   DurableWorkerBinding,
   makeBindingManifest,
+  bindingSupports,
 } from "effect-agent/agent-registration";
 import {
   COMPACTION_SUMMARY_PREFIX,
@@ -6340,14 +6341,25 @@ layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
 });
 
 layer(testLayer)("deployment continuity", (it) => {
-  // Incident: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-68
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/771498b1952794b8f2f19d1e35b604937bffcc3c
   it.effect(
     "resumes an interrupted request after an additive tool deploy without repeating its action",
     () =>
       Effect.gen(function* () {
         const effects = yield* Ref.make(0);
 
-        const action = Search.addDependency(DurableStep)
+        const parameters = (additionalProperties: boolean) =>
+          Search.parametersSchema.check(
+            Schema.makeFilter(() => true, {
+              toJsonSchema: () => ({
+                ...Tool.getJsonSchemaFromSchema(Search.parametersSchema),
+                additionalProperties,
+              }),
+            }),
+          );
+
+        const action = Search.setParameters(parameters(true))
+          .addDependency(DurableStep)
           .setFailure(DurableStepError)
           .annotate(ToolExecutionClass, "idempotent");
 
@@ -6356,18 +6368,39 @@ layer(testLayer)("deployment continuity", (it) => {
           success: Schema.String,
         }).annotate(ToolExecutionClass, "readonly");
 
-        const oldTools = Toolkit.make(action);
+        // Older schema generation closed objects even though the Effect codec stripped excess keys.
+        const originalAction = action.setParameters(parameters(false));
+
+        class OriginalCapture extends Schema.Class<OriginalCapture>("ContinuityCapture")({
+          definitions: Schema.Struct({ agent: Schema.String }),
+        }) {}
+        class CurrentCapture extends Schema.Class<CurrentCapture>("ContinuityCapture")({
+          definitions: Schema.Struct({
+            agent: Schema.String,
+            replayMetadata: Schema.optionalKey(Schema.String),
+          }),
+        }) {}
+        const capture = OriginalCapture.make({ definitions: { agent: "original" } });
+        const oldTools = Toolkit.make(originalAction);
         const newTools = Toolkit.make(action, extra);
 
         const oldDefinition = {
           ...searchDefinition,
           toolkit: oldTools,
+          input: Schema.Struct({ question: Schema.String, capture: OriginalCapture }),
           completionFromTools: [
             { tool: "search", project: () => Option.some({ answer: "request preserved" }) },
           ],
         };
 
-        const newDefinition = { ...oldDefinition, toolkit: newTools };
+        const newDefinition = {
+          ...oldDefinition,
+          toolkit: newTools,
+          input: Schema.Struct({
+            question: Schema.String,
+            capture: CurrentCapture,
+          }),
+        };
 
         const scripted = yield* makeScriptedModel(() => toolCallParts);
 
@@ -6414,12 +6447,27 @@ layer(testLayer)("deployment continuity", (it) => {
           },
         ]).pipe(Effect.provide(handlers));
 
+        // Optional schema additions need the actual retained payload when the old object was open.
+        expect(bindingSupports(currentBindings[0]!, oldBindings[0]!.digests)).toBe(false);
+        expect(
+          bindingSupports(currentBindings[0]!, oldBindings[0]!.digests, undefined, {
+            question: "preserve this request",
+            capture: { definitions: { agent: "original", replayMetadata: 123 } },
+          }),
+        ).toBe(false);
+        expect(
+          bindingSupports(currentBindings[0]!, oldBindings[0]!.digests, undefined, {
+            question: "preserve this request",
+            capture: { definitions: { agent: "original" } },
+          }),
+        ).toBe(true);
+
         const receipt = yield* Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
 
           const receipt = yield* runtime.submitRegistered(
             { definition: oldDefinition },
-            { question: "preserve this request" },
+            { question: "preserve this request", capture },
             submitOptions("deploy-continuity", "original-request"),
           );
 
@@ -6456,7 +6504,7 @@ layer(testLayer)("deployment continuity", (it) => {
           expect(
             yield* runtime.submit(
               { definition: oldDefinition },
-              { question: "preserve this request" },
+              { question: "preserve this request", capture },
               {
                 ...submitOptions(receipt.threadId, "original-request"),
                 definitions: oldBindings[0]!.digests,
@@ -6467,7 +6515,7 @@ layer(testLayer)("deployment continuity", (it) => {
           const forged = yield* runtime
             .submit(
               { definition: newDefinition },
-              { question: "forged replay metadata" },
+              { question: "forged replay metadata", capture },
               {
                 ...submitOptions(receipt.threadId, "forged"),
                 definitions: {
@@ -6482,7 +6530,7 @@ layer(testLayer)("deployment continuity", (it) => {
 
           const followup = yield* runtime.submitRegistered(
             { definition: newDefinition },
-            { question: "follow up" },
+            { question: "follow up", capture },
             submitOptions(receipt.threadId, "follow-up"),
           );
 
@@ -6503,7 +6551,7 @@ layer(testLayer)("deployment continuity", (it) => {
             ? action.setParameters(Schema.Struct({ query: Schema.Number }))
             : action;
 
-          const incompatible = { ...oldDefinition, toolkit: Toolkit.make(changed) };
+          const incompatible = { ...newDefinition, toolkit: Toolkit.make(changed) };
 
           const bindings = yield* compileRegistrations([
             {
@@ -6530,7 +6578,10 @@ layer(testLayer)("deployment continuity", (it) => {
         // Reinstantiation can remove an unused Tool; the pending operation still needs its exact contract.
         const restored = yield* compileRegistrations([
           {
-            agent: Agent.withModel(oldDefinition, scripted.model),
+            agent: Agent.withModel(
+              { ...newDefinition, toolkit: Toolkit.make(action) },
+              scripted.model,
+            ),
             definitions: { agent: "restored-deploy", model: "scripted", tools: ["search"] },
             continuity: {
               versions: { agent: "conversation-semantics", tools: { search: "search-command" } },

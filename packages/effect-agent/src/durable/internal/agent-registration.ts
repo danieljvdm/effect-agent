@@ -1,4 +1,13 @@
-import { type Crypto, type Option, type Scope, Context, Effect, Layer, Schema } from "effect";
+import {
+  type Crypto,
+  type Option,
+  type Scope,
+  Array,
+  Context,
+  Effect,
+  Layer,
+  Schema,
+} from "effect";
 import { Tool } from "effect/unstable/ai";
 
 import type * as Agent from "../../core/Agent.ts";
@@ -30,7 +39,7 @@ import {
   DefinitionDigestInput,
   DefinitionDigests,
   ReplayContract,
-  type PersistedJson,
+  PersistedJson,
 } from "../Records.ts";
 import type { Claim, Settlement } from "../SubmissionLedger.ts";
 
@@ -88,10 +97,34 @@ export interface ReplayVersions {
  * manifest from the original release for work admitted before replay contracts were retained.
  * Its original declarations must hash to that admission; a bare old digest is not a manifest.
  */
+const ToolReplayDeclaration = Schema.Struct({
+  version: PersistedJson,
+  parameters: PersistedJson,
+  success: PersistedJson,
+  failure: PersistedJson,
+  failureMode: Schema.String,
+  needsApproval: Schema.Union([Schema.Boolean, Schema.Literal("dynamic")]),
+  executionClass: Schema.String,
+  executionKind: Schema.String,
+});
+
+const AgentReplayDeclaration = Schema.Struct({
+  version: PersistedJson,
+  id: AgentId,
+  input: PersistedJson,
+  output: PersistedJson,
+  updates: Schema.NullOr(PersistedJson),
+  completion: Schema.NullOr(Schema.Struct({ tool: Schema.String, required: Schema.Boolean })),
+  completionFromTools: Schema.Array(Schema.String),
+  disposition: Schema.NullOr(PersistedJson),
+});
+
 export class BindingManifest extends Schema.Class<BindingManifest>("BindingManifest")({
   agentId: AgentId,
   definitions: DefinitionDigestInput,
   replay: ReplayContract,
+  agentContract: Schema.optionalKey(AgentReplayDeclaration),
+  toolContracts: Schema.optionalKey(Schema.Record(Schema.String, ToolReplayDeclaration)),
 }) {}
 
 export const makeBindingManifest = Effect.fn("AgentRegistration.makeBindingManifest")(function* (
@@ -163,17 +196,218 @@ export const makeBindingManifest = Effect.fn("AgentRegistration.makeBindingManif
     agentId: definition.id,
     definitions,
     replay: ReplayContract.make({ agent, tools: Object.fromEntries(tools) }),
+    agentContract: contracts.agent,
+    toolContracts: Object.fromEntries(
+      contracts.tools.map(({ name, contract }) => [name, contract]),
+    ),
   });
 });
+
+const jsonEqual = Schema.toEquivalence(PersistedJson);
+
+// JSON Schema generation can widen object openness without changing an Effect codec.
+// Prove only this widening; all other codec changes still require an exact contract.
+const schemasCompatible = (previous: PersistedJson, current: PersistedJson): boolean => {
+  if (jsonEqual(previous, current)) return true;
+
+  const hasNegativeSchema = (value: PersistedJson): boolean => {
+    if (Array.isArray<PersistedJson>(value)) return value.some(hasNegativeSchema);
+    if (value === null || typeof value !== "object") return false;
+
+    return Object.entries(value).some(
+      ([key, child]) =>
+        key === "oneOf" ||
+        key === "maxContains" ||
+        key === "unevaluatedProperties" ||
+        key === "unevaluatedItems" ||
+        key === "if" ||
+        key === "then" ||
+        key === "else" ||
+        key === "$dynamicRef" ||
+        key === "$recursiveRef" ||
+        (key === "not" && !jsonEqual(child, {})) ||
+        hasNegativeSchema(child),
+    );
+  };
+
+  if (hasNegativeSchema(previous) || hasNegativeSchema(current)) return false;
+
+  const compare = (before: PersistedJson, after: PersistedJson): boolean => {
+    if (jsonEqual(before, after)) return true;
+    if (
+      before === null ||
+      typeof before !== "object" ||
+      Array.isArray<PersistedJson>(before) ||
+      after === null ||
+      typeof after !== "object" ||
+      Array.isArray<PersistedJson>(after)
+    )
+      return false;
+    if (Object.keys(before).length !== Object.keys(after).length) return false;
+
+    return Object.entries(before).every(([key, value]) => {
+      if (!Object.hasOwn(after, key)) return false;
+      const next = after[key]!;
+
+      if (jsonEqual(value, next)) return true;
+      if (key === "additionalProperties") return value === false && next === true;
+      if (key === "items") return compare(value, next);
+      if (
+        (key === "anyOf" || key === "allOf") &&
+        Array.isArray<PersistedJson>(value) &&
+        Array.isArray<PersistedJson>(next)
+      )
+        return (
+          value.length === next.length &&
+          value.every((entry, index) => compare(entry, next[index]!))
+        );
+      if (
+        (key === "properties" || key === "$defs" || key === "definitions") &&
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray<PersistedJson>(value) &&
+        next !== null &&
+        typeof next === "object" &&
+        !Array.isArray<PersistedJson>(next)
+      )
+        return (
+          Object.keys(value).length === Object.keys(next).length &&
+          Object.entries(value).every(
+            ([name, schema]) => Object.hasOwn(next, name) && compare(schema, next[name]!),
+          )
+        );
+
+      return false;
+    });
+  };
+
+  return compare(previous, current);
+};
+
+/** Compile audited declaration data once, without acquiring an executable or rewriting receipts.
+ * Full input schemas stay in registration metadata, never in each admission's replay contract. */
+export const compileBindingManifest = Effect.fn("AgentRegistration.compileBindingManifest")(
+  function* (
+    definition: Agent.AnyDefinition,
+    definitions: DefinitionDigestInput,
+    versions: ReplayVersions,
+    retained: ReadonlyArray<BindingManifest> = [],
+  ): Effect.fn.Return<
+    Pick<ResolvedBinding, "digests" | "manifest" | "retainedManifests">,
+    DigestError,
+    Crypto.Crypto
+  > {
+    const manifest = yield* makeBindingManifest(definition, definitions, versions);
+
+    const validContract = Effect.fnUntraced(function* (entry: BindingManifest) {
+      if (entry.agentContract === undefined) return undefined;
+      if (
+        entry.agentContract.id !== entry.agentId ||
+        (yield* digestJson(entry.agentContract)) !== entry.replay.agent
+      )
+        return yield* DigestError.make({
+          message: "A manifest's Agent contract does not match its replay digest",
+        });
+
+      return entry.agentContract;
+    });
+
+    const current = manifest.agentContract!;
+    const acceptsInput = Schema.is(Schema.toEncoded(definition.input));
+
+    const validateTools = Effect.fnUntraced(function* (entry: BindingManifest) {
+      for (const [name, contract] of Object.entries(entry.toolContracts ?? {}))
+        if ((yield* digestJson(contract)) !== entry.replay.tools[name])
+          return yield* DigestError.make({
+            message: "A manifest's Tool contract does not match its replay digest",
+          });
+    });
+
+    const digests = yield* digestDefinitions(manifest.definitions);
+
+    const retainedManifests = yield* Effect.forEach(
+      retained,
+      Effect.fnUntraced(function* (entry) {
+        if (entry.agentId !== manifest.agentId)
+          return yield* DigestError.make({
+            message: "A retained manifest belongs to another Agent",
+          });
+        const previous = yield* validContract(entry);
+
+        yield* validateTools(entry);
+
+        const compatible =
+          previous !== undefined &&
+          jsonEqual(
+            { ...previous, input: null, output: null, updates: null, disposition: null },
+            { ...current, input: null, output: null, updates: null, disposition: null },
+          ) &&
+          schemasCompatible(previous.output, current.output) &&
+          schemasCompatible(previous.updates, current.updates) &&
+          schemasCompatible(previous.disposition, current.disposition);
+
+        const compatibleTools: Record<string, string> = {};
+
+        for (const [name, oldTool] of Object.entries(entry.toolContracts ?? {})) {
+          const newTool = manifest.toolContracts?.[name];
+
+          if (
+            newTool !== undefined &&
+            jsonEqual(
+              { ...oldTool, parameters: null, success: null, failure: null },
+              { ...newTool, parameters: null, success: null, failure: null },
+            ) &&
+            schemasCompatible(oldTool.parameters, newTool.parameters) &&
+            schemasCompatible(oldTool.success, newTool.success) &&
+            schemasCompatible(oldTool.failure, newTool.failure)
+          )
+            compatibleTools[name] = manifest.replay.tools[name]!;
+        }
+
+        return {
+          digests: yield* digestDefinitions(entry.definitions),
+          replay: entry.replay,
+          compatibleTools,
+          ...(compatible
+            ? {
+                inputCompatibility: {
+                  agent: manifest.replay.agent,
+                  accepts: (input: PersistedJson) => {
+                    // Async checks and defective guards cannot establish synchronous replay proof.
+                    try {
+                      return acceptsInput(input);
+                    } catch {
+                      return false;
+                    }
+                  },
+                },
+              }
+            : {}),
+        };
+      }),
+    );
+
+    return {
+      digests: DefinitionDigests.make({ ...digests, replay: manifest.replay }),
+      manifest,
+      retainedManifests,
+    };
+  },
+);
 
 const replaySupports = (
   current: ReplayContract,
   retained: ReplayContract,
   requiredTools?: ReadonlyArray<string>,
+  inputCompatible = false,
+  compatibleTools: Readonly<Record<string, string>> = {},
 ): boolean =>
-  current.agent === retained.agent &&
+  (current.agent === retained.agent || inputCompatible) &&
   (requiredTools ?? Object.keys(retained.tools)).every(
-    (name) => retained.tools[name] !== undefined && current.tools[name] === retained.tools[name],
+    (name) =>
+      retained.tools[name] !== undefined &&
+      (current.tools[name] === retained.tools[name] ||
+        (current.tools[name] !== undefined && compatibleTools[name] === current.tools[name])),
   );
 
 /** Resolve executable code only. Admission, delivery, lineage and receipt comparisons stay exact. */
@@ -181,18 +415,30 @@ export const bindingSupports = (
   binding: Pick<ResolvedBinding, "digests" | "retainedManifests">,
   digests: DefinitionDigests,
   requiredTools?: ReadonlyArray<string>,
+  input?: PersistedJson,
 ): boolean => {
   if (definitionDigestsEqual(binding.digests, digests)) return true;
 
-  const retained =
-    digests.replay ??
-    binding.retainedManifests?.find((entry) => definitionDigestsEqual(entry.digests, digests))
-      ?.replay;
+  const manifest = binding.retainedManifests?.find(
+    (entry) =>
+      definitionDigestsEqual(entry.digests, digests) ||
+      definitionDigestsEqual({ ...entry.digests, replay: entry.replay }, digests),
+  );
+
+  const retained = digests.replay ?? manifest?.replay;
 
   return (
     binding.digests.replay !== undefined &&
     retained !== undefined &&
-    replaySupports(binding.digests.replay, retained, requiredTools)
+    replaySupports(
+      binding.digests.replay,
+      retained,
+      requiredTools,
+      manifest?.inputCompatibility?.agent === binding.digests.replay.agent &&
+        input !== undefined &&
+        manifest.inputCompatibility.accepts(input),
+      manifest?.compatibleTools,
+    )
   );
 };
 
@@ -330,6 +576,12 @@ export interface ResolvedBinding extends CapturedBinding {
   readonly retainedManifests?: ReadonlyArray<{
     readonly digests: DefinitionDigests;
     readonly replay: ReplayContract;
+    readonly compatibleTools?: Readonly<Record<string, string>>;
+    /** Verified against both original declarations; applies only to this current Agent digest. */
+    readonly inputCompatibility?: {
+      readonly agent: string;
+      readonly accepts: (input: PersistedJson) => boolean;
+    };
   }>;
 }
 
@@ -429,6 +681,7 @@ export const resolveWorkerBinding = (
   agentId: AgentId,
   digests: DefinitionDigests,
   requiredTools?: ReadonlyArray<string>,
+  input?: PersistedJson,
 ): Effect.Effect<ResolvedBinding, DurableBindingFailure> => {
   const registered = bindings.filter((binding) => binding.agentId === agentId);
 
@@ -444,7 +697,7 @@ export const resolveWorkerBinding = (
 
   const compatible =
     exact ??
-    (registered.length === 1 && bindingSupports(registered[0]!, digests, requiredTools)
+    (registered.length === 1 && bindingSupports(registered[0]!, digests, requiredTools, input)
       ? registered[0]
       : undefined);
 
@@ -632,8 +885,8 @@ const compileRegistration = <Entry extends AgentRegistration>(
       try: () => registrationDefinitions(entry),
       catch: () =>
         DigestError.make({ message: "Agent update schema has no serializable wire contract" }),
-    }).pipe(Effect.flatMap(digestDefinitions)),
-    (digests) =>
+    }),
+    (definitions) =>
       Effect.gen(function* () {
         const binding = yield* capture(
           entry.model === undefined ? entry.agent : { definition: entry.agent, model: entry.model },
@@ -645,32 +898,18 @@ const compileRegistration = <Entry extends AgentRegistration>(
           ...backgroundReports(binding.definition),
         ]);
 
-        if (entry.continuity === undefined) return { ...binding, digests, reporting };
-
-        const manifest = yield* makeBindingManifest(
-          binding.definition,
-          registrationDefinitions(entry),
-          entry.continuity.versions,
-        );
-
-        const retainedManifests = yield* Effect.forEach(
-          entry.continuity.retainedManifests ?? [],
-          (retained) =>
-            retained.agentId === binding.agentId
-              ? digestDefinitions(retained.definitions).pipe(
-                  Effect.map((digests) => ({ digests, replay: retained.replay })),
-                )
-              : Effect.fail(
-                  DigestError.make({ message: "A retained manifest belongs to another Agent" }),
-                ),
-        );
+        if (entry.continuity === undefined)
+          return { ...binding, digests: yield* digestDefinitions(definitions), reporting };
 
         return {
           ...binding,
-          digests: DefinitionDigests.make({ ...digests, replay: manifest.replay }),
+          ...(yield* compileBindingManifest(
+            binding.definition,
+            definitions,
+            entry.continuity.versions,
+            entry.continuity.retainedManifests,
+          )),
           reporting,
-          manifest,
-          retainedManifests,
         };
       }),
     // The erased descriptor accepts arbitrary provided services. Restore the concrete entry's
