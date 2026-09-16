@@ -23,7 +23,8 @@
     "@effect-agent/workflow": "0.1.0-beta.44",
     "@effect-agent/example-durable-orchestration": "0.0.0",
     "@effect-agent/example-context-continuity-eval": "0.0.0",
-    "@effect-agent/example-runtime-benchmark": "0.0.0"
+    "@effect-agent/example-runtime-benchmark": "0.0.0",
+    "@effect-agent/ai-typesafe": "0.1.0-beta.99"
   },
   "changesets": [
     "activity-progress-integrity",
@@ -250,6 +251,7 @@
     "typed-budget-settlement",
     "typed-memory-namespaces",
     "typed-run-disposition",
+    "typed-typesafe-evaluations",
     "unknown-abort-recovery",
     "verified-pr-review",
     "workflow-durable-host"
