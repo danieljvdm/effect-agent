@@ -448,14 +448,49 @@ it("drains private worker progress through rebuilt runtime maintenance into an i
   );
   await drainAlarmsUntil(source, allSettled(source));
 
-  const started = await withOwner(source, (host) =>
+  const direct = await withOwner(source, (host) =>
     Subagent.start(
       backgroundWorkers,
       { question: "private task" },
       { idempotencyKey: decodeIdempotencyKey("child") },
-    ).pipe(Effect.provideService(SubagentHost, host)),
+    ).pipe(
+      Effect.provideService(SubagentHost, host),
+      Effect.catchTag("WorkerError", (error) =>
+        error.operation === "start" && error.reason === "delivery-pending"
+          ? Effect.succeed(undefined)
+          : Effect.fail(error),
+      ),
+    ),
   );
 
+  // The source alarm may win admission. Observe the original delivery without starting again.
+  const delivery = async () => {
+    const rows = await runInDurableObject(stubFor(source), (instance) =>
+      instance[DurableObject.RunSymbol](
+        Effect.flatMap(MessageDeliveryStore, (store) =>
+          store.list({ ownerThreadId: decodeThreadId(source), limit: 100 }),
+        ),
+      ),
+    );
+
+    expect(rows.next).toBeNull();
+    expect(rows.items).toHaveLength(1);
+    expect(rows.items[0]?.envelope.workerAdmission?.parameters).toEqual({
+      question: "private task",
+    });
+
+    return rows.items[0]!;
+  };
+
+  await drainAlarmsUntil(source, async () => (await delivery()).receipt !== null);
+  const accepted = await delivery();
+
+  const started = {
+    worker: accepted.envelope.workerAdmission!.origin.worker,
+    receipt: accepted.receipt!,
+  };
+
+  if (direct !== undefined) expect(direct).toEqual(started);
   await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
   customRuntimeThreads.add(started.worker.threadId);
   privateProgressRoutes.set(started.worker.threadId, decodeThreadId(source));

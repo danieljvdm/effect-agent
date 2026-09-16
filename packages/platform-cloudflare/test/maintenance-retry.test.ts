@@ -45,8 +45,11 @@ const Generation = Schema.Struct({
 describe("maintenance retry deadlines", () => {
   // Provenance: September 2026 Sentry incident — a root digest mismatch repeatedly claimed
   // and released the same receipt behind a 50ms pre-arm. Private customer identifiers omitted.
-  it("retains root binding backoff across auxiliary failures, ensureAlarm and eviction", () =>
-    Effect.runPromise(
+  // This real SQLite/eviction sweep needs a wall-clock budget; deadlines still use TestClock.
+  it("retains root binding backoff across auxiliary failures, ensureAlarm and eviction", ({
+    signal,
+  }) => {
+    return Effect.runPromise(
       Effect.gen(function* () {
         const thread = `maintenance-retry-${crypto.randomUUID()}`;
 
@@ -408,7 +411,9 @@ describe("maintenance retry deadlines", () => {
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
         }
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-    ));
+      { signal },
+    );
+  }, 20_000);
 
   it("lets no-progress backoff exceed the scan cadence while preserving a live claim", () =>
     Effect.runPromise(
