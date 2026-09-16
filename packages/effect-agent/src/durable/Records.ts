@@ -205,6 +205,8 @@ export class ReplayContract extends Schema.Class<ReplayContract>(
   "@effect-agent/thread/ReplayContract",
 )({
   agent: Digest,
+  /** Agent semantics and output/completion codecs; the saved input is checked separately. */
+  agentBehavior: Schema.optionalKey(Digest),
   tools: Schema.Record(Schema.String, Digest),
 }) {}
 

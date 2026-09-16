@@ -6575,11 +6575,19 @@ layer(testLayer)("deployment continuity", (it) => {
         }
         yield* TestClock.adjust("2 days");
 
-        // Reinstantiation can remove an unused Tool; the pending operation still needs its exact contract.
+        // A later input addition needs no historical manifest; the pending Tool keeps its contract.
         const restored = yield* compileRegistrations([
           {
             agent: Agent.withModel(
-              { ...newDefinition, toolkit: Toolkit.make(action) },
+              {
+                ...newDefinition,
+                input: Schema.Struct({
+                  question: Schema.String,
+                  capture: CurrentCapture,
+                  deploymentHint: Schema.optionalKey(Schema.Boolean),
+                }),
+                toolkit: Toolkit.make(action),
+              },
               scripted.model,
             ),
             definitions: { agent: "restored-deploy", model: "scripted", tools: ["search"] },

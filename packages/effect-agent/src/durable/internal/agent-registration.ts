@@ -187,6 +187,7 @@ export const makeBindingManifest = Effect.fn("AgentRegistration.makeBindingManif
   });
 
   const agent = yield* digestJson(contracts.agent);
+  const agentBehavior = yield* digestJson({ ...contracts.agent, input: null });
 
   const tools = yield* Effect.forEach(contracts.tools, ({ name, contract }) =>
     digestJson(contract).pipe(Effect.map((digest) => [name, digest] as const)),
@@ -195,7 +196,7 @@ export const makeBindingManifest = Effect.fn("AgentRegistration.makeBindingManif
   return BindingManifest.make({
     agentId: definition.id,
     definitions,
-    replay: ReplayContract.make({ agent, tools: Object.fromEntries(tools) }),
+    replay: ReplayContract.make({ agent, agentBehavior, tools: Object.fromEntries(tools) }),
     agentContract: contracts.agent,
     toolContracts: Object.fromEntries(
       contracts.tools.map(({ name, contract }) => [name, contract]),
@@ -293,7 +294,7 @@ export const compileBindingManifest = Effect.fn("AgentRegistration.compileBindin
     versions: ReplayVersions,
     retained: ReadonlyArray<BindingManifest> = [],
   ): Effect.fn.Return<
-    Pick<ResolvedBinding, "digests" | "manifest" | "retainedManifests">,
+    Pick<ResolvedBinding, "digests" | "manifest" | "retainedManifests" | "acceptsInput">,
     DigestError,
     Crypto.Crypto
   > {
@@ -303,7 +304,10 @@ export const compileBindingManifest = Effect.fn("AgentRegistration.compileBindin
       if (entry.agentContract === undefined) return undefined;
       if (
         entry.agentContract.id !== entry.agentId ||
-        (yield* digestJson(entry.agentContract)) !== entry.replay.agent
+        (yield* digestJson(entry.agentContract)) !== entry.replay.agent ||
+        (entry.replay.agentBehavior !== undefined &&
+          (yield* digestJson({ ...entry.agentContract, input: null })) !==
+            entry.replay.agentBehavior)
       )
         return yield* DigestError.make({
           message: "A manifest's Agent contract does not match its replay digest",
@@ -368,21 +372,7 @@ export const compileBindingManifest = Effect.fn("AgentRegistration.compileBindin
           digests: yield* digestDefinitions(entry.definitions),
           replay: entry.replay,
           compatibleTools,
-          ...(compatible
-            ? {
-                inputCompatibility: {
-                  agent: manifest.replay.agent,
-                  accepts: (input: PersistedJson) => {
-                    // Async checks and defective guards cannot establish synchronous replay proof.
-                    try {
-                      return acceptsInput(input);
-                    } catch {
-                      return false;
-                    }
-                  },
-                },
-              }
-            : {}),
+          ...(compatible ? { compatibleAgent: manifest.replay.agent } : {}),
         };
       }),
     );
@@ -391,6 +381,14 @@ export const compileBindingManifest = Effect.fn("AgentRegistration.compileBindin
       digests: DefinitionDigests.make({ ...digests, replay: manifest.replay }),
       manifest,
       retainedManifests,
+      acceptsInput: (input: PersistedJson) => {
+        // Async checks and defective guards cannot establish synchronous replay proof.
+        try {
+          return acceptsInput(input);
+        } catch {
+          return false;
+        }
+      },
     };
   },
 );
@@ -412,7 +410,7 @@ const replaySupports = (
 
 /** Resolve executable code only. Admission, delivery, lineage and receipt comparisons stay exact. */
 export const bindingSupports = (
-  binding: Pick<ResolvedBinding, "digests" | "retainedManifests">,
+  binding: Pick<ResolvedBinding, "digests" | "retainedManifests" | "acceptsInput">,
   digests: DefinitionDigests,
   requiredTools?: ReadonlyArray<string>,
   input?: PersistedJson,
@@ -434,9 +432,11 @@ export const bindingSupports = (
       binding.digests.replay,
       retained,
       requiredTools,
-      manifest?.inputCompatibility?.agent === binding.digests.replay.agent &&
-        input !== undefined &&
-        manifest.inputCompatibility.accepts(input),
+      input !== undefined &&
+        binding.acceptsInput?.(input) === true &&
+        ((binding.digests.replay.agentBehavior !== undefined &&
+          binding.digests.replay.agentBehavior === retained.agentBehavior) ||
+          manifest?.compatibleAgent === binding.digests.replay.agent),
       manifest?.compatibleTools,
     )
   );
@@ -573,15 +573,14 @@ const backgroundReports = (definition: Agent.AnyDefinition) => [
 export interface ResolvedBinding extends CapturedBinding {
   readonly digests: DefinitionDigests;
   readonly manifest?: BindingManifest;
+  /** Current encoded input guard, acquired without executable services. */
+  readonly acceptsInput?: (input: PersistedJson) => boolean;
   readonly retainedManifests?: ReadonlyArray<{
     readonly digests: DefinitionDigests;
     readonly replay: ReplayContract;
     readonly compatibleTools?: Readonly<Record<string, string>>;
-    /** Verified against both original declarations; applies only to this current Agent digest. */
-    readonly inputCompatibility?: {
-      readonly agent: string;
-      readonly accepts: (input: PersistedJson) => boolean;
-    };
+    /** Original declarations prove unchanged semantics and output/completion contracts. */
+    readonly compatibleAgent?: string;
   }>;
 }
 

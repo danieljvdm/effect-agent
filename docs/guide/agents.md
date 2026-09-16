@@ -173,8 +173,10 @@ from the original release, audit its semantics, and supply that data as
 `continuity.retainedManifests`. Registration recomputes the original fingerprints before matching
 an admission. This is metadata for retained work, not an old executable registration or a rewrite
 of stored digests. Do not construct it by assigning today's contract to an unexplained old digest.
-Manifests also retain the original Agent and Tool declarations. With unchanged semantic
-versions, recovery validates the original saved input against the current Effect codec. It can
+New admissions retain a separate fingerprint for Agent semantics and output/completion codecs.
+With that fingerprint unchanged, recovery validates the original saved input against the current
+Effect codec; future input additions do not require another historical manifest. Manifests retain
+the original Agent and Tool declarations for admissions that predate this proof. It can
 resume across optional input additions without changing the receipt. Tool codecs must still
 match, except for JSON Schema's `additionalProperties: false` becoming `true`; that widening
 accepts every previously valid value. Other Tool codec changes, changed execution classes and
