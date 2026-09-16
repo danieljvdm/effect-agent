@@ -1064,7 +1064,18 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const contractsFor = (definition: Agent.AnyDefinition) => {
     const registered = registeredBindings.filter((binding) => binding.agentId === definition.id);
     const binding = registered.length === 1 ? registered[0] : undefined;
-    const current = binding?.definition === definition ? binding : undefined;
+
+    // Attempts may restore the accepted Run policy on a Definition copy. Replay contracts
+    // describe Tools, so retain the registration's semantic versions while all declarations
+    // that affect those contracts are unchanged. Replaced Tools or completion declarations
+    // must not inherit another executable's replay authority.
+    const current =
+      binding?.definition.toolkit === definition.toolkit &&
+      binding.definition.completion === definition.completion &&
+      binding.definition.completionFromTools === definition.completionFromTools
+        ? binding
+        : undefined;
+
     const contracts = current?.digests.replay?.tools;
 
     return contracts === undefined

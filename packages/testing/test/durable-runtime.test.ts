@@ -20,7 +20,11 @@ import {
 import { RetryCommand } from "effect-agent/admin";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
-import { compileRegistrations, DurableWorkerBinding } from "effect-agent/agent-registration";
+import {
+  compileRegistrations,
+  DurableWorkerBinding,
+  type ResolvedBinding,
+} from "effect-agent/agent-registration";
 import {
   COMPACTION_SUMMARY_PREFIX,
   CONTEXT_ROLLOVER_PREFIX,
@@ -6757,10 +6761,35 @@ layer(testLayer)("deployment continuity", (it) => {
       }),
   );
 
-  it.effect(
-    "reenters a compatible current durable tool after deployment without repeating its committed step",
-    () =>
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/571ade24700cdfccfaaeb6ed608bb2841fdd6a18
+  it.effect.each([false, true])(
+    "reenters a compatible current durable tool without repeating its step (copied policy: %s)",
+    (copiedPolicy) =>
       Effect.gen(function* () {
+        const restorePolicy = (binding: ResolvedBinding): ResolvedBinding =>
+          copiedPolicy
+            ? {
+                ...binding,
+                attempt: (driver, threadId, claim) =>
+                  binding.attempt(
+                    (agent, selectedThreadId, selectedClaim) =>
+                      driver(
+                        {
+                          ...agent,
+                          definition: {
+                            ...agent.definition,
+                            policy: { ...agent.definition.policy },
+                          },
+                        },
+                        selectedThreadId,
+                        selectedClaim,
+                      ),
+                    threadId,
+                    claim,
+                  ),
+              }
+            : binding;
+
         const effects = yield* Ref.make(0);
         const currentEntries = yield* Ref.make(0);
 
@@ -6833,7 +6862,7 @@ layer(testLayer)("deployment continuity", (it) => {
           const receipt = yield* runtime.submitRegistered(
             { definition: originalDefinition },
             { question: "preserve the supplier write" },
-            submitOptions("continuity-durable-step", "original"),
+            submitOptions(`continuity-durable-step-${copiedPolicy}`, "original"),
           );
 
           yield* armFailpoint("step:after-step-append");
@@ -6843,7 +6872,11 @@ layer(testLayer)("deployment continuity", (it) => {
           yield* clearFailpoint;
 
           return receipt;
-        }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(originalBindings)));
+        }).pipe(
+          Effect.provide(
+            DurableAgentRuntime.layerWithBindings(originalBindings.map(restorePolicy)),
+          ),
+        );
 
         const retained = yield* readLog(receipt.threadId);
 
@@ -6851,8 +6884,16 @@ layer(testLayer)("deployment continuity", (it) => {
         yield* TestClock.adjust("2 days");
 
         const settled = yield* DurableAgentRuntime.use((runtime) =>
-          runtime.processThreadHead(receipt.threadId),
-        ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(currentBindings)));
+          Effect.gen(function* () {
+            const recovery = yield* runtime.recoverSubmission(receipt.submissionId);
+
+            expect(recovery.disposition).not.toBe("unknown");
+
+            return yield* runtime.processThreadHead(receipt.threadId);
+          }),
+        ).pipe(
+          Effect.provide(DurableAgentRuntime.layerWithBindings(currentBindings.map(restorePolicy))),
+        );
 
         expect(Option.isSome(settled) && settled.value).toMatchObject({
           submissionId: receipt.submissionId,
