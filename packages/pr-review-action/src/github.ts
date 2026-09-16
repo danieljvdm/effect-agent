@@ -29,6 +29,8 @@ const CompleteCheckWire = Schema.Struct({
   output: CheckOutput,
 });
 
+const CheckWriteWire = Schema.Union([CreateCheckWire, CompleteCheckWire]);
+
 const CheckRunWire = Schema.Struct({
   id: Schema.Int.check(Schema.isGreaterThan(0)),
   name: CheckName,
@@ -1007,12 +1009,38 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     return result.check_runs.some((wire) => validateCheck(wire, check));
   });
 
+  const writeReviewCheck = Effect.fn("GitHubClient.writeReviewCheck")(function* (
+    operation: string,
+    request: HttpClientRequest.HttpClientRequest,
+    input: typeof CheckWriteWire.Type,
+  ) {
+    const body = yield* Schema.encodeEffect(CheckWriteWire)(input).pipe(
+      Effect.mapError((cause) => failure(operation, cause)),
+    );
+
+    const value = yield* HttpClientRequest.bodyJson(request, body).pipe(
+      Effect.mapError((cause) => failure(operation, cause)),
+    );
+
+    return yield* execute(operation, value, checksToken).pipe(
+      Effect.flatMap(decode(CheckRunWire, operation)),
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () =>
+          GitHubApiFailure.make({
+            operation,
+            reason: "GitHub check write timed out; its outcome is unknown",
+          }),
+      }),
+    );
+  });
+
   // Every attempt creates its own run under one stable name. Completion only
   // updates the returned ID, so an older attempt cannot overwrite a newer one.
   const startReviewCheck = Effect.fn("GitHubClient.startReviewCheck")(function* (
     input: Omit<ReviewCheck, "id"> & { readonly detailsUrl?: string | undefined },
   ) {
-    const body = yield* Schema.encodeEffect(CreateCheckWire)({
+    const wire = yield* writeReviewCheck("start review check", HttpClientRequest.post(checksUrl), {
       name: input.name,
       head_sha: input.headRevision,
       external_id: checkExternalId,
@@ -1022,24 +1050,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
         title: "Review in progress",
         summary: "Reviewing the pull request at the attached commit.",
       },
-    }).pipe(Effect.mapError((cause) => failure("encode review check", cause)));
-
-    const value = yield* HttpClientRequest.post(checksUrl).pipe(
-      HttpClientRequest.bodyJson(body),
-      Effect.mapError((cause) => failure("encode review check", cause)),
-    );
-
-    const wire = yield* execute("start review check", value, checksToken).pipe(
-      Effect.flatMap(decode(CheckRunWire, "start review check")),
-      Effect.timeoutOrElse({
-        duration: "10 seconds",
-        orElse: () =>
-          GitHubApiFailure.make({
-            operation: "start review check",
-            reason: "GitHub check write timed out; its outcome is unknown",
-          }),
-      }),
-    );
+    });
 
     if (!validateCheck(wire, input)) {
       return yield* GitHubApiFailure.make({
@@ -1059,25 +1070,10 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     check: ReviewCheck,
     completion: ReviewCheckCompletion,
   ) {
-    const body = yield* Schema.encodeEffect(CompleteCheckWire)(completion).pipe(
-      Effect.mapError((cause) => failure("encode review check completion", cause)),
-    );
-
-    const value = yield* HttpClientRequest.patch(`${checksUrl}/${String(check.id)}`).pipe(
-      HttpClientRequest.bodyJson(body),
-      Effect.mapError((cause) => failure("encode review check completion", cause)),
-    );
-
-    const wire = yield* execute("complete review check", value, checksToken).pipe(
-      Effect.flatMap(decode(CheckRunWire, "complete review check")),
-      Effect.timeoutOrElse({
-        duration: "10 seconds",
-        orElse: () =>
-          GitHubApiFailure.make({
-            operation: "complete review check",
-            reason: "GitHub check write timed out; its outcome is unknown",
-          }),
-      }),
+    const wire = yield* writeReviewCheck(
+      "complete review check",
+      HttpClientRequest.patch(`${checksUrl}/${String(check.id)}`),
+      completion,
     );
 
     if (wire.id !== check.id || !validateCheck(wire, check)) {
