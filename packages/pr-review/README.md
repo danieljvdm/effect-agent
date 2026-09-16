@@ -91,6 +91,17 @@ Native rollover starts a fresh window without a summarizer call. Its bounded rec
 may omit unseen tool results, so undelivered diff pages remain unread and must be fetched again.
 Already delivered ranges and saved findings survive. Both strategies support calling `new_context`
 alone with a handoff; original instructions and the complete change index remain available.
+After rollover, the reviewer resumes unread offsets from `review_status`. Once every range has
+been delivered, it follows the remaining investigation notes with targeted reads instead of
+starting another complete diff sweep.
+
+Logs identify each successful diff read by character offsets, the first unread offset, and
+whether the whole page had already been delivered. Rollover logs count queued reads discarded
+before delivery. Navigation totals include successful reads, fully repeated reads, status calls,
+accepted note updates, pending paths, and emitted compactions. They contain no source or note text;
+repeated reads can be legitimate evidence checks and do not themselves establish wasted work.
+Failure logs retain the typed error category and specific policy limit. A duration stop is also
+identified as the five-minute deadline in the review summary.
 
 Every measured outcome includes `compactions`, an array of emitted native `CompactionPerformed`
 events containing only `kind`, `turn`, `tokensBeforeEstimate`, and `tokensAfterEstimate`.

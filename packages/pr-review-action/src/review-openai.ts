@@ -5,7 +5,7 @@ import {
   ReviewUsage,
 } from "@effect-agent/pr-review/review";
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
-import { Clock, Config, Effect, Exit, Ref, Schema, Semaphore, Stream } from "effect";
+import { Clock, Config, Effect, Exit, Option, Ref, Schema, Semaphore, Stream } from "effect";
 import { AiError } from "effect/unstable/ai";
 import { HttpBody, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
@@ -214,6 +214,31 @@ const admissionError = (description: string) =>
     reason: AiError.InvalidRequestError.make({ description }),
   });
 
+// Only the provider's bounded correlation header may leave its HTTP context.
+const RequestId = Schema.Trimmed.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,256}$/));
+
+const requestId = (value: unknown) =>
+  Option.getOrUndefined(Schema.decodeUnknownOption(RequestId)(value));
+
+const logProviderFailure = (
+  phase: "create-response" | "open-stream" | "read-stream",
+  modelCall: number,
+  error: AiError.AiError,
+  response?: HttpClientResponse.HttpClientResponse,
+) => {
+  const http = "http" in error.reason ? error.reason.http?.response : undefined;
+
+  return Effect.logWarning("Review provider failed", {
+    phase,
+    modelCall,
+    failureType: error._tag,
+    reason: error.reason._tag,
+    ...(error.reason._tag === "NetworkError" ? { networkReason: error.reason.reason } : {}),
+    status: http?.status ?? response?.status,
+    requestId: requestId(http?.headers["x-request-id"] ?? response?.headers["x-request-id"]),
+  });
+};
+
 interface Reservation {
   readonly id: number;
   readonly inputTokens: number;
@@ -285,8 +310,13 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
   const admissions = yield* Semaphore.make(1);
   const close = Ref.update(state, (current) => ({ ...current, closed: true }));
 
-  const refuse = (message: string) =>
-    close.pipe(Effect.andThen(Effect.fail(admissionError(message))));
+  const refuse = Effect.fnUntraced(function* (message: string) {
+    yield* close;
+    // These messages are fixed host diagnostics, never provider text or causes.
+    yield* Effect.logWarning("Review request refused", { reason: message });
+
+    return yield* admissionError(message);
+  });
 
   const countAttempt = Effect.fn("ReviewOpenAi.countAttempt")(function* (payload: Payload) {
     // This endpoint does no inference. Count the exact outgoing token-affecting
@@ -326,7 +356,11 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
             attempt,
             failureType: error._tag,
             ...(HttpClientError.isHttpClientError(error)
-              ? { reason: error.reason._tag, status: error.response?.status }
+              ? {
+                  reason: error.reason._tag,
+                  status: error.response?.status,
+                  requestId: requestId(error.response?.headers["x-request-id"]),
+                }
               : {}),
             retrying: attempt === 1 && transientCountFailure(error),
           }),
@@ -582,9 +616,10 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       function* (original) {
         const { payload, reservation } = yield* admit(original);
 
-        const result = yield* native
-          .createResponse(payload)
-          .pipe(Effect.catch(() => refuse("OpenAI request failed; retain its full reservation.")));
+        const result = yield* native.createResponse(payload).pipe(
+          Effect.tapError((error) => logProviderFailure("create-response", reservation.id, error)),
+          Effect.catch(() => refuse("OpenAI request failed; retain its full reservation.")),
+        );
 
         yield* settle(reservation, result[0]);
 
@@ -596,28 +631,44 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       function* (original) {
         const { payload, reservation } = yield* admit(original);
 
-        const [response, stream] = yield* native
-          .createResponseStream(payload)
-          .pipe(Effect.catch(() => refuse("OpenAI request failed; retain its full reservation.")));
+        const [response, stream] = yield* native.createResponseStream(payload).pipe(
+          Effect.tapError((error) => logProviderFailure("open-stream", reservation.id, error)),
+          Effect.catch(() => refuse("OpenAI request failed; retain its full reservation.")),
+        );
 
         return [
           response,
           stream.pipe(
-            Stream.tap((event) => {
-              if (
-                event.type !== "response.completed" &&
-                event.type !== "response.incomplete" &&
-                event.type !== "response.failed"
-              )
-                return Effect.void;
+            Stream.tapError((error) =>
+              logProviderFailure("read-stream", reservation.id, error, response),
+            ),
+            Stream.tap(
+              Effect.fnUntraced(function* (event) {
+                if (event.type === "error" || event.type === "response.failed")
+                  yield* Effect.logWarning("Review provider error event", {
+                    phase: "read-stream",
+                    modelCall: reservation.id,
+                    eventType: event.type,
+                    status: response.status,
+                    requestId: requestId(response.headers["x-request-id"]),
+                  });
+                if (
+                  event.type !== "response.completed" &&
+                  event.type !== "response.incomplete" &&
+                  event.type !== "response.failed"
+                )
+                  return;
 
-              return Schema.decodeUnknownEffect(OpenAiSchema.Response)(event.response).pipe(
-                Effect.mapError(() =>
-                  admissionError("Invalid provider completion; retain its reservation."),
-                ),
-                Effect.flatMap((completed) => settle(reservation, completed)),
-              );
-            }),
+                return yield* Schema.decodeUnknownEffect(OpenAiSchema.Response)(
+                  event.response,
+                ).pipe(
+                  Effect.catch(() =>
+                    refuse("Invalid provider completion; retain its reservation."),
+                  ),
+                  Effect.flatMap((completed) => settle(reservation, completed)),
+                );
+              }),
+            ),
             Stream.catch(() =>
               Stream.fromEffect(refuse("OpenAI stream failed; retain any unsettled reservation.")),
             ),

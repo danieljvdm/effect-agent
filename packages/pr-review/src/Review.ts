@@ -267,7 +267,7 @@ const REVIEW_INSTRUCTIONS = `${REVIEW_RUBRIC}
 Review procedure:
 1. Start with the complete change index and read every admitted patch, including deletions, reverts, and metadata. Use inline patches or read_diff pages; batch independent reads. Reading establishes access to evidence, not correctness.
 2. Identify the consumer outcome promised by the PR description, documentation, and changed contracts. Trace it through the relevant supported execution paths to its consumers, including unchanged code. Keep material, falsifiable questions about paths where that promise may fail; seek evidence for and against them before submitting. Distinguish incomplete fulfillment of the promise from optional feature expansion.
-3. Keep the claimed outcome, checked paths, exact base/head evidence references, disproved hypotheses, and next checks in review_status notes during investigation. Avoid copying source or saved findings. If context fills, call new_context alone with a concise handoff. After any rollover, recover review_status before resuming; re-read exact evidence as needed.
+3. Keep the claimed outcome, checked paths, exact base/head evidence references, disproved hypotheses, and next checks in review_status notes during investigation. Avoid copying source or saved findings. If context fills, call new_context alone with a concise handoff. After any rollover, recover review_status before resuming at its unread offsets; delivered ranges remain covered. When pendingCount is zero, continue the material questions in your notes and use targeted source reads as needed, then submit. Do not restart a full diff sweep after rollover.
 4. After the counterevidence check, save each established finding promptly with record_finding so it survives interruption. The ledger cannot retract or revise findings; recover it when unsure and never re-record a root cause with different wording, severity, or symptoms.
 5. Verify EVERY blocker in a supplied follow-up against current head before resolving its exact ID. Name the fixing code and why the original trigger no longer fails. A touched file, resolved conversation, or absence of new findings is insufficient; omit uncertain resolutions. Do not report supplied prior blockers as new findings.
 6. Consult review_status and finish with submit_review alone after assessing all admitted patches and material questions. Continue any unread ranges the host returns. Completion is a source-based review, not proof of correctness or an exhaustive dependency audit. Specific unavailable evidence may justify blockedOn after reviewing the rest; name the affected behavior and failed retrieval attempts. Excluded paths, lack of live execution, hypothetical uncertainty, and work the available tools can finish are not blockers. The host preserves findings when time, tool, or spending limits stop the run.`;
@@ -360,7 +360,7 @@ const formatRequest = (request: ReviewRequest): string => {
     ...diff.files.map((file) => JSON.stringify(file)),
     diff.text.length <= INLINE_PATCH_CHARS
       ? diff.text
-      : "Use read_diff with offset 0, then nextOffset, to inspect the diff. Index offsets allow targeted reads.",
+      : "On the first context, use read_diff with offset 0, then nextOffset. After rollover, recover review_status and resume its unread offsets instead of restarting. Index offsets allow targeted reads.",
   ].join("\n\n");
 };
 
@@ -652,17 +652,27 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       const inline = diff.text.length <= INLINE_PATCH_CHARS;
       const reads: Array<readonly [number, number]> = [];
       const queuedReads: Array<readonly [number, number]> = inline ? [[0, diff.text.length]] : [];
+      let diffReads = 0;
+      let repeatedDiffReads = 0;
+      let statusReads = 0;
       const nativeCompactor = yield* ContextCompactor;
 
       const compactor: ContextCompaction = {
         ...nativeCompactor,
         compact: (request) =>
           nativeCompactor.compact(request).pipe(
-            Stream.tap((decision) =>
-              Effect.sync(() => {
+            Stream.tap(
+              Effect.fnUntraced(function* (decision) {
                 // A native rollover may clip unseen tool results into its emergency
                 // handoff. Only model-acknowledged pages remain covered; reread the rest.
-                if (decision.kind === "rollover") queuedReads.length = 0;
+                if (decision.kind !== "rollover") return;
+                const discardedReads = queuedReads.length;
+
+                queuedReads.length = 0;
+                yield* Effect.logInfo("Review context rollover", {
+                  discardedReads,
+                  firstUnreadOffset: unreadOffset(reads),
+                });
               }),
             ),
           ),
@@ -683,8 +693,19 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
               message: "Select an offset within the diff artifact.",
             });
           const end = Math.min(diff.text.length, offset + DIFF_PAGE_CHARS);
+          const alreadyDelivered = unreadOffset(reads, offset) >= end;
 
           queuedReads.push([offset, end]);
+          diffReads += 1;
+          if (alreadyDelivered) repeatedDiffReads += 1;
+          yield* Effect.logInfo("Review diff read", {
+            read: diffReads,
+            offset,
+            end,
+            totalChars: diff.text.length,
+            alreadyDelivered,
+            firstUnreadOffset: unreadOffset(reads),
+          });
 
           return {
             offset,
@@ -694,6 +715,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
           };
         }),
         review_status: Effect.fn("Reviewer.status")(function* ({ cursor, notes: update }) {
+          statusReads += 1;
           if (update !== undefined) {
             const accepted = yield* Ref.modify(notes, (current) =>
               update.expectedRevision === current.revision
@@ -980,9 +1002,22 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       if (failure !== undefined)
         yield* Effect.logWarning("Review stopped before completion", {
           failureType: failure._tag,
+          ...(failure._tag === "AgentPolicyError" ? { policyLimit: failure.limit } : {}),
+          ...(failure._tag === "AiError" ? { reason: failure.reason._tag } : {}),
         });
 
       const pendingPaths = pendingRanges().map(({ path }) => path);
+
+      yield* Effect.logInfo("Review navigation totals", {
+        diffReads,
+        repeatedDiffReads,
+        statusReads,
+        notesUpdates: (yield* Ref.get(notes)).revision,
+        pendingPaths: pendingPaths.length,
+        firstUnreadOffset: unreadOffset(reads),
+        totalChars: diff.text.length,
+        compactions: compactions.length,
+      });
 
       const incomplete =
         pendingPaths.length > 0 ||
@@ -1026,7 +1061,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
             ? `Review stopped at the ${exhausted} budget. These findings cover the investigation completed before finalization; the remaining change has not been verified.`
             : incomplete
               ? blockedOn === undefined
-                ? `${failure?._tag === "ModelProtocolError" ? "The review stopped after a model protocol error." : "The investigation did not complete."} Recorded findings are preserved; the remaining change has not been verified.`
+                ? `${policyLimit === "duration" ? "The review reached its five-minute deadline." : failure?._tag === "ModelProtocolError" ? "The review stopped after a model protocol error." : "The investigation did not complete."} Recorded findings are preserved; the remaining change has not been verified.`
                 : `Review blocked on unavailable evidence: ${blockedOn}`
               : reviewSummary(request, findings),
       });

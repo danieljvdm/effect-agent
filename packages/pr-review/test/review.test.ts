@@ -25,6 +25,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Logger,
   Ref,
   Result,
   Schema,
@@ -1869,6 +1870,8 @@ new mode 100755`;
     "default 48k rollover preserves notes and findings while requiring unseen pages again: reread=%s",
     (reread) =>
       Effect.gen(function* () {
+        const logs: Array<unknown> = [];
+
         const input = ReviewRequest.make({
           ...request,
           changes: [...request.changes, ...largeRequest(1, 50_000).changes],
@@ -1999,9 +2002,28 @@ new mode 100755`;
           estimateCostMicrousd: () => Effect.succeed(123),
         })
           .review(input)
-          .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+          .pipe(
+            Effect.provideService(ReviewRepository, emptyRepository),
+            Effect.provide(
+              Logger.layer([Logger.make<unknown, void>(({ message }) => logs.push(message))]),
+            ),
+          );
 
         expect(outcome.report.findings).toEqual([blocker]);
+        expect(logs).toContainEqual([
+          "Review context rollover",
+          { discardedReads: 1, firstUnreadOffset: 0 },
+        ]);
+        expect(logs).toContainEqual([
+          "Review navigation totals",
+          expect.objectContaining({
+            diffReads: reread ? 3 : 1,
+            repeatedDiffReads: 0,
+            notesUpdates: reread ? 2 : 1,
+            compactions: 1,
+          }),
+        ]);
+        expect(JSON.stringify(logs)).not.toContain(unresolvedNotes);
         expect(outcome.compactions).toEqual([
           {
             kind: "rollover",
@@ -2150,17 +2172,20 @@ new mode 100755`;
   it.effect("cannot claim completion after duplicate, out-of-order, or failed diff reads", () =>
     Effect.gen(function* () {
       let call = 0;
+      const logs: Array<unknown> = [];
       const input = largeRequest(3, 40_000);
 
       const outcome = yield* makeReviewer({
         model: scriptedModel((prompt) => {
           call += 1;
 
-          if (call > 2) {
+          if (call > 3) {
             expect(completionResult(prompt)).toMatchObject({ isFailure: true });
 
             return Stream.empty;
           }
+
+          if (call === 2) return toolResponse([{ name: "read_diff", params: { offset: 0 } }]);
 
           return call === 1
             ? toolResponse([
@@ -2173,11 +2198,35 @@ new mode 100755`;
         }),
       })
         .review(ReviewRequest.make({ ...input, followUps: [followUp] }))
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+        .pipe(
+          Effect.provideService(ReviewRepository, emptyRepository),
+          Effect.provide(
+            Logger.layer([Logger.make<unknown, void>(({ message }) => logs.push(message))]),
+          ),
+        );
 
       expect(outcome.incomplete).toBe(true);
       expect(outcome.pendingPaths).toEqual(input.changes.map(({ path }) => path));
       expect(outcome.resolutions).toBeUndefined();
+      expect(logs).toContainEqual([
+        "Review diff read",
+        expect.objectContaining({
+          read: 4,
+          offset: 0,
+          end: 32_000,
+          alreadyDelivered: true,
+          firstUnreadOffset: 32_000,
+        }),
+      ]);
+      expect(logs).toContainEqual([
+        "Review navigation totals",
+        expect.objectContaining({
+          diffReads: 4,
+          repeatedDiffReads: 1,
+          pendingPaths: 3,
+          firstUnreadOffset: 32_000,
+        }),
+      ]);
     }),
   );
 
@@ -2268,6 +2317,7 @@ new mode 100755`;
 
   it.effect("keeps one deadline through navigation and closes model streams", () =>
     Effect.gen(function* () {
+      const logs: Array<unknown> = [];
       const calls = yield* Ref.make(0);
       const finalized = yield* Ref.make(0);
       const firstStarted = yield* Deferred.make<void>();
@@ -2291,7 +2341,13 @@ new mode 100755`;
 
       const fiber = yield* makeReviewer({ model, costControl: costControl(calls) })
         .review(input)
-        .pipe(Effect.provideService(ReviewRepository, emptyRepository), Effect.forkChild);
+        .pipe(
+          Effect.provideService(ReviewRepository, emptyRepository),
+          Effect.provide(
+            Logger.layer([Logger.make<unknown, void>(({ message }) => logs.push(message))]),
+          ),
+          Effect.forkChild,
+        );
 
       yield* Deferred.await(firstStarted);
       yield* TestClock.adjust("4 minutes");
@@ -2302,6 +2358,14 @@ new mode 100755`;
       expect(yield* Ref.get(finalized)).toBe(2);
       expect(outcome.incomplete).toBe(true);
       expect(outcome.pendingPaths).toEqual(input.changes.map(({ path }) => path));
+      expect(outcome.report.summary).toContain("five-minute deadline");
+      expect(logs).toContainEqual([
+        "Review stopped before completion",
+        {
+          failureType: "AgentPolicyError",
+          policyLimit: "duration",
+        },
+      ]);
     }),
   );
 

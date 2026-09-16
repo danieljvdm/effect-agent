@@ -244,7 +244,8 @@ The non-inference token count has a 10-second timeout per attempt and retries at
 timeouts, transport failures, or HTTP 408, 429, 500, 502, 503, and 504. Other HTTP failures and
 malformed counts fail immediately. Exhausted preflight fails closed before spending admission;
 it never authorizes an uncounted request. Cancellation interrupts the active attempt without a
-retry. Diagnostics report only the preflight phase, attempt, failure category, and HTTP status.
+retry. Diagnostics report only the preflight phase, attempt, failure category, HTTP status, and
+bounded provider request ID when available.
 Paid inference is never automatically retried.
 
 The spending status is an outgoing-only, uncached suffix included in that token count. It shows
@@ -266,8 +267,13 @@ invoice audit or an OpenAI account spending limit. Usage estimates remain separa
 reservations. Expected model or validation failures after a provider attempt retain an incomplete
 report with those diagnostics even when no finding was recorded. Each review's logs and footer
 show model calls, ordinary input, cache reads, cache writes, output, cache-hit ratio, and estimated
-cost. Raw provider failure causes, credentials, and
-repository source are excluded from the Action's diagnostics. Logs also count supplied tool
+cost. Provider failures identify the model call, request or stream phase, typed reason, transport
+category, HTTP status, and bounded request ID when available. Admission refusals use fixed host
+messages to distinguish invalid usage or pricing contracts from network failures. Raw provider
+failure causes, response bodies, credentials, and repository source are excluded from diagnostics.
+Navigation logs show read offsets, fully repeated pages, discarded reads at rollover, remaining
+coverage, note-update counts, and compaction counts. Policy failures name the exhausted limit;
+deadline stops also identify the five-minute limit in the published review. Logs also count supplied tool
 definitions, returned function calls, and completion calls to diagnose protocol failures.
 
 Within `.patch` files, the Action replaces single-line source-map JSON payloads in

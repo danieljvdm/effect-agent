@@ -2066,6 +2066,136 @@ describe("review provider boundary", () => {
       }),
   );
 
+  it.effect.each([
+    "create-response",
+    "open-stream",
+    "read-stream",
+    "provider-error",
+    "transport",
+    "invalid-id",
+  ] as const)("logs safe provider diagnostics for %s without retrying paid inference", (phase) =>
+    Effect.gen(function* () {
+      const logs: Array<unknown> = [];
+      let sends = 0;
+
+      const native = yield* makeNative(
+        HttpClient.make((httpRequest, url) => {
+          if (url.pathname.endsWith("/input_tokens"))
+            return Effect.succeed(
+              json(httpRequest, { object: "response.input_tokens", input_tokens: 20_000 }),
+            );
+          sends += 1;
+          if (phase === "transport")
+            return Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.TransportError({
+                  request: httpRequest,
+                  description: "private-transport-cause",
+                }),
+              }),
+            );
+
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              httpRequest,
+              new globalThis.Response(
+                phase === "provider-error"
+                  ? 'data: {"type":"error","code":"private-code","message":"private-provider-message","param":null}\n\n'
+                  : phase === "read-stream"
+                    ? 'data: {"type":"response.created","response":"private-model-output"}\n\n'
+                    : JSON.stringify({ error: { message: "private-provider-body" } }),
+                {
+                  status: phase === "read-stream" || phase === "provider-error" ? 200 : 503,
+                  headers: {
+                    "content-type":
+                      phase === "read-stream" || phase === "provider-error"
+                        ? "text/event-stream"
+                        : "application/json",
+                    "x-request-id":
+                      phase === "invalid-id" ? "private correlation header" : "req_safe-507",
+                    "x-private-header": "private-header-value",
+                  },
+                },
+              ),
+            ),
+          );
+        }),
+      );
+
+      const provider = yield* makeReviewOpenAi({
+        costLimitMicrousd: tightCostLimitMicrousd,
+        model: "gpt-5.6-sol",
+        cacheKey: "failure-diagnostics",
+      }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
+
+      const streaming =
+        phase === "open-stream" || phase === "read-stream" || phase === "provider-error";
+
+      const operation: Effect.Effect<
+        ReadonlyArray<OpenAiSchema.ResponseStreamEvent>,
+        AiError.AiError
+      > = streaming
+        ? provider.client
+            .createResponseStream(payload)
+            .pipe(Effect.flatMap(([, stream]) => Stream.runCollect(stream)))
+        : provider.client.createResponse(payload).pipe(Effect.as([]));
+
+      const exit = yield* operation.pipe(
+        Effect.exit,
+        Effect.provide(
+          Logger.layer([Logger.make<unknown, void>(({ message }) => logs.push(message))]),
+        ),
+      );
+
+      // Native error events still reach the interpreter; diagnostics do not consume them.
+      expect(Exit.isFailure(exit)).toBe(phase !== "provider-error");
+      if (phase === "provider-error") {
+        expect(Exit.isSuccess(exit) && exit.value).toEqual([
+          expect.objectContaining({ type: "error", message: "private-provider-message" }),
+        ]);
+        expect(logs).toContainEqual([
+          "Review provider error event",
+          {
+            phase: "read-stream",
+            modelCall: 1,
+            eventType: "error",
+            status: 200,
+            requestId: "req_safe-507",
+          },
+        ]);
+      } else
+        expect(logs).toContainEqual([
+          "Review provider failed",
+          {
+            phase: streaming ? phase : "create-response",
+            modelCall: 1,
+            failureType: "AiError",
+            reason:
+              phase === "transport"
+                ? "NetworkError"
+                : phase === "read-stream"
+                  ? "InvalidOutputError"
+                  : "InternalProviderError",
+            ...(phase === "transport" ? { networkReason: "TransportError" } : {}),
+            status: phase === "transport" ? undefined : phase === "read-stream" ? 200 : 503,
+            requestId: phase === "transport" || phase === "invalid-id" ? undefined : "req_safe-507",
+          },
+        ]);
+      const diagnostic = JSON.stringify(logs);
+
+      for (const secret of [
+        "private-",
+        "private correlation",
+        "test-key-never-log",
+        "api.openai.com",
+      ])
+        expect(diagnostic).not.toContain(secret);
+      expect((yield* provider.costControl.snapshot).usage.reservedCostMicrousd).toBeGreaterThan(0);
+      yield* provider.client.createResponse(payload).pipe(Effect.flip);
+      expect(sends).toBe(1);
+    }),
+  );
+
   it.effect.each(["recover", "exhaust", "interrupt"] as const)(
     "bounds and cancels preflight attempts without paid liability: %s",
     (mode) =>
