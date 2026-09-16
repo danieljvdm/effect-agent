@@ -1,0 +1,39 @@
+{
+  "name": "@effect-agent/ai-typesafe",
+  "version": "0.1.0-beta.99",
+  "description": "TypeSafe AI evaluation with Effect HttpClient and request-derived answer types.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "directory": "packages/ai-typesafe"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./type-safe-client": "./src/TypeSafeClient.ts",
+    "./type-safe-schema": "./src/TypeSafeSchema.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "effect": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.0-rc.115"
+  }
+}

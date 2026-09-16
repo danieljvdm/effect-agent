@@ -30,6 +30,25 @@ The tool declaration owns parameter, success, and failure schemas, approval, dep
 failure mode, and preliminary results. The runtime decodes every model-generated tool call through
 that declaration.
 
+## Evaluate TypeSafe questions in a tool {#typesafe-evaluations}
+
+Use `@effect-agent/ai-typesafe` inside a native Effect AI Tool for typed classification:
+
+<<< ../../packages/ai-typesafe/examples/tool.ts{ts twoslash}
+
+Provide `TicketToolsLive` with your other tool handlers and supply a
+`TypeSafeClient.layerConfig({ apiKey: Config.Redacted("TYPESAFE_API_KEY") })` backed
+by an Effect HttpClient. The declared dependency stays visible until tool execution,
+and the default failure mode keeps `AiError` in the error channel. Jev evaluates the
+fixed questions supplied by the handler; the agent's language model selects tools.
+
+`evaluate` supports mixing choice, score, and noul questions in one request and
+retains distributions and usage. Each response is validated against the request's
+IDs, types, and criteria. Confidence summarizes the distribution and does not prove
+the answer correct. Retry and timeout policies are explicit; see the
+[package entry](../reference/packages#typesafe-ai) and the
+[TypeSafe API reference](https://docs.typesafe.ai/api).
+
 ## Discover tools progressively {#progressive-discovery}
 
 A large registered catalogue can contain hundreds of tools even when a request needs only two.

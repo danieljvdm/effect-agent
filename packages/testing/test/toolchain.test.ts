@@ -95,6 +95,7 @@ type WorkflowFile = typeof WorkflowFile.Type;
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).replace(/\/$/, "");
 
 const packageNames = [
+  "ai-typesafe",
   "effect-agent",
   "platform-cloudflare",
   "platform-node",
@@ -124,6 +125,7 @@ const toolingNames = [
 ];
 
 const effectTestPackageNames = [
+  "ai-typesafe",
   "effect-agent",
   "platform-cloudflare",
   "platform-node",
@@ -137,6 +139,7 @@ const effectTestPackageNames = [
 ] as const;
 
 const productionPackageNames = [
+  "ai-typesafe",
   "effect-agent",
   "platform-cloudflare",
   "platform-node",
@@ -167,6 +170,7 @@ const platformCloudflareProviderDependencies = new Set(["@cloudflare/puppeteer"]
 // section. Everything inward of them must stay platform-clean so the semantic
 // coordinator never gains a conditional platform branch (deployment spec §3.1).
 const inwardPackageNames = [
+  "ai-typesafe",
   "effect-agent",
   "sandbox-local",
   "storage-memory",
@@ -202,6 +206,7 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
  * Internal core, engine, sandbox, and capability edges are checked by verifyPackageExports.
  */
 const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
+  "ai-typesafe": [],
   "effect-agent": [],
   "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
   "platform-node": ["effect-agent", "storage-sqlite", "workflow"],

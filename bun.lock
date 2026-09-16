@@ -7,6 +7,7 @@
       "devDependencies": {
         "@changesets/changelog-github": "0.7.0",
         "@changesets/cli": "2.31.0",
+        "@effect-agent/ai-typesafe": "workspace:*",
         "@effect-agent/platform-cloudflare": "workspace:*",
         "@effect-agent/platform-node": "workspace:*",
         "@effect-agent/sandbox-local": "workspace:*",
@@ -91,9 +92,22 @@
         "vite-plus": "catalog:",
       },
     },
+    "packages/ai-typesafe": {
+      "name": "@effect-agent/ai-typesafe",
+      "version": "0.1.0-beta.98",
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "effect": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "^4.0.0-rc.115",
+      },
+    },
     "packages/effect-agent": {
       "name": "effect-agent",
-      "version": "0.1.0-beta.95",
+      "version": "0.1.0-beta.98",
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
@@ -107,7 +121,7 @@
     },
     "packages/platform-cloudflare": {
       "name": "@effect-agent/platform-cloudflare",
-      "version": "0.1.0-beta.95",
+      "version": "0.1.0-beta.98",
       "dependencies": {
         "@effect-agent/storage-cloudflare": "workspace:*",
         "@effect/platform-browser": "catalog:",
@@ -141,7 +155,7 @@
     },
     "packages/platform-node": {
       "name": "@effect-agent/platform-node",
-      "version": "0.1.0-beta.95",
+      "version": "0.1.0-beta.98",
       "dependencies": {
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/workflow": "workspace:*",
@@ -161,7 +175,7 @@
     },
     "packages/pr-review": {
       "name": "@effect-agent/pr-review",
-      "version": "0.1.0-beta.95",
+      "version": "0.1.0-beta.98",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -194,7 +208,7 @@
     },
     "packages/sandbox-local": {
       "name": "@effect-agent/sandbox-local",
-      "version": "0.1.0-beta.95",
+      "version": "0.1.0-beta.98",
       "dependencies": {
         "@effect/platform-node": "catalog:",
         "effect-agent": "workspace:*",
@@ -212,7 +226,7 @@
     },
     "packages/storage-cloudflare": {
       "name": "@effect-agent/storage-cloudflare",
-      "version": "0.1.0-beta.95",
+      "version": "0.1.0-beta.98",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
@@ -234,7 +248,7 @@
     },
     "packages/storage-memory": {
       "name": "@effect-agent/storage-memory",
-      "version": "0.1.0-beta.95",
+      "version": "0.1.0-beta.98",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -251,7 +265,7 @@
     },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
-      "version": "0.1.0-beta.95",
+      "version": "0.1.0-beta.98",
       "dependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
@@ -269,7 +283,7 @@
     },
     "packages/testing": {
       "name": "@effect-agent/testing",
-      "version": "0.1.0-beta.95",
+      "version": "0.1.0-beta.98",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -290,7 +304,7 @@
     },
     "packages/workflow": {
       "name": "@effect-agent/workflow",
-      "version": "0.1.0-beta.95",
+      "version": "0.1.0-beta.98",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -693,6 +707,8 @@
     "@docsearch/js": ["@docsearch/js@4.7.0", "", {}, "sha512-x5lCqu1tetgsJFkjQ6VSocbHldsRkGEgwg5N98Vx21sq/V5wcmj4u226PY9k+TEpIgQ772zlYbPLTPicWyGnpA=="],
 
     "@docsearch/sidepanel-js": ["@docsearch/sidepanel-js@4.7.0", "", {}, "sha512-A8r34jCU8kcIk2viECEn2msA28ojUF1BLi/3v5OWWc5G2N3jOuuumBXoeYjfr8dA0UxgFSy5R2bt12dnFJQSyA=="],
+
+    "@effect-agent/ai-typesafe": ["@effect-agent/ai-typesafe@workspace:packages/ai-typesafe"],
 
     "@effect-agent/example-browser-run-worker-proof": ["@effect-agent/example-browser-run-worker-proof@workspace:tooling/browser-run-worker-proof"],
 
@@ -3200,7 +3216,7 @@
 
     "@alchemy.run/cloudflare-runtime/workerd/@cloudflare/workerd-windows-64": ["@cloudflare/workerd-windows-64@1.20260901.1", "", { "os": "win32", "cpu": "x64" }, "sha512-3oJnCV7mWwzqmqz+3E+KYLbw1FylH+8n+p84srWv9MEsY9II1QuKiRKVf3CQTIdTDb6rkr5fCuRtkmLgRpAsNg=="],
 
-    "@effect-agent/example-travel-planner/@effect-agent/platform-cloudflare/effect-cf": ["effect-cf@0.44.0", "", { "peerDependencies": { "@cloudflare/computer": "^0.2.0", "@cloudflare/sandbox": "^0.13.0-next.738.2", "@cloudflare/vitest-plugin": "^1.0.0", "@cloudflare/workers-types": "^5.20260825.1", "@effect/sql-d1": "^4.0.0-rc.115", "@effect/sql-pg": "^4.0.0-rc.115", "@effect/sql-sqlite-do": "^4.0.0-rc.115", "@modelcontextprotocol/server": "^2.0.0", "effect": "^4.0.0-rc.115" }, "optionalPeers": ["@cloudflare/computer", "@cloudflare/sandbox", "@cloudflare/vitest-plugin", "@cloudflare/workers-types", "@effect/sql-pg", "@modelcontextprotocol/server"] }, "sha512-D2jwyoIlC0wXY9kBQwIS4h7sigYEI+KlQGHm6WUBzNX+PngTbjyzqFCad51kumfbhoSIybhhRXyhYVy5EEySng=="],
+    "@effect-agent/example-travel-planner/@effect-agent/platform-cloudflare/effect-cf": ["effect-cf@0.44.1", "", { "peerDependencies": { "@cloudflare/computer": "^0.2.0", "@cloudflare/sandbox": "^0.13.0-next.738.2", "@cloudflare/vitest-plugin": "^1.0.0", "@cloudflare/workers-types": "^5.20260825.1", "@effect/sql-d1": "^4.0.0-rc.115", "@effect/sql-pg": "^4.0.0-rc.115", "@effect/sql-sqlite-do": "^4.0.0-rc.115", "@modelcontextprotocol/server": "^2.0.0", "effect": "^4.0.0-rc.115" }, "optionalPeers": ["@cloudflare/computer", "@cloudflare/sandbox", "@cloudflare/vitest-plugin", "@cloudflare/workers-types", "@effect/sql-pg", "@modelcontextprotocol/server"] }, "sha512-xEd7ysud5CHqClt1PeABZdX4LXipldNlw8MFpDa81wmTicFjhi7JwMIVFbs6XXj8i21AJxDxrm6TQh87FzOafA=="],
 
     "@huggingface/transformers/sharp/@img/sharp-darwin-arm64": ["@img/sharp-darwin-arm64@0.34.5", "", { "optionalDependencies": { "@img/sharp-libvips-darwin-arm64": "1.2.4" }, "os": "darwin", "cpu": "arm64" }, "sha512-imtQ3WMJXbMY4fxb/Ndp6HBTNVtWCUI0WdobyheGf5+ad6xX8VIDO8u2xE4qc/fr08CKG/7dDseFtn6M6g/r3w=="],
 

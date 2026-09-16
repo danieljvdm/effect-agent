@@ -181,6 +181,30 @@ in your host.
 
 ## Packages
 
+### `@effect-agent/ai-typesafe` {#typesafe-ai}
+
+Evaluate TypeSafe AI choice, score, and noul questions through an Effect HttpClient.
+The `TypeSafeClient` service validates answers against the submitted question IDs,
+kinds, and criteria, preserving selected-choice literals, probability distributions,
+and token usage. `TypeSafeSchema` exposes the wire schemas.
+
+```ts twoslash
+import { TypeSafeClient } from "@effect-agent/ai-typesafe";
+import { Config, Layer } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+
+const ClientLive = TypeSafeClient.layerConfig({
+  apiKey: Config.Redacted("TYPESAFE_API_KEY"),
+}).pipe(Layer.provide(FetchHttpClient.layer));
+```
+
+The package depends only on Effect at runtime and is incubated locally for later
+upstream extraction. Use evaluations directly or through a
+[native Effect AI tool](../guide/tools#typesafe-evaluations). It supplies no
+`LanguageModel`. Retry and timeout policies remain explicit application choices.
+Direct module imports use `@effect-agent/ai-typesafe/type-safe-client` and
+`@effect-agent/ai-typesafe/type-safe-schema`.
+
 ### `effect-agent` {#effect-agent-umbrella}
 
 Agent definitions, schemas, execution, streaming, policies, subagents, memory capabilities,
