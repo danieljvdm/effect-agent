@@ -16,6 +16,7 @@ import {
   Ref,
   Schema,
 } from "effect";
+import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
@@ -37,7 +38,7 @@ import {
   type RepositorySnapshot,
 } from "../src/github.ts";
 import { reviewPriority, reviewMaxCostUsd, reviewCostLimitMicrousd } from "../src/review-openai.ts";
-import { reviewMarker } from "../src/selection.ts";
+import { reviewMarker, reviewPauseMarker } from "../src/selection.ts";
 
 const file = (path: string, patch: string | undefined): ChangedFile => ({
   path,
@@ -70,6 +71,14 @@ const decodePublishedReview = (request: TestHttpRequest) => {
     request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
 
   return Schema.decodeUnknownSync(PublishedReviewBody)(JSON.parse(encoded));
+};
+
+const decodeCheckBody = (request: TestHttpRequest) => {
+  if (request.body._tag !== "Uint8Array") throw new Error("Expected check JSON");
+
+  return Schema.decodeSync(Schema.fromJsonString(Schema.Json))(
+    new TextDecoder().decode(request.body.body),
+  );
 };
 
 const actionConfig = (overrides: Record<string, string | undefined> = {}) =>
@@ -563,7 +572,23 @@ describe("stale-head publication", () => {
       const pullReads = yield* Ref.make(0);
       const postBodies = yield* Ref.make<ReadonlyArray<typeof PublishedReviewBody.Type>>([]);
 
+      const checkWrites: Array<Schema.Json> = [];
+
+      const check = {
+        id: 100,
+        name: "Effect Agent review",
+        head_sha: "inspected-head",
+        external_id: "effect-agent-pr-review:v1:12",
+      };
+
+      const options = { PR_REVIEW_AUTOMATIC_LIMIT: "2", PR_REVIEW_CHECK_NAME: check.name };
+
       const client = HttpClient.make((request, url) => {
+        if (url.pathname.includes("/check-runs")) {
+          checkWrites.push(decodeCheckBody(request));
+
+          return Effect.succeed(jsonResponse(request, check));
+        }
         if (request.method === "GET" && url.pathname.endsWith("/pulls/12")) {
           return Ref.getAndUpdate(pullReads, (count) => count + 1).pipe(
             Effect.map((count) =>
@@ -630,9 +655,7 @@ describe("stale-head publication", () => {
         return Effect.die(`unexpected request ${request.method} ${url.href}`);
       });
 
-      const exit = yield* runReviewAction(client, { PR_REVIEW_AUTOMATIC_LIMIT: "2" }).pipe(
-        Effect.exit,
-      );
+      const exit = yield* runReviewAction(client, options).pipe(Effect.exit);
 
       if (Exit.isSuccess(exit)) throw new Error("Expected stale publication to fail");
       expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
@@ -650,7 +673,13 @@ describe("stale-head publication", () => {
         },
       ]);
 
-      yield* runReviewAction(client, { PR_REVIEW_AUTOMATIC_LIMIT: "2" });
+      expect(checkWrites).toEqual([
+        expect.objectContaining({ head_sha: "inspected-head", status: "in_progress" }),
+        expect.objectContaining({ conclusion: "cancelled" }),
+      ]);
+      check.id = 101;
+      check.head_sha = "current-head";
+      yield* runReviewAction(client, options);
       const posts = yield* Ref.get(postBodies);
 
       expect(posts).toHaveLength(2);
@@ -663,6 +692,171 @@ describe("stale-head publication", () => {
         comments: [],
       });
       expect(posts[1]?.body).toContain("Automatic reviews are paused");
+      expect(checkWrites.at(-1)).toMatchObject({ conclusion: "success" });
+    }),
+  );
+});
+
+describe("PR commit review checks", () => {
+  const check = {
+    name: "Effect Agent review",
+    head_sha: "head",
+    external_id: "effect-agent-pr-review:v1:12",
+  };
+
+  const blocked = {
+    ...reviewHistoryWire(1, reviewMarker(true), "old-head", "2026-09-01T00:00:00Z"),
+    state: "CHANGES_REQUESTED",
+  };
+
+  const full = { PR_REVIEW_COMMAND: "@effect-agent review full", PR_REVIEW_COMMENT_ID: "42" };
+
+  // Stop at source acquisition: existing reviewer tests exercise completed passes.
+  const fixture = (
+    history = [blocked],
+    intercept?: (
+      request: TestHttpRequest,
+      url: URL,
+    ) => Effect.Effect<HttpClientResponse.HttpClientResponse> | undefined,
+  ) => {
+    const writes: Array<{ path: string; body: Schema.Json }> = [];
+    const checks: Array<typeof check & { id: number }> = [];
+
+    const client = HttpClient.make((request, url) =>
+      Effect.suspend(() => {
+        if (request.method !== "GET" && url.pathname.includes("/check-runs"))
+          writes.push({ path: url.pathname, body: decodeCheckBody(request) });
+        const intercepted = intercept?.(request, url);
+
+        if (intercepted !== undefined) return intercepted;
+        let body: unknown;
+
+        if (url.pathname.includes("/check-runs")) {
+          expect(request.headers.authorization).toBe("Bearer checks-token");
+          if (request.method === "GET") body = { total_count: checks.length, check_runs: checks };
+          else if (request.method === "POST") {
+            body = { ...check, id: 100 + checks.length };
+            checks.push({ ...check, id: 100 + checks.length });
+          } else body = checks.find(({ id }) => url.pathname.endsWith(`/${String(id)}`));
+        } else if (url.pathname.endsWith("/pulls/12")) {
+          body = pullRequestWire("Review status", "base", "head");
+        } else if (url.pathname.endsWith("/reviews")) {
+          body = request.method === "GET" ? history : { html_url: "https://github.test/review" };
+        } else if (url.pathname.endsWith("/reactions")) body = { id: 42, content: "eyes" };
+        else return Effect.die(`Unexpected request ${request.method} ${url.pathname}`);
+
+        return Effect.succeed(jsonResponse(request, body));
+      }),
+    );
+
+    return {
+      writes,
+      run: (overrides: Record<string, string> = {}) =>
+        runReviewAction(client, {
+          PR_REVIEW_AUTOMATIC_LIMIT: "0",
+          PR_REVIEW_CHECK_NAME: check.name,
+          PR_REVIEW_CHECKS_TOKEN: "checks-token",
+          GITHUB_SHA: "default-branch-head",
+          ...overrides,
+        }),
+    };
+  };
+
+  it.effect(
+    "replaces a paused failure with manual progress and preserves it on skipped events",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+
+        const test = fixture(undefined, (_request, url) =>
+          url.pathname.endsWith("/files")
+            ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+            : undefined,
+        );
+
+        yield* test.run();
+        expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "failure" });
+
+        const fiber = yield* Effect.forkChild(test.run(full));
+
+        yield* Deferred.await(started);
+        expect(test.writes.at(-1)?.body).toMatchObject({
+          name: check.name,
+          head_sha: "head",
+          status: "in_progress",
+        });
+        expect(test.writes).toHaveLength(3);
+        yield* test.run();
+        expect(test.writes).toHaveLength(3);
+
+        yield* Fiber.interrupt(fiber);
+        expect(test.writes.at(-1)).toMatchObject({
+          path: "/repos/reve-ai/example/check-runs/101",
+          body: { status: "completed", conclusion: "cancelled" },
+        });
+      }),
+  );
+
+  it.effect.each([
+    { body: reviewMarker(false), conclusion: "success" },
+    { body: reviewMarker(true, false), conclusion: "failure" },
+    { body: reviewPauseMarker(0), conclusion: "action_required" },
+  ])("backfills $conclusion from trusted history without reading source", ({ body, conclusion }) =>
+    Effect.gen(function* () {
+      const test = fixture([reviewHistoryWire(1, body, "head", "2026-09-01T00:00:00Z")]);
+
+      yield* test.run();
+      expect(test.writes.at(-1)?.body).toMatchObject({ status: "completed", conclusion });
+    }),
+  );
+
+  it.effect.each(["wrong-identity", "defect"] as const)("keeps %s failing the job", (mode) =>
+    Effect.gen(function* () {
+      const test = fixture(undefined, (request, url) => {
+        if (
+          mode === "wrong-identity" &&
+          request.method === "POST" &&
+          url.pathname.endsWith("/check-runs")
+        )
+          return Effect.succeed(
+            jsonResponse(request, { ...check, id: 100, head_sha: "other-head" }),
+          );
+        if (url.pathname.endsWith("/files")) return Effect.die("private defect details");
+      });
+
+      const exit = yield* Effect.exit(test.run(full));
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(test.writes).toHaveLength(mode === "wrong-identity" ? 1 : 2);
+      if (mode === "defect")
+        expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "failure" });
+      expect(JSON.stringify(test.writes)).not.toContain("private defect details");
+    }),
+  );
+
+  it.effect("keeps an uncertain completion write failing the job without replaying it", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+
+      const test = fixture(undefined, (request) =>
+        request.method === "PATCH"
+          ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+          : undefined,
+      );
+
+      const fiber = yield* Effect.forkChild(Effect.exit(test.run()));
+
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("10 seconds");
+      const exit = yield* Fiber.join(fiber);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit))
+        expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
+          _tag: "GitHubApiFailure",
+          reason: expect.stringContaining("outcome is unknown"),
+        });
+      expect(test.writes).toHaveLength(2);
     }),
   );
 });
