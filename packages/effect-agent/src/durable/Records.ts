@@ -200,13 +200,22 @@ export class DefinitionDigestInput extends Schema.Class<DefinitionDigestInput>(
   tools: PersistedJson,
 }) {}
 
-/** Digests make a replay-visible definition/configuration change explicit. */
+/** The contracts a retained Run may decode or execute, independent of its deployment. */
+export class ReplayContract extends Schema.Class<ReplayContract>(
+  "@effect-agent/thread/ReplayContract",
+)({
+  agent: Digest,
+  tools: Schema.Record(Schema.String, Digest),
+}) {}
+
+/** Digests identify admission exactly; replay contracts separately authorize continuation. */
 export class DefinitionDigests extends Schema.Class<DefinitionDigests>(
   "@effect-agent/thread/DefinitionDigests",
 )({
   agent: Digest,
   model: Digest,
   tools: Digest,
+  replay: Schema.optionalKey(ReplayContract),
 }) {}
 
 export class ThreadCreated extends Schema.TaggedClass<ThreadCreated>(
@@ -230,7 +239,7 @@ export class UserInputRecorded extends Schema.TaggedClass<UserInputRecorded>(
   messageAdmission: Schema.optionalKey(InputMessage),
 }) {}
 
-/** Immutable clock and duration allowance for one logical Run, before any agent execution. */
+/** Immutable Run start and per-Attempt duration allowance, before any agent execution. */
 export class RunStartedRecord extends Schema.TaggedClass<RunStartedRecord>(
   "@effect-agent/thread/RunStartedRecord",
 )("RunStarted", {
@@ -239,6 +248,11 @@ export class RunStartedRecord extends Schema.TaggedClass<RunStartedRecord>(
   policyAccountingVersion: Schema.Literal(1),
   maxDurationMillis: Schema.Finite.check(Schema.isGreaterThan(0)),
 }) {}
+
+/** An active Attempt exhausted its execution allowance; downtime alone never writes this. */
+export class RunDurationExhausted extends Schema.TaggedClass<RunDurationExhausted>(
+  "@effect-agent/thread/RunDurationExhausted",
+)("RunDurationExhausted", { runId: RunId }) {}
 
 const PersistedPromptMessages = Schema.toEncoded(Prompt.Prompt);
 const isPersistedPromptMessages = Schema.is(PersistedPromptMessages);
@@ -940,6 +954,7 @@ export const CanonicalRecordPayload = Schema.Union([
   ThreadCreated,
   UserInputRecorded,
   RunStartedRecord,
+  RunDurationExhausted,
   RunPolicyUsageReserved,
   ModelCompleted,
   ModelResponseRecorded,

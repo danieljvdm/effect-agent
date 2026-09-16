@@ -62,6 +62,11 @@ export const runStartedRecordId = (runId: RunId): RecordId => decodeRecordId(`ru
 
 export const runStartedBatchId = (runId: RunId): BatchId => decodeBatchId(`run-start:${runId}`);
 
+export const runDurationRecordId = (runId: RunId): RecordId =>
+  decodeRecordId(`run-duration:${runId}`);
+
+export const runDurationBatchId = (runId: RunId): BatchId => decodeBatchId(`run-duration:${runId}`);
+
 /** Deterministic Turn identity: Attempt-independent for one (Run, canonical turn) pair. */
 export const turnIdForRun = (runId: RunId, turn: number): TurnId =>
   decodeTurnId(`turn:${runId}:${turn}`);
@@ -488,6 +493,7 @@ const withoutApplicationToolCallMessages = (prompt: Prompt.Prompt): ReadonlyArra
 const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
   "RunPolicyUsageReserved",
   "RunStarted",
+  "RunDurationExhausted",
   "ToolCallPrepared",
   "ToolCallUnknown",
   "ToolCallResolved",

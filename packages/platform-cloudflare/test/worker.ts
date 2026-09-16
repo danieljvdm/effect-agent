@@ -39,6 +39,7 @@ import {
   fixtureReconcilerLayer,
   maintenanceRaceFailpoint,
   maintenanceClocks,
+  unavailableBindingThreads,
   makeContextCompactorLayer,
   makeContextAuthorizationLayer,
   plannerDefinition,
@@ -385,19 +386,21 @@ export class TestThreadObject extends ThreadObject.make(
     Effect.map(Effect.all([makeTestBindings, backgroundWorkerBindings]), ([existing, workers]) =>
       Layer.unwrap(
         Effect.map(ThreadObjectIdentity, ({ threadId }) =>
-          threadId.startsWith("background-cf-custom-") || customRuntimeThreads.has(threadId)
-            ? Layer.fresh(ThreadMaintenance.layer).pipe(
-                Layer.provideMerge(
-                  DurableAgentRuntime.layerWithBindings([...existing, ...workers]),
-                ),
-                Layer.provideMerge(layerFromBindings([])),
-              )
-            : threadId.startsWith("messages-")
+          unavailableBindingThreads.has(threadId)
+            ? layerFromBindings([])
+            : threadId.startsWith("background-cf-custom-") || customRuntimeThreads.has(threadId)
               ? Layer.fresh(ThreadMaintenance.layer).pipe(
-                  Layer.provide(testMessageRecovery),
-                  Layer.provideMerge(layerFromBindings([...existing, ...workers])),
+                  Layer.provideMerge(
+                    DurableAgentRuntime.layerWithBindings([...existing, ...workers]),
+                  ),
+                  Layer.provideMerge(layerFromBindings([])),
                 )
-              : layerFromBindings([...existing, ...workers]),
+              : threadId.startsWith("messages-")
+                ? Layer.fresh(ThreadMaintenance.layer).pipe(
+                    Layer.provide(testMessageRecovery),
+                    Layer.provideMerge(layerFromBindings([...existing, ...workers])),
+                  )
+                : layerFromBindings([...existing, ...workers]),
         ),
       ),
     ),

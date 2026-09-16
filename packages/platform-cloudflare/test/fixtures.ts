@@ -59,6 +59,8 @@ const armedRuntimeEvictions = new Map<string, Array<DurableRuntimeFailpointLocat
 export const armedRuntimeFailures = new Map<string, DurableRuntimeFailpointLocation>();
 
 /** Virtual event clocks and a scoped post-claim hold for native alarm deadline evidence. */
+export const unavailableBindingThreads = new Set<string>();
+
 export const maintenanceClocks = new Map<string, Clock.Clock>();
 
 export const alarmAttemptHolds = new Map<

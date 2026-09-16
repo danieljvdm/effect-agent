@@ -1005,9 +1005,9 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * Optional absolute deadline for the Run's `maxDuration` rail. The engine
    * uses the earlier of this value and the fresh policy deadline, so callers
    * may preserve or tighten an existing Run allowance but can never widen it.
-   * Durable coordinators derive this value from the canonical `RunStarted`
-   * record timestamp and stored duration so replacement Attempts share one
-   * wall-clock allowance (RUN-030).
+   * Durable coordinators reuse the canonical per-Attempt duration allowance;
+   * deployment downtime does not consume it. An immutable worker grant can
+   * impose an earlier absolute expiry. Turn, Tool and cost budgets remain Run-wide.
    */
   readonly durationDeadline?: DateTime.Utc | undefined;
   /**

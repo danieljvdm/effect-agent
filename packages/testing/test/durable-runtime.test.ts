@@ -19,7 +19,11 @@ import {
 } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding } from "effect-agent/agent-registration";
+import {
+  compileRegistrations,
+  DurableWorkerBinding,
+  makeBindingManifest,
+} from "effect-agent/agent-registration";
 import {
   COMPACTION_SUMMARY_PREFIX,
   CONTEXT_ROLLOVER_PREFIX,
@@ -43,7 +47,7 @@ import {
   DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
 } from "effect-agent/durable-failpoint";
-import { ToolExecutionClass } from "effect-agent/durable-step";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
 import { ThreadId, ReceiptId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
 import {
   BatchId,
@@ -5456,7 +5460,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
   );
 });
 
-layer(testLayer)("RUN-030 canonical duration", (it) => {
+layer(testLayer)("RUN-030 durable execution duration", (it) => {
   it.effect(
     "an already-expired host deadline yields before initial context preparation or provider I/O",
     () =>
@@ -5505,7 +5509,7 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
 
   for (const expired of [false, true])
     it.effect(
-      `yields before the next provider call, releases resources, and ${expired ? "preserves the original deadline" : "resumes the same Run"}`,
+      `yields before the next provider call, releases resources, and ${expired ? "resumes after downtime" : "resumes the same Run"}`,
       () =>
         Effect.gen(function* () {
           const ledger = yield* SubmissionLedger;
@@ -5588,10 +5592,8 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
             if (expired) yield* TestClock.adjust(Duration.seconds(30));
             const second = yield* runtime.processThreadHead(receipt.threadId);
 
-            expect(Option.isSome(second) && second.value.outcome).toBe(
-              expired ? "failed" : "completed",
-            );
-            expect(scripted.prompts).toHaveLength(expired ? 1 : 2);
+            expect(Option.isSome(second) && second.value.outcome).toBe("completed");
+            expect(scripted.prompts).toHaveLength(2);
             expect(yield* Ref.get(acquired)).toBe(2);
             expect(yield* Ref.get(released)).toBe(2);
             expect(yield* Ref.get(toolCalls)).toBe(1);
@@ -5711,12 +5713,9 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
         expect(scripted.prompts).toHaveLength(0);
         yield* TestClock.adjust(Duration.seconds(31));
         const settlements = yield* runtime.processThread(agent, receipt.threadId);
-        const alreadyStarted = location === "run:after-start-append";
 
-        expect(settlements.map((entry) => entry.outcome)).toEqual([
-          alreadyStarted ? "failed" : "completed",
-        ]);
-        expect(scripted.prompts).toHaveLength(alreadyStarted ? 0 : 1);
+        expect(settlements.map((entry) => entry.outcome)).toEqual(["completed"]);
+        expect(scripted.prompts).toHaveLength(1);
         const records = yield* readLog(thread);
         const starts = records.filter(({ record }) => record.payload._tag === "RunStarted");
 
@@ -5731,7 +5730,7 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
   );
 
   it.effect(
-    "rejects a changed duration after process loss without moving the canonical deadline",
+    "retains the original execution allowance after process loss and deployment downtime",
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
@@ -5773,25 +5772,21 @@ layer(testLayer)("RUN-030 canonical duration", (it) => {
           scripted.model,
         );
 
-        const rejected = yield* Effect.exit(
-          runtime.processThread(wider, receipt.threadId).pipe(Effect.provide(searchToolLayer)),
-        );
+        const settlements = yield* runtime
+          .processThread(wider, receipt.threadId)
+          .pipe(Effect.provide(searchToolLayer));
 
-        expect(failureTag(rejected)).toBe("RunJournalError");
-        expect(scripted.prompts).toHaveLength(1);
+        expect(settlements.map((entry) => entry.outcome)).toEqual(["completed"]);
+        expect(scripted.prompts).toHaveLength(2);
         const after = yield* readLog(thread);
 
         expect(after.find(({ record }) => record.payload._tag === "RunStarted")).toEqual(start);
 
-        const settlements = yield* runtime
-          .processThread(agent, receipt.threadId)
-          .pipe(Effect.provide(searchToolLayer));
-
-        expect(settlements.map((entry) => entry.outcome)).toEqual(["failed"]);
-        expect(scripted.prompts).toHaveLength(1);
-        const settlement = (yield* readLog(thread)).at(-1)?.record.payload;
-
-        expect(settlement).toMatchObject({ _tag: "SubmissionSettled", policyLimit: "duration" });
+        expect(
+          yield* runtime
+            .processThread(wider, receipt.threadId)
+            .pipe(Effect.provide(searchToolLayer)),
+        ).toEqual([]);
       }),
   );
 
@@ -6030,21 +6025,49 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
       );
 
       const agent = Agent.withModel(definition, hangingModel);
-      const thread = "thread-duration-rail";
 
-      yield* runtime.submit(agent, { question: "slow?" }, submitOptions(thread, "duration-1"));
-      const worker = yield* Effect.forkChild(runtime.processThread(agent, decodeThreadId(thread)));
+      for (const location of [
+        undefined,
+        "run:before-duration-append",
+        "run:after-duration-append",
+      ] as const) {
+        const thread = `thread-duration-rail-${location}`;
 
-      yield* TestClock.adjust(Duration.seconds(6));
-      const settlements = yield* Fiber.join(worker);
+        yield* runtime.submit(agent, { question: "slow?" }, submitOptions(thread, "duration-1"));
+        if (location !== undefined) yield* armFailpoint(location);
 
-      expect(settlements[0]?.outcome).toBe("failed");
+        const worker = yield* Effect.forkChild(
+          Effect.exit(runtime.processThread(agent, decodeThreadId(thread))),
+        );
 
-      const settled = lastSettlement(yield* readLog(thread));
+        yield* TestClock.adjust(Duration.seconds(6));
+        const first = yield* Fiber.join(worker);
 
-      expect(settled.outcome).toBe("failed");
-      expect(settled.policyLimit).toBe("duration");
-      expect(settled.result).toMatchObject({ errorTag: "AgentPolicyError" });
+        if (location !== undefined) {
+          expect(failureTag(first)).toBe("DurableRuntimeFailpointError");
+          yield* clearFailpoint;
+
+          const retry = yield* Effect.forkChild(
+            runtime.processThread(agent, decodeThreadId(thread)),
+          );
+
+          yield* TestClock.adjust("1 day");
+          expect((yield* Fiber.join(retry))[0]?.outcome).toBe("failed");
+        } else {
+          expect(Exit.isSuccess(first) && first.value[0]?.outcome).toBe("failed");
+        }
+
+        const settled = lastSettlement(yield* readLog(thread));
+
+        expect(settled.outcome).toBe("failed");
+        expect(settled.policyLimit).toBe("duration");
+        expect(settled.result).toMatchObject({ errorTag: "AgentPolicyError" });
+        expect(
+          (yield* readLog(thread)).filter(
+            ({ record }) => record.payload._tag === "RunDurationExhausted",
+          ),
+        ).toHaveLength(1);
+      }
     }),
   );
 
@@ -6312,6 +6335,225 @@ layer(pricedTestLayer)("RUN-035 durable cost accounting", (it) => {
           policyLimit: "cost",
           usageSummary: settlement?.usageSummary,
         });
+      }),
+  );
+});
+
+layer(testLayer)("deployment continuity", (it) => {
+  // Incident: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-68
+  it.effect(
+    "resumes an interrupted request after an additive tool deploy without repeating its action",
+    () =>
+      Effect.gen(function* () {
+        const effects = yield* Ref.make(0);
+
+        const action = Search.addDependency(DurableStep)
+          .setFailure(DurableStepError)
+          .annotate(ToolExecutionClass, "idempotent");
+
+        const extra = Tool.make("additional_lookup", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        }).annotate(ToolExecutionClass, "readonly");
+
+        const oldTools = Toolkit.make(action);
+        const newTools = Toolkit.make(action, extra);
+
+        const oldDefinition = {
+          ...searchDefinition,
+          toolkit: oldTools,
+          completionFromTools: [
+            { tool: "search", project: () => Option.some({ answer: "request preserved" }) },
+          ],
+        };
+
+        const newDefinition = { ...oldDefinition, toolkit: newTools };
+
+        const scripted = yield* makeScriptedModel(() => toolCallParts);
+
+        const handlers = newTools.toLayer({
+          search: () =>
+            Effect.flatMap(DurableStep, (step) =>
+              step.do(
+                "accepted-action",
+                Search.successSchema,
+                Ref.update(effects, (count) => count + 1).pipe(Effect.as({ available: true })),
+              ),
+            ),
+          additional_lookup: () => Effect.succeed("unused"),
+        });
+
+        const oldBindings = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(oldDefinition, scripted.model),
+            definitions: { agent: "conversation", model: "scripted", tools: ["search"] },
+          },
+        ]).pipe(Effect.provide(handlers));
+
+        const currentBindings = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(newDefinition, scripted.model),
+            definitions: {
+              agent: "conversation",
+              model: "scripted",
+              tools: ["search", "additional_lookup"],
+            },
+            continuity: {
+              versions: {
+                agent: "conversation-semantics",
+                tools: { search: "search-command", additional_lookup: "lookup" },
+              },
+              retainedManifests: [
+                yield* makeBindingManifest(
+                  oldDefinition,
+                  { agent: "conversation", model: "scripted", tools: ["search"] },
+                  { agent: "conversation-semantics", tools: { search: "search-command" } },
+                ),
+              ],
+            },
+          },
+        ]).pipe(Effect.provide(handlers));
+
+        const receipt = yield* Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
+
+          const receipt = yield* runtime.submitRegistered(
+            { definition: oldDefinition },
+            { question: "preserve this request" },
+            submitOptions("deploy-continuity", "original-request"),
+          );
+
+          yield* armFailpoint("step:after-step-append");
+          const interrupted = yield* Effect.exit(runtime.processThreadHead(receipt.threadId));
+
+          expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
+          yield* clearFailpoint;
+
+          return receipt;
+        }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(oldBindings)));
+
+        expect(yield* Ref.get(effects)).toBe(1);
+        const retained = yield* readLog(receipt.threadId);
+
+        yield* TestClock.adjust("2 days");
+        const unproved = currentBindings.map((binding) => ({ ...binding, retainedManifests: [] }));
+
+        const noManifest = yield* DurableAgentRuntime.use((runtime) =>
+          runtime.processThreadHead(receipt.threadId),
+        ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(unproved)), Effect.exit);
+
+        expect(failureTag(noManifest)).toBe("BindingDigestMismatch");
+        expect(yield* Ref.get(effects)).toBe(1);
+
+        const followup = yield* Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
+          const completed = yield* runtime.processThreadHead(receipt.threadId);
+
+          expect(Option.isSome(completed) && completed.value.outcome).toBe("completed");
+          expect(Option.isSome(completed) && completed.value.submissionId).toBe(
+            receipt.submissionId,
+          );
+          expect(
+            yield* runtime.submit(
+              { definition: oldDefinition },
+              { question: "preserve this request" },
+              {
+                ...submitOptions(receipt.threadId, "original-request"),
+                definitions: oldBindings[0]!.digests,
+              },
+            ),
+          ).toEqual(receipt);
+
+          const forged = yield* runtime
+            .submit(
+              { definition: newDefinition },
+              { question: "forged replay metadata" },
+              {
+                ...submitOptions(receipt.threadId, "forged"),
+                definitions: {
+                  ...currentBindings[0]!.digests,
+                  agent: oldBindings[0]!.digests.tools,
+                },
+              },
+            )
+            .pipe(Effect.exit);
+
+          expect(failureTag(forged)).toBe("AdmissionPolicyError");
+
+          const followup = yield* runtime.submitRegistered(
+            { definition: newDefinition },
+            { question: "follow up" },
+            submitOptions(receipt.threadId, "follow-up"),
+          );
+
+          expect(followup.threadId).toBe(receipt.threadId);
+          yield* armFailpoint("turn:after-response-append");
+          expect(failureTag(yield* Effect.exit(runtime.processThreadHead(receipt.threadId)))).toBe(
+            "DurableRuntimeFailpointError",
+          );
+          yield* clearFailpoint;
+
+          return followup;
+        }).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(currentBindings)));
+
+        expect(yield* Ref.get(effects)).toBe(1);
+        // Same wire shape with different meaning must be refused just like a changed codec.
+        for (const changedSchema of [false, true]) {
+          const changed = changedSchema
+            ? action.setParameters(Schema.Struct({ query: Schema.Number }))
+            : action;
+
+          const incompatible = { ...oldDefinition, toolkit: Toolkit.make(changed) };
+
+          const bindings = yield* compileRegistrations([
+            {
+              agent: Agent.withModel(incompatible, scripted.model),
+              definitions: { agent: "new-deploy", model: "scripted", tools: ["search"] },
+              continuity: {
+                versions: {
+                  agent: "conversation-semantics",
+                  tools: { search: changedSchema ? "search-command" : "different-command" },
+                },
+              },
+            },
+          ]).pipe(Effect.provide(handlers));
+
+          const refused = yield* DurableAgentRuntime.use((runtime) =>
+            runtime.processThreadHead(receipt.threadId),
+          ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(bindings)), Effect.exit);
+
+          expect(failureTag(refused)).toBe("BindingDigestMismatch");
+          expect(yield* Ref.get(effects)).toBe(1);
+        }
+        yield* TestClock.adjust("2 days");
+
+        // Reinstantiation can remove an unused Tool; the pending operation still needs its exact contract.
+        const restored = yield* compileRegistrations([
+          {
+            agent: Agent.withModel(oldDefinition, scripted.model),
+            definitions: { agent: "restored-deploy", model: "scripted", tools: ["search"] },
+            continuity: {
+              versions: { agent: "conversation-semantics", tools: { search: "search-command" } },
+            },
+          },
+        ]).pipe(Effect.provide(handlers));
+
+        const completed = yield* DurableAgentRuntime.use((runtime) =>
+          runtime.processThreadHead(receipt.threadId),
+        ).pipe(Effect.provide(DurableAgentRuntime.layerWithBindings(restored)));
+
+        expect(Option.isSome(completed) && completed.value.submissionId).toBe(
+          followup.submissionId,
+        );
+        expect(Option.isSome(completed) && completed.value.outcome).toBe("completed");
+        expect(yield* Ref.get(effects)).toBe(2);
+        expect(scripted.prompts).toHaveLength(2);
+        const after = yield* readLog(receipt.threadId);
+
+        expect(after.slice(0, retained.length)).toEqual(retained);
+        expect(
+          after.filter(({ record }) => record.payload._tag === "ToolCallSettled"),
+        ).toHaveLength(2);
       }),
   );
 });

@@ -532,7 +532,7 @@ interface RunContext {
   readonly pendingFollowUps: Array<Prompt.RawInput>;
   /** Wall-clock Run start, the base of the run-status elapsed rendering (RUN-024). */
   readonly startedAtMillis: number;
-  /** Absolute `maxDuration` rail shared by every durable Attempt (RUN-030). */
+  /** Absolute `maxDuration` rail for this Attempt, optionally tightened by its coordinator. */
   readonly durationDeadlineMillis: number;
   history: Prompt.Prompt;
   modelCalls: number;
@@ -7921,9 +7921,8 @@ function streamWithCompletion<
           const maxDurationMillis = Duration.toMillis(agent.definition.policy.maxDuration);
           const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
 
-          // RUN-030: a durable coordinator supplies the logical Run deadline from
-          // canonical Run-start evidence. Taking the earlier deadline keeps this
-          // public option tightening-only for every other caller.
+          // A coordinator can impose an earlier deadline (for example a worker grant).
+          // This option can only tighten the fresh execution allowance.
           const durationDeadlineMillis =
             options.durationDeadline === undefined
               ? attemptDeadlineMillis

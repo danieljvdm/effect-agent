@@ -276,7 +276,7 @@ describe("live Thread projection and alarm backfill", () => {
   it.each(["failure", "defect", "timeout"] as const)(
     "runs canonical work before reporting a backfill %s and releases resources",
     (failure) =>
-      withThread(async (thread) => {
+      withThread(async (thread, _now, advance) => {
         projectionControls.set(thread, { skipLive: true });
         await submit(thread, plannerDefinition);
         projectionControls.set(thread, { skipLive: true, operation: "drain", failure });
@@ -287,12 +287,13 @@ describe("live Thread projection and alarm backfill", () => {
 
         expect(resources?.released).toBe(resources?.acquired);
         projectionControls.delete(thread);
+        await advance(100);
         await quiesce(thread);
       }),
   );
 
   it("runs native work before reporting an unrelated host setup failure", () =>
-    withThread(async (thread) => {
+    withThread(async (thread, _now, advance) => {
       await submit(thread, plannerDefinition);
       hostMaintenanceControls.set(thread, {
         dispatchTimeoutMillis: 1_000,
@@ -306,11 +307,12 @@ describe("live Thread projection and alarm backfill", () => {
       expect(await allSettled(thread, namespace)()).toBe(true);
       expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
       hostMaintenanceControls.delete(thread);
+      await advance(100);
       await quiesce(thread);
     }));
 
   it("preserves a completed interruption while a sibling dispatch remains blocked", () =>
-    withThread(async (thread) => {
+    withThread(async (thread, _now, advance) => {
       projectionControls.set(thread, { skipLive: true });
       await submit(thread, plannerDefinition);
       projectionControls.set(thread, {
@@ -340,6 +342,7 @@ describe("live Thread projection and alarm backfill", () => {
         projectionControls.delete(thread);
         release();
       }
+      await advance(100);
       await quiesce(thread);
       expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
     }));

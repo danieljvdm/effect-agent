@@ -169,6 +169,9 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
  * protocol change that silently stops exercising a location fails the certification.
  */
 export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLocation> = [
+  // Active timeout recording is covered before/after append by durable-runtime.test.ts.
+  "run:before-duration-append",
+  "run:after-duration-append",
   // Tier 2 has no native compaction; dedicated checkpoint process-loss tests cover these.
   "checkpoint:before-save",
   "checkpoint:after-save",

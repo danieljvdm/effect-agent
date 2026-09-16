@@ -52,6 +52,7 @@ import {
 } from "../ThreadStore.ts";
 import {
   definitionDigestsEqual,
+  bindingSupports,
   resolveDefinitionBinding,
   type ResolvedBinding,
 } from "./agent-registration.ts";
@@ -104,8 +105,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
 
     const matching = deps.bindings.filter(
       (binding) =>
-        binding.agentId === created.agentId &&
-        definitionDigestsEqual(binding.digests, created.definitions),
+        binding.agentId === created.agentId && bindingSupports(binding, created.definitions),
     );
 
     if (matching.length !== 1) return yield* failure("context", "binding-mismatch");
@@ -310,7 +310,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
             !Schema.is(MessageAdmission)(metadata) ||
             metadata.peerName !== request.name ||
             saved.envelope.agentId !== target.agentId ||
-            !definitionDigestsEqual(saved.envelope.definitions, target.digests) ||
+            !bindingSupports(target, saved.envelope.definitions) ||
             !sameJson(saved.envelope.input, input) ||
             (inReplyTo === undefined || metadata.inReplyTo === undefined
               ? inReplyTo !== metadata.inReplyTo

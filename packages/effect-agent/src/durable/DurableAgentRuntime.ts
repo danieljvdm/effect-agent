@@ -139,6 +139,7 @@ import {
   BindingUnavailable,
   compileRegistrations,
   definitionDigestsEqual,
+  bindingSupports,
   type AgentRegistration,
   type DurableBindingFailure,
   makeLegacyWorkerBinding,
@@ -184,6 +185,7 @@ import {
   RecordId,
   RepairAnnotated,
   RunStartedRecord,
+  RunDurationExhausted,
   SettlementFailureDiagnostic,
   SubagentJoined,
   SubagentLineageRecorded,
@@ -235,6 +237,8 @@ import {
   runIdForSubmission,
   runStartedBatchId,
   runStartedRecordId,
+  runDurationRecordId,
+  runDurationBatchId,
   subagentJoinBatchId,
   subagentJoinedRecordId,
   subagentLineageBatchId,
@@ -2551,13 +2555,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const recordId = runStartedRecordId(runId);
     const existing = yield* canonicalRunStartFromRecords(records, runId);
     let start: RecordEnvelope;
+    let allowance = maxDurationMillis;
 
     if (existing !== undefined && existing.payload._tag === "RunStarted") {
-      if (existing.payload.maxDurationMillis !== maxDurationMillis) {
-        return yield* RunJournalError.make({
-          message: `Run ${runId} started with a ${existing.payload.maxDurationMillis}ms duration allowance; the replacement Binding supplies ${maxDurationMillis}ms`,
-        });
-      }
+      allowance = existing.payload.maxDurationMillis;
       start = existing;
     } else {
       const executionStarted = records.some(
@@ -2567,7 +2568,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       if (executionStarted) {
         return yield* RunJournalError.make({
-          message: `Run ${runId} has execution records but no canonical start; reset incompatible private-development data`,
+          message: `Run ${runId} has execution records but no canonical start; retain the request for evidence repair`,
         });
       }
       start = yield* makeEnvelope(
@@ -2588,7 +2589,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     return {
       startedAt: start.createdAt,
-      deadline: DateTime.addDuration(start.createdAt, Duration.millis(maxDurationMillis)),
+      // Downtime is not execution. Reuse the original per-Attempt allowance without
+      // moving the Run start or resetting journaled turn, Tool or cost accounting.
+      deadline: records.some(
+        ({ record }) =>
+          record.payload._tag === "RunDurationExhausted" && record.payload.runId === runId,
+      )
+        ? start.createdAt
+        : DateTime.addDuration(yield* DateTime.now, Duration.millis(allowance)),
     };
   });
 
@@ -7565,6 +7573,27 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         // lane would strand the repair); a reserved row WITHOUT a canonical join is an open
         // attached-child obligation and the parent never settles across it (spec §13).
         if (outcome._tag === "failed" && outcome.policyLimit === "duration") {
+          const exhaustedId = runDurationRecordId(runIdForSubmission(submissionId));
+
+          if (!(yield* refreshControl()).some(({ record }) => record.recordId === exhaustedId)) {
+            yield* hit("run:before-duration-append");
+            yield* appendBatch(
+              ctx,
+              CanonicalBatch.make({
+                batchId: runDurationBatchId(runIdForSubmission(submissionId)),
+                producerId: config.producerId,
+                records: [
+                  yield* makeEnvelope(
+                    exhaustedId,
+                    RunDurationExhausted.make({
+                      runId: runIdForSubmission(submissionId),
+                    }),
+                  ),
+                ],
+              }),
+            );
+            yield* hit("run:after-duration-append");
+          }
           yield* reconcileExpiredChildren(ctx, submission, yield* Ref.get(tokenRef));
         }
         const openObligation = yield* completeJoinedReleases(submission);
@@ -7601,60 +7630,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }
     }).pipe(Effect.scoped);
 
-  /**
-   * Framework-owned Schema-stable `ChildCompatibilityFailure` Settlement for a parent-linked
-   * child whose exact Binding cannot be resolved at claim time (spec §11, SUB-023/SUB-032): no
-   * application code runs, the child never executes, and the parent joins the bounded failure
-   * through the normal verification path. A pre-existing reservation or canonical settlement is
-   * completed instead of re-decided.
-   */
-  const settleChildCompatibility = Effect.fn("DurableAgentRuntime.settleChildCompatibility")(
-    function* (
-      claim: Claim,
-      submission: SubmissionSnapshot,
-      failure: DurableBindingFailure,
-    ): Effect.fn.Return<Settlement, DurableWorkerFailure> {
-      yield* store.materialize(
-        ThreadMaterialization.make({
-          threadId: submission.threadId,
-          producerEpoch: claim.producerEpoch,
-        }),
-      );
-      yield* ensureThreadCreated(submission.threadId, submission.agentId, submission.agentDigests);
-      const ctx = yield* attemptContextFor(submission.threadId, claim.producerEpoch);
-      const tokenRef = yield* Ref.make(claim.ownershipToken);
-      const records = yield* readControl(submission.threadId, [submission.submissionId]);
-
-      const recorded = records.some(
-        (envelope) =>
-          envelope.record.recordId === submissionSettlementRecordId(submission.submissionId),
-      );
-
-      const snapshot = yield* ledger.loadRecoverySnapshot(
-        RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
-      );
-
-      if (snapshot.reservation !== undefined) {
-        // An earlier pass already reserved the one exact outcome: complete it, never re-decide.
-        return yield* completeReservation(ctx, submission, snapshot.reservation, recorded);
-      }
-
-      const result = yield* Schema.decodeEffect(SettlementFailureDiagnostic)({
-        errorTag: "ChildCompatibilityFailure",
-        message: boundedText(failure.message),
-      }).pipe(Effect.orDie);
-
-      return yield* terminalize(ctx, submission, tokenRef, { _tag: "failed", result }, false);
-    },
-  );
-
-  /**
-   * Drain one Thread lane under claim-time Binding resolution (plan §1.7): every claimed
-   * head resolves through the selected private binding path before any code runs. A refusal
-   * writes the framework `ChildCompatibilityFailure` Settlement for a
-   * parent-linked child and surfaces the typed refusal (after releasing the claim) for a root —
-   * a worker never runs a claimed head against different code (SUB-023).
-   */
+  /** A missing compatible binding leaves both roots and children owed, with their claims released. */
   type CapturedWorkerBinding = Effect.Success<ReturnType<typeof makeLegacyWorkerBinding>>;
 
   // Register cleanup before any interruptible work can observe a granted claim. The token
@@ -7692,7 +7668,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const processThreadHead = (
     resolve: (
       submission: SubmissionSnapshot,
-    ) => Effect.Effect<CapturedWorkerBinding, DurableBindingFailure>,
+    ) => Effect.Effect<CapturedWorkerBinding, DurableBindingFailure | DurableWorkerFailure>,
     threadId: ThreadId,
     options?: { readonly yieldAfter?: DateTime.Utc },
   ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
@@ -7772,14 +7748,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         );
 
         if (resolution._tag === "refused") {
-          if (submission.parentLinkage !== undefined) {
-            return Option.some(
-              yield* settleChildCompatibility(claim, submission, resolution.failure),
-            );
-          }
-
-          // Root Submission: release the claim and surface the typed refusal — the obligation
-          // stays visible and no different code ever runs (spec §11).
           return yield* resolution.failure;
         }
 
@@ -7795,7 +7763,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const drainThread = (
     resolve: (
       submission: SubmissionSnapshot,
-    ) => Effect.Effect<CapturedWorkerBinding, DurableBindingFailure>,
+    ) => Effect.Effect<CapturedWorkerBinding, DurableBindingFailure | DurableWorkerFailure>,
     threadId: ThreadId,
   ): Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
     Effect.gen(function* () {
@@ -7867,25 +7835,83 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       );
     });
 
+  const resolveRetainedBinding = Effect.fn("DurableAgentRuntime.resolveRetainedBinding")(function* (
+    submission: SubmissionSnapshot,
+  ) {
+    const exact = registeredBindings.find(
+      (binding) =>
+        binding.agentId === submission.agentId &&
+        definitionDigestsEqual(binding.digests, submission.agentDigests),
+    );
+
+    if (exact !== undefined) return exact;
+
+    const candidates = registeredBindings.filter(
+      (binding) => binding.agentId === submission.agentId,
+    );
+
+    const candidate = candidates[0];
+
+    // A missing/ambiguous registration needs no history read. If every retained Tool contract
+    // is supported, neither does an ordinary additive deployment.
+    if (candidate === undefined || candidates.length !== 1)
+      return yield* resolveWorkerBinding(
+        registeredBindings,
+        submission.agentId,
+        submission.agentDigests,
+      );
+    if (bindingSupports(candidate, submission.agentDigests)) return candidate;
+
+    // A checkpoint can omit a settled batch that still supplies completion projection.
+    // Compatibility reads the bounded authoritative prefix, never a reduced checkpoint.
+    const records = yield* Effect.gen(function* () {
+      const tail = yield* store.inspectTail(
+        ThreadTailRequest.make({ threadId: submission.threadId }),
+      );
+
+      return yield* Stream.runCollect(
+        canonicalRange(submission.threadId, tail.tailSequence).pipe(
+          Stream.filter(controlRecords([submission.submissionId])),
+        ),
+      );
+    }).pipe(Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed([])));
+
+    const completionTools =
+      candidate === undefined
+        ? []
+        : [
+            ...(candidate.definition.completion === undefined
+              ? []
+              : [candidate.definition.completion.tool]),
+            ...(candidate.definition.completionFromTools?.map((entry) => entry.tool) ?? []),
+          ];
+
+    const pending = yield* pendingToolBatchFor(
+      records,
+      runIdForSubmission(submission.submissionId),
+      completionTools,
+    );
+
+    return yield* resolveWorkerBinding(
+      registeredBindings,
+      submission.agentId,
+      submission.agentDigests,
+      pending?.calls
+        .filter((call) => call.providerExecuted !== true || completionTools.includes(call.name))
+        .map((call) => call.name) ?? [],
+    );
+  });
+
   const processThreadResolvedImpl = (
     threadId: ThreadId,
   ): Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
-    drainThread(
-      (submission) =>
-        resolveWorkerBinding(registeredBindings, submission.agentId, submission.agentDigests),
-      threadId,
-    );
+    drainThread(resolveRetainedBinding, threadId);
 
   const processThreadHeadImpl = (
     threadId: ThreadId,
     options?: { readonly yieldAfter?: DateTime.Utc },
   ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
-    processThreadHead(
-      (submission) =>
-        resolveWorkerBinding(registeredBindings, submission.agentId, submission.agentDigests),
-      threadId,
-      options,
-    );
+    processThreadHead(resolveRetainedBinding, threadId, options);
 
   const claimFor = Effect.fn("DurableAgentRuntime.claimFor")(function* (
     submission: SubmissionSnapshot,
@@ -8311,8 +8337,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       if (
         start?.payload._tag === "RunStarted" &&
         start.payload.runId === runId &&
-        (yield* Clock.currentTimeMillis) >=
-          DateTime.toEpochMillis(start.createdAt) + start.payload.maxDurationMillis &&
+        (records.some(
+          ({ record }) =>
+            record.payload._tag === "RunDurationExhausted" && record.payload.runId === runId,
+        ) ||
+          (submission.workerAdmission !== undefined &&
+            (yield* Clock.currentTimeMillis) >=
+              submission.workerAdmission.origin.expiresAtMillis)) &&
         (decision._tag === "CompleteChildAdmission" ||
           decision._tag === "RepairSubagentStartLink" ||
           decision._tag === "AwaitChildAdmissionResolution" ||
@@ -9087,6 +9118,44 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               }),
             ),
           );
+
+    // Replay metadata is registration authority, never a caller's compatibility assertion.
+    // Frozen native deliveries already proved their original envelope above. Root retries may
+    // reuse only the original row; a new root must name a host-owned contract.
+    if (
+      options.definitions.replay !== undefined &&
+      workerAdmission === undefined &&
+      messageAdmission === undefined &&
+      !registeredBindings.some(
+        (binding) =>
+          binding.agentId === agent.definition.id &&
+          (definitionDigestsEqual(binding.digests, options.definitions) ||
+            binding.retainedManifests?.some((retained) =>
+              definitionDigestsEqual(
+                DefinitionDigests.make({ ...retained.digests, replay: retained.replay }),
+                options.definitions,
+              ),
+            )),
+      )
+    ) {
+      const retained = yield* ledger.lookup(
+        SubmissionLookupByKey.make({
+          threadId: options.threadId,
+          principal: options.principal,
+          idempotencyKey: options.idempotencyKey,
+        }),
+      );
+
+      if (
+        Option.isNone(retained) ||
+        retained.value.agentId !== agent.definition.id ||
+        !definitionDigestsEqual(retained.value.agentDigests, options.definitions)
+      )
+        return yield* AdmissionPolicyError.make({
+          reason: "refused",
+          code: "unregistered-replay-contract",
+        });
+    }
 
     const admitted = yield* ledger.admit(
       yield* Schema.decodeEffect(AdmissionRequest)({

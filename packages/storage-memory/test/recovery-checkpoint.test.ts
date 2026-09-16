@@ -73,7 +73,7 @@ const scenarios = [
   "definitions",
   "gap",
   "uncertain",
-  "deadline",
+  "downtime",
   "approval",
   "steps",
   "second-rollover",
@@ -278,7 +278,7 @@ describe("disposable durable recovery checkpoint", () => {
       const callsBefore = calls;
 
       yield* failpoints.clear;
-      if (scenario === "deadline") yield* TestClock.adjust("31 seconds");
+      if (scenario === "downtime") yield* TestClock.adjust("31 seconds");
       let readRecords = 0;
       const checkpoints = store.recoveryCheckpoints!;
 
@@ -376,10 +376,6 @@ describe("disposable durable recovery checkpoint", () => {
         );
 
         expect(pending.submission.state).toBe("unknown");
-      } else if (scenario === "deadline") {
-        expect(Option.isSome(outcome) && outcome.value.outcome).toBe("failed");
-        expect(requests).toHaveLength(requestsBefore);
-        expect(calls).toBe(callsBefore);
       } else {
         expect(Option.isSome(outcome) && outcome.value.outcome).toBe("completed");
         expect(calls).toBe(scenario === "second-rollover" ? 5 : 4);

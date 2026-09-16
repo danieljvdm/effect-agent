@@ -126,7 +126,7 @@ it.live("repairs an approval wake sent before native SQL Workflow suspension", (
 );
 
 it.live.each(["duration", "turns"] as const)(
-  "preserves the original %s budget through SQL approval restart",
+  "preserves %s accounting through SQL approval restart without charging suspension time",
   (limit) =>
     Effect.gen(function* () {
       const directory = yield* temporaryDirectory;
@@ -191,7 +191,7 @@ it.live.each(["duration", "turns"] as const)(
         );
         const settlement = yield* host.awaitSettlement(before.receipt);
 
-        expect(settlement.outcome).toBe(limit === "duration" ? "failed" : "completed");
+        expect(settlement.outcome).toBe("completed");
         yield* until(pendingIntents, (rows) => rows.length === 0);
         const log = yield* readLog(before.receipt.threadId);
 
@@ -199,14 +199,14 @@ it.live.each(["duration", "turns"] as const)(
           log.find((row) => row.record.payload._tag === "SubmissionSettled")?.record.payload,
         ).toMatchObject(
           limit === "duration"
-            ? { policyLimit: "duration" }
+            ? { outcome: "completed" }
             : { finishReason: "budget-exhausted", exhausted: "turns" },
         );
         expect(log.filter((row) => row.record.payload._tag === "RunStarted")).toEqual([
           before.start,
         ]);
-        expect(yield* Ref.get(fixture.modelCalls)).toBe(limit === "duration" ? 1 : 2);
-        expect(yield* Ref.get(fixture.toolCalls)).toBe(limit === "duration" ? 0 : 1);
+        expect(yield* Ref.get(fixture.modelCalls)).toBe(2);
+        expect(yield* Ref.get(fixture.toolCalls)).toBe(1);
       }).pipe(Effect.provide(stack));
     }).pipe(Effect.scoped, Effect.provide(platform)),
 );

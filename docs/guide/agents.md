@@ -133,6 +133,60 @@ type Failure = Agent.Failure<typeof definition>;
 Selecting between several definitions or bindings produces the union of their errors and
 requirements. Provide every branch or narrow the selection before execution.
 
+## Resume across deployments
+
+Keep Thread identities independent of deployment fingerprints. The original admission, input,
+principal, digests, idempotency key and Receipt remain immutable. Register one current executable
+per Agent and declare its replay contract separately:
+
+```ts
+const registration = {
+  agent: definition,
+  model: modelLayer,
+  definitions: deploymentDefinitions,
+  continuity: {
+    versions: {
+      agent: "conversation-contract",
+      tools: { search: "search-command" },
+    },
+  },
+};
+```
+
+Supply a semantic version for every Tool. Change it when handler meaning, durable Step codecs or
+names, external idempotency keys, authorization semantics, or child/report protocols change.
+Version the Agent when input interpretation, completion projection or orchestration semantics
+change. Registration automatically includes input/output/update schemas, completion declarations,
+Tool schemas, execution classes and kinds. JSON Schema cannot detect a changed implementation or
+codec transform; semantic versions are the host's explicit assertion, not inferred from code.
+
+New admissions retain this contract. After interruption, recovery compares the Agent contract and
+the Tools in the canonical pending batch, including results still needed for completion projection.
+Adding a Tool or changing model configuration does not invalidate an already committed operation.
+A pending Tool with a changed schema or semantic version cannot execute. It retains its original
+request and Receipt until compatible code returns. Existing durable action and delivery receipts
+continue to govern replay; a replay declaration does not create external idempotency.
+
+Digest-only admissions contain insufficient information to prove replay compatibility. Export a
+`BindingManifest` with `makeBindingManifest(originalDefinition, originalDefinitions, versions)`
+from the original release, audit its semantics, and supply that data as
+`continuity.retainedManifests`. Registration recomputes the original fingerprints before matching
+an admission. This is metadata for retained work, not an old executable registration or a rewrite
+of stored digests. Do not construct it by assigning today's contract to an unexplained old digest.
+Keep each manifest until an authoritative inventory proves no outstanding admission, child,
+report, or delivery needs it. Without proof, recovery waits rather than substituting code.
+
+Cloudflare maintenance persists bounded per-lane binding retries and continues other eligible
+lanes. Reinstantiation retains the backoff; a restored compatible registration resumes the same
+Receipt. A dependency that never recovers cannot be made to succeed by the runtime.
+
+Durable `maxDuration` bounds each active Attempt using its original recorded allowance. Time
+spent evicted, waiting for a binding, or suspended does not consume execution time. An actual
+duration exhaustion is recorded before child cleanup and survives recovery. The Run's start time
+and cumulative turn, Tool and cost accounting are unchanged; immutable worker authorization
+expiry still limits execution. Roll out the matching runtime and storage packages together before
+writing the new duration record; older runtimes cannot read it.
+
 ## Typed and external inputs
 
 The main operations accept `Agent.EncodedInput<typeof definition>`. The runtime decodes that value
