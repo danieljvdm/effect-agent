@@ -223,6 +223,79 @@ describe("TypeSafeClient", () => {
       expect(result.answers.department.probabilities).toEqual({ billing: 0.8, technical: 0.2 });
     }),
   );
+
+  it.effect("leaves omitted optional criteria absent from the returned probabilities", () =>
+    Effect.gen(function* () {
+      const criteria: { billing: string | null; technical?: string | null } = { billing: null };
+
+      const result = yield* Effect.flatMap(TypeSafeClient.TypeSafeClient, (client) =>
+        client.evaluate({
+          model: "jev-latest",
+          state: "hello",
+          questions: { department: { type: "choice", instructions: "Route", criteria } },
+        }),
+      ).pipe(
+        Effect.provide(
+          clientLayer((request) =>
+            Effect.succeed(
+              jsonResponse(request, {
+                model: "jev-latest",
+                answers: {
+                  department: {
+                    type: "choice",
+                    choice: "billing",
+                    probabilities: { billing: 1 },
+                    confidence: 1,
+                  },
+                },
+                usage: { input_tokens: 1, output_tokens: 1 },
+              }),
+            ),
+          ),
+        ),
+      );
+
+      expect(result.answers.department.probabilities).toEqual({ billing: 1 });
+      expect(result.answers.department.probabilities.technical).toBeUndefined();
+    }),
+  );
+
+  it.effect("returns only submitted entries from numeric question and patterned option maps", () =>
+    Effect.gen(function* () {
+      const criteria: Record<`team_${string}`, null> = { team_billing: null };
+      const question = { type: "choice", instructions: "Route", criteria } as const;
+      const questions: Record<number, typeof question> = { 1: question };
+
+      const result = yield* Effect.flatMap(TypeSafeClient.TypeSafeClient, (client) =>
+        client.evaluate({ model: "jev-latest", state: "hello", questions }),
+      ).pipe(
+        Effect.provide(
+          clientLayer((request) =>
+            Effect.succeed(
+              jsonResponse(request, {
+                model: "jev-latest",
+                answers: {
+                  "1": {
+                    type: "choice",
+                    choice: "team_billing",
+                    probabilities: { team_billing: 1 },
+                    confidence: 1,
+                  },
+                },
+                usage: { input_tokens: 1, output_tokens: 1 },
+              }),
+            ),
+          ),
+        ),
+      );
+
+      expect(Object.keys(result.answers)).toEqual(["1"]);
+      expect(result.answers["2"]).toBeUndefined();
+      expect(result.answers["1"]?.probabilities).toEqual({ team_billing: 1 });
+      expect(result.answers["1"]?.probabilities.team_missing).toBeUndefined();
+    }),
+  );
+
   const choice = response.answers.department;
   const score = response.answers.frustration;
 

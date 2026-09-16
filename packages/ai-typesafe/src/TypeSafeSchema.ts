@@ -140,8 +140,8 @@ export const ChoiceAnswer = Schema.Struct({
 });
 
 /**
- * Known criteria infer literal choices and probability keys. A dynamic set of
- * criteria has a string choice and possibly absent dictionary entries.
+ * Known option unions infer literal choices and required probability keys.
+ * Open string or template-pattern option types allow absent dictionary entries.
  *
  * @category models
  * @since 0.1.0
@@ -152,7 +152,9 @@ export type ChoiceAnswer<Choice extends string = string> = Omit<
 > & {
   readonly choice: Choice;
   readonly probabilities: {
-    readonly [K in Choice]: string extends Choice ? number | undefined : number;
+    readonly [K in Choice]: {} extends Pick<Record<Choice, unknown>, K>
+      ? number | undefined
+      : number;
   };
 };
 
@@ -229,10 +231,20 @@ export const EvaluateResponse = Schema.Struct({
 });
 
 type ChoiceAnswerFor<Criteria> = Criteria extends unknown
-  ? ChoiceAnswer<`${Extract<keyof Criteria, string | number>}`>
+  ? Omit<typeof ChoiceAnswer.Type, "choice" | "probabilities"> & {
+      readonly choice: `${Extract<keyof Criteria, string | number>}`;
+      readonly probabilities: {
+        readonly [
+          K in keyof Criteria as K extends string | number ? `${K}` : never
+        ]: {} extends Pick<Criteria, K> ? number | undefined : number;
+      };
+    }
   : never;
 
-/** @category models
+/**
+ * Infer a question's answer, preserving optional choice criteria in its probabilities.
+ *
+ * @category models
  * @since 0.1.0
  */
 export type AnswerFor<Q extends Question> = Q extends ChoiceQuestion
@@ -242,15 +254,15 @@ export type AnswerFor<Q extends Question> = Q extends ChoiceQuestion
     : NoulAnswer;
 
 /**
- * One answer for each statically known question. Runtime-built question maps
- * require checking an entry for absence and narrowing its `type`.
+ * One answer for each required question. Optional properties and open string,
+ * numeric, or template-pattern indexes require checking an entry for absence.
  *
  * @category models
  * @since 0.1.0
  */
 export type Answers<Q extends Questions> = {
-  readonly [K in keyof Q as K extends string | number ? `${K}` : never]: string extends keyof Q
-    ? AnswerFor<Q[K]> | undefined
+  readonly [K in keyof Q as K extends string | number ? `${K}` : never]: {} extends Pick<Q, K>
+    ? AnswerFor<NonNullable<Q[K]>> | undefined
     : AnswerFor<Q[K]>;
 };
 

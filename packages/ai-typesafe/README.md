@@ -58,7 +58,9 @@ including string-valued score legends.
 Use `satisfies TypeSafeSchema.Questions` to retain question keys and choice literals
 when defining questions separately. Runtime-built maps retain broader types:
 unknown answer IDs and probability keys may be absent, and mixed answers must be
-narrowed by `type`.
+narrowed by `type`. Optional criteria remain optional in the probability map.
+Open string, numeric, and template-pattern indexes allow absent entries;
+explicitly required keys keep their required types.
 
 The client builds a response schema from each request. It checks the exact answer
 IDs and kinds, permitted choices, complete probability keys, and matching score
