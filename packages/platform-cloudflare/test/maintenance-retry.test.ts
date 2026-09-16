@@ -168,7 +168,7 @@ describe("maintenance retry deadlines", () => {
         const pass = ThreadMaintenance.use((maintenance) => maintenance.pass);
         const ensure = ThreadMaintenance.use((maintenance) => maintenance.ensureAlarm);
 
-        const snapshot = () =>
+        const snapshot = (submissionId = receipt.submissionId) =>
           Effect.promise(() =>
             runInDurableObject(stubFor(thread), (instance) =>
               instance[DurableObject.RunSymbol](
@@ -177,7 +177,7 @@ describe("maintenance retry deadlines", () => {
                   const store = yield* ThreadStore;
 
                   const snapshot = yield* ledger.loadRecoverySnapshot(
-                    RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+                    RecoverySnapshotRequest.make({ submissionId }),
                   );
 
                   const tail = yield* store.inspectTail(
@@ -307,13 +307,27 @@ describe("maintenance retry deadlines", () => {
         expect(generation.dirty).toBeGreaterThan(generation.processed);
 
         hostFailure = true;
-        for (const location of ["maintenance:retry:before", "maintenance:retry:after"] as const) {
+        for (const location of [
+          "maintenance:binding-retry:before",
+          "maintenance:binding-retry:after",
+          "maintenance:retry:before",
+          "maintenance:retry:after",
+        ] as const) {
           crashAt = location;
           yield* run(pass).pipe(Effect.exit);
           expect(crashAt).toBeUndefined();
-          // The old pre-arm or the committed retry survives the kill. After the bounded
-          // deadline, the original failure can still be retried and ownership released.
+          const afterCrash = yield* snapshot();
+
+          expect(afterCrash.ownership).toBeUndefined();
+          // A crash leaves the pre-arm or the committed event retry intact. Only a crash
+          // BEFORE saving the binding outcome can repeat that Claim at the short deadline.
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).not.toBeNull();
+          yield* run(ensure);
+          yield* TestClock.adjust(100);
+          expect(Exit.isFailure(yield* run(pass))).toBe(true);
+          expect((yield* snapshot()).producerEpoch).toBe(
+            afterCrash.producerEpoch + (location === "maintenance:binding-retry:before" ? 1 : 0),
+          );
           yield* TestClock.adjust(60_000);
         }
 
@@ -351,6 +365,48 @@ describe("maintenance retry deadlines", () => {
         yield* TestClock.adjust(finalRetry! - (yield* Clock.currentTimeMillis));
         expect(Exit.isSuccess(yield* run(pass))).toBe(true);
         expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
+
+        // Clearing a binding wait is also a durable boundary: the completed receipt must
+        // survive either side of that write, and a stale retry must not keep the Object awake.
+        for (const location of [
+          "maintenance:binding-retry:before",
+          "maintenance:binding-retry:after",
+        ] as const) {
+          const nextReceipt = yield* Effect.promise(() =>
+            runClient(
+              CloudflareThreadClient.use((client) =>
+                client.submit(
+                  { definition: plannerDefinition },
+                  { question: "resume after retry clear crash", ref: thread },
+                  submitOptions(thread, `${thread}-${location}`),
+                ),
+              ),
+            ),
+          );
+
+          compatible = false;
+          expect(Exit.isSuccess(yield* run(pass))).toBe(true);
+          yield* TestClock.adjust(5_000);
+          compatible = true;
+          crashAt = location;
+          yield* run(pass).pipe(Effect.exit);
+          expect(crashAt).toBeUndefined();
+          const afterCrash = yield* snapshot(nextReceipt.submissionId);
+
+          expect(afterCrash.ownership).toBeUndefined();
+
+          const completed = yield* Effect.promise(() =>
+            runClient(CloudflareThreadClient.use((client) => client.awaitSettlement(nextReceipt))),
+          );
+
+          expect(completed.submissionId).toBe(nextReceipt.submissionId);
+          expect(completed.outcome).toBe("completed");
+          yield* run(ensure);
+          yield* TestClock.adjust(100);
+          expect(Exit.isSuccess(yield* run(pass))).toBe(true);
+          expect(yield* snapshot(nextReceipt.submissionId)).toEqual(afterCrash);
+          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
+        }
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
     ));
 
