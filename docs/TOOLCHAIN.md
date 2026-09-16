@@ -15,8 +15,8 @@ Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 
 | Tool                                                    | Repository version                                  |
 | ------------------------------------------------------- | --------------------------------------------------- |
-| Bun                                                     | `1.4.0`                                             |
-| Vite+                                                   | `0.3.0`                                             |
+| Bun                                                     | `1.4.2`                                             |
+| Vite+                                                   | `0.3.2`                                             |
 | Alchemy and its Cloudflare runtime                      | `2.0.0-beta.77` with upstream compatibility patches |
 | Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.115`                                      |
 | `effect-cf`                                             | `0.44.1`                                            |

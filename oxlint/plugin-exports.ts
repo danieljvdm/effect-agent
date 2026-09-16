@@ -1,4 +1,4 @@
-import type { RuleTester } from "oxlint/plugins-dev";
+import type { RuleTester } from "vite-plus/lint/plugins-dev";
 
 type Rule = Parameters<RuleTester["run"]>[1];
 type Visitor = ReturnType<NonNullable<Rule["create"]>>;
