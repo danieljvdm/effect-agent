@@ -46,6 +46,7 @@ import {
 } from "effect-agent/durable-failpoint";
 import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
 import { ThreadId, ReceiptId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
+import * as Output from "effect-agent/output";
 import {
   BatchId,
   CanonicalRecordEnvelope,
@@ -1275,6 +1276,65 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       );
 
       expect(failureTag(conflict)).toBe("AdmissionConflict");
+    }),
+  );
+
+  it.effect("#509 retains the complete conversation across consecutive durable Runs", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const scripted = yield* makeScriptedModel((call) => finalParts(String(call + 1)));
+
+      const agent = Agent.withModel(
+        Agent.make("durable-conversation", {
+          input: Schema.String,
+          inputPrompt: (message) => message,
+          output: Output.text(Schema.String),
+          instructions: Prompt.empty,
+          toolkit: Toolkit.empty,
+          policy: plannerDefinition.policy,
+        }),
+        scripted.model,
+      );
+
+      const threadId = decodeThreadId("thread-conversation");
+
+      for (const [index, input] of ["Say 1", "Say 2", "Say 3"].entries()) {
+        yield* runtime.submit(agent, input, submitOptions(threadId, `message-${index + 1}`));
+        const settlements = yield* runtime.processThread(agent, threadId);
+
+        expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+      }
+
+      const conversations = scripted.prompts.map((prompt) =>
+        prompt.content
+          .filter((message) => message.role !== "system")
+          .map((message) => ({
+            role: message.role,
+            text:
+              typeof message.content === "string"
+                ? message.content
+                : message.content
+                    .filter((part) => part.type === "text")
+                    .map((part) => part.text)
+                    .join(""),
+          })),
+      );
+
+      expect(conversations).toEqual([
+        [{ role: "user", text: "Say 1" }],
+        [
+          { role: "user", text: "Say 1" },
+          { role: "assistant", text: "1" },
+          { role: "user", text: "Say 2" },
+        ],
+        [
+          { role: "user", text: "Say 1" },
+          { role: "assistant", text: "1" },
+          { role: "user", text: "Say 2" },
+          { role: "assistant", text: "2" },
+          { role: "user", text: "Say 3" },
+        ],
+      ]);
     }),
   );
 
