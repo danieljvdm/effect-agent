@@ -1,7 +1,7 @@
 import { ReviewFollowUp } from "@effect-agent/pr-review/review";
 import { createTwoFilesPatch } from "diff";
 import type { Redacted } from "effect";
-import { Clock, DateTime, Effect, Encoding, Option, Result, Schema } from "effect";
+import { Clock, Context, DateTime, Effect, Encoding, Option, Result, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { unresolvedChangeRequests, type ReviewHistoryItem } from "./selection.ts";
@@ -1102,3 +1102,9 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     completeReviewCheck,
   } as const;
 });
+
+/** GitHub review operations, provided by the Action composition root. */
+export class GitHubClient extends Context.Service<
+  GitHubClient,
+  Effect.Success<ReturnType<typeof makeGitHubClient>>
+>()("@effect-agent/pr-review-action/GitHubClient") {}

@@ -38,6 +38,7 @@ import { type GeneratedContentOmission, omitGeneratedSourceMaps } from "./genera
 import {
   type ChangedFile,
   GitHubApiFailure,
+  GitHubClient,
   isBinaryAssetPath,
   makeExactPatch,
   makeGitHubClient,
@@ -939,11 +940,12 @@ const prepareReview = Effect.gen(function* () {
 });
 
 const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
-  prepared: Exclude<Effect.Success<typeof prepareReview>, void>,
+  prepared: Omit<Exclude<Effect.Success<typeof prepareReview>, void>, "github">,
   publication: { url?: string },
 ) {
+  const github = yield* GitHubClient;
+
   const {
-    github,
     pull,
     selection,
     reviewAuthor,
@@ -1428,12 +1430,16 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
 });
 
 export const reviewActionProgram = Effect.gen(function* () {
-  const prepared = yield* prepareReview;
+  const setup = yield* prepareReview;
 
-  if (prepared === undefined) return;
-  const { repository, checkName, github, pull, selection } = prepared;
+  if (setup === undefined) return;
+  const { github, ...prepared } = setup;
+  const { repository, checkName, pull, selection } = prepared;
   const publication: { url?: string } = {};
-  const review = reviewPullRequest(prepared, publication);
+
+  const review = reviewPullRequest(prepared, publication).pipe(
+    Effect.provideService(GitHubClient, github),
+  );
 
   if (checkName.length === 0) return yield* review;
 
