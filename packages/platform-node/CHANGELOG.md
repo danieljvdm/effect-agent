@@ -1,5 +1,16 @@
 # @effect-agent/platform-node
 
+## 0.1.0-beta.98
+
+### Patch Changes
+
+- [#507](https://github.com/danieljvdm/effect-agent/pull/507) [`95c962f`](https://github.com/danieljvdm/effect-agent/commit/95c962f8ee45c35f877d0bb21f82d4f6bac6759c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Continue accepted requests with current Agent bindings, retaining original operations and outcomes while allowing later input around unknown work under one Thread lease. BEHAVIOR CHANGE: replace historical binding manifests with per-operation replay versions and deploy matching runtime and storage packages together.
+
+- Updated dependencies [[`95c962f`](https://github.com/danieljvdm/effect-agent/commit/95c962f8ee45c35f877d0bb21f82d4f6bac6759c)]:
+  - effect-agent@0.1.0-beta.98
+  - @effect-agent/storage-sqlite@0.1.0-beta.98
+  - @effect-agent/workflow@0.1.0-beta.98
+
 ## 0.1.0-beta.97
 
 ### Patch Changes

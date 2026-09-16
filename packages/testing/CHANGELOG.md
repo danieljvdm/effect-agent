@@ -1,5 +1,12 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.98
+
+### Patch Changes
+
+- Updated dependencies [[`95c962f`](https://github.com/danieljvdm/effect-agent/commit/95c962f8ee45c35f877d0bb21f82d4f6bac6759c)]:
+  - effect-agent@0.1.0-beta.98
+
 ## 0.1.0-beta.97
 
 ### Patch Changes

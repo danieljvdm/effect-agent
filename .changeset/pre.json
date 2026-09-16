@@ -85,6 +85,7 @@
     "context-service-errors",
     "continuity-across-deployments",
     "correct-mixed-completion",
+    "current-operation-recovery",
     "delegation-containment",
     "delivery-deadlines-own-wakes",
     "direct-compaction-services",
