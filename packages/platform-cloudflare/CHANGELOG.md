@@ -1,5 +1,19 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.96
+
+### Minor Changes
+
+- [#490](https://github.com/danieljvdm/effect-agent/pull/490) [`771498b`](https://github.com/danieljvdm/effect-agent/commit/771498b1952794b8f2f19d1e35b604937bffcc3c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resume retained requests using explicit replay contracts and back off failed and blocked Cloudflare maintenance without abandoning child obligations or changing receipts. BEHAVIOR CHANGE: bound durable execution duration per active Attempt, retain actual duration exhaustion, and deploy matching runtime and storage packages before writing the new record.
+
+### Patch Changes
+
+- [#502](https://github.com/danieljvdm/effect-agent/pull/502) [`c9e1045`](https://github.com/danieljvdm/effect-agent/commit/c9e1045b2c563c6779f40d5cb9dccea14410c654) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Require effect-cf ^0.44.1 so native callback completion retains its callback scheduler.
+
+- Updated dependencies [[`771498b`](https://github.com/danieljvdm/effect-agent/commit/771498b1952794b8f2f19d1e35b604937bffcc3c)]:
+  - effect-agent@0.1.0-beta.96
+  - @effect-agent/storage-cloudflare@0.1.0-beta.96
+
 ## 0.1.0-beta.95
 
 ### Patch Changes

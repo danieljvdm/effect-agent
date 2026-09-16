@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.96
+
+### Minor Changes
+
+- [#490](https://github.com/danieljvdm/effect-agent/pull/490) [`771498b`](https://github.com/danieljvdm/effect-agent/commit/771498b1952794b8f2f19d1e35b604937bffcc3c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resume retained requests using explicit replay contracts and back off failed and blocked Cloudflare maintenance without abandoning child obligations or changing receipts. BEHAVIOR CHANGE: bound durable execution duration per active Attempt, retain actual duration exhaustion, and deploy matching runtime and storage packages before writing the new record.
+
 ## 0.1.0-beta.95
 
 ## 0.1.0-beta.94
