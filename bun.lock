@@ -93,7 +93,7 @@
     },
     "packages/effect-agent": {
       "name": "effect-agent",
-      "version": "0.1.0-beta.94",
+      "version": "0.1.0-beta.95",
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
@@ -107,7 +107,7 @@
     },
     "packages/platform-cloudflare": {
       "name": "@effect-agent/platform-cloudflare",
-      "version": "0.1.0-beta.94",
+      "version": "0.1.0-beta.95",
       "dependencies": {
         "@effect-agent/storage-cloudflare": "workspace:*",
         "@effect/platform-browser": "catalog:",
@@ -133,7 +133,7 @@
       "peerDependencies": {
         "@cloudflare/puppeteer": "^1.1.0",
         "effect": "^4.0.0-rc.115",
-        "effect-cf": "^0.43.0",
+        "effect-cf": "^0.44.0",
       },
       "optionalPeers": [
         "@cloudflare/puppeteer",
@@ -141,7 +141,7 @@
     },
     "packages/platform-node": {
       "name": "@effect-agent/platform-node",
-      "version": "0.1.0-beta.94",
+      "version": "0.1.0-beta.95",
       "dependencies": {
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/workflow": "workspace:*",
@@ -161,7 +161,7 @@
     },
     "packages/pr-review": {
       "name": "@effect-agent/pr-review",
-      "version": "0.1.0-beta.94",
+      "version": "0.1.0-beta.95",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -194,7 +194,7 @@
     },
     "packages/sandbox-local": {
       "name": "@effect-agent/sandbox-local",
-      "version": "0.1.0-beta.94",
+      "version": "0.1.0-beta.95",
       "dependencies": {
         "@effect/platform-node": "catalog:",
         "effect-agent": "workspace:*",
@@ -212,7 +212,7 @@
     },
     "packages/storage-cloudflare": {
       "name": "@effect-agent/storage-cloudflare",
-      "version": "0.1.0-beta.94",
+      "version": "0.1.0-beta.95",
       "dependencies": {
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
@@ -234,7 +234,7 @@
     },
     "packages/storage-memory": {
       "name": "@effect-agent/storage-memory",
-      "version": "0.1.0-beta.94",
+      "version": "0.1.0-beta.95",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -251,7 +251,7 @@
     },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
-      "version": "0.1.0-beta.94",
+      "version": "0.1.0-beta.95",
       "dependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
@@ -269,7 +269,7 @@
     },
     "packages/testing": {
       "name": "@effect-agent/testing",
-      "version": "0.1.0-beta.94",
+      "version": "0.1.0-beta.95",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -290,7 +290,7 @@
     },
     "packages/workflow": {
       "name": "@effect-agent/workflow",
-      "version": "0.1.0-beta.94",
+      "version": "0.1.0-beta.95",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -482,7 +482,7 @@
     "clsx": "2.1.1",
     "diff": "8.0.4",
     "effect": "4.0.0-rc.115",
-    "effect-cf": "0.43.0",
+    "effect-cf": "0.44.0",
     "esbuild": "0.28.1",
     "isomorphic-git": "1.41.9",
     "jose": "6.2.12",
@@ -1956,7 +1956,7 @@
 
     "effect-agent": ["effect-agent@workspace:packages/effect-agent"],
 
-    "effect-cf": ["effect-cf@0.43.0", "", { "peerDependencies": { "@cloudflare/computer": "^0.2.0", "@cloudflare/sandbox": "^0.13.0-next.738.2", "@cloudflare/vitest-plugin": "^1.0.0", "@cloudflare/workers-types": "^5.20260825.1", "@effect/sql-d1": "^4.0.0-rc.115", "@effect/sql-pg": "^4.0.0-rc.115", "@effect/sql-sqlite-do": "^4.0.0-rc.115", "@modelcontextprotocol/server": "^2.0.0", "effect": "^4.0.0-rc.115" }, "optionalPeers": ["@cloudflare/computer", "@cloudflare/sandbox", "@cloudflare/vitest-plugin", "@cloudflare/workers-types", "@effect/sql-pg", "@modelcontextprotocol/server"] }, "sha512-FoBrA81ZT6kmaWfiiysHTPNS6PTL3coz8fMaQ9wR3+uxEQ/5bJsqCKekWprHCNv/WKsvot49JYCb2lMCQlxsjw=="],
+    "effect-cf": ["effect-cf@0.44.0", "", { "peerDependencies": { "@cloudflare/computer": "^0.2.0", "@cloudflare/sandbox": "^0.13.0-next.738.2", "@cloudflare/vitest-plugin": "^1.0.0", "@cloudflare/workers-types": "^5.20260825.1", "@effect/sql-d1": "^4.0.0-rc.115", "@effect/sql-pg": "^4.0.0-rc.115", "@effect/sql-sqlite-do": "^4.0.0-rc.115", "@modelcontextprotocol/server": "^2.0.0", "effect": "^4.0.0-rc.115" }, "optionalPeers": ["@cloudflare/computer", "@cloudflare/sandbox", "@cloudflare/vitest-plugin", "@cloudflare/workers-types", "@effect/sql-pg", "@modelcontextprotocol/server"] }, "sha512-D2jwyoIlC0wXY9kBQwIS4h7sigYEI+KlQGHm6WUBzNX+PngTbjyzqFCad51kumfbhoSIybhhRXyhYVy5EEySng=="],
 
     "electron-to-chromium": ["electron-to-chromium@1.5.398", "", {}, "sha512-AsvhAxopJGh6museTDMIjn6JpDYOfgu4RLlygomt87MUwBUqTfd/1EiPtx10/LZE8xpTvkP2E9Gafq7lkLtodQ=="],
 
@@ -2963,6 +2963,8 @@
     "@effect-agent/example-travel-planner/@effect-agent/testing": ["@effect-agent/testing@0.1.0-beta.88", "", { "dependencies": { "effect-agent": "0.1.0-beta.88" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-MrpA8Fx9U8F9RlwuuWERCymc0zJc2V/qCxa42UcZABP4GpiseUaLYSo3kVKenkbpZJV6ocDe/Sd7L8WfuExZYg=="],
 
     "@effect-agent/example-travel-planner/effect-agent": ["effect-agent@0.1.0-beta.88", "", { "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-haxGxrNqD7xbcfy3FLZCUZ99SJy7jNtFB3wHNDRiKSwrUrmIeOfNQ8S8rPvd7LFTq823mw3HqSrXh0kRNkbNZQ=="],
+
+    "@effect-agent/example-travel-planner/effect-cf": ["effect-cf@0.43.0", "", { "peerDependencies": { "@cloudflare/computer": "^0.2.0", "@cloudflare/sandbox": "^0.13.0-next.738.2", "@cloudflare/vitest-plugin": "^1.0.0", "@cloudflare/workers-types": "^5.20260825.1", "@effect/sql-d1": "^4.0.0-rc.115", "@effect/sql-pg": "^4.0.0-rc.115", "@effect/sql-sqlite-do": "^4.0.0-rc.115", "@modelcontextprotocol/server": "^2.0.0", "effect": "^4.0.0-rc.115" }, "optionalPeers": ["@cloudflare/computer", "@cloudflare/sandbox", "@cloudflare/vitest-plugin", "@cloudflare/workers-types", "@effect/sql-pg", "@modelcontextprotocol/server"] }, "sha512-FoBrA81ZT6kmaWfiiysHTPNS6PTL3coz8fMaQ9wR3+uxEQ/5bJsqCKekWprHCNv/WKsvot49JYCb2lMCQlxsjw=="],
 
     "@effect/platform-node-shared/ws": ["ws@8.21.3", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw=="],
 
