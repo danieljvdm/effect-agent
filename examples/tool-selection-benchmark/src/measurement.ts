@@ -76,7 +76,9 @@ const refuse = (description: string) =>
 
 // No token-count preflight or retries: timings include exactly the production path.
 // Request count, request bytes, output tokens and elapsed time bound this experiment.
-export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(function* () {
+export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(function* (
+  expectedInitialTools: number,
+) {
   const native = yield* OpenAiClient.OpenAiClient;
   const calls: Array<typeof ModelCall.Type> = [];
 
@@ -85,6 +87,9 @@ export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(functio
     createResponse: () => refuse("Expected streaming requests"),
     createResponseStream: Effect.fn("ToolSelectionBenchmark.response")(function* (payload) {
       const requestJson = JSON.stringify(payload);
+
+      if (calls.length === 0 && payload.tools?.length !== expectedInitialTools)
+        return yield* refuse("Initial tool count does not match the benchmark arm");
 
       if (calls.length >= 6 || new TextEncoder().encode(requestJson).byteLength > 65_536)
         return yield* refuse("Model-call or request-byte bound exceeded");

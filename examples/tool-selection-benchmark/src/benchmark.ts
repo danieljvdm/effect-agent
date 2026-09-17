@@ -34,7 +34,7 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
   task: Task,
   repetition: number,
 ) {
-  const metered = yield* instrument();
+  const metered = yield* instrument(arm === "all-50" ? 50 : 9);
   const toolCalls: Array<(typeof Sample.Type.toolCalls)[number]> = [];
   const selections: Array<typeof Selection.Type> = [];
   const decision = yield* DecisionModel.DecisionModel;
@@ -93,7 +93,7 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
       "Use tools to retrieve fresh records before answering; never invent records. If a needed tool is missing, use discover_tools with a short, distinctive search term when available. Follow linked records when the task requires it. Preserve status strings and verification codes exactly in your answer.",
     toolkit: Toolkit.make(...tools, ...(withDiscovery ? [discovery.tool] : [])),
     toolExposure: {
-      ...(withDiscovery ? { initialToolNames: [...commonTools] } : {}),
+      initialToolNames: withDiscovery ? [...commonTools] : Object.keys(catalogue),
       maxTools: withDiscovery ? 9 : 50,
       maxSchemaBytes: 65_536,
     },
