@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.104
+
+### Patch Changes
+
+- [#530](https://github.com/danieljvdm/effect-agent/pull/530) [`caf7e7e`](https://github.com/danieljvdm/effect-agent/commit/caf7e7ea69448fb820f9e95cffe480cbb458d500) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve each invocation's tracing context and sampling decision when running registered attempts or preparing reports. Remove per-poll, digest, and response-part helper spans while retaining operation boundaries and errors, and allow hosts to use effect-cf 0.45.
+
 ## 0.1.0-beta.103
 
 ## 0.1.0-beta.102
