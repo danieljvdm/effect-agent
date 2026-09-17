@@ -2,6 +2,7 @@ import { DecisionModel } from "@effect-agent/ai-decision";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
+  Context,
   Deferred,
   Effect,
   Exit,
@@ -136,6 +137,115 @@ const failure = <E>(exit: Exit.Exit<unknown, E>) =>
   Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined;
 
 layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", (it) => {
+  it.effect(
+    "isolates concurrent and nested selector services and failures from the host default",
+    () =>
+      Effect.gen(function* () {
+        class SelectionFailure extends Schema.TaggedError<SelectionFailure>()(
+          "SelectionFailure",
+          {},
+        ) {}
+        class SelectionSource extends Context.Service<
+          SelectionSource,
+          Effect.Effect<ReadonlyArray<string>, SelectionFailure>
+        >()("tool-exposure/SelectionSource") {}
+
+        const allStarted = yield* Deferred.make<void>();
+        const rejected = new SelectionFailure({});
+        const nestedRequests: Array<ReadonlyArray<string>> = [];
+
+        const nested = Agent.withModel(
+          Agent.make("selector-child", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Done.",
+            toolkit: Toolkit.make(),
+          }),
+          scripted([done], nestedRequests),
+        );
+
+        let started = 0;
+        let hostCalls = 0;
+
+        const selector: ToolSelector.Hook<SelectionFailure, SelectionSource> = {
+          select: () =>
+            Effect.gen(function* () {
+              const selection = yield* SelectionSource;
+              const first = started++ === 0;
+
+              if (started === 3) yield* Deferred.succeed(allStarted, undefined);
+              yield* Deferred.await(allStarted);
+              if (first)
+                yield* AgentRuntime.run(nested, "nested").pipe(
+                  Effect.provide(Layer.mergeAll(identifiers, ThreadHistory.layer)),
+                  Effect.orDie,
+                );
+
+              return yield* selection;
+            }),
+        };
+
+        const host: ToolSelector.Hook = {
+          select: () =>
+            Effect.sync(() => {
+              hostCalls++;
+
+              return [];
+            }),
+        };
+
+        const observed = yield* Effect.gen(function* () {
+          const results = yield* Effect.all(
+            [
+              Effect.succeed(["native:read"]),
+              Effect.succeed(["native:write"]),
+              Effect.fail(rejected),
+            ].map((selection) =>
+              Effect.gen(function* () {
+                const requests: Array<ReadonlyArray<string>> = [];
+
+                const exit = yield* AgentRuntime.run(
+                  Agent.withModel(definition, scripted([done], requests)),
+                  "go",
+                  { toolSelector: selector },
+                ).pipe(Effect.provideService(SelectionSource, selection), Effect.exit);
+
+                return { exit, requests };
+              }),
+            ),
+            { concurrency: 3 },
+          );
+
+          const requests: Array<ReadonlyArray<string>> = [];
+
+          yield* AgentRuntime.run(Agent.withModel(definition, scripted([done], requests)), "host");
+
+          return { results, requests };
+        }).pipe(
+          Effect.provideService(ToolSelector.RunToolSelector, host),
+          Effect.provide(
+            tools.toLayer({
+              discover: () => Effect.die("unused"),
+              read: () => Effect.die("unused"),
+              write: () => Effect.die("unused"),
+              status: () => Effect.die("unused"),
+            }),
+          ),
+        );
+
+        expect(observed.results.map(({ requests }) => requests)).toEqual([
+          [["discover", "read", "status"]],
+          [["discover", "write", "status"]],
+          [],
+        ]);
+        expect(observed.results.slice(0, 2).every(({ exit }) => Exit.isSuccess(exit))).toBe(true);
+        expect(failure(observed.results[2]!.exit)).toBe(rejected);
+        expect(observed.requests).toEqual([["discover", "status"]]);
+        expect(nestedRequests).toEqual([[]]);
+        expect(hostCalls).toBe(2);
+      }),
+  );
+
   it.effect(
     "selects Code Mode aliases once per owning native tool and breaks relevance ties by ID",
     () =>

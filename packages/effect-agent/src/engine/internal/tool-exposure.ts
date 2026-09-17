@@ -1,5 +1,5 @@
 import { Context, Effect, Schema } from "effect";
-import { Tool, type LanguageModel } from "effect/unstable/ai";
+import { Tool, type AiError, type LanguageModel } from "effect/unstable/ai";
 
 import type { AnyDefinition } from "../../core/Agent.ts";
 import { ModelProtocolError } from "../../core/AgentError.ts";
@@ -286,11 +286,23 @@ const SelectedIds = Schema.Array(Descriptor.fields.id).check(
   Schema.isUnique(),
 );
 
+// Bind and acquire the selected policy with the Run's E/R. Keep this slot separate
+// from the public RunToolSelector host default: nested Runs must select their own
+// override without inheriting the parent's callback or its untracked E/R.
+export const currentToolSelector = <E, R>() =>
+  Context.Reference<ToolSelector.Hook<E | AiError.AiError | ModelProtocolError, R> | undefined>(
+    "@effect-agent/engine/CurrentToolSelector",
+    { defaultValue: () => undefined },
+  );
+
 export const selectTools = Effect.fn("ToolSelector.select")(function* <E, R>(
-  selector: ToolSelector.Hook<E, R>,
   request: Omit<ToolSelector.Request, "catalogue">,
   entries: ReadonlyArray<CatalogEntry>,
 ) {
+  const selector = yield* currentToolSelector<E, R>();
+
+  if (selector === undefined) return undefined;
+
   const limits = yield* Schema.decodeEffect(SelectorLimits)({
     maxTools: selector.maxTools ?? 8,
     maxCandidates: selector.maxCandidates ?? 1_024,

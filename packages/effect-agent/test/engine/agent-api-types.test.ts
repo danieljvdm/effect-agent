@@ -668,6 +668,8 @@ it("preserves visibility Layer dependencies and construction failures", () => {
 });
 
 it("preserves selector failures and services without changing registered Tool requirements", () => {
+  const base = AgentRuntime.run(Agent.withModel(planner, model), { city: "Lisbon", days: "2" });
+
   const run = AgentRuntime.run(
     Agent.withModel(planner, model),
     { city: "Lisbon", days: "2" },
@@ -685,11 +687,11 @@ it("preserves selector failures and services without changing registered Tool re
     },
   );
 
-  expectTypeOf<Extract<Effect.Services<typeof run>, TurnHost | Catalog>>().toEqualTypeOf<
-    TurnHost | Catalog
+  expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
+    Effect.Services<typeof base> | TurnHost
   >();
-  expectTypeOf<Extract<Effect.Error<typeof run>, TurnHostError | ToolError>>().toEqualTypeOf<
-    TurnHostError | ToolError
+  expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<
+    Effect.Error<typeof base> | TurnHostError
   >();
 });
 

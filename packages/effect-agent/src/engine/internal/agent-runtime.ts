@@ -136,6 +136,7 @@ import {
 } from "./provider-result-staging.ts";
 import { deliverToolFailure, emitThenAfter, isolateToolDerivative } from "./tool-derivative.ts";
 import {
+  currentToolSelector,
   selectTools,
   decodeSelection,
   decodeSnapshot,
@@ -5441,23 +5442,20 @@ const makeTurn = <
           catalog,
         );
 
-      if (options.toolSelector !== undefined) {
-        const selected = yield* selectTools(
-          options.toolSelector,
-          {
-            threadId: context.threadId,
-            runId: context.runId,
-            turnId,
-            turn,
-            input: context.input,
-            source: modelContext.prompt,
-            selection: context.toolSelection,
-          },
-          catalog,
-        );
+      const selected = yield* selectTools<HookError, HookRequirements>(
+        {
+          threadId: context.threadId,
+          runId: context.runId,
+          turnId,
+          turn,
+          input: context.input,
+          source: modelContext.prompt,
+          selection: context.toolSelection,
+        },
+        catalog,
+      );
 
-        if (selected !== undefined) context.toolSelection = selected;
-      }
+      if (selected !== undefined) context.toolSelection = selected;
 
       let snapshot =
         agent.definition.toolExposure === undefined &&
@@ -7835,6 +7833,8 @@ function streamWithCompletion<
       );
 
       const visibility = yield* RunToolVisibility;
+      const { toolSelector, ...suppliedOptions } = runOptions;
+      const selector = toolSelector ?? (yield* RunToolSelector);
 
       const ids = yield* IdGenerator;
       const threadId = runOptions.threadId ?? (yield* ids.nextThreadId);
@@ -7875,16 +7875,13 @@ function streamWithCompletion<
         | HookError
         | ThreadHistoryError
         | RunContextPreparationError
-        | AgentToolAuthorizationCheckError
-        | AiError.AiError
-        | ModelProtocolError,
+        | AgentToolAuthorizationCheckError,
         HookRequirements
       > = {
-        ...runOptions,
+        ...suppliedOptions,
         context: runOptions.context ?? preparation.hook,
         transientContext: runOptions.transientContext ?? preparation.transientContext,
         toolAuthorization: runOptions.toolAuthorization ?? authorization,
-        toolSelector: runOptions.toolSelector ?? (yield* RunToolSelector),
         threadId,
         runId,
         ...(retained === undefined
@@ -8422,6 +8419,7 @@ function streamWithCompletion<
             }),
             Context.add(CurrentToolCatalog, { entries: [] }),
             Context.add(RunToolVisibility, visibility),
+            Context.add(currentToolSelector<HookError, HookRequirements>(), selector),
             Context.add(RunEventSink, closedRunEventSink),
             Context.add(DurableStep, closedDurableStep),
             Context.add(SubagentDurability, closedSubagentDurability),
