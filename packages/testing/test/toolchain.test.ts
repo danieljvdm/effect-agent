@@ -56,6 +56,7 @@ const ChangesetConfig = Schema.Struct({
 });
 
 const WorkflowStep = Schema.Struct({
+  "continue-on-error": Schema.optionalKey(Schema.Boolean),
   id: Schema.optionalKey(Schema.String),
   name: Schema.optionalKey(Schema.String),
   if: Schema.optionalKey(Schema.String),
@@ -1007,6 +1008,23 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         ref: "${{ github.event.pull_request.base.sha || github.event.before }}",
         "persist-credentials": false,
       });
+      expect(
+        workflowStep(ci, "build", "Restore verified version PR build")?.["continue-on-error"],
+      ).toBe(true);
+      const buildCondition = workflowStep(ci, "build", "Build packages, examples, and docs")?.if;
+
+      if (buildCondition === undefined) return yield* Effect.die("Missing build fallback");
+      for (const [outcome, rebuild] of [
+        ["success", false],
+        ["failure", true],
+        ["skipped", true],
+      ] as const) {
+        expect(
+          runInNewContext(buildCondition.replace(/^\$\{\{\s*|\s*\}\}$/g, ""), {
+            steps: { restore: { outcome } },
+          }),
+        ).toBe(rebuild);
+      }
       const script = workflowStep(ci, "ready", "Verify all required gates passed")?.run;
 
       if (script === undefined) return yield* Effect.die("Missing ready fan-in");

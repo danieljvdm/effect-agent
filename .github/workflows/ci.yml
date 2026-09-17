@@ -236,6 +236,10 @@ jobs:
             vite-task-build-${{ runner.os }}-
 
       - name: Restore verified version PR build
+        id: restore
+        # Expired or corrupt artifacts require a fresh build; source equivalence
+        # remains independently proven. Publication still fails on bad evidence.
+        continue-on-error: true
         if: ${{ needs.release-proof.outputs.fast == 'true' && needs.release-proof.outputs.build-run != '' }}
         run: ./node_modules/.bin/vp run ci:release-build
         env:
@@ -248,7 +252,7 @@ jobs:
 
       - name: Build packages, examples, and docs
         id: build
-        if: ${{ needs.release-proof.outputs.fast != 'true' || needs.release-proof.outputs.build-run == '' }}
+        if: ${{ steps.restore.outcome != 'success' }}
         run: ./node_modules/.bin/vp run -v build
 
       - name: Validate versioned release packages

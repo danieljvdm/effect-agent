@@ -567,8 +567,9 @@ are not transferred, but their successful exact-tree build remains required evid
 
 Publication accepts only the successful exact-main CI run selected by `workflow_run`, rechecks
 its attempt and current main before preparation and after the live gate, and inspects the restored
-npm packages again. Missing, expired, corrupt or mismatched artifacts fail the attempt; they never
-authorize publication. Artifact retention is seven days; rerun CI to replace expired evidence.
+npm packages again. Main rebuilds if the PR artifact cannot be restored. Publication fails on
+missing, expired, corrupt or mismatched artifacts; they never authorize publication. Artifact
+retention is seven days; rerun main CI to replace expired evidence.
 The fresh paid gate, Changesets registry checks, npm OIDC provenance and Action tag publication
 remain required. Local controlled proofs establish correctness; hosted release latency needs a
 matched version-merge run.
