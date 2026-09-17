@@ -9,7 +9,10 @@ export type Arm = typeof Arm.Type;
 export const Usage = Schema.Struct({
   input_tokens: Schema.Natural,
   output_tokens: Schema.Natural,
-  input_tokens_details: Schema.Struct({ cached_tokens: Schema.Natural }),
+  input_tokens_details: Schema.Struct({
+    cached_tokens: Schema.Natural,
+    cache_write_tokens: Schema.optionalKey(Schema.Natural),
+  }),
   output_tokens_details: Schema.Struct({ reasoning_tokens: Schema.Natural }),
 });
 

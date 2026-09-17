@@ -11,10 +11,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import {
   catalogue,
   commonTools,
-  makeHandlers,
+  Handlers,
   Output,
   type Task,
   tasks,
+  ToolEvidence,
   tools,
 } from "./fixture.ts";
 import { type Selection, type Arm, BenchmarkError, instrument, Sample } from "./measurement.ts";
@@ -111,7 +112,7 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
     toolCalls.push({ name, id, at: yield* Clock.currentTimeMillis });
   });
 
-  const handlers = Layer.merge(makeHandlers(observeTool), discovery.handlers);
+  const handlers = Layer.merge(Handlers, discovery.handlers);
   const agent = Agent.withModel(definition, OpenAiLanguageModel.model("gpt-6-astra", settings));
   const start = yield* Clock.currentTimeMillis;
 
@@ -121,6 +122,7 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
     arm === "jev-8-discovery" ? { toolSelector: selector } : {},
   ).pipe(
     Effect.provide(Layer.merge(handlers, ThreadHistory.layer)),
+    Effect.provideService(ToolEvidence, { record: observeTool }),
     Effect.provideService(OpenAiClient.OpenAiClient, metered.client),
     Effect.timeout("150 seconds"),
     Effect.exit,

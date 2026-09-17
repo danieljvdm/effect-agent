@@ -1,4 +1,4 @@
-import { Effect, Record, Schema } from "effect";
+import { Context, Effect, Record, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 // These eight are the application default, chosen independently of the tasks.
@@ -89,17 +89,27 @@ const records: Readonly<Record<string, string>> = {
   "get_sensor_calibration/CAL-77": "status=calibration_due; verification=CAL-V6P8",
 };
 
-export const makeHandlers = (observe: (name: string, id: string) => Effect.Effect<void>) =>
-  toolkit.toLayer(
-    Record.map(
+export class ToolEvidence extends Context.Service<
+  ToolEvidence,
+  {
+    readonly record: (name: string, id: string) => Effect.Effect<void>;
+  }
+>()("ToolSelectionBenchmark/ToolEvidence") {}
+
+export const Handlers = toolkit.toLayer(
+  Effect.gen(function* () {
+    const evidence = yield* ToolEvidence;
+
+    return Record.map(
       catalogue,
       (_description, name) =>
         ({ id }: typeof Parameters.Type) =>
-          observe(name, id).pipe(
-            Effect.as({ value: records[`${name}/${id}`] ?? "No matching record." }),
-          ),
-    ),
-  );
+          evidence
+            .record(name, id)
+            .pipe(Effect.as({ value: records[`${name}/${id}`] ?? "No matching record." })),
+    );
+  }),
+);
 
 export const tasks = [
   {

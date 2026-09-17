@@ -18,7 +18,7 @@ From the repository root:
 ```sh
 vp run perf:tool-selection --output /tmp/tool-selection-plan.json
 # Supply OPENAI_API_KEY and TYPESAFEAI_API_KEY through your secret manager.
-vp run perf:tool-selection --live --repetitions 3 --output /tmp/tool-selection-live.json
+vp run perf:tool-selection --live --repetitions 3 --output /tmp/tool-selection-live.json --log-level error
 ```
 
 The first command performs no inference. A live run makes 27 sequential samples,
