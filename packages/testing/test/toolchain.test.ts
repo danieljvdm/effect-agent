@@ -115,7 +115,7 @@ const privatePackageNames = ["pr-review-action"] as const;
 /** Provider bindings belong to leaf applications, never framework packages. */
 const providerConsumingPackages = new Set<string>();
 
-const exampleNames = ["travel-planner"];
+const exampleNames = ["tool-selection-benchmark", "travel-planner"];
 
 const toolingNames = [
   "context-continuity-eval",
@@ -213,7 +213,7 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
 const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
   "ai-decision": [],
   "ai-typesafe": ["ai-decision"],
-  "effect-agent": [],
+  "effect-agent": ["ai-decision"],
   "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
   "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
   "pr-review": ["effect-agent"],

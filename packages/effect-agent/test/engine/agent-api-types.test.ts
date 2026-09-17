@@ -1,3 +1,4 @@
+import type { DecisionModel } from "@effect-agent/ai-decision";
 import { Context, Effect, Layer, Option, Schema, SchemaGetter, type Scope, Stream } from "effect";
 import { AgentRuntime, Output } from "effect-agent";
 import * as Agent from "effect-agent/agent";
@@ -17,7 +18,8 @@ import {
 } from "effect-agent/run-options";
 import { type ThreadHistory } from "effect-agent/thread-history";
 import { RunToolVisibility } from "effect-agent/tool-exposure";
-import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import * as ToolSelector from "effect-agent/tool-selector";
+import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { expectTypeOf, it } from "vite-plus/test";
 
 class Instructions extends Context.Service<Instructions, string>()("api-types/Instructions") {}
@@ -662,5 +664,71 @@ it("preserves visibility Layer dependencies and construction failures", () => {
   >();
   expectTypeOf<Effect.Error<typeof visibleRun>>().toEqualTypeOf<
     Effect.Error<typeof run> | TurnHostError
+  >();
+});
+
+it("preserves selector failures and services without changing registered Tool requirements", () => {
+  const base = AgentRuntime.run(Agent.withModel(planner, model), { city: "Lisbon", days: "2" });
+
+  const run = AgentRuntime.run(
+    Agent.withModel(planner, model),
+    { city: "Lisbon", days: "2" },
+    {
+      toolSelector: {
+        select: () =>
+          Effect.gen(function* () {
+            const selected = yield* TurnHost;
+
+            if (selected === "") return yield* TurnHostError.make({});
+
+            return [selected];
+          }),
+      },
+    },
+  );
+
+  expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
+    Effect.Services<typeof base> | TurnHost
+  >();
+  expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<
+    Effect.Error<typeof base> | TurnHostError
+  >();
+});
+
+class SelectionObserver extends Context.Service<SelectionObserver, string>()(
+  "api-types/SelectionObserver",
+) {}
+class SelectionObserverError extends Schema.TaggedError<SelectionObserverError>()(
+  "SelectionObserverError",
+  {},
+) {}
+it("preserves decision state and usage-observer E/R in the selector", () => {
+  const construction = ToolSelector.fromDecisionModel({
+    state: () =>
+      Effect.gen(function* () {
+        const state = yield* TurnHost;
+
+        if (state === "") return yield* TurnHostError.make({});
+
+        return state;
+      }),
+    onEvaluation: () =>
+      Effect.gen(function* () {
+        const status = yield* SelectionObserver;
+
+        if (status === "") return yield* SelectionObserverError.make({});
+      }),
+  });
+
+  expectTypeOf<Effect.Error<typeof construction>>().toEqualTypeOf<AiError.AiError>();
+  expectTypeOf<Effect.Services<typeof construction>>().toEqualTypeOf<never>();
+  const selector = Effect.runSync(construction);
+
+  type Selection = ReturnType<typeof selector.select>;
+  expectTypeOf<Effect.Error<Selection>>().toEqualTypeOf<
+    TurnHostError | SelectionObserverError | AiError.AiError
+  >();
+  expectTypeOf<Effect.Services<Selection>>().toEqualTypeOf<
+    TurnHost | SelectionObserver | DecisionModel.DecisionModel
   >();
 });

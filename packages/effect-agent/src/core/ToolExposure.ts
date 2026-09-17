@@ -72,3 +72,17 @@ export const IncludesCatalogDocumentation = Context.Reference<boolean>(
   "@effect-agent/core/ToolExposure/IncludesCatalogDocumentation",
   { defaultValue: () => false },
 );
+
+/** Bounded metadata shared by discovery and pre-model selection, after eligibility filtering. */
+export class Descriptor extends Schema.Class<Descriptor>(
+  "@effect-agent/core/ToolExposure/Descriptor",
+)({
+  id: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
+  kind: Schema.Literals(["native", "code-mode"]),
+  name: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
+  nativeToolName: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
+  namespace: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(128))),
+  method: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(128))),
+  description: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_048))),
+  namespaceDescription: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+}) {}

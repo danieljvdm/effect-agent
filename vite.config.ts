@@ -207,6 +207,10 @@ export default defineConfig({
         cache: false,
         command: "bun tooling/context-continuity-eval/src/performance-main.ts",
       },
+      "perf:tool-selection": {
+        cache: false,
+        command: "bun examples/tool-selection-benchmark/src/main.ts",
+      },
       "perf:cloudflare:build": {
         cache: false,
         command: "bun tooling/context-continuity-eval/src/build-performance-cloudflare.ts",

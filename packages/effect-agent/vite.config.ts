@@ -63,6 +63,7 @@ export default defineConfig({
       "src/engine/ToolBroker.ts",
       "src/capabilities/ToolDiscovery.ts",
       "src/ToolExposure.ts",
+      "src/ToolSelector.ts",
       "src/core/ToolResult.ts",
       "src/core/Usage.ts",
       "src/capabilities/WebCapture.ts",
