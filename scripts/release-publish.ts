@@ -6,7 +6,7 @@ import { ChildProcess } from "effect/unstable/process";
 
 // Changesets owns final registry checks, publishing, prerelease tags, and Git tags.
 // npm needs resolved Bun dependency ranges and built exports in its input manifests.
-class ReleaseError extends Schema.TaggedError<ReleaseError>()("ReleaseError", {
+export class ReleaseError extends Schema.TaggedError<ReleaseError>()("ReleaseError", {
   package: Schema.String,
   reason: Schema.String,
 }) {

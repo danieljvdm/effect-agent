@@ -201,7 +201,7 @@ The project is in prerelease mode. Leaving it requires an explicit release decis
 `vp run changeset pre exit`.
 
 Use `vp run changeset` to describe a consumer-visible change.
-On pushes to `main`, `.github/workflows/release.yml` maintains the version PR.
+After successful ordinary `main` CI, `.github/workflows/release.yml` maintains the version PR.
 After that PR merges, the workflow publishes through npm trusted publishing with provenance.
 
 Publication first runs `release:checked-publish`, which checks npm for unpublished public versions.
@@ -219,9 +219,10 @@ Each attempt preserves its own evidence artifact, including failures. This gate 
 documented continuity scenario; it does not certify large-history startup or Cloudflare host
 performance.
 
-The release PR runs the same static checks, tests, and builds as every other PR. The workflow
-uses the existing Effect Agent GitHub App to create and update it, so those pushes trigger
-ordinary CI. Keep the App's contents and pull-request write permissions enabled and configure
+The release PR always runs candidate builds and the required `ready` gate. It can reuse
+proven ordinary source checks through the [release metadata proof](#release-metadata-ci).
+The workflow uses the existing Effect Agent GitHub App to create and update it, so those pushes trigger
+PR CI. Keep the App's contents and pull-request write permissions enabled and configure
 the `EFFECT_AGENT_APP_ID` and `EFFECT_AGENT_APP_PRIVATE_KEY` repository secrets.
 The checkout disables persisted credentials so Changesets uses the App token.
 
@@ -462,7 +463,7 @@ invocation runs and receives its deployment environment.
 Cloudflare storage, Cloudflare platform, Node platform, and testing have dedicated test runners.
 The remaining-workspace job includes every other package and runs one package task at a time.
 
-The generated Changesets PR runs ordinary CI like other PRs.
+The generated Changesets PR uses the release metadata proof below, with ordinary CI as its fallback.
 Explicit `@effect-agent review` comments still request review.
 
 PR Review uses `pull_request_target` and runs only trusted default-branch code.
@@ -499,8 +500,52 @@ Main pushes run static checks, tests, and builds to populate shared caches
 and validate Action releases. The `ready` fan-in runs only on PRs. Main runs are not cancelled
 by newer pushes. GitHub scopes PR caches to each PR's merge ref, so another PR cannot reuse them.
 A new release PR can restore the latest main results only after those jobs finish saving their
-caches; a release PR created while main CI is still running may restore an older baseline.
-Tests are reused only when task inputs match, never solely because paths did not change.
+caches. Waiting for those caches alone does not prevent version fields from invalidating whole-file
+task fingerprints. Ordinary task results are reused only when task inputs match.
+
+### Release metadata CI {#release-metadata-ci}
+
+`scripts/release-ci.ts` can reuse static checks and all eight test-matrix gates from ordinary
+`CI` on the exact PR base. The verifier and its dependencies run from that base, with read-only
+contents, Actions and pull-request permissions. Candidate files are read as Git objects;
+the proof does not execute candidate code or accept PR-provided evidence artifacts.
+
+The supported delta is deliberately narrow: every public package in the single fixed group
+advances by one beta number, changelogs prepend the corresponding entry without rewriting history,
+and `bun.lock` changes only the matching workspace version fields. Manifests and the lockfile
+must otherwise remain byte-identical. Prerelease state must record all existing changeset IDs and
+initialize each newly included public package at its base version; mode, tag and existing initial
+versions stay fixed. Changeset files themselves, dependencies, exports, scripts, module type,
+source, tests, configuration and workflow policy cannot change. Stable releases, other prerelease
+transitions and unfamiliar layouts run ordinary CI.
+
+The proof checks the current PR head and base, current `main`, the synthetic merge commit's exact
+two parents, and equality of the merge and head trees. It queries the latest base push run of
+the identified CI workflow, requiring a completed successful run and successful ordinary
+command steps for static checks, every test suite and the build. Evidence is bound to its run
+ID and attempt, then rechecked along with the PR revisions. A skipped command, missing job,
+partial API page, changing attempt, policy change, API failure or 45-second proof timeout selects ordinary
+CI. Setup failures also fall back. The summary records the immutable revisions and evidence run.
+Only main-push source validation can authorize reuse; fast-path PR results never authorize another
+fast path. No manifest or lockfile is globally excluded from Vite Task inputs.
+
+The candidate still receives a frozen install, all package/example/docs/Action builds, formatting,
+export and purity checks, and `ci:release-packages`. Package inspection temporarily prepares the
+same npm-ready manifests used by publication and checks `npm pack --dry-run --ignore-scripts`
+for the actual version and every exported JavaScript and declaration file. Source manifests and
+prerelease state are restored. A failed retained check fails `ready`. This path neither publishes
+nor calls paid models; the separate paid continuity gate in `release:checked-publish` remains intact.
+
+Release generation uses `workflow_run: completed` after successful main CI, so the usual timing
+race consumes no waiting runner. Because Changesets uses `github.sha` internally, generation
+requires that SHA to equal the completed run's head; a newer main revision waits for its own CI.
+An already stale PR or changed merge tree falls back to ordinary CI. Evidence applies only to the
+recorded merge checkout, just as ordinary PR checks do; it does not validate later base movement
+or replace branch protection's up-to-date requirements.
+
+Main pushes still run ordinary CI and produce their own Action artifact for the existing publisher.
+Post-merge release duplication and candidate build costs are intentionally retained. Local proof
+tests establish correctness, not hosted latency savings; hosted speedup requires a matched CI run.
 
 The pre-commit hook runs `vp check --fix` on staged JavaScript and TypeScript.
 CI runs the full gate, including package type checks and the Action build.

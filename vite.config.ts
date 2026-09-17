@@ -166,6 +166,14 @@ export default defineConfig({
       scripts: true,
     },
     tasks: {
+      "ci:release-proof": {
+        cache: false,
+        command: "bun scripts/release-ci.ts",
+      },
+      "ci:release-packages": {
+        cache: false,
+        command: "bun scripts/check-release-packages.ts",
+      },
       "docs:deploy": {
         cache: false,
         command: "vp exec alchemy deploy alchemy.run.ts --stage prod",

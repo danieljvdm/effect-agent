@@ -1,7 +1,11 @@
 name: Release
 
 on:
-  push:
+  # Generate the version PR only after the exact main revision has finished CI.
+  # This event waits without reserving a runner; the PR proof still fails closed.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
 
 concurrency:
@@ -13,6 +17,10 @@ permissions: {}
 jobs:
   release:
     name: Release
+    # workflow_run has write authority: accept only this repo's successful main
+    # push. Changesets uses github.sha internally, so it MUST equal the tested
+    # head (workflow_run's default-branch SHA can otherwise have moved ahead).
+    if: ${{ github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.repository.full_name == github.repository && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.head_sha == github.sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 70
     permissions:
@@ -26,6 +34,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 

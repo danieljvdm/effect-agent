@@ -21,6 +21,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess } from "effect/unstable/process";
 
 import { compareBundles } from "../../../scripts/bundle-size.ts";
+import { checkReleasePackages } from "../../../scripts/check-release-packages.ts";
 import {
   command as releaseCommand,
   PublishManifest,
@@ -885,7 +886,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     { timeout: 30_000 },
   );
 
-  it.effect("runs ordinary CI on release PRs and uses App-authored Changesets updates", () =>
+  it.effect("retains required release gates and App-authored Changesets updates", () =>
     Effect.gen(function* () {
       const ci = yield* readWorkflow(".github/workflows/ci.yml");
       const release = yield* readWorkflow(".github/workflows/release.yml");
@@ -906,6 +907,117 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         "./node_modules/.bin/vp run --no-cache release:checked-publish",
       );
       expect(release.jobs.release?.permissions?.["id-token"]).toBe("write");
+      expect(release.on).toEqual({
+        workflow_run: { workflows: ["CI"], types: ["completed"], branches: ["main"] },
+      });
+      expect(checkout?.with?.ref).toBe("${{ github.sha }}");
+      const releaseIf = release.jobs.release?.if;
+
+      if (releaseIf === undefined) return yield* Effect.die("Missing release predicate");
+
+      const mainRun = {
+        event: "push",
+        conclusion: "success",
+        head_branch: "main",
+        head_sha: "validated-main",
+        repository: { full_name: "danieljvdm/effect-agent" },
+        head_repository: { full_name: "danieljvdm/effect-agent" },
+        path: ".github/workflows/ci.yml",
+      };
+
+      const eligible = (run: typeof mainRun, sha = "validated-main") =>
+        runInNewContext(releaseIf.slice(3, -2), {
+          github: { sha, repository: "danieljvdm/effect-agent", event: { workflow_run: run } },
+        });
+
+      expect(eligible(mainRun)).toBe(true);
+      expect(eligible(mainRun, "newer-main")).toBe(false);
+      for (const run of [
+        { ...mainRun, event: "pull_request" },
+        { ...mainRun, conclusion: "failure" },
+        { ...mainRun, head_branch: "feature" },
+        { ...mainRun, path: ".github/workflows/other.yml" },
+        { ...mainRun, head_repository: { full_name: "fork/effect-agent" } },
+      ])
+        expect(eligible(run)).toBe(false);
+    }),
+  );
+
+  it.effect("falls back to ordinary jobs and makes ready require candidate validation", () =>
+    Effect.gen(function* () {
+      const ci = yield* readWorkflow(".github/workflows/ci.yml");
+      const proof = ci.jobs["release-proof"];
+
+      expect(proof?.permissions).toEqual({
+        contents: "read",
+        actions: "read",
+        "pull-requests": "read",
+      });
+      expect(workflowStep(ci, "release-proof", "Check out trusted base verifier")?.with).toEqual({
+        ref: "${{ github.event.pull_request.base.sha }}",
+        "persist-credentials": false,
+      });
+      expect(proof?.outputs?.fast).toBe(
+        "${{ steps.proof.outcome == 'success' && steps.proof.outputs.fast == 'true' }}",
+      );
+      expect(ci.jobs.ready?.needs).toEqual(["release-proof", "checks", "test", "build"]);
+      const packageCheck = workflowStep(ci, "build", "Validate versioned release packages");
+
+      expect(packageCheck?.if).toBe("${{ needs.release-proof.outputs.fast == 'true' }}");
+      expect(packageCheck?.run).toContain("vp run ci:release-packages");
+      expect(workflowStep(ci, "build", "Build packages, examples, and docs")?.run).toBe(
+        "./node_modules/.bin/vp run -v build",
+      );
+      for (const fast of [undefined, "false", "true"]) {
+        for (const job of ["checks", "test", "build"]) {
+          const expression = ci.jobs[job]?.if;
+
+          if (expression === undefined) return yield* Effect.die("Missing job predicate");
+
+          const evaluate = (cancelled: boolean) =>
+            runInNewContext(
+              expression.slice(3, -2).replaceAll("needs.release-proof", 'needs["release-proof"]'),
+              {
+                cancelled: () => cancelled,
+                needs: { "release-proof": { outputs: { fast } } },
+              },
+            );
+
+          expect(evaluate(false), `${job}, fast=${fast}`).toBe(job === "build" || fast !== "true");
+          expect(evaluate(true)).toBe(false);
+        }
+      }
+      const script = workflowStep(ci, "ready", "Verify all required gates passed")?.run;
+
+      if (script === undefined) return yield* Effect.die("Missing ready fan-in");
+      // Run the actual shell gate. A skipped build or failed retained package check
+      // must fail ready even when the proof succeeded.
+      for (const [fast, proof, checks, tests, build, succeeds] of [
+        ["true", "success", "skipped", "skipped", "success", true],
+        ["false", "failure", "success", "success", "success", true],
+        ["", "skipped", "success", "success", "success", true],
+        ["true", "success", "skipped", "skipped", "failure", false],
+        ["true", "success", "skipped", "skipped", "skipped", false],
+        ["true", "failure", "skipped", "skipped", "success", false],
+        ["false", "success", "skipped", "skipped", "success", false],
+        ["false", "success", "success", "failure", "success", false],
+      ] as const) {
+        const exit = yield* Effect.exit(
+          runFixtureCommand(repositoryRoot, "env", [
+            `RELEASE_FAST=${fast}`,
+            `PROOF_RESULT=${proof}`,
+            `CHECKS_RESULT=${checks}`,
+            `TEST_RESULT=${tests}`,
+            `BUILD_RESULT=${build}`,
+            "bash",
+            "-e",
+            "-c",
+            script,
+          ]),
+        );
+
+        expect(Exit.isSuccess(exit)).toBe(succeeds);
+      }
     }),
   );
 
@@ -1144,6 +1256,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             });
           }),
         );
+        yield* assertRestored;
+
+        yield* checkReleasePackages(root);
         yield* assertRestored;
 
         // Exercise Changesets itself without registry writes. This catches its
