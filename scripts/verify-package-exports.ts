@@ -352,6 +352,14 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
                 `${layer} must use relative framework imports or platform-neutral Effect modules: ${specifier}`,
               );
 
+            if (
+              pkg.manifest.name === "@effect-agent/ai-decision" &&
+              relative.startsWith("src/") &&
+              specifier !== "effect" &&
+              !specifier.startsWith("effect/")
+            )
+              report(file, `The inward decision contract may only import Effect: ${specifier}`);
+
             const name = specifier.startsWith("@")
               ? specifier.split("/").slice(0, 2).join("/")
               : specifier.split("/")[0];

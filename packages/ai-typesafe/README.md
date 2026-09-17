@@ -2,7 +2,7 @@
 
 Evaluate TypeSafe AI choice, score, and noul questions with Effect. The package uses
 Effect's platform-neutral `HttpClient`, `Schema`, `Config`, and `AiError` and has
-only an Effect runtime peer dependency (`^4.0.0-rc.115`).
+an Effect runtime peer dependency (`^4.0.0-rc.115`) and the shared `@effect-agent/ai-decision` contract.
 
 ```ts
 import { TypeSafeClient } from "@effect-agent/ai-typesafe";
@@ -38,6 +38,13 @@ Run `program` with your application's Effect runtime. The compiling
 overall timeout. Acquiring the client does not send requests.
 
 ## Questions and answers
+
+For reusable, provider-independent definitions, use `DecisionQuery` and `DecisionSet` from
+`@effect-agent/ai-decision` with `TypeSafeDecisionModel.model("jev-latest")`. The
+[decision example](examples/decision.ts) evaluates all three question kinds against schema-encoded
+input. Shared answers retain their distributions; Jev confidence is stored under
+`result.providerMetadata.typesafe.confidence`, keyed by question ID. Decode that namespace with
+`TypeSafeDecisionModel.ProviderMetadata`. The direct client below retains the native wire answers.
 
 `evaluate` sends `POST https://api.typesafe.ai/v1/systemone` with bearer authentication
 and the required `{ model, state, questions }` body. State and instructions accept
@@ -102,6 +109,15 @@ schedule and `Effect.timeout`, or supply `transformClient` to `make`, `layer`, o
 `layerConfig`. The transformer receives the client after authentication and status
 filtering. `apiUrl` overrides the versioned base URL for a proxy or substitute.
 
+## Provider-neutral decisions
+
+`TypeSafeDecisionModel.model("jev-latest")` supplies `DecisionModel` from
+`@effect-agent/ai-decision`. Provide `TypeSafeClient` when constructing the Layer.
+The adapter maps shared `probability` questions and answers to TypeSafe's `noul` wire format;
+choice and score evidence is preserved. HTTP policies remain on the client.
+The [compiling example](examples/decision.ts) uses all three evaluations to advance a typed
+application state. Model decisions do not execute tools or authorize side effects.
+
 ## Native Effect AI tools
 
 The compiling [tool example](examples/tool.ts) declares a native `Tool` with
@@ -115,12 +131,13 @@ and tool planning are outside its API.
 
 ## Modules and extraction
 
-Root exports are the `TypeSafeClient` and `TypeSafeSchema` namespaces. Direct imports
+Root exports are the `TypeSafeClient`, `TypeSafeSchema`, and `TypeSafeDecisionModel` namespaces. Direct imports
 use `@effect-agent/ai-typesafe/type-safe-client` and
-`@effect-agent/ai-typesafe/type-safe-schema`.
+`@effect-agent/ai-typesafe/type-safe-schema`, and
+`@effect-agent/ai-typesafe/type-safe-decision-model`.
 
 This package follows Effect provider module conventions while incubating in the
-Effect Agent release group. Its source imports only `effect/*`; it has no engine,
+Effect Agent release group. Its source imports Effect and the inward decision contract; it has no engine,
 platform, persistence, or vendor SDK dependency. Upstream extraction would change
 package metadata, service identity, import paths, and release documentation while
 retaining the HTTP contracts and tests.

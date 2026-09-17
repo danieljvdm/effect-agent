@@ -1,9 +1,8 @@
 /**
- * Request and response schemas for TypeSafe's System One HTTP API.
+ * Request and response schemas for provider-neutral decision evaluations.
  *
  * @since 0.1.0
  */
-import { DecisionSchema } from "@effect-agent/ai-decision";
 import * as Schema from "effect/Schema";
 
 /**
@@ -12,7 +11,7 @@ import * as Schema from "effect/Schema";
  * @category schemas
  * @since 0.1.0
  */
-export const Content = DecisionSchema.Content;
+export const Content = Schema.Union([Schema.String, Schema.JsonObject, Schema.Array(Schema.Json)]);
 
 /** @category models
  * @since 0.1.0
@@ -25,7 +24,13 @@ export type Content = typeof Content.Type;
  * @category schemas
  * @since 0.1.0
  */
-export const ChoiceQuestion = DecisionSchema.ChoiceQuestion;
+export const ChoiceQuestion = Schema.Struct({
+  type: Schema.Literal("choice"),
+  instructions: Content,
+  criteria: Schema.Record(Schema.String, Schema.NullOr(Schema.String)).check(
+    Schema.isMinProperties(1),
+  ),
+});
 
 /** @category models
  * @since 0.1.0
@@ -38,7 +43,11 @@ export type ChoiceQuestion = typeof ChoiceQuestion.Type;
  * @category schemas
  * @since 0.1.0
  */
-export const ScoreQuestion = DecisionSchema.ScoreQuestion;
+export const ScoreQuestion = Schema.Struct({
+  type: Schema.Literal("score"),
+  instructions: Content,
+  criteria: Schema.Array(Schema.String).check(Schema.isMinLength(2)),
+});
 
 /** @category models
  * @since 0.1.0
@@ -51,8 +60,8 @@ export type ScoreQuestion = typeof ScoreQuestion.Type;
  * @category schemas
  * @since 0.1.0
  */
-export const NoulQuestion = Schema.Struct({
-  type: Schema.Literal("noul"),
+export const ProbabilityQuestion = Schema.Struct({
+  type: Schema.Literal("probability"),
   instructions: Content,
   criteria: Schema.optionalKey(
     Schema.Struct({
@@ -65,12 +74,12 @@ export const NoulQuestion = Schema.Struct({
 /** @category models
  * @since 0.1.0
  */
-export type NoulQuestion = typeof NoulQuestion.Type;
+export type ProbabilityQuestion = typeof ProbabilityQuestion.Type;
 
 /** @category schemas
  * @since 0.1.0
  */
-export const Question = Schema.Union([ChoiceQuestion, ScoreQuestion, NoulQuestion]);
+export const Question = Schema.Union([ChoiceQuestion, ScoreQuestion, ProbabilityQuestion]);
 
 /** @category models
  * @since 0.1.0
@@ -91,7 +100,6 @@ export type Questions = typeof Questions.Type;
  * @since 0.1.0
  */
 export const EvaluateRequest = Schema.Struct({
-  model: Schema.String,
   state: Content,
   questions: Questions,
 });
@@ -114,18 +122,19 @@ export type EvaluateRequest<Q extends Questions = Questions> = Omit<
  * @category schemas
  * @since 0.1.0
  */
-export const Probability = DecisionSchema.Probability;
+export const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }));
 
 /**
- * A selected option and its full distribution. Confidence summarizes the
- * distribution; it does not guarantee correctness.
+ * A selected option and its full distribution. Provider-specific confidence
+ * statistics belong to evaluation metadata, not the shared answer contract.
  *
  * @category schemas
  * @since 0.1.0
  */
 export const ChoiceAnswer = Schema.Struct({
-  ...DecisionSchema.ChoiceAnswer.fields,
-  confidence: Probability,
+  type: Schema.Literal("choice"),
+  choice: Schema.String,
+  probabilities: Schema.Record(Schema.String, Probability),
 });
 
 /**
@@ -154,8 +163,10 @@ export type ChoiceAnswer<Choice extends string = string> = Omit<
  * @since 0.1.0
  */
 export const ScoreAnswer = Schema.Struct({
-  ...DecisionSchema.ScoreAnswer.fields,
-  confidence: Probability,
+  type: Schema.Literal("score"),
+  score: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
+  legend: Schema.Record(Schema.String, Schema.String),
+  probabilities: Schema.Record(Schema.String, Probability),
 });
 
 /**
@@ -171,32 +182,38 @@ export type ScoreAnswer = Omit<typeof ScoreAnswer.Type, "legend" | "probabilitie
 };
 
 /**
- * The probability of yes. Noul has no separate confidence field.
+ * The probability of yes. A probability answer has no separate confidence field.
  *
  * @category schemas
  * @since 0.1.0
  */
-export const NoulAnswer = Schema.Struct({ type: Schema.Literal("noul"), noul: Probability });
+export const ProbabilityAnswer = Schema.Struct({
+  type: Schema.Literal("probability"),
+  probability: Probability,
+});
 
 /** @category models
  * @since 0.1.0
  */
-export type NoulAnswer = typeof NoulAnswer.Type;
+export type ProbabilityAnswer = typeof ProbabilityAnswer.Type;
 
 /** @category schemas
  * @since 0.1.0
  */
-export const Answer = Schema.Union([ChoiceAnswer, ScoreAnswer, NoulAnswer]);
+export const Answer = Schema.Union([ChoiceAnswer, ScoreAnswer, ProbabilityAnswer]);
 
 /** @category models
  * @since 0.1.0
  */
-export type Answer = ChoiceAnswer | ScoreAnswer | NoulAnswer;
+export type Answer = ChoiceAnswer | ScoreAnswer | ProbabilityAnswer;
 
 /** @category schemas
  * @since 0.1.0
  */
-export const Usage = Schema.Struct({ input_tokens: Schema.Natural, output_tokens: Schema.Natural });
+export const Usage = Schema.Struct({
+  inputTokens: Schema.NullOr(Schema.Natural),
+  outputTokens: Schema.NullOr(Schema.Natural),
+});
 
 /** @category models
  * @since 0.1.0
@@ -204,16 +221,32 @@ export const Usage = Schema.Struct({ input_tokens: Schema.Natural, output_tokens
 export type Usage = typeof Usage.Type;
 
 /**
- * The wire response shape. `TypeSafeClient.evaluate` additionally validates
+ * Provider-namespaced evidence that has no shared interpretation. Consumers
+ * decode a namespace with its provider's schema before using its contents.
+ *
+ * @category schemas
+ * @since 0.1.0
+ */
+export const ProviderMetadata = Schema.Record(Schema.String, Schema.JsonObject);
+
+/** @category models
+ * @since 0.1.0
+ */
+export type ProviderMetadata = typeof ProviderMetadata.Type;
+
+/**
+ * The wire response shape. `DecisionModel.evaluate` additionally validates
  * answer IDs, question kinds, criteria, distributions, and score correlations.
  *
  * @category schemas
  * @since 0.1.0
  */
 export const EvaluateResponse = Schema.Struct({
+  provider: Schema.NonEmptyString,
   model: Schema.String,
   answers: Schema.Record(Schema.String, Answer),
   usage: Usage,
+  providerMetadata: Schema.optionalKey(ProviderMetadata),
 });
 
 type ChoiceAnswerFor<Criteria> = Criteria extends unknown
@@ -237,7 +270,7 @@ export type AnswerFor<Q extends Question> = Q extends ChoiceQuestion
   ? ChoiceAnswerFor<Q["criteria"]>
   : Q extends ScoreQuestion
     ? ScoreAnswer
-    : NoulAnswer;
+    : ProbabilityAnswer;
 
 /**
  * One answer for each required question. Optional properties and open string,

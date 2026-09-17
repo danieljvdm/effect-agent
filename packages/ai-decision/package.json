@@ -1,12 +1,12 @@
 {
-  "name": "@effect-agent/ai-typesafe",
+  "name": "@effect-agent/ai-decision",
   "version": "0.1.0-beta.102",
-  "description": "TypeSafe AI evaluation with Effect HttpClient and request-derived answer types.",
+  "description": "Provider-neutral choice, score, and probability evaluations with Effect.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/danieljvdm/effect-agent.git",
-    "directory": "packages/ai-typesafe"
+    "directory": "packages/ai-decision"
   },
   "files": [
     "dist",
@@ -16,9 +16,10 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./type-safe-client": "./src/TypeSafeClient.ts",
-    "./type-safe-schema": "./src/TypeSafeSchema.ts",
-    "./type-safe-decision-model": "./src/TypeSafeDecisionModel.ts"
+    "./decision-model": "./src/DecisionModel.ts",
+    "./decision-query": "./src/DecisionQuery.ts",
+    "./decision-schema": "./src/DecisionSchema.ts",
+    "./decision-set": "./src/DecisionSet.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -27,9 +28,6 @@
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vp test"
-  },
-  "dependencies": {
-    "@effect-agent/ai-decision": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

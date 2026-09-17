@@ -80,6 +80,7 @@ specifications, planning documents, decision registers, ADRs, roadmaps, or evide
 ## Package dependency direction
 
 ```text
+ai-decision <- ai-typesafe
 effect-agent <- storage adapters
 effect-agent <- workflow
 effect-agent + selected adapters <- platform packages

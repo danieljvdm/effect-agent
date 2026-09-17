@@ -1,5 +1,6 @@
+import { DecisionModel, DecisionQuery, DecisionSet } from "@effect-agent/ai-decision";
 import type { TypeSafeSchema } from "@effect-agent/ai-typesafe";
-import { TypeSafeClient } from "@effect-agent/ai-typesafe";
+import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
 import { assert, describe, expect, it } from "@effect/vitest";
 import {
   Cause,
@@ -751,3 +752,99 @@ describe("TypeSafeClient", () => {
     }),
   );
 });
+
+it.effect("evaluates a reusable mixed decision set through the real TypeSafe HTTP boundary", () =>
+  Effect.gen(function* () {
+    const model = yield* DecisionModel.DecisionModel;
+
+    const assessment = DecisionSet.make({
+      input: Schema.Struct({ message: Schema.String, history: Schema.Array(Schema.Json) }),
+      questions: {
+        department: DecisionQuery.choice({
+          instructions: questions.department.instructions,
+          options: questions.department.criteria,
+        }),
+        frustration: DecisionQuery.score({
+          instructions: questions.frustration.instructions,
+          levels: questions.frustration.criteria,
+        }),
+        urgent: DecisionQuery.probability(questions.urgent),
+      },
+    });
+
+    const result = yield* model.evaluate(assessment, request.state);
+
+    expect(result).toEqual({
+      provider: "typesafe",
+      model: response.model,
+      usage: { inputTokens: 312, outputTokens: 48 },
+      answers: {
+        department: {
+          type: "choice",
+          choice: "billing",
+          probabilities: { billing: 0.8, technical: 0.2 },
+        },
+        frustration: {
+          type: "score",
+          score: 1.6,
+          legend: { "0": "Calm", "1": "Frustrated", "2": "Very angry" },
+          probabilities: { "0": 0.05, "1": 0.3, "2": 0.65 },
+        },
+        urgent: { type: "probability", probability: 0.9 },
+      },
+      providerMetadata: { typesafe: { confidence: { department: 0.7, frustration: 0.78 } } },
+    });
+
+    const metadata = yield* Schema.decodeUnknownEffect(TypeSafeDecisionModel.ProviderMetadata)(
+      result.providerMetadata?.typesafe,
+    );
+
+    expect(metadata.confidence).toEqual({ department: 0.7, frustration: 0.78 });
+  }).pipe(
+    Effect.provide(
+      TypeSafeDecisionModel.model("jev-latest").pipe(
+        Layer.provide(
+          clientLayer((sent) =>
+            Effect.gen(function* () {
+              expect(yield* requestBody(sent).pipe(Effect.orDie)).toEqual(request);
+
+              return jsonResponse(sent, response);
+            }),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
+it.effect("preserves reserved question IDs through the decision adapter", () =>
+  Effect.gen(function* () {
+    const model = yield* DecisionModel.DecisionModel;
+
+    const result = yield* model.evaluate({
+      state: "go",
+      questions: {
+        ["__proto__"]: { type: "probability", instructions: "Relevant?" },
+      },
+    });
+
+    expect(Object.hasOwn(result.answers, "__proto__")).toBe(true);
+    expect(result.answers["__proto__"]).toEqual({ type: "probability", probability: 0.8 });
+  }).pipe(
+    Effect.provide(
+      TypeSafeDecisionModel.model("jev-latest").pipe(
+        Layer.provide(
+          clientLayer((sent) =>
+            Effect.succeed(
+              jsonResponse(sent, {
+                model: "jev-resolved",
+                usage: { input_tokens: 1, output_tokens: 1 },
+                answers: { ["__proto__"]: { type: "noul", noul: 0.8 } },
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  ),
+);

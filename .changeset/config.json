@@ -9,6 +9,7 @@
   "commit": false,
   "fixed": [
     [
+      "@effect-agent/ai-decision",
       "@effect-agent/ai-typesafe",
       "@effect-agent/platform-cloudflare",
       "@effect-agent/platform-node",

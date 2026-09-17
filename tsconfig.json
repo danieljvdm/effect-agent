@@ -42,6 +42,12 @@
     },
     {
       "path": "./examples/travel-planner"
+    },
+    {
+      "path": "./packages/ai-decision"
+    },
+    {
+      "path": "./packages/ai-typesafe"
     }
   ]
 }

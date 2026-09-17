@@ -181,6 +181,18 @@ in your host.
 
 ## Packages
 
+### `@effect-agent/ai-decision` {#decision-models}
+
+Provider-neutral choice, score, and probability evaluations. `DecisionModel` preserves literal
+answer types, validates distributions against each request, and reports separate provider usage.
+`DecisionQuery.choice`, `.score`, and `.probability` construct questions; `DecisionSet.make`
+groups them with an input Schema for `model.evaluate(set, input)`. The Schema's encoded input
+becomes shared model-visible state. `DecisionSchema` owns the shared values; provider-specific
+statistics live in optional `providerMetadata`. The package depends only on Effect and does not
+run state machines or tool handlers. Compose answers with ordinary Effect code.
+
+The [TypeSafe state-transition example](../guide/tools#decision-transitions) shows all three question kinds.
+
 ### `@effect-agent/ai-typesafe` {#typesafe-ai}
 
 Evaluate TypeSafe AI choice, score, and noul questions through an Effect HttpClient.
@@ -198,12 +210,13 @@ const ClientLive = TypeSafeClient.layerConfig({
 }).pipe(Layer.provide(FetchHttpClient.layer));
 ```
 
-The package depends only on Effect at runtime and is incubated locally for later
+The package depends on Effect and the inward decision contract at runtime and is incubated locally for later
 upstream extraction. Use evaluations directly or through a
 [native Effect AI tool](../guide/tools#typesafe-evaluations). It supplies no
 `LanguageModel`. Retry and timeout policies remain explicit application choices.
-Direct module imports use `@effect-agent/ai-typesafe/type-safe-client` and
-`@effect-agent/ai-typesafe/type-safe-schema`.
+Direct module imports use `@effect-agent/ai-typesafe/type-safe-client`,
+`@effect-agent/ai-typesafe/type-safe-schema`, and `@effect-agent/ai-typesafe/type-safe-decision-model`.
+`TypeSafeDecisionModel.model` supplies the shared decision provider.
 
 ### `effect-agent` {#effect-agent-umbrella}
 

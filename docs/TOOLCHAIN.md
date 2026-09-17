@@ -70,10 +70,11 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 
 Framework code stays in `packages/*`. The canonical app and operational harnesses are leaf workspaces.
 Provider integrations come from upstream Effect AI Layers. The locally incubated
-`@effect-agent/ai-typesafe` package is the narrow exception: it depends only on Effect
+`@effect-agent/ai-typesafe` package is the narrow exception: it depends on Effect and the inward `@effect-agent/ai-decision` contract
 at runtime and follows upstream provider module conventions for later extraction.
 
 ```text
+ai-decision <- ai-typesafe
 effect-agent <- storage adapters
 effect-agent <- workflow
 effect-agent + selected adapters <- platform packages
@@ -188,7 +189,7 @@ retain a cached preview after a deployment.
 
 ## Releasing to npm
 
-All eleven public packages share one Changesets fixed group and publish to `beta`
+All twelve public packages share one Changesets fixed group and publish to `beta`
 as `X.Y.Z-beta.N`. Keep the group in `.changeset/config.json` aligned with public workspaces.
 The travel planner is a private application with no package version. It does not receive
 changesets, version bumps, changelogs, package tags, or npm releases. Private-package versioning

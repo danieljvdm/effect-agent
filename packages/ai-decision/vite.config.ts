@@ -4,9 +4,10 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
-      "src/TypeSafeClient.ts",
-      "src/TypeSafeSchema.ts",
-      "src/TypeSafeDecisionModel.ts",
+      "src/DecisionModel.ts",
+      "src/DecisionQuery.ts",
+      "src/DecisionSchema.ts",
+      "src/DecisionSet.ts",
     ],
     dts: true,
     sourcemap: true,

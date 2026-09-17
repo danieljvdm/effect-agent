@@ -49,6 +49,28 @@ the answer correct. Retry and timeout policies are explicit; see the
 [package entry](../reference/packages#typesafe-ai) and the
 [TypeSafe API reference](https://docs.typesafe.ai/api).
 
+## Compose decisions into state transitions {#decision-transitions}
+
+Define reusable questions with `DecisionQuery` and a typed input with `DecisionSet`:
+
+<<< ../../packages/ai-typesafe/examples/decision.ts{ts twoslash}
+
+`model.evaluate(set, input)` encodes input through the set's Schema and evaluates all questions
+against that shared state. The input's encoding services remain in the Effect requirements;
+invalid input or questions fail with `AiError` before provider I/O. Application code uses typed
+answers to choose the next state. Dependent questions require a subsequent evaluation.
+
+The provider-neutral names are `choice`, `score`, and `probability`. TypeSafe's `noul` stays at the
+HTTP boundary. Choice probabilities sum to one; probability questions independently estimate
+whether each proposition holds. Score answers retain a fractional, zero-indexed position along
+the supplied levels and their full distribution. The example's thresholds are application policy.
+
+Jev's separate confidence statistic is retained under `result.providerMetadata.typesafe.confidence`,
+keyed by question ID. Decode the namespace with `TypeSafeDecisionModel.ProviderMetadata` when
+using it. Other providers need only supply the shared answer contract. The set selects no provider
+and applies no routing policy. This example changes application state only; it does not execute
+or authorize an agent Tool call.
+
 ## Discover tools progressively {#progressive-discovery}
 
 A large registered catalogue can contain hundreds of tools even when a request needs only two.
