@@ -1,5 +1,16 @@
 # @effect-agent/ai-typesafe
 
+## 0.1.0-beta.105
+
+### Patch Changes
+
+- [#532](https://github.com/danieljvdm/effect-agent/pull/532) [`8e09da8`](https://github.com/danieljvdm/effect-agent/commit/8e09da806f0609bc23fa6fc15b1bed5ae0a0cb1d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Require `TypeSafeClient.Config` and `HttpClient` when constructing the TypeSafe client.
+
+  BEHAVIOR CHANGE: Replace `make(options)`, `layer(options)`, and `layerConfig(options)` with the `make` Effect or `layer` Layer; provide `TypeSafeClient.Config` (or `TypeSafeClient.Config.layer` for environment configuration) and apply HTTP policies to the supplied `HttpClient` instead of `transformClient`.
+
+- Updated dependencies []:
+  - @effect-agent/ai-decision@0.1.0-beta.105
+
 ## 0.1.0-beta.104
 
 ### Patch Changes

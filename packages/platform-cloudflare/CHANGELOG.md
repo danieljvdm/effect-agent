@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.105
+
+### Patch Changes
+
+- [#534](https://github.com/danieljvdm/effect-agent/pull/534) [`8491671`](https://github.com/danieljvdm/effect-agent/commit/84916713273694ae717095c5ec5aaae108300520) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep ready Thread work running while alarm-owned delivery finishes, preserving independent retry deadlines and one shared event budget. Treat `ThreadHostMaintenance`'s `dispatchClosed` signal as the end of new delivery waves; keep local admission listeners alive until their event Scope closes.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.105
+  - effect-agent@0.1.0-beta.105
+
 ## 0.1.0-beta.104
 
 ### Patch Changes

@@ -1,5 +1,7 @@
 # effect-agent
 
+## 0.1.0-beta.105
+
 ## 0.1.0-beta.104
 
 ### Patch Changes

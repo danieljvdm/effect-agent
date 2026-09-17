@@ -152,6 +152,7 @@
     "native-chaos-generation",
     "native-empty-context-tools",
     "native-outstanding-reads",
+    "native-scheduling-during-delivery",
     "native-subscription-alarm-services",
     "native-tool-observability",
     "navigable-pr-review",
@@ -257,6 +258,7 @@
     "typed-memory-namespaces",
     "typed-run-disposition",
     "typed-typesafe-evaluations",
+    "typesafe-client-requirements",
     "unknown-abort-recovery",
     "verified-pr-review",
     "workflow-durable-host"
