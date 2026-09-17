@@ -705,6 +705,8 @@ class SelectionObserverError extends Schema.TaggedError<SelectionObserverError>(
 it("preserves decision state and usage-observer E/R in the selector", () => {
   const selector = ToolSelector.fromDecisionModel({
     minimumRelevance: 0.6,
+    prompt: { task: "Find tools that can resolve the current request." },
+    criteria: { true: "Advances the request", false: "Unrelated capability" },
     state: () =>
       Effect.gen(function* () {
         const state = yield* TurnHost;
