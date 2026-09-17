@@ -941,7 +941,7 @@ const modelResponseCodecFor = (toolkit: Toolkit.Any) => {
   return codec;
 };
 
-const ownModelResponsePartGeneral = Effect.fn("AgentRuntime.ownModelResponsePart")(function* <
+const ownModelResponsePartGeneral = Effect.fnUntraced(function* <
   Tools extends Record<string, Tool.Any>,
 >(
   part: unknown,

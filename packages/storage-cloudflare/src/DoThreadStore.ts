@@ -619,7 +619,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
     return result;
   });
 
-  const loadRecords = Effect.fn("DoThreadStore.loadRecords")(function* (request: RawReadRequest) {
+  const loadRecords = Effect.fnUntraced(function* (request: RawReadRequest) {
     const result = yield* journal
       .read(request)
       .pipe(Effect.mapError((error) => storeError("read canonical records", error)));
@@ -654,7 +654,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
 
   const read: ThreadStore["Service"]["read"] = (request) => Stream.unwrap(readEffect(request));
 
-  const observeEffect = Effect.fn("DoThreadStore.observe")(function* (request: ThreadObservation) {
+  const observeEffect = Effect.fnUntraced(function* (request: ThreadObservation) {
     const validated = yield* Schema.decodeEffect(Schema.toType(ThreadObservation))(request).pipe(
       Effect.mapError((error) => schemaStoreError("validate thread observation", error)),
     );
@@ -662,8 +662,12 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
     yield* requireThread(journal, validated.threadId);
     const initialSequence = yield* parseOffset(validated.threadId, validated.afterOffset);
     const cursor = yield* Ref.make(initialSequence);
+    let polls = 0;
+    let emptyPolls = 0;
+    let deliveredRecords = 0;
 
-    const poll = Effect.fn("DoThreadStore.observePoll")(function* () {
+    const poll = Effect.fnUntraced(function* () {
+      polls++;
       const fromSequenceExclusive = yield* Ref.get(cursor);
 
       const result = yield* loadRecords(
@@ -675,19 +679,37 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
       );
 
       if (result.count === 0) {
+        emptyPolls++;
         yield* Effect.sleep(config.observationPollInterval);
 
         return Stream.empty;
       }
 
-      return result.records.pipe(Stream.tap((record) => Ref.set(cursor, record.sequence)));
+      return result.records.pipe(
+        Stream.tap((record) => {
+          deliveredRecords++;
+
+          return Ref.set(cursor, record.sequence);
+        }),
+      );
     });
 
-    return Stream.fromEffectRepeat(poll()).pipe(Stream.flatten);
+    return Stream.fromEffectRepeat(poll()).pipe(
+      Stream.flatten,
+      Stream.ensuring(
+        Effect.suspend(() =>
+          Effect.annotateCurrentSpan({
+            "effect_agent.observation.polls": polls,
+            "effect_agent.observation.empty_polls": emptyPolls,
+            "effect_agent.observation.records": deliveredRecords,
+          }),
+        ),
+      ),
+    );
   });
 
   const observe: ThreadStore["Service"]["observe"] = (request) =>
-    Stream.unwrap(observeEffect(request));
+    Stream.unwrap(observeEffect(request)).pipe(Stream.withSpan("DoThreadStore.observe"));
 
   const exportThread: ThreadStore["Service"]["export"] = Effect.fn("DoThreadStore.export")(
     function* (request: ThreadExportRequest) {

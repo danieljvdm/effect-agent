@@ -1,4 +1,14 @@
-import { type Crypto, type Option, type Scope, Context, Effect, Layer, Schema } from "effect";
+import {
+  type Crypto,
+  type Option,
+  type Scope,
+  Context,
+  Effect,
+  Layer,
+  References,
+  Schema,
+  Tracer,
+} from "effect";
 import { Tool } from "effect/unstable/ai";
 
 import type * as Agent from "../../core/Agent.ts";
@@ -229,20 +239,40 @@ type ReportRequirements<Reports> =
         : never
     : never;
 
+// Registrations outlive their construction span. Dependencies remain captured,
+// while every attempt/report inherits the invoking fiber's tracing state.
+const omitTraceContext = Context.omit(
+  Tracer.ParentSpan,
+  Tracer.Tracer,
+  Tracer.MinimumTraceLevel,
+  Tracer.CurrentTraceLevel,
+  References.TracerEnabled,
+  References.TracerTimingEnabled,
+  References.TracerSpanAnnotations,
+  References.TracerSpanLinks,
+);
+
+// R describes captured application services; ParentSpan is supplied by the
+// live invocation rather than stored as a registration dependency.
+const withoutTraceContext = <R>(context: Context.Context<R>): Context.Context<R> =>
+  omitTraceContext(context) as Context.Context<R>;
+
 const captureReporting = <R>(reports: ReadonlyArray<WorkerReporting<unknown, R>>) =>
-  Effect.map(Effect.context<Exclude<R, Scope.Scope>>(), (context) =>
-    reports.map((report): WorkerReporting<WorkerReportPreparationFailure> => ({
-      ...report,
-      prepare: (value) =>
-        Effect.scoped(Effect.suspend(() => report.prepare(value))).pipe(
-          Effect.provide(context),
-          Effect.mapError((error) =>
-            Schema.is(WorkerReportPreparationFailure)(error)
-              ? error
-              : WorkerReportPreparationFailure.make({ stage: "preparation" }),
+  Effect.map(
+    Effect.context<Exclude<R, Scope.Scope>>().pipe(Effect.map(withoutTraceContext)),
+    (context) =>
+      reports.map((report): WorkerReporting<WorkerReportPreparationFailure> => ({
+        ...report,
+        prepare: (value) =>
+          Effect.scoped(Effect.suspend(() => report.prepare(value))).pipe(
+            Effect.provide(context),
+            Effect.mapError((error) =>
+              Schema.is(WorkerReportPreparationFailure)(error)
+                ? error
+                : WorkerReportPreparationFailure.make({ stage: "preparation" }),
+            ),
           ),
-        ),
-    })),
+      })),
   );
 
 const backgroundReports = (definition: Agent.AnyDefinition) => [
@@ -276,7 +306,9 @@ const capture = <A extends ExecutableAgentBinding, Provides = never, Requires = 
   Exclude<DurableWorkerRequirements<A>, Provides> | Requires
 > =>
   Effect.map(
-    Effect.context<Exclude<DurableWorkerRequirements<A>, Provides> | Requires>(),
+    Effect.context<Exclude<DurableWorkerRequirements<A>, Provides> | Requires>().pipe(
+      Effect.map(withoutTraceContext),
+    ),
     (context): CapturedBinding => ({
       agentId: agent.definition.id,
       definition: agent.definition,

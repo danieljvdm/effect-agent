@@ -34,7 +34,7 @@ const canonicalJson = (value: Schema.Json): string => {
 };
 
 /** Digest a JSON value using a stable, locale-independent object-key ordering (UTF-16 code units, RFC 8785 style). */
-export const digestJson = Effect.fn("Thread.digestJson")(function* (
+export const digestJson = Effect.fnUntraced(function* (
   value: Schema.Json,
 ): Effect.fn.Return<Digest, DigestError, Crypto.Crypto> {
   const crypto = yield* Crypto.Crypto;
@@ -55,38 +55,32 @@ export const digestJson = Effect.fn("Thread.digestJson")(function* (
 });
 
 /** Digest a canonical batch together with the prior tail to form an append-only hash chain. */
-export const digestCanonicalBatch = Effect.fn("Thread.digestCanonicalBatch")(
-  (
-    previousTailDigest: Digest,
-    batch: CanonicalBatch,
-  ): Effect.Effect<Digest, DigestError, Crypto.Crypto> =>
-    Schema.encodeEffect(CanonicalBatch)(batch).pipe(
-      Effect.mapError(() => DigestError.make({ message: "Canonical batch encoding failed" })),
-      Effect.flatMap((encoded) =>
-        digestJson({
-          previousTailDigest,
-          batch: encoded,
-        }),
-      ),
+export const digestCanonicalBatch = (
+  previousTailDigest: Digest,
+  batch: CanonicalBatch,
+): Effect.Effect<Digest, DigestError, Crypto.Crypto> =>
+  Schema.encodeEffect(CanonicalBatch)(batch).pipe(
+    Effect.mapError(() => DigestError.make({ message: "Canonical batch encoding failed" })),
+    Effect.flatMap((encoded) =>
+      digestJson({
+        previousTailDigest,
+        batch: encoded,
+      }),
     ),
-);
+  );
 
 /** Digest one schema-encoded Agent, Model, or Toolkit definition. */
-export const digestDefinition = Effect.fn("Thread.digestDefinition")((definition: Schema.Json) =>
-  digestJson(definition),
-);
+export const digestDefinition = (definition: Schema.Json) => digestJson(definition);
 
 /** Digest all replay-relevant definitions without hiding which authority changed. */
-export const digestDefinitions = Effect.fn("Thread.digestDefinitions")(
-  (
-    definitions: DefinitionDigestInput,
-  ): Effect.Effect<DefinitionDigests, DigestError, Crypto.Crypto> =>
-    Effect.all({
-      agent: digestDefinition(definitions.agent),
-      model: digestDefinition(definitions.model),
-      tools: digestDefinition(definitions.tools),
-    }).pipe(Effect.map((digests) => DefinitionDigests.make(digests))),
-);
+export const digestDefinitions = (
+  definitions: DefinitionDigestInput,
+): Effect.Effect<DefinitionDigests, DigestError, Crypto.Crypto> =>
+  Effect.all({
+    agent: digestDefinition(definitions.agent),
+    model: digestDefinition(definitions.model),
+    tools: digestDefinition(definitions.tools),
+  }).pipe(Effect.map((digests) => DefinitionDigests.make(digests)));
 
 export const EMPTY_TAIL_DIGEST = Schema.decodeSync(Digest)(
   "0000000000000000000000000000000000000000000000000000000000000000",

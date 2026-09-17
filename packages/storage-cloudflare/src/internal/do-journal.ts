@@ -1149,7 +1149,7 @@ const makeJournal = (
     );
   });
 
-  const read = Effect.fn("DoJournal.read")(function* (request: RawReadRequest) {
+  const read = Effect.fnUntraced(function* (request: RawReadRequest) {
     // Capture membership without retaining payloads. Append-only sequences keep each later
     // payload query inside this snapshot, even when new records arrive during consumption.
     const planRows = yield* sql<Record<string, unknown>>`
