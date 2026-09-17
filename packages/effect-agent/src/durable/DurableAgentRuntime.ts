@@ -115,6 +115,7 @@ import {
 import { SubagentHost } from "../engine/SubagentHost.ts";
 import { ThreadHistory } from "../engine/ThreadHistory.ts";
 import { RunToolVisibility } from "../engine/ToolExposure.ts";
+import { RunToolSelector } from "../engine/ToolSelector.ts";
 import {
   type RetryCommand,
   ExplainedEvidence,
@@ -1040,6 +1041,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const runToolAuthorization = yield* RunToolAuthorization;
 
   const runToolVisibility = yield* RunToolVisibility;
+  const runToolSelector = yield* RunToolSelector;
 
   const runToolScheduling = yield* RunToolScheduling;
 
@@ -7310,6 +7312,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           ),
           Stream.provideService(CurrentToolFailureObserver, toolFailureObserver),
           Stream.provideService(RunToolVisibility, runToolVisibility),
+          Stream.provideService(RunToolSelector, runToolSelector),
           Stream.provideService(RunToolScheduling, runToolScheduling),
           Stream.provideService(ContextCompactor, compactor),
           Stream.provideService(RunContextPreparation, runContextPreparation),

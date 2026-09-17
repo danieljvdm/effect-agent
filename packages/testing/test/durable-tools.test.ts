@@ -99,6 +99,7 @@ import {
   type PreparedToolCallEvidence,
   type ReconciliationDecision,
 } from "effect-agent/tool-reconciler";
+import { RunToolSelector } from "effect-agent/tool-selector";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { Prompt, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
@@ -957,6 +958,88 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
     );
   }
 
+  for (const location of ["turn:after-response-append", "turn:after-results-append"] as const) {
+    it.effect(`reuses pre-model selection after ${location} and retains the host selector`, () => {
+      let selections = 0;
+      let workerCalls = 0;
+
+      return Effect.gen(function* () {
+        yield* clearFailpoint;
+        const runtime = yield* DurableAgentRuntime;
+        const desk = yield* makeBookDesk(bookTools);
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? toolTurn(toolCall("book-selected", "book", { ref: "r-selected" }))
+            : finalParts('{"answer":"booked"}'),
+        );
+
+        const agent = Agent.withModel(bookDefinition, scripted.model);
+        const thread = `selector-${location}`;
+
+        yield* runtime.submit(agent, { question: "book" }, submitOptions(thread, thread));
+        yield* armFailpoint(location);
+
+        const process = runtime.processThread(agent, decodeThreadId(thread)).pipe(
+          Effect.provide(desk.toolLayer),
+          Effect.provideService(RunToolSelector, {
+            select: () =>
+              Effect.sync(() => {
+                workerCalls++;
+
+                return [];
+              }),
+          }),
+        );
+
+        const first = yield* process.pipe(Effect.exit);
+
+        expect(failureTag(first)).toBe("DurableRuntimeFailpointError");
+        expect(selections).toBe(1);
+
+        const firstResponse = (yield* readLog(thread)).find(
+          (entry) => entry.record.payload._tag === "ModelResponseRecorded",
+        );
+
+        expect(firstResponse?.record.payload).toMatchObject({
+          toolExposure: { exposedToolNames: ["book"], selection: { toolNames: ["book"] } },
+        });
+        yield* clearFailpoint;
+        yield* runtime.runRecovery;
+        const settled = yield* process;
+
+        expect(settled[0]?.outcome).toBe("completed");
+        expect(yield* desk.count("r-selected")).toBe(1);
+        expect(selections).toBe(2);
+        expect(workerCalls).toBe(0);
+
+        const responses = (yield* readLog(thread)).flatMap((entry) =>
+          entry.record.payload._tag === "ModelResponseRecorded" ? [entry.record.payload] : [],
+        );
+
+        expect(responses).toHaveLength(2);
+        expect(responses[1]?.toolExposure?.selection?.toolNames).toEqual(["book"]);
+      }).pipe(
+        Effect.provide(
+          testLayer.pipe(
+            Layer.provide(
+              Layer.succeed(RunToolSelector, {
+                select: ({ turn, catalogue }) =>
+                  Effect.sync(() => {
+                    selections++;
+                    expect(catalogue.some((entry) => entry.id === "native:book")).toBe(true);
+
+                    return turn === 1 ? ["native:book"] : undefined;
+                  }),
+              }),
+            ),
+          ),
+          { local: true },
+        ),
+      );
+    });
+  }
+
   it.effect("captures host scheduling barriers while independent durable reads overlap", () =>
     Effect.gen(function* () {
       const bothReading = yield* Deferred.make<void>();
@@ -1433,11 +1516,20 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         const agent = Agent.withModel(bookDefinition, scripted.model);
         const thread = `visibility-captured-${configured}`;
         let workerPolicyCalls = 0;
+        let workerSelectorCalls = 0;
 
         yield* runtime.submit(agent, { question: "book" }, submitOptions(thread, "visible"));
 
         const settlements = yield* runtime.processThread(agent, decodeThreadId(thread)).pipe(
           Effect.provide(desk.toolLayer),
+          Effect.provideService(RunToolSelector, {
+            select: () =>
+              Effect.sync(() => {
+                workerSelectorCalls++;
+
+                return [];
+              }),
+          }),
           Effect.provideService(RunToolVisibility, {
             visible: () =>
               Effect.sync(() => {
@@ -1451,6 +1543,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* desk.count("r-visible")).toBe(1);
         expect(workerPolicyCalls).toBe(0);
+        expect(workerSelectorCalls).toBe(0);
 
         const responses = (yield* readLog(thread)).flatMap((entry) =>
           entry.record.payload._tag === "ModelResponseRecorded" ? [entry.record.payload] : [],

@@ -128,6 +128,10 @@ The eligible native Tools whose declarations accompany one model request. A run-
 replaces the non-pinned set at a complete Tool Batch boundary. It changes neither registered Tool
 identities nor their Handler requirements.
 
+**Tool selector**
+An optional host Effect that ranks the eligible Tool catalogue before a fresh model request.
+It changes exposure through the existing Selection contract and grants no execution authority.
+
 **Tool discovery**
 
 A readonly Tool that searches the currently visible catalogue and returns bounded documentation.

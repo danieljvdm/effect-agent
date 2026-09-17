@@ -75,6 +75,7 @@ at runtime and follows upstream provider module conventions for later extraction
 
 ```text
 ai-decision <- ai-typesafe
+ai-decision <- effect-agent
 effect-agent <- storage adapters
 effect-agent <- workflow
 effect-agent + selected adapters <- platform packages

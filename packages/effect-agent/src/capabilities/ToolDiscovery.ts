@@ -2,13 +2,13 @@ import { Effect, Schema, type Scope } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { utf8ByteLength } from "../core/internal/utf8.ts";
-import { DiscoveryTool, PinnedTool } from "../core/ToolExposure.ts";
+import { Descriptor, DiscoveryTool, PinnedTool } from "../core/ToolExposure.ts";
 import { ToolExecutionClass } from "../engine/DurableStep.ts";
+import { catalogEntryId as entryId, describeCatalog } from "../engine/internal/tool-exposure.ts";
 import { CurrentToolCatalog, type CatalogEntry } from "../engine/ToolExposure.ts";
 
 const Name = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const Namespace = Schema.NonEmptyString.check(Schema.isMaxLength(128));
-const Description = Schema.String.check(Schema.isMaxLength(2_048));
 const NamespaceDescription = Schema.String.check(Schema.isMaxLength(512));
 const EntryId = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 
@@ -18,19 +18,7 @@ export const Parameters = Schema.Struct({
   namespace: Schema.optionalKey(Namespace),
 });
 
-/** Metadata given to custom search only after host visibility and inherited grants are applied. */
-export class Descriptor extends Schema.Class<Descriptor>(
-  "@effect-agent/capabilities/ToolDiscovery/Descriptor",
-)({
-  id: EntryId,
-  kind: Schema.Literals(["native", "code-mode"]),
-  name: Name,
-  nativeToolName: Name,
-  namespace: Schema.optionalKey(Namespace),
-  method: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(128))),
-  description: Schema.optionalKey(Description),
-  namespaceDescription: Schema.optionalKey(NamespaceDescription),
-}) {}
+export { Descriptor } from "../core/ToolExposure.ts";
 
 /**
  * Selected metadata and canonical encoded Tool Schemas. Provider-specific model schema
@@ -118,11 +106,6 @@ export interface Options<Failure extends Schema.Top = typeof Schema.Never, Requi
       ) => Effect.Effect<ReadonlyArray<string>, Failure["Type"], Requirements>)
     | undefined;
 }
-
-const entryId = (entry: CatalogEntry): string =>
-  entry.kind === "native"
-    ? `native:${entry.tool.name}`
-    : `code-mode:${entry.nativeToolName}:${entry.namespace}.${entry.method}`;
 
 const compare = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -214,52 +197,16 @@ export const make = <Failure extends Schema.Top = typeof Schema.Never, Requireme
             )
             .toSorted((left, right) => compare(entryId(left), entryId(right)));
 
-          const catalogue: Array<Descriptor> = [];
-          const byId = new Map<string, CatalogEntry>();
-
-          for (const entry of entries) {
-            const id = entryId(entry);
-
-            if (byId.has(id)) {
-              return yield* ToolDiscoveryError.make({
+          const catalogue = yield* describeCatalog(entries, bounds.namespaceDescriptions).pipe(
+            Effect.mapError(() =>
+              ToolDiscoveryError.make({
                 reason: "invalid-catalogue",
-                message: "The visible catalogue contains duplicate entry identities",
-              });
-            }
-            const description = Tool.getDescription(entry.tool);
+                message: "The visible catalogue contains invalid metadata or duplicate identities",
+              }),
+            ),
+          );
 
-            const namespaceDescription =
-              entry.namespace === undefined ||
-              !Object.hasOwn(bounds.namespaceDescriptions, entry.namespace)
-                ? undefined
-                : bounds.namespaceDescriptions[entry.namespace];
-
-            const descriptor = yield* Schema.decodeEffect(Descriptor)({
-              id,
-              kind: entry.kind,
-              name: entry.tool.name,
-              nativeToolName: entry.nativeToolName,
-              ...(entry.namespace === undefined ? {} : { namespace: entry.namespace }),
-              ...(entry.kind === "code-mode" ? { method: entry.method } : {}),
-              ...(description === undefined
-                ? {}
-                : {
-                    description:
-                      description.length > 2_048 ? `${description.slice(0, 2_047)}…` : description,
-                  }),
-              ...(namespaceDescription === undefined ? {} : { namespaceDescription }),
-            }).pipe(
-              Effect.mapError(() =>
-                ToolDiscoveryError.make({
-                  reason: "invalid-catalogue",
-                  message: "The visible catalogue contains invalid metadata",
-                }),
-              ),
-            );
-
-            catalogue.push(Object.freeze(descriptor));
-            byId.set(id, entry);
-          }
+          const byId = new Map(entries.map((entry) => [entryId(entry), entry]));
 
           const ids =
             search === undefined

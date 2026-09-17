@@ -120,6 +120,7 @@
     "./tool-discovery": "./src/capabilities/ToolDiscovery.ts",
     "./tool-exposure": "./src/ToolExposure.ts",
     "./tool-reconciler": "./src/durable/ToolReconciler.ts",
+    "./tool-selector": "./src/ToolSelector.ts",
     "./tool-result": "./src/core/ToolResult.ts",
     "./usage": "./src/core/Usage.ts",
     "./wake-scheduler": "./src/durable/WakeScheduler.ts",
@@ -135,6 +136,9 @@
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vp test --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect-agent/ai-decision": "workspace:*"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",

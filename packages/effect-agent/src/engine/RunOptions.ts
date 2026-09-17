@@ -37,6 +37,7 @@ import type { WorkerBudgetScope, FrameworkMessage } from "../core/Worker.ts";
 import type { CompactionError, ContextMessageTokenEstimator } from "./ContextCompactor.ts";
 import type { ContextRolloverSelection, ModelCallContext } from "./ContextWindow.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./DurableStep.ts";
+import type { Hook as ToolSelectorHook } from "./ToolSelector.ts";
 
 /** Live, trusted application diagnostics. Never persisted, transported, or automatically logged. */
 interface ToolFailureIdentity {
@@ -936,6 +937,14 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * is restored through `context` instead of rerendering the application's input prompt.
    */
   readonly retainedInput?: Schema.Json | undefined;
+
+  /**
+   * Rank eligible Tools after context preparation and before a fresh model request. Undefined
+   * results retain context/discovery selection. Runs once per Turn, never for a resumed batch
+   * or a same-Turn provider retry. Resources close after selection, under the Run deadline.
+   * This option is not inherited by Subagents; hosts can provide RunToolSelector separately.
+   */
+  readonly toolSelector?: ToolSelectorHook<HookError, HookRequirements> | undefined;
 
   /** Initial or canonically restored run-scoped native selection. */
   readonly toolSelection?: Selection | undefined;

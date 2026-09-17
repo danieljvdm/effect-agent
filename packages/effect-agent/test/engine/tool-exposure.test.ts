@@ -1,5 +1,18 @@
+import { DecisionModel } from "@effect-agent/ai-decision";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Layer, Option, Schema, SchemaGetter, Stream } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Result,
+  Schema,
+  SchemaGetter,
+  Stream,
+} from "effect";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import { ContextRolloverTool } from "effect-agent/context-window";
@@ -19,6 +32,8 @@ import {
   CurrentToolCatalog,
   RunToolVisibility,
 } from "effect-agent/tool-exposure";
+import * as ToolSelector from "effect-agent/tool-selector";
+import { TestClock } from "effect/testing";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 let threadSequence = 0;
@@ -121,6 +136,422 @@ const failure = <E>(exit: Exit.Exit<unknown, E>) =>
   Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined;
 
 layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", (it) => {
+  it.effect(
+    "selects Code Mode aliases once per owning native tool and breaks relevance ties by ID",
+    () =>
+      Effect.gen(function* () {
+        const requests: Array<ReadonlyArray<string>> = [];
+
+        const code = Tool.make("run_code", { success: Schema.String }).annotate(
+          AdditionalToolCatalog,
+          [
+            { tool: Read, namespace: "records", method: "first" },
+            { tool: Read, namespace: "records", method: "second" },
+          ],
+        );
+
+        const native = Toolkit.make(code, Read, Status);
+
+        const agent = Agent.make("selector-alias", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Answer",
+          toolkit: native,
+        });
+
+        const decision = yield* DecisionModel.make({
+          evaluate: () =>
+            Effect.succeed({
+              provider: "test",
+              model: "tie",
+              usage: { inputTokens: null, outputTokens: null },
+              answers: {
+                candidate_0: { type: "probability", probability: 0.9 },
+                candidate_1: { type: "probability", probability: 0.9 },
+                candidate_2: { type: "probability", probability: 0.9 },
+                candidate_3: { type: "probability", probability: 0.9 },
+                candidate_4: { type: "probability", probability: 0.1 },
+              },
+            }),
+        });
+
+        const selector = ToolSelector.fromDecisionModel({
+          state: () => Effect.succeed("go"),
+          minimumRelevance: 0.8,
+          maxTools: 2,
+        });
+
+        let ranked: ReadonlyArray<string> | undefined;
+
+        yield* AgentRuntime.run(Agent.withModel(agent, scripted([done], requests)), "go", {
+          toolSelector: {
+            ...selector,
+            select: (request) =>
+              selector.select(request).pipe(
+                Effect.tap((ids) =>
+                  Effect.sync(() => {
+                    ranked = ids;
+                  }),
+                ),
+              ),
+          },
+        }).pipe(
+          Effect.provideService(DecisionModel.DecisionModel, decision),
+          Effect.provide(
+            native.toLayer({
+              run_code: () => Effect.die("unused"),
+              read: () => Effect.die("unused"),
+              status: () => Effect.die("unused"),
+            }),
+          ),
+        );
+        expect(ranked).toEqual([
+          "code-mode:run_code:records.first",
+          "code-mode:run_code:records.second",
+          "native:read",
+          "native:run_code",
+        ]);
+        expect(requests).toEqual([["run_code", "read", "status"]]);
+      }),
+  );
+
+  it.effect(
+    "clears non-pinned tools on a decision no-match and refuses oversized state before evaluation",
+    () =>
+      Effect.gen(function* () {
+        for (const mode of ["clear", "state-limit"] as const) {
+          const requests: Array<ReadonlyArray<string>> = [];
+          let evaluations = 0;
+
+          const decision = yield* DecisionModel.make({
+            evaluate: () =>
+              Effect.sync(() => {
+                evaluations++;
+
+                return {
+                  provider: "test",
+                  model: "none",
+                  usage: { inputTokens: null, outputTokens: null },
+                  answers: {
+                    candidate_0: { type: "probability", probability: 0.1 },
+                    candidate_1: { type: "probability", probability: 0.1 },
+                    candidate_2: { type: "probability", probability: 0.1 },
+                    candidate_3: { type: "probability", probability: 0.1 },
+                  },
+                };
+              }),
+          });
+
+          const exit = yield* AgentRuntime.run(
+            Agent.withModel(definition, scripted([done], requests)),
+            "go",
+            {
+              toolSelection: Selection.make({ toolNames: ["read"] }),
+              toolSelector: ToolSelector.fromDecisionModel({
+                state: () => Effect.succeed("é"),
+                minimumRelevance: 0.8,
+                onNoMatch: "clear",
+                maxStateBytes: mode === "clear" ? 4 : 3,
+              }),
+            },
+          ).pipe(
+            Effect.provideService(DecisionModel.DecisionModel, decision),
+            Effect.provide(
+              tools.toLayer({
+                discover: () => Effect.die("unused"),
+                read: () => Effect.die("unused"),
+                write: () => Effect.die("unused"),
+                status: () => Effect.die("unused"),
+              }),
+            ),
+            Effect.exit,
+          );
+
+          if (mode === "clear") {
+            expect(Exit.isSuccess(exit)).toBe(true);
+            expect(requests).toEqual([["discover", "status"]]);
+            expect(evaluations).toBe(1);
+          } else {
+            expect(failure(exit)).toMatchObject({
+              _tag: "AiError",
+              reason: { _tag: "InvalidRequestError" },
+            });
+            expect(requests).toEqual([]);
+            expect(evaluations).toBe(0);
+          }
+        }
+      }),
+  );
+
+  it.effect(
+    "shortlists before the first model turn with filtered metadata, batched relevance, and retained pins",
+    () =>
+      Effect.gen(function* () {
+        const requests: Array<ReadonlyArray<string>> = [];
+        let evaluations = 0;
+        let observed = 0;
+
+        const decision = yield* DecisionModel.make({
+          evaluate: (request) =>
+            Effect.sync(() => {
+              evaluations++;
+              expect(request.state).toBe("go");
+              expect(Object.keys(request.questions)).toEqual([
+                "candidate_0",
+                "candidate_1",
+                "candidate_2",
+              ]);
+              expect(JSON.stringify(request.questions)).not.toContain("write");
+
+              return {
+                provider: "test",
+                model: "decisions",
+                usage: { inputTokens: 12, outputTokens: 3 },
+                answers: {
+                  candidate_0: { type: "probability", probability: 0.1 },
+                  candidate_1: { type: "probability", probability: evaluations === 1 ? 0.9 : 0.2 },
+                  candidate_2: { type: "probability", probability: 0.1 },
+                },
+              };
+            }),
+        });
+
+        const selector = ToolSelector.fromDecisionModel({
+          state: ({ input }) => Schema.decodeUnknownEffect(Schema.String)(input),
+          minimumRelevance: 0.8,
+          maxTools: 1,
+          onEvaluation: ({ usage }) =>
+            Effect.sync(() => {
+              observed++;
+              expect(usage.inputTokens).toBe(12);
+            }),
+        });
+
+        const result = yield* AgentRuntime.run(
+          Agent.withModel(definition, scripted([[call("read-1", "read"), finish], done], requests)),
+          "go",
+          {
+            toolSelector: selector,
+            subagentGrant: SubagentGrant.make({
+              allowedToolNames: ["discover", "read", "status"],
+              maxDepth: 1,
+            }),
+            delegationDepth: 1,
+          },
+        ).pipe(
+          Effect.provideService(DecisionModel.DecisionModel, decision),
+          Effect.provide(
+            tools.toLayer({
+              discover: () => Effect.die("Discovery should not run"),
+              read: () => Effect.succeed("found"),
+              write: () => Effect.die("Hidden Tool ran"),
+              status: () => Effect.succeed(""),
+            }),
+          ),
+        );
+
+        expect(result.output).toBe("done");
+        expect(evaluations).toBe(2);
+        expect(observed).toBe(2);
+        expect(requests).toEqual([
+          ["discover", "read", "status"],
+          ["discover", "read", "status"],
+        ]);
+      }),
+  );
+
+  it.effect(
+    "applies select, keep, and clear after context preparation and closes selector resources before dispatch",
+    () =>
+      Effect.gen(function* () {
+        let selected = 0;
+        let finalized = 0;
+        const requests: Array<ReadonlyArray<string>> = [];
+
+        const model = scripted(
+          [[call("r1", "read"), finish], [call("r2", "read"), finish], done],
+          requests,
+        );
+
+        yield* AgentRuntime.run(Agent.withModel(definition, model), "go", {
+          context: {
+            prepare: ({ source }) =>
+              Effect.sync(() => {
+                expect(finalized).toBe(selected);
+
+                return { prompt: source };
+              }),
+          },
+          toolSelector: {
+            select: ({ source, catalogue }) =>
+              Effect.gen(function* () {
+                expect(source.content.length).toBeGreaterThan(0);
+                expect(catalogue.map((entry) => entry.id)).toEqual([
+                  "native:discover",
+                  "native:read",
+                  "native:status",
+                ]);
+                yield* Effect.addFinalizer(() =>
+                  Effect.sync(() => {
+                    finalized++;
+                  }),
+                );
+                selected++;
+
+                return selected === 1 ? ["native:read"] : selected === 2 ? undefined : [];
+              }),
+          },
+        }).pipe(
+          Effect.scoped,
+          Effect.provideService(RunToolVisibility, {
+            visible: ({ toolNames }) =>
+              Effect.succeed(toolNames.filter((name) => name !== "write")),
+          }),
+          Effect.provide(
+            tools.toLayer({
+              discover: () => Effect.die("unused"),
+              read: () =>
+                Effect.sync(() => {
+                  expect(finalized).toBe(selected);
+
+                  return "ok";
+                }),
+              write: () => Effect.die("unused"),
+              status: () => Effect.succeed(""),
+            }),
+          ),
+        );
+        expect(requests).toEqual([
+          ["discover", "read", "status"],
+          ["discover", "read", "status"],
+          ["discover", "status"],
+        ]);
+        expect(finalized).toBe(3);
+      }),
+  );
+
+  for (const ids of [["native:read", "native:write"], ["native:read", "native:read"], ["read"]]) {
+    it.effect(`rejects every invalid selector ID before applying maxTools: ${ids.join(",")}`, () =>
+      Effect.gen(function* () {
+        const requests: Array<ReadonlyArray<string>> = [];
+
+        const exit = yield* AgentRuntime.run(
+          Agent.withModel(definition, scripted([done], requests)),
+          "go",
+          {
+            toolSelector: { maxTools: 1, select: () => Effect.succeed(ids) },
+          },
+        ).pipe(
+          Effect.provideService(RunToolVisibility, {
+            visible: () => Effect.succeed(["discover", "read", "status"]),
+          }),
+          Effect.provide(
+            tools.toLayer({
+              discover: () => Effect.die("unused"),
+              read: () => Effect.die("unused"),
+              write: () => Effect.die("unused"),
+              status: () => Effect.die("unused"),
+            }),
+          ),
+          Effect.exit,
+        );
+
+        expect(failure(exit)).toMatchObject({ _tag: "ModelProtocolError" });
+        expect(requests).toEqual([]);
+      }),
+    );
+  }
+
+  for (const limits of [{ maxCandidates: 1 }, { maxCatalogueBytes: 1 }]) {
+    it.effect(`bounds selector input before evaluation: ${JSON.stringify(limits)}`, () =>
+      Effect.gen(function* () {
+        const requests: Array<ReadonlyArray<string>> = [];
+
+        const exit = yield* AgentRuntime.run(
+          Agent.withModel(definition, scripted([done], requests)),
+          "go",
+          {
+            toolSelector: { ...limits, select: () => Effect.die("Oversized catalogue evaluated") },
+          },
+        ).pipe(
+          Effect.provide(
+            tools.toLayer({
+              discover: () => Effect.die("unused"),
+              read: () => Effect.die("unused"),
+              write: () => Effect.die("unused"),
+              status: () => Effect.die("unused"),
+            }),
+          ),
+          Effect.exit,
+        );
+
+        expect(failure(exit)).toMatchObject({ _tag: "ModelProtocolError" });
+        expect(requests).toEqual([]);
+      }),
+    );
+  }
+
+  for (const mode of ["failure", "defect", "timeout", "interrupt"] as const) {
+    it.effect(`preserves selector ${mode} and finalizes before any model call`, () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const requests: Array<ReadonlyArray<string>> = [];
+        let finalized = false;
+
+        const program = AgentRuntime.run(
+          Agent.withModel(definition, scripted([done], requests)),
+          "go",
+          {
+            toolSelector: {
+              select: () =>
+                Effect.gen(function* () {
+                  yield* Effect.addFinalizer(() =>
+                    Effect.sync(() => {
+                      finalized = true;
+                    }),
+                  );
+                  yield* Deferred.succeed(started, undefined);
+                  if (mode === "failure")
+                    return yield* Effect.fail("selector-unavailable" as const);
+                  if (mode === "defect") return yield* Effect.die("selector-defect");
+
+                  return yield* Effect.never;
+                }),
+            },
+          },
+        ).pipe(
+          Effect.provide(
+            tools.toLayer({
+              discover: () => Effect.die("unused"),
+              read: () => Effect.die("unused"),
+              write: () => Effect.die("unused"),
+              status: () => Effect.die("unused"),
+            }),
+          ),
+        );
+
+        const fiber = yield* (
+          mode === "timeout" ? program.pipe(Effect.timeout("1 second")) : program
+        ).pipe(Effect.forkChild);
+
+        yield* Deferred.await(started);
+        if (mode === "timeout") yield* TestClock.adjust("1 second");
+        if (mode === "interrupt") yield* Fiber.interrupt(fiber);
+        const exit = yield* Fiber.await(fiber);
+
+        expect(finalized).toBe(true);
+        expect(requests).toEqual([]);
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (mode === "failure") expect(failure(exit)).toBe("selector-unavailable");
+        if (mode === "defect" && Exit.isFailure(exit))
+          expect(Result.getOrThrow(Cause.findDefect(exit.cause))).toBe("selector-defect");
+        if (mode === "timeout") expect(failure(exit)).toMatchObject({ _tag: "TimeoutError" });
+        if (mode === "interrupt" && Exit.isFailure(exit))
+          expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+      }),
+    );
+  }
+
   // Regression: https://github.com/danieljvdm/effect-agent/issues/496
   for (const budget of ["aggregate", "single"] as const) {
     it.effect(`continues after ${budget} discovery overflow with only documented selections`, () =>
@@ -658,6 +1089,7 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", 
           Agent.withModel(definition, scripted([done], requests)),
           "go",
           {
+            toolSelector: { select: () => Effect.die("Resumed batch must not select again") },
             resume: {
               turn: 1,
               turnId: TurnId.make("original"),

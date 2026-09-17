@@ -125,6 +125,7 @@ import { MessagingHost } from "../MessagingHost.ts";
 import { SubagentHost } from "../SubagentHost.ts";
 import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { CurrentToolCatalog, RunToolVisibility, type CatalogEntry } from "../ToolExposure.ts";
+import { RunToolSelector } from "../ToolSelector.ts";
 import { boundedValueFootprint } from "./bounded-value.ts";
 import { insertOutputContract, isTextOutput, outputSchemaContract } from "./output-contract.ts";
 import { ownPrimitiveDelta } from "./primitive-delta.ts";
@@ -135,6 +136,7 @@ import {
 } from "./provider-result-staging.ts";
 import { deliverToolFailure, emitThenAfter, isolateToolDerivative } from "./tool-derivative.ts";
 import {
+  selectTools,
   decodeSelection,
   decodeSnapshot,
   eligibleCatalog,
@@ -5439,6 +5441,24 @@ const makeTurn = <
           catalog,
         );
 
+      if (options.toolSelector !== undefined) {
+        const selected = yield* selectTools(
+          options.toolSelector,
+          {
+            threadId: context.threadId,
+            runId: context.runId,
+            turnId,
+            turn,
+            input: context.input,
+            source: modelContext.prompt,
+            selection: context.toolSelection,
+          },
+          catalog,
+        );
+
+        if (selected !== undefined) context.toolSelection = selected;
+      }
+
       let snapshot =
         agent.definition.toolExposure === undefined &&
         context.toolSelection === undefined &&
@@ -7855,13 +7875,16 @@ function streamWithCompletion<
         | HookError
         | ThreadHistoryError
         | RunContextPreparationError
-        | AgentToolAuthorizationCheckError,
+        | AgentToolAuthorizationCheckError
+        | AiError.AiError
+        | ModelProtocolError,
         HookRequirements
       > = {
         ...runOptions,
         context: runOptions.context ?? preparation.hook,
         transientContext: runOptions.transientContext ?? preparation.transientContext,
         toolAuthorization: runOptions.toolAuthorization ?? authorization,
+        toolSelector: runOptions.toolSelector ?? (yield* RunToolSelector),
         threadId,
         runId,
         ...(retained === undefined

@@ -345,11 +345,13 @@ export const verifyPackageExports = Effect.fn("verifyPackageExports")(
             if (
               allowedLayers !== undefined &&
               specifier !== "effect" &&
-              !specifier.startsWith("effect/")
+              !specifier.startsWith("effect/") &&
+              specifier !== "@effect-agent/ai-decision" &&
+              !specifier.startsWith("@effect-agent/ai-decision/")
             )
               report(
                 file,
-                `${layer} must use relative framework imports or platform-neutral Effect modules: ${specifier}`,
+                `${layer} must use relative framework imports, the inward decision contract, or platform-neutral Effect modules: ${specifier}`,
               );
 
             if (

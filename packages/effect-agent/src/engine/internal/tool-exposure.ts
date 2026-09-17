@@ -11,6 +11,7 @@ import {
 } from "../../core/SubagentContract.ts";
 import {
   AdditionalToolCatalog,
+  Descriptor,
   IncludesCatalogDocumentation,
   DiscoveryTool,
   Limits,
@@ -23,6 +24,7 @@ import {
 import { ContextRolloverTool } from "../ContextWindow.ts";
 import { getToolExecutionClass } from "../DurableStep.ts";
 import { RunToolVisibility, type CatalogEntry, type VisibilityRequest } from "../ToolExposure.ts";
+import type * as ToolSelector from "../ToolSelector.ts";
 
 const invalid = (message: string) => ModelProtocolError.make({ message });
 
@@ -221,4 +223,108 @@ export const exposureSnapshot = Effect.fn("ToolExposure.exposureSnapshot")(funct
     exposedToolNames: names,
     ...(selection === undefined ? {} : { selection }),
   });
+});
+
+/** One stable identity for native Tools and each programmatic alias. */
+export const catalogEntryId = (entry: CatalogEntry): string =>
+  entry.kind === "native"
+    ? `native:${entry.tool.name}`
+    : `code-mode:${entry.nativeToolName}:${entry.namespace}.${entry.method}`;
+
+export const describeCatalog = Effect.fnUntraced(function* (
+  entries: ReadonlyArray<CatalogEntry>,
+  namespaceDescriptions: Readonly<Record<string, string>> = {},
+) {
+  const seen = new Set<string>();
+  const descriptors: Array<Descriptor> = [];
+
+  for (const entry of entries) {
+    const id = catalogEntryId(entry);
+
+    if (seen.has(id))
+      return yield* invalid("The eligible Tool catalogue contains duplicate identities");
+    seen.add(id);
+    const description = Tool.getDescription(entry.tool);
+
+    const namespaceDescription =
+      entry.namespace !== undefined && Object.hasOwn(namespaceDescriptions, entry.namespace)
+        ? namespaceDescriptions[entry.namespace]
+        : undefined;
+
+    const descriptor = yield* Schema.decodeEffect(Descriptor)({
+      id,
+      kind: entry.kind,
+      name: entry.tool.name,
+      nativeToolName: entry.nativeToolName,
+      ...(entry.namespace === undefined ? {} : { namespace: entry.namespace }),
+      ...(entry.kind === "code-mode" ? { method: entry.method } : {}),
+      ...(description === undefined
+        ? {}
+        : {
+            description:
+              description.length > 2_048 ? `${description.slice(0, 2_047)}…` : description,
+          }),
+      ...(namespaceDescription === undefined ? {} : { namespaceDescription }),
+    }).pipe(
+      Effect.mapError(() => invalid("The eligible Tool catalogue contains invalid metadata")),
+    );
+
+    descriptors.push(Object.freeze(descriptor));
+  }
+
+  return Object.freeze(descriptors.toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
+});
+
+const SelectorLimits = Schema.Struct({
+  maxTools: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 64 })),
+  maxCandidates: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_024 })),
+  maxCatalogueBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_048_576 })),
+});
+
+const SelectedIds = Schema.Array(Descriptor.fields.id).check(
+  Schema.isMaxLength(1_024),
+  Schema.isUnique(),
+);
+
+export const selectTools = Effect.fn("ToolSelector.select")(function* <E, R>(
+  selector: ToolSelector.Hook<E, R>,
+  request: Omit<ToolSelector.Request, "catalogue">,
+  entries: ReadonlyArray<CatalogEntry>,
+) {
+  const limits = yield* Schema.decodeEffect(SelectorLimits)({
+    maxTools: selector.maxTools ?? 8,
+    maxCandidates: selector.maxCandidates ?? 1_024,
+    maxCatalogueBytes: selector.maxCatalogueBytes ?? 262_144,
+  }).pipe(Effect.mapError(() => invalid("Invalid Tool selector bounds")));
+
+  if (entries.length > limits.maxCandidates)
+    return yield* invalid("Tool selector catalogue exceeds its candidate bound");
+  const catalogue = yield* describeCatalog(entries);
+
+  const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Descriptor)))(
+    catalogue,
+  ).pipe(Effect.mapError(() => invalid("Tool selector catalogue cannot be encoded")));
+
+  if (utf8ByteLength(encoded) > limits.maxCatalogueBytes)
+    return yield* invalid("Tool selector catalogue exceeds its byte bound");
+  const ids = yield* Effect.scoped(selector.select(Object.freeze({ ...request, catalogue })));
+
+  if (ids === undefined) return undefined;
+
+  const checked = yield* Schema.decodeEffect(SelectedIds)(ids).pipe(
+    Effect.mapError(() => invalid("Tool selector must return unique catalogue IDs")),
+  );
+
+  const byId = new Map(catalogue.map((entry) => [entry.id, entry.nativeToolName]));
+  const names = new Set<string>();
+
+  for (const id of checked) {
+    const name = byId.get(id);
+
+    if (name === undefined)
+      return yield* invalid("Tool selector returned an ID outside the eligible catalogue");
+    names.add(name);
+  }
+
+  return Selection.make({ toolNames: [...names].slice(0, limits.maxTools) });
 });
