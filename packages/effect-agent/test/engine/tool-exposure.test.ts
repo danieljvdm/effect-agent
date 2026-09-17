@@ -195,12 +195,13 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", 
         };
 
         const observed = yield* Effect.gen(function* () {
-          const results = yield* Effect.all(
+          const results = yield* Effect.forEach(
             [
               Effect.succeed(["native:read"]),
               Effect.succeed(["native:write"]),
               Effect.fail(rejected),
-            ].map((selection) =>
+            ],
+            (selection) =>
               Effect.gen(function* () {
                 const requests: Array<ReadonlyArray<string>> = [];
 
@@ -212,7 +213,6 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", 
 
                 return { exit, requests };
               }),
-            ),
             { concurrency: 3 },
           );
 
