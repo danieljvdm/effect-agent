@@ -224,7 +224,13 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
   const providers = Layer.merge(
     OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") }),
     TypeSafeDecisionModel.model("jev-latest").pipe(
-      Layer.provide(TypeSafeClient.layerConfig({ apiKey: Config.Redacted("TYPESAFEAI_API_KEY") })),
+      Layer.provide(TypeSafeClient.layer),
+      Layer.provide(
+        Layer.effect(
+          TypeSafeClient.Config,
+          Config.all({ apiKey: Config.Redacted("TYPESAFEAI_API_KEY") }),
+        ),
+      ),
     ),
   ).pipe(Layer.provide(FetchHttpClient.layer));
 
