@@ -1,7 +1,7 @@
-import type { Option, Stream } from "effect";
-import { Context, Effect, Schema } from "effect";
+import { Context, Effect, Option, Schema, Stream } from "effect";
 
 import { RunId, SubmissionId, ThreadId } from "../core/Identifiers.ts";
+import type { ToolCallPrepared, WorkerInputRequested } from "./Records.ts";
 import {
   BatchId,
   CanonicalBatch,
@@ -12,10 +12,8 @@ import {
   PersistedJson,
   ProducerEpoch,
   RecordId,
-  ToolCallPrepared,
-  WorkerInputRequested,
 } from "./Records.ts";
-import { runIdForSubmission } from "./RunJournal.ts";
+import { runIdForSubmission, toolCallPreparedRecordId } from "./RunJournal.ts";
 import { SubmissionLedger, SubmissionLookupById } from "./SubmissionLedger.ts";
 
 export const MAX_THREAD_EXPORT_RECORDS = 131_072;
@@ -36,42 +34,21 @@ export const ThreadOutstandingRequest = Schema.Struct({
 
 export type ThreadOutstandingRequest = typeof ThreadOutstandingRequest.Type;
 
-export const ThreadOutstanding = Schema.Struct({
-  threadId: ThreadId,
-  throughSequence: CanonicalSequence,
-  /** False only for legacy worker acknowledgements awaiting native repair. */
-  complete: Schema.Boolean,
-  operations: Schema.Array(
-    Schema.Struct({
-      submissionId: SubmissionId,
-      prepared: ToolCallPrepared,
-      /** Prepared is not an unknown outcome or a grant to execute. */
-      state: Schema.Literals(["prepared", "unknown"]),
-    }),
-  ),
-  /** Source reservations without an acknowledgement proving external effects are resolved. */
-  workerInputs: Schema.Array(WorkerInputRequested),
-});
+export interface ThreadOutstanding {
+  readonly threadId: ThreadId;
+  readonly throughSequence: CanonicalSequence;
+  readonly complete: true;
+  readonly operations: ReadonlyArray<{
+    readonly submissionId: SubmissionId;
+    readonly prepared: ToolCallPrepared;
+    /** Prepared is not an unknown outcome or a grant to execute. */
+    readonly state: "prepared" | "unknown";
+  }>;
+  /** Source reservations without proof that external effects are resolved. */
+  readonly workerInputs: ReadonlyArray<WorkerInputRequested>;
+}
 
-export type ThreadOutstanding = typeof ThreadOutstanding.Type;
-
-/** Runtime maintenance cursor; never use a partial page to authorize an action. */
-export const ThreadWorkerInputsPageRequest = Schema.Struct({
-  threadId: ThreadId,
-  afterSequence: Schema.optionalKey(CanonicalSequence),
-  limit: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100)),
-});
-
-export type ThreadWorkerInputsPageRequest = typeof ThreadWorkerInputsPageRequest.Type;
-
-export const ThreadWorkerInputsPage = Schema.Struct({
-  inputs: Schema.Array(WorkerInputRequested),
-  next: Schema.NullOr(CanonicalSequence),
-});
-
-export type ThreadWorkerInputsPage = typeof ThreadWorkerInputsPage.Type;
-
-/** Native worker lifetime reservations and selected Run accounting, excluding conversation records. */
+/** Native worker reservation/accounting snapshot at a captured canonical tail. */
 export const ThreadWorkerStateRequest = Schema.Struct({
   threadId: ThreadId,
   sourceSubmissionId: Schema.optionalKey(SubmissionId),
@@ -83,15 +60,6 @@ export const ThreadWorkerStateRequest = Schema.Struct({
 
 export type ThreadWorkerStateRequest = typeof ThreadWorkerStateRequest.Type;
 
-export const ThreadWorkerState = Schema.Struct({
-  threadId: ThreadId,
-  tailSequence: CanonicalSequence,
-  tailDigest: Digest,
-  records: Schema.Array(CanonicalRecordEnvelope),
-});
-
-export type ThreadWorkerState = typeof ThreadWorkerState.Type;
-
 /** Saturating lifetime peer-message count: the result is at most the requested cap. */
 export const ThreadPeerCountRequest = Schema.Struct({
   threadId: ThreadId,
@@ -100,57 +68,124 @@ export const ThreadPeerCountRequest = Schema.Struct({
 
 export type ThreadPeerCountRequest = typeof ThreadPeerCountRequest.Type;
 
-/** Native indexed reads. Canonical append maintains these atomically; no history fallback. */
-export interface ThreadNativeReads {
-  readonly countPeerMessages: (
-    request: ThreadPeerCountRequest,
-  ) => Effect.Effect<number, ThreadStoreError | ThreadNotMaterialized>;
-  readonly readWorkerState: (
-    request: ThreadWorkerStateRequest,
-  ) => Effect.Effect<ThreadWorkerState, ThreadStoreError | ThreadNotMaterialized>;
-  readonly readWorkerInputsPage: (
-    request: ThreadWorkerInputsPageRequest,
-  ) => Effect.Effect<ThreadWorkerInputsPage, ThreadStoreError | ThreadNotMaterialized>;
-  readonly getRecord: (
-    request: ThreadRecordRequest,
-  ) => Effect.Effect<
-    Option.Option<CanonicalRecordEnvelope>,
-    ThreadStoreError | ThreadNotMaterialized
-  >;
-  readonly getRunInput: (
-    request: ThreadRunInputRequest,
-  ) => Effect.Effect<
-    Option.Option<CanonicalRecordEnvelope>,
-    ThreadStoreError | ThreadNotMaterialized
-  >;
-  readonly readOutstanding: (
-    request: ThreadOutstandingRequest,
-  ) => Effect.Effect<ThreadOutstanding, ThreadStoreError | ThreadNotMaterialized>;
-}
+const incomplete = (operation: string) =>
+  ThreadStoreError.make({
+    operation,
+    message: "Native canonical read is incomplete or corrupt",
+  });
 
-const nativeReads = Effect.gen(function* () {
+/** Collect a complete bounded selection, using canonical sequence as a sparse cursor. */
+const selectedRecords = Effect.fnUntraced(function* (
+  threadId: ThreadId,
+  selection: ThreadSelection,
+  limit: number,
+) {
   const store = yield* ThreadStore;
+  const records: Array<CanonicalRecordEnvelope> = [];
+  let afterSequence: CanonicalSequence | undefined;
 
-  if (store.nativeReads === undefined)
-    return yield* ThreadStoreError.make({
-      operation: "native read",
-      message: "This adapter does not support native indexed reads",
-    });
+  while (true) {
+    const pageLimit = Math.min(1024, limit + 1 - records.length);
 
-  return store.nativeReads;
+    const page = yield* Stream.runCollect(
+      store.read({
+        threadId,
+        selection,
+        page: { limit: pageLimit, ...(afterSequence === undefined ? {} : { afterSequence }) },
+      }),
+    );
+
+    for (const entry of page) {
+      if (
+        entry.threadId !== threadId ||
+        entry.sequence <= (afterSequence ?? 0) ||
+        ("expectedTailSequence" in selection && entry.sequence > selection.expectedTailSequence)
+      )
+        return yield* incomplete("read selection identity");
+      afterSequence = entry.sequence;
+      records.push(entry);
+    }
+    if (page.length > pageLimit || records.length > limit)
+      return yield* incomplete("read selection limit");
+    if (page.length < pageLimit) return records;
+  }
 });
 
 /** Host-owned read: authenticate the Thread and exact locator before calling. */
 export const getRecord = Effect.fn("ThreadStore.getRecord")(function* (
   request: ThreadRecordRequest,
 ) {
-  return yield* (yield* nativeReads).getRecord(request);
+  yield* Schema.decodeEffect(ThreadRecordRequest)(request).pipe(
+    Effect.mapError(() => incomplete("getRecord request")),
+  );
+
+  const records = yield* selectedRecords(
+    request.threadId,
+    { _tag: "RecordId", recordId: request.recordId },
+    1,
+  );
+
+  if (records.some((entry) => entry.record.recordId !== request.recordId))
+    return yield* incomplete("getRecord identity");
+
+  return Option.fromUndefinedOr(records[0]);
 });
 
 export const getRunInput = Effect.fn("ThreadStore.getRunInput")(function* (
   request: ThreadRunInputRequest,
 ) {
-  return yield* (yield* nativeReads).getRunInput(request);
+  yield* Schema.decodeEffect(ThreadRunInputRequest)(request).pipe(
+    Effect.mapError(() => incomplete("getRunInput request")),
+  );
+
+  const records = yield* selectedRecords(
+    request.threadId,
+    { _tag: "RunInput", runId: request.runId },
+    1,
+  );
+
+  if (
+    records.some(
+      ({ record: { payload } }) =>
+        payload._tag !== "UserInputRecorded" ||
+        payload.kind !== "user" ||
+        payload.runId !== request.runId,
+    )
+  )
+    return yield* incomplete("getRunInput identity");
+
+  return Option.fromUndefinedOr(records[0]);
+});
+
+/** A bounded snapshot of native lifetime and source-submission worker accounting. */
+export const readWorkerState = Effect.fn("ThreadStore.readWorkerState")(function* (
+  request: ThreadWorkerStateRequest,
+) {
+  yield* Schema.decodeEffect(ThreadWorkerStateRequest)(request).pipe(
+    Effect.mapError(() => incomplete("readWorkerState request")),
+  );
+  const store = yield* ThreadStore;
+  const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId: request.threadId }));
+
+  const records = yield* selectedRecords(
+    request.threadId,
+    {
+      _tag: "WorkerState",
+      expectedTailSequence: tail.tailSequence,
+      expectedTailDigest: tail.tailDigest,
+      ...(request.sourceSubmissionId === undefined
+        ? {}
+        : { sourceSubmissionId: request.sourceSubmissionId }),
+    },
+    request.limit,
+  );
+
+  return {
+    threadId: request.threadId,
+    tailSequence: tail.tailSequence,
+    tailDigest: tail.tailDigest,
+    records,
+  };
 });
 
 /**
@@ -162,32 +197,92 @@ export const getRunInput = Effect.fn("ThreadStore.getRunInput")(function* (
 export const readOutstanding = Effect.fn("ThreadStore.readOutstanding")(function* (
   request: ThreadOutstandingRequest,
 ) {
-  const state = yield* (yield* nativeReads).readOutstanding(request);
-
-  if (!state.complete)
-    return yield* ThreadStoreError.make({
-      operation: "readOutstanding",
-      message: "Legacy worker acknowledgements require native repair",
-    });
+  yield* Schema.decodeEffect(ThreadOutstandingRequest)(request).pipe(
+    Effect.mapError(() => incomplete("readOutstanding request")),
+  );
+  const store = yield* ThreadStore;
   const ledger = yield* SubmissionLedger;
+  const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId: request.threadId }));
 
-  for (const operation of state.operations) {
-    const submission = yield* ledger.lookup(
-      SubmissionLookupById.make({ submissionId: operation.submissionId }),
+  const records = yield* selectedRecords(
+    request.threadId,
+    {
+      _tag: "Outstanding",
+      expectedTailSequence: tail.tailSequence,
+      expectedTailDigest: tail.tailDigest,
+    },
+    request.limit,
+  );
+
+  const operations: Array<ThreadOutstanding["operations"][number]> = [];
+  const workerInputs: Array<WorkerInputRequested> = [];
+
+  for (const entry of records) {
+    const payload = entry.record.payload;
+
+    if (payload._tag === "WorkerInputRequested") {
+      workerInputs.push(payload);
+      continue;
+    }
+    if (payload._tag !== "ToolCallPrepared" && payload._tag !== "ToolCallUnknown")
+      return yield* incomplete("readOutstanding record");
+
+    const preparedEntry =
+      payload._tag === "ToolCallPrepared"
+        ? entry
+        : Option.getOrUndefined(
+            yield* getRecord({
+              threadId: request.threadId,
+              recordId: toolCallPreparedRecordId(payload.runId, payload.turn, payload.toolCallId),
+            }),
+          );
+
+    const inputEntry = Option.getOrUndefined(
+      yield* getRunInput({ threadId: request.threadId, runId: payload.runId }),
     );
 
     if (
-      submission._tag === "None" ||
-      submission.value.threadId !== request.threadId ||
-      runIdForSubmission(operation.submissionId) !== operation.prepared.runId
+      preparedEntry === undefined ||
+      inputEntry === undefined ||
+      preparedEntry.sequence > tail.tailSequence ||
+      inputEntry.sequence > tail.tailSequence
     )
-      return yield* ThreadStoreError.make({
-        operation: "readOutstanding",
-        message: "Canonical operation has no matching native admission",
-      });
+      return yield* incomplete("readOutstanding proof beyond snapshot");
+    const prepared = preparedEntry.record.payload;
+    const input = inputEntry.record.payload;
+
+    if (
+      prepared?._tag !== "ToolCallPrepared" ||
+      prepared.runId !== payload.runId ||
+      prepared.turn !== payload.turn ||
+      prepared.toolCallId !== payload.toolCallId ||
+      prepared.toolName !== payload.toolName ||
+      input?._tag !== "UserInputRecorded" ||
+      input.submissionId === undefined ||
+      runIdForSubmission(input.submissionId) !== prepared.runId
+    )
+      return yield* incomplete("readOutstanding canonical ownership");
+
+    const submission = yield* ledger.lookup(
+      SubmissionLookupById.make({ submissionId: input.submissionId }),
+    );
+
+    if (Option.isNone(submission) || submission.value.threadId !== request.threadId)
+      return yield* incomplete("readOutstanding native admission");
+    operations.push({
+      submissionId: input.submissionId,
+      prepared,
+      state: payload._tag === "ToolCallUnknown" ? "unknown" : "prepared",
+    });
   }
 
-  return state;
+  return {
+    threadId: request.threadId,
+    throughSequence: tail.tailSequence,
+    complete: true as const,
+    operations,
+    workerInputs,
+  };
 });
 
 export class ThreadMaterialization extends Schema.Class<ThreadMaterialization>(
@@ -219,6 +314,39 @@ export class ThreadRead extends Schema.Class<ThreadRead>("@effect-agent/thread/T
   afterSequence: Schema.optionalKey(CanonicalSequence),
   limit: Schema.Natural.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1_024)),
 }) {}
+
+/** Closed native selections; mutable metadata is read at this exact canonical tail. */
+export const ThreadSelection = Schema.Union([
+  Schema.Struct({ _tag: Schema.Literal("RecordId"), recordId: RecordId }),
+  Schema.Struct({ _tag: Schema.Literal("RunInput"), runId: RunId }),
+  Schema.Struct({
+    _tag: Schema.Literal("Outstanding"),
+    expectedTailSequence: CanonicalSequence,
+    expectedTailDigest: Digest,
+  }),
+  Schema.Struct({
+    _tag: Schema.Literal("WorkerState"),
+    expectedTailSequence: CanonicalSequence,
+    expectedTailDigest: Digest,
+    sourceSubmissionId: Schema.optionalKey(SubmissionId),
+  }),
+]);
+
+export type ThreadSelection = typeof ThreadSelection.Type;
+
+/** Nested page makes an old ThreadRead decoder reject, never strip a selection into history. */
+export const SelectedThreadRead = Schema.Struct({
+  threadId: ThreadId,
+  selection: ThreadSelection,
+  page: Schema.Struct({
+    afterSequence: Schema.optionalKey(CanonicalSequence),
+    limit: ThreadRead.fields.limit,
+  }),
+});
+
+export type SelectedThreadRead = typeof SelectedThreadRead.Type;
+export const ThreadReadRequest = Schema.Union([SelectedThreadRead, ThreadRead]);
+export type ThreadReadRequest = typeof ThreadReadRequest.Type;
 
 export class ThreadObservation extends Schema.Class<ThreadObservation>(
   "@effect-agent/thread/ThreadObservation",
@@ -400,7 +528,7 @@ export class ThreadStore extends Context.Service<
       ThreadStoreError | ThreadNotMaterialized | AppendConflict | FenceRejected
     >;
     readonly read: (
-      request: ThreadRead,
+      request: ThreadReadRequest,
     ) => Stream.Stream<CanonicalRecordEnvelope, ThreadStoreError | ThreadNotMaterialized>;
     readonly observe: (
       request: ThreadObservation,
@@ -414,6 +542,11 @@ export class ThreadStore extends Context.Service<
     /** Absent when this adapter does not support disposable checkpoints. */
     readonly checkpoints?: ThreadCheckpoints | undefined;
     readonly recoveryCheckpoints?: ThreadRecoveryCheckpoints | undefined;
-    readonly nativeReads?: ThreadNativeReads | undefined;
+    /** Indexed scalar count; unsupported adapters fail closed at the caller. */
+    readonly countPeerMessages?:
+      | ((
+          request: ThreadPeerCountRequest,
+        ) => Effect.Effect<number, ThreadStoreError | ThreadNotMaterialized>)
+      | undefined;
   }
 >()("@effect-agent/thread/ThreadStore") {}

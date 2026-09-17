@@ -60,6 +60,10 @@ import {
   ThreadObservation,
   ThreadRead,
   ThreadStore,
+  getRecord,
+  getRunInput,
+  readOutstanding,
+  readWorkerState,
   ThreadStoreError,
   ThreadTailRequest,
   FenceRejected,
@@ -293,34 +297,30 @@ describe("cross-DO port routing", () => {
             batch: batch("native-input", [record]),
           }),
         );
-        const native = store.nativeReads!;
 
         expect(
-          Option.getOrThrow(yield* native.getRecord({ threadId: owner, recordId: record.recordId }))
+          Option.getOrThrow(yield* getRecord({ threadId: owner, recordId: record.recordId }))
             .record,
         ).toEqual(record);
-        expect(
-          Option.getOrThrow(yield* native.getRunInput({ threadId: owner, runId })).record,
-        ).toEqual(record);
-        expect(yield* native.readOutstanding({ threadId: owner, limit: 1 })).toMatchObject({
+        expect(Option.getOrThrow(yield* getRunInput({ threadId: owner, runId })).record).toEqual(
+          record,
+        );
+        expect(yield* readOutstanding({ threadId: owner, limit: 1 })).toMatchObject({
           complete: true,
           operations: [],
           workerInputs: [],
           throughSequence: 1,
         });
-        expect(yield* native.readWorkerState({ threadId: owner, limit: 1 })).toMatchObject({
+        expect(yield* readWorkerState({ threadId: owner, limit: 1 })).toMatchObject({
           records: [],
           tailSequence: 1,
         });
-        expect(yield* native.countPeerMessages({ threadId: owner, limit: 1 })).toBe(0);
-        expect(yield* native.readWorkerInputsPage({ threadId: owner, limit: 1 })).toEqual({
-          inputs: [],
-          next: null,
-        });
+        expect(yield* store.countPeerMessages!({ threadId: owner, limit: 1 })).toBe(0);
         expect(
-          (yield* native
-            .getRecord({ threadId: thread("native-missing-owner"), recordId: record.recordId })
-            .pipe(Effect.flip))._tag,
+          (yield* getRecord({
+            threadId: thread("native-missing-owner"),
+            recordId: record.recordId,
+          }).pipe(Effect.flip))._tag,
         ).toBe("ThreadNotMaterialized");
       }),
     ));

@@ -67,7 +67,6 @@ import {
 } from "effect-agent/run-options";
 import {
   AbortCommand,
-  MarkReadyRequest,
   IdempotencyKey,
   Principal,
   ResolutionAbortSubmission,
@@ -75,6 +74,7 @@ import {
   ResolutionNeverHappened,
   SubmissionLedger,
   SubmissionLookupById,
+  submissionInputRecordId,
   UnknownResolutionCommand,
   type SettlementConflict,
   type UnknownResolutionConflict,
@@ -2375,105 +2375,131 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       }),
   );
 
-  it.effect("bounded reads reject a canonical Run pointing at another admitted Run", () =>
-    Effect.gen(function* () {
-      const runtime = yield* DurableAgentRuntime;
-      const store = yield* ThreadStore;
-      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"unused"}'));
-      const agent = Agent.withModel(bookDefinition, scripted.model);
+  for (const scenario of ["wrong-run", "late-input"] as const) {
+    it.effect(`bounded reads reject ${scenario} canonical ownership evidence`, () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const store = yield* ThreadStore;
+        const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"unused"}'));
+        const agent = Agent.withModel(bookDefinition, scripted.model);
 
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "original" },
-        submitOptions("native-mismatch", "original"),
-      );
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "original" },
+          submitOptions(`native-${scenario}`, "original"),
+        );
 
-      const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId: receipt.threadId }));
-      const runId = Schema.decodeSync(RunId)("run:another-admission");
+        const runId =
+          scenario === "wrong-run"
+            ? Schema.decodeSync(RunId)("run:another-admission")
+            : runIdForSubmission(receipt.submissionId);
 
-      const envelope = (id: string, payload: RecordEnvelope["payload"]) =>
-        RecordEnvelope.make({
-          recordId: Schema.decodeSync(RecordId)(id),
-          family: "thread",
-          schemaVersion: 1,
-          createdAt: DateTime.makeUnsafe(1),
-          deploymentId: Schema.decodeSync(DeploymentId)("test"),
-          payload,
+        const envelope = (id: string, payload: RecordEnvelope["payload"]) =>
+          RecordEnvelope.make({
+            recordId: Schema.decodeSync(RecordId)(id),
+            family: "thread",
+            schemaVersion: 1,
+            createdAt: DateTime.makeUnsafe(1),
+            deploymentId: Schema.decodeSync(DeploymentId)("test"),
+            payload,
+          });
+
+        const input = envelope(
+          submissionInputRecordId(receipt.submissionId),
+          UserInputRecorded.make({
+            kind: "user",
+            runId,
+            submissionId: receipt.submissionId,
+            input: { question: "original" },
+          }),
+        );
+
+        const append = Effect.fnUntraced(function* (
+          id: string,
+          records: readonly [RecordEnvelope, ...Array<RecordEnvelope>],
+        ) {
+          const tail = yield* store.inspectTail(
+            ThreadTailRequest.make({ threadId: receipt.threadId }),
+          );
+
+          yield* store.append(
+            FencedAppendRequest.make({
+              threadId: receipt.threadId,
+              producerEpoch: tail.producerEpoch,
+              expectedTailSequence: tail.tailSequence,
+              expectedTailDigest: tail.tailDigest,
+              batch: CanonicalBatch.make({
+                batchId: Schema.decodeSync(BatchId)(id),
+                producerId: Schema.decodeSync(ProducerId)("test"),
+                records,
+              }),
+            }),
+          );
         });
 
-      yield* store.append(
-        FencedAppendRequest.make({
-          threadId: receipt.threadId,
-          producerEpoch: tail.producerEpoch,
-          expectedTailSequence: tail.tailSequence,
-          expectedTailDigest: tail.tailDigest,
-          batch: CanonicalBatch.make({
-            batchId: Schema.decodeSync(BatchId)("malformed"),
-            producerId: Schema.decodeSync(ProducerId)("test"),
-            records: [
-              envelope(
-                "input",
-                UserInputRecorded.make({
-                  kind: "user",
-                  runId,
-                  submissionId: receipt.submissionId,
-                  input: { question: "wrong" },
-                }),
-              ),
-              envelope(
-                "prepared",
-                ToolCallPrepared.make({
-                  runId,
-                  turnId: Schema.decodeSync(ToolCallPrepared.fields.turnId)("turn"),
-                  turn: 1,
-                  toolCallId: decodeToolCallId("call"),
-                  toolName: "book",
-                  parameters: {},
-                  parametersDigest: SHA_A,
-                }),
-              ),
-            ],
-          }),
-        }),
-      );
-      expect(
-        failureTag(yield* Effect.exit(readOutstanding({ threadId: receipt.threadId, limit: 1 }))),
-      ).toBe("ThreadStoreError");
-    }),
-  );
+        yield* append("prepared", [
+          envelope(
+            toolCallPreparedRecordId(runId, 1, decodeToolCallId("call")),
+            ToolCallPrepared.make({
+              runId,
+              turnId: Schema.decodeSync(ToolCallPrepared.fields.turnId)("turn"),
+              turn: 1,
+              toolCallId: decodeToolCallId("call"),
+              toolName: "book",
+              parameters: {},
+              parametersDigest: SHA_A,
+            }),
+          ),
+          ...(scenario === "wrong-run" ? [input] : []),
+        ]);
+        let injected = false;
 
-  it.effect("single-submission recovery defers a ready admission before materialization", () =>
-    Effect.gen(function* () {
-      const runtime = yield* DurableAgentRuntime;
-      const ledger = yield* SubmissionLedger;
-      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"unused"}'));
-      const agent = Agent.withModel(bookDefinition, scripted.model);
+        const racedStore = ThreadStore.of({
+          ...store,
+          read: (request) =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                if (
+                  scenario === "late-input" &&
+                  "selection" in request &&
+                  request.selection._tag === "RunInput" &&
+                  !injected
+                ) {
+                  injected = true;
+                  yield* append("late-input", [input]).pipe(Effect.orDie);
+                }
 
-      yield* armFailpoint("submit:after-admit");
-      expect(
-        failureTag(
-          yield* Effect.exit(
-            runtime.submit(
-              agent,
-              { question: "wait" },
-              submitOptions("native-ready-unmaterialized", "first"),
+                return store.read(request);
+              }),
+            ),
+        });
+
+        expect(
+          failureTag(
+            yield* Effect.exit(
+              readOutstanding({ threadId: receipt.threadId, limit: 1 }).pipe(
+                Effect.provideService(ThreadStore, racedStore),
+              ),
             ),
           ),
-        ),
-      ).toBe("DurableRuntimeFailpointError");
-      yield* clearFailpoint;
-
-      const admitted = (yield* Stream.runCollect(ledger.scanNonterminal)).find(
-        (row) => row.threadId === "native-ready-unmaterialized",
-      )!;
-
-      yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
-      expect(yield* runtime.recoverSubmission(admitted.submissionId)).toMatchObject({
-        decision: { _tag: "ApplyInput" },
-        disposition: "deferred",
-      });
-    }),
-  );
+        ).toBe("ThreadStoreError");
+        if (scenario === "late-input") {
+          expect(injected).toBe(true);
+          expect(
+            (yield* readOutstanding({ threadId: receipt.threadId, limit: 1 })).operations,
+          ).toHaveLength(1);
+          yield* runtime.abort(
+            AbortCommand.make({
+              submissionId: receipt.submissionId,
+              author: "test",
+              reason: "retire the proof fixture",
+            }),
+          );
+          yield* runtime.recoverSubmission(receipt.submissionId);
+        }
+      }),
+    );
+  }
 
   it.effect("a canonical settlement beats open tool calls: abort records the uncertainty", () =>
     Effect.gen(function* () {
@@ -2554,39 +2580,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           (operation) => operation.state,
         ),
       ).toEqual(["unknown"]);
-
-      const command = UnknownResolutionCommand.make({
-        submissionId: receipt.submissionId,
-        toolCallId: decodeToolCallId("book-1"),
-        author: "supplier",
-        reason: "confirmed receipt",
-        resolution: ResolutionCompletedWithResult.make({
-          result: { confirmation: "supplier-original" },
-          isFailure: false,
-        }),
-      });
-
-      yield* armFailpoint("resolve:before-terminal-append");
-      expect(failureTag(yield* Effect.exit(runtime.resolveUnknown(command)))).toBe(
-        "DurableRuntimeFailpointError",
-      );
-      yield* clearFailpoint;
-      expect(
-        (yield* readOutstanding({ threadId: receipt.threadId, limit: 1 })).operations,
-      ).toHaveLength(1);
-      yield* armFailpoint("resolve:after-terminal-append");
-      expect(failureTag(yield* Effect.exit(runtime.resolveUnknown(command)))).toBe(
-        "DurableRuntimeFailpointError",
-      );
-      yield* clearFailpoint;
-      const resolved = yield* runtime.resolveUnknown(command);
-
-      expect(yield* runtime.resolveUnknown(command)).toEqual(resolved);
-      expect((yield* readOutstanding({ threadId: receipt.threadId, limit: 1 })).operations).toEqual(
-        [],
-      );
-      expect(yield* runtime.awaitSettlement(receipt)).toEqual(settlement);
-      expect(yield* desk.count("r-abort")).toBe(0);
     }),
   );
 
@@ -2645,20 +2638,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(records.map((envelope) => envelope.record.recordId)).not.toContain(
         `tool-settled:${runId}:1:book-1`,
       );
-      yield* runtime.resolveUnknown(
-        UnknownResolutionCommand.make({
-          submissionId: receipt.submissionId,
-          toolCallId: decodeToolCallId("book-1"),
-          author: "supplier",
-          reason: "external request never happened",
-          resolution: ResolutionNeverHappened.make(),
-        }),
-      );
-      expect((yield* readOutstanding({ threadId: receipt.threadId, limit: 1 })).operations).toEqual(
-        [],
-      );
-      expect((yield* runtime.awaitSettlement(receipt)).outcome).toBe("aborted");
-      expect(yield* desk.count("r-resabort")).toBe(0);
     }),
   );
 

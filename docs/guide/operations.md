@@ -68,6 +68,9 @@ visit outstanding records, without replaying completed history or contacting his
 An overflow, missing adapter capability, invalid canonical ownership, or an unverified legacy
 acknowledgement fails closed. The maximum requested inventory is 4096; partial inventories never
 mean permission. `readOutstanding` requires `ThreadStore` and `SubmissionLedger`.
+The helpers use closed selections through `ThreadStore.read`; selected requests use nested
+`page.limit`, and mutable pages verify the captured tail sequence and digest. Older adapters
+reject this distinct request shape rather than interpreting it as a history read.
 
 For exact receipts, use `ThreadStore.getRecord({ threadId, recordId })` or
 `ThreadStore.getRunInput({ threadId, runId })`. The latter returns the original user input,
@@ -91,7 +94,7 @@ an indexed lifetime count and exact message/accepted-input records; replies use 
 envelope's delivery principal.
 
 `MessageDelivery.readPending({ ownerThreadId, limit })` reads current retained deliveries
-from the existing delivery store, separately from canonical operations. It includes accepted,
+through the existing owner-scoped `list` with `pendingOnly: true`, separately from canonical operations. It includes accepted,
 parked, and future-due entries; processed/refused history is excluded. Cloudflare routes this
 read to the source owner. Bounds, missing capability, malformed data, or a mismatched owner
 fail closed. A no-receipt action delivery remains uncertain even before a canonical worker
@@ -102,9 +105,9 @@ reports without reconstructing transport validation. These reads grant no execut
 
 Supported SQLite and Cloudflare storage upgrades build the indexes once, atomically and in
 bounded decode pages. Existing worker acknowledgements without external-outcome proof remain
-incomplete until native recovery repairs them. `recoverSubmission` pages these reservations
-outside action reads, including when they exceed the action inventory limit. Proven completion
-retires inventory entries while preserving the original canonical records and receipts.
+incomplete and fail closed. Current proven completion retires inventory entries while preserving
+the original canonical records and receipts. Aborting a submission retains its unknown outcomes;
+a terminal settlement does not authorize retrying or resolving those operations.
 
 ## Monitor unfinished work {#obligation-monitoring}
 
@@ -140,13 +143,6 @@ Recovery claims the unknown Submission with its abort intent, handles attached c
 records an aborted settlement. It does not replay uncertain ordinary tools.
 The unknown evidence and first abort audit remain. Abort cannot roll back an external effect. A
 `SettlementConflict` reports a terminal result that won before the abort.
-
-After a terminal settlement, `resolveUnknown` accepts factual `CompletedWithResult` or
-`NeverHappened` evidence for an original prepared call. It atomically records the result and
-resolution audit, preserves the original settlement and abort decision, and retries the worker
-completion acknowledgement. It never reexecutes the cancelled operation or reopens the Run;
-`SafeToRetry` remains invalid for terminal work. Retry an interrupted resolution with the same
-command. Conflicting factual outcomes fail with `UnknownResolutionConflict`.
 
 Do not edit ledger state, wake the lane in a loop, resolve every open call separately, or clean up
 children by hand. The runtime owns those steps after it durably accepts the parent abort. It never

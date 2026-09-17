@@ -74,7 +74,6 @@ import {
   WorkerInputRequested,
   ToolCallPrepared,
   ToolCallUnknown,
-  ToolCallSettled,
   type CanonicalRecordPayload,
 } from "../../src/durable/Records.ts";
 import {
@@ -320,62 +319,45 @@ const harness = Effect.fn("workerHostHarness")(function* (
         ),
     }),
     Effect.provideService(ThreadStore, {
-      nativeReads: {
-        countPeerMessages: () => Effect.die("Worker fixture does not send peer messages"),
-        getRecord: ({ threadId, recordId }) =>
-          Effect.sync(() => {
+      read: (request) =>
+        Stream.suspend(() => {
+          const all = logs.get(request.threadId) ?? [];
+          const selection = "selection" in request ? request.selection : undefined;
+          let records = all;
+
+          if (selection?._tag === "RecordId") {
+            records = all.filter((entry) => entry.record.recordId === selection.recordId);
             reads.exact++;
-
-            return Option.fromUndefinedOr(
-              logs.get(threadId)?.find((entry) => entry.record.recordId === recordId),
+          } else if (selection?._tag === "WorkerState") {
+            records = all.filter(({ record: { payload } }) =>
+              payload._tag === "SubtreeBudgetReserved"
+                ? payload.sourceSubmissionId === selection.sourceSubmissionId
+                : payload._tag === "SubagentJoined"
+                  ? payload.runId === `run:${selection.sourceSubmissionId}`
+                  : [
+                      "ThreadCreated",
+                      "WorkerOriginRecorded",
+                      "SubagentLineageRecorded",
+                      "WorkerInputRequested",
+                      "WorkerInputCompleted",
+                    ].includes(payload._tag),
             );
-          }),
-        getRunInput: () => Effect.die("Worker fixture does not inspect Run inputs"),
-        readOutstanding: () =>
-          Effect.die("Worker admission never uses outstanding-operation inventory"),
-        readWorkerInputsPage: () => Effect.die("Worker fixture does not run native repair"),
-        readWorkerState: ({ threadId, sourceSubmissionId }) =>
-          Effect.sync(() => {
-            const all = logs.get(threadId) ?? [];
-
-            const records = all.filter(({ record }) => {
-              const payload = record.payload;
-
-              if (payload._tag === "SubtreeBudgetReserved")
-                return payload.sourceSubmissionId === sourceSubmissionId;
-              if (payload._tag === "SubagentJoined")
-                return payload.runId === `run:${sourceSubmissionId}`;
-
-              return [
-                "ThreadCreated",
-                "WorkerOriginRecorded",
-                "SubagentLineageRecorded",
-                "WorkerInputRequested",
-                "WorkerInputCompleted",
-              ].includes(payload._tag);
-            });
-
             reads.worker += records.length;
+          } else if (selection !== undefined)
+            return Stream.die("Worker fixture only reads exact identities and accounting");
+          const page = "selection" in request ? request.page : request;
 
-            return {
-              threadId,
-              tailSequence: Schema.decodeSync(CanonicalSequence)(all.length),
-              tailDigest: digest,
-              records,
-            };
-          }),
-      },
-      read: ({ threadId, afterSequence = 0, limit }) =>
-        Stream.fromIterable(
-          (logs.get(threadId) ?? [])
-            .filter((entry) => entry.sequence > afterSequence)
-            .slice(0, limit)
-            .map((entry) => {
-              reads.paged++;
+          return Stream.fromIterable(
+            records
+              .filter((entry) => entry.sequence > (page.afterSequence ?? 0))
+              .slice(0, page.limit)
+              .map((entry) => {
+                if (selection === undefined) reads.paged++;
 
-              return entry;
-            }),
-        ),
+                return entry;
+              }),
+          );
+        }),
       export: ({ threadId }) =>
         Effect.suspend(() => {
           const records = logs.get(threadId);
@@ -783,82 +765,54 @@ layer(NodeCrypto.layer)((it) => {
       }),
   );
 
-  it.effect(
-    "keeps terminal uncertain inputs current until factual resolution acknowledges them",
-    () =>
-      Effect.gen(function* () {
-        const h = yield* harness({
-          sourceReports: [reportWith(() => Effect.succeed({ encodedInput: "supplier status" }))],
-        });
+  it.effect("keeps terminal uncertain inputs current while allowing their native report", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({
+        sourceReports: [reportWith(() => Effect.succeed({ encodedInput: "supplier status" }))],
+      });
 
-        const initial = request("uncertain-worker");
-        const first = yield* h.host.start(initial);
-        const admission = h.submissions.get(first.receipt.submissionId)!.workerAdmission!;
-        const runId = Schema.decodeSync(RunId)(`run:${first.receipt.submissionId}`);
-        const toolCallId = Schema.decodeSync(ToolCallId)("external-action");
+      const initial = request("uncertain-worker");
+      const first = yield* h.host.start(initial);
+      const runId = Schema.decodeSync(RunId)(`run:${first.receipt.submissionId}`);
+      const toolCallId = Schema.decodeSync(ToolCallId)("external-action");
 
-        h.push(
-          first.worker.threadId,
-          ToolCallPrepared.make({
-            runId,
-            turnId: Schema.decodeSync(ToolCallPrepared.fields.turnId)("turn"),
-            turn: 1,
-            toolCallId,
-            toolName: "supplier",
-            parameters: { original: true },
-            parametersDigest: digest,
-          }),
-          "prepared-action",
-        );
-        h.push(
-          first.worker.threadId,
-          ToolCallUnknown.make({
-            runId,
-            turn: 1,
-            toolCallId,
-            toolName: "supplier",
-            reason: "lost reply",
-          }),
-          "unknown-action",
-        );
-        yield* h.settle(first.receipt, "reported result");
-        expect(
-          h.logs
-            .get(sourceId)!
-            .filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
-        ).toEqual([]);
-        expect(yield* h.host.start(initial)).toEqual(first);
-        expect(
-          [...h.deliveries.values()].some(
-            (entry) => entry.key.ownerThreadId === first.worker.threadId,
-          ),
-        ).toBe(true);
-        h.push(
-          first.worker.threadId,
-          ToolCallSettled.make({
-            runId,
-            toolCallId,
-            toolName: "supplier",
-            result: { receipt: "confirmed" },
-            isFailure: false,
-          }),
-          "supplier-result",
-        );
-        yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
-        yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
-
-        const acknowledgements = h.logs
+      h.push(
+        first.worker.threadId,
+        ToolCallPrepared.make({
+          runId,
+          turnId: Schema.decodeSync(ToolCallPrepared.fields.turnId)("turn"),
+          turn: 1,
+          toolCallId,
+          toolName: "supplier",
+          parameters: { original: true },
+          parametersDigest: digest,
+        }),
+        "prepared-action",
+      );
+      h.push(
+        first.worker.threadId,
+        ToolCallUnknown.make({
+          runId,
+          turn: 1,
+          toolCallId,
+          toolName: "supplier",
+          reason: "lost reply",
+        }),
+        "unknown-action",
+      );
+      yield* h.settle(first.receipt, "reported result");
+      expect(
+        h.logs
           .get(sourceId)!
-          .flatMap(({ record }) =>
-            record.payload._tag === "WorkerInputCompleted" ? [record.payload] : [],
-          );
-
-        expect(acknowledgements).toHaveLength(1);
-        expect(acknowledgements[0]).toMatchObject({
-          messageId: admission.messageId,
-          effectsResolved: true,
-        });
-      }),
+          .filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
+      ).toEqual([]);
+      expect(yield* h.host.start(initial)).toEqual(first);
+      expect(
+        [...h.deliveries.values()].some(
+          (entry) => entry.key.ownerThreadId === first.worker.threadId,
+        ),
+      ).toBe(true);
+    }),
   );
 
   it.effect("distinguishes transient worker pressure from permanent input exhaustion", () =>

@@ -12,7 +12,6 @@ import {
   MessageDeliveryFailpoint,
   MessageDeliveryKey,
   MessageDeliveryPageRequest,
-  MessageDeliveryPendingRequest,
   MessageDeliveryRecord,
   MessageDeliveryStore,
   MessageDeliveryStoreLimits,
@@ -254,29 +253,12 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
     insert,
     get,
     change,
-    readPending: Effect.fn("SqlMessageDeliveryStore.readPending")(function* (request) {
-      const input = yield* validateMessageDelivery(
-        MessageDeliveryPendingRequest,
-        request,
-        "read-pending",
-      );
-
-      const rows = yield* query(
-        "read-pending",
-        sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.ownerThreadId} AND state NOT IN ('processed', 'refused') ORDER BY message_id LIMIT ${input.limit + 1}`,
-      );
-
-      if (rows.length > input.limit)
-        return yield* MessageDeliveryError.make({ reason: "capacity", operation: "read-pending" });
-
-      return yield* decodeRows(rows);
-    }),
     list: Effect.fn("SqlMessageDeliveryStore.list")(function* (request) {
       const input = yield* validateMessageDelivery(MessageDeliveryPageRequest, request, "list");
 
       const rows = yield* query(
         "list",
-        sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.ownerThreadId} ${input.after === undefined ? sql`` : sql`AND message_id > ${input.after}`} ORDER BY message_id LIMIT ${input.limit + 1}`,
+        sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.ownerThreadId} ${input.after === undefined ? sql`` : sql`AND message_id > ${input.after}`} ${input.pendingOnly ? sql`AND state NOT IN ('processed', 'refused')` : sql``} ORDER BY message_id LIMIT ${input.limit + 1}`,
       );
 
       const records = yield* decodeRows(rows);

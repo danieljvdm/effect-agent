@@ -187,10 +187,6 @@ export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLoc
   "policy:before-reservation-append",
   "policy:after-reservation-append",
   "resolve:after-intent",
-  // Terminal factual resolution bypasses execution; before/after canonical commit is
-  // exercised by the abort/supplier-resolution cases in durable-tools.test.ts.
-  "resolve:before-terminal-append",
-  "resolve:after-terminal-append",
   // All six shapes retain their original Tool contracts, so none retires an unavailable
   // operation. The deployment continuity matrix in durable-runtime.test.ts exercises the
   // actual before/after-unavailable append boundaries, asserting absent/present canonical

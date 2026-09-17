@@ -309,7 +309,12 @@ export const messageDeliveryStoreConformanceCases = [
         ]),
         "Pending reads must use the source owner",
       );
-      const page = yield* store.list({ ownerThreadId: a.key.ownerThreadId, limit: 1 });
+
+      const page = yield* store.list({
+        ownerThreadId: a.key.ownerThreadId,
+        limit: 1,
+        pendingOnly: true,
+      });
 
       yield* verify(
         page.items.length === 1 && page.items[0]?.key.messageId === "a" && page.next === "a",
@@ -320,6 +325,7 @@ export const messageDeliveryStoreConformanceCases = [
         ownerThreadId: a.key.ownerThreadId,
         limit: 1,
         after: a.key.messageId,
+        pendingOnly: true,
       });
 
       yield* verify(

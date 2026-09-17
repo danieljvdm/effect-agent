@@ -8,7 +8,6 @@ import {
   MessageDeliveryFailpoint,
   MessageDeliveryKey,
   MessageDeliveryPageRequest,
-  MessageDeliveryPendingRequest,
   MessageDeliveryRecord,
   MessageDeliveryStore,
   MessageDeliveryStoreLimits,
@@ -58,7 +57,7 @@ export const memoryMessageDeliveryStoreLayer = (
 
       const state = yield* Ref.make({
         records: new Map<string, string>(),
-        pending: new Map<ThreadId, ReadonlySet<string>>(),
+        pending: new Map<ThreadId, ReadonlySet<MessageDeliveryKey["messageId"]>>(),
       });
 
       const commit = (record: MessageDeliveryRecord, encoded: string) =>
@@ -66,8 +65,8 @@ export const memoryMessageDeliveryStoreLayer = (
           const key = messageDeliveryKeyString(record.key);
           const keys = new Set(current.pending.get(record.key.ownerThreadId));
 
-          if (messageDeliveryUsesCapacity(record)) keys.add(key);
-          else keys.delete(key);
+          if (messageDeliveryUsesCapacity(record)) keys.add(record.key.messageId);
+          else keys.delete(record.key.messageId);
           const pending = new Map(current.pending);
 
           if (keys.size === 0) pending.delete(record.key.ownerThreadId);
@@ -233,36 +232,27 @@ export const memoryMessageDeliveryStoreLayer = (
         insert,
         get,
         change,
-        readPending: Effect.fn("MemoryMessageDeliveryStore.readPending")(function* (request) {
-          const input = yield* validateMessageDelivery(
-            MessageDeliveryPendingRequest,
-            request,
-            "read-pending",
-          );
-
-          const current = yield* Ref.get(state);
-          const keys = current.pending.get(input.ownerThreadId);
-
-          if (keys !== undefined && keys.size > input.limit)
-            return yield* MessageDeliveryError.make({
-              reason: "capacity",
-              operation: "read-pending",
-            });
-
-          return yield* Effect.forEach(keys ?? [], (key) => {
-            const encoded = current.records.get(key);
-
-            return encoded === undefined
-              ? Effect.fail(
-                  MessageDeliveryError.make({ reason: "corrupt", operation: "read-pending" }),
-                )
-              : decode(encoded);
-          });
-        }),
         list: Effect.fn("MemoryMessageDeliveryStore.list")(function* (request) {
           const input = yield* validateMessageDelivery(MessageDeliveryPageRequest, request, "list");
 
-          const records = (yield* all())
+          const current = yield* Ref.get(state);
+
+          const retained = input.pendingOnly
+            ? yield* Effect.forEach(
+                [...(current.pending.get(input.ownerThreadId) ?? [])]
+                  .filter((messageId) => input.after === undefined || messageId > input.after)
+                  .sort()
+                  .slice(0, input.limit + 1),
+                (messageId) =>
+                  decode(
+                    current.records.get(
+                      messageDeliveryKeyString({ ownerThreadId: input.ownerThreadId, messageId }),
+                    ) ?? "",
+                  ),
+              )
+            : yield* all();
+
+          const records = retained
             .filter(
               (record) =>
                 record.key.ownerThreadId === input.ownerThreadId &&

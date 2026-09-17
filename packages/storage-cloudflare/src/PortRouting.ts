@@ -1,9 +1,5 @@
 import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
-import {
-  MessageDeliveryStore,
-  MessageDeliveryError,
-  readPending,
-} from "effect-agent/message-delivery";
+import { MessageDeliveryStore, MessageDeliveryError } from "effect-agent/message-delivery";
 import {
   AdmissionIndeterminate,
   AdmissionConflict,
@@ -28,8 +24,8 @@ import {
 } from "effect-agent/thread-store";
 
 import {
-  MessageDeliveryReadPendingCall,
-  MessageDeliveryReadPendingResult,
+  MessageDeliveryListCall,
+  MessageDeliveryListResult,
   boundPortDiagnostic,
   decodePortRequest,
   decodePortResponse,
@@ -52,18 +48,8 @@ import {
   PortSucceeded,
   StoreAppendCall,
   StoreAppendResult,
-  StoreGetRecordCall,
-  StoreGetRecordResult,
-  StoreGetRunInputCall,
-  StoreGetRunInputResult,
-  StoreReadWorkerInputsPageCall,
-  StoreReadWorkerStateCall,
   StoreCountPeerMessagesCall,
   StoreCountPeerMessagesResult,
-  StoreReadWorkerStateResult,
-  StoreReadWorkerInputsPageResult,
-  StoreReadOutstandingCall,
-  StoreReadOutstandingResult,
   StoreExportCall,
   StoreExportResult,
   StoreInspectTailCall,
@@ -811,80 +797,18 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
   };
 
   const routed = ThreadStore.of({
-    nativeReads: {
-      getRecord: (request) =>
-        options.ownsThread(request.threadId)
-          ? local.nativeReads === undefined
-            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
-            : local.nativeReads.getRecord(request)
-          : foreignStoreCall(
-              "thread getRecord",
-              request.threadId,
-              StoreGetRecordCall.make({ request }),
-              StoreGetRecordResult,
-              ThreadNotMaterialized,
-            ).pipe(Effect.map((reply) => Option.fromUndefinedOr(reply.record))),
-      getRunInput: (request) =>
-        options.ownsThread(request.threadId)
-          ? local.nativeReads === undefined
-            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
-            : local.nativeReads.getRunInput(request)
-          : foreignStoreCall(
-              "thread getRunInput",
-              request.threadId,
-              StoreGetRunInputCall.make({ request }),
-              StoreGetRunInputResult,
-              ThreadNotMaterialized,
-            ).pipe(Effect.map((reply) => Option.fromUndefinedOr(reply.record))),
-      countPeerMessages: (request) =>
-        options.ownsThread(request.threadId)
-          ? local.nativeReads === undefined
-            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
-            : local.nativeReads.countPeerMessages(request)
-          : foreignStoreCall(
-              "thread countPeerMessages",
-              request.threadId,
-              StoreCountPeerMessagesCall.make({ request }),
-              StoreCountPeerMessagesResult,
-              ThreadNotMaterialized,
-            ).pipe(Effect.map((reply) => reply.count)),
-      readWorkerState: (request) =>
-        options.ownsThread(request.threadId)
-          ? local.nativeReads === undefined
-            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
-            : local.nativeReads.readWorkerState(request)
-          : foreignStoreCall(
-              "thread readWorkerState",
-              request.threadId,
-              StoreReadWorkerStateCall.make({ request }),
-              StoreReadWorkerStateResult,
-              ThreadNotMaterialized,
-            ).pipe(Effect.map((reply) => reply.state)),
-      readWorkerInputsPage: (request) =>
-        options.ownsThread(request.threadId)
-          ? local.nativeReads === undefined
-            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
-            : local.nativeReads.readWorkerInputsPage(request)
-          : foreignStoreCall(
-              "thread readWorkerInputsPage",
-              request.threadId,
-              StoreReadWorkerInputsPageCall.make({ request }),
-              StoreReadWorkerInputsPageResult,
-              ThreadNotMaterialized,
-            ).pipe(Effect.map((reply) => reply.page)),
-      readOutstanding: (request) =>
-        options.ownsThread(request.threadId)
-          ? local.nativeReads === undefined
-            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
-            : local.nativeReads.readOutstanding(request)
-          : foreignStoreCall(
-              "thread readOutstanding",
-              request.threadId,
-              StoreReadOutstandingCall.make({ request }),
-              StoreReadOutstandingResult,
-              ThreadNotMaterialized,
-            ).pipe(Effect.map((reply) => reply.state)),
-    },
+    countPeerMessages: (request) =>
+      options.ownsThread(request.threadId)
+        ? local.countPeerMessages === undefined
+          ? Effect.fail(crossThreadStoreError("peer count unavailable", request.threadId))
+          : local.countPeerMessages(request)
+        : foreignStoreCall(
+            "thread countPeerMessages",
+            request.threadId,
+            StoreCountPeerMessagesCall.make({ request }),
+            StoreCountPeerMessagesResult,
+            ThreadNotMaterialized,
+          ).pipe(Effect.map((reply) => reply.count)),
 
     materialize: (request) =>
       options.ownsThread(request.threadId)
@@ -1014,7 +938,7 @@ export const routedThreadStoreLayer = (
 ): Layer.Layer<ThreadStore, never, ThreadStore | ThreadPortTransport> =>
   Layer.effectContext(makeRoutedStoreServices(options));
 
-/** Route only the read of current obligations; all delivery mutations remain source local. */
+/** Route the existing owner-scoped list; delivery mutations remain source local. */
 export const routedMessageDeliveryStoreLayer = (options: RoutedPortOptions) =>
   Layer.effect(
     MessageDeliveryStore,
@@ -1024,19 +948,22 @@ export const routedMessageDeliveryStoreLayer = (options: RoutedPortOptions) =>
 
       return MessageDeliveryStore.of({
         ...local,
-        readPending: (request) =>
+        list: (request) =>
           options.ownsThread(request.ownerThreadId)
-            ? readPending(request).pipe(Effect.provideService(MessageDeliveryStore, local))
-            : call(request.ownerThreadId, MessageDeliveryReadPendingCall.make({ request })).pipe(
+            ? local.list(request)
+            : call(request.ownerThreadId, MessageDeliveryListCall.make({ request })).pipe(
                 Effect.mapError(() =>
-                  MessageDeliveryError.make({ reason: "storage", operation: "route read-pending" }),
+                  MessageDeliveryError.make({
+                    reason: "storage",
+                    operation: "route delivery list",
+                  }),
                 ),
                 Effect.flatMap((response) => {
                   if (
                     response._tag === "PortSucceeded" &&
-                    response.result._tag === "MessageDeliveryReadPendingResult"
+                    response.result._tag === "MessageDeliveryListResult"
                   )
-                    return Effect.succeed(response.result.records);
+                    return Effect.succeed(response.result.page);
 
                   return Effect.fail(
                     response._tag === "PortFailed" &&
@@ -1044,7 +971,7 @@ export const routedMessageDeliveryStoreLayer = (options: RoutedPortOptions) =>
                       ? response.failure
                       : MessageDeliveryError.make({
                           reason: "storage",
-                          operation: "route read-pending",
+                          operation: "route delivery list",
                         }),
                   );
                 }),
@@ -1078,46 +1005,24 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
   request: PortRequest,
 ): Effect.fn.Return<PortResponse, never, SubmissionLedger | ThreadStore | MessageDeliveryStore> {
   switch (request._tag) {
-    case "MessageDeliveryReadPending": {
-      const records = yield* readPending(request.request).pipe(Effect.result);
+    case "MessageDeliveryList": {
+      const store = yield* MessageDeliveryStore;
 
       return yield* capture(
-        Effect.fromResult(records).pipe(
-          Effect.map((records) => MessageDeliveryReadPendingResult.make({ records })),
-        ),
+        store
+          .list(request.request)
+          .pipe(Effect.map((page) => MessageDeliveryListResult.make({ page }))),
       );
     }
     case "StoreCountPeerMessages": {
       const store = yield* ThreadStore;
 
       return yield* capture(
-        store.nativeReads === undefined
+        store.countPeerMessages === undefined
           ? Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId))
-          : store.nativeReads
+          : store
               .countPeerMessages(request.request)
               .pipe(Effect.map((count) => StoreCountPeerMessagesResult.make({ count }))),
-      );
-    }
-    case "StoreReadWorkerState": {
-      const store = yield* ThreadStore;
-
-      return yield* capture(
-        store.nativeReads === undefined
-          ? Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId))
-          : store.nativeReads
-              .readWorkerState(request.request)
-              .pipe(Effect.map((state) => StoreReadWorkerStateResult.make({ state }))),
-      );
-    }
-    case "StoreReadWorkerInputsPage": {
-      const store = yield* ThreadStore;
-
-      return yield* capture(
-        store.nativeReads === undefined
-          ? Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId))
-          : store.nativeReads
-              .readWorkerInputsPage(request.request)
-              .pipe(Effect.map((page) => StoreReadWorkerInputsPageResult.make({ page }))),
       );
     }
     case "LedgerAdmit": {
@@ -1211,56 +1116,6 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
         store
           .inspectTail(request.request)
           .pipe(Effect.map((tail) => StoreInspectTailResult.make({ tail }))),
-      );
-    }
-    case "StoreGetRecord": {
-      const store = yield* ThreadStore;
-
-      if (store.nativeReads === undefined)
-        return yield* capture(
-          Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId)),
-        );
-
-      return yield* capture(
-        store.nativeReads
-          .getRecord(request.request)
-          .pipe(
-            Effect.map((record) =>
-              StoreGetRecordResult.make(Option.isSome(record) ? { record: record.value } : {}),
-            ),
-          ),
-      );
-    }
-    case "StoreGetRunInput": {
-      const store = yield* ThreadStore;
-
-      if (store.nativeReads === undefined)
-        return yield* capture(
-          Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId)),
-        );
-
-      return yield* capture(
-        store.nativeReads
-          .getRunInput(request.request)
-          .pipe(
-            Effect.map((record) =>
-              StoreGetRunInputResult.make(Option.isSome(record) ? { record: record.value } : {}),
-            ),
-          ),
-      );
-    }
-    case "StoreReadOutstanding": {
-      const store = yield* ThreadStore;
-
-      if (store.nativeReads === undefined)
-        return yield* capture(
-          Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId)),
-        );
-
-      return yield* capture(
-        store.nativeReads
-          .readOutstanding(request.request)
-          .pipe(Effect.map((state) => StoreReadOutstandingResult.make({ state }))),
       );
     }
     case "StoreExport": {

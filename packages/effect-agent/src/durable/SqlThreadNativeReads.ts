@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
@@ -9,16 +9,11 @@ import {
   RecordId,
 } from "./Records.ts";
 import { runIdForSubmission } from "./RunJournal.ts";
+import type { ThreadStore } from "./ThreadStore.ts";
 import {
-  type ThreadOutstanding,
-  type ThreadNativeReads,
-  ThreadNotMaterialized,
-  ThreadOutstandingRequest,
-  ThreadRecordRequest,
-  ThreadWorkerInputsPageRequest,
-  ThreadWorkerStateRequest,
+  SelectedThreadRead,
   ThreadPeerCountRequest,
-  ThreadRunInputRequest,
+  ThreadNotMaterialized,
   ThreadStoreError,
 } from "./ThreadStore.ts";
 
@@ -125,7 +120,7 @@ export const seedNativeReadIndexes = Effect.gen(function* () {
 });
 
 const Row = Schema.Struct({
-  thread_id: ThreadRecordRequest.fields.threadId,
+  thread_id: SelectedThreadRead.fields.threadId,
   sequence: CanonicalSequence,
   record_id: RecordId,
   batch_id: CanonicalRecordEnvelope.fields.batchId,
@@ -133,17 +128,12 @@ const Row = Schema.Struct({
   outstanding: Schema.optionalKey(Schema.Int),
 });
 
-export const makeNativeReads = Effect.fnUntraced(function* (
+export const makeSelectedReads = Effect.fnUntraced(function* (
   envelope: (row: typeof Row.Type) => Effect.Effect<CanonicalRecordEnvelope, ThreadStoreError>,
-): Effect.fn.Return<ThreadNativeReads, never, SqlClient.SqlClient> {
+) {
   const sql = yield* SqlClient.SqlClient;
 
-  const decodeRows = (rows: unknown) =>
-    Schema.decodeUnknownEffect(Schema.Array(Row))(rows).pipe(
-      Effect.mapError((cause) => failure("native read", cause)),
-    );
-
-  const requireThread = Effect.fnUntraced(function* (threadId: ThreadRecordRequest["threadId"]) {
+  const requireThread = Effect.fnUntraced(function* (threadId: SelectedThreadRead["threadId"]) {
     const rows =
       yield* sql`SELECT tail_sequence, tail_digest FROM effect_agent_threads WHERE thread_id = ${threadId}`;
 
@@ -159,227 +149,108 @@ export const makeNativeReads = Effect.fnUntraced(function* (
     return decoded[0];
   });
 
-  const one = Effect.fnUntraced(function* (rows: unknown) {
-    const decoded = yield* decodeRows(rows);
-
-    if (decoded.length > 1) return yield* failure("native unique lookup");
-    if (decoded[0] === undefined) return Option.none();
-    const value = yield* envelope(decoded[0]);
-
-    if (value.record.recordId !== decoded[0].record_id)
-      return yield* failure("native record identity");
-
-    return Option.some(value);
-  });
-
-  const getRecord: ThreadNativeReads["getRecord"] = Effect.fn("ThreadStore.getRecord")(
-    function* (request) {
-      yield* Schema.decodeEffect(ThreadRecordRequest)(request);
-      yield* requireThread(request.threadId);
-
-      return yield* one(
-        yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND record_id = ${request.recordId}`,
-      );
-    },
-    Effect.mapError((cause) =>
-      cause._tag === "ThreadNotMaterialized" || cause._tag === "ThreadStoreError"
-        ? cause
-        : failure("getRecord", cause),
-    ),
-  );
-
-  const getRunInput: ThreadNativeReads["getRunInput"] = Effect.fn("ThreadStore.getRunInput")(
-    function* (request) {
-      yield* Schema.decodeEffect(ThreadRunInputRequest)(request);
-      yield* requireThread(request.threadId);
-
-      return yield* one(
-        yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = 'UserInputRecorded' AND json_extract(record_json, '$.payload.kind') = 'user' AND json_extract(record_json, '$.payload.runId') = ${request.runId} LIMIT 2`,
-      );
-    },
-    Effect.mapError((cause) =>
-      cause._tag === "ThreadNotMaterialized" || cause._tag === "ThreadStoreError"
-        ? cause
-        : failure("getRunInput", cause),
-    ),
-  );
-
-  const readOutstanding: ThreadNativeReads["readOutstanding"] = Effect.fn(
-    "ThreadStore.readOutstanding",
-  )(
-    function* (request) {
-      yield* Schema.decodeEffect(ThreadOutstandingRequest)(request);
-
+  const read = Effect.fnUntraced(
+    function* (request: SelectedThreadRead) {
       return yield* sql.withTransaction(
         Effect.gen(function* () {
           const tail = yield* requireThread(request.threadId);
+          const selection = request.selection;
 
-          const rows = yield* decodeRows(
-            yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json, outstanding FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND outstanding <> 0 ORDER BY sequence LIMIT ${request.limit + 1}`,
-          );
+          if (
+            "expectedTailSequence" in selection &&
+            (tail.tail_sequence !== selection.expectedTailSequence ||
+              tail.tail_digest !== selection.expectedTailDigest)
+          )
+            return yield* failure("selected read tail changed");
+          const after = request.page.afterSequence ?? 0;
+          let rows: unknown;
 
-          if (rows.length > request.limit) return yield* failure("readOutstanding limit");
-          const operations: Array<ThreadOutstanding["operations"][number]> = [];
-          const workerInputs: Array<ThreadOutstanding["workerInputs"][number]> = [];
+          switch (selection._tag) {
+            case "RecordId":
+              rows =
+                yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND record_id = ${selection.recordId} AND sequence > ${after}`;
+              break;
+            case "RunInput":
+              rows =
+                yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = 'UserInputRecorded' AND json_extract(record_json, '$.payload.kind') = 'user' AND json_extract(record_json, '$.payload.runId') = ${selection.runId} LIMIT 2`;
+              break;
+            case "Outstanding":
+              rows =
+                yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json, outstanding FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND outstanding <> 0 AND sequence > ${after} ORDER BY sequence LIMIT ${request.page.limit}`;
+              break;
+            case "WorkerState": {
+              const runId =
+                selection.sourceSubmissionId === undefined
+                  ? null
+                  : runIdForSubmission(selection.sourceSubmissionId);
 
-          for (const row of rows) {
-            const payload = (yield* envelope(row)).record.payload;
-
-            if (payload._tag === "WorkerInputRequested") {
-              workerInputs.push(payload);
-              continue;
+              rows = yield* sql`
+            SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
+            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND json_extract(record_json, '$.payload._tag') IN ('ThreadCreated', 'WorkerOriginRecorded', 'SubagentLineageRecorded', 'WorkerInputRequested', 'WorkerInputCompleted')
+            UNION ALL
+            SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
+            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND json_extract(record_json, '$.payload._tag') = 'SubtreeBudgetReserved' AND json_extract(record_json, '$.payload.sourceSubmissionId') IS ${selection.sourceSubmissionId ?? null}
+            UNION ALL
+            SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
+            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND json_extract(record_json, '$.payload._tag') = 'SubagentJoined' AND json_extract(record_json, '$.payload.runId') = ${runId}
+            ORDER BY sequence LIMIT ${request.page.limit}`;
+              break;
             }
-            if (payload._tag !== "ToolCallPrepared" && payload._tag !== "ToolCallUnknown")
-              return yield* failure("readOutstanding record");
-
-            const preparedRecord =
-              payload._tag === "ToolCallPrepared"
-                ? payload
-                : Option.getOrUndefined(
-                    yield* one(
-                      yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = 'ToolCallPrepared' AND json_extract(record_json, '$.payload.runId') = ${payload.runId} AND json_extract(record_json, '$.payload.toolCallId') = ${payload.toolCallId} LIMIT 2`,
-                    ),
-                  )?.record.payload;
-
-            const input = Option.getOrUndefined(
-              yield* getRunInput({ threadId: request.threadId, runId: payload.runId }),
-            )?.record.payload;
-
-            if (
-              preparedRecord?._tag !== "ToolCallPrepared" ||
-              input?._tag !== "UserInputRecorded" ||
-              input.submissionId === undefined
-            )
-              return yield* failure("readOutstanding canonical ownership");
-            operations.push({
-              submissionId: input.submissionId,
-              prepared: preparedRecord,
-              state: payload._tag === "ToolCallUnknown" ? "unknown" : "prepared",
-            });
           }
+          const decoded = yield* Schema.decodeUnknownEffect(Schema.Array(Row))(rows);
 
-          return {
-            complete: rows.every((row) => row.outstanding !== 4),
-            threadId: request.threadId,
-            throughSequence: tail.tail_sequence,
-            operations,
-            workerInputs,
-          };
-        }),
-      );
-    },
-    Effect.mapError((cause) =>
-      cause._tag === "ThreadNotMaterialized" || cause._tag === "ThreadStoreError"
-        ? cause
-        : failure("readOutstanding", cause),
-    ),
-  );
+          if (selection._tag === "RunInput" && decoded.length > 1)
+            return yield* failure("ambiguous original Run input");
 
-  const readWorkerInputsPage: ThreadNativeReads["readWorkerInputsPage"] = Effect.fn(
-    "ThreadStore.readWorkerInputsPage",
-  )(
-    function* (request) {
-      yield* Schema.decodeEffect(ThreadWorkerInputsPageRequest)(request);
-      yield* requireThread(request.threadId);
+          return yield* Effect.forEach(
+            decoded.filter((row) => row.sequence > after),
+            (row) =>
+              Effect.gen(function* () {
+                const value = yield* envelope(row);
 
-      const rows = yield* decodeRows(
-        yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
-        WHERE thread_id = ${request.threadId} AND outstanding <> 0 AND outstanding IN (3, 4)
-          AND sequence > ${request.afterSequence ?? 0} ORDER BY sequence LIMIT ${request.limit + 1}`,
-      );
+                if (
+                  value.record.recordId !== row.record_id ||
+                  row.thread_id !== request.threadId ||
+                  (selection._tag === "Outstanding" &&
+                    !(
+                      (row.outstanding === 1 && value.record.payload._tag === "ToolCallPrepared") ||
+                      (row.outstanding === 2 && value.record.payload._tag === "ToolCallUnknown") ||
+                      (row.outstanding === 3 &&
+                        value.record.payload._tag === "WorkerInputRequested")
+                    ))
+                )
+                  return yield* failure("selected record incomplete or corrupt");
 
-      const page = rows.slice(0, request.limit);
-      const inputs = [];
-
-      for (const row of page) {
-        const payload = (yield* envelope(row)).record.payload;
-
-        if (payload._tag !== "WorkerInputRequested")
-          return yield* failure("readWorkerInputsPage record");
-        inputs.push(payload);
-      }
-
-      return { inputs, next: rows.length > request.limit ? (page.at(-1)?.sequence ?? null) : null };
-    },
-    Effect.mapError((cause) =>
-      cause._tag === "ThreadNotMaterialized" || cause._tag === "ThreadStoreError"
-        ? cause
-        : failure("readWorkerInputsPage", cause),
-    ),
-  );
-
-  const readWorkerState: ThreadNativeReads["readWorkerState"] = Effect.fn(
-    "ThreadStore.readWorkerState",
-  )(
-    function* (request) {
-      yield* Schema.decodeEffect(ThreadWorkerStateRequest)(request);
-
-      return yield* sql.withTransaction(
-        Effect.gen(function* () {
-          const tail = yield* requireThread(request.threadId);
-
-          const runId =
-            request.sourceSubmissionId === undefined
-              ? null
-              : runIdForSubmission(request.sourceSubmissionId);
-
-          const rows = yield* decodeRows(
-            yield* sql`
-          SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
-          WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') IN ('ThreadCreated', 'WorkerOriginRecorded', 'SubagentLineageRecorded', 'WorkerInputRequested', 'WorkerInputCompleted')
-          UNION ALL
-          SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
-          WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = 'SubtreeBudgetReserved' AND json_extract(record_json, '$.payload.sourceSubmissionId') IS ${request.sourceSubmissionId ?? null}
-          UNION ALL
-          SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
-          WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = 'SubagentJoined' AND json_extract(record_json, '$.payload.runId') = ${runId}
-          ORDER BY sequence LIMIT ${request.limit + 1}`,
+                return value;
+              }),
           );
-
-          if (rows.length > request.limit) return yield* failure("readWorkerState limit");
-          const records = yield* Effect.forEach(rows, envelope);
-
-          return {
-            threadId: request.threadId,
-            tailSequence: tail.tail_sequence,
-            tailDigest: tail.tail_digest,
-            records,
-          };
         }),
       );
     },
     Effect.mapError((cause) =>
       cause._tag === "ThreadNotMaterialized" || cause._tag === "ThreadStoreError"
         ? cause
-        : failure("readWorkerState", cause),
+        : failure("selected read", cause),
     ),
   );
 
-  const countPeerMessages: ThreadNativeReads["countPeerMessages"] = Effect.fn(
-    "ThreadStore.countPeerMessages",
-  )(
-    function* (request) {
-      yield* Schema.decodeEffect(ThreadPeerCountRequest)(request);
-      yield* requireThread(request.threadId);
+  const countPeerMessages: NonNullable<ThreadStore["Service"]["countPeerMessages"]> =
+    Effect.fnUntraced(
+      function* (request) {
+        yield* Schema.decodeEffect(ThreadPeerCountRequest)(request);
+        yield* requireThread(request.threadId);
 
-      const rows =
-        yield* sql`SELECT 1 FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = 'PeerMessagePrepared' LIMIT ${request.limit}`;
+        const rows =
+          yield* sql`SELECT 1 FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = 'PeerMessagePrepared' LIMIT ${request.limit}`;
 
-      return rows.length;
-    },
-    Effect.mapError((cause) =>
-      cause._tag === "ThreadNotMaterialized" || cause._tag === "ThreadStoreError"
-        ? cause
-        : failure("countPeerMessages", cause),
-    ),
-  );
+        return rows.length;
+      },
+      Effect.mapError((cause) =>
+        cause._tag === "ThreadNotMaterialized" || cause._tag === "ThreadStoreError"
+          ? cause
+          : failure("countPeerMessages", cause),
+      ),
+    );
 
-  return {
-    getRecord,
-    getRunInput,
-    readOutstanding,
-    readWorkerInputsPage,
-    readWorkerState,
-    countPeerMessages,
-  };
+  return { read, countPeerMessages };
 });

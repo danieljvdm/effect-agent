@@ -48,7 +48,13 @@ import {
   submissionInputRecordId,
 } from "../SubmissionLedger.ts";
 import { PreparedInput } from "../Subscription.ts";
-import { FencedAppendRequest, ThreadRead, ThreadTailRequest, ThreadStore } from "../ThreadStore.ts";
+import {
+  getRecord,
+  FencedAppendRequest,
+  ThreadRead,
+  ThreadTailRequest,
+  ThreadStore,
+} from "../ThreadStore.ts";
 import {
   definitionDigestsEqual,
   resolveDefinitionBinding,
@@ -95,11 +101,9 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
     threadId: ThreadId,
     recordId: RecordEnvelope["recordId"],
   ) {
-    if (deps.store.nativeReads === undefined) return yield* failure("send", "unavailable");
-
     return Option.getOrUndefined(
-      yield* deps.store.nativeReads
-        .getRecord({ threadId, recordId })
+      yield* getRecord({ threadId, recordId })
+        .pipe(Effect.provideService(ThreadStore, deps.store))
         .pipe(Effect.mapError(() => failure("send", "storage"))),
     )?.record;
   });
@@ -329,9 +333,10 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
           });
           yield* authorizeEnvelope(saved, operation);
         } else {
-          if (deps.store.nativeReads === undefined) return yield* failure(operation, "unavailable");
+          if (deps.store.countPeerMessages === undefined)
+            return yield* failure(operation, "unavailable");
           if (
-            (yield* deps.store.nativeReads
+            (yield* deps.store
               .countPeerMessages({ threadId, limit: maxMessages })
               .pipe(Effect.mapError(mapStore(operation)))) >= maxMessages
           )

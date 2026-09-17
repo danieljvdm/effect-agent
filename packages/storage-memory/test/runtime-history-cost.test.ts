@@ -176,6 +176,7 @@ const measure = Effect.fn("RuntimeHistoryCost.measure")(function* (
     ...store,
     read: (request) =>
       Stream.suspend(() => {
+        if ("selection" in request) return store.read(request);
         openedPages++;
         requests.push(request);
         if (request.afterSequence === undefined) prefixTraversals++;

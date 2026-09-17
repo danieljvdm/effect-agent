@@ -203,7 +203,7 @@ describe("MemoryThreadStore", () => {
       it.effect(conformanceCase.name, () =>
         conformanceCase.run.pipe(
           Effect.updateService(ThreadStore, (store) => ({
-            nativeReads: store.nativeReads,
+            countPeerMessages: store.countPeerMessages,
             materialize: store.materialize,
             append: store.append,
             read: store.read,

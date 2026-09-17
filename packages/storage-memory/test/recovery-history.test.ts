@@ -75,6 +75,7 @@ const countingThreadStoreLayer = Layer.effectContext(
       read: (request) =>
         Stream.unwrap(
           Effect.gen(function* () {
+            if ("selection" in request) return store.read(request);
             yield* Ref.update(requests, (current) => [...current, request]);
             const failure = yield* Ref.get(failingAfter);
 

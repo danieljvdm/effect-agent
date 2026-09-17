@@ -163,24 +163,20 @@ export type MessageDeliveryChange = typeof MessageDeliveryChange.Type;
 
 export const MessageDeliveryPageRequest = Schema.Struct({
   ownerThreadId: ThreadId,
-  limit: Positive.check(Schema.isLessThanOrEqualTo(100)),
+  limit: Positive.check(Schema.isLessThanOrEqualTo(4096)),
   after: Schema.optionalKey(IdempotencyKey),
+  /** Native pending index, including accepted, future-due and parked obligations. */
+  pendingOnly: Schema.optionalKey(Schema.Boolean),
 });
 
 export type MessageDeliveryPageRequest = typeof MessageDeliveryPageRequest.Type;
 
-/** All current retained obligations, including future-due, accepted and parked deliveries. */
-export const MessageDeliveryPendingRequest = Schema.Struct({
-  ownerThreadId: ThreadId,
-  limit: Positive.check(Schema.isLessThanOrEqualTo(4096)),
+export const MessageDeliveryPage = Schema.Struct({
+  items: Schema.Array(MessageDeliveryRecord),
+  next: Schema.NullOr(IdempotencyKey),
 });
 
-export type MessageDeliveryPendingRequest = typeof MessageDeliveryPendingRequest.Type;
-
-export interface MessageDeliveryPage {
-  readonly items: ReadonlyArray<MessageDeliveryRecord>;
-  readonly next: IdempotencyKey | null;
-}
+export type MessageDeliveryPage = typeof MessageDeliveryPage.Type;
 
 /**
  * Trusted host port, independent of either Thread's active Submission. List/get require an owner.
@@ -202,10 +198,6 @@ export class MessageDeliveryStore extends Context.Service<
     readonly list: (
       request: MessageDeliveryPageRequest,
     ) => Effect.Effect<MessageDeliveryPage, MessageDeliveryError>;
-    /** Bounded native index read. Overflow fails; no completed-history fallback. */
-    readonly readPending?: (
-      request: MessageDeliveryPendingRequest,
-    ) => Effect.Effect<ReadonlyArray<MessageDeliveryRecord>, MessageDeliveryError>;
     readonly change: (
       key: MessageDeliveryKey,
       change: MessageDeliveryChange,
@@ -229,30 +221,30 @@ export class MessageDeliveryStore extends Context.Service<
  * delivery remains uncertain, including when parked or due in the future.
  */
 export const readPending = Effect.fn("MessageDelivery.readPending")(function* (
-  request: MessageDeliveryPendingRequest,
+  request: Pick<MessageDeliveryPageRequest, "ownerThreadId" | "limit">,
 ) {
+  const store = yield* MessageDeliveryStore;
+
   const input = yield* validateMessageDelivery(
-    MessageDeliveryPendingRequest,
-    request,
+    MessageDeliveryPageRequest,
+    {
+      ownerThreadId: request.ownerThreadId,
+      limit: request.limit,
+      pendingOnly: true,
+    },
     "read-pending",
   );
 
-  const store = yield* MessageDeliveryStore;
-
-  if (store.readPending === undefined)
-    return yield* MessageDeliveryError.make({
-      reason: "storage",
-      operation: "read-pending unavailable",
-    });
-
-  const records = yield* validateMessageDelivery(
-    Schema.Array(MessageDeliveryRecord),
-    yield* store.readPending(input),
+  const page = yield* validateMessageDelivery(
+    MessageDeliveryPage,
+    yield* store.list(input),
     "read-pending result",
   );
 
-  if (records.length > input.limit)
+  if (page.next !== null || page.items.length > input.limit)
     return yield* MessageDeliveryError.make({ reason: "capacity", operation: "read-pending" });
+  const records = page.items;
+
   if (
     records.some(
       (record) =>

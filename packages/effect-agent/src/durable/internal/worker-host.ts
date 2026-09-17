@@ -71,6 +71,7 @@ import {
 } from "../Records.ts";
 import {
   workerInputRecordId,
+  agentUpdateRecordId,
   firstWorkerInputRecordId,
   subagentLineageRecordId,
   workerOriginRecordId,
@@ -96,6 +97,8 @@ import type { SubmissionStatus } from "../SubmissionStatus.ts";
 import { PreparedInput } from "../Subscription.ts";
 import {
   ThreadStore,
+  getRecord,
+  readWorkerState as readNativeWorkerState,
   FencedAppendRequest,
   ThreadExportRequest,
   type ThreadExport,
@@ -295,11 +298,10 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     recordId: RecordId,
     operation: WorkerError["operation"],
   ) {
-    if (deps.store.nativeReads === undefined) return yield* failure(operation, "unavailable");
-
-    return yield* deps.store.nativeReads
-      .getRecord({ threadId, recordId })
-      .pipe(Effect.mapError(storageFailure(operation)));
+    return yield* getRecord({ threadId, recordId }).pipe(
+      Effect.provideService(ThreadStore, deps.store),
+      Effect.mapError(storageFailure(operation)),
+    );
   });
 
   const readIdentity = Effect.fn("WorkerHost.readIdentity")(function* (
@@ -325,15 +327,14 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     operation: WorkerError["operation"],
     sourceSubmissionId?: SubmissionId,
   ) {
-    if (deps.store.nativeReads === undefined) return yield* failure(operation, "unavailable");
-
-    return yield* deps.store.nativeReads
-      .readWorkerState({
-        threadId,
-        limit: MAX_THREAD_EXPORT_RECORDS,
-        ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
-      })
-      .pipe(Effect.mapError(storageFailure(operation)));
+    return yield* readNativeWorkerState({
+      threadId,
+      limit: MAX_THREAD_EXPORT_RECORDS,
+      ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
+    }).pipe(
+      Effect.provideService(ThreadStore, deps.store),
+      Effect.mapError(storageFailure(operation)),
+    );
   });
 
   const hit = (location: DurableRuntimeFailpointLocation, operation: WorkerError["operation"]) =>
@@ -1106,13 +1107,19 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (update.threadId !== submission.threadId || update.agentId !== origin.worker.targetAgentId)
         return yield* failure("followUp", "worker-mismatch");
 
-      const sourceHistory = yield* read(origin.source.threadId, "followUp");
+      const first = Option.getOrUndefined(
+        yield* exactRecord(
+          origin.source.threadId,
+          workerInputRecordId(origin.firstMessageId),
+          "followUp",
+        ),
+      )?.record.payload;
 
-      const first = requests(sourceHistory.records).find(
-        (row) => row.admission.messageId === origin.firstMessageId,
-      );
-
-      if (first === undefined || !sameOrigin(first.admission.origin, origin))
+      if (
+        first?._tag !== "WorkerInputRequested" ||
+        first.admission.messageId !== origin.firstMessageId ||
+        !sameOrigin(first.admission.origin, origin)
+      )
         return yield* failure("followUp", "corrupt");
 
       const source = yield* sourceAuthority(
@@ -1294,13 +1301,19 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       const hostSubmission = selected.value;
       const hostAdmission = selected.value.workerAdmission;
 
-      const sourceHistory = yield* read(origin.source.threadId, "inspect");
+      const firstInput = Option.getOrUndefined(
+        yield* exactRecord(
+          origin.source.threadId,
+          workerInputRecordId(origin.firstMessageId),
+          "inspect",
+        ),
+      )?.record.payload;
 
-      const firstInput = requests(sourceHistory.records).find(
-        (row) => row.admission.messageId === origin.firstMessageId,
-      );
-
-      if (firstInput === undefined || !sameOrigin(firstInput.admission.origin, origin))
+      if (
+        firstInput?._tag !== "WorkerInputRequested" ||
+        firstInput.admission.messageId !== origin.firstMessageId ||
+        !sameOrigin(firstInput.admission.origin, origin)
+      )
         return yield* failure("inspect", "corrupt");
 
       // Reporting stays with the original owner even when a later input came from another
@@ -1680,46 +1693,6 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     }
 
     return yield* failure("inspect", "storage");
-  });
-
-  const repairInputs = Effect.fn("WorkerHost.repairInputs")(function* (threadId: ThreadId) {
-    if (deps.store.nativeReads === undefined || Option.isNone(deps.deliveries)) return;
-
-    let afterSequence: CanonicalSequence | undefined;
-
-    do {
-      const pending = yield* deps.store.nativeReads
-        .readWorkerInputsPage({
-          threadId,
-          limit: 100,
-          ...(afterSequence === undefined ? {} : { afterSequence }),
-        })
-        .pipe(Effect.mapError(storageFailure("inspect")));
-
-      for (const { admission } of pending.inputs) {
-        const delivery = yield* deps.deliveries.value
-          .get({ ownerThreadId: threadId, messageId: admission.messageId })
-          .pipe(Effect.mapError(storageFailure("inspect")));
-
-        const principal = admission.deliveryPrincipal ?? delivery?.envelope.deliveryPrincipal;
-
-        if (principal === undefined) return yield* failure("inspect", "unavailable");
-
-        const found = yield* deps.ledger
-          .lookup(
-            SubmissionLookupByKey.make({
-              threadId: admission.origin.worker.threadId,
-              principal,
-              idempotencyKey: admission.messageId,
-            }),
-          )
-          .pipe(Effect.mapError(storageFailure("inspect")));
-
-        if (Option.isSome(found) && found.value.state === "settled")
-          yield* completeInput(found.value);
-      }
-      afterSequence = pending.next ?? undefined;
-    } while (afterSequence !== undefined);
   });
 
   const facet = (
@@ -2402,28 +2375,36 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       Effect.mapError(() => failure("followUp", "corrupt")),
     );
 
-    const child = yield* read(
+    const childThreadId =
       message._tag === "WorkerCompletion"
         ? message.report.worker.threadId
-        : message.worker.threadId,
-      "followUp",
-    );
+        : message.worker.threadId;
+
+    const proofId =
+      message._tag === "WorkerCompletion"
+        ? workerReportRecordId(options.idempotencyKey)
+        : yield* withCrypto(
+            agentUpdateRecordId(
+              message.update.threadId,
+              message.update.runId,
+              message.update.updateId,
+            ),
+          ).pipe(Effect.mapError(storageFailure("followUp")));
+
+    const proof = Option.getOrUndefined(yield* exactRecord(childThreadId, proofId, "followUp"))
+      ?.record.payload;
 
     const frozen =
       message._tag === "WorkerCompletion"
-        ? child.records.flatMap(({ record }) =>
-            record.payload._tag === "WorkerReportPrepared" &&
-            record.payload.runId === message.report.runId
-              ? [record.payload.envelope]
-              : [],
-          )[0]
-        : child.records.flatMap(({ record }) =>
-            record.payload._tag === "AgentUpdateEmitted" &&
-            Schema.toEquivalence(Update)(record.payload.update, message.update) &&
-            record.payload.delivery !== undefined
-              ? [record.payload.delivery.envelope]
-              : [],
-          )[0];
+        ? proof?._tag === "WorkerReportPrepared" &&
+          proof.runId === message.report.runId &&
+          proof.messageId === options.idempotencyKey
+          ? proof.envelope
+          : undefined
+        : proof?._tag === "AgentUpdateEmitted" &&
+            Schema.toEquivalence(Update)(proof.update, message.update)
+          ? proof.delivery?.envelope
+          : undefined;
 
     if (frozen === undefined) return yield* failure("followUp", "denied");
 
@@ -2447,20 +2428,31 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     )
       return yield* failure("followUp", "denied");
 
-    const recorded = child.records.find(
-      ({ record }) => record.payload._tag === "WorkerOriginRecorded",
+    const recorded = Option.getOrUndefined(
+      yield* exactRecord(childThreadId, workerOriginRecordId(childThreadId), "followUp"),
     )?.record.payload;
 
-    if (recorded?._tag !== "WorkerOriginRecorded" || recorded.origin.reporting?.mode !== "standard")
+    if (
+      recorded?._tag !== "WorkerOriginRecorded" ||
+      recorded.origin.worker.threadId !== childThreadId ||
+      recorded.origin.reporting?.mode !== "standard"
+    )
       return yield* failure("followUp", "denied");
     const origin = recorded.origin;
-    const source = yield* read(origin.source.threadId, "followUp");
 
-    const first = requests(source.records).find(
-      (row) => row.admission.messageId === origin.firstMessageId,
-    );
+    const first = Option.getOrUndefined(
+      yield* exactRecord(
+        origin.source.threadId,
+        workerInputRecordId(origin.firstMessageId),
+        "followUp",
+      ),
+    )?.record.payload;
 
-    if (first === undefined || !sameOrigin(first.admission.origin, origin))
+    if (
+      first?._tag !== "WorkerInputRequested" ||
+      first.admission.messageId !== origin.firstMessageId ||
+      !sameOrigin(first.admission.origin, origin)
+    )
       return yield* failure("followUp", "denied");
     const receiving = envelope.workerAdmission;
 
@@ -2556,7 +2548,6 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     validateAdmission,
     ensureOrigin,
     completeInput,
-    repairInputs,
     reserveSubtree,
   };
 });

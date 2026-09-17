@@ -50,6 +50,9 @@ import {
   ThreadObservation,
   ThreadRead,
   ThreadStore,
+  getRecord,
+  getRunInput,
+  readWorkerState,
   ThreadTailRequest,
   FencedAppendRequest,
   FenceRejected,
@@ -715,16 +718,29 @@ const notMaterializedOperations = conformanceCase(
     }),
 );
 
+const selectedOutstanding = Effect.fnUntraced(function* (threadId: ThreadId) {
+  const store = yield* ThreadStore;
+  const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
+
+  return yield* Stream.runCollect(
+    store.read({
+      threadId,
+      page: { limit: 1024 },
+      selection: {
+        _tag: "Outstanding",
+        expectedTailSequence: tail.tailSequence,
+        expectedTailDigest: tail.tailDigest,
+      },
+    }),
+  );
+});
+
 const nativeOutstandingReads = conformanceCase(
   "native reads retain uncertainty until canonical result and preserve exact input identities",
   ({ ensure, expectFailure }) =>
     Effect.gen(function* () {
       const threadId = decodeThreadId("conformance-native-outstanding");
-      const store = yield* ThreadStore;
-      const native = store.nativeReads;
 
-      yield* ensure(native !== undefined, "Supported adapters provide native reads");
-      if (native === undefined) return;
       yield* materialize(threadId, EPOCH_ONE);
 
       let tail = yield* append(
@@ -754,12 +770,37 @@ const nativeOutstandingReads = conformanceCase(
         batch("native-prepared", [envelope("native-prepared", prepared)]),
         tail,
       );
-      const first = yield* native.readOutstanding({ threadId, limit: 1 });
+      const store = yield* ThreadStore;
+
+      const selected = {
+        threadId,
+        page: { limit: 1 },
+        selection: {
+          _tag: "Outstanding" as const,
+          expectedTailSequence: tail.lastSequence,
+          expectedTailDigest: tail.tailDigest,
+        },
+      };
+
+      yield* expectFailure(
+        "Old decoder must reject a selected read",
+        Schema.decodeUnknownEffect(ThreadRead)(selected),
+      );
+      yield* expectFailure(
+        "Digest mismatch must reject a selected read",
+        Stream.runCollect(
+          store.read({
+            ...selected,
+            selection: { ...selected.selection, expectedTailDigest: EMPTY_TAIL_DIGEST },
+          }),
+        ),
+      );
+      const first = yield* selectedOutstanding(threadId);
 
       yield* ensure(
-        first.operations.length === 1 &&
-          first.operations[0]?.state === "prepared" &&
-          first.operations[0].prepared.executionKind === "orchestration",
+        first.length === 1 &&
+          first[0]?.record.payload._tag === "ToolCallPrepared" &&
+          first[0].record.payload.executionKind === "orchestration",
         "A current orchestration preparation is not an unknown outcome",
       );
       tail = yield* append(
@@ -794,19 +835,23 @@ const nativeOutstandingReads = conformanceCase(
         ]),
         tail,
       );
-      const unknown = yield* native.readOutstanding({ threadId, limit: 1 });
+      yield* expectFailure(
+        "An append that changed outstanding flags invalidates the captured page",
+        Stream.runCollect(store.read(selected)),
+      );
+      const unknown = yield* selectedOutstanding(threadId);
 
       yield* ensure(
-        unknown.operations.length === 1 && unknown.operations[0]?.state === "unknown",
+        unknown.length === 1 && unknown[0]?.record.payload._tag === "ToolCallUnknown",
         "A resolution permission is not a recorded external result",
       );
 
-      const exact = yield* native.getRecord({
+      const exact = yield* getRecord({
         threadId,
         recordId: decodeRecordId("native-prepared"),
       });
 
-      const input = yield* native.getRunInput({ threadId, runId: CONFORMANCE_RUN });
+      const input = yield* getRunInput({ threadId, runId: CONFORMANCE_RUN });
 
       yield* ensure(
         Option.isSome(exact) &&
@@ -814,6 +859,43 @@ const nativeOutstandingReads = conformanceCase(
           Option.isSome(input) &&
           input.value.record.recordId === "native-input",
         "Exact lookups retain original preparation and host input",
+      );
+      tail = yield* append(
+        threadId,
+        batch("later-preparation", [envelope("later-preparation", prepared)]),
+        tail,
+      );
+      const retained = yield* selectedOutstanding(threadId);
+
+      yield* ensure(
+        retained.length === 2 &&
+          retained[0]?.record.payload._tag === "ToolCallUnknown" &&
+          retained[1]?.record.payload._tag === "ToolCallPrepared",
+        "A later preparation never overwrites older uncertainty",
+      );
+
+      const currentSelection = {
+        ...selected,
+        selection: {
+          ...selected.selection,
+          expectedTailSequence: tail.lastSequence,
+          expectedTailDigest: tail.tailDigest,
+        },
+      };
+
+      const sparsePage = yield* Stream.runCollect(store.read(currentSelection));
+
+      const sparseNext = yield* Stream.runCollect(
+        store.read({
+          ...currentSelection,
+          page: { limit: 1, afterSequence: sparsePage[0]!.sequence },
+        }),
+      );
+
+      yield* ensure(
+        sparsePage[0]?.record.payload._tag === "ToolCallUnknown" &&
+          sparseNext[0]?.record.payload._tag === "ToolCallPrepared",
+        "Selection pages use sparse canonical sequence without skipping current records",
       );
       yield* append(
         threadId,
@@ -832,14 +914,14 @@ const nativeOutstandingReads = conformanceCase(
         tail,
       );
       yield* ensure(
-        (yield* native.readOutstanding({ threadId, limit: 1 })).operations.length === 0,
+        (yield* selectedOutstanding(threadId)).length === 0,
         "Only canonical result retires the uncertain call",
       );
       const missingThread = decodeThreadId("native-missing");
 
       const missing = yield* expectFailure(
         "reading unmaterialized native state",
-        native.readOutstanding({ threadId: missingThread, limit: 1 }),
+        selectedOutstanding(missingThread),
       );
 
       yield* ensure(
@@ -850,60 +932,30 @@ const nativeOutstandingReads = conformanceCase(
 );
 
 const nativeAmbiguousOwnership = conformanceCase(
-  "native reads fail closed on missing or ambiguous original Run input",
-  ({ ensure, expectFailure }) =>
+  "native Run input lookup fails closed on ambiguous original input",
+  ({ expectFailure }) =>
     Effect.gen(function* () {
-      const native = (yield* ThreadStore).nativeReads;
+      const threadId = decodeThreadId("ambiguous-native-run");
 
-      yield* ensure(native !== undefined, "Supported adapters provide native reads");
-      if (native === undefined) return;
-      for (const count of [0, 2]) {
-        const threadId = decodeThreadId(`native-ownership-${count}`);
-
-        yield* materialize(threadId, EPOCH_ONE);
-
-        const prepared = RecordEnvelope.make({
-          ...record("prepared", "unused"),
-          payload: ToolCallPrepared.make({
-            runId: CONFORMANCE_RUN,
-            turnId: Schema.decodeSync(TurnId)("turn"),
-            turn: 1,
-            toolCallId: Schema.decodeSync(ToolCallId)("call"),
-            toolName: "external",
-            parameters: {},
-            parametersDigest: EMPTY_TAIL_DIGEST,
-          }),
-        });
-
-        yield* append(
-          threadId,
-          batch("ownership", [
-            prepared,
-            ...Array.from({ length: count }, (_, i) => record(`input-${i}`, `input-${i}`)),
-          ]),
-        );
-        yield* expectFailure(
-          "authorizing without unique original input",
-          native.readOutstanding({ threadId, limit: 1 }),
-        );
-        if (count === 2)
-          yield* expectFailure(
-            "looking up an ambiguous Run input",
-            native.getRunInput({ threadId, runId: CONFORMANCE_RUN }),
-          );
-      }
+      yield* materialize(threadId, EPOCH_ONE);
+      yield* append(
+        threadId,
+        batch("inputs", [record("input-1", "first"), record("input-2", "second")]),
+      );
+      yield* expectFailure(
+        "ambiguous original Run input",
+        getRunInput({ threadId, runId: CONFORMANCE_RUN }),
+      );
     }),
 );
 
-const nativeWorkerRepairPages = conformanceCase(
-  "native repair pages drain unverified acknowledgements despite inventory overflow",
+const nativeWorkerAccounting = conformanceCase(
+  "native worker accounting retains lifetime reservations without conversation history",
   ({ ensure, expectFailure }) =>
     Effect.gen(function* () {
-      const threadId = decodeThreadId("native-worker-repair");
-      const native = (yield* ThreadStore).nativeReads;
+      const threadId = decodeThreadId("native-worker-accounting");
+      const store = yield* ThreadStore;
 
-      yield* ensure(native !== undefined, "Supported adapters provide native reads");
-      if (native === undefined) return;
       yield* materialize(threadId, EPOCH_ONE);
       const workerThreadId = decodeThreadId("worker");
       const agentId = Schema.decodeSync(AgentId)("agent");
@@ -960,70 +1012,32 @@ const nativeWorkerRepairPages = conformanceCase(
           ...(verified ? { effectsResolved: true as const } : {}),
         });
 
-      // Exceed one full maintenance page. Action-time overflow must not prevent maintenance.
-      let tail: Pick<AppendResult, "lastSequence" | "tailDigest"> = EMPTY_TAIL;
+      const requested = WorkerInputRequested.make({
+        admission: { origin, messageId: origin.firstMessageId, parameters: {}, createdAtMillis: 0 },
+        inputDigest: EMPTY_TAIL_DIGEST,
+      });
 
-      for (let i = 0; i < 101; i++) {
-        const messageId = Schema.decodeSync(IdempotencyKey)(`message-${i}`);
+      let tail = yield* append(
+        threadId,
+        batch("legacy", [
+          envelope("requested", requested),
+          envelope("legacy-completion", completed(origin.firstMessageId, false)),
+        ]),
+      );
 
-        tail = yield* append(
-          threadId,
-          batch(`requested-${i}`, [
-            envelope(
-              `requested-${i}`,
-              WorkerInputRequested.make({
-                admission: { origin, messageId, parameters: {}, createdAtMillis: 0 },
-                inputDigest: EMPTY_TAIL_DIGEST,
-              }),
-            ),
-            envelope(`completed-${i}`, completed(messageId, false)),
-          ]),
-          tail,
-        );
-      }
       yield* expectFailure(
-        "overflow cannot authorize",
-        native.readOutstanding({ threadId, limit: 100 }),
-      );
-      yield* ensure(
-        !(yield* native.readOutstanding({ threadId, limit: 101 })).complete,
         "Legacy acknowledgements remain explicitly incomplete",
+        selectedOutstanding(threadId),
       );
-      let afterSequence: CanonicalSequence | undefined;
-      const seen = new Set<string>();
-
-      do {
-        const page = yield* native.readWorkerInputsPage({
-          threadId,
-          limit: 100,
-          ...(afterSequence === undefined ? {} : { afterSequence }),
-        });
-
-        yield* ensure(page.inputs.length <= 100, "Repair keeps its own bounded page size");
-        for (const { admission } of page.inputs) {
-          yield* ensure(!seen.has(admission.messageId), "Cursor never repeats a retired input");
-          seen.add(admission.messageId);
-          tail = yield* append(
-            threadId,
-            batch(`verified-${admission.messageId}`, [
-              envelope(`verified-${admission.messageId}`, completed(admission.messageId, true)),
-            ]),
-            tail,
-          );
-        }
-        afterSequence = page.next ?? undefined;
-      } while (afterSequence !== undefined);
-      const state = yield* native.readOutstanding({ threadId, limit: 1 });
-
-      yield* ensure(
-        seen.size === 101 && state.complete && state.workerInputs.length === 0,
-        "Repair drains every legacy acknowledgement across pages",
+      tail = yield* append(
+        threadId,
+        batch("verified", [envelope("verified", completed(origin.firstMessageId, true))]),
+        tail,
       );
       yield* ensure(
-        Option.isSome(
-          yield* native.getRecord({ threadId, recordId: decodeRecordId("requested-0") }),
-        ),
-        "Retirement retains exact original admission evidence",
+        (yield* selectedOutstanding(threadId)).length === 0 &&
+          Option.isSome(yield* getRecord({ threadId, recordId: decodeRecordId("requested") })),
+        "Proven completion retires the input while retaining its canonical reservation",
       );
       // Cross the recovery horizon with irrelevant conversation records. Native worker
       // accounting must return the same families and scope, while capturing the full CAS tail.
@@ -1070,7 +1084,7 @@ const nativeWorkerRepairPages = conformanceCase(
         tail,
       );
       yield* ensure(
-        (yield* native.countPeerMessages({ threadId, limit: 1 })) === 0,
+        (yield* store.countPeerMessages!({ threadId, limit: 1 })) === 0,
         "Conversation history does not count as peer sends",
       );
 
@@ -1088,19 +1102,24 @@ const nativeWorkerRepairPages = conformanceCase(
 
       tail = yield* append(threadId, batch("peer-proofs", [peerProof(0), peerProof(1)]), tail);
       yield* ensure(
-        (yield* native.countPeerMessages({ threadId, limit: 1 })) === 1 &&
-          (yield* native.countPeerMessages({ threadId, limit: 1000 })) === 2,
+        (yield* store.countPeerMessages!({ threadId, limit: 1 })) === 1 &&
+          (yield* store.countPeerMessages!({ threadId, limit: 1000 })) === 2,
         "Peer count saturates at the requested capacity without returning payloads",
       );
 
-      const accounting = yield* native.readWorkerState({
+      yield* expectFailure(
+        "Worker accounting cannot return a partial authorization snapshot",
+        readWorkerState({ threadId, sourceSubmissionId: CONFORMANCE_SUBMISSION, limit: 3 }),
+      );
+
+      const accounting = yield* readWorkerState({
         threadId,
         sourceSubmissionId: CONFORMANCE_SUBMISSION,
-        limit: 304,
+        limit: 4,
       });
 
       yield* ensure(
-        accounting.records.length === 304 &&
+        accounting.records.length === 4 &&
           accounting.records
             .filter(({ record }) => record.payload._tag === "SubtreeBudgetReserved")
             .map(({ record }) => record.recordId)
@@ -1121,7 +1140,7 @@ const nativeWorkerRepairPages = conformanceCase(
 export const threadStoreConformanceCases: ReadonlyArray<ThreadStoreConformanceCase> = [
   nativeOutstandingReads,
   nativeAmbiguousOwnership,
-  nativeWorkerRepairPages,
+  nativeWorkerAccounting,
   atomicBatchVisibility,
   idempotentReplay,
   tailConflict,

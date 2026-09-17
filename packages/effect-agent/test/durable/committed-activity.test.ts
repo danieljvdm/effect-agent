@@ -150,6 +150,8 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
         }),
       ),
     read: (request) => {
+      if ("selection" in request)
+        return Stream.die("History fixture does not implement selected reads");
       state.pages.push(request.limit);
 
       return Stream.fromIterable(

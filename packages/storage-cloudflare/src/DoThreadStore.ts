@@ -21,7 +21,7 @@ import {
   Digest,
   ObservationOffset,
 } from "effect-agent/records";
-import { makeNativeReads } from "effect-agent/sql-thread-native-reads";
+import { makeSelectedReads } from "effect-agent/sql-thread-native-reads";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 import {
   AppendConflict,
@@ -33,7 +33,7 @@ import {
   ThreadMaterialization,
   ThreadNotMaterialized,
   ThreadObservation,
-  ThreadRead,
+  ThreadReadRequest,
   ThreadStore,
   type ThreadCheckpoints,
   ThreadStoreError,
@@ -633,11 +633,12 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
     };
   });
 
-  const readEffect = Effect.fn("DoThreadStore.read")(function* (request: ThreadRead) {
-    const validated = yield* Schema.decodeEffect(Schema.toType(ThreadRead))(request).pipe(
+  const readEffect = Effect.fn("DoThreadStore.read")(function* (request: ThreadReadRequest) {
+    const validated = yield* Schema.decodeEffect(Schema.toType(ThreadReadRequest))(request).pipe(
       Effect.mapError((error) => schemaStoreError("validate thread read", error)),
     );
 
+    if ("selection" in validated) return Stream.fromIterable(yield* selectedReads.read(validated));
     yield* requireThread(journal, validated.threadId);
 
     const result = yield* loadRecords(
@@ -930,10 +931,10 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
     return Option.some(checkpoint);
   });
 
-  const nativeReads = yield* makeNativeReads(decodeEnvelope);
+  const selectedReads = yield* makeSelectedReads(decodeEnvelope);
 
   const threadStore = ThreadStore.of({
-    nativeReads,
+    countPeerMessages: selectedReads.countPeerMessages,
     append,
     export: exportThread,
     inspectTail,
