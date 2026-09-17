@@ -174,7 +174,7 @@ export const makeNativeReads = Effect.fnUntraced(function* (
 
   const getRecord: ThreadNativeReads["getRecord"] = Effect.fn("ThreadStore.getRecord")(
     function* (request) {
-      yield* Schema.decodeUnknownEffect(ThreadRecordRequest)(request);
+      yield* Schema.decodeEffect(ThreadRecordRequest)(request);
       yield* requireThread(request.threadId);
 
       return yield* one(
@@ -190,7 +190,7 @@ export const makeNativeReads = Effect.fnUntraced(function* (
 
   const getRunInput: ThreadNativeReads["getRunInput"] = Effect.fn("ThreadStore.getRunInput")(
     function* (request) {
-      yield* Schema.decodeUnknownEffect(ThreadRunInputRequest)(request);
+      yield* Schema.decodeEffect(ThreadRunInputRequest)(request);
       yield* requireThread(request.threadId);
 
       return yield* one(
@@ -208,7 +208,7 @@ export const makeNativeReads = Effect.fnUntraced(function* (
     "ThreadStore.readOutstanding",
   )(
     function* (request) {
-      yield* Schema.decodeUnknownEffect(ThreadOutstandingRequest)(request);
+      yield* Schema.decodeEffect(ThreadOutstandingRequest)(request);
 
       return yield* sql.withTransaction(
         Effect.gen(function* () {
@@ -279,7 +279,7 @@ export const makeNativeReads = Effect.fnUntraced(function* (
     "ThreadStore.readWorkerInputsPage",
   )(
     function* (request) {
-      yield* Schema.decodeUnknownEffect(ThreadWorkerInputsPageRequest)(request);
+      yield* Schema.decodeEffect(ThreadWorkerInputsPageRequest)(request);
       yield* requireThread(request.threadId);
 
       const rows = yield* decodeRows(
@@ -312,7 +312,7 @@ export const makeNativeReads = Effect.fnUntraced(function* (
     "ThreadStore.readWorkerState",
   )(
     function* (request) {
-      yield* Schema.decodeUnknownEffect(ThreadWorkerStateRequest)(request);
+      yield* Schema.decodeEffect(ThreadWorkerStateRequest)(request);
 
       return yield* sql.withTransaction(
         Effect.gen(function* () {
@@ -359,7 +359,7 @@ export const makeNativeReads = Effect.fnUntraced(function* (
     "ThreadStore.countPeerMessages",
   )(
     function* (request) {
-      yield* Schema.decodeUnknownEffect(ThreadPeerCountRequest)(request);
+      yield* Schema.decodeEffect(ThreadPeerCountRequest)(request);
       yield* requireThread(request.threadId);
 
       const rows =
