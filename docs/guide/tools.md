@@ -61,8 +61,9 @@ invalid input or questions fail with `AiError` before provider I/O. Application 
 answers to choose the next state. Dependent questions require a subsequent evaluation.
 
 The provider-neutral names are `choice`, `score`, and `probability`. TypeSafe's `noul` stays at the
-HTTP boundary. Choice probabilities sum to one; probability questions independently estimate
-whether each proposition holds. Score answers retain a fractional, zero-indexed position along
+HTTP boundary. Choice probabilities describe one distribution, subject to the provider's rounding
+rule; probability questions independently estimate whether each proposition holds. Score answers
+retain a fractional, zero-indexed position along
 the supplied levels and their full distribution. The example's thresholds are application policy.
 
 Jev's separate confidence statistic is retained under `result.providerMetadata.typesafe.confidence`,
@@ -70,6 +71,10 @@ keyed by question ID. Decode the namespace with `TypeSafeDecisionModel.ProviderM
 using it. Other providers need only supply the shared answer contract. The set selects no provider
 and applies no routing policy. This example changes application state only; it does not execute
 or authorize an agent Tool call.
+
+The Jev adapter preserves two-decimal Choice probabilities totaling `0.99` or `1.01` within
+bounded rounding limits. It keeps the original values and shares that validation rule with the
+HTTP client. Other providers default to strict distribution sums; Score checks remain strict.
 
 ## Discover tools progressively {#progressive-discovery}
 

@@ -1,6 +1,7 @@
 import { DecisionModel, type DecisionSchema } from "@effect-agent/ai-decision";
 import { Effect, Layer, Schema } from "effect";
 
+import { choiceProbabilitySum } from "./internal/schema.ts";
 import { TypeSafeClient } from "./TypeSafeClient.ts";
 import * as TypeSafeSchema from "./TypeSafeSchema.ts";
 
@@ -29,6 +30,7 @@ export const model = (
       const client = yield* TypeSafeClient;
 
       return yield* DecisionModel.make({
+        choiceProbabilitySum,
         evaluate: Effect.fnUntraced(function* (request) {
           const questions: TypeSafeSchema.Questions = Object.fromEntries(
             Object.entries(request.questions).map(([id, question]) => [

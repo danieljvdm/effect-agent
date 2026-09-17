@@ -88,6 +88,10 @@ const invalidAnswers = [
   { ...response.answers, team: { ...response.answers.team, probabilities: { billing: 0.8 } } },
   {
     ...response.answers,
+    team: { ...response.answers.team, probabilities: { billing: 0.79, engineering: 0.2 } },
+  },
+  {
+    ...response.answers,
     team: { ...response.answers.team, probabilities: { billing: 0.8, engineering: 0.3 } },
   },
   { ...response.answers, severity: { ...response.answers.severity, score: 0.1 } },
@@ -128,6 +132,49 @@ it.effect("rejects mismatched answer identities, types, distributions and score 
 
     expect(error.reason._tag).toBe("InvalidRequestError");
     expect(called).toBe(false);
+  }),
+);
+
+it.effect("a provider sum check changes only Choice sums and preserves validation failures", () =>
+  Effect.gen(function* () {
+    const rounded = {
+      ...response.answers,
+      team: { ...response.answers.team, probabilities: { billing: 0.79, engineering: 0.2 } },
+    };
+
+    const choiceProbabilitySum = Schema.makeFilter(
+      (probabilities: Readonly<Record<string, number>>) =>
+        Math.abs(Object.values(probabilities).reduce((sum, value) => sum + value, 0) - 1) < 0.011,
+    );
+
+    const model = yield* DecisionModel.make({
+      choiceProbabilitySum,
+      evaluate: () => Effect.succeed({ ...response, answers: rounded }),
+    });
+
+    expect((yield* model.evaluate(request)).answers).toEqual(rounded);
+
+    for (const answers of [
+      { ...rounded, team: { ...rounded.team, choice: "engineering" } },
+      { ...rounded, team: { ...rounded.team, probabilities: { billing: 0.99 } } },
+      {
+        ...rounded,
+        severity: {
+          ...rounded.severity,
+          probabilities: { "0": 0.1, "1": 0.89 },
+          score: 0.89,
+        },
+      },
+    ]) {
+      const provider = yield* DecisionModel.make({
+        choiceProbabilitySum,
+        evaluate: () => Effect.succeed({ ...response, answers }),
+      });
+
+      const error = yield* provider.evaluate(request).pipe(Effect.flip);
+
+      expect(error.reason._tag).toBe("InvalidOutputError");
+    }
   }),
 );
 

@@ -127,6 +127,7 @@ export const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, ma
 /**
  * A selected option and its full distribution. Provider-specific confidence
  * statistics belong to evaluation metadata, not the shared answer contract.
+ * Probabilities retain the provider's reported precision and are not normalized.
  *
  * @category schemas
  * @since 0.1.0

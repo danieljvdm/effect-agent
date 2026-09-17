@@ -340,6 +340,28 @@ describe("TypeSafeClient", () => {
       "probabilities do not sum to one",
       withAnswer("department", { ...choice, probabilities: { billing: 0.6, technical: 0.2 } }),
     ],
+    [
+      "high-precision drift is not two-decimal rounding",
+      withAnswer("department", {
+        ...choice,
+        probabilities: { billing: 0.790001, technical: 0.2 },
+      }),
+    ],
+    [
+      "rounding does not excuse the wrong winning choice",
+      withAnswer("department", {
+        ...choice,
+        probabilities: { billing: 0.49, technical: 0.5 },
+      }),
+    ],
+    [
+      "Choice rounding does not relax Score distributions",
+      withAnswer("frustration", {
+        ...score,
+        score: 1.59,
+        probabilities: { "0": 0.05, "1": 0.29, "2": 0.65 },
+      }),
+    ],
     ["score exceeds the rubric", withAnswer("frustration", { ...score, score: 3 })],
     ["score disagrees with its distribution", withAnswer("frustration", { ...score, score: 0.6 })],
     [
@@ -752,6 +774,87 @@ describe("TypeSafeClient", () => {
     }),
   );
 });
+
+it.effect.each([
+  // Captured Jev 1.13.0 distribution, with option names replaced by fixture names.
+  ["captured 0.99 total", { a: 0.27, b: 0.67, c: 0, d: 0.03, e: 0.01, f: 0.01, g: 0 }],
+  ["rounded 1.01 total", { a: 0.33, b: 0.34, c: 0.34, d: 0, e: 0, f: 0, g: 0 }],
+] as const)("preserves %s through the client and DecisionModel", ([, probabilities]) =>
+  Effect.gen(function* () {
+    const questions = {
+      route: {
+        type: "choice",
+        instructions: "Pick a route",
+        criteria: { a: null, b: null, c: null, d: null, e: null, f: null, g: null },
+      },
+    } satisfies TypeSafeSchema.Questions;
+
+    const answer = { type: "choice", choice: "b", probabilities, confidence: 0.61 };
+
+    const ClientLive = clientLayer((request) =>
+      Effect.succeed(
+        jsonResponse(request, {
+          model: "jev-1.13.0",
+          answers: { route: answer },
+          usage: { input_tokens: 10, output_tokens: 2 },
+        }),
+      ),
+    );
+
+    const direct = yield* Effect.flatMap(TypeSafeClient.TypeSafeClient, (client) =>
+      client.evaluate({ model: "jev-latest", state: "request", questions }),
+    ).pipe(Effect.provide(ClientLive));
+
+    const shared = yield* Effect.flatMap(DecisionModel.DecisionModel, (model) =>
+      model.evaluate({ state: "request", questions }),
+    ).pipe(
+      Effect.provide(TypeSafeDecisionModel.model("jev-latest").pipe(Layer.provide(ClientLive))),
+    );
+
+    expect(direct.answers.route).toEqual(answer);
+    expect(shared.answers.route).toEqual({ type: "choice", choice: "b", probabilities });
+  }),
+);
+
+it.effect.each([
+  ["a single option cannot round to 0.99", [0.99]],
+  ["seven options cannot widen the cap to 0.02", [0.67, 0.27, 0, 0.02, 0.01, 0.01, 0]],
+  // An uncapped n * 0.005 allowance would accept an all-zero 200-option distribution.
+  [
+    "a large catalogue cannot round away all probability mass",
+    Array.from({ length: 200 }, () => 0),
+  ],
+] as const)("rejects invalid rounded distributions: %s", ([, values]) =>
+  Effect.gen(function* () {
+    const criteria = Object.fromEntries(values.map((_, i) => [String(i), null]));
+    const probabilities = Object.fromEntries(values.map((value, i) => [String(i), value]));
+
+    const error = yield* Effect.flatMap(TypeSafeClient.TypeSafeClient, (client) =>
+      client.evaluate({
+        model: "jev-latest",
+        state: "request",
+        questions: { route: { type: "choice", instructions: "Pick a route", criteria } },
+      }),
+    ).pipe(
+      Effect.provide(
+        clientLayer((request) =>
+          Effect.succeed(
+            jsonResponse(request, {
+              model: "jev-1.13.0",
+              answers: {
+                route: { type: "choice", choice: "0", probabilities, confidence: 0.5 },
+              },
+              usage: { input_tokens: 10, output_tokens: 2 },
+            }),
+          ),
+        ),
+      ),
+      Effect.flip,
+    );
+
+    expect(error.reason._tag).toBe("InvalidOutputError");
+  }),
+);
 
 it.effect("evaluates a reusable mixed decision set through the real TypeSafe HTTP boundary", () =>
   Effect.gen(function* () {

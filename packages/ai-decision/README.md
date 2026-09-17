@@ -96,8 +96,15 @@ has no cross-provider interpretation.
 `DecisionModel.make({ evaluate })` captures provider services in its construction Effect.
 The callback receives a JSON snapshot of `{ state, questions }` and returns untrusted evidence.
 The service validates exact answer IDs and types, allowed choices, complete distributions summing
-to one within `1e-6`, maximal-probability choices, and rubric-consistent weighted scores.
+to one within `1e-6` by default, maximal-probability choices, and rubric-consistent weighted scores.
 Unexpected fields fail validation. Valid numbers are preserved, never normalized.
+
+A provider adapter can supply `choiceProbabilitySum`, an Effect Schema check, to `DecisionModel.make`
+for its bounded Choice rounding rule. This trusted construction option replaces only the Choice
+sum check; exact keys, finite [0, 1] values, winning choices, and all Score checks remain enforced.
+Response metadata cannot select a different validator. The TypeSafe adapter shares its HTTP client's
+check for observed two-decimal Choice totals of `0.99` or `1.01`, bounded by `0.005` per option
+and at most one percentage point overall. Higher-precision drift retains the strict tolerance.
 
 Callbacks return `Effect<unknown, AiError, R>`. Request and response failures become native
 `AiError` reasons `InvalidRequestError` and `InvalidOutputError`, respectively, with bounded generic

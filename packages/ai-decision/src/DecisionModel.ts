@@ -1,4 +1,4 @@
-import { Context, Effect, Schema, type Scope } from "effect";
+import { Context, Effect, Schema, type SchemaAST, type Scope } from "effect";
 import { AiError } from "effect/unstable/ai";
 
 import * as DecisionSchema from "./DecisionSchema.ts";
@@ -35,6 +35,13 @@ export class DecisionModel extends Context.Service<DecisionModel, Service>()(
  * thresholds, or transitions. Usage is returned to the caller, not charged to an agent Run.
  */
 export const make = Effect.fnUntraced(function* <R>(options: {
+  /**
+   * Provider-owned rounding check replacing only the Choice probability-sum check.
+   * Defaults to a sum of 1 within 1e-6. Exact keys, ranges, winning choices, and
+   * all Score checks remain enforced. This trusted construction option never
+   * comes from response metadata and must not normalize the supplied values.
+   */
+  readonly choiceProbabilitySum?: SchemaAST.Check<Readonly<Record<string, number>>>;
   readonly evaluate: (
     request: DecisionSchema.EvaluateRequest,
   ) => Effect.Effect<unknown, AiError.AiError, R>;
@@ -77,7 +84,7 @@ export const make = Effect.fnUntraced(function* <R>(options: {
       ),
     );
 
-    const schema = responseFor(request.questions);
+    const schema = responseFor(request.questions, options.choiceProbabilitySum);
 
     const result = yield* Effect.scoped(options.evaluate(snapshot)).pipe(
       Effect.provideContext(services),

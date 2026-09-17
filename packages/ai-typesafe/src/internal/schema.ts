@@ -5,15 +5,31 @@ import * as TypeSafeSchema from "../TypeSafeSchema.ts";
 // Permit floating-point serialization error without changing provider values.
 const tolerance = 1e-6;
 
-const distribution = (keys: ReadonlyArray<string>) =>
-  Schema.Record(Schema.Literals(keys), TypeSafeSchema.Probability).check(
-    Schema.makeFilter(
-      (probabilities) =>
-        Math.abs(Object.values(probabilities).reduce((sum, value) => sum + value, 0) - 1) <=
-        tolerance,
-      { expected: "probabilities summing to 1 (within 1e-6)" },
-    ),
-  );
+const probabilitySum = Schema.makeFilter(
+  (probabilities: Readonly<Record<string, number>>) =>
+    Math.abs(Object.values(probabilities).reduce((sum, value) => sum + value, 0) - 1) <= tolerance,
+  { expected: "probabilities summing to 1 (within 1e-6)" },
+);
+
+// Jev Choice responses have been observed with two-decimal probabilities totaling 0.99.
+// Limit compatibility to one percentage point, even for very large option catalogues.
+// Score sums/weighting retain their strict checks; no Score rounding contract is assumed.
+export const choiceProbabilitySum = Schema.makeFilter(
+  (probabilities: Readonly<Record<string, number>>) => {
+    const values = Object.values(probabilities);
+    const error = Math.abs(values.reduce((sum, value) => sum + value, 0) - 1);
+
+    return (
+      error <= tolerance ||
+      (error <= Math.min(0.01, values.length * 0.005) + tolerance &&
+        values.every((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8))
+    );
+  },
+  { expected: "probabilities summing to 1 within bounded two-decimal Choice rounding" },
+);
+
+const distribution = (keys: ReadonlyArray<string>, sumCheck = probabilitySum) =>
+  Schema.Record(Schema.Literals(keys), TypeSafeSchema.Probability).check(sumCheck);
 
 const answerFor = (question: TypeSafeSchema.Question) => {
   switch (question.type) {
@@ -23,7 +39,7 @@ const answerFor = (question: TypeSafeSchema.Question) => {
       return Schema.Struct({
         ...TypeSafeSchema.ChoiceAnswer.fields,
         choice: Schema.Literals(keys),
-        probabilities: distribution(keys),
+        probabilities: distribution(keys, choiceProbabilitySum),
       }).check(
         Schema.makeFilter(
           ({ choice, probabilities }) =>

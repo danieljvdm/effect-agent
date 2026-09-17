@@ -73,9 +73,14 @@ The client builds a response schema from each request. It checks the exact answe
 IDs and kinds, permitted choices, complete probability keys, and matching score
 legends. Probabilities and confidence must be finite and in [0, 1]. A choice must
 have maximal probability; ties are valid. Scores range from zero to the last level
-and must match their probability-weighted value. Distribution sums allow `1e-6`
-rounding error, and score comparisons allow `1e-6` times the highest level index.
-Values are preserved rather than normalized. Unexpected response fields are rejected.
+and must match their probability-weighted value. Distribution sums normally allow `1e-6`
+serialization error. For Choice only, observed two-decimal probabilities can total `0.99` or
+`1.01`: the allowance is `0.005` per option, capped at one percentage point overall.
+Every probability must be representable to two decimal places to use this allowance;
+higher-precision drift is rejected. A single `0.99` option and an all-zero large catalogue
+remain invalid. Values are preserved, never normalized. Score sums retain the `1e-6` tolerance,
+and score comparisons allow `1e-6` times the highest level index.
+Unexpected response fields are rejected.
 
 Confidence summarizes a distribution; it is not a correctness guarantee. Noul has
 no separate confidence. Choose application thresholds using evaluated examples for
@@ -115,6 +120,7 @@ filtering. `apiUrl` overrides the versioned base URL for a proxy or substitute.
 `@effect-agent/ai-decision`. Provide `TypeSafeClient` when constructing the Layer.
 The adapter maps shared `probability` questions and answers to TypeSafe's `noul` wire format;
 choice and score evidence is preserved. HTTP policies remain on the client.
+The adapter supplies the same bounded Choice rounding check to the shared model validator.
 The [compiling example](examples/decision.ts) uses all three evaluations to advance a typed
 application state. Model decisions do not execute tools or authorize side effects.
 
