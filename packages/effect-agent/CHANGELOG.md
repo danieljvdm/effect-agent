@@ -1,5 +1,13 @@
 # effect-agent
 
+## 0.1.0-beta.106
+
+### Patch Changes
+
+- [#533](https://github.com/danieljvdm/effect-agent/pull/533) [`992d062`](https://github.com/danieljvdm/effect-agent/commit/992d062a095995bd8f328a01cc784b6a9a7ffc72) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Distinguish authorization check failures from policy denials and preserve original local causes with structured private diagnostics across durable settlements, Worker admissions, retained message deliveries, and programmatic Worker observation. Add reusable diagnostic codecs and bounded diagnostic context copies while keeping generated tool results and completion reports free of private causal detail.
+
+  BEHAVIOR CHANGE: Project Worker and validation errors into a safe failure schema before exposing them through custom tools with `failureMode: "return"`; their new causal fields are private diagnostics.
+
 ## 0.1.0-beta.105
 
 ## 0.1.0-beta.104

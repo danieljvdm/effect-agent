@@ -211,6 +211,7 @@
     "required-failed-settlement-diagnostic",
     "required-native-completion",
     "resolved-context-history",
+    "retain-authorization-cause",
     "retain-browser-startup-identity",
     "retain-upgraded-worker-authority",
     "retained-context-tool-contracts",

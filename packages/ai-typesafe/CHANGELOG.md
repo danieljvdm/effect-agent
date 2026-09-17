@@ -1,5 +1,12 @@
 # @effect-agent/ai-typesafe
 
+## 0.1.0-beta.106
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/ai-decision@0.1.0-beta.106
+
 ## 0.1.0-beta.105
 
 ### Patch Changes
