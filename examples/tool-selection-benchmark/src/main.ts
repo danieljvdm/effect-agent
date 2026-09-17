@@ -18,7 +18,7 @@ const command = Command.make(
     suite: Flag.Literals("suite", Suite.literals).pipe(
       Flag.withDefault("discovery"),
       Flag.withDescription(
-        "discovery: original five arms; cache: eight arms and linked chain; probe: controlled cache sequences.",
+        "discovery: original five arms; cache: ten arms and linked chain; probe: controlled cache sequences; informed: only the two availability-note arms.",
       ),
     ),
     context: Flag.Literals("context", ContextSize.literals).pipe(

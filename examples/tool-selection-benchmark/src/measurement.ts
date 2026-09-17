@@ -3,7 +3,7 @@ import { OpenAiClient, type OpenAiSchema } from "@effect/ai-openai";
 import { Cause, Clock, Context, Effect, Exit, Schema, Stream } from "effect";
 import { AiError } from "effect/unstable/ai";
 
-import { withStableTools } from "./stable-tools.ts";
+import { makeAvailabilityNotes, withStableTools } from "./stable-tools.ts";
 
 export const Arm = Schema.Literals([
   "all-50",
@@ -17,13 +17,16 @@ export const Arm = Schema.Literals([
   "probe-fixed",
   "probe-filtered",
   "probe-allowed",
+  "informed-fixed-8-jev",
+  "informed-jev-8-jev",
 ]);
 
 export type Arm = typeof Arm.Type;
 export const arms: ReadonlyArray<Arm> = Arm.literals.slice(0, 5);
-export const cacheArms: ReadonlyArray<Arm> = Arm.literals.slice(0, 8);
-export const probeArms: ReadonlyArray<Arm> = Arm.literals.slice(8);
-export const Suite = Schema.Literals(["discovery", "cache", "probe"]);
+export const informedArms: ReadonlyArray<Arm> = Arm.literals.slice(11);
+export const cacheArms: ReadonlyArray<Arm> = [...Arm.literals.slice(0, 8), ...informedArms];
+export const probeArms: ReadonlyArray<Arm> = Arm.literals.slice(8, 11);
+export const Suite = Schema.Literals(["discovery", "cache", "probe", "informed"]);
 export const ContextSize = Schema.Literals(["short", "reference"]);
 
 export const Usage = Schema.Struct({
@@ -118,6 +121,7 @@ export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(functio
   options: {
     readonly stableTools?: ReadonlyArray<typeof OpenAiSchema.Tool.Encoded>;
     readonly maxCalls?: number;
+    readonly availabilityNotes?: boolean;
   } = {},
 ) {
   const native = yield* OpenAiClient.OpenAiClient;
@@ -125,6 +129,7 @@ export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(functio
   const journal = yield* Journal;
   const calls: Array<typeof ModelCall.Type> = [];
   const decisions: Array<typeof DecisionCall.Type> = [];
+  const annotateAvailability = makeAvailabilityNotes();
 
   const saveModel = (call: typeof ModelCall.Type) =>
     journal.record("model", Schema.encodeSync(Schema.fromJsonString(ModelCall))(call));
@@ -178,9 +183,19 @@ export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(functio
       if (calls.length === 0 && original.tools?.length !== expectedInitialTools)
         return yield* refuse("Initial tool count does not match the benchmark arm");
 
-      const payload = options.stableTools
+      const stable = options.stableTools
         ? yield* withStableTools(original, options.stableTools)
         : original;
+
+      const callableTools =
+        original.tool_choice === "none"
+          ? []
+          : (original.tools?.flatMap((tool) => (tool.type === "function" ? [tool.name] : [])) ??
+            []);
+
+      const payload = options.availabilityNotes
+        ? yield* annotateAvailability(stable, callableTools)
+        : stable;
 
       const requestJson = JSON.stringify(payload);
 
@@ -203,11 +218,7 @@ export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(functio
         firstDeltaAt: null,
         tools:
           payload.tools?.flatMap((tool) => (tool.type === "function" ? [tool.name] : [])) ?? [],
-        callableTools:
-          original.tool_choice === "none"
-            ? []
-            : (original.tools?.flatMap((tool) => (tool.type === "function" ? [tool.name] : [])) ??
-              []),
+        callableTools,
         requestJson,
         toolCalls: [],
         model: null,

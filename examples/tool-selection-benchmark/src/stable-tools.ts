@@ -91,3 +91,60 @@ export const withStableTools = Effect.fnUntraced(function* (
           },
   };
 });
+
+/**
+ * Keep availability updates in an append-only transport overlay. Replacing an
+ * ephemeral note each turn would discard that part of the reusable history.
+ * This overlay is scoped to one benchmark sample, not durable thread storage.
+ */
+export const makeAvailabilityNotes = () => {
+  let previous: ReadonlyArray<typeof OpenAiSchema.InputItem.Encoded> = [];
+  let previousNames: string | undefined;
+  const notes: Array<{ readonly after: number; readonly text: string }> = [];
+
+  return Effect.fnUntraced(function* (
+    payload: Request,
+    names: ReadonlyArray<string>,
+  ): Effect.fn.Return<Request, AiError.AiError> {
+    const input = payload.input;
+
+    if (input === undefined || typeof input === "string" || input.length === 0)
+      return yield* invalid("Availability notes require a structured conversation");
+    if (
+      input.length < previous.length ||
+      previous.some((item, index) => JSON.stringify(item) !== JSON.stringify(input[index]))
+    )
+      return yield* invalid("Availability notes require append-only source messages");
+
+    const namesKey = JSON.stringify(names);
+
+    if (namesKey !== previousNames) {
+      notes.push({
+        after: input.length,
+        text:
+          `Tool availability update: the currently callable functions are ${names.length === 0 ? "none" : names.join(", ")}. ` +
+          "Other tool definitions remain visible but are currently disabled." +
+          (names.includes("discover_tools")
+            ? " Use discover_tools to enable a needed capability before calling it."
+            : ""),
+      });
+      previousNames = namesKey;
+    }
+    previous = input;
+
+    const annotated: Array<typeof OpenAiSchema.InputItem.Encoded> = [];
+
+    for (const [index, item] of input.entries()) {
+      annotated.push(item);
+      for (const note of notes) {
+        if (note.after === index + 1)
+          annotated.push({
+            role: "developer",
+            content: [{ type: "input_text", text: note.text }],
+          });
+      }
+    }
+
+    return { ...payload, input: annotated };
+  });
+};

@@ -24,10 +24,11 @@ import {
 } from "./fixture.ts";
 import {
   type Selection,
-  type Arm,
   arms,
   cacheArms,
+  informedArms,
   probeArms,
+  Arm,
   ContextSize,
   Suite,
   BenchmarkError,
@@ -54,7 +55,7 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
 ) {
   const toolCalls: Array<(typeof Sample.Type.toolCalls)[number]> = [];
   const selections: Array<typeof Selection.Type> = [];
-  const useInitialRanking = arm === "stable-jev-8-jev" || arm.startsWith("jev-8");
+  const useInitialRanking = arm.includes("jev-8");
   const useSemanticDiscovery = arm === "all-50-discovery" || arm.endsWith("-jev");
   const withDiscovery = arm !== "all-50";
   const allTools = arm === "all-50" || arm === "all-50-discovery";
@@ -66,7 +67,8 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
 
   const metered = yield* instrument(allTools ? (withDiscovery ? 51 : 50) : 9, {
     maxCalls,
-    ...(arm.startsWith("stable-")
+    availabilityNotes: arm.startsWith("informed-"),
+    ...(arm.startsWith("stable-") || arm.startsWith("informed-")
       ? { stableTools: yield* encodeTools([...tools, discovery.tool]) }
       : {}),
   });
@@ -181,7 +183,7 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
 });
 
 const Report = Schema.Struct({
-  version: Schema.Literal(3),
+  version: Schema.Literal(4),
   startedAt: Schema.Finite,
   sourceCommit: Schema.String,
   dirty: Schema.Boolean,
@@ -190,6 +192,8 @@ const Report = Schema.Struct({
   repetitions: Schema.Natural,
   suite: Suite,
   context: ContextSize,
+  arms: Schema.Array(Arm),
+  tasks: Schema.Array(Schema.String),
   live: Schema.Boolean,
   model: Schema.Literal("gpt-6-astra"),
   decisionModel: Schema.String,
@@ -224,6 +228,19 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
 
   const runtime = (yield* spawner.string(ChildProcess.make("bun", ["--version"]))).trim();
   const platform = (yield* spawner.string(ChildProcess.make("uname", ["-sm"]))).trim();
+
+  const selectedArms =
+    options.suite === "probe"
+      ? probeArms
+      : options.suite === "informed"
+        ? informedArms
+        : options.suite === "cache"
+          ? cacheArms
+          : arms;
+
+  const selectedTasks =
+    options.suite === "discovery" || options.suite === "probe" ? tasks : cacheTasks;
+
   const samples: Array<typeof Sample.Type> = [];
   const startedAt = yield* Clock.currentTimeMillis;
 
@@ -232,7 +249,7 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
       .writeFileString(
         `${options.output}.tmp`,
         Schema.encodeSync(Schema.fromJsonString(Report))({
-          version: 3,
+          version: 4,
           startedAt,
           sourceCommit,
           dirty,
@@ -241,6 +258,9 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
           repetitions: options.repetitions,
           suite: options.suite,
           context: options.context,
+          arms: selectedArms,
+          tasks:
+            options.suite === "probe" ? ["cache-probe"] : selectedTasks.map((task) => task.name),
           live: options.live,
           model: "gpt-6-astra",
           decisionModel: "jev-latest",
@@ -251,11 +271,6 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
 
   yield* save();
 
-  const selectedArms =
-    options.suite === "probe" ? probeArms : options.suite === "cache" ? cacheArms : arms;
-
-  const selectedTasks = options.suite === "cache" ? cacheTasks : tasks;
-
   const count =
     selectedArms.length *
     options.repetitions *
@@ -263,7 +278,7 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
 
   if (!options.live) {
     yield* Console.log(
-      `Dry run: ${count} ${options.suite}/${options.context} samples; at most ${options.suite === "probe" ? 4 : options.suite === "cache" ? 12 : 6} OpenAI calls each. ${options.output}`,
+      `Dry run: ${count} ${options.suite}/${options.context} samples; at most ${options.suite === "probe" ? 4 : options.suite === "discovery" ? 6 : 12} OpenAI calls each. ${options.output}`,
     );
 
     return;
@@ -326,7 +341,7 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
               repetition: repetition + 1,
             }),
           );
-          yield* Console.log(`Running ${task.name} / ${arm} / ${repetition + 1}`);
+          yield* Console.log(`Running ${currentSample}`);
 
           const sample = yield* options.suite === "probe"
             ? runProbe(arm, repetition + 1, options.context, `${startedAt}/${currentSample}`)

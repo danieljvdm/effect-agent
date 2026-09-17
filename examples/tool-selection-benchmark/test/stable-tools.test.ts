@@ -7,9 +7,42 @@ import { FetchHttpClient } from "effect/unstable/http";
 
 import { tools } from "../src/fixture.ts";
 import { refuse } from "../src/measurement.ts";
-import { encodeTools, withStableTools } from "../src/stable-tools.ts";
+import { encodeTools, makeAvailabilityNotes, withStableTools } from "../src/stable-tools.ts";
 
 describe("stable catalogue experiment", () => {
+  it.effect(
+    "preserves availability notes as history grows and refuses rewritten source history",
+    () =>
+      Effect.gen(function* () {
+        const annotate = makeAvailabilityNotes();
+        const input = [{ role: "user", content: "Read the invoice." }] as const;
+        const first = yield* annotate({ input }, ["discover_tools"]);
+
+        const extended = [
+          ...input,
+          { type: "function_call", name: "discover_tools", call_id: "find", arguments: "{}" },
+          { type: "function_call_output", call_id: "find", output: "get_invoice is now available" },
+        ] as const;
+
+        const second = yield* annotate({ input: extended }, ["get_invoice", "discover_tools"]);
+        const repeated = yield* annotate({ input: extended }, ["get_invoice", "discover_tools"]);
+
+        expect(first.input).toHaveLength(2);
+        expect(second.input).toHaveLength(5);
+        expect(second.input?.slice(0, 2)).toEqual(first.input);
+        expect(repeated.input).toEqual(second.input);
+        expect(JSON.stringify(second.input)).toContain(
+          "currently callable functions are get_invoice, discover_tools",
+        );
+        expect(
+          Exit.isFailure(yield* annotate({ input }, ["discover_tools"]).pipe(Effect.exit)),
+        ).toBe(true);
+        expect(
+          Exit.isFailure(yield* makeAvailabilityNotes()({ input: [] }, []).pipe(Effect.exit)),
+        ).toBe(true);
+      }),
+  );
+
   it.effect("matches real OpenAI schema conversion and restricts the callable subset", () =>
     Effect.gen(function* () {
       const discovery = ToolDiscovery.fromDecisionModel({ minimumRelevance: 0.5 });
