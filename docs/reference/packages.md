@@ -183,40 +183,21 @@ in your host.
 
 ### `@effect-agent/ai-decision` {#decision-models}
 
-Provider-neutral choice, score, and probability evaluations. `DecisionModel` preserves literal
-answer types, validates distributions against each request, and reports separate provider usage.
-`DecisionQuery.choice`, `.score`, and `.probability` construct questions; `DecisionSet.make`
-groups them with an input Schema for `model.evaluate(set, input)`. The Schema's encoded input
-becomes shared model-visible state. `DecisionSchema` owns the shared values; provider-specific
-statistics live in optional `providerMetadata`. The package depends only on Effect and does not
-run state machines or tool handlers. Compose answers with ordinary Effect code.
+Provider-neutral questions (`DecisionQuery`), reusable assessments (`DecisionSet`), and the
+evaluation service (`DecisionModel`). `DecisionSchema` defines their shared values. The package
+depends only on Effect; application code owns routing, transitions, and side effects.
 
-The [TypeSafe state-transition example](../guide/tools#decision-transitions) shows all three question kinds.
+Start with the [decision guide](../guide/tools#decision-transitions), then use the
+[API reference](./decision-models) for options and results.
 
 ### `@effect-agent/ai-typesafe` {#typesafe-ai}
 
-Evaluate TypeSafe AI choice, score, and noul questions through an Effect HttpClient.
-The `TypeSafeClient` service validates answers against the submitted question IDs,
-kinds, and criteria, preserving selected-choice literals, probability distributions,
-and token usage. `TypeSafeSchema` exposes the wire schemas.
+The Jev adapter: `TypeSafeDecisionModel` supplies the shared decision service, while
+`TypeSafeClient` and `TypeSafeSchema` expose the native choice, score, and noul API.
+The package depends on Effect and `@effect-agent/ai-decision` and uses an Effect HttpClient.
 
-```ts twoslash
-import { TypeSafeClient } from "@effect-agent/ai-typesafe";
-import { Config, Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-
-const ClientLive = TypeSafeClient.layerConfig({
-  apiKey: Config.Redacted("TYPESAFE_API_KEY"),
-}).pipe(Layer.provide(FetchHttpClient.layer));
-```
-
-The package depends on Effect and the inward decision contract at runtime and is incubated locally for later
-upstream extraction. Use evaluations directly or through a
-[native Effect AI tool](../guide/tools#typesafe-evaluations). It supplies no
-`LanguageModel`. Retry and timeout policies remain explicit application choices.
-Direct module imports use `@effect-agent/ai-typesafe/type-safe-client`,
-`@effect-agent/ai-typesafe/type-safe-schema`, and `@effect-agent/ai-typesafe/type-safe-decision-model`.
-`TypeSafeDecisionModel.model` supplies the shared decision provider.
+See [client configuration](./decision-models#typesafe-client) or wrap an assessment in a
+[native Effect AI tool](../guide/tools#typesafe-evaluations).
 
 ### `effect-agent` {#effect-agent-umbrella}
 

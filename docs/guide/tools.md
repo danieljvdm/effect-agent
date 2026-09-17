@@ -30,51 +30,66 @@ The tool declaration owns parameter, success, and failure schemas, approval, dep
 failure mode, and preliminary results. The runtime decodes every model-generated tool call through
 that declaration.
 
-## Evaluate TypeSafe questions in a tool {#typesafe-evaluations}
-
-Use `@effect-agent/ai-typesafe` inside a native Effect AI Tool for typed classification:
-
-<<< ../../packages/ai-typesafe/examples/tool.ts{ts twoslash}
-
-Provide `TicketToolsLive` with your other tool handlers and supply a
-`TypeSafeClient.layerConfig({ apiKey: Config.Redacted("TYPESAFE_API_KEY") })` backed
-by an Effect HttpClient. The declared dependency stays visible until tool execution,
-and the default failure mode keeps `AiError` in the error channel. Jev evaluates the
-fixed questions supplied by the handler; the agent's language model selects tools.
-
-`evaluate` supports mixing choice, score, and noul questions in one request and
-retains distributions and usage. Each response is validated against the request's
-IDs, types, and criteria. Confidence summarizes the distribution and does not prove
-the answer correct. Retry and timeout policies are explicit; see the
-[package entry](../reference/packages#typesafe-ai) and the
-[TypeSafe API reference](https://docs.typesafe.ai/api).
-
 ## Compose decisions into state transitions {#decision-transitions}
 
-Define reusable questions with `DecisionQuery` and a typed input with `DecisionSet`:
+`@effect-agent/ai-decision` evaluates typed questions about application state. A `DecisionSet`
+owns the input Schema and questions. A `DecisionModel` supplies the evaluator through a provider
+Layer, such as Jev. Application code owns the next state, routing policy, and side effects.
 
-<<< ../../packages/ai-typesafe/examples/decision.ts{ts twoslash}
+```text
+input + DecisionSet → DecisionModel → typed answers → application action
+                           ↑
+                     provider Layer
+```
 
-`model.evaluate(set, input)` encodes input through the set's Schema and evaluates all questions
-against that shared state. The input's encoding services remain in the Effect requirements;
-invalid input or questions fail with `AiError` before provider I/O. Application code uses typed
-answers to choose the next state. Dependent questions require a subsequent evaluation.
+| Query         | Use it to                                                      |
+| ------------- | -------------------------------------------------------------- |
+| `choice`      | Select a named option and inspect its probability distribution |
+| `score`       | Rate input along ordered levels, allowing fractional scores    |
+| `probability` | Estimate whether a proposition is true, from 0 to 1            |
 
-The provider-neutral names are `choice`, `score`, and `probability`. TypeSafe's `noul` stays at the
-HTTP boundary. Choice probabilities describe one distribution, subject to the provider's rounding
-rule; probability questions independently estimate whether each proposition holds. Score answers
-retain a fractional, zero-indexed position along
-the supplied levels and their full distribution. The example's thresholds are application policy.
+```ts twoslash
+import { DecisionModel, DecisionQuery, DecisionSet } from "@effect-agent/ai-decision";
+import { Effect, Schema } from "effect";
 
-Jev's separate confidence statistic is retained under `result.providerMetadata.typesafe.confidence`,
-keyed by question ID. Decode the namespace with `TypeSafeDecisionModel.ProviderMetadata` when
-using it. Other providers need only supply the shared answer contract. The set selects no provider
-and applies no routing policy. This example changes application state only; it does not execute
-or authorize an agent Tool call.
+const TicketAssessment = DecisionSet.make({
+  input: Schema.Struct({ message: Schema.String }),
+  questions: {
+    department: DecisionQuery.choice({
+      instructions: "Which team should handle this ticket?",
+      options: { billing: "Payments and refunds", technical: "Bugs and outages" },
+    }),
+  },
+});
 
-The Jev adapter preserves two-decimal Choice probabilities totaling `0.99` or `1.01` within
-bounded rounding limits. It keeps the original values and shares that validation rule with the
-HTTP client. Other providers default to strict distribution sums; Score checks remain strict.
+const assess = Effect.gen(function* () {
+  const model = yield* DecisionModel.DecisionModel;
+  const { answers } = yield* model.evaluate(TicketAssessment, {
+    message: "Please refund my duplicate charge.",
+  });
+  return answers.department.choice; // "billing" | "technical"
+});
+```
+
+Provide `TypeSafeDecisionModel.model("jev-latest")` with its client Layer to run `assess`.
+The [complete decision example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-typesafe/examples/decision.ts)
+shows provider setup, all three queries, and an application state transition.
+
+The set's Schema encodes the input sent to the provider, so include only data it should receive.
+Questions in one evaluation are independent; a question that depends on another answer needs
+a subsequent evaluation. Probabilities inform application thresholds and do not grant permission
+to act. Choose retry and timeout policies explicitly. See the
+[reference](../reference/decision-models) for options, evidence, and errors.
+
+## Evaluate TypeSafe questions in a tool {#typesafe-evaluations}
+
+A native Effect AI tool can run a fixed Jev assessment inside its handler. The language model
+chooses when to call the tool; Jev answers the questions defined by the handler.
+
+The [tool example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-typesafe/examples/tool.ts)
+declares the input and result schemas, exposes `AiError` failures, and uses `Toolkit.toLayer`
+to call `TypeSafeClient`. Supply `TicketToolsLive` with your other handlers and a
+[configured client Layer](../reference/decision-models#typesafe-client) when executing the tool.
 
 ## Discover tools progressively {#progressive-discovery}
 

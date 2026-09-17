@@ -186,6 +186,7 @@ export default defineConfig({
           items: [
             { text: "Overview", link: "/reference/" },
             { text: "Package map", link: "/reference/packages" },
+            { text: "Decision models", link: "/reference/decision-models" },
             { text: "Subagent policies & recovery", link: "/reference/subagents" },
           ],
         },

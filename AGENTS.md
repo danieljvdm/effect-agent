@@ -58,6 +58,21 @@ Keep user-facing behavior in existing guides, implementation contracts beside th
 regression evidence in tests. Explain change rationale in the pull request. Do not create separate
 specifications, planning documents, decision registers, ADRs, roadmaps, or evidence logs.
 
+## Documentation
+
+Documentation is for humans learning the library. Guides must be terse and explain
+concepts succinctly: what a feature does, how it fits, and how to use it.
+
+- Lead with the mental model and ownership boundaries. Use small architecture or
+  flow diagrams and only the code snippets essential to understanding and usage.
+- Put detailed options, defaults, and API behavior in scannable reference pages.
+  Link to runnable examples for complete setup.
+- Keep implementation contracts in source, schemas, and API comments. LLMs can
+  read the code; do not turn user guides into agent context or implementation audits.
+- Keep crucial caveats beside the relevant concept; link to reference details.
+- Edit the page as a whole. Do not append feature inventories, change histories,
+  or long defensive explanations to an otherwise focused guide.
+
 ## Non-negotiable architecture rules
 
 1. Public asynchronous operations return `Effect` or `Stream`, not naked `Promise` values.

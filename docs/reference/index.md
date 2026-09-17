@@ -1,6 +1,6 @@
 ---
 title: Reference
-description: Find package boundaries, public imports, and detailed subagent configuration contracts.
+description: Look up public imports, decision model APIs, and subagent configuration.
 ---
 
 # Reference
@@ -12,6 +12,12 @@ Look up package ownership and detailed configuration after following the
 
 The [package map](./packages) covers public imports, available capabilities, dependencies,
 and the responsibilities of each framework package.
+
+## Decision models
+
+The [decision model reference](./decision-models) covers query options, typed results,
+Jev configuration, probability validation, and errors. Start with the
+[decision guide](../guide/tools#decision-transitions) to define and evaluate a set of questions.
 
 ## Subagent policies and recovery
 
