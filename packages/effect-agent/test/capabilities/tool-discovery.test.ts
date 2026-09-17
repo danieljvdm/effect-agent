@@ -507,11 +507,13 @@ const evidence = {
 };
 
 describe("decision-model discovery", () => {
-  it.effect("ranks semantic queries within the namespace and reports separate usage", () =>
+  it.effect("ranks with a custom relevance prompt and rubric within the namespace", () =>
     Effect.gen(function* () {
       let observed = 0;
 
       const definition = ToolDiscovery.fromDecisionModel({
+        prompt: "Would this tool find the billing evidence requested by the query?",
+        criteria: { true: "Finds the requested billing evidence", false: "Unrelated capability" },
         minimumRelevance: 0.8,
         maxResults: 1,
         onEvaluation: (result) =>
@@ -536,6 +538,22 @@ describe("decision-model discovery", () => {
             expect(Object.keys(request.questions)).toEqual(["candidate_0", "candidate_1"]);
             expect(JSON.stringify(request.questions)).not.toContain("search_pages");
             expect(JSON.stringify(request.questions)).not.toContain("discover_tools");
+            expect(request.questions.candidate_1).toEqual({
+              type: "probability",
+              instructions: {
+                question: "Would this tool find the billing evidence requested by the query?",
+                tool: {
+                  name: "query_records",
+                  description: "Query stored account records",
+                  namespace: "records",
+                  method: "",
+                },
+              },
+              criteria: {
+                true: "Finds the requested billing evidence",
+                false: "Unrelated capability",
+              },
+            });
 
             return {
               ...evidence,
@@ -750,6 +768,8 @@ describe("decision-model discovery", () => {
 });
 
 const semanticTyped = ToolDiscovery.fromDecisionModel({
+  prompt: { task: "Find the tools required by the discovery query." },
+  criteria: { true: "Required", false: "Unrelated" },
   minimumRelevance: 0.5,
   failure: SearchError,
   onEvaluation: () =>

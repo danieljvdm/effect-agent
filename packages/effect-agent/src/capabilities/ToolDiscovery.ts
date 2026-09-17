@@ -322,6 +322,10 @@ export interface DecisionOptions<
   Failure extends Schema.Top = typeof Schema.Never,
   Requirements = never,
 > extends Omit<Options<Failure, Requirements>, "search"> {
+  /** Override the default relevance question. Each candidate's metadata is supplied alongside it. */
+  readonly prompt?: DecisionSchema.Content | undefined;
+  /** Optional descriptions of relevant (true) and irrelevant (false), forwarded to each probability query. */
+  readonly criteria?: DecisionSchema.ProbabilityQuestion["criteria"] | undefined;
   /** Application-chosen independent relevance cutoff in [0, 1]. No matches return an empty selection. */
   readonly minimumRelevance: number;
   /** Reject larger eligible catalogues before evaluating; default 128, maximum 1024. */
@@ -344,8 +348,9 @@ const DecisionBounds = Schema.Struct({
 
 /**
  * Build discover_tools with DecisionModel relevance ranking instead of literal keyword matching.
- * Only the bounded discovery query, optional namespace, and eligible metadata reach the provider;
- * no prompt or Thread history is projected. The discovery Tool excludes itself from evaluation.
+ * The configured prompt and criteria accompany the bounded discovery query, optional namespace,
+ * and eligible metadata; no conversation prompt or Thread history is implicitly projected.
+ * The discovery Tool excludes itself from evaluation.
  * One batch asks an independent probability question per candidate, with stable ID tie-breaking.
  * Empty catalogues skip I/O. Result/schema budgets, pins and activation use make's normal contract.
  *
@@ -406,6 +411,8 @@ export const fromDecisionModel = <
         return yield* invalid("Tool discovery catalogue exceeds its byte bound");
 
       const result = yield* rankToolRelevance({
+        prompt: options.prompt,
+        criteria: options.criteria,
         state: {
           query: request.query,
           ...(request.namespace === undefined ? {} : { namespace: request.namespace }),
