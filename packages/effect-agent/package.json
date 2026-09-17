@@ -84,6 +84,7 @@
     "./semantic-memory": "./src/capabilities/SemanticMemory.ts",
     "./semantic-memory-index": "./src/core/SemanticMemoryIndex.ts",
     "./semantic-memory-revalidation": "./src/core/SemanticMemoryRevalidation.ts",
+    "./sql-thread-native-reads": "./src/durable/SqlThreadNativeReads.ts",
     "./sql-memory-store": "./src/durable/SqlMemoryStore.ts",
     "./sql-message-delivery-store": "./src/durable/SqlMessageDeliveryStore.ts",
     "./sql-storage-v2-upgrade": "./src/durable/SqlStorageV2Upgrade.ts",

@@ -3,7 +3,7 @@ import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Context, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Context, DateTime, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { DurableWorkerBinding } from "effect-agent/agent-registration";
@@ -31,6 +31,11 @@ import {
 import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
 import { IdempotencyKey, Principal } from "effect-agent/receipt";
 import {
+  CanonicalBatch,
+  RecordEnvelope,
+  UserInputRecorded,
+  RecordId,
+  BatchId,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -41,7 +46,12 @@ import { RunToolAuthorization } from "effect-agent/run-options";
 import { ScheduledInputRefused, ScheduledInputRetryable } from "effect-agent/schedule";
 import { SubmissionLedger, SubmissionLookupByKey } from "effect-agent/submission-ledger";
 import { PreparedInput } from "effect-agent/subscription";
-import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
+import {
+  FencedAppendRequest,
+  ThreadTailRequest,
+  ThreadExportRequest,
+  ThreadStore,
+} from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
@@ -102,6 +112,8 @@ const makeHarness = Effect.fn(function* (
 ) {
   const controls = {
     fault: undefined as string | undefined,
+    exported: 0,
+    readRecords: 0,
     route: destinationThread,
     routeCalls: 0,
     denied: (_request: PeerAuthorizationRequest): boolean => false,
@@ -120,7 +132,7 @@ const makeHarness = Effect.fn(function* (
       ),
   });
 
-  const shared = yield* Layer.build(
+  const originalShared = yield* Layer.build(
     Layer.mergeAll(
       MemorySubmissionLedgerLive,
       MemoryThreadStoreLive,
@@ -166,6 +178,28 @@ const makeHarness = Effect.fn(function* (
       }),
     ).pipe(Layer.provideMerge(faults), Layer.provideMerge(NodeCrypto.layer)),
   );
+
+  const originalStore = Context.get(originalShared, ThreadStore);
+
+  const shared = Context.add(originalShared, ThreadStore, {
+    ...originalStore,
+    export: (request) =>
+      originalStore.export(request).pipe(
+        Effect.tap((log) =>
+          Effect.sync(() => {
+            controls.exported += log.records.length;
+          }),
+        ),
+      ),
+    read: (request) =>
+      originalStore.read(request).pipe(
+        Stream.tap(() =>
+          Effect.sync(() => {
+            controls.readRecords++;
+          }),
+        ),
+      ),
+  });
 
   const bindings = yield* Effect.forEach([source, destination], (definition) => {
     const model = Model.make(
@@ -310,6 +344,7 @@ const makeHarness = Effect.fn(function* (
 
   return {
     controls,
+    store,
     runtime,
     makeRuntime,
     makeDriver,
@@ -330,6 +365,73 @@ const makeHarness = Effect.fn(function* (
 });
 
 describe("durable peer messaging boundaries", () => {
+  it.effect(
+    "peer send, replay, reply and ingress use exact proof despite large unrelated history",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const inbound = yield* h.send("applied-original");
+
+        yield* h.driver.process(inbound.message);
+        yield* h.runtime.processThreadResolved(destinationThread);
+        for (const threadId of [sourceThread, destinationThread]) {
+          let tail = yield* h.store.inspectTail(ThreadTailRequest.make({ threadId }));
+
+          for (let base = 0; base < 4097; base += 256) {
+            const record = (n: number) =>
+              RecordEnvelope.make({
+                recordId: Schema.decodeSync(RecordId)(`history-${n}`),
+                family: "thread",
+                schemaVersion: 1,
+                createdAt: DateTime.makeUnsafe(1),
+                deploymentId: Schema.decodeSync(DeploymentId)("test"),
+                payload: UserInputRecorded.make({ kind: "steering", input: `old-${n}` }),
+              });
+
+            const result = yield* h.store.append(
+              FencedAppendRequest.make({
+                threadId,
+                producerEpoch: tail.producerEpoch,
+                expectedTailSequence: tail.tailSequence,
+                expectedTailDigest: tail.tailDigest,
+                batch: CanonicalBatch.make({
+                  batchId: Schema.decodeSync(BatchId)(`history-${base}`),
+                  producerId: Schema.decodeSync(ProducerId)("test"),
+                  records: [
+                    record(base),
+                    ...Array.from({ length: Math.min(255, 4096 - base) }, (_, offset) =>
+                      record(base + offset + 1),
+                    ),
+                  ],
+                }),
+              }),
+            );
+
+            tail = { ...tail, tailSequence: result.lastSequence, tailDigest: result.tailDigest };
+          }
+        }
+        h.controls.exported = 0;
+        h.controls.readRecords = 0;
+        const sent = yield* h.send("after-history");
+
+        expect((yield* h.send("after-history")).message).toEqual(sent.message);
+        expect((yield* h.submitEnvelope((yield* h.row(inbound.message)).envelope)).threadId).toBe(
+          destinationThread,
+        );
+
+        const reply = yield* h.receiver.reply({
+          ...back,
+          encodedInput: { text: "reply" },
+          idempotencyKey: key("bounded-reply"),
+          inReplyTo: inbound.message,
+        });
+
+        expect((yield* h.row(reply.message)).envelope.threadId).toBe(sourceThread);
+        expect(h.controls.exported).toBe(0);
+        expect(h.controls.readRecords).toBeLessThan(32);
+      }).pipe(Effect.scoped),
+  );
+
   it.effect(
     "delivers from a settled source to a settled receiver across runtime reconstruction",
     () =>

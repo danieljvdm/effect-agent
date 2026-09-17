@@ -193,7 +193,14 @@ const isMutatingPortRequest = (request: PortRequest): boolean => {
     case "LedgerResolveAdmission":
     case "StoreReadPage":
     case "StoreInspectTail":
+    case "StoreGetRecord":
+    case "StoreGetRunInput":
+    case "StoreReadOutstanding":
+    case "StoreReadWorkerInputsPage":
+    case "StoreReadWorkerState":
+    case "StoreCountPeerMessages":
     case "StoreExport":
+    case "MessageDeliveryReadPending":
       return false;
   }
   request satisfies never;
@@ -350,6 +357,8 @@ const requireReceiptThread = Effect.fn("ThreadObject.requireReceiptThread")(func
 
 const requirePortThread = (request: PortRequest) => {
   switch (request._tag) {
+    case "MessageDeliveryReadPending":
+      return requireReceiptThread(request.request.ownerThreadId);
     case "LedgerLookup":
       return request.request._tag === "SubmissionLookupById"
         ? lookupAddressedSubmission(request.request.submissionId).pipe(Effect.asVoid)
@@ -365,6 +374,12 @@ const requirePortThread = (request: PortRequest) => {
     case "StoreAppend":
     case "StoreReadPage":
     case "StoreInspectTail":
+    case "StoreGetRecord":
+    case "StoreGetRunInput":
+    case "StoreReadOutstanding":
+    case "StoreReadWorkerInputsPage":
+    case "StoreReadWorkerState":
+    case "StoreCountPeerMessages":
     case "StoreExport":
       return requireReceiptThread(request.request.threadId);
   }

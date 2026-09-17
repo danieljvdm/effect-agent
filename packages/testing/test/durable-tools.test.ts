@@ -4,6 +4,7 @@ import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
+  DateTime,
   Context,
   Deferred,
   Duration,
@@ -31,9 +32,14 @@ import {
   type DurableRuntimeFailpointLocation,
 } from "effect-agent/durable-failpoint";
 import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
-import { ThreadId, SubmissionId, ToolCallId } from "effect-agent/identifiers";
+import { ThreadId, SubmissionId, ToolCallId, RunId } from "effect-agent/identifiers";
 import {
   CanonicalBatch,
+  RecordEnvelope,
+  RecordId,
+  BatchId,
+  ToolCallPrepared,
+  UserInputRecorded,
   type CanonicalRecordEnvelope,
   DefinitionDigestInput,
   DefinitionDigests,
@@ -61,6 +67,7 @@ import {
 } from "effect-agent/run-options";
 import {
   AbortCommand,
+  MarkReadyRequest,
   IdempotencyKey,
   Principal,
   ResolutionAbortSubmission,
@@ -74,6 +81,7 @@ import {
 } from "effect-agent/submission-ledger";
 import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
 import {
+  readOutstanding,
   FencedAppendRequest,
   ThreadRead,
   ThreadStore,
@@ -2367,6 +2375,106 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       }),
   );
 
+  it.effect("bounded reads reject a canonical Run pointing at another admitted Run", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const store = yield* ThreadStore;
+      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"unused"}'));
+      const agent = Agent.withModel(bookDefinition, scripted.model);
+
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: "original" },
+        submitOptions("native-mismatch", "original"),
+      );
+
+      const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId: receipt.threadId }));
+      const runId = Schema.decodeSync(RunId)("run:another-admission");
+
+      const envelope = (id: string, payload: RecordEnvelope["payload"]) =>
+        RecordEnvelope.make({
+          recordId: Schema.decodeSync(RecordId)(id),
+          family: "thread",
+          schemaVersion: 1,
+          createdAt: DateTime.makeUnsafe(1),
+          deploymentId: Schema.decodeSync(DeploymentId)("test"),
+          payload,
+        });
+
+      yield* store.append(
+        FencedAppendRequest.make({
+          threadId: receipt.threadId,
+          producerEpoch: tail.producerEpoch,
+          expectedTailSequence: tail.tailSequence,
+          expectedTailDigest: tail.tailDigest,
+          batch: CanonicalBatch.make({
+            batchId: Schema.decodeSync(BatchId)("malformed"),
+            producerId: Schema.decodeSync(ProducerId)("test"),
+            records: [
+              envelope(
+                "input",
+                UserInputRecorded.make({
+                  kind: "user",
+                  runId,
+                  submissionId: receipt.submissionId,
+                  input: { question: "wrong" },
+                }),
+              ),
+              envelope(
+                "prepared",
+                ToolCallPrepared.make({
+                  runId,
+                  turnId: Schema.decodeSync(ToolCallPrepared.fields.turnId)("turn"),
+                  turn: 1,
+                  toolCallId: decodeToolCallId("call"),
+                  toolName: "book",
+                  parameters: {},
+                  parametersDigest: SHA_A,
+                }),
+              ),
+            ],
+          }),
+        }),
+      );
+      expect(
+        failureTag(yield* Effect.exit(readOutstanding({ threadId: receipt.threadId, limit: 1 }))),
+      ).toBe("ThreadStoreError");
+    }),
+  );
+
+  it.effect("single-submission recovery defers a ready admission before materialization", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const ledger = yield* SubmissionLedger;
+      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"unused"}'));
+      const agent = Agent.withModel(bookDefinition, scripted.model);
+
+      yield* armFailpoint("submit:after-admit");
+      expect(
+        failureTag(
+          yield* Effect.exit(
+            runtime.submit(
+              agent,
+              { question: "wait" },
+              submitOptions("native-ready-unmaterialized", "first"),
+            ),
+          ),
+        ),
+      ).toBe("DurableRuntimeFailpointError");
+      yield* clearFailpoint;
+
+      const admitted = (yield* Stream.runCollect(ledger.scanNonterminal)).find(
+        (row) => row.threadId === "native-ready-unmaterialized",
+      )!;
+
+      yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+      expect(yield* runtime.recoverSubmission(admitted.submissionId)).toMatchObject({
+        decision: { _tag: "ApplyInput" },
+        disposition: "deferred",
+      });
+    }),
+  );
+
   it.effect("a canonical settlement beats open tool calls: abort records the uncertainty", () =>
     Effect.gen(function* () {
       yield* resetReconciler;
@@ -2441,6 +2549,44 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       const after = yield* runtime.runRecovery;
 
       expect(after.find((entry) => entry.submissionId === receipt.submissionId)).toBeUndefined();
+      expect(
+        (yield* readOutstanding({ threadId: receipt.threadId, limit: 1 })).operations.map(
+          (operation) => operation.state,
+        ),
+      ).toEqual(["unknown"]);
+
+      const command = UnknownResolutionCommand.make({
+        submissionId: receipt.submissionId,
+        toolCallId: decodeToolCallId("book-1"),
+        author: "supplier",
+        reason: "confirmed receipt",
+        resolution: ResolutionCompletedWithResult.make({
+          result: { confirmation: "supplier-original" },
+          isFailure: false,
+        }),
+      });
+
+      yield* armFailpoint("resolve:before-terminal-append");
+      expect(failureTag(yield* Effect.exit(runtime.resolveUnknown(command)))).toBe(
+        "DurableRuntimeFailpointError",
+      );
+      yield* clearFailpoint;
+      expect(
+        (yield* readOutstanding({ threadId: receipt.threadId, limit: 1 })).operations,
+      ).toHaveLength(1);
+      yield* armFailpoint("resolve:after-terminal-append");
+      expect(failureTag(yield* Effect.exit(runtime.resolveUnknown(command)))).toBe(
+        "DurableRuntimeFailpointError",
+      );
+      yield* clearFailpoint;
+      const resolved = yield* runtime.resolveUnknown(command);
+
+      expect(yield* runtime.resolveUnknown(command)).toEqual(resolved);
+      expect((yield* readOutstanding({ threadId: receipt.threadId, limit: 1 })).operations).toEqual(
+        [],
+      );
+      expect(yield* runtime.awaitSettlement(receipt)).toEqual(settlement);
+      expect(yield* desk.count("r-abort")).toBe(0);
     }),
   );
 
@@ -2499,6 +2645,20 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(records.map((envelope) => envelope.record.recordId)).not.toContain(
         `tool-settled:${runId}:1:book-1`,
       );
+      yield* runtime.resolveUnknown(
+        UnknownResolutionCommand.make({
+          submissionId: receipt.submissionId,
+          toolCallId: decodeToolCallId("book-1"),
+          author: "supplier",
+          reason: "external request never happened",
+          resolution: ResolutionNeverHappened.make(),
+        }),
+      );
+      expect((yield* readOutstanding({ threadId: receipt.threadId, limit: 1 })).operations).toEqual(
+        [],
+      );
+      expect((yield* runtime.awaitSettlement(receipt)).outcome).toBe("aborted");
+      expect(yield* desk.count("r-resabort")).toBe(0);
     }),
   );
 

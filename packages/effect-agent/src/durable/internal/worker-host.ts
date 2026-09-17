@@ -70,6 +70,13 @@ import {
   PersistedJson,
 } from "../Records.ts";
 import {
+  workerInputRecordId,
+  firstWorkerInputRecordId,
+  subagentLineageRecordId,
+  workerOriginRecordId,
+  workerReportRecordId,
+} from "../RunJournal.ts";
+import {
   type ScheduledInputFailure,
   ScheduledInputRefused,
   ScheduledInputRetryable,
@@ -91,6 +98,8 @@ import {
   ThreadStore,
   FencedAppendRequest,
   ThreadExportRequest,
+  type ThreadExport,
+  MAX_THREAD_EXPORT_RECORDS,
   ThreadRead,
   ThreadTailRequest,
 } from "../ThreadStore.ts";
@@ -281,6 +290,52 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       .export(ThreadExportRequest.make({ threadId }))
       .pipe(Effect.mapError(storageFailure(operation)));
 
+  const exactRecord = Effect.fn("WorkerHost.exactRecord")(function* (
+    threadId: ThreadId,
+    recordId: RecordId,
+    operation: WorkerError["operation"],
+  ) {
+    if (deps.store.nativeReads === undefined) return yield* failure(operation, "unavailable");
+
+    return yield* deps.store.nativeReads
+      .getRecord({ threadId, recordId })
+      .pipe(Effect.mapError(storageFailure(operation)));
+  });
+
+  const readIdentity = Effect.fn("WorkerHost.readIdentity")(function* (
+    threadId: ThreadId,
+    operation: WorkerError["operation"],
+  ) {
+    const tail = yield* deps.store
+      .inspectTail(ThreadTailRequest.make({ threadId }))
+      .pipe(Effect.mapError(storageFailure(operation)));
+
+    const first = yield* deps.store
+      .read(ThreadRead.make({ threadId, limit: 1 }))
+      .pipe(Stream.runCollect, Effect.mapError(storageFailure(operation)));
+
+    const worker = yield* exactRecord(threadId, workerOriginRecordId(threadId), operation);
+    const attached = yield* exactRecord(threadId, subagentLineageRecordId(threadId), operation);
+
+    return { ...tail, records: [...first, ...Option.toArray(worker), ...Option.toArray(attached)] };
+  });
+
+  const readWorkerState = Effect.fn("WorkerHost.readWorkerState")(function* (
+    threadId: ThreadId,
+    operation: WorkerError["operation"],
+    sourceSubmissionId?: SubmissionId,
+  ) {
+    if (deps.store.nativeReads === undefined) return yield* failure(operation, "unavailable");
+
+    return yield* deps.store.nativeReads
+      .readWorkerState({
+        threadId,
+        limit: MAX_THREAD_EXPORT_RECORDS,
+        ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
+      })
+      .pipe(Effect.mapError(storageFailure(operation)));
+  });
+
   const hit = (location: DurableRuntimeFailpointLocation, operation: WorkerError["operation"]) =>
     deps.failpoint.hit(location).pipe(Effect.mapError(storageFailure(operation)));
 
@@ -295,7 +350,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         | WorkerReportPrepared
         | WorkerReportRefused
         | SubtreeBudgetReserved,
-      current: Effect.Success<ReturnType<typeof read>>,
+      current: Pick<ThreadExport, "tailSequence" | "tailDigest" | "records">,
       phase: "source" | "origin" | "completion" | "subtree" | "report",
     ) {
       const operation = "start";
@@ -389,11 +444,16 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
   const sourceAuthority = Effect.fn("WorkerHost.sourceAuthority")(function* (
     threadId: ThreadId,
     submissionId?: SubmissionId,
+    reservations = false,
   ) {
-    const current = yield* read(threadId, "start");
+    const current = yield* reservations
+      ? readWorkerState(threadId, "start", submissionId)
+      : readIdentity(threadId, "start");
+
     const created = current.records[0]?.record.payload;
 
-    if (created?._tag !== "ThreadCreated") return yield* failure("start", "not-found");
+    if (created?._tag !== "ThreadCreated" || current.records[0]?.sequence !== 1)
+      return yield* failure("start", "not-found");
 
     const binding = currentBinding(created.agentId);
 
@@ -539,7 +599,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     const recordId = `subtree:${payload.reservationId}`;
 
     for (let attempt = 0; attempt < 16; attempt++) {
-      const source = yield* sourceAuthority(sourceThreadId, payload.sourceSubmissionId);
+      const source = yield* sourceAuthority(sourceThreadId, payload.sourceSubmissionId, true);
 
       const previous = source.current.records.find(({ record }) => record.recordId === recordId)
         ?.record.payload;
@@ -720,10 +780,15 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     retainedFrameworkInput: boolean,
   ): Effect.fn.Return<void, WorkerError> {
     const origin = admission.origin;
-    const id = `worker-input:${admission.messageId}`;
+    const id = workerInputRecordId(admission.messageId);
 
     for (let attempt = 0; attempt < 16; attempt++) {
-      const source = yield* sourceAuthority(origin.source.threadId, admission.sourceSubmissionId);
+      const source = yield* sourceAuthority(
+        origin.source.threadId,
+        admission.sourceSubmissionId,
+        true,
+      );
+
       const current = source.current;
       const rows = requests(current.records);
       const existing = current.records.find(({ record }) => record.recordId === id)?.record.payload;
@@ -953,7 +1018,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
   const ensureOrigin = Effect.fn("WorkerHost.ensureOrigin")(function* (origin: WorkerOrigin) {
     for (let attempt = 0; attempt < 16; attempt++) {
-      const current = yield* read(origin.worker.threadId, "start");
+      const current = yield* readIdentity(origin.worker.threadId, "start");
 
       const existing = current.records.find(
         ({ record }) => record.payload._tag === "WorkerOriginRecorded",
@@ -976,7 +1041,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (
         yield* append(
           origin.worker.threadId,
-          `worker-origin:${origin.worker.threadId}`,
+          workerOriginRecordId(origin.worker.threadId),
           WorkerOriginRecorded.make({ origin }),
           current,
           "origin",
@@ -1205,7 +1270,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       Effect.mapError(storageFailure("inspect")),
     );
 
-    const recordId = `worker-report:${messageId}`;
+    const recordId = workerReportRecordId(messageId);
 
     const prepare = Effect.fn("WorkerHost.prepareReport")(function* (): Effect.fn.Return<
       WorkerReportPrepared | WorkerReportRefused,
@@ -1556,7 +1621,23 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     )
       return yield* failure("inspect", "corrupt");
 
+    const unresolved = new Set<string>();
+
+    for (const { record } of child.records) {
+      const value = record.payload;
+
+      if (
+        (value._tag === "ToolCallPrepared" || value._tag === "ToolCallUnknown") &&
+        value.runId === settled.runId
+      )
+        unresolved.add(value.toolCallId);
+      if (value._tag === "ToolCallSettled" && value.runId === settled.runId)
+        unresolved.delete(value.toolCallId);
+    }
+    if (unresolved.size > 0) return;
+
     const payload = WorkerInputCompleted.make({
+      effectsResolved: true,
       messageId: admission.messageId,
       workerThreadId: submission.threadId,
       submissionId: submission.submissionId,
@@ -1568,7 +1649,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     for (let attempt = 0; attempt < 16; attempt++) {
       const source = yield* read(admission.origin.source.threadId, "inspect");
 
-      const existing = source.records.find(
+      const existing = source.records.findLast(
         ({ record }) =>
           record.payload._tag === "WorkerInputCompleted" &&
           record.payload.messageId === admission.messageId,
@@ -1577,16 +1658,19 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (existing !== undefined) {
         if (
           existing._tag !== "WorkerInputCompleted" ||
-          !Schema.toEquivalence(WorkerInputCompleted)(existing, payload)
+          !Schema.toEquivalence(WorkerInputCompleted)(
+            { ...existing, effectsResolved: true },
+            payload,
+          )
         )
           return yield* failure("inspect", "corrupt");
 
-        return;
+        if (existing.effectsResolved) return;
       }
       if (
         yield* append(
           admission.origin.source.threadId,
-          `worker-completed:${admission.messageId}`,
+          `worker-effects-resolved:${admission.messageId}`,
           payload,
           source,
           "completion",
@@ -1596,6 +1680,46 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     }
 
     return yield* failure("inspect", "storage");
+  });
+
+  const repairInputs = Effect.fn("WorkerHost.repairInputs")(function* (threadId: ThreadId) {
+    if (deps.store.nativeReads === undefined || Option.isNone(deps.deliveries)) return;
+
+    let afterSequence: CanonicalSequence | undefined;
+
+    do {
+      const pending = yield* deps.store.nativeReads
+        .readWorkerInputsPage({
+          threadId,
+          limit: 100,
+          ...(afterSequence === undefined ? {} : { afterSequence }),
+        })
+        .pipe(Effect.mapError(storageFailure("inspect")));
+
+      for (const { admission } of pending.inputs) {
+        const delivery = yield* deps.deliveries.value
+          .get({ ownerThreadId: threadId, messageId: admission.messageId })
+          .pipe(Effect.mapError(storageFailure("inspect")));
+
+        const principal = admission.deliveryPrincipal ?? delivery?.envelope.deliveryPrincipal;
+
+        if (principal === undefined) return yield* failure("inspect", "unavailable");
+
+        const found = yield* deps.ledger
+          .lookup(
+            SubmissionLookupByKey.make({
+              threadId: admission.origin.worker.threadId,
+              principal,
+              idempotencyKey: admission.messageId,
+            }),
+          )
+          .pipe(Effect.mapError(storageFailure("inspect")));
+
+        if (Option.isSome(found) && found.value.state === "settled")
+          yield* completeInput(found.value);
+      }
+      afterSequence = pending.next ?? undefined;
+    } while (afterSequence !== undefined);
   });
 
   const facet = (
@@ -1660,14 +1784,20 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       yield* binding(target, operation);
 
       if (worker.targetAgentId !== target.id) return yield* failure(operation, "worker-mismatch");
-      const source = yield* read(context.source.threadId, operation);
 
-      const origin = requests(source.records).find(
-        (row) => row.admission.origin.worker.threadId === worker.threadId,
-      )?.admission.origin;
+      const first = Option.getOrUndefined(
+        yield* exactRecord(context.source.threadId, firstWorkerInputRecordId(worker), operation),
+      )?.record.payload;
+
+      const origin = first?._tag === "WorkerInputRequested" ? first.admission.origin : undefined;
 
       if (origin === undefined) return yield* failure(operation, "not-found");
-      if (origin.worker.delegationId !== worker.delegationId)
+      if (
+        !Schema.toEquivalence(WorkerRef)(origin.worker, worker) ||
+        first?._tag !== "WorkerInputRequested" ||
+        first.admission.messageId !== origin.firstMessageId ||
+        workerInputRecordId(origin.firstMessageId) !== firstWorkerInputRecordId(worker)
+      )
         return yield* failure(operation, "worker-mismatch");
 
       return origin;
@@ -2126,7 +2256,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       summary: Effect.fn("WorkerHost.inspectWorker")(function* (request) {
         yield* authorize("inspect", "read", request.worker);
         const origin = yield* findOrigin(request.worker, request.target, "inspect");
-        const source = yield* read(context.source.threadId, "inspect");
+        const source = yield* readWorkerState(context.source.threadId, "inspect");
 
         return yield* summarize(origin, requests(source.records), "inspect");
       }),
@@ -2213,7 +2343,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         yield* binding(request.target, "list");
         if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 100)
           return yield* failure("list", "capacity");
-        const source = yield* read(context.source.threadId, "list");
+        const source = yield* readWorkerState(context.source.threadId, "list");
         const all = requests(source.records);
 
         const origins = [
@@ -2367,7 +2497,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       operation: "context",
       access: "context",
     });
-    const current = yield* read(sourceThreadId, "context");
+    const current = yield* readIdentity(sourceThreadId, "context");
     const created = current.records[0]?.record.payload;
 
     if (created?._tag !== "ThreadCreated") return yield* failure("context", "not-found");
@@ -2426,6 +2556,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     validateAdmission,
     ensureOrigin,
     completeInput,
+    repairInputs,
     reserveSubtree,
   };
 });

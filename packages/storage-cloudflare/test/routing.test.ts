@@ -1,18 +1,27 @@
+import { doMessageDeliveryStoreLayer } from "@effect-agent/storage-cloudflare/do-message-delivery-store";
+import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
 import { ledgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
-import { layer as storeLayer } from "@effect-agent/storage-cloudflare/do-thread-store";
+import {
+  storageConfigLayer,
+  layer as storeLayer,
+} from "@effect-agent/storage-cloudflare/do-thread-store";
 import {
   ThreadPortTransport,
   PortTransportError,
   portTransportFailure,
   routedThreadStoreLayer,
+  routedMessageDeliveryStoreLayer,
   routedSubmissionLedgerLayer,
 } from "@effect-agent/storage-cloudflare/port-routing";
 import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import { runInDurableObject } from "cloudflare:test";
 import type { Crypto } from "effect";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { digestJson, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { type PersistedJson } from "effect-agent/records";
+import { RunId } from "effect-agent/identifiers";
+import { MessageDeliveryStore, readPending } from "effect-agent/message-delivery";
+import { CanonicalRecord, UserInputRecorded, type PersistedJson } from "effect-agent/records";
 import {
   AbortCommand,
   AdmissionConflict,
@@ -42,6 +51,7 @@ import {
   WaitingForChildSuspension,
   type Claim,
 } from "effect-agent/submission-ledger";
+import { makeMessageDeliveryFixture } from "effect-agent/testing/message-delivery-store-conformance";
 import {
   AppendConflict,
   ThreadExportRequest,
@@ -135,7 +145,7 @@ const transportLayer = (state: TransportControl) =>
 const withRoutedPorts = <A, E>(
   objectName: string,
   state: TransportControl,
-  build: Effect.Effect<A, E, SubmissionLedger | ThreadStore | Crypto.Crypto>,
+  build: Effect.Effect<A, E, SubmissionLedger | ThreadStore | MessageDeliveryStore | Crypto.Crypto>,
   includeCheckpoints = true,
 ): Promise<A> =>
   runInDurableObject(threadStub(objectName), (_instance, doState) =>
@@ -143,6 +153,20 @@ const withRoutedPorts = <A, E>(
       build.pipe(
         Effect.provide(
           Layer.mergeAll(
+            routedMessageDeliveryStoreLayer({
+              ownsThread: (target) => target === thread(objectName),
+            }).pipe(
+              Layer.provide(
+                doMessageDeliveryStoreLayer().pipe(
+                  Layer.provide([
+                    storageConfigLayer({ storage: doState.storage }),
+                    SqliteClient.layer({ storage: doState.storage }),
+                    DoStorageFailpoint.layer,
+                  ]),
+                ),
+              ),
+              Layer.provide(transportLayer(state)),
+            ),
             routedSubmissionLedgerLayer({
               ownsThread: (target) => target === thread(objectName),
             }).pipe(
@@ -199,6 +223,108 @@ const claimedLocalLane = Effect.fn("RoutingTest.claimedLocalLane")(function* (
 });
 
 describe("cross-DO port routing", () => {
+  it("routes current retained obligations to their source owner before materialization", async () => {
+    const state = control();
+    const owner = "wp2-pending-owner";
+
+    const record = await withRoutedPorts(
+      owner,
+      state,
+      Effect.gen(function* () {
+        const store = yield* MessageDeliveryStore;
+        const record = yield* makeMessageDeliveryFixture("future-delivery", owner);
+
+        yield* store.insert(record);
+
+        return yield* store.change(record.key, {
+          _tag: "Defer",
+          expectedVersion: 1,
+          nowMillis: 0,
+          untilMillis: 100,
+        });
+      }),
+    );
+
+    await withRoutedPorts(
+      "wp2-pending-caller",
+      state,
+      Effect.gen(function* () {
+        expect(yield* readPending({ ownerThreadId: record.key.ownerThreadId, limit: 1 })).toEqual([
+          record,
+        ]);
+        expect(
+          yield* readPending({ ownerThreadId: thread("wp2-pending-caller"), limit: 1 }),
+        ).toEqual([]);
+      }),
+    );
+  });
+
+  it("routes exact canonical lookups and bounded inventories to their owning Object", () =>
+    withRoutedPorts(
+      "native-reader",
+      control(),
+      Effect.gen(function* () {
+        const store = yield* ThreadStore;
+        const owner = thread("native-record-owner");
+
+        yield* store.materialize(
+          ThreadMaterialization.make({ threadId: owner, producerEpoch: epoch(1) }),
+        );
+
+        const runId = Schema.decodeSync(RunId)("native-owner-run");
+
+        const original = inputRecord("native-input", "accepted input");
+
+        const record = CanonicalRecord.make({
+          ...original,
+          payload: UserInputRecorded.make({
+            kind: "user",
+            runId,
+            input: "accepted input",
+          }),
+        });
+
+        yield* store.append(
+          FencedAppendRequest.make({
+            threadId: owner,
+            producerEpoch: epoch(1),
+            expectedTailSequence: sequence(0),
+            expectedTailDigest: EMPTY_TAIL_DIGEST,
+            batch: batch("native-input", [record]),
+          }),
+        );
+        const native = store.nativeReads!;
+
+        expect(
+          Option.getOrThrow(yield* native.getRecord({ threadId: owner, recordId: record.recordId }))
+            .record,
+        ).toEqual(record);
+        expect(
+          Option.getOrThrow(yield* native.getRunInput({ threadId: owner, runId })).record,
+        ).toEqual(record);
+        expect(yield* native.readOutstanding({ threadId: owner, limit: 1 })).toMatchObject({
+          complete: true,
+          operations: [],
+          workerInputs: [],
+          throughSequence: 1,
+        });
+        expect(yield* native.readWorkerState({ threadId: owner, limit: 1 })).toMatchObject({
+          records: [],
+          tailSequence: 1,
+        });
+        expect(yield* native.countPeerMessages({ threadId: owner, limit: 1 })).toBe(0);
+        expect(yield* native.readWorkerInputsPage({ threadId: owner, limit: 1 })).toEqual({
+          inputs: [],
+          next: null,
+        });
+        expect(
+          (yield* native
+            .getRecord({ threadId: thread("native-missing-owner"), recordId: record.recordId })
+            .pipe(Effect.flip))._tag,
+        ).toBe("ThreadNotMaterialized");
+      }),
+    ));
+
   it("preserves absent checkpoint support while routing base store operations", () => {
     const state = control();
 

@@ -12,6 +12,7 @@ import {
   MessageDeliveryFailpoint,
   MessageDeliveryKey,
   MessageDeliveryPageRequest,
+  MessageDeliveryPendingRequest,
   MessageDeliveryRecord,
   MessageDeliveryStore,
   MessageDeliveryStoreLimits,
@@ -253,6 +254,23 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
     insert,
     get,
     change,
+    readPending: Effect.fn("SqlMessageDeliveryStore.readPending")(function* (request) {
+      const input = yield* validateMessageDelivery(
+        MessageDeliveryPendingRequest,
+        request,
+        "read-pending",
+      );
+
+      const rows = yield* query(
+        "read-pending",
+        sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.ownerThreadId} AND state NOT IN ('processed', 'refused') ORDER BY message_id LIMIT ${input.limit + 1}`,
+      );
+
+      if (rows.length > input.limit)
+        return yield* MessageDeliveryError.make({ reason: "capacity", operation: "read-pending" });
+
+      return yield* decodeRows(rows);
+    }),
     list: Effect.fn("SqlMessageDeliveryStore.list")(function* (request) {
       const input = yield* validateMessageDelivery(MessageDeliveryPageRequest, request, "list");
 
@@ -299,4 +317,11 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
       return decoded[0]?.deadline ?? null;
     }),
   });
+});
+
+/** Add the pending-only index within the adapter's format transaction. */
+export const createMessageDeliveryPendingIndex = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  yield* sql`CREATE INDEX effect_agent_message_deliveries_pending ON effect_agent_message_deliveries(owner_thread_id, message_id) WHERE state NOT IN ('processed', 'refused')`;
 });

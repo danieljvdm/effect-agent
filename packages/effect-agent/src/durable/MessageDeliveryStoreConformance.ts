@@ -15,6 +15,7 @@ import { digestJson } from "./Digest.ts";
 import { Receipt } from "./DurableAgentRuntime.ts";
 import {
   MessageDeliveryStore,
+  readPending,
   messageDeliveryCapacity,
   prepareMessageDelivery,
 } from "./MessageDelivery.ts";
@@ -172,6 +173,13 @@ export const messageDeliveryStoreConformanceCases = [
         "Deferral must advance the persisted wake deadline",
       );
 
+      yield* verify(
+        Equal.equals(yield* readPending({ ownerThreadId: initial.key.ownerThreadId, limit: 1 }), [
+          deferred,
+        ]),
+        "Future-due retained work must remain visible before any canonical reservation",
+      );
+
       const changed = yield* store
         .insert({ ...initial, predecessor: Schema.decodeSync(IdempotencyKey)("different") })
         .pipe(Effect.result);
@@ -214,6 +222,13 @@ export const messageDeliveryStoreConformanceCases = [
         "Acceptance must not claim processing",
       );
 
+      yield* verify(
+        Equal.equals(yield* readPending({ ownerThreadId: initial.key.ownerThreadId, limit: 1 }), [
+          accepted,
+        ]),
+        "Accepted work must retain its exact receipt and envelope in the pending read",
+      );
+
       const secondClaim = yield* store.change(initial.key, {
         _tag: "Claim",
         nowMillis: 6,
@@ -247,6 +262,10 @@ export const messageDeliveryStoreConformanceCases = [
         (yield* store.nextDeadline()) === null,
         "Processed work must release its wake deadline",
       );
+      yield* verify(
+        (yield* readPending({ ownerThreadId: initial.key.ownerThreadId, limit: 1 })).length === 0,
+        "Processed history must not enter pending authorization reads",
+      );
     }),
   },
   {
@@ -274,6 +293,21 @@ export const messageDeliveryStoreConformanceCases = [
       yield* verify(
         Equal.equals(yield* store.get(a.key), a),
         "Refusal must preserve original input",
+      );
+
+      const overflow = yield* readPending({ ownerThreadId: a.key.ownerThreadId, limit: 1 }).pipe(
+        Effect.result,
+      );
+
+      yield* verify(
+        Result.isFailure(overflow) && overflow.failure.reason === "capacity",
+        "Overflow must fail without a partial inventory",
+      );
+      yield* verify(
+        Equal.equals(yield* readPending({ ownerThreadId: other.key.ownerThreadId, limit: 1 }), [
+          other,
+        ]),
+        "Pending reads must use the source owner",
       );
       const page = yield* store.list({ ownerThreadId: a.key.ownerThreadId, limit: 1 });
 
@@ -344,6 +378,13 @@ export const messageDeliveryStoreConformanceCases = [
       yield* verify(
         (yield* store.nextDeadline()) === null && parked.status === "parked",
         "Parked work must remain inspectable without busy polling",
+      );
+
+      yield* verify(
+        Equal.equals(yield* readPending({ ownerThreadId: initial.key.ownerThreadId, limit: 1 }), [
+          parked,
+        ]),
+        "Parked uncertainty must remain visible without a wake deadline",
       );
 
       const recovered = yield* store.change(initial.key, {

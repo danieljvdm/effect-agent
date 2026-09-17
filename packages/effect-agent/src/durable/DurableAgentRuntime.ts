@@ -278,7 +278,7 @@ import {
   type JoinedToHost,
   type OwnershipLost,
   type RecoverySnapshot,
-  type SettlementConflict,
+  SettlementConflict,
   type SubmissionSnapshot,
   AbortCommand,
   AdmissionRequest,
@@ -327,8 +327,8 @@ import {
   type ApprovalDecisionIntent,
   type ChildBudgetReservationSnapshot,
   type JoinSnapshot,
-  type UnknownResolutionConflict,
-  type UnknownResolutionIntent,
+  UnknownResolutionConflict,
+  UnknownResolutionIntent,
 } from "./SubmissionLedger.ts";
 import { PendingSubmission, SettledSubmission, type SubmissionStatus } from "./SubmissionStatus.ts";
 import { verifyThreadInvariants } from "./ThreadInvariants.ts";
@@ -2213,7 +2213,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   /**
    * Existing ownership-free settlement protocol for queued aborts and joined outcomes.
    * Its canonical settlement reservation authorizes the append; it never authorizes tool
-   * execution, unknown-resolution appends, or repair audits beside a live writer.
+   * execution. Terminal factual resolutions also use this CAS: they close only the
+   * settled Run's original call, without changing the lane owner or reopening execution.
    */
   const attemptContextAtTail = Effect.fn("DurableAgentRuntime.attemptContextAtTail")(function* (
     threadId: ThreadId,
@@ -9456,7 +9457,28 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       });
     }
 
+    if (found.value.state === "settled")
+      yield* workerRuntime.completeInput(found.value).pipe(
+        Effect.mapError((cause) =>
+          LedgerError.make({
+            operation: "recoverSubmission",
+            message: "Worker completion repair failed",
+            cause,
+          }),
+        ),
+      );
     const history = yield* readRecoveryHistory(found.value.threadId, [submissionId]);
+
+    if (history.materialized)
+      yield* workerRuntime.repairInputs(found.value.threadId).pipe(
+        Effect.mapError((cause) =>
+          LedgerError.make({
+            operation: "recoverSubmission",
+            message: "Worker input repair failed",
+            cause,
+          }),
+        ),
+      );
 
     if (history.materialized && found.value.workerAdmission?.origin.reporting?.mode === "standard")
       yield* updateRuntime.repair(found.value.threadId);
@@ -9923,6 +9945,192 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         submissionId: command.submissionId,
       }),
     );
+
+    const selected = yield* ledger.lookup(
+      SubmissionLookupById.make({ submissionId: command.submissionId }),
+    );
+
+    if (Option.isSome(selected) && selected.value.state === "settled") {
+      const submission = selected.value;
+      const resolution = command.resolution;
+
+      if (resolution._tag !== "CompletedWithResult" && resolution._tag !== "NeverHappened")
+        return yield* SettlementConflict.make({
+          submissionId: command.submissionId,
+          existingOutcome: submission.settledOutcome ?? "aborted",
+        });
+
+      const history = yield* readRecoveryHistory(submission.threadId, [
+        submission.submissionId,
+      ]).pipe(
+        Effect.mapError((cause) =>
+          LedgerError.make({
+            operation: "resolveUnknown",
+            message: "Cannot verify terminal operation",
+            cause,
+          }),
+        ),
+      );
+
+      const runId = runIdForSubmission(submission.submissionId);
+
+      const preparations = history.records.flatMap(({ record }) =>
+        record.payload._tag === "ToolCallPrepared" &&
+        record.payload.runId === runId &&
+        record.payload.toolCallId === command.toolCallId
+          ? [record.payload]
+          : [],
+      );
+
+      const prepared = preparations[0];
+
+      if (preparations.length !== 1 || prepared === undefined)
+        return yield* LedgerError.make({
+          operation: "resolveUnknown",
+          message: "No unique original preparation for this terminal operation",
+        });
+
+      const result =
+        resolution._tag === "CompletedWithResult"
+          ? { value: resolution.result, isFailure: resolution.isFailure }
+          : {
+              value: yield* Schema.encodeEffect(ToolUnavailable)(
+                ToolUnavailable.make({
+                  toolName: prepared.toolName,
+                  execution: "not-executed",
+                  message:
+                    "The external operation never happened; its Submission is already settled.",
+                }),
+              ).pipe(Effect.flatMap(decodePersisted), Effect.orDie),
+              isFailure: true,
+            };
+
+      const settledId = toolCallSettledRecordId(runId, prepared.turn, prepared.toolCallId);
+      const resolvedId = toolCallResolvedRecordId(runId, prepared.turn, prepared.toolCallId);
+
+      const priorResult = history.records.find(({ record }) => record.recordId === settledId)
+        ?.record.payload;
+
+      let audit = history.records.find(({ record }) => record.recordId === resolvedId)?.record;
+
+      if (
+        priorResult !== undefined &&
+        (priorResult._tag !== "ToolCallSettled" ||
+          priorResult.runId !== runId ||
+          priorResult.toolCallId !== prepared.toolCallId ||
+          priorResult.toolName !== prepared.toolName ||
+          priorResult.isFailure !== result.isFailure ||
+          !Schema.toEquivalence(PersistedJson)(priorResult.result, result.value))
+      )
+        return yield* UnknownResolutionConflict.make({
+          submissionId: command.submissionId,
+          toolCallId: command.toolCallId,
+        });
+      if (
+        audit !== undefined &&
+        (audit.payload._tag !== "ToolCallResolved" ||
+          audit.payload.runId !== runId ||
+          audit.payload.toolCallId !== prepared.toolCallId ||
+          audit.payload.resolution !==
+            (resolution._tag === "NeverHappened"
+              ? "never-started"
+              : resolution.isFailure
+                ? "failed-with-error"
+                : "completed-with-result"))
+      )
+        return yield* UnknownResolutionConflict.make({
+          submissionId: command.submissionId,
+          toolCallId: command.toolCallId,
+        });
+      if (audit !== undefined && priorResult === undefined)
+        return yield* LedgerError.make({
+          operation: "resolveUnknown",
+          message: "Terminal resolution audit has no canonical result",
+        });
+      if (audit === undefined) {
+        audit = yield* makeEnvelope(
+          resolvedId,
+          ToolCallResolved.make({
+            runId,
+            toolCallId: prepared.toolCallId,
+            resolution:
+              resolution._tag === "NeverHappened"
+                ? "never-started"
+                : resolution.isFailure
+                  ? "failed-with-error"
+                  : "completed-with-result",
+            author: command.author,
+            reason: command.reason,
+          }),
+        );
+
+        const records: [RecordEnvelope, ...Array<RecordEnvelope>] =
+          priorResult === undefined
+            ? [
+                yield* makeEnvelope(
+                  settledId,
+                  ToolCallSettled.make({
+                    runId,
+                    toolCallId: prepared.toolCallId,
+                    toolName: prepared.toolName,
+                    result: result.value,
+                    isFailure: result.isFailure,
+                  }),
+                ),
+                audit,
+              ]
+            : [audit];
+
+        yield* hit("resolve:before-terminal-append");
+        // Terminal settlement authorizes only these historical facts. This CAS neither claims
+        // the lane nor changes its producer epoch, and never executes the cancelled operation.
+        yield* Effect.gen(function* () {
+          const ctx = yield* attemptContextAtTail(submission.threadId);
+
+          yield* appendBatch(
+            ctx,
+            CanonicalBatch.make({
+              batchId: toolCallResolutionBatchId(submission.submissionId, prepared.toolCallId),
+              producerId: config.producerId,
+              records,
+            }),
+          );
+        }).pipe(
+          Effect.mapError((cause) =>
+            LedgerError.make({
+              operation: "resolveUnknown",
+              message:
+                "Terminal supplier evidence was not confirmed canonical; retry the same resolution",
+              cause,
+            }),
+          ),
+        );
+        yield* hit("resolve:after-terminal-append");
+      }
+      if (audit.payload._tag !== "ToolCallResolved")
+        return yield* LedgerError.make({
+          operation: "resolveUnknown",
+          message: "Invalid terminal resolution audit",
+        });
+      yield* workerRuntime.completeInput(submission).pipe(
+        Effect.mapError((cause) =>
+          LedgerError.make({
+            operation: "resolveUnknown",
+            message: "Worker acknowledgement remains pending",
+            cause,
+          }),
+        ),
+      );
+
+      return UnknownResolutionIntent.make({
+        ...command,
+        author: audit.payload.author,
+        reason: audit.payload.reason,
+        resolvedAt: audit.createdAt,
+        canonicalRecordId: audit.recordId,
+      });
+    }
+
     const intent = yield* ledger.recordUnknownResolution(command);
 
     yield* hit("resolve:after-intent");

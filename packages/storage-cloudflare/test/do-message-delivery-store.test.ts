@@ -1,7 +1,7 @@
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer } from "effect";
-import { MessageDeliveryStore } from "effect-agent/message-delivery";
+import { MessageDeliveryStore, readPending } from "effect-agent/message-delivery";
 import {
   makeMessageDeliveryFixture,
   messageDeliveryStoreConformanceCases,
@@ -55,6 +55,9 @@ it("reconstructs pending obligations from Thread Object SQL with no active ledge
           const store = yield* MessageDeliveryStore;
 
           expect(yield* store.get(record.key)).toEqual(record);
+          expect(yield* readPending({ ownerThreadId: record.key.ownerThreadId, limit: 1 })).toEqual(
+            [record],
+          );
           expect(yield* store.due(0, 10)).toEqual([record.key]);
           expect(yield* store.nextDeadline(record.key.ownerThreadId)).toBe(0);
         }).pipe(Effect.provide(storeLayer(storage)));

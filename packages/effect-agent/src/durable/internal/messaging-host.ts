@@ -40,16 +40,15 @@ import {
   PersistedJson,
   type ProducerId,
   RecordEnvelope,
-  RecordId,
 } from "../Records.ts";
-import { PreparedInput } from "../Subscription.ts";
+import { peerMessageRecordId } from "../RunJournal.ts";
 import {
-  FencedAppendRequest,
-  ThreadExportRequest,
-  ThreadRead,
-  ThreadTailRequest,
-  ThreadStore,
-} from "../ThreadStore.ts";
+  SubmissionLedger,
+  SubmissionLookupByKey,
+  submissionInputRecordId,
+} from "../SubmissionLedger.ts";
+import { PreparedInput } from "../Subscription.ts";
+import { FencedAppendRequest, ThreadRead, ThreadTailRequest, ThreadStore } from "../ThreadStore.ts";
 import {
   definitionDigestsEqual,
   resolveDefinitionBinding,
@@ -76,6 +75,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
   const deps = {
     ...options,
     store: yield* ThreadStore,
+    ledger: yield* SubmissionLedger,
     deliveries: yield* Effect.serviceOption(MessageDeliveryStore),
     crypto: yield* Crypto.Crypto,
     authorizer: yield* PeerAuthorizer,
@@ -91,14 +91,30 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
       Effect.mapError(() => failure("send", "storage")),
     );
 
-  const read = (threadId: ThreadId) =>
-    deps.store
-      .export(ThreadExportRequest.make({ threadId }))
-      .pipe(Effect.mapError(() => failure("context", "storage")));
+  const exactRecord = Effect.fn("MessagingHost.exactRecord")(function* (
+    threadId: ThreadId,
+    recordId: RecordEnvelope["recordId"],
+  ) {
+    if (deps.store.nativeReads === undefined) return yield* failure("send", "unavailable");
+
+    return Option.getOrUndefined(
+      yield* deps.store.nativeReads
+        .getRecord({ threadId, recordId })
+        .pipe(Effect.mapError(() => failure("send", "storage"))),
+    )?.record;
+  });
 
   const sourceOf = Effect.fn("MessagingHost.source")(function* (threadId: ThreadId) {
-    const log = yield* read(threadId);
-    const created = log.records[0]?.record.payload;
+    const log = yield* deps.store
+      .inspectTail(ThreadTailRequest.make({ threadId }))
+      .pipe(Effect.mapError(() => failure("context", "storage")));
+
+    const records = yield* deps.store.read(ThreadRead.make({ threadId, limit: 1 })).pipe(
+      Stream.runCollect,
+      Effect.mapError(() => failure("context", "storage")),
+    );
+
+    const created = records[0]?.record.payload;
 
     if (created?._tag !== "ThreadCreated") return yield* failure("context", "not-found");
 
@@ -134,11 +150,10 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
   const proof = Effect.fn("MessagingHost.proof")(function* (message: MessageRef) {
     const source = yield* sourceOf(message.ownerThreadId);
 
-    const record = source.log.records.find(
-      ({ record }) =>
-        record.payload._tag === "PeerMessagePrepared" &&
-        record.payload.messageId === message.messageId,
-    )?.record;
+    const record = yield* exactRecord(
+      message.ownerThreadId,
+      peerMessageRecordId(message.messageId),
+    );
 
     if (record === undefined) return yield* failure("reply", "invalid-reference");
     const saved = yield* decodeProof(record);
@@ -290,11 +305,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
       for (let attempt = 0; attempt < 8; attempt++) {
         const current = attempt === 0 ? initial : yield* sourceOf(threadId);
 
-        const prior = current.log.records.find(
-          ({ record }) =>
-            record.payload._tag === "PeerMessagePrepared" &&
-            record.payload.messageId === message.messageId,
-        )?.record;
+        const prior = yield* exactRecord(threadId, peerMessageRecordId(message.messageId));
 
         let saved: Effect.Success<ReturnType<typeof proof>>;
 
@@ -318,10 +329,11 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
           });
           yield* authorizeEnvelope(saved, operation);
         } else {
+          if (deps.store.nativeReads === undefined) return yield* failure(operation, "unavailable");
           if (
-            current.log.records.filter(
-              ({ record }) => record.payload._tag === "PeerMessagePrepared",
-            ).length >= maxMessages
+            (yield* deps.store.nativeReads
+              .countPeerMessages({ threadId, limit: maxMessages })
+              .pipe(Effect.mapError(mapStore(operation)))) >= maxMessages
           )
             return yield* failure(operation, "capacity");
           let destinationThread: ThreadId;
@@ -329,17 +341,38 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
           if (operation === "reply") {
             if (inReplyTo === undefined) return yield* failure(operation, "invalid-reference");
 
-            const inbound = current.log.records.find(
-              ({ record }) =>
-                record.payload._tag === "UserInputRecorded" &&
-                Schema.is(MessageAdmission)(record.payload.messageAdmission) &&
-                sameRef(record.payload.messageAdmission.message, inReplyTo),
-            )?.record.payload;
+            const original = yield* proof(inReplyTo);
+
+            if (
+              original.envelope.threadId !== threadId ||
+              original.envelope.agentId !== current.address.agentId
+            )
+              return yield* failure(operation, "invalid-reference");
+
+            const accepted = yield* deps.ledger
+              .lookup(
+                SubmissionLookupByKey.make({
+                  threadId,
+                  principal: original.envelope.deliveryPrincipal,
+                  idempotencyKey: inReplyTo.messageId,
+                }),
+              )
+              .pipe(Effect.mapError(mapStore(operation)));
+
+            const inbound = Option.isNone(accepted)
+              ? undefined
+              : (yield* exactRecord(threadId, submissionInputRecordId(accepted.value.submissionId)))
+                  ?.payload;
 
             if (
               inbound?._tag !== "UserInputRecorded" ||
               !Schema.is(MessageAdmission)(inbound.messageAdmission) ||
-              inbound.messageAdmission.sender.agentId !== target.agentId
+              inbound.messageAdmission.sender.agentId !== target.agentId ||
+              !sameRef(inbound.messageAdmission.message, inReplyTo) ||
+              !Schema.is(MessageAdmission)(original.envelope.messageAdmission) ||
+              !sameAdmission(inbound.messageAdmission, original.envelope.messageAdmission) ||
+              Option.isNone(accepted) ||
+              inbound.submissionId !== accepted.value.submissionId
             )
               return yield* failure(operation, "invalid-reference");
             destinationThread = inbound.messageAdmission.returnAddress.threadId;
@@ -410,7 +443,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
                   producerId: deps.producerId,
                   records: [
                     RecordEnvelope.make({
-                      recordId: Schema.decodeSync(RecordId)(message.messageId),
+                      recordId: peerMessageRecordId(message.messageId),
                       family: "thread",
                       schemaVersion: 1,
                       createdAt: DateTime.makeUnsafe(createdAtMillis),

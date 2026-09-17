@@ -1,4 +1,9 @@
 import { Schema } from "effect";
+import {
+  MessageDeliveryError,
+  MessageDeliveryPendingRequest,
+  MessageDeliveryRecord,
+} from "effect-agent/message-delivery";
 import { CanonicalRecordEnvelope } from "effect-agent/records";
 import {
   AbortCommand,
@@ -22,6 +27,15 @@ import {
   AppendConflict,
   AppendResult,
   ThreadExport,
+  ThreadRecordRequest,
+  ThreadRunInputRequest,
+  ThreadOutstandingRequest,
+  ThreadOutstanding,
+  ThreadWorkerInputsPageRequest,
+  ThreadWorkerInputsPage,
+  ThreadWorkerStateRequest,
+  ThreadWorkerState,
+  ThreadPeerCountRequest,
   ThreadExportRequest,
   ThreadMaterialization,
   ThreadNotMaterialized,
@@ -166,8 +180,43 @@ export class StoreExportCall extends Schema.TaggedClass<StoreExportCall>(
   request: ThreadExportRequest,
 }) {}
 
+export class StoreGetRecordCall extends Schema.TaggedClass<StoreGetRecordCall>()("StoreGetRecord", {
+  request: ThreadRecordRequest,
+}) {}
+
+export class StoreGetRunInputCall extends Schema.TaggedClass<StoreGetRunInputCall>()(
+  "StoreGetRunInput",
+  { request: ThreadRunInputRequest },
+) {}
+
+export class StoreReadOutstandingCall extends Schema.TaggedClass<StoreReadOutstandingCall>()(
+  "StoreReadOutstanding",
+  { request: ThreadOutstandingRequest },
+) {}
+
+export class StoreReadWorkerInputsPageCall extends Schema.TaggedClass<StoreReadWorkerInputsPageCall>()(
+  "StoreReadWorkerInputsPage",
+  { request: ThreadWorkerInputsPageRequest },
+) {}
+
+export class StoreReadWorkerStateCall extends Schema.TaggedClass<StoreReadWorkerStateCall>()(
+  "StoreReadWorkerState",
+  { request: ThreadWorkerStateRequest },
+) {}
+
+export class StoreCountPeerMessagesCall extends Schema.TaggedClass<StoreCountPeerMessagesCall>()(
+  "StoreCountPeerMessages",
+  { request: ThreadPeerCountRequest },
+) {}
+
+export class MessageDeliveryReadPendingCall extends Schema.TaggedClass<MessageDeliveryReadPendingCall>()(
+  "MessageDeliveryReadPending",
+  { request: MessageDeliveryPendingRequest },
+) {}
+
 /** Every request that may cross a Durable Object boundary — the CLOSED route-capable subset. */
 export const PortRequest = Schema.Union([
+  MessageDeliveryReadPendingCall,
   LedgerAdmitCall,
   LedgerMarkReadyCall,
   LedgerLookupCall,
@@ -179,6 +228,12 @@ export const PortRequest = Schema.Union([
   StoreReadPageCall,
   StoreInspectTailCall,
   StoreExportCall,
+  StoreGetRecordCall,
+  StoreGetRunInputCall,
+  StoreReadOutstandingCall,
+  StoreReadWorkerInputsPageCall,
+  StoreReadWorkerStateCall,
+  StoreCountPeerMessagesCall,
 ]);
 
 export type PortRequest = typeof PortRequest.Type;
@@ -254,8 +309,44 @@ export class StoreExportResult extends Schema.TaggedClass<StoreExportResult>(
   export: ThreadExport,
 }) {}
 
+export class StoreGetRecordResult extends Schema.TaggedClass<StoreGetRecordResult>()(
+  "StoreGetRecordResult",
+  { record: Schema.optionalKey(CanonicalRecordEnvelope) },
+) {}
+
+export class StoreGetRunInputResult extends Schema.TaggedClass<StoreGetRunInputResult>()(
+  "StoreGetRunInputResult",
+  { record: Schema.optionalKey(CanonicalRecordEnvelope) },
+) {}
+
+export class StoreReadOutstandingResult extends Schema.TaggedClass<StoreReadOutstandingResult>()(
+  "StoreReadOutstandingResult",
+  { state: ThreadOutstanding },
+) {}
+
+export class StoreReadWorkerInputsPageResult extends Schema.TaggedClass<StoreReadWorkerInputsPageResult>()(
+  "StoreReadWorkerInputsPageResult",
+  { page: ThreadWorkerInputsPage },
+) {}
+
+export class StoreReadWorkerStateResult extends Schema.TaggedClass<StoreReadWorkerStateResult>()(
+  "StoreReadWorkerStateResult",
+  { state: ThreadWorkerState },
+) {}
+
+export class StoreCountPeerMessagesResult extends Schema.TaggedClass<StoreCountPeerMessagesResult>()(
+  "StoreCountPeerMessagesResult",
+  { count: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1000 })) },
+) {}
+
+export class MessageDeliveryReadPendingResult extends Schema.TaggedClass<MessageDeliveryReadPendingResult>()(
+  "MessageDeliveryReadPendingResult",
+  { records: Schema.Array(MessageDeliveryRecord) },
+) {}
+
 /** Every successful routed result. Callers narrow by the tag their request implies. */
 export const PortResult = Schema.Union([
+  MessageDeliveryReadPendingResult,
   LedgerAdmitResult,
   LedgerMarkReadyResult,
   LedgerLookupResult,
@@ -267,6 +358,12 @@ export const PortResult = Schema.Union([
   StoreReadPageResult,
   StoreInspectTailResult,
   StoreExportResult,
+  StoreGetRecordResult,
+  StoreGetRunInputResult,
+  StoreReadOutstandingResult,
+  StoreReadWorkerInputsPageResult,
+  StoreReadWorkerStateResult,
+  StoreCountPeerMessagesResult,
 ]);
 
 export type PortResult = typeof PortResult.Type;
@@ -281,6 +378,7 @@ export type PortResult = typeof PortResult.Type;
  * thread ports declare, so a routed caller observes identical error tags and fields.
  */
 export const PortFailure = Schema.Union([
+  MessageDeliveryError,
   AdmissionConflict,
   AdmissionPolicyError,
   SettlementConflict,

@@ -1,8 +1,14 @@
+import { doMessageDeliveryStoreLayer } from "@effect-agent/storage-cloudflare/do-message-delivery-store";
+import { DoStorageFailpoint } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
 import { ledgerLayer } from "@effect-agent/storage-cloudflare/do-submission-ledger";
-import { layer as doThreadStoreLayer } from "@effect-agent/storage-cloudflare/do-thread-store";
+import {
+  storageConfigLayer,
+  layer as doThreadStoreLayer,
+} from "@effect-agent/storage-cloudflare/do-thread-store";
 import { handleEncodedPortRequest } from "@effect-agent/storage-cloudflare/port-routing";
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import { DurableObject } from "cloudflare:workers";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 
 export { ProbeDurableObject } from "./probe-worker.ts";
 
@@ -24,6 +30,13 @@ export class ThreadStorageObject extends DurableObject {
     return Effect.runPromise(
       handleEncodedPortRequest(encoded).pipe(
         Effect.provide([
+          doMessageDeliveryStoreLayer().pipe(
+            Layer.provide([
+              storageConfigLayer({ storage: this.ctx.storage }),
+              DoStorageFailpoint.layer,
+              SqliteClient.layer({ storage: this.ctx.storage }),
+            ]),
+          ),
           ledgerLayer({ storage: this.ctx.storage }),
           doThreadStoreLayer({ storage: this.ctx.storage, observationPollInterval: 1 }),
         ]),

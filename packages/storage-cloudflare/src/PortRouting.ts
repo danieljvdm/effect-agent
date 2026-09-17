@@ -1,5 +1,10 @@
 import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
 import {
+  MessageDeliveryStore,
+  MessageDeliveryError,
+  readPending,
+} from "effect-agent/message-delivery";
+import {
   AdmissionIndeterminate,
   AdmissionConflict,
   AdmissionPolicyError,
@@ -23,6 +28,8 @@ import {
 } from "effect-agent/thread-store";
 
 import {
+  MessageDeliveryReadPendingCall,
+  MessageDeliveryReadPendingResult,
   boundPortDiagnostic,
   decodePortRequest,
   decodePortResponse,
@@ -45,6 +52,18 @@ import {
   PortSucceeded,
   StoreAppendCall,
   StoreAppendResult,
+  StoreGetRecordCall,
+  StoreGetRecordResult,
+  StoreGetRunInputCall,
+  StoreGetRunInputResult,
+  StoreReadWorkerInputsPageCall,
+  StoreReadWorkerStateCall,
+  StoreCountPeerMessagesCall,
+  StoreCountPeerMessagesResult,
+  StoreReadWorkerStateResult,
+  StoreReadWorkerInputsPageResult,
+  StoreReadOutstandingCall,
+  StoreReadOutstandingResult,
   StoreExportCall,
   StoreExportResult,
   StoreInspectTailCall,
@@ -305,7 +324,7 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
                 operation,
                 message: boundPortDiagnostic(
                   `The Thread Object owning ${target} answered ${operation} with the ` +
-                    `out-of-contract failure ${failure._tag}: ${failure.message}`,
+                    `out-of-contract failure ${failure._tag}`,
                 ),
                 cause: failure,
               }),
@@ -763,7 +782,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
                 operation,
                 message: boundPortDiagnostic(
                   `The Thread Object owning ${target} answered ${operation} with the ` +
-                    `out-of-contract failure ${failure._tag}: ${failure.message}`,
+                    `out-of-contract failure ${failure._tag}`,
                 ),
                 cause: failure,
               }),
@@ -792,6 +811,81 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
   };
 
   const routed = ThreadStore.of({
+    nativeReads: {
+      getRecord: (request) =>
+        options.ownsThread(request.threadId)
+          ? local.nativeReads === undefined
+            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
+            : local.nativeReads.getRecord(request)
+          : foreignStoreCall(
+              "thread getRecord",
+              request.threadId,
+              StoreGetRecordCall.make({ request }),
+              StoreGetRecordResult,
+              ThreadNotMaterialized,
+            ).pipe(Effect.map((reply) => Option.fromUndefinedOr(reply.record))),
+      getRunInput: (request) =>
+        options.ownsThread(request.threadId)
+          ? local.nativeReads === undefined
+            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
+            : local.nativeReads.getRunInput(request)
+          : foreignStoreCall(
+              "thread getRunInput",
+              request.threadId,
+              StoreGetRunInputCall.make({ request }),
+              StoreGetRunInputResult,
+              ThreadNotMaterialized,
+            ).pipe(Effect.map((reply) => Option.fromUndefinedOr(reply.record))),
+      countPeerMessages: (request) =>
+        options.ownsThread(request.threadId)
+          ? local.nativeReads === undefined
+            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
+            : local.nativeReads.countPeerMessages(request)
+          : foreignStoreCall(
+              "thread countPeerMessages",
+              request.threadId,
+              StoreCountPeerMessagesCall.make({ request }),
+              StoreCountPeerMessagesResult,
+              ThreadNotMaterialized,
+            ).pipe(Effect.map((reply) => reply.count)),
+      readWorkerState: (request) =>
+        options.ownsThread(request.threadId)
+          ? local.nativeReads === undefined
+            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
+            : local.nativeReads.readWorkerState(request)
+          : foreignStoreCall(
+              "thread readWorkerState",
+              request.threadId,
+              StoreReadWorkerStateCall.make({ request }),
+              StoreReadWorkerStateResult,
+              ThreadNotMaterialized,
+            ).pipe(Effect.map((reply) => reply.state)),
+      readWorkerInputsPage: (request) =>
+        options.ownsThread(request.threadId)
+          ? local.nativeReads === undefined
+            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
+            : local.nativeReads.readWorkerInputsPage(request)
+          : foreignStoreCall(
+              "thread readWorkerInputsPage",
+              request.threadId,
+              StoreReadWorkerInputsPageCall.make({ request }),
+              StoreReadWorkerInputsPageResult,
+              ThreadNotMaterialized,
+            ).pipe(Effect.map((reply) => reply.page)),
+      readOutstanding: (request) =>
+        options.ownsThread(request.threadId)
+          ? local.nativeReads === undefined
+            ? Effect.fail(crossThreadStoreError("native read unavailable", request.threadId))
+            : local.nativeReads.readOutstanding(request)
+          : foreignStoreCall(
+              "thread readOutstanding",
+              request.threadId,
+              StoreReadOutstandingCall.make({ request }),
+              StoreReadOutstandingResult,
+              ThreadNotMaterialized,
+            ).pipe(Effect.map((reply) => reply.state)),
+    },
+
     materialize: (request) =>
       options.ownsThread(request.threadId)
         ? local.materialize(request)
@@ -920,6 +1014,45 @@ export const routedThreadStoreLayer = (
 ): Layer.Layer<ThreadStore, never, ThreadStore | ThreadPortTransport> =>
   Layer.effectContext(makeRoutedStoreServices(options));
 
+/** Route only the read of current obligations; all delivery mutations remain source local. */
+export const routedMessageDeliveryStoreLayer = (options: RoutedPortOptions) =>
+  Layer.effect(
+    MessageDeliveryStore,
+    Effect.gen(function* () {
+      const local = yield* MessageDeliveryStore;
+      const call = makeTransportCall(yield* ThreadPortTransport);
+
+      return MessageDeliveryStore.of({
+        ...local,
+        readPending: (request) =>
+          options.ownsThread(request.ownerThreadId)
+            ? readPending(request).pipe(Effect.provideService(MessageDeliveryStore, local))
+            : call(request.ownerThreadId, MessageDeliveryReadPendingCall.make({ request })).pipe(
+                Effect.mapError(() =>
+                  MessageDeliveryError.make({ reason: "storage", operation: "route read-pending" }),
+                ),
+                Effect.flatMap((response) => {
+                  if (
+                    response._tag === "PortSucceeded" &&
+                    response.result._tag === "MessageDeliveryReadPendingResult"
+                  )
+                    return Effect.succeed(response.result.records);
+
+                  return Effect.fail(
+                    response._tag === "PortFailed" &&
+                      response.failure._tag === "MessageDeliveryError"
+                      ? response.failure
+                      : MessageDeliveryError.make({
+                          reason: "storage",
+                          operation: "route read-pending",
+                        }),
+                  );
+                }),
+              ),
+      });
+    }),
+  );
+
 // ---------------------------------------------------------------------------
 // Owner-side execution
 // ---------------------------------------------------------------------------
@@ -943,8 +1076,50 @@ const capture = <Failure extends PortFailure>(
  */
 export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(function* (
   request: PortRequest,
-): Effect.fn.Return<PortResponse, never, SubmissionLedger | ThreadStore> {
+): Effect.fn.Return<PortResponse, never, SubmissionLedger | ThreadStore | MessageDeliveryStore> {
   switch (request._tag) {
+    case "MessageDeliveryReadPending": {
+      const records = yield* readPending(request.request).pipe(Effect.result);
+
+      return yield* capture(
+        Effect.fromResult(records).pipe(
+          Effect.map((records) => MessageDeliveryReadPendingResult.make({ records })),
+        ),
+      );
+    }
+    case "StoreCountPeerMessages": {
+      const store = yield* ThreadStore;
+
+      return yield* capture(
+        store.nativeReads === undefined
+          ? Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId))
+          : store.nativeReads
+              .countPeerMessages(request.request)
+              .pipe(Effect.map((count) => StoreCountPeerMessagesResult.make({ count }))),
+      );
+    }
+    case "StoreReadWorkerState": {
+      const store = yield* ThreadStore;
+
+      return yield* capture(
+        store.nativeReads === undefined
+          ? Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId))
+          : store.nativeReads
+              .readWorkerState(request.request)
+              .pipe(Effect.map((state) => StoreReadWorkerStateResult.make({ state }))),
+      );
+    }
+    case "StoreReadWorkerInputsPage": {
+      const store = yield* ThreadStore;
+
+      return yield* capture(
+        store.nativeReads === undefined
+          ? Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId))
+          : store.nativeReads
+              .readWorkerInputsPage(request.request)
+              .pipe(Effect.map((page) => StoreReadWorkerInputsPageResult.make({ page }))),
+      );
+    }
     case "LedgerAdmit": {
       const ledger = yield* SubmissionLedger;
 
@@ -1038,6 +1213,56 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
           .pipe(Effect.map((tail) => StoreInspectTailResult.make({ tail }))),
       );
     }
+    case "StoreGetRecord": {
+      const store = yield* ThreadStore;
+
+      if (store.nativeReads === undefined)
+        return yield* capture(
+          Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId)),
+        );
+
+      return yield* capture(
+        store.nativeReads
+          .getRecord(request.request)
+          .pipe(
+            Effect.map((record) =>
+              StoreGetRecordResult.make(Option.isSome(record) ? { record: record.value } : {}),
+            ),
+          ),
+      );
+    }
+    case "StoreGetRunInput": {
+      const store = yield* ThreadStore;
+
+      if (store.nativeReads === undefined)
+        return yield* capture(
+          Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId)),
+        );
+
+      return yield* capture(
+        store.nativeReads
+          .getRunInput(request.request)
+          .pipe(
+            Effect.map((record) =>
+              StoreGetRunInputResult.make(Option.isSome(record) ? { record: record.value } : {}),
+            ),
+          ),
+      );
+    }
+    case "StoreReadOutstanding": {
+      const store = yield* ThreadStore;
+
+      if (store.nativeReads === undefined)
+        return yield* capture(
+          Effect.fail(crossThreadStoreError("native read unavailable", request.request.threadId)),
+        );
+
+      return yield* capture(
+        store.nativeReads
+          .readOutstanding(request.request)
+          .pipe(Effect.map((state) => StoreReadOutstandingResult.make({ state }))),
+      );
+    }
     case "StoreExport": {
       const store = yield* ThreadStore;
 
@@ -1068,7 +1293,9 @@ const encodedProtocolFailure = (message: string): unknown => ({
  * transport never has to interpret exceptions as protocol answers.
  */
 export const handleEncodedPortRequest = Effect.fn("DoPortRouting.handleEncodedPortRequest")(
-  function* (encoded: unknown): Effect.fn.Return<unknown, never, SubmissionLedger | ThreadStore> {
+  function* (
+    encoded: unknown,
+  ): Effect.fn.Return<unknown, never, SubmissionLedger | ThreadStore | MessageDeliveryStore> {
     const response = yield* decodePortRequest(encoded).pipe(
       Effect.flatMap(executePortRequest),
       Effect.catch((error) =>

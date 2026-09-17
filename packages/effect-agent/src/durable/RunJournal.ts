@@ -7,6 +7,7 @@ import { RunPolicyUsage } from "../core/RunPolicyUsage.ts";
 import { type Selection, type Snapshot } from "../core/ToolExposure.ts";
 import type { ToolParameterRejection } from "../core/ToolResult.ts";
 import { ModelCallUsage, summarizeModelUsage, type RunUsageSummary } from "../core/Usage.ts";
+import type { WorkerRef } from "../core/Worker.ts";
 import {
   CLEARED_TOOL_RESULT,
   COMPACTION_SUMMARY_PREFIX,
@@ -132,6 +133,32 @@ export const modelResponseRecordId = (runId: RunId, turn: number): RecordId =>
 /** Terminal Tool completion marker committed atomically with its settled Tool result. */
 export const runCompletedRecordId = (runId: RunId): RecordId =>
   decodeRecordId(`run-completed:${runId}`);
+
+/** Native source reservation locator, including the first admission of a continuing worker. */
+export const workerInputRecordId = (messageId: IdempotencyKey): RecordId =>
+  decodeRecordId(`worker-input:${messageId}`);
+
+/** Source-owned first reservation; native worker identity is minted from its first message. */
+export const firstWorkerInputRecordId = (worker: WorkerRef): RecordId =>
+  decodeRecordId(`worker-input:${worker.threadId}`);
+
+export const workerOriginRecordId = (threadId: ThreadId): RecordId =>
+  decodeRecordId(`worker-origin:${threadId}`);
+
+export const workerReportRecordId = (messageId: IdempotencyKey): RecordId =>
+  decodeRecordId(`worker-report:${messageId}`);
+
+export const peerMessageRecordId = (messageId: IdempotencyKey): RecordId =>
+  decodeRecordId(messageId);
+
+/** Same immutable tuple used by native update admission; callers never parse its hash. */
+export const agentUpdateRecordId = Effect.fn("RunJournal.agentUpdateRecordId")(function* (
+  threadId: ThreadId,
+  runId: RunId,
+  updateId: IdempotencyKey,
+) {
+  return decodeRecordId(`agent-update:${yield* digestJson([threadId, runId, updateId])}`);
+});
 
 /** Deterministic canonical record identity of one Turn's `ToolCallSettled` record. */
 export const toolCallSettledRecordId = (

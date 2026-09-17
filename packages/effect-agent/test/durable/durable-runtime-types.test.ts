@@ -90,7 +90,7 @@ it("keeps bounded worker operations and status reads typed without hidden requir
     UpdateError | LedgerError
   >();
   expectTypeOf<Effect.Services<ReturnType<typeof makeMessagingRuntime>>>().toEqualTypeOf<
-    ThreadStore | Crypto.Crypto
+    ThreadStore | SubmissionLedger | Crypto.Crypto
   >();
   expectTypeOf<Parameters<Runtime["workerHost"]>>().toEqualTypeOf<
     [

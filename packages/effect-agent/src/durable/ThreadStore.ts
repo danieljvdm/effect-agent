@@ -1,7 +1,7 @@
-import type { Effect, Option, Stream } from "effect";
-import { Context, Schema } from "effect";
+import type { Option, Stream } from "effect";
+import { Context, Effect, Schema } from "effect";
 
-import { ThreadId } from "../core/Identifiers.ts";
+import { RunId, SubmissionId, ThreadId } from "../core/Identifiers.ts";
 import {
   BatchId,
   CanonicalBatch,
@@ -11,7 +11,184 @@ import {
   ObservationOffset,
   PersistedJson,
   ProducerEpoch,
+  RecordId,
+  ToolCallPrepared,
+  WorkerInputRequested,
 } from "./Records.ts";
+import { runIdForSubmission } from "./RunJournal.ts";
+import { SubmissionLedger, SubmissionLookupById } from "./SubmissionLedger.ts";
+
+export const MAX_THREAD_EXPORT_RECORDS = 131_072;
+
+/** Exact canonical identity; absence is not proof that an admission was never accepted. */
+export const ThreadRecordRequest = Schema.Struct({ threadId: ThreadId, recordId: RecordId });
+export type ThreadRecordRequest = typeof ThreadRecordRequest.Type;
+
+/** The original user input for a Run, excluding later joined inputs. */
+export const ThreadRunInputRequest = Schema.Struct({ threadId: ThreadId, runId: RunId });
+export type ThreadRunInputRequest = typeof ThreadRunInputRequest.Type;
+
+export const ThreadOutstandingRequest = Schema.Struct({
+  threadId: ThreadId,
+  /** Exceeding this bound fails; a truncated inventory never grants authority. */
+  limit: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(4_096)),
+});
+
+export type ThreadOutstandingRequest = typeof ThreadOutstandingRequest.Type;
+
+export const ThreadOutstanding = Schema.Struct({
+  threadId: ThreadId,
+  throughSequence: CanonicalSequence,
+  /** False only for legacy worker acknowledgements awaiting native repair. */
+  complete: Schema.Boolean,
+  operations: Schema.Array(
+    Schema.Struct({
+      submissionId: SubmissionId,
+      prepared: ToolCallPrepared,
+      /** Prepared is not an unknown outcome or a grant to execute. */
+      state: Schema.Literals(["prepared", "unknown"]),
+    }),
+  ),
+  /** Source reservations without an acknowledgement proving external effects are resolved. */
+  workerInputs: Schema.Array(WorkerInputRequested),
+});
+
+export type ThreadOutstanding = typeof ThreadOutstanding.Type;
+
+/** Runtime maintenance cursor; never use a partial page to authorize an action. */
+export const ThreadWorkerInputsPageRequest = Schema.Struct({
+  threadId: ThreadId,
+  afterSequence: Schema.optionalKey(CanonicalSequence),
+  limit: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100)),
+});
+
+export type ThreadWorkerInputsPageRequest = typeof ThreadWorkerInputsPageRequest.Type;
+
+export const ThreadWorkerInputsPage = Schema.Struct({
+  inputs: Schema.Array(WorkerInputRequested),
+  next: Schema.NullOr(CanonicalSequence),
+});
+
+export type ThreadWorkerInputsPage = typeof ThreadWorkerInputsPage.Type;
+
+/** Native worker lifetime reservations and selected Run accounting, excluding conversation records. */
+export const ThreadWorkerStateRequest = Schema.Struct({
+  threadId: ThreadId,
+  sourceSubmissionId: Schema.optionalKey(SubmissionId),
+  limit: Schema.Int.check(
+    Schema.isGreaterThan(0),
+    Schema.isLessThanOrEqualTo(MAX_THREAD_EXPORT_RECORDS),
+  ),
+});
+
+export type ThreadWorkerStateRequest = typeof ThreadWorkerStateRequest.Type;
+
+export const ThreadWorkerState = Schema.Struct({
+  threadId: ThreadId,
+  tailSequence: CanonicalSequence,
+  tailDigest: Digest,
+  records: Schema.Array(CanonicalRecordEnvelope),
+});
+
+export type ThreadWorkerState = typeof ThreadWorkerState.Type;
+
+/** Saturating lifetime peer-message count: the result is at most the requested cap. */
+export const ThreadPeerCountRequest = Schema.Struct({
+  threadId: ThreadId,
+  limit: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1000)),
+});
+
+export type ThreadPeerCountRequest = typeof ThreadPeerCountRequest.Type;
+
+/** Native indexed reads. Canonical append maintains these atomically; no history fallback. */
+export interface ThreadNativeReads {
+  readonly countPeerMessages: (
+    request: ThreadPeerCountRequest,
+  ) => Effect.Effect<number, ThreadStoreError | ThreadNotMaterialized>;
+  readonly readWorkerState: (
+    request: ThreadWorkerStateRequest,
+  ) => Effect.Effect<ThreadWorkerState, ThreadStoreError | ThreadNotMaterialized>;
+  readonly readWorkerInputsPage: (
+    request: ThreadWorkerInputsPageRequest,
+  ) => Effect.Effect<ThreadWorkerInputsPage, ThreadStoreError | ThreadNotMaterialized>;
+  readonly getRecord: (
+    request: ThreadRecordRequest,
+  ) => Effect.Effect<
+    Option.Option<CanonicalRecordEnvelope>,
+    ThreadStoreError | ThreadNotMaterialized
+  >;
+  readonly getRunInput: (
+    request: ThreadRunInputRequest,
+  ) => Effect.Effect<
+    Option.Option<CanonicalRecordEnvelope>,
+    ThreadStoreError | ThreadNotMaterialized
+  >;
+  readonly readOutstanding: (
+    request: ThreadOutstandingRequest,
+  ) => Effect.Effect<ThreadOutstanding, ThreadStoreError | ThreadNotMaterialized>;
+}
+
+const nativeReads = Effect.gen(function* () {
+  const store = yield* ThreadStore;
+
+  if (store.nativeReads === undefined)
+    return yield* ThreadStoreError.make({
+      operation: "native read",
+      message: "This adapter does not support native indexed reads",
+    });
+
+  return store.nativeReads;
+});
+
+/** Host-owned read: authenticate the Thread and exact locator before calling. */
+export const getRecord = Effect.fn("ThreadStore.getRecord")(function* (
+  request: ThreadRecordRequest,
+) {
+  return yield* (yield* nativeReads).getRecord(request);
+});
+
+export const getRunInput = Effect.fn("ThreadStore.getRunInput")(function* (
+  request: ThreadRunInputRequest,
+) {
+  return yield* (yield* nativeReads).getRunInput(request);
+});
+
+/**
+ * Work is proportional to outstanding records, independent of completed history. Unknown
+ * effects survive abort and resolution intent; only canonical closure removes them. A
+ * preparation from another Run still requires native recovery before it can be treated as
+ * safe. This snapshot grants no execution authority and does not freeze other owners.
+ */
+export const readOutstanding = Effect.fn("ThreadStore.readOutstanding")(function* (
+  request: ThreadOutstandingRequest,
+) {
+  const state = yield* (yield* nativeReads).readOutstanding(request);
+
+  if (!state.complete)
+    return yield* ThreadStoreError.make({
+      operation: "readOutstanding",
+      message: "Legacy worker acknowledgements require native repair",
+    });
+  const ledger = yield* SubmissionLedger;
+
+  for (const operation of state.operations) {
+    const submission = yield* ledger.lookup(
+      SubmissionLookupById.make({ submissionId: operation.submissionId }),
+    );
+
+    if (
+      submission._tag === "None" ||
+      submission.value.threadId !== request.threadId ||
+      runIdForSubmission(operation.submissionId) !== operation.prepared.runId
+    )
+      return yield* ThreadStoreError.make({
+        operation: "readOutstanding",
+        message: "Canonical operation has no matching native admission",
+      });
+  }
+
+  return state;
+});
 
 export class ThreadMaterialization extends Schema.Class<ThreadMaterialization>(
   "@effect-agent/thread/ThreadMaterialization",
@@ -74,7 +251,6 @@ export class ThreadTail extends Schema.Class<ThreadTail>("@effect-agent/thread/T
 }) {}
 
 /** Maximum canonical records represented by one Thread export. */
-export const MAX_THREAD_EXPORT_RECORDS = 131_072;
 
 export class ThreadExport extends Schema.Class<ThreadExport>("@effect-agent/thread/ThreadExport")({
   format: Schema.Literal("effect-agent/thread@1"),
@@ -238,5 +414,6 @@ export class ThreadStore extends Context.Service<
     /** Absent when this adapter does not support disposable checkpoints. */
     readonly checkpoints?: ThreadCheckpoints | undefined;
     readonly recoveryCheckpoints?: ThreadRecoveryCheckpoints | undefined;
+    readonly nativeReads?: ThreadNativeReads | undefined;
   }
 >()("@effect-agent/thread/ThreadStore") {}

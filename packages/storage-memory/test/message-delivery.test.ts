@@ -11,6 +11,7 @@ import {
   MessageDeliveryFailpoint,
   MessageDeliveryFailpointError,
   MessageDeliveryStore,
+  readPending,
   prepareMessageDelivery,
   type MessageDeliveryChange,
   type MessageDeliveryKey,
@@ -814,6 +815,12 @@ describe("direct message delivery", () => {
             ).pipe(Effect.flip),
           ).toMatchObject({ _tag: "MessageDeliveryFailpointError", point: selected });
           const stored = yield* store.get(record.key);
+
+          expect(yield* readPending({ ownerThreadId: record.key.ownerThreadId, limit: 1 })).toEqual(
+            stored === null || stored.status === "processed" || stored.status === "refused"
+              ? []
+              : [stored],
+          );
 
           if (tag === "insert") expect(stored === null).toBe(phase === "before");
           else expect(stored?.version).toBe(before.version + (phase === "after" ? 1 : 0));

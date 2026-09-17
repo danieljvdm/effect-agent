@@ -21,6 +21,7 @@ import {
   Digest,
   ObservationOffset,
 } from "effect-agent/records";
+import { makeNativeReads } from "effect-agent/sql-thread-native-reads";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 import {
   AppendConflict,
@@ -918,7 +919,10 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
     return Option.some(checkpoint);
   });
 
+  const nativeReads = yield* makeNativeReads(decodeEnvelope);
+
   const threadStore = ThreadStore.of({
+    nativeReads,
     append,
     export: exportThread,
     inspectTail,

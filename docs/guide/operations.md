@@ -43,6 +43,69 @@ resolution consult `OperationAuthorizer`. Its default allows trusted service hol
 real authorizer before exposing these methods outside a trusted host. Denial fails as
 `OperationDenied` before protected I/O. The host must authorize admissions before calling `submit`.
 
+## Read current external work
+
+Host policy can use store-level reads without acquiring `DurableAgentRuntime`:
+
+```ts twoslash
+import { Effect } from "effect";
+import type { ThreadId } from "effect-agent/identifiers";
+import * as ThreadStore from "effect-agent/thread-store";
+
+const outstanding = Effect.fn("outstanding")(function* (threadId: ThreadId) {
+  return yield* ThreadStore.readOutstanding({ threadId, limit: 4096 });
+});
+```
+
+The result contains `throughSequence`, original `ToolCallPrepared` operations with their
+`submissionId` and `state` (`prepared` or `unknown`), and native `workerInputs` whose completion
+has not proven external effects resolved. Preparation is not an unknown outcome: the current
+Run may already be authorized to execute it. Policy remains application-owned, including which
+children share its scope. These reads do not acquire execution authority or freeze other work.
+
+Memory, SQLite, and Cloudflare maintain this inventory atomically with canonical append. Reads
+visit outstanding records, without replaying completed history or contacting historical children.
+An overflow, missing adapter capability, invalid canonical ownership, or an unverified legacy
+acknowledgement fails closed. The maximum requested inventory is 4096; partial inventories never
+mean permission. `readOutstanding` requires `ThreadStore` and `SubmissionLedger`.
+
+For exact receipts, use `ThreadStore.getRecord({ threadId, recordId })` or
+`ThreadStore.getRunInput({ threadId, runId })`. The latter returns the original user input,
+excluding joined inputs, and rejects ambiguous original inputs. Both return an optional canonical
+envelope and require only `ThreadStore`. Authorize the owner and locator before reading and
+verify the returned payload; absence alone does not prove an admission was never accepted.
+
+Use the existing `submissionInputRecordId` / `submissionSettlementRecordId` exports from
+`effect-agent/submission-ledger`, or these `effect-agent/run-journal` locators:
+
+- `workerInputRecordId(messageId)` and `firstWorkerInputRecordId(worker)` for source reservations,
+  including before child admission and after retirement;
+- `workerOriginRecordId(threadId)` for child origin;
+- `workerReportRecordId(destinationIdempotencyKey)` and `peerMessageRecordId(messageId)`;
+- `agentUpdateRecordId(threadId, runId, updateId)`, an Effect requiring `Crypto`.
+
+Worker start and follow-up admission use first-record/exact identity reads and an indexed
+snapshot of existing worker reservation/accounting families, with the full canonical tail
+for the existing CAS. Lifetime limits still count completed reservations. Peer admission uses
+an indexed lifetime count and exact message/accepted-input records; replies use the original
+envelope's delivery principal.
+
+`MessageDelivery.readPending({ ownerThreadId, limit })` reads current retained deliveries
+from the existing delivery store, separately from canonical operations. It includes accepted,
+parked, and future-due entries; processed/refused history is excluded. Cloudflare routes this
+read to the source owner. Bounds, missing capability, malformed data, or a mismatched owner
+fail closed. A no-receipt action delivery remains uncertain even before a canonical worker
+reservation exists. A native receipt proves accepted admission, not destination materialization;
+worker admission reserves its source input before returning a receipt. Applications can leave
+accepted worker discovery to canonical outstanding inputs and recognize native completion/update
+reports without reconstructing transport validation. These reads grant no execution authority.
+
+Supported SQLite and Cloudflare storage upgrades build the indexes once, atomically and in
+bounded decode pages. Existing worker acknowledgements without external-outcome proof remain
+incomplete until native recovery repairs them. `recoverSubmission` pages these reservations
+outside action reads, including when they exceed the action inventory limit. Proven completion
+retires inventory entries while preserving the original canonical records and receipts.
+
 ## Monitor unfinished work {#obligation-monitoring}
 
 `scanObligations` scans current ledger state. It returns `submissionId`, `threadId`, state,
@@ -77,6 +140,13 @@ Recovery claims the unknown Submission with its abort intent, handles attached c
 records an aborted settlement. It does not replay uncertain ordinary tools.
 The unknown evidence and first abort audit remain. Abort cannot roll back an external effect. A
 `SettlementConflict` reports a terminal result that won before the abort.
+
+After a terminal settlement, `resolveUnknown` accepts factual `CompletedWithResult` or
+`NeverHappened` evidence for an original prepared call. It atomically records the result and
+resolution audit, preserves the original settlement and abort decision, and retries the worker
+completion acknowledgement. It never reexecutes the cancelled operation or reopens the Run;
+`SafeToRetry` remains invalid for terminal work. Retry an interrupted resolution with the same
+command. Conflicting factual outcomes fail with `UnknownResolutionConflict`.
 
 Do not edit ledger state, wake the lane in a loop, resolve every open call separately, or clean up
 children by hand. The runtime owns those steps after it durably accepts the parent abort. It never

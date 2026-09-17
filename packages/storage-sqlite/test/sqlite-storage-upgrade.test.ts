@@ -9,6 +9,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   restoreV2,
+  removeNativeReadIndexes,
   assertPreserved,
   assertReceiptReplay,
   assertSubscriptionReplay,
@@ -92,6 +93,7 @@ describe("supported beta50 storage upgrade", () => {
             yield* open;
             const sql = yield* SqlClient.SqlClient;
 
+            yield* removeNativeReadIndexes;
             yield* sql`DROP INDEX effect_agent_submissions_nonterminal`;
             yield* sql`DROP TABLE effect_agent_recovery_checkpoints`;
             yield* sql`PRAGMA user_version = 9`;
@@ -104,7 +106,7 @@ describe("supported beta50 storage upgrade", () => {
             armed = false;
             yield* open;
             yield* assertPreserved("sqlite");
-            expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 11 }]);
+            expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 12 }]);
             expect(yield* sql`SELECT * FROM effect_agent_recovery_checkpoints`).toEqual([]);
             const upgraded = yield* snapshotStore;
 
@@ -125,6 +127,7 @@ describe("supported beta50 storage upgrade", () => {
         yield* open;
         const sql = yield* SqlClient.SqlClient;
 
+        yield* removeNativeReadIndexes;
         yield* sql`DROP INDEX effect_agent_submissions_nonterminal`;
         yield* sql`DROP TABLE effect_agent_recovery_checkpoints`;
         yield* sql`ALTER TABLE effect_agent_submissions RENAME COLUMN message_admission_json TO malformed_column`;
@@ -154,6 +157,7 @@ describe("supported beta50 storage upgrade", () => {
             yield* open;
             const sql = yield* SqlClient.SqlClient;
 
+            yield* removeNativeReadIndexes;
             yield* sql`DROP INDEX effect_agent_submissions_nonterminal`;
             yield* sql`DROP TABLE effect_agent_recovery_checkpoints`;
             yield* sql`DROP TABLE effect_agent_message_deliveries`;
@@ -189,6 +193,7 @@ describe("supported beta50 storage upgrade", () => {
           yield* open;
           const sql = yield* SqlClient.SqlClient;
 
+          yield* removeNativeReadIndexes;
           yield* sql`DROP INDEX effect_agent_submissions_nonterminal`;
           yield* sql`DROP TABLE effect_agent_recovery_checkpoints`;
           yield* sql`DROP TABLE effect_agent_message_deliveries`;
@@ -204,7 +209,7 @@ describe("supported beta50 storage upgrade", () => {
           armed = false;
           yield* open;
           yield* assertPreserved("sqlite");
-          expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 11 }]);
+          expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 12 }]);
           expect(yield* sql`SELECT * FROM effect_agent_message_deliveries`).toEqual([]);
         }),
       (location) =>
@@ -238,7 +243,7 @@ describe("supported beta50 storage upgrade", () => {
         );
         const sql = yield* SqlClient.SqlClient;
 
-        expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 11 }]);
+        expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 12 }]);
       }),
     ),
   );
@@ -343,6 +348,7 @@ describe("nonterminal index upgrade", () => {
                 const sql = yield* SqlClient.SqlClient;
 
                 yield* sql`INSERT INTO effect_agent_recovery_checkpoints (thread_id, through_sequence, tail_digest, checkpoint_json) SELECT thread_id, tail_sequence, tail_digest, '{"retained":true}' FROM effect_agent_threads LIMIT 1`;
+                yield* removeNativeReadIndexes;
                 yield* sql`DROP INDEX effect_agent_submissions_nonterminal`;
                 yield* sql`PRAGMA user_version = 10`;
                 const before = yield* snapshotStore;
@@ -356,19 +362,28 @@ describe("nonterminal index upgrade", () => {
                 const after = yield* snapshotStore;
 
                 for (const [table, rows] of Object.entries(before.contents)) {
-                  if (table !== "effect_agent_meta") expect(after.contents[table]).toEqual(rows);
+                  if (table !== "effect_agent_meta")
+                    expect(after.contents[table]).toMatchObject(rows);
                 }
                 expect(
                   after.definitions.filter(
-                    (entry) => entry.name !== "effect_agent_submissions_nonterminal",
+                    (entry) =>
+                      entry.name !== "effect_agent_submissions_nonterminal" &&
+                      entry.name !== "effect_agent_message_deliveries_pending" &&
+                      !entry.name.startsWith("effect_agent_records_") &&
+                      entry.name !== "effect_agent_canonical_records",
                   ),
-                ).toEqual(before.definitions);
+                ).toEqual(
+                  before.definitions.filter(
+                    (entry) => entry.name !== "effect_agent_canonical_records",
+                  ),
+                );
                 expect(
                   after.definitions.find(
                     (entry) => entry.name === "effect_agent_submissions_nonterminal",
                   )?.sql,
                 ).toContain("WHERE state <> 'settled'");
-                expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 11 }]);
+                expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 12 }]);
                 yield* open;
                 expect(yield* snapshotStore).toEqual(after);
               }),
@@ -400,6 +415,7 @@ describe("nonterminal index upgrade", () => {
             yield* open;
             const sql = yield* SqlClient.SqlClient;
 
+            yield* removeNativeReadIndexes;
             yield* sql`DROP INDEX effect_agent_submissions_nonterminal`;
             yield* sql`PRAGMA user_version = 10`;
             yield* sql.unsafe(`ALTER TABLE ${table} RENAME COLUMN ${column} TO malformed_column`);
@@ -439,4 +455,60 @@ describe("nonterminal index upgrade", () => {
       }),
     ),
   );
+});
+
+describe("native canonical index upgrade", () => {
+  for (const point of [
+    "upgrade:before-mutation",
+    "upgrade:after-mutation",
+    "upgrade:before-version",
+    "upgrade:after-version",
+  ] as const) {
+    it.effect(`preserves v11 canonical rows atomically at ${point}`, () => {
+      let armed = false;
+
+      return withFixture(
+        (open) =>
+          Effect.gen(function* () {
+            yield* open;
+            const sql = yield* SqlClient.SqlClient;
+
+            yield* removeNativeReadIndexes;
+            yield* sql`PRAGMA user_version = 11`;
+            const before = yield* snapshotStore;
+
+            armed = true;
+            expect(Exit.isFailure(yield* open.pipe(Effect.exit))).toBe(true);
+            expect(yield* snapshotStore).toEqual(before);
+            armed = false;
+            yield* open;
+            yield* assertPreserved("sqlite");
+            expect(yield* sql`PRAGMA user_version`).toEqual([{ user_version: 12 }]);
+          }),
+        (location) =>
+          armed && location === point
+            ? SqliteStorageFailpointError.make({ location })
+            : Effect.void,
+      );
+    });
+  }
+  for (const corruption of ["canonical gap", "missing index"] as const)
+    it.effect(`rejects a predecessor ${corruption} without mutation`, () =>
+      withFixture((open) =>
+        Effect.gen(function* () {
+          yield* open;
+          const sql = yield* SqlClient.SqlClient;
+
+          yield* removeNativeReadIndexes;
+          yield* sql`PRAGMA user_version = 11`;
+          if (corruption === "canonical gap")
+            yield* sql`DELETE FROM effect_agent_canonical_records WHERE sequence = 1`;
+          else yield* sql`DROP INDEX effect_agent_submissions_nonterminal`;
+          const before = yield* snapshotStore;
+
+          expect(Exit.isFailure(yield* open.pipe(Effect.exit))).toBe(true);
+          expect(yield* snapshotStore).toEqual(before);
+        }),
+      ),
+    );
 });

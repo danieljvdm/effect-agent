@@ -2,7 +2,7 @@ import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer } from "effect";
-import { MessageDeliveryStore } from "effect-agent/message-delivery";
+import { MessageDeliveryStore, readPending } from "effect-agent/message-delivery";
 import {
   makeMessageDeliveryFixture,
   messageDeliveryStoreConformanceCases,
@@ -54,6 +54,9 @@ it.effect("rediscovers an interrupted delivery lease after closing and reopening
         const store = yield* MessageDeliveryStore;
 
         expect(yield* store.get(record.key)).toEqual(oldClaim);
+        expect(yield* readPending({ ownerThreadId: record.key.ownerThreadId, limit: 1 })).toEqual([
+          oldClaim,
+        ]);
         expect(yield* store.due(99, 10)).toEqual([]);
         expect(yield* store.due(100, 10)).toEqual([record.key]);
 

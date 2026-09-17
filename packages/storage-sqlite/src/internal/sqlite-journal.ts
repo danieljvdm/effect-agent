@@ -2,13 +2,19 @@ import { NodeCrypto } from "@effect/platform-node";
 import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect, Exit, Schema } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { CanonicalSequence, ProducerEpoch } from "effect-agent/records";
+import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
 import { ScheduleFailpoint, ScheduleFailpointError } from "effect-agent/schedule";
+import { createMessageDeliveryPendingIndex } from "effect-agent/sql-message-delivery-store";
 import {
   checkV2ThreadLayout,
   upgradeV2Schedules,
   upgradeV2Subscriptions,
 } from "effect-agent/sql-storage-v2-upgrade";
+import {
+  createNativeReadIndexes,
+  seedNativeReadIndexes,
+  indexCanonicalRecord,
+} from "effect-agent/sql-thread-native-reads";
 import { SubscriptionFailpoint, SubscriptionFailpointError } from "effect-agent/subscription";
 import {
   MAX_THREAD_EXPORT_RECORDS,
@@ -488,6 +494,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     version.user_version !== 8 &&
     version.user_version !== 9 &&
     version.user_version !== 10 &&
+    version.user_version !== 11 &&
     version.user_version !== CurrentSqliteStorageVersion
   ) {
     return yield* SqliteStorageCompatibilityError.make({
@@ -496,7 +503,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       message:
         `The SQLite file uses unsupported storage version ${version.user_version}; ` +
         `this build supports exactly version ${CurrentSqliteStorageVersion}. ` +
-        "Only supported v7, v8, v9 and v10 can be upgraded automatically. Keep the original file and use a compatible library version.",
+        "Only supported v7, v8, v9, v10 and v11 can be upgraded automatically. Keep the original file and use a compatible library version.",
     });
   }
 
@@ -620,7 +627,18 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           yield* createNonterminalIndex;
           yield* failpoint("upgrade:after-mutation");
           yield* failpoint("upgrade:before-version");
-          yield* sql`PRAGMA user_version = 11`;
+          yield* createNativeReadIndexes;
+          yield* createMessageDeliveryPendingIndex;
+          yield* seedNativeReadIndexes.pipe(
+            Effect.catchTag("ThreadStoreError", (error) =>
+              SqliteStorageCorruptionError.make({
+                table: "effect_agent_canonical_records",
+                rowKey: "upgrade",
+                message: error.message,
+              }),
+            ),
+          );
+          yield* sql`PRAGMA user_version = 12`;
           yield* failpoint("upgrade:after-version");
         }),
       )
@@ -694,6 +712,59 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     );
   }
 
+  if (version.user_version === 11) {
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const current = yield* sql<{ user_version: number }>`PRAGMA user_version`;
+
+          if (current[0]?.user_version === 12) return;
+          if (current[0]?.user_version !== 11)
+            return yield* SqliteStorageCompatibilityError.make({
+              actualVersion: current[0]?.user_version ?? -1,
+              supportedVersion: 12,
+              message: "Storage version changed during native index upgrade",
+            });
+          yield* checkPredecessorLayout(10);
+
+          const requiredIndex =
+            yield* sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'effect_agent_submissions_nonterminal'`;
+
+          if (requiredIndex.length !== 1)
+            return yield* SqliteStorageCompatibilityError.make({
+              actualVersion: 11,
+              supportedVersion: 12,
+              message: "Predecessor storage is missing its required nonterminal index",
+            });
+          yield* failpoint("upgrade:before-mutation");
+          yield* createNativeReadIndexes;
+          yield* createMessageDeliveryPendingIndex;
+          yield* seedNativeReadIndexes.pipe(
+            Effect.catchTag("ThreadStoreError", (error) =>
+              SqliteStorageCorruptionError.make({
+                table: "effect_agent_canonical_records",
+                rowKey: "upgrade",
+                message: error.message,
+              }),
+            ),
+          );
+          yield* failpoint("upgrade:after-mutation");
+          yield* failpoint("upgrade:before-version");
+          yield* sql`PRAGMA user_version = 12`;
+          yield* failpoint("upgrade:after-version");
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          SqliteStorageError.make({
+            operation: "upgrade native indexes",
+            message: error.message,
+            cause: error,
+          }),
+        ),
+      );
+  }
+
   const requiredRows = yield* sql<Record<string, unknown>>`
     SELECT name
     FROM sqlite_master
@@ -713,7 +784,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         'effect_agent_schedules',
         'effect_agent_message_deliveries',
         'effect_agent_recovery_checkpoints'
-      )) OR (type = 'index' AND name = 'effect_agent_submissions_nonterminal')
+      )) OR (type = 'index' AND name IN ('effect_agent_submissions_nonterminal', 'effect_agent_records_subtree', 'effect_agent_message_deliveries_pending', 'effect_agent_records_outstanding', 'effect_agent_records_call', 'effect_agent_records_run_input', 'effect_agent_records_worker_input'))
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
 
@@ -724,7 +795,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     requiredRows,
   );
 
-  if (required.length !== 15) {
+  if (required.length !== 21) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: CurrentSqliteStorageVersion,
       supportedVersion: CurrentSqliteStorageVersion,
@@ -1142,6 +1213,23 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
                     ${record.recordJson}
                   )
                 `.pipe(Effect.mapError(storageError("insert canonical record")));
+
+              const canonical = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
+                record.recordJson,
+              ).pipe(
+                Effect.mapError((error) =>
+                  SqliteStorageCorruptionError.make({
+                    table: "effect_agent_canonical_records",
+                    rowKey: record.recordId,
+                    message: error.message,
+                  }),
+                ),
+              );
+
+              yield* indexCanonicalRecord(request.threadId, canonical).pipe(
+                Effect.provideService(SqlClient.SqlClient, sql),
+                Effect.mapError(storageError("index canonical record")),
+              );
               yield* failpoint("append:after-record-insert");
             }),
           { discard: true },

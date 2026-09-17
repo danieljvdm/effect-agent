@@ -17,6 +17,7 @@ import {
 } from "@effect-agent/storage-cloudflare/port-protocol";
 import {
   executePortRequest,
+  routedMessageDeliveryStoreLayer,
   routedThreadStoreLayer,
   routedSubmissionLedgerLayer,
 } from "@effect-agent/storage-cloudflare/port-routing";
@@ -713,7 +714,10 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
 
       const portsEndpointLayer = Layer.effect(ThreadObjectPorts)(
         Effect.gen(function* () {
-          const local = yield* Effect.context<SubmissionLedger | ThreadStore>();
+          const local = yield* Effect.context<
+            SubmissionLedger | ThreadStore | MessageDeliveryStore
+          >();
+
           const ledger = Context.get(local, SubmissionLedger);
 
           return ThreadObjectPorts.of({
@@ -722,18 +726,23 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
               ledger.lookup(SubmissionLookupById.make({ submissionId })),
           });
         }),
-      ).pipe(Layer.provide(localPorts));
+      ).pipe(Layer.provide(localPorts), Layer.provide(messageStore));
 
       const routedPorts = Layer.mergeAll(
         routedSubmissionLedgerLayer({ ownsThread }),
         routedThreadStoreLayer({ ownsThread }),
       ).pipe(Layer.provide(localPorts), Layer.provide(threadPortTransportLayer));
 
+      const routedMessages = routedMessageDeliveryStoreLayer({ ownsThread }).pipe(
+        Layer.provide(messageStore),
+        Layer.provide(threadPortTransportLayer),
+      );
+
       const runtimeStack = application.pipe(
         Layer.provide(
           cloudflarePreparedInputAdmissionLayer.pipe(Layer.provide(CloudflareThreadClient.layer)),
         ),
-        Layer.provideMerge(messageStore),
+        Layer.provideMerge(routedMessages),
         Layer.provideMerge(routedPorts),
         Layer.provideMerge(wakes),
         Layer.provideMerge(base),
@@ -744,7 +753,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
         runtimeStack,
         ThreadMaintenance.layer.pipe(Layer.provide(runtimeStack), Layer.provide(messageRecovery)),
         portsEndpointLayer,
-        messageStore,
+        routedMessages,
         messageRecovery,
       ).pipe(
         Layer.provideMerge(publication),

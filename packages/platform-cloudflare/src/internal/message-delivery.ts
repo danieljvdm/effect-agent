@@ -12,6 +12,7 @@ import {
 } from "effect";
 import { type ThreadId } from "effect-agent/identifiers";
 import {
+  readPending,
   MessageDeliveryDriver,
   MessageDeliveryError,
   MessageDeliveryStore,
@@ -82,6 +83,11 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
           ),
         ),
       get: (key) => local(key.ownerThreadId, store.get(key)),
+      readPending: (request) =>
+        local(
+          request.ownerThreadId,
+          readPending(request).pipe(Effect.provideService(MessageDeliveryStore, store)),
+        ),
       list: (request) => local(request.ownerThreadId, store.list(request)),
       change: (key, change) => local(key.ownerThreadId, mutate(store.change(key, change))),
       // Only the trusted physical-owner pump omits an owner. All returned keys still

@@ -1,11 +1,13 @@
 import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect } from "effect";
+import { createMessageDeliveryPendingIndex } from "effect-agent/sql-message-delivery-store";
+import { createNativeReadIndexes } from "effect-agent/sql-thread-native-reads";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
 import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
-export const CurrentSqliteStorageVersion = 11;
+export const CurrentSqliteStorageVersion = 12;
 
 /** Index only outstanding obligations, ordered by the recovery scan's stable cursor. */
 export const createNonterminalIndex = Effect.gen(function* () {
@@ -344,9 +346,11 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
       .withoutTransform;
     yield* sql`CREATE INDEX effect_agent_subscription_deliveries_registration ON effect_agent_subscription_deliveries (tenant_id, source_address, owner_id, subscription_id, delivery_key)`
       .withoutTransform;
+    yield* createNativeReadIndexes;
     yield* createNonterminalIndex;
     yield* createMessageDeliveryTables;
+    yield* createMessageDeliveryPendingIndex;
     yield* createRecoveryCheckpointTable;
-    yield* sql`PRAGMA user_version = 11`.withoutTransform;
+    yield* sql`PRAGMA user_version = 12`.withoutTransform;
   }),
 });

@@ -1,8 +1,14 @@
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import { Effect, Schema, Stream } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { CanonicalSequence, ProducerEpoch } from "effect-agent/records";
+import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
+import { createMessageDeliveryPendingIndex } from "effect-agent/sql-message-delivery-store";
 import { checkV2ThreadLayout } from "effect-agent/sql-storage-v2-upgrade";
+import {
+  createNativeReadIndexes,
+  seedNativeReadIndexes,
+  indexCanonicalRecord,
+} from "effect-agent/sql-thread-native-reads";
 import {
   MAX_THREAD_EXPORT_RECORDS,
   CheckpointRejected,
@@ -605,7 +611,18 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             yield* createNonterminalIndex;
             yield* failpoint("upgrade:after-mutation");
             yield* failpoint("upgrade:before-version");
-            yield* sql`UPDATE effect_agent_meta SET value='6' WHERE key='storage_version'`;
+            yield* createNativeReadIndexes;
+            yield* createMessageDeliveryPendingIndex;
+            yield* seedNativeReadIndexes.pipe(
+              Effect.catchTag("ThreadStoreError", (error) =>
+                DoStorageCorruptionError.make({
+                  table: "effect_agent_canonical_records",
+                  rowKey: "upgrade",
+                  message: error.message,
+                }),
+              ),
+            );
+            yield* sql`UPDATE effect_agent_meta SET value='7' WHERE key='storage_version'`;
             yield* failpoint("upgrade:after-version");
           }),
         )
@@ -624,7 +641,67 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
               message: error.message,
             }),
           ),
+          Effect.catchTag("SchemaError", (error) =>
+            DoStorageCorruptionError.make({
+              table: "effect_agent_canonical_records",
+              rowKey: "upgrade",
+              message: error.message,
+            }),
+          ),
           Effect.catchTag("SqlError", storageError("upgrade supported thread storage")),
+        );
+    } else if (version.value === "6") {
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const current = yield* sql<{
+              value: string;
+            }>`SELECT value FROM effect_agent_meta WHERE key = 'storage_version'`;
+
+            if (current[0]?.value === "7") return;
+            if (current[0]?.value !== "6")
+              return yield* DoStorageCompatibilityError.make({
+                actualVersion: -1,
+                supportedVersion: 7,
+                message: "Storage version changed during native index upgrade",
+              });
+            yield* checkPredecessorLayout(5);
+
+            const requiredIndex =
+              yield* sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'effect_agent_submissions_nonterminal'`;
+
+            if (requiredIndex.length !== 1)
+              return yield* DoStorageCompatibilityError.make({
+                actualVersion: 6,
+                supportedVersion: 7,
+                message: "Predecessor storage is missing its required nonterminal index",
+              });
+            yield* failpoint("upgrade:before-mutation");
+            yield* createNativeReadIndexes;
+            yield* createMessageDeliveryPendingIndex;
+            yield* seedNativeReadIndexes.pipe(
+              Effect.catchTag("ThreadStoreError", (error) =>
+                DoStorageCorruptionError.make({
+                  table: "effect_agent_canonical_records",
+                  rowKey: "upgrade",
+                  message: error.message,
+                }),
+              ),
+            );
+            yield* failpoint("upgrade:after-mutation");
+            yield* failpoint("upgrade:before-version");
+            yield* sql`UPDATE effect_agent_meta SET value='7' WHERE key='storage_version'`;
+            yield* failpoint("upgrade:after-version");
+          }),
+        )
+        .pipe(
+          Effect.mapError((error) =>
+            DoStorageError.make({
+              operation: "upgrade native indexes",
+              message: error.message,
+              cause: error,
+            }),
+          ),
         );
     } else if (version.value !== String(CurrentDoStorageVersion)) {
       const actualVersion = Number.parseInt(version.value, 10);
@@ -635,7 +712,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
         message:
           `The Durable Object uses unsupported storage version ${version.value}; ` +
           `this build supports exactly version ${CurrentDoStorageVersion}. ` +
-          "Only supported v2, v3, v4 and v5 can be upgraded automatically. Keep the original store and use a compatible library version.",
+          "Only supported v2, v3, v4, v5 and v6 can be upgraded automatically. Keep the original store and use a compatible library version.",
       });
     }
   }
@@ -645,7 +722,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     FROM sqlite_master
     WHERE (type = 'table'
       AND name IN ${sql.in([...REQUIRED_TABLES, "effect_agent_message_deliveries", "effect_agent_recovery_checkpoints"])}
-    ) OR (type = 'index' AND name = 'effect_agent_submissions_nonterminal')
+    ) OR (type = 'index' AND name IN ('effect_agent_submissions_nonterminal', 'effect_agent_records_subtree', 'effect_agent_message_deliveries_pending', 'effect_agent_records_outstanding', 'effect_agent_records_call', 'effect_agent_records_run_input', 'effect_agent_records_worker_input'))
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
 
@@ -656,7 +733,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
     requiredRows,
   );
 
-  if (required.length !== REQUIRED_TABLES.length + 3) {
+  if (required.length !== REQUIRED_TABLES.length + 9) {
     return yield* DoStorageCompatibilityError.make({
       actualVersion: CurrentDoStorageVersion,
       supportedVersion: CurrentDoStorageVersion,
@@ -1030,6 +1107,23 @@ const makeJournal = (
                     ${record.recordJson}
                   )
                 `.pipe(Effect.mapError(storageError("insert canonical record")));
+
+              const canonical = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
+                record.recordJson,
+              ).pipe(
+                Effect.mapError((error) =>
+                  DoStorageCorruptionError.make({
+                    table: "effect_agent_canonical_records",
+                    rowKey: record.recordId,
+                    message: error.message,
+                  }),
+                ),
+              );
+
+              yield* indexCanonicalRecord(request.threadId, canonical).pipe(
+                Effect.provideService(SqlClient.SqlClient, sql),
+                Effect.mapError(storageError("index canonical record")),
+              );
               yield* failpoint("append:after-record-insert");
             }),
           { discard: true },

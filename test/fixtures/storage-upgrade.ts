@@ -106,7 +106,12 @@ export const assertPreserved = Effect.fn("StorageUpgradeFixture.assertPreserved"
     for (const [index, old] of oldRows.entries()) {
       const row = current[index];
 
-      if (table === "effect_agent_submissions") {
+      if (table === "effect_agent_canonical_records") {
+        const { outstanding, ...retained } = row;
+
+        expect(outstanding).toBe(0);
+        expect(retained).toEqual(old);
+      } else if (table === "effect_agent_submissions") {
         const {
           admission_group,
           admission_fence_json,
@@ -274,4 +279,17 @@ export const assertSubscriptionReplay = Effect.gen(function* () {
       }),
     ).toEqual(complete);
   }
+});
+
+/** Reconstruct the exact predecessor format before exercising an upgrade. */
+export const removeNativeReadIndexes = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  yield* sql`DROP INDEX effect_agent_message_deliveries_pending`;
+  yield* sql`DROP INDEX effect_agent_records_subtree`;
+  yield* sql`DROP INDEX effect_agent_records_outstanding`;
+  yield* sql`DROP INDEX effect_agent_records_call`;
+  yield* sql`DROP INDEX effect_agent_records_run_input`;
+  yield* sql`DROP INDEX effect_agent_records_worker_input`;
+  yield* sql`ALTER TABLE effect_agent_canonical_records DROP COLUMN outstanding`;
 });

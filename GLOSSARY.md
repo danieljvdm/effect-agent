@@ -447,7 +447,8 @@ cannot mutate canonical state even if it resumes.
 **Unknown Outcome**  
 A durable record that an external Tool effect may have occurred but was not confirmed
 canonically. It is neither success nor ordinary failure. Its Submission remains parked with an
-open settlement obligation while later input can run.
+open settlement obligation while later input can run. Uncertain effects can also outlive an aborted
+or otherwise terminal Submission; only canonical factual closure retires that uncertainty.
 
 **Accepted-work Contract**  
 Once a Submission is durably acknowledged, the runtime owes it exactly one durable Settlement.

@@ -880,6 +880,8 @@ export class WorkerInputCompleted extends Schema.TaggedClass<WorkerInputComplete
     receiptId: ReceiptId,
     settlementId: SettlementId,
     completedAtMillis: Schema.Natural,
+    /** New acknowledgements prove that this input's external effects are resolved. */
+    effectsResolved: Schema.optionalKey(Schema.Literal(true)),
   },
 ) {}
 
