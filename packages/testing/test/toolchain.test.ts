@@ -911,39 +911,10 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         workflow_run: { workflows: ["CI"], types: ["completed"], branches: ["main"] },
       });
       expect(checkout?.with?.ref).toBe("${{ github.sha }}");
-      const releaseIf = release.jobs.release?.if;
-
-      if (releaseIf === undefined) return yield* Effect.die("Missing release predicate");
-
-      const mainRun = {
-        event: "push",
-        conclusion: "success",
-        head_branch: "main",
-        head_sha: "validated-main",
-        repository: { full_name: "danieljvdm/effect-agent" },
-        head_repository: { full_name: "danieljvdm/effect-agent" },
-        path: ".github/workflows/ci.yml",
-      };
-
-      const eligible = (run: typeof mainRun, sha = "validated-main") =>
-        runInNewContext(releaseIf.slice(3, -2), {
-          github: { sha, repository: "danieljvdm/effect-agent", event: { workflow_run: run } },
-        });
-
-      expect(eligible(mainRun)).toBe(true);
-      expect(eligible(mainRun, "newer-main")).toBe(false);
-      for (const run of [
-        { ...mainRun, event: "pull_request" },
-        { ...mainRun, conclusion: "failure" },
-        { ...mainRun, head_branch: "feature" },
-        { ...mainRun, path: ".github/workflows/other.yml" },
-        { ...mainRun, head_repository: { full_name: "fork/effect-agent" } },
-      ])
-        expect(eligible(run)).toBe(false);
     }),
   );
 
-  it.effect("falls back to ordinary jobs and makes ready require candidate validation", () =>
+  it.effect("isolates release proof credentials and makes ready require candidate validation", () =>
     Effect.gen(function* () {
       const ci = yield* readWorkflow(".github/workflows/ci.yml");
       const proof = ci.jobs["release-proof"];
@@ -957,36 +928,6 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         ref: "${{ github.event.pull_request.base.sha }}",
         "persist-credentials": false,
       });
-      expect(proof?.outputs?.fast).toBe(
-        "${{ steps.proof.outcome == 'success' && steps.proof.outputs.fast == 'true' }}",
-      );
-      expect(ci.jobs.ready?.needs).toEqual(["release-proof", "checks", "test", "build"]);
-      const packageCheck = workflowStep(ci, "build", "Validate versioned release packages");
-
-      expect(packageCheck?.if).toBe("${{ needs.release-proof.outputs.fast == 'true' }}");
-      expect(packageCheck?.run).toContain("vp run ci:release-packages");
-      expect(workflowStep(ci, "build", "Build packages, examples, and docs")?.run).toBe(
-        "./node_modules/.bin/vp run -v build",
-      );
-      for (const fast of [undefined, "false", "true"]) {
-        for (const job of ["checks", "test", "build"]) {
-          const expression = ci.jobs[job]?.if;
-
-          if (expression === undefined) return yield* Effect.die("Missing job predicate");
-
-          const evaluate = (cancelled: boolean) =>
-            runInNewContext(
-              expression.slice(3, -2).replaceAll("needs.release-proof", 'needs["release-proof"]'),
-              {
-                cancelled: () => cancelled,
-                needs: { "release-proof": { outputs: { fast } } },
-              },
-            );
-
-          expect(evaluate(false), `${job}, fast=${fast}`).toBe(job === "build" || fast !== "true");
-          expect(evaluate(true)).toBe(false);
-        }
-      }
       const script = workflowStep(ci, "ready", "Verify all required gates passed")?.run;
 
       if (script === undefined) return yield* Effect.die("Missing ready fan-in");

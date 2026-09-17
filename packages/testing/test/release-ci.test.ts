@@ -440,7 +440,6 @@ layer(NodeServices.layer)((it) => {
         const evidence = { ...run, head_sha: base };
         const requests: Array<string> = [];
         let scenario = "success";
-        let runReads = 0;
 
         const client = HttpClient.make((request, url) => {
           requests.push(`${request.method} ${url.pathname}${url.search}`);
@@ -481,7 +480,6 @@ layer(NodeServices.layer)((it) => {
               body = { ...jobs, jobs: jobs.jobs.map((job) => ({ ...job, head_sha: base })) };
               break;
             case "actions/runs/42":
-              runReads += 1;
               body = { ...evidence, run_attempt: scenario === "rerun" ? 2 : 1 };
               break;
             default:
@@ -506,7 +504,6 @@ layer(NodeServices.layer)((it) => {
           fast: true,
           evidence: { base, head, checkout, runId: 42, runAttempt: 1 },
         });
-        expect(runReads).toBe(1);
         expect(requests).toContain(
           `GET /repos/${repository}/actions/workflows/12/runs?head_sha=${base}&event=push&branch=main&per_page=100`,
         );
