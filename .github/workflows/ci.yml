@@ -236,7 +236,7 @@ jobs:
             vite-task-build-${{ runner.os }}-
 
       - name: Restore verified version PR build
-        if: ${{ needs.release-proof.outputs.build-run != '' }}
+        if: ${{ needs.release-proof.outputs.fast == 'true' && needs.release-proof.outputs.build-run != '' }}
         run: ./node_modules/.bin/vp run ci:release-build
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -248,7 +248,7 @@ jobs:
 
       - name: Build packages, examples, and docs
         id: build
-        if: ${{ needs.release-proof.outputs.build-run == '' }}
+        if: ${{ needs.release-proof.outputs.fast != 'true' || needs.release-proof.outputs.build-run == '' }}
         run: ./node_modules/.bin/vp run -v build
 
       - name: Validate versioned release packages
