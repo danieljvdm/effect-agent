@@ -11,9 +11,12 @@ import {
   decideReleaseCi,
   type MetadataChange,
   proveReleaseCi,
+  proveMergedReleaseCi,
   readCommand,
   readMetadata,
   verifyEvidence,
+  verifyBuildEvidence,
+  verifyMainBuild,
   verifyMetadata,
   verifyRevisions,
 } from "../../../scripts/release-ci.ts";
@@ -232,6 +235,7 @@ const run: typeof Run.Type = {
   status: "completed",
   conclusion: "success",
   repository: { full_name: repository },
+  head_repository: { full_name: repository },
 };
 
 const jobs: typeof Jobs.Type = {
@@ -307,6 +311,8 @@ it.effect("requires exact ordinary workflow, revision, run and successful comman
 );
 
 const pull = {
+  number: 516,
+  merged: false,
   state: "open",
   merge_commit_sha: checkout,
   base: { ref: "main", sha: base, repo: { full_name: repository } },
@@ -440,6 +446,46 @@ layer(NodeServices.layer)((it) => {
         const evidence = { ...run, head_sha: base };
         const requests: Array<string> = [];
         let scenario = "success";
+        let merged = false;
+        let mergedCheckout = checkout;
+
+        const buildRun = {
+          ...evidence,
+          id: 43,
+          event: "pull_request",
+          head_branch: "changeset-release/main",
+          head_sha: head,
+        };
+
+        const buildJobs = {
+          total_count: 2,
+          jobs: [
+            {
+              ...jobs.jobs[0]!,
+              name: "Build",
+              run_id: 43,
+              head_sha: head,
+              steps: [
+                "Build packages, examples, and docs",
+                "Validate versioned release packages",
+                "Upload release build",
+              ].map((name) => ({ name, status: "completed", conclusion: "success" })),
+            },
+            {
+              ...jobs.jobs[0]!,
+              name: "ready",
+              run_id: 43,
+              head_sha: head,
+              steps: [
+                {
+                  name: "Verify all required gates passed",
+                  status: "completed",
+                  conclusion: "success",
+                },
+              ],
+            },
+          ],
+        };
 
         const client = HttpClient.make((request, url) => {
           requests.push(`${request.method} ${url.pathname}${url.search}`);
@@ -448,21 +494,44 @@ layer(NodeServices.layer)((it) => {
           let body: unknown;
 
           switch (route) {
+            case `commits/${mergedCheckout}/pulls`:
+              body = [{ number: 516, head: { sha: head } }];
+              if (scenario === "ambiguous") body = [body, body];
+              break;
             case "pulls/516":
               body = {
                 ...pull,
-                merge_commit_sha: checkout,
+                state: merged ? "closed" : "open",
+                merged,
+                merge_commit_sha: mergedCheckout,
                 base: { ...pull.base, sha: base },
                 head: { ...pull.head, sha: head },
               };
               break;
             case "git/ref/heads/main":
-              body = { object: { sha: scenario === "moved" ? head : base } };
+              body = {
+                object: { sha: scenario === "moved" ? head : merged ? mergedCheckout : base },
+              };
               break;
             case "actions/workflows/ci.yml":
               body = { id: 12, path: ".github/workflows/ci.yml", state: "active" };
               break;
             case "actions/workflows/12/runs":
+              if (url.searchParams.get("event") === "pull_request") {
+                body = {
+                  total_count: scenario === "no-build" ? 0 : 1,
+                  workflow_runs:
+                    scenario === "no-build"
+                      ? []
+                      : [
+                          {
+                            ...buildRun,
+                            conclusion: scenario === "failed-build" ? "failure" : "success",
+                          },
+                        ],
+                };
+                break;
+              }
               body = {
                 total_count: scenario === "missing" ? 0 : 1,
                 workflow_runs:
@@ -478,6 +547,21 @@ layer(NodeServices.layer)((it) => {
               break;
             case "actions/runs/42/attempts/1/jobs":
               body = { ...jobs, jobs: jobs.jobs.map((job) => ({ ...job, head_sha: base })) };
+              break;
+            case "actions/runs/43/attempts/1/jobs":
+              body =
+                scenario === "skipped-upload"
+                  ? {
+                      ...buildJobs,
+                      jobs: buildJobs.jobs.map((job) => ({
+                        ...job,
+                        steps: job.steps.filter((step) => step.name !== "Upload release build"),
+                      })),
+                    }
+                  : buildJobs;
+              break;
+            case "actions/runs/43":
+              body = { ...buildRun, run_attempt: scenario === "build-rerun" ? 2 : 1 };
               break;
             case "actions/runs/42":
               body = { ...evidence, run_attempt: scenario === "rerun" ? 2 : 1 };
@@ -514,6 +598,93 @@ layer(NodeServices.layer)((it) => {
         for (scenario of ["missing", "pending", "api-error", "malformed", "rerun", "moved"]) {
           expect(yield* prove).toEqual({ fast: false });
         }
+        scenario = "success";
+        merged = true;
+
+        const proveMerged = () =>
+          decideReleaseCi(
+            proveMergedReleaseCi(directory, base, mergedCheckout, "test-read-only-token"),
+          ).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+        // The same source proof survives both supported GitHub merge topologies.
+        for (const candidate of [
+          checkout,
+          yield* git("commit-tree", `${head}^{tree}`, "-p", base, "-m", "Squashed version PR"),
+        ]) {
+          mergedCheckout = candidate;
+          expect(yield* proveMerged()).toEqual({
+            fast: true,
+            evidence: {
+              base,
+              head,
+              checkout: candidate,
+              runId: 42,
+              runAttempt: 1,
+              buildRunId: 43,
+              buildRunAttempt: 1,
+            },
+          });
+          for (scenario of [
+            "moved",
+            "no-build",
+            "ambiguous",
+            "failed-build",
+            "skipped-upload",
+            "build-rerun",
+            "rerun",
+            "api-error",
+          ]) {
+            expect(yield* proveMerged()).toEqual({ fast: false });
+          }
+          scenario = "success";
+        }
+        yield* verifyBuildEvidence(head, 12, buildRun, buildJobs, "pull_request");
+        expect(
+          (yield* decideReleaseCi(
+            verifyBuildEvidence(
+              head,
+              12,
+              { ...buildRun, head_repository: { full_name: "fork/effect-agent" } },
+              buildJobs,
+              "pull_request",
+            ),
+          )).fast,
+        ).toBe(false);
+
+        // A successful main artifact still needs its exact attempt and current main.
+        const mainBuild = {
+          ...buildRun,
+          event: "push",
+          head_branch: "main",
+          head_sha: mergedCheckout,
+        };
+
+        const mainClient = HttpClient.make((request, url) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(
+                url.pathname.endsWith("ci.yml")
+                  ? { id: 12, path: ".github/workflows/ci.yml", state: "active" }
+                  : url.pathname.endsWith("/jobs")
+                    ? {
+                        ...buildJobs,
+                        jobs: buildJobs.jobs.map((job) => ({ ...job, head_sha: mergedCheckout })),
+                      }
+                    : url.pathname.endsWith("/main")
+                      ? { object: { sha: scenario === "moved" ? base : mergedCheckout } }
+                      : { ...mainBuild, run_attempt: scenario === "rerun" ? 2 : 1 },
+              ),
+            ),
+          ),
+        );
+
+        const verifyMain = decideReleaseCi(
+          verifyMainBuild(mergedCheckout, 43, 1, "test-token"),
+        ).pipe(Effect.provideService(HttpClient.HttpClient, mainClient));
+
+        expect((yield* verifyMain).fast).toBe(true);
+        for (scenario of ["moved", "rerun"]) expect((yield* verifyMain).fast).toBe(false);
         expect(yield* git("rev-parse", "HEAD")).toBe(base);
         expect(yield* git("status", "--porcelain")).toBe("");
         // Lossy stream decoding must not hide a changed trailing byte in the lockfile.

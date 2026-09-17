@@ -228,7 +228,8 @@ the `EFFECT_AGENT_APP_ID` and `EFFECT_AGENT_APP_PRIVATE_KEY` repository secrets.
 The checkout disables persisted credentials so Changesets uses the App token.
 
 After merge, Changesets handles registry version checks, publishing, package tags, and GitHub
-releases. The publish command builds the workspace and temporarily prepares npm-ready manifests:
+releases. CI transfers the exact validated package build to publication; manual releases build locally.
+The publisher temporarily prepares npm-ready manifests:
 source exports point at built files, `workspace:*` dependencies use the current workspace
 versions, and `catalog:` dependencies use the root catalog. All source manifests are restored
 on success, failure, or interruption. npm publishes through OIDC with provenance; each package
@@ -497,8 +498,8 @@ the reviewer reads untrusted source through GitHub's API instead.
 Each test-matrix job has its own task-cache key. The three suites split from the workspace job
 also fall back to its earlier cache, so splitting the matrix does not discard reusable results.
 Static checks, tests, and builds save successful task results even when another task fails.
-Main pushes run static checks, tests, and builds to populate shared caches
-and validate Action releases. The `ready` fan-in runs only on PRs. Main runs are not cancelled
+Ordinary main pushes run static checks, tests, and builds to populate shared caches
+and validate Action releases. Proven version merges reuse their source checks and exact PR build. The `ready` fan-in runs only on PRs. Main runs are not cancelled
 by newer pushes. GitHub scopes PR caches to each PR's merge ref, so another PR cannot reuse them.
 A new release PR can restore the latest main results only after those jobs finish saving their
 caches. Waiting for those caches alone does not prevent version fields from invalidating whole-file
@@ -506,10 +507,16 @@ task fingerprints. Ordinary task results are reused only when task inputs match.
 
 ### Release metadata CI {#release-metadata-ci}
 
-`scripts/release-ci.ts` can reuse static checks and all eight test-matrix gates from ordinary
-`CI` on the exact PR base. The verifier and its dependencies run from that base, with read-only
-contents, Actions and pull-request permissions. Candidate files are read as Git objects;
-the proof does not execute candidate code or accept PR-provided evidence artifacts.
+`scripts/release-ci.ts` reuses static checks and all eight test-matrix gates from ordinary
+`CI` on the exact source base, both on the version PR and after its merge. The verifier and its
+dependencies run from that base, with read-only contents, Actions and pull-request permissions.
+Candidate files are read as Git objects; the proof does not execute candidate code.
+
+```text
+ordinary source CI -> version PR: proof + build + package checks
+                  -> version merge: proof + restore PR build + package checks
+                  -> publication: restore main build + package checks + live gate -> npm
+```
 
 The supported delta is deliberately narrow: every public package in the single fixed group
 advances by one beta number, changelogs prepend the corresponding entry without rewriting history,
@@ -530,8 +537,9 @@ CI. Setup failures also fall back. The summary records the immutable revisions a
 Only main-push source validation can authorize reuse; fast-path PR results never authorize another
 fast path. No manifest or lockfile is globally excluded from Vite Task inputs.
 
-The candidate still receives a frozen install, all package/example/docs/Action builds, formatting,
-export and purity checks, and `ci:release-packages`. Package inspection temporarily prepares the
+The version PR still receives a frozen install, all package/example/docs/Action builds, formatting,
+export and purity checks, and `ci:release-packages`. Main repeats the frozen install, formatting,
+export, purity and package checks after restoring that exact build. Package inspection temporarily prepares the
 same npm-ready manifests used by publication and checks `npm pack --dry-run --ignore-scripts`
 for the actual version and every exported JavaScript and declaration file. Source manifests and
 prerelease state are restored. A failed retained check fails `ready`. This path neither publishes
@@ -544,9 +552,26 @@ An already stale PR or changed merge tree falls back to ordinary CI. Evidence ap
 recorded merge checkout, just as ordinary PR checks do; it does not validate later base movement
 or replace branch protection's up-to-date requirements.
 
-Main pushes still run ordinary CI and produce their own Action artifact for the existing publisher.
-Post-merge release duplication and candidate build costs are intentionally retained. Local proof
-tests establish correctness, not hosted latency savings; hosted speedup requires a matched CI run.
+A version merge must belong to the single merged Changesets PR, have its recorded base as the
+previous main revision, and have exactly the PR head's tree. Squash and two-parent merges are
+supported; changed bases, merge resolutions and other topologies select ordinary CI. The proof
+rechecks ordinary source CI and the latest successful version-PR CI attempt, including its actual
+build, package checks and `ready` command. It never chains source approval through another fast path.
+
+Each build uploads one `release-build-<run>-<attempt>` artifact containing package `dist` files and
+the Action bundle, bound to its Git tree, commit and parents. Consumers check the authenticated
+GitHub artifact identity and SHA-256 of the complete archive before decoding it, then check the
+recorded revisions and file hashes. Only generated build paths can be restored. Main records the
+restored build under its own identity after package validation. Documentation and example outputs
+are not transferred, but their successful exact-tree build remains required evidence.
+
+Publication accepts only the successful exact-main CI run selected by `workflow_run`, rechecks
+its attempt and current main before preparation and after the live gate, and inspects the restored
+npm packages again. Missing, expired, corrupt or mismatched artifacts fail the attempt; they never
+authorize publication. Artifact retention is seven days; rerun CI to replace expired evidence.
+The fresh paid gate, Changesets registry checks, npm OIDC provenance and Action tag publication
+remain required. Local controlled proofs establish correctness; hosted release latency needs a
+matched version-merge run.
 
 The pre-commit hook runs `vp check --fix` on staged JavaScript and TypeScript.
 CI runs the full gate, including package type checks and the Action build.

@@ -170,6 +170,10 @@ export default defineConfig({
         cache: false,
         command: "bun scripts/release-ci.ts",
       },
+      "ci:release-build": {
+        cache: false,
+        command: "bun scripts/release-build.ts",
+      },
       "ci:release-packages": {
         cache: false,
         command: "bun scripts/check-release-packages.ts",

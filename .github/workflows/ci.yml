@@ -29,7 +29,7 @@ jobs:
     name: Verify release equivalence
     # Eligibility is only a cost filter. The trusted base verifier checks every
     # changed byte/mode, current PR revisions, and ordinary base CI via the API.
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'changeset-release/main' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.ref == 'changeset-release/main' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     # Setup/API failures must select ordinary CI, including bootstrap before this
@@ -41,11 +41,15 @@ jobs:
       pull-requests: read
     outputs:
       fast: ${{ steps.proof.outcome == 'success' && steps.proof.outputs.fast == 'true' }}
+      build-run: ${{ steps.proof.outputs.build-run }}
+      build-attempt: ${{ steps.proof.outputs.build-attempt }}
+      base: ${{ steps.proof.outputs.base }}
+      head: ${{ steps.proof.outputs.head }}
     steps:
       - name: Check out trusted base verifier
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.event.before }}
           persist-credentials: false
 
       - name: Set up Bun
@@ -61,7 +65,7 @@ jobs:
         run: ./node_modules/.bin/vp run ci:release-proof
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          RELEASE_BASE: ${{ github.event.pull_request.base.sha }}
+          RELEASE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           RELEASE_HEAD: ${{ github.event.pull_request.head.sha }}
           RELEASE_PR: ${{ github.event.pull_request.number }}
 
@@ -201,9 +205,14 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -226,17 +235,41 @@ jobs:
             vite-task-build-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
             vite-task-build-${{ runner.os }}-
 
+      - name: Restore verified version PR build
+        if: ${{ needs.release-proof.outputs.build-run != '' }}
+        run: ./node_modules/.bin/vp run ci:release-build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_BUILD_MODE: restore
+          RELEASE_BUILD_RUN: ${{ needs.release-proof.outputs.build-run }}
+          RELEASE_BUILD_ATTEMPT: ${{ needs.release-proof.outputs.build-attempt }}
+          RELEASE_BASE: ${{ needs.release-proof.outputs.base }}
+          RELEASE_HEAD: ${{ needs.release-proof.outputs.head }}
+
       - name: Build packages, examples, and docs
         id: build
+        if: ${{ needs.release-proof.outputs.build-run == '' }}
         run: ./node_modules/.bin/vp run -v build
 
       - name: Validate versioned release packages
-        if: ${{ needs.release-proof.outputs.fast == 'true' }}
         run: |
           ./node_modules/.bin/vp fmt --check
           ./node_modules/.bin/vp run check:exports
           ./node_modules/.bin/vp run verify:package-purity
           ./node_modules/.bin/vp run ci:release-packages
+
+      - name: Record release build
+        run: ./node_modules/.bin/vp run ci:release-build
+        env:
+          RELEASE_BUILD_MODE: write
+
+      - name: Upload release build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .release-build/build.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload the Action bundle
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -256,14 +289,15 @@ jobs:
 
   publish-action:
     name: Publish Action
-    needs: [checks, test, build]
-    # release-proof is skipped on main. Override implicit ancestor success,
-    # while still requiring every direct validation job to succeed.
+    needs: [release-proof, checks, test, build]
+    # A version merge can reuse ordinary source checks and the exact PR build.
+    # Retained package checks must still succeed before publishing the Action.
     if: >-
       ${{ !cancelled() &&
           github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-          needs.checks.result == 'success' &&
-          needs.test.result == 'success' &&
+          ((needs.checks.result == 'success' && needs.test.result == 'success') ||
+           (needs['release-proof'].result == 'success' && needs['release-proof'].outputs.fast == 'true' &&
+            needs.checks.result == 'skipped' && needs.test.result == 'skipped')) &&
           needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5

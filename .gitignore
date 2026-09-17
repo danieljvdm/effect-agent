@@ -33,3 +33,4 @@ test/fixtures/*.d.ts
 oxlint/plugin-exports.d.ts
 .performance-base/
 .performance-report/
+.release-build/

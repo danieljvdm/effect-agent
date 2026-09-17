@@ -1,8 +1,11 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Cause, Console, Effect, Exit, FileSystem, Option, Path, Schema } from "effect";
+import { Cause, Config, Console, Effect, Exit, FileSystem, Option, Path, Schema } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess } from "effect/unstable/process";
+
+import { downloadReleaseBuild, restoreReleaseBuild } from "./release-build.ts";
+import { readCommand, verifyMainBuild } from "./release-ci.ts";
 
 // Changesets owns final registry checks, publishing, prerelease tags, and Git tags.
 // npm needs resolved Bun dependency ranges and built exports in its input manifests.
@@ -384,6 +387,34 @@ export const command = CliCommand.make(
     );
 
     const publish = Effect.gen(function* () {
+      const buildRun = yield* Config.option(Config.Number("RELEASE_BUILD_RUN"));
+
+      const verifyBuild = Effect.gen(function* () {
+        if (Option.isNone(buildRun)) return;
+        yield* verifyMainBuild(
+          (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
+          buildRun.value,
+          yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
+          yield* Config.String("RELEASE_BUILD_TOKEN"),
+        );
+      });
+
+      if (Option.isSome(buildRun)) {
+        yield* verifyBuild;
+        yield* downloadReleaseBuild(
+          root,
+          buildRun.value,
+          yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
+          (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
+          yield* Config.String("RELEASE_BUILD_TOKEN"),
+        );
+        yield* restoreReleaseBuild(root, path.join(root, ".release-build", "build.json"), {
+          runId: buildRun.value,
+          runAttempt: yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
+          commit: (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
+        });
+        yield* runCommand(root, "vp", ["run", "ci:release-packages"]);
+      } else yield* runCommand(root, "vp", ["run", "build"]);
       if (checkContinuity && !dryRun)
         yield* runCommand(root, "vp", [
           "run",
@@ -395,7 +426,7 @@ export const command = CliCommand.make(
           "--max-cost-usd",
           "10",
         ]);
-      yield* runCommand(root, "vp", ["run", "build"]);
+      yield* verifyBuild;
       yield* withPublishManifests(root, (directories) =>
         dryRun
           ? Effect.forEach(
