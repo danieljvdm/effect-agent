@@ -91,17 +91,6 @@ declares the input and result schemas, exposes `AiError` failures, and uses `Too
 to call `TypeSafeClient`. Supply `TicketToolsLive` with your other handlers and a
 [configured client Layer](../reference/decision-models#typesafe-client) when executing the tool.
 
-## Compose decisions into state transitions {#decision-transitions}
-
-The shared decision API evaluates independent questions against one state. Application code uses
-the typed evidence to choose the next state; dependent evaluations run after that transition.
-
-<<< ../../packages/ai-typesafe/examples/decision.ts{ts twoslash}
-
-The provider-neutral names are `choice`, `score`, and `probability`. TypeSafe's `noul` stays at the
-HTTP boundary. Confidence and probability remain visible, and transition rules remain explicit.
-This example changes application state only; it does not execute or authorize an agent Tool call.
-
 ## Select tools before the model turn {#automatic-selection}
 
 Use a separate decision model to shortlist eligible tools before the main LanguageModel plans a call:
@@ -134,7 +123,8 @@ export const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
 
 The state projection sends only explicitly chosen application data to the evaluator. The cutoff
 is illustrative; evaluate it against your own tasks. One evaluation contains one independent
-probability question per eligible candidate. This permits several relevant tools; categorical
+`DecisionQuery.probability` per eligible candidate through the decision model's
+[dynamic evaluation API](../reference/decision-models#evaluation). This permits several relevant tools; categorical
 choice probabilities are not independent relevance scores. Equal scores use catalogue-ID order.
 
 The core `ToolSelector.Hook` accepts any Effect callback returning ranked catalogue IDs, including
