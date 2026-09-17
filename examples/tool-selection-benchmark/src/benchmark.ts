@@ -10,6 +10,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   catalogue,
+  grade,
   commonTools,
   Handlers,
   Output,
@@ -18,7 +19,16 @@ import {
   ToolEvidence,
   tools,
 } from "./fixture.ts";
-import { type Selection, type Arm, BenchmarkError, instrument, Sample } from "./measurement.ts";
+import {
+  type Selection,
+  type Arm,
+  arms,
+  BenchmarkError,
+  instrument,
+  Journal,
+  refuse,
+  Sample,
+} from "./measurement.ts";
 
 export const settings = {
   max_output_tokens: 2_048,
@@ -28,8 +38,6 @@ export const settings = {
   strictJsonSchema: true,
 } as const;
 
-const arms: ReadonlyArray<Arm> = ["all-50", "fixed-8-discovery", "jev-8-discovery"];
-
 const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
   arm: Arm,
   task: Task,
@@ -38,15 +46,11 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
   const metered = yield* instrument(arm === "all-50" ? 50 : 9);
   const toolCalls: Array<(typeof Sample.Type.toolCalls)[number]> = [];
   const selections: Array<typeof Selection.Type> = [];
-  const decision = yield* DecisionModel.DecisionModel;
-  let evaluation: typeof Selection.Type.evaluation = null;
+  const useInitialRanking = arm.startsWith("jev-8");
+  const useSemanticDiscovery = arm.endsWith("-jev");
 
   const ranking = yield* ToolSelector.fromDecisionModel({
     state: (request) => Schema.decodeUnknownEffect(Schema.String)(request.input),
-    onEvaluation: (result) =>
-      Effect.sync(() => {
-        evaluation = result;
-      }),
   }).pipe(Effect.provideService(ToolSelector.DecisionConfig, { maxTools: 8, minimumRelevance: 0 }));
 
   const selector: ToolSelector.Hook<Schema.SchemaError | AiError.AiError> = {
@@ -60,10 +64,13 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
       return yield* ranking
         .select({
           ...request,
-          catalogue: request.catalogue.filter((candidate) => candidate.name !== "discover_tools"),
+          catalogue: request.catalogue.filter(
+            (candidate) =>
+              candidate.name !== "discover_tools" && !task.withhold?.includes(candidate.name),
+          ),
         })
         .pipe(
-          Effect.provideService(DecisionModel.DecisionModel, decision),
+          Effect.provideService(DecisionModel.DecisionModel, metered.decision),
           Effect.tap((ids) =>
             Effect.sync(() => {
               selected = ids?.slice(0, 8) ?? [];
@@ -74,7 +81,6 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
               selections.push({
                 elapsedMs: (yield* Clock.currentTimeMillis) - started,
                 selected,
-                evaluation,
               });
             }),
           ),
@@ -82,14 +88,17 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
     }),
   };
 
-  const discovery = ToolDiscovery.make({ maxResults: 8 });
+  const discovery = useSemanticDiscovery
+    ? ToolDiscovery.fromDecisionModel({ maxResults: 8, minimumRelevance: 0.5 })
+    : ToolDiscovery.make({ maxResults: 8 });
+
   const withDiscovery = arm !== "all-50";
 
   const definition = Agent.make("tool-selection-benchmark", {
     input: Schema.String,
     output: Output,
     instructions:
-      "Use tools to retrieve fresh records before answering; never invent records. If a needed tool is missing, use discover_tools with a short, distinctive search term when available. Follow linked records when the task requires it. Preserve status strings and verification codes exactly in your answer.",
+      "Use tools to retrieve fresh records before answering; never invent records. If a needed tool is missing, use discover_tools when available, following its description. Follow linked records when the task requires it. Return only the requested field values as strings in values, with no labels or commentary. Preserve codes, dates and status strings exactly. Do not include unrelated fields or record IDs.",
     toolkit: Toolkit.make(...tools, ...(withDiscovery ? [discovery.tool] : [])),
     toolExposure: {
       initialToolNames: withDiscovery ? [...commonTools] : Object.keys(catalogue),
@@ -110,14 +119,17 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
     toolCalls.push({ name, id, at: yield* Clock.currentTimeMillis });
   });
 
-  const handlers = Layer.merge(Handlers, discovery.handlers);
+  const handlers = Layer.merge(Handlers, discovery.handlers).pipe(
+    Layer.provide(Layer.succeed(DecisionModel.DecisionModel, metered.decision)),
+  );
+
   const agent = Agent.withModel(definition, OpenAiLanguageModel.model("gpt-6-astra", settings));
   const start = yield* Clock.currentTimeMillis;
 
   const exit = yield* AgentRuntime.run(
     agent,
     task.input,
-    arm === "jev-8-discovery" ? { toolSelector: selector } : {},
+    useInitialRanking ? { toolSelector: selector } : {},
   ).pipe(
     Effect.provide(Layer.merge(handlers, ThreadHistory.layer)),
     Effect.provideService(ToolEvidence, { record: observeTool }),
@@ -127,18 +139,14 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
   );
 
   const elapsedMs = (yield* Clock.currentTimeMillis) - start;
-  const answer = Exit.isSuccess(exit) ? exit.value.output.answer : null;
-  const called = new Set(toolCalls.map((call) => `${call.name}/${call.id}`));
-
-  const success =
-    answer !== null &&
-    task.evidence.every((value) => answer.includes(value)) &&
-    task.requiredCalls.every((value) => called.has(value));
+  const answer = Exit.isSuccess(exit) ? exit.value.output.values : null;
+  const success = answer !== null && grade(task, answer, toolCalls);
 
   return Sample.make({
     arm,
     task: task.name,
     repetition,
+    forcedMiss: task.withhold !== undefined,
     elapsedMs,
     success,
     answer,
@@ -148,13 +156,14 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
         ? null
         : "Missing required evidence or tool execution",
     modelCalls: metered.calls,
+    decisionCalls: metered.decisions,
     toolCalls,
     selections,
   });
 });
 
 const Report = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   startedAt: Schema.Finite,
   sourceCommit: Schema.String,
   dirty: Schema.Boolean,
@@ -175,7 +184,9 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-  if (yield* fs.exists(options.output))
+  const journalPath = `${options.output}.events.jsonl`;
+
+  if ((yield* fs.exists(options.output)) || (yield* fs.exists(journalPath)))
     return yield* BenchmarkError.make({
       message: "Output already exists; choose a new path to preserve prior attempts",
     });
@@ -195,27 +206,29 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
   const startedAt = yield* Clock.currentTimeMillis;
 
   const save = () =>
-    fs.writeFileString(
-      options.output,
-      Schema.encodeSync(Schema.fromJsonString(Report))({
-        version: 1,
-        startedAt,
-        sourceCommit,
-        dirty,
-        runtime,
-        platform,
-        repetitions: options.repetitions,
-        live: options.live,
-        model: "gpt-6-astra",
-        decisionModel: "jev-latest",
-        samples,
-      }),
-    );
+    fs
+      .writeFileString(
+        `${options.output}.tmp`,
+        Schema.encodeSync(Schema.fromJsonString(Report))({
+          version: 2,
+          startedAt,
+          sourceCommit,
+          dirty,
+          runtime,
+          platform,
+          repetitions: options.repetitions,
+          live: options.live,
+          model: "gpt-6-astra",
+          decisionModel: "jev-latest",
+          samples,
+        }),
+      )
+      .pipe(Effect.andThen(fs.rename(`${options.output}.tmp`, options.output)));
 
   yield* save();
   if (!options.live) {
     yield* Console.log(
-      `Dry run: ${tasks.length * arms.length * options.repetitions} samples; at most 6 OpenAI calls and 1 JEV call each. ${options.output}`,
+      `Dry run: ${tasks.length * arms.length * options.repetitions} samples; at most 6 OpenAI calls and 7 JEV calls each. ${options.output}`,
     );
 
     return;
@@ -234,16 +247,49 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
     ),
   ).pipe(Layer.provide(FetchHttpClient.layer));
 
+  let currentSample = "";
+
+  const Event = Schema.Struct({
+    sample: Schema.String,
+    at: Schema.Finite,
+    kind: Schema.String,
+    payload: Schema.String,
+  });
+
+  const journal = Journal.of({
+    record: Effect.fnUntraced(function* (kind, payload) {
+      const line = Schema.encodeSync(Schema.fromJsonString(Event))({
+        sample: currentSample,
+        at: yield* Clock.currentTimeMillis,
+        kind,
+        payload,
+      });
+
+      yield* fs
+        .writeFileString(journalPath, `${line}\n`, { flag: "a" })
+        .pipe(Effect.mapError(() => refuse("Could not checkpoint benchmark evidence")));
+    }),
+  });
+
   yield* Effect.gen(function* () {
-    // Latin-square rotation gives each arm every position for every task over three repetitions.
+    // Five repetitions give every arm each position for every task, balancing order effects.
     for (let repetition = 0; repetition < options.repetitions; repetition++) {
       for (const [taskIndex, task] of tasks.entries()) {
         const offset = (repetition + taskIndex) % arms.length;
 
         for (const arm of [...arms.slice(offset), ...arms.slice(0, offset)]) {
+          currentSample = `${task.name}/${arm}/${repetition + 1}`;
+          yield* journal.record(
+            "sample-start",
+            JSON.stringify({ task, arm, repetition: repetition + 1 }),
+          );
           yield* Console.log(`Running ${task.name} / ${arm} / ${repetition + 1}`);
           const sample = yield* runSample(arm, task, repetition + 1);
 
+          yield* journal.record(
+            "sample-complete",
+            Schema.encodeSync(Schema.fromJsonString(Sample))(sample),
+          );
           samples.push(sample);
           yield* save();
           yield* Console.log(
@@ -252,7 +298,7 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
         }
       }
     }
-  }).pipe(Effect.provide(providers));
+  }).pipe(Effect.provide(Layer.merge(providers, Layer.succeed(Journal, journal))));
 
   if (samples.some((sample) => !sample.success))
     return yield* BenchmarkError.make({

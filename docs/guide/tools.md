@@ -260,6 +260,45 @@ catalogues, invalid selected schemas, and custom-search failures still propagate
 Provider-defined tools are not ordinary callable schemas and cannot be documented by this
 capability.
 
+### Discover with a decision model
+
+`ToolDiscovery.fromDecisionModel` ranks eligible tools by semantic relevance to the discovery
+query. It shares the independent probability ranking used by `ToolSelector.fromDecisionModel`.
+The caller chooses a relevance threshold; below-threshold results are omitted, including an
+empty result when nothing matches. There is no implicit keyword fallback.
+
+```ts twoslash
+import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
+import { Config, Layer } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+import { ToolDiscovery } from "effect-agent";
+
+export const discovery = ToolDiscovery.fromDecisionModel({
+  minimumRelevance: 0.5,
+  maxResults: 8,
+});
+
+const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
+  Layer.provide(TypeSafeClient.layerConfig({ apiKey: Config.Redacted("TYPESAFEAI_API_KEY") })),
+  Layer.provide(FetchHttpClient.layer),
+);
+
+export const DiscoveryHandlers = discovery.handlers.pipe(Layer.provide(DecisionLive));
+```
+
+Register `discovery.tool` in the agent's toolkit and provide `DiscoveryHandlers` alongside the
+business tool handlers. Any `DecisionModel` provider can replace the JEV Layer above.
+Only the bounded query, optional exact namespace, and eligible tool metadata reach the decision
+provider; this capability does not project the prompt or thread history. Discovery excludes
+itself, rejects oversized catalogues before I/O, and skips evaluation for an empty catalogue.
+The existing documentation byte limits, pinned tools, authority checks, and next-turn selection
+replacement still apply. Ranking cannot grant additional tool authority.
+
+An optional `onEvaluation` callback receives provider, resolved model, and usage. Decision-model
+billing is separate from generative model usage. Supply observer dependencies to the handler
+Layer and its expected failure Schema through `failure`. Provider `AiError`, declared observer
+failures, defects, timeout, and interruption propagate; hosts own deadlines and fallback policy.
+
 ### Supply application search
 
 The optional Effect callback receives only the eligible catalogue, already filtered by the exact

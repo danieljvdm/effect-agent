@@ -70,7 +70,7 @@ export const catalogue = {
 
 export const Parameters = Schema.Struct({ id: Schema.NonEmptyString });
 export const ToolResult = Schema.Struct({ value: Schema.String });
-export const Output = Schema.Struct({ answer: Schema.String });
+export const Output = Schema.Struct({ values: Schema.Array(Schema.String) });
 
 export const tools = Record.toEntries(catalogue).map(([name, description]) =>
   Tool.make(name, { description, parameters: Parameters, success: ToolResult }).annotate(
@@ -87,6 +87,8 @@ const records: Readonly<Record<string, string>> = {
   "get_support_ticket/TKT-309":
     "The linked operational record is calibration CAL-77. Use get_sensor_calibration with id CAL-77 to obtain its current status and verification code.",
   "get_sensor_calibration/CAL-77": "status=calibration_due; verification=CAL-V6P8",
+  "get_subscription_usage/SUB-411": "consumed=731; allowance=1200",
+  "get_vendor_contract/VEN-512": "end=2028-06-30; incoterm=DDP",
 };
 
 export class ToolEvidence extends Context.Service<
@@ -111,7 +113,15 @@ export const Handlers = toolkit.toLayer(
   }),
 );
 
-export const tasks = [
+export interface Task {
+  readonly name: string;
+  readonly input: string;
+  readonly evidence: ReadonlyArray<string>;
+  readonly requiredCalls: ReadonlyArray<string>;
+  readonly withhold?: ReadonlyArray<string>;
+}
+
+export const tasks: ReadonlyArray<Task> = [
   {
     name: "common",
     input: "What are the current shipping status and tracking code for order ORD-104?",
@@ -131,6 +141,43 @@ export const tasks = [
     evidence: ["calibration_due", "CAL-V6P8"],
     requiredCalls: ["get_support_ticket/TKT-309", "get_sensor_calibration/CAL-77"],
   },
-] as const;
+  {
+    name: "paraphrase",
+    input:
+      "How much of subscription SUB-411’s allowance has been used, and what is the full allowance?",
+    evidence: ["731", "1200"],
+    requiredCalls: ["get_subscription_usage/SUB-411"],
+  },
+  {
+    name: "forced-paraphrase",
+    input: "When does supplier VEN-512’s purchasing agreement end, and which incoterm applies?",
+    evidence: ["2028-06-30", "DDP"],
+    requiredCalls: ["get_vendor_contract/VEN-512"],
+    withhold: ["get_vendor_contract"],
+  },
+  {
+    name: "forced-followup",
+    input:
+      "Investigate support ticket TKT-309. Follow its linked operational record and report that record's current status and verification code.",
+    evidence: ["calibration_due", "CAL-V6P8"],
+    requiredCalls: ["get_support_ticket/TKT-309", "get_sensor_calibration/CAL-77"],
+    withhold: ["get_sensor_calibration"],
+  },
+];
 
-export type Task = (typeof tasks)[number];
+/** Exact multiset equality rejects extra, missing or duplicated claims, plus require actual execution. */
+export const grade = (
+  task: Task,
+  values: ReadonlyArray<string>,
+  calls: ReadonlyArray<{ readonly name: string; readonly id: string }>,
+): boolean => {
+  const expected = [...task.evidence].sort();
+  const actual = [...values].sort();
+  const executed = new Set(calls.map((call) => `${call.name}/${call.id}`));
+
+  return (
+    actual.length === expected.length &&
+    actual.every((value, index) => value === expected[index]) &&
+    task.requiredCalls.every((call) => executed.has(call))
+  );
+};
