@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.102
+
+### Patch Changes
+
+- [#521](https://github.com/danieljvdm/effect-agent/pull/521) [`be0dcaf`](https://github.com/danieljvdm/effect-agent/commit/be0dcafb69e0641d8b82ff174fee53a53e367f18) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Settle cancelled durable runs as aborted when tool authorization observes their abort intent before the cancellation watcher.
+
 ## 0.1.0-beta.101
 
 ### Patch Changes

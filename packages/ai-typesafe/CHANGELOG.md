@@ -1,5 +1,7 @@
 # @effect-agent/ai-typesafe
 
+## 0.1.0-beta.102
+
 ## 0.1.0-beta.101
 
 ## 0.1.0-beta.100
