@@ -296,11 +296,14 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", 
             }),
         });
 
-        const selector = ToolSelector.fromDecisionModel({
+        const selector = yield* ToolSelector.fromDecisionModel({
           state: () => Effect.succeed("go"),
-          minimumRelevance: 0.8,
-          maxTools: 2,
-        });
+        }).pipe(
+          Effect.provideService(ToolSelector.DecisionConfig, {
+            minimumRelevance: 0.8,
+            maxTools: 2,
+          }),
+        );
 
         let ranked: ReadonlyArray<string> | undefined;
 
@@ -336,6 +339,29 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", 
       }),
   );
 
+  it.effect("rejects invalid decision configuration before constructing the selector", () =>
+    Effect.gen(function* () {
+      for (const config of [
+        { minimumRelevance: Number.NaN },
+        { minimumRelevance: -0.1 },
+        { minimumRelevance: 1.1 },
+        { maxTools: 65 },
+        { maxCandidates: 1_025 },
+        { maxCatalogueBytes: 0 },
+        { maxStateBytes: 1_048_577 },
+      ]) {
+        const error = yield* ToolSelector.fromDecisionModel({
+          state: () => Effect.die("Invalid configuration must not project state"),
+        }).pipe(Effect.provideService(ToolSelector.DecisionConfig, config), Effect.flip);
+
+        expect(error).toMatchObject({
+          _tag: "AiError",
+          reason: { _tag: "InvalidRequestError", description: "Invalid decision configuration" },
+        });
+      }
+    }),
+  );
+
   it.effect(
     "clears non-pinned tools on a decision no-match and refuses oversized state before evaluation",
     () =>
@@ -368,12 +394,15 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", 
             "go",
             {
               toolSelection: Selection.make({ toolNames: ["read"] }),
-              toolSelector: ToolSelector.fromDecisionModel({
+              toolSelector: yield* ToolSelector.fromDecisionModel({
                 state: () => Effect.succeed("é"),
-                minimumRelevance: 0.8,
-                onNoMatch: "clear",
-                maxStateBytes: mode === "clear" ? 4 : 3,
-              }),
+              }).pipe(
+                Effect.provideService(ToolSelector.DecisionConfig, {
+                  minimumRelevance: 0.8,
+                  onNoMatch: "clear",
+                  maxStateBytes: mode === "clear" ? 4 : 3,
+                }),
+              ),
             },
           ).pipe(
             Effect.provideService(DecisionModel.DecisionModel, decision),
@@ -445,18 +474,21 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", 
             }),
         });
 
-        const selector = ToolSelector.fromDecisionModel({
-          state: ({ input }) => Schema.decodeUnknownEffect(Schema.String)(input),
+        const DecisionConfigLive = Layer.succeed(ToolSelector.DecisionConfig, {
           prompt: { task: "Would this tool retrieve evidence needed for the request?" },
           criteria: { true: "Retrieves relevant evidence", false: "Does not retrieve it" },
           minimumRelevance: 0.8,
           maxTools: 1,
+        });
+
+        const selector = yield* ToolSelector.fromDecisionModel({
+          state: ({ input }) => Schema.decodeUnknownEffect(Schema.String)(input),
           onEvaluation: ({ usage }) =>
             Effect.sync(() => {
               observed++;
               expect(usage.inputTokens).toBe(12);
             }),
-        });
+        }).pipe(Effect.provide(DecisionConfigLive));
 
         const result = yield* AgentRuntime.run(
           Agent.withModel(definition, scripted([[call("read-1", "read"), finish], done], requests)),

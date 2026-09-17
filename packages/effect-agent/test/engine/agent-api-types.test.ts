@@ -703,10 +703,7 @@ class SelectionObserverError extends Schema.TaggedError<SelectionObserverError>(
   {},
 ) {}
 it("preserves decision state and usage-observer E/R in the selector", () => {
-  const selector = ToolSelector.fromDecisionModel({
-    minimumRelevance: 0.6,
-    prompt: { task: "Find tools that can resolve the current request." },
-    criteria: { true: "Advances the request", false: "Unrelated capability" },
+  const construction = ToolSelector.fromDecisionModel({
     state: () =>
       Effect.gen(function* () {
         const state = yield* TurnHost;
@@ -722,6 +719,10 @@ it("preserves decision state and usage-observer E/R in the selector", () => {
         if (status === "") return yield* SelectionObserverError.make({});
       }),
   });
+
+  expectTypeOf<Effect.Error<typeof construction>>().toEqualTypeOf<AiError.AiError>();
+  expectTypeOf<Effect.Services<typeof construction>>().toEqualTypeOf<never>();
+  const selector = Effect.runSync(construction);
 
   type Selection = ReturnType<typeof selector.select>;
   expectTypeOf<Effect.Error<Selection>>().toEqualTypeOf<

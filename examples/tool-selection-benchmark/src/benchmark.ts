@@ -41,15 +41,13 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
   const decision = yield* DecisionModel.DecisionModel;
   let evaluation: typeof Selection.Type.evaluation = null;
 
-  const ranking = ToolSelector.fromDecisionModel({
-    maxTools: 8,
-    minimumRelevance: 0,
+  const ranking = yield* ToolSelector.fromDecisionModel({
     state: (request) => Schema.decodeUnknownEffect(Schema.String)(request.input),
     onEvaluation: (result) =>
       Effect.sync(() => {
         evaluation = result;
       }),
-  });
+  }).pipe(Effect.provideService(ToolSelector.DecisionConfig, { maxTools: 8, minimumRelevance: 0 }));
 
   const selector: ToolSelector.Hook<Schema.SchemaError | AiError.AiError> = {
     maxTools: 8,
