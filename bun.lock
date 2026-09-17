@@ -45,6 +45,22 @@
         "vue": "catalog:",
       },
     },
+    "examples/tool-selection-benchmark": {
+      "name": "@effect-agent/example-tool-selection-benchmark",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/ai-decision": "workspace:*",
+        "@effect-agent/ai-typesafe": "workspace:*",
+        "@effect/ai-openai": "catalog:",
+        "@effect/platform-node": "catalog:",
+        "effect": "catalog:",
+        "effect-agent": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "examples/travel-planner": {
       "name": "@effect-agent/example-travel-planner",
       "dependencies": {
@@ -740,6 +756,8 @@
     "@effect-agent/example-runtime-benchmark": ["@effect-agent/example-runtime-benchmark@workspace:tooling/runtime-benchmark"],
 
     "@effect-agent/example-semantic-memory-eval": ["@effect-agent/example-semantic-memory-eval@workspace:tooling/semantic-memory-eval"],
+
+    "@effect-agent/example-tool-selection-benchmark": ["@effect-agent/example-tool-selection-benchmark@workspace:examples/tool-selection-benchmark"],
 
     "@effect-agent/example-travel-planner": ["@effect-agent/example-travel-planner@workspace:examples/travel-planner"],
 

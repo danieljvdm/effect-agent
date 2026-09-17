@@ -1,0 +1,21 @@
+{
+  "name": "@effect-agent/example-tool-selection-benchmark",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@effect-agent/ai-decision": "workspace:*",
+    "@effect-agent/ai-typesafe": "workspace:*",
+    "@effect/ai-openai": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
+    "effect-agent": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}
