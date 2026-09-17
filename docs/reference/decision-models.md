@@ -97,7 +97,7 @@ two decimal places. Higher-precision values keep the default tolerance. A single
 ## TypeSafe client
 
 `TypeSafeDecisionModel.model(model)` supplies a `DecisionModel` Layer requiring `TypeSafeClient`.
-Configure it with an Effect HttpClient:
+`TypeSafeClient.layer` requires `TypeSafeClient.Config` and an Effect `HttpClient`:
 
 ```ts twoslash
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
@@ -105,15 +105,20 @@ import { Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
-  Layer.provide(TypeSafeClient.layerConfig().pipe(Layer.provide(FetchHttpClient.layer))),
+  Layer.provide(TypeSafeClient.layer),
+  Layer.provide(TypeSafeClient.Config.layer),
+  Layer.provide(FetchHttpClient.layer),
 );
 ```
 
-| Client option     | `make` / `layer`                | `layerConfig`                       | Default                                                              |
-| ----------------- | ------------------------------- | ----------------------------------- | -------------------------------------------------------------------- |
-| `apiKey`          | Required `Redacted<string>`     | Optional `Config<Redacted<string>>` | `layerConfig` reads `TYPESAFE_API_KEY`                               |
-| `apiUrl`          | Optional string                 | Optional `Config<string>`           | `https://api.typesafe.ai/v1`                                         |
-| `transformClient` | Optional HttpClient transformer | Same                                | No transformation; applied after authentication and status filtering |
+| Config service field | Type                        | `TypeSafeClient.Config.layer` source                           |
+| -------------------- | --------------------------- | -------------------------------------------------------------- |
+| `apiKey`             | Required `Redacted<string>` | `TYPESAFE_API_KEY`                                             |
+| `apiUrl`             | Optional string             | `TYPESAFE_API_URL`, defaulting to `https://api.typesafe.ai/v1` |
+
+For application-owned configuration, supply `TypeSafeClient.Config` with `Layer.effect` or
+`Layer.succeed`. `make` is an Effect and `layer` is a Layer; neither takes configuration arguments.
+Both capture their requirements at construction, so evaluation only requires the client service.
 
 Client acquisition sends no requests. Evaluations send `POST /systemone` with bearer
 authentication. The versioned base URL can be overridden for a proxy.
@@ -142,12 +147,33 @@ Evaluations fail with `AiError`. Invalid local input is rejected before provider
 | TypeSafe HTTP 529                                            | `InternalProviderError`              |
 | HTTP transport failure                                       | `NetworkError`                       |
 
-Other HTTP statuses use Effect AI's status mapping. `layerConfig` can also fail with
+Other HTTP statuses use Effect AI's status mapping. `TypeSafeClient.Config.layer` can fail with
 `ConfigError`. Defects and interruption propagate normally; cancellation reaches the supplied
 HttpClient, including response-body reads.
 
 There are no default retries or deadlines. Compose `Effect.retry` and `Effect.timeout`, or
-configure HTTP policies through `transformClient`.
+customize the HttpClient requirement with `Layer.updateService` before providing the transport:
+
+```ts twoslash
+import { TypeSafeClient } from "@effect-agent/ai-typesafe";
+import { flow, Layer, Schedule } from "effect";
+import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+
+const ClientLive = TypeSafeClient.layer.pipe(
+  Layer.updateService(
+    HttpClient.HttpClient,
+    flow(
+      HttpClient.filterStatusOk,
+      HttpClient.retryTransient({ times: 1, schedule: Schedule.spaced("20 millis") }),
+    ),
+  ),
+  Layer.provide(TypeSafeClient.Config.layer),
+  Layer.provide(FetchHttpClient.layer),
+);
+```
+
+Filter statuses before retrying to share one retry budget across HTTP and transport failures.
+Request middleware on the supplied client receives the authenticated, absolute request URL.
 
 TypeSafe HTTP errors retain status, headers, and provider error text. Credentials are redacted,
 but provider error text may contain submitted content. The integration adds no body logging;

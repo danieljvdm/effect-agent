@@ -1,6 +1,6 @@
 import type { TypeSafeSchema } from "@effect-agent/ai-typesafe";
 import { TypeSafeClient } from "@effect-agent/ai-typesafe";
-import { Config, Effect, type Layer, Redacted } from "effect";
+import { type Config, Effect, Layer } from "effect";
 import type { AiError, Tool } from "effect/unstable/ai";
 import type { HttpClient } from "effect/unstable/http";
 import { expectTypeOf, it } from "vite-plus/test";
@@ -176,15 +176,23 @@ it("keeps open numeric and patterned choices broad without promising absent prob
   >().toEqualTypeOf<number | undefined>();
 });
 
-it("exposes only HttpClient requirements at construction and ConfigError for configuration", () => {
-  const make = TypeSafeClient.make({ apiKey: Redacted.make("test") });
-  const layer = TypeSafeClient.layer({ apiKey: Redacted.make("test") });
-  const configured = TypeSafeClient.layerConfig({ apiKey: Config.Redacted("TYPESAFE_API_KEY") });
+it("requires configuration and HttpClient at construction and captures both for evaluation", () => {
+  const make = TypeSafeClient.make;
+  const layer = TypeSafeClient.layer;
+  const config = TypeSafeClient.Config.layer;
+  const configured = layer.pipe(Layer.provide(config));
 
   expectTypeOf<Effect.Error<typeof make>>().toEqualTypeOf<never>();
-  expectTypeOf<Effect.Services<typeof make>>().toEqualTypeOf<HttpClient.HttpClient>();
-  expectTypeOf<Layer.Services<typeof layer>>().toEqualTypeOf<HttpClient.HttpClient>();
+  expectTypeOf<Effect.Services<typeof make>>().toEqualTypeOf<
+    TypeSafeClient.Config | HttpClient.HttpClient
+  >();
+  expectTypeOf<Layer.Services<typeof layer>>().toEqualTypeOf<
+    TypeSafeClient.Config | HttpClient.HttpClient
+  >();
   expectTypeOf<Layer.Error<typeof layer>>().toEqualTypeOf<never>();
+  expectTypeOf<Layer.Success<typeof config>>().toEqualTypeOf<TypeSafeClient.Config>();
+  expectTypeOf<Layer.Services<typeof config>>().toEqualTypeOf<never>();
+  expectTypeOf<Layer.Error<typeof config>>().toEqualTypeOf<Config.ConfigError>();
   expectTypeOf<Layer.Services<typeof configured>>().toEqualTypeOf<HttpClient.HttpClient>();
   expectTypeOf<Layer.Error<typeof configured>>().toEqualTypeOf<Config.ConfigError>();
 });

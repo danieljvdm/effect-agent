@@ -3,10 +3,10 @@
  *
  * @since 0.1.0
  */
-import * as Config from "effect/Config";
+import * as EffectConfig from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import { flow, identity } from "effect/Function";
+import { flow } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
@@ -43,103 +43,101 @@ export class TypeSafeClient extends Context.Service<TypeSafeClient, Service>()(
   "@effect-agent/ai-typesafe/TypeSafeClient",
 ) {}
 
-/** @category options
+const defaultApiUrl = "https://api.typesafe.ai/v1";
+
+/**
+ * Configuration captured when the client is acquired. Supply this service from
+ * application configuration or use `Config.layer` to load environment values.
+ *
+ * @category services
  * @since 0.1.0
  */
-export interface Options {
-  readonly apiKey: Redacted.Redacted<string>;
-  /** Base URL, including the API version. Defaults to https://api.typesafe.ai/v1. */
-  readonly apiUrl?: string | undefined;
-  /** Applied after authentication and status filtering, for explicit HTTP policies. */
-  readonly transformClient?: ((client: HttpClient.HttpClient) => HttpClient.HttpClient) | undefined;
+export class Config extends Context.Service<
+  Config,
+  {
+    readonly apiKey: Redacted.Redacted<string>;
+    /** Base URL, including the API version. Defaults to https://api.typesafe.ai/v1. */
+    readonly apiUrl?: string | undefined;
+  }
+>()("@effect-agent/ai-typesafe/TypeSafeClient/Config") {
+  /**
+   * Load `TYPESAFE_API_KEY` and optional `TYPESAFE_API_URL` through Effect Config.
+   * Missing credentials fail with ConfigError before any HTTP request.
+   */
+  static readonly layer: Layer.Layer<Config, EffectConfig.ConfigError> = Layer.effect(
+    Config,
+    EffectConfig.all({
+      apiKey: EffectConfig.Redacted("TYPESAFE_API_KEY"),
+      apiUrl: EffectConfig.String("TYPESAFE_API_URL").pipe(EffectConfig.withDefault(defaultApiUrl)),
+    }),
+  );
 }
 
 const encodeRequest = Schema.encodeEffect(Schema.fromJsonString(TypeSafeSchema.EvaluateRequest));
 
 /**
- * Construct the client using a supplied, platform-neutral HttpClient.
- * Acquiring the service does not send a request.
+ * Capture Config and a platform-neutral HttpClient at construction.
+ * Acquiring the service does not send a request. Apply HTTP policies to the
+ * supplied HttpClient; its request middleware receives authenticated, absolute URLs.
  *
  * @category constructors
  * @since 0.1.0
  */
-export const make = Effect.fnUntraced(function* (
-  options: Options,
-): Effect.fn.Return<Service, never, HttpClient.HttpClient> {
-  const apiKey = Redacted.value(options.apiKey);
+export const make: Effect.Effect<Service, never, Config | HttpClient.HttpClient> = Effect.gen(
+  function* () {
+    const config = yield* Config;
+    const apiKey = Redacted.value(config.apiKey);
 
-  const redact = (text: string) =>
-    apiKey.length === 0 ? text : text.replaceAll(apiKey, "<redacted>");
+    const redact = (text: string) =>
+      apiKey.length === 0 ? text : text.replaceAll(apiKey, "<redacted>");
 
-  const client = (yield* HttpClient.HttpClient).pipe(
-    HttpClient.mapRequest(
-      flow(
-        HttpClientRequest.prependUrl(options.apiUrl ?? "https://api.typesafe.ai/v1"),
-        HttpClientRequest.bearerToken(options.apiKey),
-        HttpClientRequest.acceptJson,
+    const client = (yield* HttpClient.HttpClient).pipe(
+      HttpClient.mapRequestInput(
+        flow(
+          HttpClientRequest.prependUrl(config.apiUrl ?? defaultApiUrl),
+          HttpClientRequest.bearerToken(config.apiKey),
+          HttpClientRequest.acceptJson,
+        ),
       ),
-    ),
-    HttpClient.filterStatusOk,
-    options.transformClient ?? identity,
-  );
-
-  const evaluate = Effect.fnUntraced(function* <const Q extends TypeSafeSchema.Questions>(
-    options: TypeSafeSchema.EvaluateRequest<Q>,
-  ): Effect.fn.Return<TypeSafeSchema.EvaluateResponse<Q>, AiError.AiError> {
-    const body = yield* encodeRequest(options).pipe(
-      Effect.mapError((error) =>
-        Errors.make(new AiError.InvalidRequestError({ description: redact(error.message) })),
-      ),
+      HttpClient.filterStatusOk,
     );
 
-    const schema = responseFor(options.questions);
-
-    return yield* client
-      .execute(
-        HttpClientRequest.post("/systemone").pipe(
-          HttpClientRequest.bodyText(body, "application/json"),
+    const evaluate = Effect.fnUntraced(function* <const Q extends TypeSafeSchema.Questions>(
+      options: TypeSafeSchema.EvaluateRequest<Q>,
+    ): Effect.fn.Return<TypeSafeSchema.EvaluateResponse<Q>, AiError.AiError> {
+      const body = yield* encodeRequest(options).pipe(
+        Effect.mapError((error) =>
+          Errors.make(new AiError.InvalidRequestError({ description: redact(error.message) })),
         ),
-      )
-      .pipe(
-        Effect.flatMap(HttpClientResponse.schemaBodyJson(schema, { onExcessProperty: "error" })),
-        Effect.catchTags({
-          HttpClientError: (error) => Errors.mapHttpClientError(error, redact),
-          SchemaError: (error) => Effect.fail(Errors.mapSchemaError(error, redact)),
-        }),
-        Effect.updateService(Headers.CurrentRedactedNames, (names) => [...names, "authorization"]),
       );
-  });
 
-  return TypeSafeClient.of({ client, evaluate });
-});
+      const schema = responseFor(options.questions);
+
+      return yield* client
+        .execute(
+          HttpClientRequest.post("/systemone").pipe(
+            HttpClientRequest.bodyText(body, "application/json"),
+          ),
+        )
+        .pipe(
+          Effect.flatMap(HttpClientResponse.schemaBodyJson(schema, { onExcessProperty: "error" })),
+          Effect.catchTags({
+            HttpClientError: (error) => Errors.mapHttpClientError(error, redact),
+            SchemaError: (error) => Effect.fail(Errors.mapSchemaError(error, redact)),
+          }),
+          Effect.updateService(Headers.CurrentRedactedNames, (names) => [
+            ...names,
+            "authorization",
+          ]),
+        );
+    });
+
+    return TypeSafeClient.of({ client, evaluate });
+  },
+);
 
 /** @category layers
  * @since 0.1.0
  */
-export const layer = (
-  options: Options,
-): Layer.Layer<TypeSafeClient, never, HttpClient.HttpClient> =>
-  Layer.effect(TypeSafeClient, make(options));
-
-/**
- * Configure the client with Effect Config. The API key defaults to
- * `Config.Redacted("TYPESAFE_API_KEY")`.
- *
- * @category layers
- * @since 0.1.0
- */
-export const layerConfig = (options?: {
-  readonly apiKey?: Config.Config<Redacted.Redacted<string>> | undefined;
-  readonly apiUrl?: Config.Config<string> | undefined;
-  readonly transformClient?: Options["transformClient"];
-}): Layer.Layer<TypeSafeClient, Config.ConfigError, HttpClient.HttpClient> =>
-  Layer.effect(
-    TypeSafeClient,
-    Effect.gen(function* () {
-      return yield* make({
-        apiKey: yield* options?.apiKey ?? Config.Redacted("TYPESAFE_API_KEY"),
-        apiUrl: options?.apiUrl === undefined ? undefined : yield* options.apiUrl,
-        transformClient: options?.transformClient,
-      });
-    }),
-  );
+export const layer: Layer.Layer<TypeSafeClient, never, Config | HttpClient.HttpClient> =
+  Layer.effect(TypeSafeClient, make);

@@ -1,6 +1,6 @@
 import { DecisionModel, DecisionQuery, DecisionSet } from "@effect-agent/ai-decision";
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
-import { Config, Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 class Received extends Schema.TaggedClass<Received>()("Received", { message: Schema.String }) {}
@@ -46,7 +46,8 @@ export const advance = Effect.fn("ticket.advance")(function* (state: typeof Tick
 
 export const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
   Layer.provide(
-    TypeSafeClient.layerConfig({ apiKey: Config.Redacted("TYPESAFE_API_KEY") }).pipe(
+    TypeSafeClient.layer.pipe(
+      Layer.provide(TypeSafeClient.Config.layer),
       Layer.provide(FetchHttpClient.layer),
     ),
   ),

@@ -1,6 +1,6 @@
 import type { TypeSafeSchema } from "@effect-agent/ai-typesafe";
 import { TypeSafeClient } from "@effect-agent/ai-typesafe";
-import { Config, Effect, Layer, Schedule } from "effect";
+import { Effect, Layer, Schedule } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 export const questions = {
@@ -30,9 +30,10 @@ export const evaluateTicket = Effect.gen(function* () {
   });
 });
 
-export const ClientLive = TypeSafeClient.layerConfig({
-  apiKey: Config.Redacted("TYPESAFE_API_KEY"),
-}).pipe(Layer.provide(FetchHttpClient.layer));
+export const ClientLive = TypeSafeClient.layer.pipe(
+  Layer.provide(TypeSafeClient.Config.layer),
+  Layer.provide(FetchHttpClient.layer),
+);
 
 // Retry at most twice. The timeout covers the entire operation, including backoff.
 export const program = evaluateTicket.pipe(

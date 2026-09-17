@@ -1,8 +1,8 @@
 # @effect-agent/ai-typesafe
 
 Use Jev to evaluate typed questions with Effect. `TypeSafeDecisionModel` supplies the
-provider for [`@effect-agent/ai-decision`](../ai-decision); `TypeSafeClient` owns HTTP
-configuration and also exposes Jev's API directly.
+provider for [`@effect-agent/ai-decision`](../ai-decision); `TypeSafeClient` requires
+configuration and an HttpClient, and also exposes Jev's API directly.
 
 ```text
 DecisionModel → TypeSafeDecisionModel → TypeSafeClient → Jev
@@ -16,16 +16,20 @@ import { Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
 const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
-  Layer.provide(TypeSafeClient.layerConfig().pipe(Layer.provide(FetchHttpClient.layer))),
+  Layer.provide(TypeSafeClient.layer),
+  Layer.provide(TypeSafeClient.Config.layer),
+  Layer.provide(FetchHttpClient.layer),
 );
 ```
 
-Set `TYPESAFE_API_KEY`, then provide `DecisionLive` to the Effect that evaluates your
-decision set. The adapter maps shared `probability` questions to Jev's `noul` and retains
+`TypeSafeClient.Config.layer` reads `TYPESAFE_API_KEY` and optional `TYPESAFE_API_URL`.
+Provide your own `TypeSafeClient.Config` layer to use application-owned configuration.
+Provide `DecisionLive` to the Effect that evaluates your decision set.
+The adapter maps shared `probability` questions to Jev's `noul` and retains
 choice and score distributions. Application code chooses how to use the answers.
 
-There are no default retries or deadlines. Add those policies with Effect or the client's
-`transformClient` option. See the [configuration and error reference](https://effect-agent.com/reference/decision-models#typesafe-client)
+There are no default retries or deadlines. Add those policies with Effect or to the supplied
+HttpClient. See the [configuration and error reference](https://effect-agent.com/reference/decision-models#typesafe-client)
 for details, including Jev's [rounded probabilities](https://effect-agent.com/reference/decision-models#probability-validation).
 
 ## Examples

@@ -4,7 +4,6 @@ import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe
 import { assert, describe, expect, it } from "@effect/vitest";
 import {
   Cause,
-  Config,
   ConfigProvider,
   Deferred,
   Effect,
@@ -13,6 +12,7 @@ import {
   Layer,
   Redacted,
   Ref,
+  Schedule,
   Schema,
 } from "effect";
 import { TestClock } from "effect/testing";
@@ -79,11 +79,9 @@ const jsonResponse = (request: HttpClientRequest.HttpClientRequest, body: unknow
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }),
   );
 
-const clientLayer = (
-  handler: Parameters<typeof HttpClient.make>[0],
-  options?: Partial<TypeSafeClient.Options>,
-) =>
-  TypeSafeClient.layer({ apiKey: Redacted.make(apiKey), ...options }).pipe(
+const clientLayer = (handler: Parameters<typeof HttpClient.make>[0]) =>
+  TypeSafeClient.layer.pipe(
+    Layer.provide(Layer.succeed(TypeSafeClient.Config, { apiKey: Redacted.make(apiKey) })),
     Layer.provide(Layer.succeed(HttpClient.HttpClient, HttpClient.make(handler))),
   );
 
@@ -143,19 +141,30 @@ describe("TypeSafeClient", () => {
       }),
   );
 
-  it.effect(
-    "loads redacted configuration and composes an HTTP policy without sending during acquisition",
-    () =>
+  it.effect.each([
+    ["default endpoint", { TYPESAFE_API_KEY: apiKey }, "https://api.typesafe.ai/v1"],
+    [
+      "configured endpoint",
+      { TYPESAFE_API_KEY: apiKey, TYPESAFE_API_URL: "https://typesafe.example/v1" },
+      "https://typesafe.example/v1",
+    ],
+  ] as const)(
+    "captures redacted configuration and HTTP policy without I/O: %s",
+    ([, environment, apiUrl]) =>
       Effect.gen(function* () {
         const sent: Array<HttpClientRequest.HttpClientRequest> = [];
 
-        const layer = TypeSafeClient.layerConfig({
-          apiUrl: Config.String("TYPESAFE_API_URL"),
-          transformClient: HttpClient.mapRequest((request) => ({
-            ...request,
-            url: `${request.url}?policy=applied`,
-          })),
-        }).pipe(
+        const layer = TypeSafeClient.layer.pipe(
+          Layer.provide(TypeSafeClient.Config.layer),
+          Layer.updateService(
+            HttpClient.HttpClient,
+            HttpClient.mapRequest((request) => {
+              expect(request.url).toBe(`${apiUrl}/systemone`);
+              expect(request.headers.authorization).toBe(`Bearer ${apiKey}`);
+
+              return { ...request, url: `${request.url}?policy=applied` };
+            }),
+          ),
           Layer.provide(
             Layer.succeed(
               HttpClient.HttpClient,
@@ -166,24 +175,22 @@ describe("TypeSafeClient", () => {
               }),
             ),
           ),
-          Layer.provide(
-            ConfigProvider.layer(
-              ConfigProvider.fromUnknown({
-                TYPESAFE_API_KEY: apiKey,
-                TYPESAFE_API_URL: "https://typesafe.example/v1",
-              }),
-            ),
-          ),
+          Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(environment))),
         );
 
         yield* Effect.gen(function* () {
           const client = yield* TypeSafeClient.TypeSafeClient;
 
           expect(sent).toHaveLength(0);
-          yield* client.evaluate(request);
+          yield* client.evaluate(request).pipe(
+            Effect.provideService(TypeSafeClient.Config, {
+              apiKey: Redacted.make("different-credential"),
+              apiUrl: "https://different.example/v1",
+            }),
+          );
         }).pipe(Effect.provide(layer));
 
-        expect(sent[0].url).toBe("https://typesafe.example/v1/systemone?policy=applied");
+        expect(sent[0].url).toBe(`${apiUrl}/systemone?policy=applied`);
         expect(sent[0].headers.authorization).toBe(`Bearer ${apiKey}`);
       }),
   );
@@ -222,6 +229,84 @@ describe("TypeSafeClient", () => {
 
       expect(result.answers.department.choice).toBe("billing");
       expect(result.answers.department.probabilities).toEqual({ billing: 0.8, technical: 0.2 });
+    }),
+  );
+
+  it.effect("fails missing credential configuration before HTTP dispatch", () =>
+    Effect.gen(function* () {
+      let requests = 0;
+
+      const error = yield* evaluate.pipe(
+        Effect.provide(
+          TypeSafeClient.layer.pipe(
+            Layer.provide(TypeSafeClient.Config.layer),
+            Layer.provide(
+              Layer.succeed(
+                HttpClient.HttpClient,
+                HttpClient.make((request) => {
+                  requests++;
+
+                  return Effect.succeed(jsonResponse(request, response));
+                }),
+              ),
+            ),
+            Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
+          ),
+        ),
+        Effect.flip,
+      );
+
+      expect(error._tag).toBe("ConfigError");
+      expect(requests).toBe(0);
+    }),
+  );
+
+  it.effect.each([
+    ["rate limit", [429, 200], "jev-actual-version"],
+    ["provider failure", [503, 200], "jev-actual-version"],
+    ["transport failure", ["transport", 200], "jev-actual-version"],
+    ["mixed failures exhaust one retry", [503, "transport", 200], "NetworkError"],
+  ] as const)("applies the supplied HttpClient retry policy: %s", ([, statuses, expected]) =>
+    Effect.gen(function* () {
+      const sent: Array<HttpClientRequest.HttpClientRequest> = [];
+
+      const http = HttpClient.make((request) => {
+        const status = statuses[sent.length];
+
+        sent.push(request);
+
+        return status === "transport"
+          ? Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.TransportError({ request }),
+              }),
+            )
+          : Effect.succeed(jsonResponse(request, response, status));
+      }).pipe(
+        HttpClient.filterStatusOk,
+        HttpClient.retryTransient({ times: 1, schedule: Schedule.spaced("20 millis") }),
+      );
+
+      const fiber = yield* evaluate.pipe(
+        Effect.provide(
+          TypeSafeClient.layer.pipe(
+            Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
+            Layer.provide(Layer.succeed(TypeSafeClient.Config, { apiKey: Redacted.make(apiKey) })),
+          ),
+        ),
+        Effect.match({
+          onSuccess: (value) => value.model,
+          onFailure: (error) => error.reason._tag,
+        }),
+        Effect.forkChild,
+      );
+
+      yield* TestClock.adjust("20 millis");
+      expect(yield* Fiber.join(fiber)).toBe(expected);
+      expect(sent.map((request) => [request.url, request.headers.authorization])).toEqual([
+        ["https://api.typesafe.ai/v1/systemone", `Bearer ${apiKey}`],
+        ["https://api.typesafe.ai/v1/systemone", `Bearer ${apiKey}`],
+      ]);
     }),
   );
 
