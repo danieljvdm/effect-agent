@@ -9,15 +9,15 @@ import {
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Crypto, Effect, Layer, Schema } from "effect";
+import { Crypto, Effect, Layer, Option, Schema } from "effect";
 import { SubmissionId } from "effect-agent/identifiers";
 import { type CanonicalRecordEnvelope } from "effect-agent/records";
 import { scheduleOwnerKey } from "effect-agent/schedule-transition";
 import { type Scheduling } from "effect-agent/scheduling";
-import {
-  submissionInputRecordId,
-  submissionSettlementRecordId,
-} from "effect-agent/submission-ledger";
+import { SubmissionLedger, SubmissionLookupById } from "effect-agent/submission-ledger";
+import { verifyThreadInvariants } from "effect-agent/thread-invariants";
+import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
+import { DurableObject } from "effect-cf";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { expect } from "vite-plus/test";
 
@@ -342,11 +342,9 @@ export interface SupplierExpectation {
 
 /**
  * The convergence property asserted after every abort (the Node crash harness's
- * `assertConvergence`, verbatim claims): every accepted Submission still exists and settled;
- * each has EXACTLY one canonical terminal record; no canonical record identity was ever
- * double-appended (stale epochs fenced, DUR-006/DUR-007); canonical inputs and settlements
- * follow the admitted FIFO order (DUR-004); and, when the row touches the external supplier,
- * no recorded result was fabricated and the invocation counts match the claim exactly.
+ * `assertConvergence`): reuse the production invariant checker, including its evidence-bound
+ * exception for input that ran while an earlier operation was parked unknown. Require every
+ * raw ledger row to exist and settle, then independently check supplier results and counts.
  */
 export const assertConvergence = async (
   thread: string,
@@ -359,61 +357,40 @@ export const assertConvergence = async (
   const rows = await laneRows(thread, namespace);
 
   expect(rows.length).toBeGreaterThan(0);
-  for (const row of rows) {
-    expect(row.state, `submission ${row.submission_id}`).toBe("settled");
-  }
-  const records = await readCanonical(thread, namespace);
-  const recordIds = records.map((envelope) => envelope.record.recordId);
 
-  expect(new Set(recordIds).size).toBe(recordIds.length);
-  const ordered = [...rows].sort((left, right) => left.queue_sequence - right.queue_sequence);
+  const report = await withAbortedInstanceRetry(() =>
+    runInDurableObject(stubFor(thread, namespace), (instance) =>
+      instance[DurableObject.RunSymbol](
+        Effect.gen(function* () {
+          const store = yield* ThreadStore;
+          const ledger = yield* SubmissionLedger;
 
-  for (const row of ordered) {
-    const settled = records.filter(
-      (envelope) =>
-        envelope.record.recordId ===
-        submissionSettlementRecordId(decodeSubmissionId(row.submission_id)),
-    );
+          const found = yield* Effect.forEach(rows, (row) =>
+            ledger.lookup(
+              SubmissionLookupById.make({ submissionId: decodeSubmissionId(row.submission_id) }),
+            ),
+          );
 
-    expect(settled, `settlement record for ${row.submission_id}`).toHaveLength(1);
-    expect(settled[0]?.record.payload._tag).toBe("SubmissionSettled");
-  }
+          const submissions = found.flatMap(Option.toArray);
 
-  const expectedInputs = ordered.map((row) =>
-    submissionInputRecordId(decodeSubmissionId(row.submission_id)),
+          expect(submissions).toHaveLength(rows.length);
+
+          return yield* verifyThreadInvariants({
+            export: yield* store.export(
+              ThreadExportRequest.make({ threadId: decodeThreadId(thread) }),
+            ),
+            submissions,
+            requireAllSettled: true,
+          });
+        }),
+      ),
+    ),
   );
 
-  const inputOrder = recordIds.filter((recordId) =>
-    expectedInputs.some((expected) => expected === recordId),
-  );
-
-  expect(inputOrder).toEqual(expectedInputs.filter((expected) => inputOrder.includes(expected)));
-
-  // P7 §7(c) exemption: an ABORTED settlement for never-run work (no canonical `input:{sid}`
-  // record) settles immediately by design — without waiting for the head — so it is excluded
-  // from the FIFO settlement comparison. DUR-004 bounds EXECUTION order, which never-run work
-  // has none of (mirrors `verifyThreadInvariants`).
-  const abortedNeverRan = (submissionId: string): boolean =>
-    !recordIds.includes(submissionInputRecordId(decodeSubmissionId(submissionId))) &&
-    records.some(
-      (envelope) =>
-        envelope.record.recordId ===
-          submissionSettlementRecordId(decodeSubmissionId(submissionId)) &&
-        envelope.record.payload._tag === "SubmissionSettled" &&
-        envelope.record.payload.outcome === "aborted",
-    );
-
-  const expectedSettlements = ordered
-    .filter((row) => !abortedNeverRan(row.submission_id))
-    .map((row) => submissionSettlementRecordId(decodeSubmissionId(row.submission_id)));
-
-  const settlementOrder = recordIds.filter((recordId) =>
-    expectedSettlements.some((expected) => expected === recordId),
-  );
-
-  expect(settlementOrder).toEqual(expectedSettlements);
+  expect(report.checks.filter((check) => check.status === "failed")).toEqual([]);
 
   if (options?.supplier !== undefined) {
+    const records = await readCanonical(thread, namespace);
     const produced = supplierValuesFor(options.supplier.ref);
 
     for (const envelope of records) {
