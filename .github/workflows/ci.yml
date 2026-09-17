@@ -257,7 +257,14 @@ jobs:
   publish-action:
     name: Publish Action
     needs: [checks, test, build]
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    # release-proof is skipped on main. Override implicit ancestor success,
+    # while still requiring every direct validation job to succeed.
+    if: >-
+      ${{ !cancelled() &&
+          github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          needs.checks.result == 'success' &&
+          needs.test.result == 'success' &&
+          needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

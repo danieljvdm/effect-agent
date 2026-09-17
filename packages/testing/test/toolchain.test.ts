@@ -786,16 +786,69 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
   );
 
   it.effect(
+    "gates Action publication on successful direct validation after a skipped ancestor",
+    () =>
+      Effect.gen(function* () {
+        const workflow = yield* readWorkflow(".github/workflows/ci.yml");
+        const publisher = workflow.jobs["publish-action"];
+        const condition = publisher?.if;
+
+        expect(publisher?.needs).toEqual(["checks", "test", "build"]);
+        if (condition === undefined)
+          return yield* Effect.die("Missing Action publication condition");
+
+        // Incident: https://github.com/danieljvdm/effect-agent/actions/runs/35246052768
+        // GitHub inserts success() unless the condition has a status function.
+        // The skipped release-proof ancestor made that implicit check false.
+        expect(condition).toMatch(/\b(?:always|cancelled|failure|success)\s*\(/);
+        const expression = condition.replace(/^\$\{\{\s*|\s*\}\}$/g, "");
+
+        // Evaluate the boolean/string expression used by this workflow, not a
+        // scheduler simulation. Hosted publication remains a post-merge check.
+        for (const [event, ref, cancelled, checks, tests, build, eligible] of [
+          ["push", "refs/heads/main", false, "success", "success", "success", true],
+          ["pull_request", "refs/heads/main", false, "success", "success", "success", false],
+          ["push", "refs/heads/feature", false, "success", "success", "success", false],
+          ["push", "refs/tags/action-v1", false, "success", "success", "success", false],
+          ["workflow_dispatch", "refs/heads/main", false, "success", "success", "success", false],
+          ["push", "refs/heads/main", true, "success", "success", "success", false],
+          ["push", "refs/heads/main", false, "failure", "success", "success", false],
+          ["push", "refs/heads/main", false, "cancelled", "success", "success", false],
+          ["push", "refs/heads/main", false, "skipped", "success", "success", false],
+          ["push", "refs/heads/main", false, "success", "failure", "success", false],
+          ["push", "refs/heads/main", false, "success", "cancelled", "success", false],
+          ["push", "refs/heads/main", false, "success", "skipped", "success", false],
+          ["push", "refs/heads/main", false, "success", "success", "failure", false],
+          ["push", "refs/heads/main", false, "success", "success", "cancelled", false],
+          ["push", "refs/heads/main", false, "success", "success", "skipped", false],
+        ] as const) {
+          const actual: unknown = runInNewContext(expression, {
+            github: { event_name: event, ref },
+            needs: {
+              checks: { result: checks },
+              test: { result: tests },
+              build: { result: build },
+            },
+            success: () => false,
+            failure: () => [checks, tests, build].includes("failure"),
+            cancelled: () => cancelled,
+            always: () => true,
+          });
+
+          expect(actual, JSON.stringify({ event, ref, cancelled, checks, tests, build })).toBe(
+            eligible,
+          );
+        }
+      }),
+  );
+
+  it.effect(
     "publishes Action artifacts atomically without changing source commits",
     () =>
       Effect.gen(function* () {
         const workflow = yield* readWorkflow(".github/workflows/ci.yml");
         const publisher = workflow.jobs["publish-action"];
 
-        expect(publisher?.needs).toEqual(["checks", "test", "build"]);
-        expect(publisher?.if).toBe(
-          "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
-        );
         expect(publisher?.permissions).toEqual({ contents: "write" });
 
         const script = workflowStep(
@@ -919,6 +972,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       const ci = yield* readWorkflow(".github/workflows/ci.yml");
       const proof = ci.jobs["release-proof"];
 
+      expect(ci.jobs.ready?.if).toBe("${{ always() && github.event_name == 'pull_request' }}");
       expect(proof?.permissions).toEqual({
         contents: "read",
         actions: "read",
