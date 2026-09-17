@@ -115,7 +115,7 @@ const privatePackageNames = ["pr-review-action"] as const;
 /** Provider bindings belong to leaf applications, never framework packages. */
 const providerConsumingPackages = new Set<string>();
 
-const exampleNames = ["travel-planner"];
+const exampleNames = ["tool-selection-benchmark", "travel-planner"];
 
 const toolingNames = [
   "context-continuity-eval",
