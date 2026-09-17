@@ -392,8 +392,10 @@ and execution classification. Decode unknown input and parameters with the appli
 when checking resource access. Keep denial reasons safe to log.
 
 The runtime checks each executable model-declared call after approval and before any handler in
-the batch starts. A denial fails with `AgentToolAuthorizationDenied`. Recovery checks calls that still need
-execution; it reuses recorded results without executing or authorizing them again.
+the batch starts. A denial fails with `AgentToolAuthorizationDenied`. If that durable Submission
+already has an abort intent, the runtime records the abort and settles it as aborted after joining
+attached children. Other failures retain their original handling. Recovery checks calls that still
+need execution; it reuses recorded results without executing or authorizing them again.
 
 Omitting both the service and per-run hook allows calls without this additional host check. Durable hosts use
 `RunToolAuthorization.allowAll` by default. Install a policy before granting tools access to

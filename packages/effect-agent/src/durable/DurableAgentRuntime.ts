@@ -7369,6 +7369,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             error,
           ): Effect.Effect<
             | { readonly _tag: "failedRun"; readonly outcome: AttemptOutcome }
+            | { readonly _tag: "aborted" }
             | { readonly _tag: "suspendedRun"; readonly toolCallId: ToolCallId }
             | {
                 readonly _tag: "suspendedChildRun";
@@ -7413,6 +7414,20 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
               if (halted !== undefined) {
                 return yield* halted;
+              }
+
+              // Host authorization can observe cancellation before the abort watcher ticks.
+              // Only an authorization denial with this Submission's durable intent is an abort.
+              if (error instanceof AgentToolAuthorizationDenied) {
+                const intent = yield* ledger.readAbortIntent(
+                  AbortIntentRequest.make({ submissionId }),
+                );
+
+                if (intent !== undefined) {
+                  yield* appendAbortRecord(ctx, intent);
+
+                  return { _tag: "aborted" as const };
+                }
               }
 
               // Settlement keeps only a bounded diagnostic. Report the live failure here,
@@ -8037,7 +8052,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           continue;
         }
         if (outcome._tag === "aborted") {
-          // The abort watcher ended the Run while attached children may still be open:
+          // Durable abort ended the Run while attached children may still be open:
           // request-abort-and-join before the aborted settlement (spec §13.1).
           const disposition = yield* abortAttachedChildren(ctx, submission, tokenRef, knownIds);
 

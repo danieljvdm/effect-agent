@@ -2046,6 +2046,87 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
     }),
   );
 
+  it.effect("settles aborted when authorization observes cancellation before the watcher", () =>
+    Effect.gen(function* () {
+      const admissionRuntime = yield* DurableAgentRuntime;
+      const ledger = yield* SubmissionLedger;
+      const desk = yield* makeBookDesk(bookTools);
+
+      const scripted = yield* makeScriptedModel(() =>
+        toolTurn(toolCall("book-cancelled", "book", { ref: "r-cancelled" })),
+      );
+
+      const agent = Agent.withModel(bookDefinition, scripted.model);
+      const thread = "thread-tool-authorization-cancelled";
+
+      const receipt = yield* admissionRuntime.submit(
+        agent,
+        { question: "book it" },
+        submitOptions(thread, "tool-authorization-cancelled-1"),
+      );
+
+      const command = AbortCommand.make({
+        submissionId: receipt.submissionId,
+        author: "operator",
+        reason: "stop the booking",
+      });
+
+      const runtime = yield* DurableAgentRuntime.pipe(
+        Effect.provide(
+          Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
+            Layer.provide(
+              Layer.succeed(RunToolAuthorization, {
+                // TestClock stays frozen: persist intent and deny before the watcher can tick.
+                authorize: () =>
+                  ledger
+                    .requestAbort(command)
+                    .pipe(
+                      Effect.orDie,
+                      Effect.as({ _tag: "denied", reason: "the current work was cancelled" }),
+                    ),
+              }),
+            ),
+          ),
+        ),
+      );
+
+      const settlements = yield* runtime
+        .processThread(agent, receipt.threadId)
+        .pipe(Effect.provide(desk.toolLayer));
+
+      expect(settlements).toHaveLength(1);
+      expect(yield* desk.count("r-cancelled")).toBe(0);
+      expect(settlements[0]).toMatchObject({
+        submissionId: receipt.submissionId,
+        receiptId: receipt.receiptId,
+        outcome: "aborted",
+      });
+      const records = yield* readLog(thread);
+
+      expect(logTags(records)).toEqual([
+        "ThreadCreated",
+        "UserInputRecorded",
+        "RunStarted",
+        "ModelResponseRecorded",
+        "AbortRequested",
+        "SubmissionSettled",
+      ]);
+      expect(
+        records.find(({ record }) => record.payload._tag === "AbortRequested")?.record.payload,
+      ).toMatchObject(command);
+      expect(yield* runtime.awaitSettlement(receipt)).toEqual(settlements[0]);
+
+      yield* runtime.recoverSubmission(receipt.submissionId);
+      expect(
+        yield* runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(desk.toolLayer)),
+      ).toEqual([]);
+      expect(yield* runtime.awaitSettlement(receipt)).toEqual(settlements[0]);
+      expect(yield* readLog(thread)).toEqual(records);
+      expect(yield* desk.count("r-cancelled")).toBe(0);
+      expect(scripted.prompts).toHaveLength(1);
+    }),
+  );
+
   it.effect(
     "a prepared call without a settled record marks unknown under the default reconciler and frees the worker permit",
     () =>
