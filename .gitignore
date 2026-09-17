@@ -30,5 +30,6 @@ docs/.vitepress/dist
 packages/*/src/**/*.d.ts
 scripts/**/*.d.ts
 test/fixtures/*.d.ts
+oxlint/plugin-exports.d.ts
 .performance-base/
 .performance-report/
