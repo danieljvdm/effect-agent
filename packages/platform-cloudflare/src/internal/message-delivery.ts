@@ -135,15 +135,15 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
     }).pipe(Effect.mapError(failure("prepare message delivery")));
 
     return Context.make(ThreadMessageDelivery, {
-      drainUntil: (sourceFinished, dispatchUntil) =>
+      drainUntil: (dispatchClosed, dispatchUntil) =>
         Effect.gen(function* () {
-          // Subscribe before the initial scan. Only external dispatch stops with the source;
+          // Subscribe before the initial scan. Only admission of new waves stops;
           // the enclosing event owns these resources until its actual teardown.
           const notified = (yield* Stream.toPull(wakes.wakes)).pipe(
             Effect.catch(() => Effect.never),
           );
 
-          const done = yield* Effect.forkScoped(sourceFinished);
+          const done = yield* Effect.forkScoped(dispatchClosed);
 
           const select = (initial = false) =>
             Effect.gen(function* () {
@@ -151,7 +151,7 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
               const now = yield* Clock.currentTimeMillis;
 
               // Recheck after local preparation: a late selection cannot start another wave once
-              // the source ends. Always grant the initial opportunity to a caught-up alarm.
+              // dispatch closes. Always grant the initial opportunity to a caught-up alarm.
               if (
                 (!initial && done.pollUnsafe() !== undefined) ||
                 now + wave.timeoutMillis > DateTime.toEpochMillis(dispatchUntil)

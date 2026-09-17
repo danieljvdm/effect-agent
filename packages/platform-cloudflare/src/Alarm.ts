@@ -30,6 +30,7 @@ import {
   drainDue,
   type ThreadProjectionError,
 } from "effect-agent/thread-projection-maintenance";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { DurableObjectContext } from "./CloudflareBindings.ts";
@@ -188,7 +189,7 @@ export class MaintenancePassReport extends Schema.Class<MaintenancePassReport>(
   phase: Schema.Literals(["caught-up", "actionable"]),
   /** Recovery decisions executed (or deferred) BEFORE any new claim in this pass. */
   recovered: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  /** Whether the head Attempt settled. Joined input may settle with that head. */
+  /** Head Attempts settled during the event. Joined input may settle with each head. */
   settled: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** Submissions still nonterminal after the pass (suspended/unknown lanes stay honest). */
   nonterminal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -212,6 +213,8 @@ export type ThreadMaintenanceFailpointLocation =
   | "maintenance:binding-retry:after"
   | "maintenance:retry:before"
   | "maintenance:retry:after"
+  | "maintenance:checkpoint:before"
+  | "maintenance:checkpoint:after"
   | "maintenance:finish:before"
   | "maintenance:finish:after";
 
@@ -272,7 +275,7 @@ export class ThreadPublication extends Context.Service<
  */
 export const ThreadMessageDelivery = Context.Reference<{
   readonly drainUntil: (
-    sourceFinished: Effect.Effect<void>,
+    dispatchClosed: Effect.Effect<void>,
     dispatchUntil: DateTime.Utc,
   ) => Effect.Effect<void, DurableAlarmError, Scope.Scope>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
@@ -285,14 +288,14 @@ export const ThreadMessageDelivery = Context.Reference<{
 
 /**
  * Application obligations sharing this Object's alarm. Admit one initial external wave even on
- * a caught-up pass, then respond to wakes while native work runs. sourceFinished closes only
- * admission of NEW external waves. Keep local admission/hub subscriptions in the supplied event
- * Scope until maintenance tears it down; do not scope them to sourceFinished or to this Effect.
+ * a caught-up pass, then respond to wakes until dispatchClosed. This closes only admission
+ * of NEW external waves; native work can continue while admitted waves finish. Keep local
+ * admission/hub subscriptions in the event Scope until maintenance tears it down.
  * No deadline sleeps or automatic retry loops. Return after already-admitted waves finish.
  *
  * Declare a finite whole-wave allowance (1..300000ms): maximum for parallel lanes, sum for
  * sequential operations. Admit a wave only if its allowance fits before dispatchUntil. Later
- * arrivals cannot renew the retirement window. Maintenance bounds the join after sourceFinished,
+ * arrivals cannot renew the retirement window. Maintenance bounds the join after dispatchClosed,
  * interrupts and joins event Scope, then reads local deadlines under the mutation gate.
  *
  * Setup and pendingDeadline are bounded local operations. Persist claims/envelopes before
@@ -304,7 +307,7 @@ export const ThreadMessageDelivery = Context.Reference<{
 export const ThreadHostMaintenance = Context.Reference<{
   readonly dispatchTimeoutMillis: number;
   readonly drainUntil: (
-    sourceFinished: Effect.Effect<void>,
+    dispatchClosed: Effect.Effect<void>,
     dispatchUntil: DateTime.Utc,
   ) => Effect.Effect<void, DurableAlarmError, Scope.Scope>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
@@ -350,6 +353,14 @@ class BindingRetry extends Schema.Class<BindingRetry>("BindingRetry")({
   notBefore: Schema.Finite,
   reportedAt: Schema.Finite,
 }) {}
+
+interface NativePassResult {
+  readonly phase: "caught-up" | "actionable";
+  readonly recovered: number;
+  readonly settled: number;
+  readonly nonterminal: number;
+  readonly nextAttemptAt: number | undefined;
+}
 
 interface MaintenanceObservation {
   generation?: bigint;
@@ -536,20 +547,20 @@ export type MaintenancePassFailure =
 /**
  * Incremental, quiescent maintenance over a durable dirty/processed generation (issue #93).
  *
- * `pass` = generation snapshot/pre-arm → recovery → one head Attempt → generation acknowledgement:
+ * One physical event owns native scheduling, auxiliary delivery and final alarm rearming.
  *
- * 1. One storage transaction reads dirty/processed and re-arms before work. A caught-up forced
- *    alarm takes an O(1) path without recovery, ledger scans, or canonical-history reads.
- * 2. Recovery strictly precedes a new claim. One head Attempt advances the lane and requests
- *    a safe yield after ten minutes. The whole event has a fourteen-minute cooperative timeout.
- * 3. Auxiliary dispatch and listeners belong to the event Scope. After native completion,
- *    stop new external waves, join native delivery through its driver-owned Claim deadline,
- *    and bound host/backfill work by explicit allowances before closing and joining Scope.
- *    Ordinary auxiliary setup failures are reported after the one native opportunity.
- * 4. The final transaction acknowledges only the generation observed at pass start. A racing
- *    mutation therefore remains `dirty > processed` and retains its atomically-established alarm.
- * 5. Stable external waits acknowledge and clear. Autonomous retry, indeterminate, and lease
- *    recovery states leave their generation dirty and retain bounded backoff rearming.
+ * 1. Prearm before any work. A caught-up native step uses the O(1) generation record without
+ *    recovery, ledger scans or canonical-history reads.
+ * 2. Reconcile before each head Attempt, then checkpoint only the observed generation. A racing
+ *    producer keeps its newer generation dirty. Native retries retain their durable backoff.
+ * 3. After the initial native opportunity, stop admitting new external waves and let the
+ *    active waves finish. While they remain in flight, native wakes and bounded scans can
+ *    advance more heads. All Attempts share the event's original ten-minute yield deadline.
+ * 4. Native message delivery retains its driver-owned Claim deadline. Host/backfill joins are
+ *    bounded independently; incoming native work never restarts or cancels their attempts.
+ *    Auxiliary failures are reported after the current native opportunity.
+ * 5. Close every event resource before the final gated deadline snapshot and alarm decision.
+ *    The whole event retains one fourteen-minute cooperative timeout.
  */
 export class ThreadMaintenance extends Context.Service<
   ThreadMaintenance,
@@ -579,6 +590,7 @@ export class ThreadMaintenance extends Context.Service<
     | ThreadProjectionMaintenance
     | DurableAgentRuntime
     | SubmissionLedger
+    | WakeScheduler
     | DurableAlarmService
     | ThreadMaintenanceFailpoint
     | CloudflareDurableRuntimeConfig
@@ -588,6 +600,7 @@ export class ThreadMaintenance extends Context.Service<
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const ledger = yield* SubmissionLedger;
+      const wakes = yield* WakeScheduler;
       const alarm = yield* DurableAlarmService;
       const config = yield* CloudflareDurableRuntimeConfig;
       const { ctx } = yield* DurableObjectContext;
@@ -745,7 +758,10 @@ export class ThreadMaintenance extends Context.Service<
               ctx.storage.transaction(async (transaction) => {
                 const { state } = await readMaintenanceState(transaction);
 
-                const previous = state.retry?.generation === generation ? state.retry : undefined;
+                const previous =
+                  state.retry?.generation === generation && state.retry.nativeOnly === nativeOnly
+                    ? state.retry
+                    : undefined;
 
                 const retry = MaintenanceRetry.make({
                   generation,
@@ -784,21 +800,10 @@ export class ThreadMaintenance extends Context.Service<
         yield* failpoint.hit("maintenance:retry:after");
       });
 
-      const pass = Effect.fn("ThreadMaintenance.pass")(function* (
-        yieldAfter: DateTime.Utc,
-        dispatchUntil: DateTime.Utc,
+      const beginNative = Effect.fn("ThreadMaintenance.beginNative")(function* (
         observed: MaintenanceObservation,
-      ): Effect.fn.Return<MaintenancePassReport, MaintenancePassFailure, Scope.Scope> {
-        const annotate = (report: MaintenancePassReport) =>
-          Effect.annotateCurrentSpan({
-            phase: report.phase,
-            recovered: report.recovered,
-            settled: report.settled,
-            nonterminal: report.nonterminal,
-            alarm: report.alarm,
-          }).pipe(Effect.as(report));
-
-        const started = yield* mutations.withSnapshot((activeAtStart) =>
+      ) {
+        return yield* mutations.withSnapshot((activeAtStart) =>
           Effect.gen(function* () {
             const generation = yield* beginPass(observed);
 
@@ -810,76 +815,13 @@ export class ThreadMaintenance extends Context.Service<
             return { ...generation, activeAtStart };
           }),
         );
+      });
 
-        // This scope owns auxiliary dispatch and listeners, independently of source completion.
-        // Close it before acknowledgement, including on failure or event interruption.
-        const auxiliaryScope = yield* Effect.acquireRelease(Scope.make("parallel"), (scope, exit) =>
-          Scope.close(scope, exit),
-        );
-
-        const sourceFinished = yield* Deferred.make<void>();
-        const finished = Deferred.await(sourceFinished);
-
-        // Fork setup too: an ordinary auxiliary setup failure is reported after native work,
-        // rather than gating its opportunity. Event interruption still closes every fiber.
-        const deliveryFiber = yield* Effect.forkIn(
-          Scope.provide(auxiliaryScope)(messages.drainUntil(finished, dispatchUntil)),
-          auxiliaryScope,
-        );
-
-        const hostFiber = yield* Effect.forkIn(
-          Scope.provide(auxiliaryScope)(
-            Effect.gen(function* () {
-              yield* Schema.decodeEffect(AuxiliaryDispatchMillis)(host.dispatchTimeoutMillis).pipe(
-                Effect.mapError((cause) =>
-                  DurableAlarmError.make({
-                    operation: "host dispatch allowance",
-                    message:
-                      "Declare an integer whole-wave allowance between 1 and 300000 milliseconds",
-                    cause,
-                  }),
-                ),
-              );
-              yield* host.drainUntil(finished, dispatchUntil);
-            }),
-          ),
-          auxiliaryScope,
-        );
-
-        // Backfill is one disposable wave; its timer starts beside native execution.
-        const backfill = yield* Effect.forkIn(
-          drainDue.pipe(
-            Effect.provideService(ThreadProjectionMaintenance, projection),
-            Effect.timeoutOption(config.projectionDispatchTimeoutMillis),
-          ),
-          auxiliaryScope,
-        );
-
-        const finishAuxiliary = Effect.gen(function* () {
-          yield* Deferred.succeed(sourceFinished, undefined);
-
-          const remaining = Math.max(
-            1,
-            DateTime.toEpochMillis(dispatchUntil) - (yield* Clock.currentTimeMillis),
-          );
-
-          const hostJoin = yield* Effect.forkIn(
-            Fiber.join(hostFiber).pipe(
-              Effect.timeoutOption(Math.min(host.dispatchTimeoutMillis, remaining)),
-              Effect.tap((result) =>
-                Effect.annotateCurrentSpan({ "host.timedOut": Option.isNone(result) }),
-              ),
-            ),
-            auxiliaryScope,
-          );
-
-          // Native transport uses the driver's actual Claim deadline, through Retry persistence.
-          // Only our host/backfill timers suppress their own interruption. Earlier failed exits,
-          // including pure self-interruption, remain failures while siblings are still blocked.
-          yield* Fiber.joinAll([deliveryFiber, hostJoin, backfill]);
-          yield* Scope.close(auxiliaryScope, Exit.void);
-        });
-
+      const advance = Effect.fn("ThreadMaintenance.advance")(function* (
+        started: Effect.Success<ReturnType<typeof beginNative>>,
+        yieldAfter: DateTime.Utc,
+        observed: MaintenanceObservation,
+      ): Effect.fn.Return<NativePassResult, MaintenancePassFailure> {
         const deadline = yield* publication.pendingDeadline;
 
         if (
@@ -891,55 +833,34 @@ export class ThreadMaintenance extends Context.Service<
         const pending = yield* publication.pendingDeadline;
 
         if (started._tag === "CaughtUp" || Option.isSome(pending)) {
-          yield* finishAuxiliary;
-          yield* failpoint.hit("maintenance:finish:before");
-
-          const disposition = yield* mutations.withSnapshot((active) =>
+          const nextAttemptAt = yield* mutations.withSnapshot((active) =>
             Effect.gen(function* () {
-              // Re-read under the producer gate: a concurrent append/host mutation cannot be
-              // cleared using a stale empty deadline. Dirty generations bound all producer races.
-              const latest = yield* pendingDeadline;
               const now = yield* Clock.currentTimeMillis;
 
-              return yield* runTransaction("finish publication pass", () =>
-                ctx.storage.transaction(async (transaction) => {
-                  const { state } = await readMaintenanceState(transaction);
-
-                  const nativeDeadline =
-                    active > 0 || state.dirty > state.processed
-                      ? state.retry?.generation === state.dirty && active === 0
-                        ? Math.max(now + minimumAlarmDelay, state.retry.notBefore)
-                        : now + config.wakeScanInterval
-                      : Infinity;
-
-                  const next = Option.isSome(latest)
-                    ? Math.min(nativeDeadline, latest.value)
-                    : nativeDeadline;
-
-                  if (Number.isFinite(next)) {
-                    await transaction.setAlarm(Math.max(now + minimumAlarmDelay, next));
-
-                    return "rearmed" as const;
-                  }
-                  await transaction.deleteAlarm();
-
-                  return "cleared" as const;
-                }),
+              const { state } = yield* runTransaction("read native maintenance deadline", () =>
+                ctx.storage.transaction((transaction) => readMaintenanceState(transaction)),
               );
+
+              const native =
+                active > 0 || state.dirty > state.processed
+                  ? state.retry?.generation === state.dirty && active === 0
+                    ? state.retry.notBefore
+                    : now + minimumAlarmDelay
+                  : Infinity;
+
+              const next = Option.isSome(pending) ? pending.value : native;
+
+              return Number.isFinite(next) ? Math.max(now + minimumAlarmDelay, next) : undefined;
             }),
           );
 
-          yield* failpoint.hit("maintenance:finish:after");
-
-          return yield* annotate(
-            MaintenancePassReport.make({
-              phase: "caught-up",
-              recovered: 0,
-              settled: 0,
-              nonterminal: started.nonterminal,
-              alarm: disposition,
-            }),
-          );
+          return {
+            phase: "caught-up",
+            recovered: 0,
+            settled: 0,
+            nonterminal: started.nonterminal,
+            nextAttemptAt,
+          };
         }
         // Step 2 — reconciliation strictly precedes new work in this pass (exit gate).
         observed.nativeOnly = true;
@@ -1006,7 +927,7 @@ export class ThreadMaintenance extends Context.Service<
         let retries = selection.retries;
         let bindingFailure: DurableBindingFailure | undefined;
 
-        // One runnable FIFO head per event. An absent agent is a durable wait for a deployment,
+        // One runnable FIFO head per native opportunity. An absent agent waits for a deployment,
         // including for children; other local lanes and host deliveries remain independently due.
         const settlement =
           selected === undefined
@@ -1041,7 +962,7 @@ export class ThreadMaintenance extends Context.Service<
           if (retry !== undefined || previous !== undefined) {
             // The Attempt released its Claim. Commit its binding wait (or clear) once,
             // before joining fallible auxiliary work. This local fact neither acknowledges
-            // a generation nor changes the shared alarm; those require event retirement.
+            // a generation nor changes the shared alarm.
             yield* failpoint.hit("maintenance:binding-retry:before");
             retries = yield* runTransaction("record submission binding retry", () =>
               ctx.storage.transaction(async (transaction) => {
@@ -1074,8 +995,6 @@ export class ThreadMaintenance extends Context.Service<
           }
         }
 
-        observed.nativeOnly = false;
-        yield* finishAuxiliary;
         const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
         const waitingHeads = new Map<ThreadId, boolean>();
 
@@ -1115,87 +1034,213 @@ export class ThreadMaintenance extends Context.Service<
 
         const delay = Math.max(ordinaryDelay, bindingDelay);
 
+        // Checkpoint native progress without changing the physical alarm. Auxiliary
+        // delivery remains live; later mutations still advance the shared generation.
+        yield* failpoint.hit("maintenance:checkpoint:before");
+
+        const nextAttemptAt = yield* mutations.withSnapshot((active) =>
+          runTransaction("checkpoint native maintenance", () =>
+            ctx.storage.transaction(async (transaction) => {
+              const { state } = await readMaintenanceState(transaction);
+
+              const processed =
+                autonomous || started.activeAtStart > 0 || active > 0
+                  ? state.processed
+                  : state.processed > started.generation
+                    ? state.processed
+                    : started.generation;
+
+              const next = ThreadMaintenanceState.make({
+                ...Struct.omit(state, ["retry"]),
+                processed,
+                nonterminal: remaining.length,
+                bindingRetries: (state.bindingRetries ?? []).filter((retry) =>
+                  remaining.some((row) => row.submissionId === retry.submissionId),
+                ),
+                ...(autonomous && !progressed
+                  ? {
+                      retry: MaintenanceRetry.make({
+                        generation: started.generation,
+                        notBefore: now + delay,
+                        nativeOnly: true,
+                        stalls: Math.min(30, started.stalls + 1),
+                      }),
+                    }
+                  : {}),
+              });
+
+              await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
+              if (autonomous) {
+                return started.activeAtStart > 0 || active > 0 || state.dirty !== started.generation
+                  ? now + minimumAlarmDelay
+                  : now + delay;
+              }
+
+              return started.activeAtStart > 0 || active > 0 || next.dirty > next.processed
+                ? now + minimumAlarmDelay
+                : undefined;
+            }),
+          ),
+        );
+
+        yield* failpoint.hit("maintenance:checkpoint:after");
+
+        return {
+          phase: "actionable",
+          recovered: recovered.length,
+          settled: Option.isSome(settlement) ? 1 : 0,
+          nonterminal: remaining.length,
+          nextAttemptAt,
+        };
+      });
+
+      const pass = Effect.fn("ThreadMaintenance.pass")(function* (
+        yieldAfter: DateTime.Utc,
+        dispatchUntil: DateTime.Utc,
+        observed: MaintenanceObservation,
+      ): Effect.fn.Return<MaintenancePassReport, MaintenancePassFailure, Scope.Scope> {
+        // Subscribe before the first native snapshot. Hints accelerate rechecks; the
+        // bounded scan and durable generation still recover dropped notifications.
+        const notified = (yield* Stream.toPull(wakes.wakes)).pipe(
+          Effect.asVoid,
+          Effect.catch(() => Effect.never),
+        );
+
+        let started = yield* beginNative(observed);
+
+        // This scope owns auxiliary dispatch and listeners, independently of native progress.
+        // Close it before final alarm rearming, including on failure or event interruption.
+        const auxiliaryScope = yield* Effect.acquireRelease(Scope.make("parallel"), (scope, exit) =>
+          Scope.close(scope, exit),
+        );
+
+        const dispatchClosed = yield* Deferred.make<void>();
+        const stopDispatch = Deferred.await(dispatchClosed);
+
+        // Fork setup too: an ordinary auxiliary setup failure is reported after native work,
+        // rather than gating its opportunity. Event interruption still closes every fiber.
+        const deliveryFiber = yield* Effect.forkIn(
+          Scope.provide(auxiliaryScope)(messages.drainUntil(stopDispatch, dispatchUntil)),
+          auxiliaryScope,
+        );
+
+        const hostFiber = yield* Effect.forkIn(
+          Scope.provide(auxiliaryScope)(
+            Effect.gen(function* () {
+              yield* Schema.decodeEffect(AuxiliaryDispatchMillis)(host.dispatchTimeoutMillis).pipe(
+                Effect.mapError((cause) =>
+                  DurableAlarmError.make({
+                    operation: "host dispatch allowance",
+                    message:
+                      "Declare an integer whole-wave allowance between 1 and 300000 milliseconds",
+                    cause,
+                  }),
+                ),
+              );
+              yield* host.drainUntil(stopDispatch, dispatchUntil);
+            }),
+          ),
+          auxiliaryScope,
+        );
+
+        // Backfill is one disposable wave; its timer starts beside native execution.
+        const backfill = yield* Effect.forkIn(
+          drainDue.pipe(
+            Effect.provideService(ThreadProjectionMaintenance, projection),
+            Effect.timeoutOption(config.projectionDispatchTimeoutMillis),
+          ),
+          auxiliaryScope,
+        );
+
+        let result = yield* advance(started, yieldAfter, observed);
+        let phase = result.phase;
+        let recovered = result.recovered;
+        let settled = result.settled;
+
+        observed.nativeOnly = false;
+
+        // Close admission of new delivery waves once, then keep advancing native
+        // work while the already-admitted waves finish. Neither lane restarts the
+        // other's work or receives a fresh event budget.
+        yield* Deferred.succeed(dispatchClosed, undefined);
+
+        const remaining = Math.max(
+          1,
+          DateTime.toEpochMillis(dispatchUntil) - (yield* Clock.currentTimeMillis),
+        );
+
+        const hostJoin = yield* Effect.forkIn(
+          Fiber.join(hostFiber).pipe(
+            Effect.timeoutOption(Math.min(host.dispatchTimeoutMillis, remaining)),
+            Effect.tap((outcome) =>
+              Effect.annotateCurrentSpan({ "host.timedOut": Option.isNone(outcome) }),
+            ),
+          ),
+          auxiliaryScope,
+        );
+
+        const retired = yield* Effect.forkChild(Fiber.joinAll([deliveryFiber, hostJoin, backfill]));
+
+        const auxiliaryPending = () =>
+          deliveryFiber.pollUnsafe() === undefined ||
+          hostFiber.pollUnsafe() === undefined ||
+          backfill.pollUnsafe() === undefined;
+
+        while (retired.pollUnsafe() === undefined && auxiliaryPending()) {
+          const now = yield* Clock.currentTimeMillis;
+          const until = DateTime.toEpochMillis(yieldAfter);
+
+          if (now >= until) break;
+
+          const next = Math.min(
+            result.nextAttemptAt ?? Infinity,
+            now + config.wakeScanInterval,
+            until,
+          );
+
+          const ready = yield* Effect.raceFirst(
+            Effect.raceFirst(notified, Effect.sleep(Math.max(0, next - now))).pipe(Effect.as(true)),
+            Fiber.await(retired).pipe(Effect.as(false)),
+          );
+
+          if (!ready || retired.pollUnsafe() !== undefined || !auxiliaryPending()) break;
+          if ((yield* Clock.currentTimeMillis) >= until) break;
+
+          started = yield* beginNative(observed);
+          result = yield* advance(started, yieldAfter, observed);
+          if (result.phase === "actionable") phase = "actionable";
+          recovered += result.recovered;
+          settled += result.settled;
+          observed.nativeOnly = false;
+        }
+        // Preserve driver-owned Claim deadlines and failures, then close every
+        // listener before the one final alarm decision.
+        yield* Fiber.join(retired);
+        yield* Scope.close(auxiliaryScope, Exit.void);
         yield* failpoint.hit("maintenance:finish:before");
 
-        const alarmDisposition = yield* mutations.withSnapshot((active) =>
+        const disposition = yield* mutations.withSnapshot((active) =>
           Effect.gen(function* () {
-            const publicationDeadline = yield* pendingDeadline;
+            const latest = yield* pendingDeadline;
+            const now = yield* Clock.currentTimeMillis;
 
-            return yield* runTransaction("finish maintenance pass", () =>
+            return yield* runTransaction("finish maintenance event", () =>
               ctx.storage.transaction(async (transaction) => {
                 const { state } = await readMaintenanceState(transaction);
 
-                // Autonomous work and in-flight mutations intentionally leave the observed
-                // generation dirty. Otherwise acknowledge only the pass-start generation.
-                const processed =
-                  autonomous || started.activeAtStart > 0 || active > 0
-                    ? state.processed
-                    : state.processed > started.generation
-                      ? state.processed
-                      : started.generation;
+                const native =
+                  active > 0 || state.dirty > state.processed
+                    ? state.retry?.generation === state.dirty && active === 0
+                      ? Math.max(now + minimumAlarmDelay, state.retry.notBefore)
+                      : state.dirty === observed.generation && active === 0
+                        ? (result.nextAttemptAt ?? now + config.wakeScanInterval)
+                        : now + minimumAlarmDelay
+                    : Infinity;
 
-                const next = ThreadMaintenanceState.make({
-                  ...Struct.omit(state, ["retry"]),
-                  processed,
-                  nonterminal: remaining.length,
-                  bindingRetries: (state.bindingRetries ?? []).filter((retry) =>
-                    remaining.some((row) => row.submissionId === retry.submissionId),
-                  ),
-                  ...(autonomous && !progressed
-                    ? {
-                        retry: MaintenanceRetry.make({
-                          generation: started.generation,
-                          notBefore: now + delay,
-                          nativeOnly: true,
-                          stalls: Math.min(30, started.stalls + 1),
-                        }),
-                      }
-                    : {}),
-                });
+                const next = Option.isSome(latest) ? Math.min(native, latest.value) : native;
 
-                await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
-                if (autonomous) {
-                  // Replace the crash-fallback slot with this pass's bounded backoff. The target
-                  // is never earlier than the begin-pass fallback, so workerd does not cancel
-                  // this running alarm handler before its report/span can complete.
-                  const nativeDeadline =
-                    started.activeAtStart > 0 || active > 0 || state.dirty !== started.generation
-                      ? now + minimumAlarmDelay
-                      : now + delay;
-
-                  await transaction.setAlarm(
-                    Option.isSome(publicationDeadline)
-                      ? Math.max(
-                          now + minimumAlarmDelay,
-                          Math.min(nativeDeadline, publicationDeadline.value),
-                        )
-                      : nativeDeadline,
-                  );
-
-                  return "rearmed" as const;
-                }
-                if (started.activeAtStart > 0 || active > 0 || next.dirty > next.processed) {
-                  // A mutation overlapped this pass's observation window or raced
-                  // acknowledgement. It stays dirty and its pre-armed bounded alarm survives;
-                  // unseen effects are never acknowledged. Do not accelerate that future alarm
-                  // from inside the current handler: workerd cancels a running handler when it
-                  // writes an earlier slot.
-                  await ensureTransactionAlarmBy(
-                    transaction,
-                    Option.isSome(publicationDeadline)
-                      ? Math.max(
-                          now + minimumAlarmDelay,
-                          Math.min(now + config.wakeScanInterval, publicationDeadline.value),
-                        )
-                      : now + config.wakeScanInterval,
-                  );
-
-                  return "rearmed" as const;
-                }
-                if (Option.isSome(publicationDeadline)) {
-                  await transaction.setAlarm(
-                    Math.max(now + minimumAlarmDelay, publicationDeadline.value),
-                  );
+                if (Number.isFinite(next)) {
+                  await transaction.setAlarm(Math.max(now + minimumAlarmDelay, next));
 
                   return "rearmed" as const;
                 }
@@ -1209,15 +1254,23 @@ export class ThreadMaintenance extends Context.Service<
 
         yield* failpoint.hit("maintenance:finish:after");
 
-        return yield* annotate(
-          MaintenancePassReport.make({
-            phase: "actionable",
-            recovered: recovered.length,
-            settled: Option.isSome(settlement) ? 1 : 0,
-            nonterminal: remaining.length,
-            alarm: alarmDisposition,
-          }),
-        );
+        const report = MaintenancePassReport.make({
+          phase,
+          recovered,
+          settled,
+          nonterminal: result.nonterminal,
+          alarm: disposition,
+        });
+
+        yield* Effect.annotateCurrentSpan({
+          phase: report.phase,
+          recovered: report.recovered,
+          settled: report.settled,
+          nonterminal: report.nonterminal,
+          alarm: report.alarm,
+        });
+
+        return report;
       });
 
       return ThreadMaintenance.of({

@@ -458,7 +458,11 @@ describe("Thread Object message maintenance", () => {
           await entered.promise;
           for (let arrival = 0; arrival < 3; arrival++) {
             await advance(500);
-            if (mode === "continuous native arrivals") await submit(source, `arrival-${arrival}`);
+            if (mode === "continuous native arrivals") {
+              await submit(source, `arrival-${arrival}`);
+              await advance(100);
+              expect(await allSettled(source)()).toBe(true);
+            }
           }
           expect(
             retired,
@@ -476,7 +480,7 @@ describe("Thread Object message maintenance", () => {
       }),
   );
 
-  it("retires a held delivery and runs the next ready source budget before the old response resolves", () =>
+  it("executes new input during a held delivery and retains its exact retry after timeout", () =>
     withThreads(async (source, destination, now, advance) => {
       await submit(source, "initial");
       await drainAlarmsUntil(source, allSettled(source));
@@ -518,7 +522,11 @@ describe("Thread Object message maintenance", () => {
 
         expect(destinationRows).toHaveLength(1);
         await submit(source, "next-ready-continuation");
-        await advance(10_000);
+        await advance(100);
+        expect(retired).toBe(false);
+        expect(await allSettled(source)()).toBe(true);
+        expect(messageDeliveryResources.get(source)).toEqual({ acquired: 1, released: 0 });
+        await advance(9_900);
         expect(retired, "the destination response must not own the physical event").toBe(true);
         expect(await outcome).toEqual({ interrupted: false });
         expect(messageDeliveryResources.get(source)).toEqual({ acquired: 1, released: 1 });
@@ -526,11 +534,9 @@ describe("Thread Object message maintenance", () => {
         expect((await laneRows(source)).map((row) => row.state)).toEqual([
           "settled",
           "settled",
-          "ready",
+          "settled",
         ]);
 
-        // The next physical event executes its native budget before the old response resolves.
-        await runDurableObjectAlarm(stubFor(source));
         expect(await allSettled(source)()).toBe(true);
         expect((await read(source))?.status).toBe("pending");
         expect((await read(source))?.retry.lastFailure).toBe("timeout");

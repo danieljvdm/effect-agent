@@ -306,52 +306,47 @@ const maintenance = Context.make(ThreadHostMaintenance, {
   // For example, a wave of four sequential commits allowing 15 seconds each.
   dispatchTimeoutMillis: 60_000,
   pendingDeadline: outbox.pendingDeadline,
-  drainUntil: (sourceFinished, dispatchUntil) =>
+  drainUntil: (dispatchClosed, dispatchUntil) =>
     Effect.gen(function* () {
       // The supplied Scope belongs to the physical alarm, including retirement.
       yield* admission.listen.pipe(Effect.forkScoped);
-      yield* outbox.drainUntil(sourceFinished, dispatchUntil);
+      yield* outbox.drainUntil(dispatchClosed, dispatchUntil);
     }),
 });
 ```
 
 The application pump admits an initial bounded wave, even on a caught-up alarm, and may dispatch
-new wake-driven waves while native execution runs. `sourceFinished` stops admission of new
-external waves; it must not close local admission or hub subscriptions. Keep those subscriptions
+new wake-driven waves until `dispatchClosed`. This signal stops new external waves; native
+execution can continue while the admitted waves finish. Keep local admission and hub subscriptions
 in the supplied event Scope until maintenance tears it down. The pump returns after its active
-wave finishes. Remove deadline-sleep retry loops and listeners scoped to native completion.
+wave finishes. Delivery retries belong to later alarms, not deadline-sleep loops in the hook.
 
 Declare the whole-wave `dispatchTimeoutMillis` as an integer from 1 to 300000 milliseconds.
 Use the sum for sequential operations and the maximum for parallel lanes. Admit a new wave only
 if its full allowance fits before `dispatchUntil`; otherwise leave the work durably due without
-claiming an attempt. New arrivals must not renew this horizon. Setup and `pendingDeadline` are
-bounded local operations. Ordinary auxiliary setup failures are reported after native work.
+claiming an attempt. Setup and `pendingDeadline` are bounded local operations.
 
-Maintenance runs native execution, message delivery, host delivery and disposable projection
-backfill concurrently. At native completion it stops new external waves, bounds the host join
-by its declared allowance, and waits for the native driver's current parallel wave through its
-normal timeout/retry commit. The driver's timer starts from the actual Claim, not batch
-selection. Its retained policy defaults to 30000ms and permits at most 300000ms; four driver
-permits serve four selected rows without sequential attempt windows. A late active wave keeps
-its opportunity even under continuous native arrivals. The single current native hook is
-`ThreadMessageDelivery.drainUntil(sourceFinished, dispatchUntil)`; the old `drain` fallback is
-removed.
+The native scheduler owns recovery, FIFO selection and retry timing. After its initial opportunity,
+it closes admission of external waves and keeps responding to native wakes while the admitted
+waves finish. Already-ready work and new admissions can execute without cancelling or restarting
+an unrelated delivery. Periodic generation checks recover dropped wake hints; receipt-only
+bookkeeping does not create native recovery debt.
 
-Disposable backfill has one independently bounded wave per event, configured by
-`ThreadObject.Options.projectionDispatchTimeoutMillis` (default 30000ms, maximum 300000ms).
-This does not change required live `applyCommitted` publication. The worst added handoff wait is
-the maximum of the active native attempt window, declared host allowance and remaining backfill
-allowance, at most five minutes plus bounded local setup/commit/cleanup. These windows overlap;
-they are not added together. The ten-minute native yield and fourteen-minute whole-event ceiling
-remain in force. Cooperative cancellation cannot preempt synchronous code or stuck finalizers.
+Native message delivery keeps the driver's actual Claim deadline, including its timeout/retry
+commit. The driver has four parallel permits and a retained attempt allowance of at most five
+minutes. Host delivery uses its declared whole-wave allowance; disposable backfill has one wave
+bounded by `projectionDispatchTimeoutMillis` (default 30000ms, maximum 300000ms). These limits
+are independent of native arrivals. All native Attempts share the original ten-minute yield
+deadline, and the entire event shares one fourteen-minute ceiling. Neither input nor delivery
+renews these budgets. Cooperative cancellation cannot preempt synchronous code or stuck finalizers.
 
-After auxiliary cleanup, maintenance reads local durable deadlines under the mutation/generation
-gate and acknowledges only observed work. Retry deadlines schedule future physical alarms;
-there are no in-event sleeps for them. Persist exact envelopes and claims before network dispatch.
-Local cancellation does not cancel or roll back remote effects. Interrupted claims, receipts and
-projection cursors remain recoverable after reconstruction. Typed failures, defects and a hook's
-own interruption retain the prearmed generation; only the owner's finite cutoff is deferred work.
-The maintenance span records host cutoff use.
+Each native step checkpoints its observed generation without changing the physical alarm. After
+all event resources close, the owner reads durable deadlines under the mutation gate and rearms
+or clears the alarm once. A producer racing either checkpoint or retirement retains its newer
+generation and prearmed wake. Persist exact envelopes and claims before network dispatch; local
+cancellation cannot roll back remote effects. Interrupted work remains recoverable after
+reconstruction. Typed failures, defects and a hook's own interruption retain recovery; only the
+owner's finite delivery cutoff is deferred work. The maintenance span records host cutoff use.
 
 Every accepted host mutation uses the shared `ThreadMutationGate`; hooks must not write the raw
 alarm slot. Native admission, approval, abort and unknown resolution retain the default
@@ -651,10 +646,11 @@ Alarms recover pending work after eviction without another user request.
 The host owns the Object's [single alarm](https://developers.cloudflare.com/durable-objects/api/alarms/);
 do not replace its handler or schedule unrelated alarms on that Object.
 
-Each Thread alarm reconciles recovery and advances at most one head Attempt. Accepted input can
-still join that Run through its normal turn boundaries. After ten minutes, the Attempt commits
-its completed turn and yields before preparing another turn, including context summarization.
-A later alarm resumes the same Run with its original duration deadline and cumulative usage.
+Each Thread alarm grants an initial head Attempt and can advance further heads while auxiliary
+delivery remains in flight. Recovery precedes each claim, and all Attempts share the event's
+original ten-minute yield deadline. Accepted input can still join the active Run at normal turn
+boundaries. At the yield deadline, the Attempt commits its completed turn before yielding; a later
+alarm resumes the same Run with its original duration deadline and cumulative usage.
 
 The whole Thread alarm has a fourteen-minute watchdog, including time waiting for another pass.
 The Schedule Owner uses the same watchdog while scanning due schedules. It continues past failed

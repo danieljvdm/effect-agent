@@ -15,7 +15,12 @@ import { TestClock } from "effect/testing";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 
-import { DurableAlarmError } from "../src/Alarm.ts";
+import {
+  DurableAlarmError,
+  ThreadHostMaintenance,
+  ThreadMaintenance,
+  ThreadMaintenanceFailpoint,
+} from "../src/Alarm.ts";
 import type { DurableObjectContext, ThreadObjectNamespace } from "../src/CloudflareBindings.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
 import * as ThreadObject from "../src/ThreadObject.ts";
@@ -347,8 +352,9 @@ describe("live Thread projection and alarm backfill", () => {
       expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
     }));
 
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/0fe79ac5
   it.each(["host", "projection"] as const)(
-    "keeps admission listeners live after native completion until stalled %s work is retired",
+    "executes admitted work while the same %s delivery remains in flight",
     (held) =>
       withThread(async (thread, _now, advance) => {
         let entered!: () => void;
@@ -434,12 +440,18 @@ describe("live Thread projection and alarm backfill", () => {
           );
           expect(wakes).toBeGreaterThan(previousWakes);
           expect(released).toBe(false);
+          await advance(100);
+          expect(retired).toBe(false);
+          expect((await laneRows(thread, namespace)).map((row) => row.state)).toEqual([
+            "settled",
+            "settled",
+          ]);
           await advance(1_000);
           expect(retired).toBe(true);
           expect(released).toBe(true);
           expect((await laneRows(thread, namespace)).map((row) => row.state)).toEqual([
             "settled",
-            "ready",
+            "settled",
           ]);
           expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
         } finally {
@@ -451,6 +463,49 @@ describe("live Thread projection and alarm backfill", () => {
         await alarm(thread);
         expect(await allSettled(thread, namespace)()).toBe(true);
         await quiesce(thread);
+      }),
+  );
+
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/0fe79ac5
+  it.each(["maintenance:checkpoint:before", "maintenance:checkpoint:after"] as const)(
+    "recovers native progress and pending projection after eviction at %s",
+    (location) =>
+      withThread(async (thread) => {
+        projectionControls.set(thread, { skipLive: true });
+        await submit(thread, plannerDefinition);
+
+        const outcome = await runInDurableObject(stub(thread), (instance, state) =>
+          instance[DurableObject.RunSymbol](
+            ThreadMaintenance.use((maintenance) => maintenance.pass).pipe(
+              Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
+              Effect.provideService(ThreadMaintenanceFailpoint, {
+                hit: (at) =>
+                  at === location
+                    ? Effect.sync(() => state.abort("native checkpoint eviction"))
+                    : Effect.void,
+              }),
+              Effect.provideService(ThreadHostMaintenance, {
+                dispatchTimeoutMillis: 1_000,
+                pendingDeadline: Effect.succeed(Option.none()),
+                drainUntil: () => Effect.never,
+              }),
+              Effect.exit,
+            ),
+          ),
+        ).catch((cause) => Exit.die(cause));
+
+        expect(
+          Exit.isFailure(outcome) ? Cause.pretty(outcome.cause) : "unexpected success",
+        ).toContain("native checkpoint eviction");
+        expect(await allSettled(thread, namespace)()).toBe(true);
+        const canonical = await readCanonical(thread, namespace);
+
+        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
+        projectionControls.delete(thread);
+        await quiesce(thread);
+        expect(await readCanonical(thread, namespace)).toEqual(canonical);
+        expect(await watermark(thread)).toBe(canonical.at(-1)!.sequence);
+        expect(await allSettled(thread, namespace)()).toBe(true);
       }),
   );
 

@@ -5,7 +5,7 @@ import {
   threadStoreLayer,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
 import { runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Effect, Exit, Layer, Option, Schema } from "effect";
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ProducerId } from "effect-agent/records";
 import {
@@ -13,8 +13,10 @@ import {
   RecoverySnapshotRequest,
   ReleaseOwnershipRequest,
   SubmissionLedger,
+  SubmissionLookupById,
 } from "effect-agent/submission-ledger";
 import { ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
+import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
@@ -44,6 +46,128 @@ const Generation = Schema.Struct({
 });
 
 describe("maintenance retry deadlines", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/0fe79ac5
+  it("executes already-ready lanes while one delivery completes, even without wake hints", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const thread = `scheduler-backlog-${crypto.randomUUID()}`;
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(thread, yield* Clock.Clock);
+        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
+        yield* Effect.promise(() =>
+          runInDurableObject(stubFor(thread), (instance, state) =>
+            instance[DurableObject.RunSymbol](
+              Effect.gen(function* () {
+                yield* TestClock.setTime(Date.now() + 86_400_000);
+                const clock = yield* TestClock.testClockWith(Effect.succeed);
+                const bindings = yield* makeTestBindings;
+                const config = yield* CloudflareDurableRuntimeConfig;
+                const entered = yield* Deferred.make<void>();
+                const release = yield* Deferred.make<void>();
+                let attempts = 0;
+                let completed = false;
+                let active = false;
+
+                const ports = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
+                  Layer.provide(
+                    storageConfigLayer({
+                      storage: state.storage,
+                      ownershipLeaseDuration: config.ownershipLeaseDuration,
+                    }),
+                  ),
+                  Layer.provide(DoStorageFailpoint.layer),
+                );
+
+                const services = Layer.fresh(ThreadMaintenance.layer).pipe(
+                  Layer.provideMerge(DurableAgentRuntime.layerWithBindings(bindings)),
+                  Layer.provideMerge(ports),
+                  Layer.provide(WakeScheduler.layerNoop),
+                );
+
+                yield* Effect.gen(function* () {
+                  const maintenance = yield* ThreadMaintenance;
+                  const runtime = yield* DurableAgentRuntime;
+                  const ledger = yield* SubmissionLedger;
+                  const receipts = [];
+
+                  for (const lane of ["a", "b"]) {
+                    const id = `${thread}-${lane}`;
+
+                    receipts.push(
+                      yield* maintenance.withMutation(
+                        runtime.submitRegistered(
+                          { definition: plannerDefinition },
+                          { question: "queued before the alarm", ref: id },
+                          submitOptions(id, id),
+                        ),
+                      ),
+                    );
+                  }
+                  expect(
+                    (yield* Stream.runCollect(ledger.scanNonterminal)).map((row) => row.state),
+                  ).toEqual(["ready", "ready"]);
+                  const running = yield* Effect.forkChild(maintenance.pass);
+
+                  yield* Deferred.await(entered);
+                  for (let elapsed = 0; elapsed < 500; elapsed += 100) {
+                    yield* clock.adjust(100);
+                    if ((yield* Stream.runCollect(ledger.scanNonterminal)).length === 0) break;
+                  }
+                  for (const receipt of receipts) {
+                    const row = yield* ledger.lookup(
+                      SubmissionLookupById.make({
+                        submissionId: receipt.submissionId,
+                      }),
+                    );
+
+                    expect(Option.isSome(row) ? row.value.state : "missing").toBe("settled");
+                  }
+                  expect(running.pollUnsafe()).toBeUndefined();
+                  expect({ attempts, completed, active }).toEqual({
+                    attempts: 1,
+                    completed: false,
+                    active: true,
+                  });
+                  yield* Deferred.succeed(release, undefined);
+                  expect((yield* Fiber.join(running)).settled).toBe(2);
+                  expect({ attempts, completed, active }).toEqual({
+                    attempts: 1,
+                    completed: true,
+                    active: false,
+                  });
+                }).pipe(
+                  Effect.provide(services),
+                  Effect.provideService(ThreadHostMaintenance, {
+                    dispatchTimeoutMillis: 1_000,
+                    pendingDeadline: Effect.sync(() =>
+                      completed ? Option.none() : Option.some(0),
+                    ),
+                    drainUntil: () =>
+                      Effect.gen(function* () {
+                        yield* Effect.acquireRelease(
+                          Effect.sync(() => {
+                            attempts++;
+                            active = true;
+                          }),
+                          () =>
+                            Effect.sync(() => {
+                              active = false;
+                            }),
+                        );
+                        yield* Deferred.succeed(entered, undefined);
+                        yield* Deferred.await(release);
+                        completed = true;
+                      }),
+                  }),
+                );
+              }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+            ),
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
+
   // A missing root agent must not repeatedly claim and release the same receipt behind a
   // 50ms pre-arm, even when auxiliary work fails or the Object is evicted.
   // This real SQLite/eviction sweep needs a wall-clock budget; deadlines still use TestClock.
