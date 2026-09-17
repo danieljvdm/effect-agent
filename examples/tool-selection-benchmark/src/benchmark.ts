@@ -8,6 +8,7 @@ import { type AiError, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import { runProbe } from "./cache-probe.ts";
 import {
   catalogue,
   grade,
@@ -16,6 +17,8 @@ import {
   Output,
   type Task,
   tasks,
+  cacheTasks,
+  referenceContext,
   ToolEvidence,
   tools,
 } from "./fixture.ts";
@@ -23,12 +26,17 @@ import {
   type Selection,
   type Arm,
   arms,
+  cacheArms,
+  probeArms,
+  ContextSize,
+  Suite,
   BenchmarkError,
   instrument,
   Journal,
   refuse,
   Sample,
 } from "./measurement.ts";
+import { encodeTools } from "./stable-tools.ts";
 
 export const settings = {
   max_output_tokens: 2_048,
@@ -42,12 +50,26 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
   arm: Arm,
   task: Task,
   repetition: number,
+  context: typeof ContextSize.Type,
 ) {
-  const metered = yield* instrument(arm === "all-50" ? 50 : 9);
   const toolCalls: Array<(typeof Sample.Type.toolCalls)[number]> = [];
   const selections: Array<typeof Selection.Type> = [];
-  const useInitialRanking = arm.startsWith("jev-8");
-  const useSemanticDiscovery = arm.endsWith("-jev");
+  const useInitialRanking = arm === "stable-jev-8-jev" || arm.startsWith("jev-8");
+  const useSemanticDiscovery = arm === "all-50-discovery" || arm.endsWith("-jev");
+  const withDiscovery = arm !== "all-50";
+  const allTools = arm === "all-50" || arm === "all-50-discovery";
+  const maxCalls = task.name === "chain-4" ? 12 : 6;
+
+  const discovery = useSemanticDiscovery
+    ? ToolDiscovery.fromDecisionModel({ maxResults: 8, minimumRelevance: 0.5 })
+    : ToolDiscovery.make({ maxResults: 8 });
+
+  const metered = yield* instrument(allTools ? (withDiscovery ? 51 : 50) : 9, {
+    maxCalls,
+    ...(arm.startsWith("stable-")
+      ? { stableTools: yield* encodeTools([...tools, discovery.tool]) }
+      : {}),
+  });
 
   const ranking = yield* ToolSelector.fromDecisionModel({
     state: (request) => Schema.decodeUnknownEffect(Schema.String)(request.input),
@@ -88,26 +110,21 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
     }),
   };
 
-  const discovery = useSemanticDiscovery
-    ? ToolDiscovery.fromDecisionModel({ maxResults: 8, minimumRelevance: 0.5 })
-    : ToolDiscovery.make({ maxResults: 8 });
-
-  const withDiscovery = arm !== "all-50";
-
   const definition = Agent.make("tool-selection-benchmark", {
     input: Schema.String,
     output: Output,
     instructions:
-      "Use tools to retrieve fresh records before answering; never invent records. If a needed tool is missing, use discover_tools when available, following its description. Follow linked records when the task requires it. Return only the requested field values as strings in values, with no labels or commentary. Preserve codes, dates and status strings exactly. Do not include unrelated fields or record IDs.",
+      "Use tools to retrieve fresh records before answering; never invent records. If a needed tool is missing, use discover_tools when available, following its description. Follow linked records when the task requires it. Return only the requested field values as strings in values, with no labels or commentary. Preserve codes, dates and status strings exactly. Do not include unrelated fields or record IDs." +
+      (context === "reference" ? `\n${referenceContext}` : ""),
     toolkit: Toolkit.make(...tools, ...(withDiscovery ? [discovery.tool] : [])),
     toolExposure: {
-      initialToolNames: withDiscovery ? [...commonTools] : Object.keys(catalogue),
-      maxTools: withDiscovery ? 9 : 50,
+      initialToolNames: allTools ? Object.keys(catalogue) : [...commonTools],
+      maxTools: allTools ? (withDiscovery ? 51 : 50) : 9,
       maxSchemaBytes: 65_536,
     },
     policy: {
-      maxTurns: 6,
-      maxToolCalls: 8,
+      maxTurns: maxCalls,
+      maxToolCalls: task.name === "chain-4" ? 16 : 8,
       maxDuration: "2 minutes",
       toolConcurrency: 1,
       toolResultBounds: { maxBytes: 32_768 },
@@ -146,6 +163,7 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
     arm,
     task: task.name,
     repetition,
+    context,
     forcedMiss: task.withhold !== undefined,
     elapsedMs,
     success,
@@ -163,13 +181,15 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
 });
 
 const Report = Schema.Struct({
-  version: Schema.Literal(2),
+  version: Schema.Literal(3),
   startedAt: Schema.Finite,
   sourceCommit: Schema.String,
   dirty: Schema.Boolean,
   runtime: Schema.String,
   platform: Schema.String,
   repetitions: Schema.Natural,
+  suite: Suite,
+  context: ContextSize,
   live: Schema.Boolean,
   model: Schema.Literal("gpt-6-astra"),
   decisionModel: Schema.String,
@@ -180,6 +200,8 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
   readonly output: string;
   readonly repetitions: number;
   readonly live: boolean;
+  readonly suite: typeof Suite.Type;
+  readonly context: typeof ContextSize.Type;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -210,13 +232,15 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
       .writeFileString(
         `${options.output}.tmp`,
         Schema.encodeSync(Schema.fromJsonString(Report))({
-          version: 2,
+          version: 3,
           startedAt,
           sourceCommit,
           dirty,
           runtime,
           platform,
           repetitions: options.repetitions,
+          suite: options.suite,
+          context: options.context,
           live: options.live,
           model: "gpt-6-astra",
           decisionModel: "jev-latest",
@@ -226,9 +250,20 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
       .pipe(Effect.andThen(fs.rename(`${options.output}.tmp`, options.output)));
 
   yield* save();
+
+  const selectedArms =
+    options.suite === "probe" ? probeArms : options.suite === "cache" ? cacheArms : arms;
+
+  const selectedTasks = options.suite === "cache" ? cacheTasks : tasks;
+
+  const count =
+    selectedArms.length *
+    options.repetitions *
+    (options.suite === "probe" ? 1 : selectedTasks.length);
+
   if (!options.live) {
     yield* Console.log(
-      `Dry run: ${tasks.length * arms.length * options.repetitions} samples; at most 6 OpenAI calls and 7 JEV calls each. ${options.output}`,
+      `Dry run: ${count} ${options.suite}/${options.context} samples; at most ${options.suite === "probe" ? 4 : options.suite === "cache" ? 12 : 6} OpenAI calls each. ${options.output}`,
     );
 
     return;
@@ -272,19 +307,30 @@ export const benchmark = Effect.fn("ToolSelectionBenchmark.run")(function* (opti
   });
 
   yield* Effect.gen(function* () {
-    // Five repetitions give every arm each position for every task, balancing order effects.
+    // Rotate positions by task and repetition; retain every attempt, including failures.
     for (let repetition = 0; repetition < options.repetitions; repetition++) {
-      for (const [taskIndex, task] of tasks.entries()) {
-        const offset = (repetition + taskIndex) % arms.length;
+      for (const [taskIndex, task] of (options.suite === "probe"
+        ? selectedTasks.slice(0, 1)
+        : selectedTasks
+      ).entries()) {
+        const offset = (repetition + taskIndex) % selectedArms.length;
 
-        for (const arm of [...arms.slice(offset), ...arms.slice(0, offset)]) {
-          currentSample = `${task.name}/${arm}/${repetition + 1}`;
+        for (const arm of [...selectedArms.slice(offset), ...selectedArms.slice(0, offset)]) {
+          currentSample = `${options.context}/${options.suite === "probe" ? "cache-probe" : task.name}/${arm}/${repetition + 1}`;
           yield* journal.record(
             "sample-start",
-            JSON.stringify({ task, arm, repetition: repetition + 1 }),
+            JSON.stringify({
+              task: options.suite === "probe" ? null : task,
+              arm,
+              context: options.context,
+              repetition: repetition + 1,
+            }),
           );
           yield* Console.log(`Running ${task.name} / ${arm} / ${repetition + 1}`);
-          const sample = yield* runSample(arm, task, repetition + 1);
+
+          const sample = yield* options.suite === "probe"
+            ? runProbe(arm, repetition + 1, options.context, `${startedAt}/${currentSample}`)
+            : runSample(arm, task, repetition + 1, options.context);
 
           yield* journal.record(
             "sample-complete",

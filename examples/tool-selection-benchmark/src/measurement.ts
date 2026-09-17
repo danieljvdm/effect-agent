@@ -1,7 +1,9 @@
 import { DecisionModel, DecisionSchema } from "@effect-agent/ai-decision";
-import { OpenAiClient } from "@effect/ai-openai";
+import { OpenAiClient, type OpenAiSchema } from "@effect/ai-openai";
 import { Cause, Clock, Context, Effect, Exit, Schema, Stream } from "effect";
 import { AiError } from "effect/unstable/ai";
+
+import { withStableTools } from "./stable-tools.ts";
 
 export const Arm = Schema.Literals([
   "all-50",
@@ -9,10 +11,20 @@ export const Arm = Schema.Literals([
   "jev-8-keyword",
   "fixed-8-jev",
   "jev-8-jev",
+  "all-50-discovery",
+  "stable-fixed-8-jev",
+  "stable-jev-8-jev",
+  "probe-fixed",
+  "probe-filtered",
+  "probe-allowed",
 ]);
 
 export type Arm = typeof Arm.Type;
-export const arms: ReadonlyArray<Arm> = Arm.literals;
+export const arms: ReadonlyArray<Arm> = Arm.literals.slice(0, 5);
+export const cacheArms: ReadonlyArray<Arm> = Arm.literals.slice(0, 8);
+export const probeArms: ReadonlyArray<Arm> = Arm.literals.slice(8);
+export const Suite = Schema.Literals(["discovery", "cache", "probe"]);
+export const ContextSize = Schema.Literals(["short", "reference"]);
 
 export const Usage = Schema.Struct({
   input_tokens: Schema.Natural,
@@ -29,6 +41,7 @@ export const ModelCall = Schema.Struct({
   completedAt: Schema.NullOr(Schema.Finite),
   firstDeltaAt: Schema.NullOr(Schema.Finite),
   tools: Schema.Array(Schema.String),
+  callableTools: Schema.Array(Schema.String),
   toolCalls: Schema.Array(Schema.Struct({ name: Schema.String, arguments: Schema.String })),
   requestJson: Schema.String,
   model: Schema.NullOr(Schema.String),
@@ -54,6 +67,7 @@ export const Sample = Schema.Struct({
   arm: Arm,
   task: Schema.String,
   repetition: Schema.Natural,
+  context: ContextSize,
   forcedMiss: Schema.Boolean,
   elapsedMs: Schema.Finite,
   success: Schema.Boolean,
@@ -101,6 +115,10 @@ const Completion = Schema.Struct({
 // No token-count preflight or retries. Capture providers and checkpoint sink once per sample.
 export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(function* (
   expectedInitialTools: number,
+  options: {
+    readonly stableTools?: ReadonlyArray<typeof OpenAiSchema.Tool.Encoded>;
+    readonly maxCalls?: number;
+  } = {},
 ) {
   const native = yield* OpenAiClient.OpenAiClient;
   const nativeDecision = yield* DecisionModel.DecisionModel;
@@ -116,7 +134,8 @@ export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(functio
 
   const decision = yield* DecisionModel.make({
     evaluate: Effect.fn("ToolSelectionBenchmark.decision")(function* (request) {
-      if (decisions.length >= 7) return yield* refuse("Decision-call bound exceeded");
+      if (decisions.length >= (options.maxCalls ?? 6) + 1)
+        return yield* refuse("Decision-call bound exceeded");
       const index = decisions.length;
 
       let call: typeof DecisionCall.Type = {
@@ -155,12 +174,20 @@ export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(functio
   const client = OpenAiClient.OpenAiClient.of({
     ...native,
     createResponse: () => refuse("Expected streaming requests"),
-    createResponseStream: Effect.fn("ToolSelectionBenchmark.response")(function* (payload) {
+    createResponseStream: Effect.fn("ToolSelectionBenchmark.response")(function* (original) {
+      if (calls.length === 0 && original.tools?.length !== expectedInitialTools)
+        return yield* refuse("Initial tool count does not match the benchmark arm");
+
+      const payload = options.stableTools
+        ? yield* withStableTools(original, options.stableTools)
+        : original;
+
       const requestJson = JSON.stringify(payload);
 
-      if (calls.length === 0 && payload.tools?.length !== expectedInitialTools)
-        return yield* refuse("Initial tool count does not match the benchmark arm");
-      if (calls.length >= 6 || new TextEncoder().encode(requestJson).byteLength > 65_536)
+      if (
+        calls.length >= (options.maxCalls ?? 6) ||
+        new TextEncoder().encode(requestJson).byteLength > 262_144
+      )
         return yield* refuse("Model-call or request-byte bound exceeded");
       if (
         payload.model !== "gpt-6-astra" ||
@@ -176,6 +203,11 @@ export const instrument = Effect.fn("ToolSelectionBenchmark.instrument")(functio
         firstDeltaAt: null,
         tools:
           payload.tools?.flatMap((tool) => (tool.type === "function" ? [tool.name] : [])) ?? [],
+        callableTools:
+          original.tool_choice === "none"
+            ? []
+            : (original.tools?.flatMap((tool) => (tool.type === "function" ? [tool.name] : [])) ??
+              []),
         requestJson,
         toolCalls: [],
         model: null,

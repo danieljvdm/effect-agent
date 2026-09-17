@@ -89,6 +89,13 @@ const records: Readonly<Record<string, string>> = {
   "get_sensor_calibration/CAL-77": "status=calibration_due; verification=CAL-V6P8",
   "get_subscription_usage/SUB-411": "consumed=731; allowance=1200",
   "get_vendor_contract/VEN-512": "end=2028-06-30; incoterm=DDP",
+  "get_support_ticket/TKT-808":
+    "Follow product recall PRD-808 using get_product_recall. Continue following the linked records until the final verification code is available.",
+  "get_product_recall/PRD-808":
+    "Follow customs shipment SHP-808 using get_shipment_customs; it contains the next linked record.",
+  "get_shipment_customs/SHP-808":
+    "Follow vendor rating VEN-808 using get_vendor_rating; it contains the final verification code.",
+  "get_vendor_rating/VEN-808": "verification=CHAIN-P9D2; status=approved",
 };
 
 export class ToolEvidence extends Context.Service<
@@ -164,6 +171,32 @@ export const tasks: ReadonlyArray<Task> = [
     withhold: ["get_sensor_calibration"],
   },
 ];
+
+export const cacheTasks: ReadonlyArray<Task> = [
+  ...tasks,
+  {
+    name: "chain-4",
+    input:
+      "Investigate support ticket TKT-808. Follow each linked record until you reach the final verification code, and report only that code and its status.",
+    evidence: ["CHAIN-P9D2", "approved"],
+    requiredCalls: [
+      "get_support_ticket/TKT-808",
+      "get_product_recall/PRD-808",
+      "get_shipment_customs/SHP-808",
+      "get_vendor_rating/VEN-808",
+    ],
+  },
+];
+
+// Deliberately synthetic static reference material, identical across arms. It
+// makes even eight-tool requests cache-eligible; it is not a production transcript.
+export const referenceContext =
+  "Historical archive for context only. These entries contain no current task answers.\n" +
+  Array.from(
+    { length: 128 },
+    (_, index) =>
+      `Archive entry ${String(index).padStart(3, "0")}: internal audit closed; administrative review complete; historical records retained. Retrieve current record values through the available tools.`,
+  ).join("\n");
 
 /** Exact multiset equality rejects extra, missing or duplicated claims, plus require actual execution. */
 export const grade = (

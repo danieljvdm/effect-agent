@@ -67,3 +67,68 @@ JSON is replaced atomically after each sample. Existing evidence paths are refus
 Any failed sample causes a nonzero exit after preserving the complete run. Keep raw
 results in experiment artifacts, with task-level distributions and failures alongside
 aggregate tables; do not publish a universal speedup from these fixtures.
+
+## Stable catalogue and cache experiment
+
+```sh
+vp run perf:tool-selection --suite cache --context short --repetitions 4 --live --output /tmp/cache-short.json --log-level error
+vp run perf:tool-selection --suite cache --context reference --repetitions 4 --live --output /tmp/cache-reference.json --log-level error
+vp run perf:tool-selection --suite probe --context short --repetitions 8 --live --output /tmp/probe-short.json --log-level error
+vp run perf:tool-selection --suite probe --context reference --repetitions 8 --live --output /tmp/probe-reference.json --log-level error
+```
+
+`cache` retains the five original arms and adds three controls:
+
+| Arm                | Definitions sent | Initially callable  | Discovery |
+| ------------------ | ---------------- | ------------------- | --------- |
+| all-50-discovery   | 50 + discovery   | 50 + discovery      | JEV       |
+| stable-fixed-8-jev | 50 + discovery   | Fixed 8 + discovery | JEV       |
+| stable-jev-8-jev   | 50 + discovery   | JEV 8 + discovery   | JEV       |
+
+The two stable arms use a **benchmark-only OpenAI client adapter**. It serializes
+the authorized fixture catalogue with Effect's OpenAI schema transformer and keeps
+those definitions in a fixed order. The runtime still chooses and enforces its
+normal active subset; the adapter translates that subset to native `allowed_tools`.
+Unknown names, schema drift, duplicate definitions and unsupported choices fail
+before I/O. Stable arms expose metadata for all 51 tools to the provider. This is
+not framework support for stable exposure and does not reduce schema tokens.
+
+The cache suite adds a four-record chain with three initially unknown links. It
+allows 12 model turns and 16 tool calls for that task, keeping the original limits
+for the six existing tasks. The `reference` context adds 128 identical synthetic
+archive entries to the instructions in every arm, making even the shortlists
+cache-eligible. It is a context-size stress condition, not a real conversation
+transcript. Input-token counts come from the provider, not estimates. Both contexts
+retain the same task inputs, required executions and exact-answer oracle. Reference
+material is not sent to JEV, whose explicit state remains the task or discovery query.
+
+`probe` isolates the transport mechanism without an agent or JEV. Each trial makes
+four sequential, identical requests requiring one shipping-tool call. Callable sets
+are A/A/A/A for `probe-fixed` (eight physical definitions), or A/B/C/A for
+`probe-filtered` (eight changing definitions) and `probe-allowed` (50 stable
+definitions). All sets contain the required shipping tool. No handlers execute;
+success means exactly one correctly parameterized call in each response.
+
+Each probe trial salts the **first tool description** before the cacheable prefix,
+then holds that salt and all message content fixed for its four requests. Report
+actual first-request cache reads/writes, changed-subset requests and the return to A
+separately. A new `prompt_cache_key` is not used to assert cold state. The agent suite
+uses unsalted shared fixture prefixes and measures observed reuse under serial
+traffic. It does not artificially warm each arm, and includes first-use writes.
+
+The commands above produce 448 agent attempts (8 arms × 7 tasks × 4 repetitions ×
+2 contexts) plus 48 four-request probe trials. Position rotates by task/repetition;
+four repetitions do not balance every per-task position. Keep contexts separate in
+latency comparisons because they run in separate time windows. A useful primary
+target is at least 10% lower observed token cost with no observed correctness loss;
+also report latency distributions, failed attempts, JEV overhead and cache counters.
+This fixture scale cannot establish production reliability or universal savings.
+
+Evidence format v3 adds `suite`, `context`, and per-request `callableTools` alongside
+the transmitted `tools` and exact request JSON. Requests are bounded at 256 KiB for
+all suites. The cache suite's chain allows at most 13 JEV calls; other agent tasks
+retain seven. Probe trials allow four OpenAI calls and zero JEV calls. These are
+request bounds, not a dollar cap. Run with builds and tests idle and retain pilot
+attempts separately. Price actual cache reads, writes, other input, output and JEV
+usage; show missing usage as unknown. Do not infer financial savings from cache-hit
+percentage alone or silently discard failed/slow attempts.
