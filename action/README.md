@@ -315,7 +315,7 @@ Compaction can change prefixes, and routing and cache availability still affect 
 [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
 
 Input admission allows at most 1,000 usable files, 2,000,000 characters per patch, 8,000,000 patch
-characters in total, and 8 MB of hydrated base/head source. Failed, unsupported, and oversized
+characters in total, and 16 MB of hydrated base/head source. Failed, unsupported, and oversized
 candidates do not consume usable file slots. A file that exceeds the remaining source or patch
 allowance is excluded without preventing smaller later files from fitting. These bounds
 limit input preparation independently of the shared inference spending ceiling.

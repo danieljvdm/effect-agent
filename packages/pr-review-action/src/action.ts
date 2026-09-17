@@ -75,7 +75,7 @@ import {
 } from "./selection.ts";
 
 const MAX_GENERATED_CLASSIFICATIONS = 100;
-const MAX_HYDRATED_SOURCE_BYTES = 8_000_000;
+const MAX_HYDRATED_SOURCE_BYTES = 16_000_000;
 
 const ACTION_INPUT_BY_CONFIG: Readonly<Record<string, string>> = {
   OPENAI_API_KEY: "INPUT_OPENAI-API-KEY",

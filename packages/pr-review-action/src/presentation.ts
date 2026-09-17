@@ -130,7 +130,7 @@ export class ReviewExclusion extends Schema.Class<ReviewExclusion>("ReviewExclus
 const exclusionReason: Record<ReviewExclusion["reason"], string> = {
   "path-limit": "Path exceeds 512 characters",
   "file-limit": `${formatNumber(MAX_REVIEW_FILES)}-file input limit`,
-  "source-limit": "8 MB source hydration limit",
+  "source-limit": "16 MB source hydration limit",
   "unsupported-entry": "Not a regular file",
   "source-read-failed": "Source could not be read as bounded UTF-8 text",
   "patch-unavailable": "Exact patch could not be generated within the diff bounds",
