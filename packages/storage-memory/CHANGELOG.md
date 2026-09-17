@@ -1,5 +1,14 @@
 # @effect-agent/storage-memory
 
+## 0.1.0-beta.101
+
+### Patch Changes
+
+- [#517](https://github.com/danieljvdm/effect-agent/pull/517) [`6a4f4f8`](https://github.com/danieljvdm/effect-agent/commit/6a4f4f870fe87ebb0d3cc76905dcadd77c9a29ef) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose bounded outstanding-operation and pending-delivery reads, exact canonical record locators, and native worker/peer admission lookups. Retain uncertain external outcomes after abort and retire worker inputs only after their effects are resolved.
+
+- Updated dependencies [[`6a4f4f8`](https://github.com/danieljvdm/effect-agent/commit/6a4f4f870fe87ebb0d3cc76905dcadd77c9a29ef)]:
+  - effect-agent@0.1.0-beta.101
+
 ## 0.1.0-beta.100
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/ai-typesafe",
-  "version": "0.1.0-beta.100",
+  "version": "0.1.0-beta.101",
   "description": "TypeSafe AI evaluation with Effect HttpClient and request-derived answer types.",
   "license": "MIT",
   "repository": {

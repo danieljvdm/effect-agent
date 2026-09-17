@@ -148,6 +148,7 @@
     "native-agent-workflows",
     "native-chaos-generation",
     "native-empty-context-tools",
+    "native-outstanding-reads",
     "native-subscription-alarm-services",
     "native-tool-observability",
     "navigable-pr-review",
