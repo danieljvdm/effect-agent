@@ -2121,12 +2121,17 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         );
 
         const agent = Agent.withModel(bookDefinition, scripted.model);
+        // Regression: https://github.com/danieljvdm/effect-agent/commit/d9249632b9f7ab70f6aca23ac0630f99c3c4d31d
+        // Admitted Thread identity is authoritative; a bounded diagnostic copy must not prevent settlement.
+        const threadId = `thread-check-failed-${"x".repeat(1_024)}`;
 
         const receipt = yield* admissionRuntime.submit(
           agent,
           { question: "book it" },
-          submitOptions("thread-check-failed", "check-failed"),
+          submitOptions(threadId, "check-failed"),
         );
+
+        expect(receipt.threadId).toBe(threadId);
 
         const runtime = yield* DurableAgentRuntime.pipe(
           Effect.provide(
@@ -2146,10 +2151,15 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(settlements).toHaveLength(1);
         expect(settlements[0]).toMatchObject({
           outcome: "failed",
+          receiptId: receipt.receiptId,
+          submissionId: receipt.submissionId,
           failure: {
             errorTag: "AgentToolAuthorizationCheckError",
             message: "Could not verify authority",
-            context: { threadId: receipt.threadId, submissionId: receipt.submissionId },
+            context: {
+              threadId: expect.stringMatching(/^thread-check-failed-.*\[truncated\]$/),
+              submissionId: receipt.submissionId,
+            },
             diagnostic: {
               _tag: "Cause",
               reasons: [
@@ -2201,6 +2211,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(settled).toEqual(settlements[0]);
         const records = yield* readLog(receipt.threadId);
 
+        expect(records.every((record) => record.threadId === threadId)).toBe(true);
         expect(records.some(({ record }) => record.payload._tag === "ToolCallPrepared")).toBe(
           false,
         );
@@ -2224,6 +2235,8 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ).toEqual([]);
         expect(logs).toHaveLength(1);
         expect(Schema.is(FailureDiagnostic.Failure)(settlements[0]?.failure)).toBe(true);
+        expect(settlements[0]?.failure?.context?.threadId).toHaveLength(1_024);
+        expect(Schema.decodeExit(FailureDiagnostic.Context)({ threadId })._tag).toBe("Failure");
       }),
   );
 

@@ -453,6 +453,8 @@ it excludes arbitrary payload fields and redacts common credential forms. Diagno
 operator data, never a ready-made user message. Keep private payloads out of error text; applications
 can provide stricter text redaction to `FailureDiagnostic.capture`. Capture marks cycles and bounds
 explicitly rather than pretending to reconstruct the original error after transport.
+Use `FailureDiagnostic.captureContext` for bounded diagnostic correlation copies; shortened values
+end in `[truncated]`, and the original identities remain in their owning records.
 Worker admission and message-delivery failures retain the same causal data: `WorkerError.cause`
 preserves live errors, and the delivery's `lastFailureDiagnostic` survives retries and recovery.
 The delivery's receipt and refusal/retry classification remain the authority for safe retry decisions.

@@ -4242,7 +4242,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       errorTag: errorTagOf(error).slice(0, 256) || "UnknownError",
       message: errorMessageOf(error).slice(0, MAX_FAILURE_MESSAGE_LENGTH),
       diagnostic: FailureDiagnostic.capture(cause),
-      context,
+      context: FailureDiagnostic.captureContext(context),
     }).pipe(
       // The exact diagnostic Schema admits only causal fields, never arbitrary provider payloads.
       Effect.orDie,

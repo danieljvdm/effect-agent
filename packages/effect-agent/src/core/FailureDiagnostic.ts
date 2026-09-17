@@ -303,6 +303,13 @@ export const capture = (
   return visit(value, 0);
 };
 
+/** Bound and redact a diagnostic copy; canonical identities stay in their owning records. */
+export const captureContext = (context: Context): Context => {
+  const diagnostic = capture(context);
+
+  return diagnostic._tag === "Error" ? (diagnostic.context ?? {}) : {};
+};
+
 /**
  * Preserve the original value in-process; across JSON retain its structured diagnostic projection.
  * Decoding returns Diagnostic data, never claims to reconstruct an application error class.
