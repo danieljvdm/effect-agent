@@ -1,18 +1,23 @@
+import type { DecisionModel, DecisionSchema } from "@effect-agent/ai-decision";
 import { Effect, Schema, type Scope } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
+import { AiError, Tool, Toolkit } from "effect/unstable/ai";
 
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { Descriptor, DiscoveryTool, PinnedTool } from "../core/ToolExposure.ts";
 import { ToolExecutionClass } from "../engine/DurableStep.ts";
 import { catalogEntryId as entryId, describeCatalog } from "../engine/internal/tool-exposure.ts";
 import { CurrentToolCatalog, type CatalogEntry } from "../engine/ToolExposure.ts";
+import { readDecisionConfig } from "./DecisionToolSelectorConfig.ts";
+import { rankToolRelevance } from "./internal/tool-relevance.ts";
+
+export { DecisionConfig, defaultDecisionConfig } from "./DecisionToolSelectorConfig.ts";
 
 const Name = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const Namespace = Schema.NonEmptyString.check(Schema.isMaxLength(128));
 const NamespaceDescription = Schema.String.check(Schema.isMaxLength(512));
 const EntryId = Schema.NonEmptyString.check(Schema.isMaxLength(1_024));
 
-/** Search text is bounded and literal; namespace selects one exact host-declared group. */
+/** Search text is bounded; the search policy defines matching. Namespace selects one exact group. */
 export const Parameters = Schema.Struct({
   query: Schema.NonEmptyString.check(Schema.isMaxLength(512), Schema.isPattern(/\S/)),
   namespace: Schema.optionalKey(Namespace),
@@ -314,3 +319,95 @@ export const make = <Failure extends Schema.Top = typeof Schema.Never, Requireme
 
   return Object.freeze({ tool, toolkit, handlers });
 };
+
+/** Options for semantic discovery. The failure Schema describes onEvaluation failures. */
+export interface DecisionOptions<
+  Failure extends Schema.Top = typeof Schema.Never,
+  Requirements = never,
+> extends Omit<Options<Failure, Requirements>, "search"> {
+  /** Separate evaluator usage, without query or answers. Failures stop discovery; no implicit fallback. */
+  readonly onEvaluation?:
+    | ((
+        result: Pick<DecisionSchema.EvaluateResponse, "provider" | "model" | "usage">,
+      ) => Effect.Effect<void, Failure["Type"], Requirements>)
+    | undefined;
+}
+
+/**
+ * Read the shared DecisionConfig service and construct semantic discover_tools. Provide
+ * configuration to this construction Effect; the resulting Tool captures the validated settings.
+ * The configured prompt and criteria accompany the bounded discovery query, optional namespace,
+ * and eligible metadata; no conversation prompt or Thread history is implicitly projected.
+ * The discovery Tool excludes itself from evaluation.
+ * One batch asks an independent probability question per candidate, with stable ID tie-breaking.
+ * Empty catalogues skip I/O. Result/schema budgets, pins and activation use make's normal contract.
+ *
+ * Provide DecisionModel and observer services to handlers at Layer construction. AiError and the
+ * declared observer failures remain typed; defects, timeout and interruption propagate normally.
+ * Hosts own provider deadlines and billing. Evaluation grants no additional Tool authority.
+ */
+export const fromDecisionModel = Effect.fnUntraced(function* <
+  Failure extends Schema.Top = typeof Schema.Never,
+  Requirements = never,
+>(options: DecisionOptions<Failure, Requirements> = {}) {
+  const bounds = yield* readDecisionConfig;
+
+  const observerFailure: Schema.Codec<
+    Failure["Type"],
+    Failure["Encoded"],
+    Failure["DecodingServices"],
+    Failure["EncodingServices"]
+  > = options.failure ?? Schema.Never;
+
+  const invalid = (description: string) =>
+    AiError.AiError.make({
+      module: "ToolDiscovery",
+      method: "search",
+      reason: AiError.InvalidRequestError.make({ description }),
+    });
+
+  const failure = Schema.Union([AiError.AiError, observerFailure]);
+
+  return make<typeof failure, Requirements | DecisionModel.DecisionModel>({
+    description:
+      options.description ??
+      "Find available tools by describing the capability you need, with an optional exact namespace. Semantic relevance determines matches; exact keywords are not required. Returned native tools become available next turn. Code Mode matches document namespace methods and select their owning execution tool.",
+    maxResults: options.maxResults,
+    maxResultBytes: options.maxResultBytes,
+    namespaceDescriptions: options.namespaceDescriptions,
+    failure,
+    search: Effect.fn("ToolDiscovery.decisions")(function* (request, eligible) {
+      const catalogue = eligible.filter(
+        (candidate) => candidate.nativeToolName !== "discover_tools",
+      );
+
+      if (catalogue.length === 0) return [];
+      if (catalogue.length > bounds.maxCandidates)
+        return yield* invalid("Tool discovery catalogue exceeds its candidate bound");
+
+      const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(Descriptor)))(
+        catalogue,
+      ).pipe(Effect.mapError(() => invalid("Invalid Tool discovery catalogue")));
+
+      if (utf8ByteLength(encoded) > bounds.maxCatalogueBytes)
+        return yield* invalid("Tool discovery catalogue exceeds its byte bound");
+
+      const result = yield* rankToolRelevance({
+        prompt: bounds.prompt,
+        criteria: bounds.criteria,
+        state: {
+          query: request.query,
+          ...(request.namespace === undefined ? {} : { namespace: request.namespace }),
+        },
+        catalogue,
+        minimumRelevance: bounds.minimumRelevance,
+        maxStateBytes: bounds.maxStateBytes,
+        module: "ToolDiscovery",
+      });
+
+      if (options.onEvaluation !== undefined) yield* options.onEvaluation(result.evaluation);
+
+      return result.ids;
+    }),
+  });
+});

@@ -1,6 +1,18 @@
+import { DecisionModel } from "@effect-agent/ai-decision";
 import { describe, expect, it } from "@effect/vitest";
-import type { Layer } from "effect";
-import { Cause, Context, Effect, Encoding, Exit, Fiber, Queue, Ref, Schema, Stream } from "effect";
+import {
+  Layer,
+  Cause,
+  Context,
+  Effect,
+  Encoding,
+  Exit,
+  Fiber,
+  Queue,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import * as CodeMode from "effect-agent/code-mode";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import * as ToolDiscovery from "effect-agent/tool-discovery";
@@ -12,8 +24,9 @@ import {
   CurrentToolCatalog,
   type CatalogEntry,
 } from "effect-agent/tool-exposure";
+import * as ToolSelector from "effect-agent/tool-selector";
 import { TestClock } from "effect/testing";
-import { Tool, type Toolkit } from "effect/unstable/ai";
+import { AiError, Tool, type Toolkit } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
 
 const Search = Tool.make("search_pages", {
@@ -497,4 +510,304 @@ it("retains search errors and Layer requirements without capturing the engine ca
     Extract<Tool.HandlerError<typeof typed.tool>, SearchError>
   >().toEqualTypeOf<SearchError>();
   expectTypeOf<Tool.HandlerServices<typeof typed.tool>>().toEqualTypeOf<CurrentToolCatalog>();
+});
+
+const evidence = {
+  provider: "test",
+  model: "relevance",
+  usage: { inputTokens: 40, outputTokens: 2 },
+};
+
+describe("decision-model discovery", () => {
+  it.effect("ranks with a custom relevance prompt and rubric within the namespace", () =>
+    Effect.gen(function* () {
+      let observed = 0;
+
+      const DecisionConfigLive = Layer.succeed(ToolSelector.DecisionConfig, {
+        prompt: "Would this tool find the billing evidence requested by the query?",
+        criteria: { true: "Finds the requested billing evidence", false: "Unrelated capability" },
+        minimumRelevance: 0.8,
+      });
+
+      const definition = yield* ToolDiscovery.fromDecisionModel({
+        maxResults: 1,
+        onEvaluation: (result) =>
+          Effect.sync(() => {
+            expect(result).toEqual(evidence);
+            observed++;
+          }),
+      }).pipe(Effect.provide(DecisionConfigLive));
+
+      const Archive = Tool.make("archived_statements", {
+        description: "Historical billing documents",
+        success: Schema.String,
+      });
+
+      const model = yield* DecisionModel.make({
+        evaluate: (request) =>
+          Effect.sync(() => {
+            expect(request.state).toEqual({
+              query: "uncover recent charges",
+              namespace: "records",
+            });
+            expect(Object.keys(request.questions)).toEqual(["candidate_0", "candidate_1"]);
+            expect(JSON.stringify(request.questions)).not.toContain("search_pages");
+            expect(JSON.stringify(request.questions)).not.toContain("discover_tools");
+            expect(request.questions.candidate_1).toEqual({
+              type: "probability",
+              instructions: {
+                question: "Would this tool find the billing evidence requested by the query?",
+                tool: {
+                  name: "query_records",
+                  description: "Query stored account records",
+                  namespace: "records",
+                  method: "",
+                },
+              },
+              criteria: {
+                true: "Finds the requested billing evidence",
+                false: "Unrelated capability",
+              },
+            });
+
+            return {
+              ...evidence,
+              answers: {
+                candidate_0: { type: "probability", probability: 0.2 },
+                candidate_1: { type: "probability", probability: 0.95 },
+              },
+            };
+          }),
+      });
+
+      const result = yield* invoke(
+        definition,
+        [
+          native(Query, "records"),
+          native(Search, "web"),
+          native(Archive, "records"),
+          native(definition.tool, "records"),
+        ],
+        { query: "uncover recent charges", namespace: "records" },
+      ).pipe(Effect.provideService(DecisionModel.DecisionModel, model));
+
+      expect(result.toolNames).toEqual(["query_records"]);
+      expect(result.matches[0]?.parameters).toMatchObject({
+        properties: { account: { type: "string" } },
+      });
+      expect(observed).toBe(1);
+    }),
+  );
+
+  it.effect("breaks ties by catalogue ID and activates an aliased native owner once", () =>
+    Effect.gen(function* () {
+      const code = CodeMode.make("execute", {
+        description: "Execute research tools",
+        includeDeclarations: false,
+        tools: { web: { search: Search, lookup: Search } },
+      });
+
+      const aliases = Context.get(code.tool.annotations, AdditionalToolCatalog).map((entry) => ({
+        ...entry,
+        kind: "code-mode" as const,
+        nativeToolName: "execute",
+      }));
+
+      const model = yield* DecisionModel.make({
+        evaluate: () =>
+          Effect.succeed({
+            ...evidence,
+            answers: {
+              candidate_0: { type: "probability", probability: 0.9 },
+              candidate_1: { type: "probability", probability: 0.9 },
+              candidate_2: { type: "probability", probability: 0.9 },
+            },
+          }),
+      });
+
+      const result = yield* invoke(
+        yield* ToolDiscovery.fromDecisionModel({ maxResults: 2 }),
+        [native(Search, "web"), ...aliases],
+        { query: "investigate a subject" },
+      ).pipe(Effect.provideService(DecisionModel.DecisionModel, model));
+
+      expect(result.matches.map((match) => match.id)).toEqual([
+        "code-mode:execute:web.lookup",
+        "code-mode:execute:web.search",
+      ]);
+      expect(result.toolNames).toEqual(["execute"]);
+    }),
+  );
+
+  it.effect("returns no matches below the cutoff and skips evaluation for an empty catalogue", () =>
+    Effect.gen(function* () {
+      let evaluations = 0;
+
+      const definition = yield* ToolDiscovery.fromDecisionModel().pipe(
+        Effect.provideService(ToolDiscovery.DecisionConfig, { minimumRelevance: 0.8 }),
+      );
+
+      const model = yield* DecisionModel.make({
+        evaluate: () =>
+          Effect.sync(() => {
+            evaluations++;
+
+            return {
+              ...evidence,
+              answers: { candidate_0: { type: "probability", probability: 0.6 } },
+            };
+          }),
+      });
+
+      for (const entries of [[native(Search)], [native(definition.tool)], []]) {
+        const result = yield* invoke(definition, entries, { query: "pages" }).pipe(
+          Effect.provideService(DecisionModel.DecisionModel, model),
+        );
+
+        expect(result).toEqual({ toolNames: [], matches: [] });
+      }
+      expect(evaluations).toBe(1);
+    }),
+  );
+
+  it.effect("refuses oversized catalogues before paid evaluation", () =>
+    Effect.gen(function* () {
+      let evaluations = 0;
+
+      const model = yield* DecisionModel.make({
+        evaluate: () =>
+          Effect.sync(() => {
+            evaluations++;
+
+            return {};
+          }),
+      });
+
+      for (const limits of [{ maxCandidates: 1 }, { maxCatalogueBytes: 1 }, { maxStateBytes: 1 }]) {
+        const failure = yield* invoke(
+          yield* ToolDiscovery.fromDecisionModel().pipe(
+            Effect.provideService(ToolDiscovery.DecisionConfig, limits),
+          ),
+          [native(Search), native(Query)],
+          { query: "pages" },
+        ).pipe(Effect.provideService(DecisionModel.DecisionModel, model), Effect.flip);
+
+        expect(failure).toMatchObject({ _tag: "AiError", reason: { _tag: "InvalidRequestError" } });
+      }
+      expect(evaluations).toBe(0);
+    }),
+  );
+
+  it.effect("rejects invalid shared configuration while constructing discovery", () =>
+    Effect.gen(function* () {
+      const error = yield* ToolDiscovery.fromDecisionModel().pipe(
+        Effect.provideService(ToolSelector.DecisionConfig, { maxCandidates: 0 }),
+        Effect.flip,
+      );
+
+      expect(error).toMatchObject({
+        _tag: "AiError",
+        reason: { _tag: "InvalidRequestError", description: "Invalid decision configuration" },
+      });
+    }),
+  );
+
+  it.effect(
+    "preserves provider/observer failures, defects and cancellation while closing evaluator resources",
+    () =>
+      Effect.gen(function* () {
+        const finalized = yield* Ref.make(0);
+        const started = yield* Queue.unbounded<void>();
+
+        const providerError = AiError.AiError.make({
+          module: "test",
+          method: "evaluate",
+          reason: AiError.InvalidRequestError.make({ description: "offline" }),
+        });
+
+        const observerError = SearchError.make({ reason: "audit unavailable" });
+
+        for (const outcome of [
+          "success",
+          "provider",
+          "observer",
+          "defect",
+          "timeout",
+          "interrupt",
+        ] as const) {
+          const model = yield* DecisionModel.make({
+            evaluate: () =>
+              Effect.gen(function* () {
+                yield* Effect.addFinalizer(() => Ref.update(finalized, (count) => count + 1));
+                yield* Queue.offer(started, undefined);
+                if (outcome === "provider") return yield* providerError;
+                if (outcome === "defect") return yield* Effect.die("broken provider");
+                if (outcome === "timeout" || outcome === "interrupt") return yield* Effect.never;
+
+                return {
+                  ...evidence,
+                  answers: { candidate_0: { type: "probability", probability: 0.9 } },
+                };
+              }),
+          });
+
+          const definition = yield* ToolDiscovery.fromDecisionModel({
+            failure: SearchError,
+            onEvaluation: () => (outcome === "observer" ? Effect.fail(observerError) : Effect.void),
+          });
+
+          const operation = invoke(definition, [native(Search)], { query: "investigate" }).pipe(
+            Effect.provideService(DecisionModel.DecisionModel, model),
+          );
+
+          const fiber = yield* (
+            outcome === "timeout" ? operation.pipe(Effect.timeout("1 second")) : operation
+          ).pipe(Effect.forkChild);
+
+          yield* Queue.take(started);
+          if (outcome === "timeout") yield* TestClock.adjust("1 second");
+          if (outcome === "interrupt") yield* Fiber.interrupt(fiber);
+          const exit = yield* Fiber.await(fiber);
+
+          if (outcome === "success") expect(Exit.isSuccess(exit)).toBe(true);
+          else {
+            expect(Exit.isFailure(exit)).toBe(true);
+            if (Exit.isFailure(exit)) {
+              if (outcome === "defect") expect(Cause.hasDies(exit.cause)).toBe(true);
+              if (outcome === "interrupt") expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+              if (outcome === "provider") expect(Cause.squash(exit.cause)).toBe(providerError);
+              if (outcome === "observer") expect(Cause.squash(exit.cause)).toBe(observerError);
+            }
+          }
+        }
+        expect(yield* Ref.get(finalized)).toBe(6);
+      }),
+  );
+});
+
+const semanticConstruction = ToolDiscovery.fromDecisionModel({
+  failure: SearchError,
+  onEvaluation: () =>
+    Effect.gen(function* () {
+      yield* SearchIndex;
+      yield* Effect.addFinalizer(() => Effect.void);
+
+      return yield* SearchError.make({ reason: "audit" });
+    }),
+});
+
+it("tracks the decision provider and observer requirements in the handler Layer", () => {
+  expectTypeOf<Effect.Error<typeof semanticConstruction>>().toEqualTypeOf<AiError.AiError>();
+  expectTypeOf<Effect.Services<typeof semanticConstruction>>().toEqualTypeOf<never>();
+  const semanticTyped = Effect.runSync(semanticConstruction);
+
+  expectTypeOf<Layer.Services<typeof semanticTyped.handlers>>().toEqualTypeOf<
+    DecisionModel.DecisionModel | SearchIndex
+  >();
+  expectTypeOf<Tool.HandlerError<typeof semanticTyped.tool>>().toEqualTypeOf<
+    AiError.AiError | SearchError | ToolDiscovery.ToolDiscoveryError
+  >();
+  expectTypeOf<
+    Tool.HandlerServices<typeof semanticTyped.tool>
+  >().toEqualTypeOf<CurrentToolCatalog>();
 });
