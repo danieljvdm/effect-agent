@@ -269,7 +269,7 @@ empty result when nothing matches. There is no implicit keyword fallback.
 
 ```ts twoslash
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
-import { Config, Effect, Layer } from "effect";
+import { Effect, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { ToolDiscovery, ToolSelector } from "effect-agent";
 
@@ -280,7 +280,8 @@ const DecisionConfigLive = Layer.succeed(ToolSelector.DecisionConfig, {
 });
 
 const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
-  Layer.provide(TypeSafeClient.layerConfig({ apiKey: Config.Redacted("TYPESAFEAI_API_KEY") })),
+  Layer.provide(TypeSafeClient.layer),
+  Layer.provide(TypeSafeClient.Config.layer),
   Layer.provide(FetchHttpClient.layer),
 );
 
