@@ -62,7 +62,7 @@ const runSample = Effect.fn("ToolSelectionBenchmark.sample")(function* (
   const maxCalls = task.name === "chain-4" ? 12 : 6;
 
   const discovery = useSemanticDiscovery
-    ? ToolDiscovery.fromDecisionModel({ maxResults: 8, minimumRelevance: 0.5 })
+    ? yield* ToolDiscovery.fromDecisionModel({ maxResults: 8 })
     : ToolDiscovery.make({ maxResults: 8 });
 
   const metered = yield* instrument(allTools ? (withDiscovery ? 51 : 50) : 9, {

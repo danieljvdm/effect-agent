@@ -1,4 +1,4 @@
-import { type DecisionModel, DecisionSchema } from "@effect-agent/ai-decision";
+import type { DecisionModel, DecisionSchema } from "@effect-agent/ai-decision";
 import { Effect, Schema, type Scope } from "effect";
 import { AiError, Tool, Toolkit } from "effect/unstable/ai";
 
@@ -7,7 +7,10 @@ import { Descriptor, DiscoveryTool, PinnedTool } from "../core/ToolExposure.ts";
 import { ToolExecutionClass } from "../engine/DurableStep.ts";
 import { catalogEntryId as entryId, describeCatalog } from "../engine/internal/tool-exposure.ts";
 import { CurrentToolCatalog, type CatalogEntry } from "../engine/ToolExposure.ts";
+import { readDecisionConfig } from "./DecisionToolSelectorConfig.ts";
 import { rankToolRelevance } from "./internal/tool-relevance.ts";
+
+export { DecisionConfig, defaultDecisionConfig } from "./DecisionToolSelectorConfig.ts";
 
 const Name = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 const Namespace = Schema.NonEmptyString.check(Schema.isMaxLength(128));
@@ -322,16 +325,6 @@ export interface DecisionOptions<
   Failure extends Schema.Top = typeof Schema.Never,
   Requirements = never,
 > extends Omit<Options<Failure, Requirements>, "search"> {
-  /** Override the default relevance question. Each candidate's metadata is supplied alongside it. */
-  readonly prompt?: DecisionSchema.Content | undefined;
-  /** Optional descriptions of relevant (true) and irrelevant (false), forwarded to each probability query. */
-  readonly criteria?: DecisionSchema.ProbabilityQuestion["criteria"] | undefined;
-  /** Application-chosen independent relevance cutoff in [0, 1]. No matches return an empty selection. */
-  readonly minimumRelevance: number;
-  /** Reject larger eligible catalogues before evaluating; default 128, maximum 1024. */
-  readonly maxCandidates?: number | undefined;
-  /** UTF-8 JSON metadata bound before evaluation; default 256 KiB, maximum 1 MiB. */
-  readonly maxCatalogueBytes?: number | undefined;
   /** Separate evaluator usage, without query or answers. Failures stop discovery; no implicit fallback. */
   readonly onEvaluation?:
     | ((
@@ -340,14 +333,9 @@ export interface DecisionOptions<
     | undefined;
 }
 
-const DecisionBounds = Schema.Struct({
-  minimumRelevance: DecisionSchema.Probability,
-  maxCandidates: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_024 })),
-  maxCatalogueBytes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_048_576 })),
-});
-
 /**
- * Build discover_tools with DecisionModel relevance ranking instead of literal keyword matching.
+ * Read the shared DecisionConfig service and construct semantic discover_tools. Provide
+ * configuration to this construction Effect; the resulting Tool captures the validated settings.
  * The configured prompt and criteria accompany the bounded discovery query, optional namespace,
  * and eligible metadata; no conversation prompt or Thread history is implicitly projected.
  * The discovery Tool excludes itself from evaluation.
@@ -358,17 +346,11 @@ const DecisionBounds = Schema.Struct({
  * declared observer failures remain typed; defects, timeout and interruption propagate normally.
  * Hosts own provider deadlines and billing. Evaluation grants no additional Tool authority.
  */
-export const fromDecisionModel = <
+export const fromDecisionModel = Effect.fnUntraced(function* <
   Failure extends Schema.Top = typeof Schema.Never,
   Requirements = never,
->(
-  options: DecisionOptions<Failure, Requirements>,
-) => {
-  const bounds = Schema.decodeSync(DecisionBounds)({
-    minimumRelevance: options.minimumRelevance,
-    maxCandidates: options.maxCandidates ?? 128,
-    maxCatalogueBytes: options.maxCatalogueBytes ?? 262_144,
-  });
+>(options: DecisionOptions<Failure, Requirements> = {}) {
+  const bounds = yield* readDecisionConfig;
 
   const observerFailure: Schema.Codec<
     Failure["Type"],
@@ -411,16 +393,15 @@ export const fromDecisionModel = <
         return yield* invalid("Tool discovery catalogue exceeds its byte bound");
 
       const result = yield* rankToolRelevance({
-        prompt: options.prompt,
-        criteria: options.criteria,
+        prompt: bounds.prompt,
+        criteria: bounds.criteria,
         state: {
           query: request.query,
           ...(request.namespace === undefined ? {} : { namespace: request.namespace }),
         },
         catalogue,
         minimumRelevance: bounds.minimumRelevance,
-        // Parameters bounds the only projected state to well below this encoded byte limit.
-        maxStateBytes: 8_192,
+        maxStateBytes: bounds.maxStateBytes,
         module: "ToolDiscovery",
       });
 
@@ -429,4 +410,4 @@ export const fromDecisionModel = <
       return result.ids;
     }),
   });
-};
+});

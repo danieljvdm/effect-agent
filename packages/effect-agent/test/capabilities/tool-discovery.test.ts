@@ -1,7 +1,18 @@
 import { DecisionModel } from "@effect-agent/ai-decision";
 import { describe, expect, it } from "@effect/vitest";
-import type { Layer } from "effect";
-import { Cause, Context, Effect, Encoding, Exit, Fiber, Queue, Ref, Schema, Stream } from "effect";
+import {
+  Layer,
+  Cause,
+  Context,
+  Effect,
+  Encoding,
+  Exit,
+  Fiber,
+  Queue,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import * as CodeMode from "effect-agent/code-mode";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import * as ToolDiscovery from "effect-agent/tool-discovery";
@@ -13,6 +24,7 @@ import {
   CurrentToolCatalog,
   type CatalogEntry,
 } from "effect-agent/tool-exposure";
+import * as ToolSelector from "effect-agent/tool-selector";
 import { TestClock } from "effect/testing";
 import { AiError, Tool, type Toolkit } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
@@ -511,17 +523,20 @@ describe("decision-model discovery", () => {
     Effect.gen(function* () {
       let observed = 0;
 
-      const definition = ToolDiscovery.fromDecisionModel({
+      const DecisionConfigLive = Layer.succeed(ToolSelector.DecisionConfig, {
         prompt: "Would this tool find the billing evidence requested by the query?",
         criteria: { true: "Finds the requested billing evidence", false: "Unrelated capability" },
         minimumRelevance: 0.8,
+      });
+
+      const definition = yield* ToolDiscovery.fromDecisionModel({
         maxResults: 1,
         onEvaluation: (result) =>
           Effect.sync(() => {
             expect(result).toEqual(evidence);
             observed++;
           }),
-      });
+      }).pipe(Effect.provide(DecisionConfigLive));
 
       const Archive = Tool.make("archived_statements", {
         description: "Historical billing documents",
@@ -611,7 +626,7 @@ describe("decision-model discovery", () => {
       });
 
       const result = yield* invoke(
-        ToolDiscovery.fromDecisionModel({ minimumRelevance: 0.8, maxResults: 2 }),
+        yield* ToolDiscovery.fromDecisionModel({ maxResults: 2 }),
         [native(Search, "web"), ...aliases],
         { query: "investigate a subject" },
       ).pipe(Effect.provideService(DecisionModel.DecisionModel, model));
@@ -627,7 +642,10 @@ describe("decision-model discovery", () => {
   it.effect("returns no matches below the cutoff and skips evaluation for an empty catalogue", () =>
     Effect.gen(function* () {
       let evaluations = 0;
-      const definition = ToolDiscovery.fromDecisionModel({ minimumRelevance: 0.8 });
+
+      const definition = yield* ToolDiscovery.fromDecisionModel().pipe(
+        Effect.provideService(ToolDiscovery.DecisionConfig, { minimumRelevance: 0.8 }),
+      );
 
       const model = yield* DecisionModel.make({
         evaluate: () =>
@@ -636,7 +654,7 @@ describe("decision-model discovery", () => {
 
             return {
               ...evidence,
-              answers: { candidate_0: { type: "probability", probability: 0.1 } },
+              answers: { candidate_0: { type: "probability", probability: 0.6 } },
             };
           }),
       });
@@ -665,9 +683,11 @@ describe("decision-model discovery", () => {
           }),
       });
 
-      for (const limits of [{ maxCandidates: 1 }, { maxCatalogueBytes: 1 }]) {
+      for (const limits of [{ maxCandidates: 1 }, { maxCatalogueBytes: 1 }, { maxStateBytes: 1 }]) {
         const failure = yield* invoke(
-          ToolDiscovery.fromDecisionModel({ minimumRelevance: 0.8, ...limits }),
+          yield* ToolDiscovery.fromDecisionModel().pipe(
+            Effect.provideService(ToolDiscovery.DecisionConfig, limits),
+          ),
           [native(Search), native(Query)],
           { query: "pages" },
         ).pipe(Effect.provideService(DecisionModel.DecisionModel, model), Effect.flip);
@@ -678,20 +698,19 @@ describe("decision-model discovery", () => {
     }),
   );
 
-  it("validates semantic bounds during construction", () => {
-    for (const minimumRelevance of [-0.1, 1.1, Number.NaN])
-      expect(() => ToolDiscovery.fromDecisionModel({ minimumRelevance })).toThrow(
-        /minimumRelevance/,
+  it.effect("rejects invalid shared configuration while constructing discovery", () =>
+    Effect.gen(function* () {
+      const error = yield* ToolDiscovery.fromDecisionModel().pipe(
+        Effect.provideService(ToolSelector.DecisionConfig, { maxCandidates: 0 }),
+        Effect.flip,
       );
-    for (const maxCandidates of [0, 1025])
-      expect(() =>
-        ToolDiscovery.fromDecisionModel({ minimumRelevance: 0.5, maxCandidates }),
-      ).toThrow(/maxCandidates/);
-    for (const maxCatalogueBytes of [0, 1_048_577])
-      expect(() =>
-        ToolDiscovery.fromDecisionModel({ minimumRelevance: 0.5, maxCatalogueBytes }),
-      ).toThrow(/maxCatalogueBytes/);
-  });
+
+      expect(error).toMatchObject({
+        _tag: "AiError",
+        reason: { _tag: "InvalidRequestError", description: "Invalid decision configuration" },
+      });
+    }),
+  );
 
   it.effect(
     "preserves provider/observer failures, defects and cancellation while closing evaluator resources",
@@ -732,8 +751,7 @@ describe("decision-model discovery", () => {
               }),
           });
 
-          const definition = ToolDiscovery.fromDecisionModel({
-            minimumRelevance: 0.8,
+          const definition = yield* ToolDiscovery.fromDecisionModel({
             failure: SearchError,
             onEvaluation: () => (outcome === "observer" ? Effect.fail(observerError) : Effect.void),
           });
@@ -767,10 +785,7 @@ describe("decision-model discovery", () => {
   );
 });
 
-const semanticTyped = ToolDiscovery.fromDecisionModel({
-  prompt: { task: "Find the tools required by the discovery query." },
-  criteria: { true: "Required", false: "Unrelated" },
-  minimumRelevance: 0.5,
+const semanticConstruction = ToolDiscovery.fromDecisionModel({
   failure: SearchError,
   onEvaluation: () =>
     Effect.gen(function* () {
@@ -782,6 +797,10 @@ const semanticTyped = ToolDiscovery.fromDecisionModel({
 });
 
 it("tracks the decision provider and observer requirements in the handler Layer", () => {
+  expectTypeOf<Effect.Error<typeof semanticConstruction>>().toEqualTypeOf<AiError.AiError>();
+  expectTypeOf<Effect.Services<typeof semanticConstruction>>().toEqualTypeOf<never>();
+  const semanticTyped = Effect.runSync(semanticConstruction);
+
   expectTypeOf<Layer.Services<typeof semanticTyped.handlers>>().toEqualTypeOf<
     DecisionModel.DecisionModel | SearchIndex
   >();

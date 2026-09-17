@@ -45,7 +45,7 @@ describe("stable catalogue experiment", () => {
 
   it.effect("matches real OpenAI schema conversion and restricts the callable subset", () =>
     Effect.gen(function* () {
-      const discovery = ToolDiscovery.fromDecisionModel({ minimumRelevance: 0.5 });
+      const discovery = yield* ToolDiscovery.fromDecisionModel();
       const full = yield* encodeTools([...tools, discovery.tool]);
       const native = yield* OpenAiClient.OpenAiClient;
       const captured: Array<typeof OpenAiSchema.CreateResponse.Encoded> = [];

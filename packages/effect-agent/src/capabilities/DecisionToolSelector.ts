@@ -1,5 +1,5 @@
-import { type DecisionModel, DecisionSchema } from "@effect-agent/ai-decision";
-import { Effect, Schema } from "effect";
+import type { DecisionModel, DecisionSchema } from "@effect-agent/ai-decision";
+import { Effect } from "effect";
 import type { AiError } from "effect/unstable/ai";
 
 import type { Hook, Request } from "../engine/ToolSelector.ts";
@@ -57,8 +57,8 @@ export const fromDecisionModel = Effect.fnUntraced(function* <
 
       const result = yield* rankToolRelevance({
         state,
-        prompt: options.prompt,
-        criteria: options.criteria,
+        prompt: bounds.prompt,
+        criteria: bounds.criteria,
         catalogue: request.catalogue,
         minimumRelevance: bounds.minimumRelevance,
         maxStateBytes: bounds.maxStateBytes,
