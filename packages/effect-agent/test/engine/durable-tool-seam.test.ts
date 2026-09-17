@@ -18,6 +18,7 @@ import {
 import * as Agent from "effect-agent/agent";
 import {
   AgentApprovalDenied,
+  AgentToolAuthorizationCheckError,
   AgentPolicyError,
   ModelProtocolError,
 } from "effect-agent/agent-error";
@@ -194,9 +195,10 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
-  for (const outcome of ["allowed", "denied", "preparation-failed"] as const) {
+  for (const outcome of ["allowed", "denied", "preparation-failed", "check-failed"] as const) {
     it.effect(`composes ambient host services: ${outcome}`, () => {
       const seen: Array<string> = [];
+      const original = new HookFailure({ message: "Authority storage failed" });
 
       const tools = Toolkit.make(
         Tool.make("book", {
@@ -238,6 +240,10 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
         ? true
         : false = true;
 
+      const checkError: AgentToolAuthorizationCheckError extends Effect.Error<typeof program>
+        ? true
+        : false = true;
+
       return Effect.gen(function* () {
         const result = yield* program.pipe(Effect.exit);
 
@@ -250,15 +256,32 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
             expect(Cause.findErrorOption(result.cause)).toMatchObject({
               _tag: "Some",
               value: {
-                _tag: outcome === "denied" ? "AgentToolAuthorizationDenied" : "MemoryRecallError",
+                _tag:
+                  outcome === "denied"
+                    ? "AgentToolAuthorizationDenied"
+                    : outcome === "check-failed"
+                      ? "AgentToolAuthorizationCheckError"
+                      : "MemoryRecallError",
               },
             });
           }
-          expect(seen).toEqual(outcome === "denied" ? ["prepare", "authorize"] : ["prepare"]);
+          expect(seen).toEqual(
+            outcome === "preparation-failed" ? ["prepare"] : ["prepare", "authorize"],
+          );
+          if (outcome === "check-failed") {
+            const error = failureFrom(result);
+
+            expect(error).toBeInstanceOf(AgentToolAuthorizationCheckError);
+            if (error instanceof AgentToolAuthorizationCheckError) {
+              expect(Cause.findErrorOption(error.cause)).toEqual(Option.some(original));
+              expect(Cause.findErrorOption(error.cause).pipe(Option.getOrThrow)).toBe(original);
+            }
+          }
         }
         expect(preparationRequired).toBe(false);
         expect(authorizationRequired).toBe(false);
         expect(preparationError).toBe(true);
+        expect(checkError).toBe(true);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
@@ -280,9 +303,16 @@ layer(testLayer)("P5 WP1 durable Tool seams", (it) => {
               },
             }),
             Layer.succeed(RunToolAuthorization, {
-              authorize: () =>
-                Effect.sync(() => {
+              authorize: ({ call }) =>
+                Effect.gen(function* () {
                   seen.push("authorize");
+                  if (outcome === "check-failed")
+                    return yield* new AgentToolAuthorizationCheckError({
+                      toolCallId: call.toolCallId,
+                      toolName: call.toolName,
+                      message: "Could not verify authority",
+                      cause: Cause.fail(original),
+                    });
 
                   return outcome === "denied"
                     ? { _tag: "denied" as const, reason: "revoked" }

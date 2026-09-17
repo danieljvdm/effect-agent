@@ -471,13 +471,23 @@ describe("direct message delivery", () => {
         parkReason: "exhausted",
         receipt: receipt(record.envelope),
         settlement: null,
+        lastFailureDiagnostic: {
+          _tag: "Error",
+          errorTag: "ScheduledInputRetryable",
+          cause: { _tag: "Error", message: "Status transport closed", code: "ECONNRESET" },
+        },
       });
     }).pipe(
       Effect.provide(
         layer({
           submit: (envelope) => Effect.succeed(receipt(envelope)),
           submissionStatus: () =>
-            Effect.fail(ScheduledInputRetryable.make({ reason: "transport" })),
+            Effect.fail(
+              ScheduledInputRetryable.make({
+                reason: "transport",
+                cause: Object.assign(new Error("Status transport closed"), { code: "ECONNRESET" }),
+              }),
+            ),
         }),
       ),
     ),

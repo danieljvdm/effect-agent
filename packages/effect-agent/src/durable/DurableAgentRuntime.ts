@@ -31,10 +31,12 @@ import {
   AgentApprovalPending,
   AgentInputError,
   AgentToolAuthorizationDenied,
+  type AgentToolAuthorizationCheckError,
   PolicyLimit,
 } from "../core/AgentError.ts";
 import { AgentPolicy } from "../core/AgentPolicy.ts";
 import { UpdateError } from "../core/AgentUpdates.ts";
+import * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import {
   type ReceiptId,
   ThreadId,
@@ -2922,7 +2924,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       .completeInput(submission)
       .pipe(
         Effect.mapError((cause) =>
-          LedgerError.make({ operation: "worker-completion", message: cause.reason }),
+          LedgerError.make({ operation: "worker-completion", message: cause.reason, cause }),
         ),
       );
     const linkage = submission.parentLinkage;
@@ -4231,12 +4233,18 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     }
   });
 
-  const failureOutcome = (error: unknown): Effect.Effect<AttemptOutcome> =>
+  const failureOutcome = (
+    error: unknown,
+    cause: Cause.Cause<unknown>,
+    context: FailureDiagnostic.Context,
+  ): Effect.Effect<AttemptOutcome> =>
     Schema.decodeEffect(SettlementFailureDiagnostic)({
       errorTag: errorTagOf(error).slice(0, 256) || "UnknownError",
       message: errorMessageOf(error).slice(0, MAX_FAILURE_MESSAGE_LENGTH),
+      diagnostic: FailureDiagnostic.capture(cause),
+      context,
     }).pipe(
-      // The exact diagnostic Schema admits no raw Cause, stack, or provider payload.
+      // The exact diagnostic Schema admits only causal fields, never arbitrary provider payloads.
       Effect.orDie,
       Effect.map((result) => ({
         _tag: "failed" as const,
@@ -6729,7 +6737,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         join: joinSubagent,
       };
 
-      const toolAuthorization: RunToolAuthorizationHook = {
+      const toolAuthorization: RunToolAuthorizationHook<AgentToolAuthorizationCheckError> = {
         authorize: (request: RunToolAuthorizationRequest) =>
           inheritedGrant !== undefined &&
           !inheritedGrant.allowedToolNames.includes(request.call.toolName)
@@ -6750,6 +6758,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       const options: RunOptions<
         | CoordinatorHalt
+        | AgentToolAuthorizationCheckError
         | CompactionError
         | RunContextPreparationError
         | Agent.Failure<typeof agent>,
@@ -7364,9 +7373,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       ).pipe(Effect.provideService(IdGenerator, idGenerator));
 
       const result = yield* raced.pipe(
-        Effect.catch(
+        Effect.catchCauseFilter(
+          Cause.findError,
           (
             error,
+            cause,
           ): Effect.Effect<
             | { readonly _tag: "failedRun"; readonly outcome: AttemptOutcome }
             | { readonly _tag: "aborted" }
@@ -7430,14 +7441,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 }
               }
 
-              // Settlement keeps only a bounded diagnostic. Report the live failure here,
+              // Report the original live Cause here, before its private diagnostic projection,
               // after excluding suspensions, so hosts retain its cause and stack exactly
               // once per failed Run; reading or retrying its receipt never reports again.
               if (
-                !(error instanceof AgentApprovalDenied) &&
-                !(error instanceof AgentToolAuthorizationDenied)
+                cause.reasons.some(
+                  (reason) =>
+                    reason._tag === "Die" ||
+                    (reason._tag === "Fail" &&
+                      !(reason.error instanceof AgentApprovalDenied) &&
+                      !(reason.error instanceof AgentToolAuthorizationDenied)),
+                )
               )
-                yield* Effect.logError("Agent run failed", Cause.fail(error)).pipe(
+                yield* Effect.logError("Agent run failed", cause).pipe(
                   Effect.annotateLogs({
                     agentId: agent.definition.id,
                     runId,
@@ -7449,7 +7465,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
               return {
                 _tag: "failedRun" as const,
-                outcome: yield* failureOutcome(error),
+                outcome: yield* failureOutcome(error, cause, {
+                  agentId: agent.definition.id,
+                  runId,
+                  threadId: ctx.threadId,
+                  submissionId,
+                  attemptId: lineage.attemptId,
+                }),
               };
             });
           },
@@ -7574,7 +7596,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           .ensureOrigin(submission.workerAdmission.origin)
           .pipe(
             Effect.mapError((cause) =>
-              LedgerError.make({ operation: "worker-origin", message: cause.reason }),
+              LedgerError.make({ operation: "worker-origin", message: cause.reason, cause }),
             ),
           );
       }
@@ -9007,7 +9029,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               .ensureOrigin(submission.workerAdmission.origin)
               .pipe(
                 Effect.mapError((cause) =>
-                  LedgerError.make({ operation: "worker-origin", message: cause.reason }),
+                  LedgerError.make({ operation: "worker-origin", message: cause.reason, cause }),
                 ),
               );
           }
@@ -9578,6 +9600,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                         ? "occupied"
                         : "refused",
                   code: `worker-${cause.reason}`,
+                  cause,
                 }),
               ),
             );
@@ -9609,6 +9632,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                     ? "unavailable"
                     : "refused",
                 code: `message-${cause.reason}`,
+                cause,
               }),
             ),
           );
@@ -9701,7 +9725,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         .ensureOrigin(workerAdmission.origin)
         .pipe(
           Effect.mapError((cause) =>
-            LedgerError.make({ operation: "worker-origin", message: cause.reason }),
+            LedgerError.make({ operation: "worker-origin", message: cause.reason, cause }),
           ),
         );
     }

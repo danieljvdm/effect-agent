@@ -524,6 +524,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
                       ? "unavailable"
                       : "refused",
                   code: `worker-${error.reason}`,
+                  cause: error,
                 }),
               ),
             );
@@ -1333,6 +1334,13 @@ layer(NodeCrypto.layer)((it) => {
       Effect.gen(function* () {
         let unavailable = true;
         let calls = 0;
+
+        const dependency = Object.assign(new Error("Capacity store unavailable"), {
+          _tag: "CapacityStorageError",
+          code: "CONNECTION_RESET",
+          privatePayload: "private capacity data",
+        });
+
         const ownerId = Schema.decodeSync(SubmissionId)("capacity-owner");
 
         const h = yield* harness({ independentBudget: true }).pipe(
@@ -1345,7 +1353,11 @@ layer(NodeCrypto.layer)((it) => {
                 expect(request.sourceSubmission?.inputPayload).toBe("captured concurrency one");
 
                 return unavailable
-                  ? WorkerError.make({ operation: "start", reason: "unavailable" })
+                  ? WorkerError.make({
+                      operation: "start",
+                      reason: "unavailable",
+                      cause: dependency,
+                    })
                   : Effect.succeed(Option.some({ maxActiveWorkersPerSource: 1 }));
               }),
           }),
@@ -1379,7 +1391,30 @@ layer(NodeCrypto.layer)((it) => {
         const start = () => host.start({ ...request("retry-capacity"), budgetScope: "worker-run" });
 
         // The public host reports the retryable delivery as storage; admission keeps its typed code.
-        expect((yield* start().pipe(Effect.flip)).reason).toBe("storage");
+        const failure = yield* start().pipe(Effect.flip);
+
+        expect(failure).toMatchObject({
+          reason: "storage",
+          cause: {
+            _tag: "Error",
+            errorTag: "ScheduledInputRetryable",
+            cause: {
+              errorTag: "AdmissionPolicyError",
+              code: "worker-unavailable",
+              cause: {
+                errorTag: "WorkerError",
+                reason: { _tag: "Value", value: "unavailable" },
+                cause: {
+                  errorTag: "CapacityStorageError",
+                  message: "Capacity store unavailable",
+                  code: "CONNECTION_RESET",
+                  stack: dependency.stack,
+                },
+              },
+            },
+          },
+        });
+        expect(JSON.stringify(failure.cause)).not.toContain("private capacity data");
         expect(calls).toBe(1);
         expect([...h.deliveries.values()][0]?.status).toBe("pending");
         const envelope = [...h.deliveries.values()][0]!.envelope;

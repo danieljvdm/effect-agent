@@ -2,6 +2,7 @@ import type { Option, Stream } from "effect";
 import { Context, Duration, Effect, Schema } from "effect";
 
 import { InputMessage } from "../capabilities/Messaging.ts";
+import * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import {
   AgentId,
   AttemptId,
@@ -133,6 +134,8 @@ export class AdmissionPolicyError extends Schema.TaggedError<AdmissionPolicyErro
   {
     reason: Schema.Literals(["refused", "unavailable", "occupied"]),
     code: Schema.NonEmptyString.check(Schema.isMaxLength(128)),
+    cause: Schema.optionalKey(FailureDiagnostic.Value),
+    stack: Schema.optionalKey(Schema.String),
   },
 ) {}
 
@@ -916,7 +919,7 @@ export class ChildReservationConflict extends Schema.TaggedError<ChildReservatio
 export class LedgerError extends Schema.TaggedError<LedgerError>()("LedgerError", {
   operation: Schema.String,
   message: Schema.String,
-  cause: Schema.optionalKey(Schema.Defect()),
+  cause: Schema.optionalKey(FailureDiagnostic.Value),
 }) {}
 
 export type SubmissionLedgerFailure =

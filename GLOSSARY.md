@@ -100,7 +100,8 @@ event, source version, destination, and admission identity before fallible input
 
 **Settlement**  
 The single durable terminal outcome owed to an accepted Submission: `completed`, `failed`, or
-`aborted`. A failed Settlement always carries the framework's bounded generic diagnostic;
+`aborted`. A failed Settlement always carries a bounded failure summary and may retain private
+structured causal diagnostics and execution correlation;
 completed joined work and every aborted Settlement may legitimately have no result. An ordinary
 completed Settlement may materialize the Definition-validated, Schema-encoded application run
 disposition stored in its exact canonical record. A Run Settlement may also carry its canonical

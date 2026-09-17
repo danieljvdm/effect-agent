@@ -1,5 +1,6 @@
 import { Clock, Context, Crypto, Effect, Layer, Result, Schema, Semaphore } from "effect";
 
+import * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import { ThreadId } from "../core/Identifiers.ts";
 import { Receipt } from "../core/Receipt.ts";
 import { WorkerUpdate } from "../core/Worker.ts";
@@ -86,6 +87,8 @@ export const MessageDeliveryRecord = Schema.Struct({
   parkReason: Schema.NullOr(ParkReason),
   leaseUntilMillis: Schema.NullOr(ScheduleInstant),
   retry: ScheduleRetry,
+  /** Last failed admission/status check, retained across retries and successful recovery. */
+  lastFailureDiagnostic: Schema.optionalKey(FailureDiagnostic.Diagnostic),
 }).check(
   Schema.makeFilter(
     (record) =>
@@ -117,6 +120,8 @@ export type MessageDeliveryRecord = typeof MessageDeliveryRecord.Type;
 export class MessageDeliveryError extends Schema.TaggedError<MessageDeliveryError>()(
   "MessageDeliveryError",
   {
+    cause: Schema.optionalKey(FailureDiagnostic.Value),
+    stack: Schema.optionalKey(Schema.String),
     reason: Schema.Literals([
       "validation",
       "conflict",
@@ -151,9 +156,24 @@ export const MessageDeliveryChange = Schema.Union([
   Schema.Struct({ _tag: Schema.Literal("Accept"), ...fence, receipt: Receipt }),
   Schema.Struct({ _tag: Schema.Literal("Process"), ...fence, settlement: Settlement }),
   Schema.Struct({ _tag: Schema.Literal("ObservePending"), ...fence }),
-  Schema.Struct({ _tag: Schema.Literal("Refuse"), ...fence, code: BoundedName }),
-  Schema.Struct({ _tag: Schema.Literal("Retry"), ...fence, reason: ScheduleRetryReason }),
-  Schema.Struct({ _tag: Schema.Literal("Park"), ...fence, reason: ParkReason }),
+  Schema.Struct({
+    _tag: Schema.Literal("Refuse"),
+    ...fence,
+    code: BoundedName,
+    diagnostic: Schema.optionalKey(FailureDiagnostic.Diagnostic),
+  }),
+  Schema.Struct({
+    _tag: Schema.Literal("Retry"),
+    ...fence,
+    reason: ScheduleRetryReason,
+    diagnostic: Schema.optionalKey(FailureDiagnostic.Diagnostic),
+  }),
+  Schema.Struct({
+    _tag: Schema.Literal("Park"),
+    ...fence,
+    reason: ParkReason,
+    diagnostic: Schema.optionalKey(FailureDiagnostic.Diagnostic),
+  }),
   Schema.Struct({ _tag: Schema.Literal("Recover"), ...fence, deadlineAtMillis: ScheduleInstant }),
   /** Waiting for earlier admission never spends an automatic transport attempt. */
   Schema.Struct({ _tag: Schema.Literal("Defer"), ...fence, untilMillis: ScheduleInstant }),
@@ -292,8 +312,8 @@ export const sameMessageDeliveryIdentity = (
   left.createdAtMillis === right.createdAtMillis &&
   left.initialDeadlineAtMillis === right.initialDeadlineAtMillis;
 
-const error = (reason: MessageDeliveryError["reason"], operation: string) =>
-  MessageDeliveryError.make({ reason, operation });
+const error = (reason: MessageDeliveryError["reason"], operation: string, cause?: unknown) =>
+  MessageDeliveryError.make({ reason, operation, ...(cause === undefined ? {} : { cause }) });
 
 export const validateMessageDelivery = <A, I>(
   schema: Schema.Codec<A, I>,
@@ -328,23 +348,23 @@ export const prepareMessageDelivery = Effect.fn("MessageDelivery.prepare")(funct
     policy: options.policy ?? defaultMessageDeliveryPolicy,
   }).pipe(
     Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(MessageDeliveryPreparation))),
-    Effect.mapError(() => error("validation", "prepare")),
+    Effect.mapError((cause) => error("validation", "prepare", cause)),
   );
 
   const envelope = snapshot.envelope;
 
   const encoded = yield* Schema.encodeEffect(PreparedInput)(envelope).pipe(
-    Effect.mapError(() => error("validation", "prepare")),
+    Effect.mapError((cause) => error("validation", "prepare", cause)),
   );
 
   const inputDigest = yield* digestJson(encoded.input).pipe(
-    Effect.mapError(() => error("storage", "digest")),
+    Effect.mapError((cause) => error("storage", "digest", cause)),
   );
 
   if (inputDigest !== envelope.inputDigest) return yield* error("corrupt", "input-digest");
 
   const envelopeDigest = yield* digestJson(encoded).pipe(
-    Effect.mapError(() => error("storage", "digest")),
+    Effect.mapError((cause) => error("storage", "digest", cause)),
   );
 
   return yield* validateMessageDelivery(
@@ -390,7 +410,14 @@ export const applyMessageDeliveryChange = (
   if (record.version !== change.expectedVersion) return conflict();
   if (record.status === "processed" || record.status === "refused") return conflict();
   const now = change.nowMillis;
-  const base = { ...record, version: record.version + 1 };
+
+  const base = {
+    ...record,
+    version: record.version + 1,
+    ...("diagnostic" in change && change.diagnostic !== undefined
+      ? { lastFailureDiagnostic: change.diagnostic }
+      : {}),
+  };
 
   const parked = (reason: typeof ParkReason.Type): MessageDeliveryRecord => ({
     ...base,
@@ -636,12 +663,12 @@ export class MessageDeliveryDriver extends Context.Service<
                 if (claimed.status === "parked") return claimed;
 
                 const envelope = yield* Schema.encodeEffect(PreparedInput)(claimed.envelope).pipe(
-                  Effect.mapError(() => error("corrupt", "envelope")),
+                  Effect.mapError((cause) => error("corrupt", "envelope", cause)),
                 );
 
                 const digest = yield* digestJson(envelope).pipe(
                   Effect.provideService(Crypto.Crypto, crypto),
-                  Effect.mapError(() => error("storage", "digest")),
+                  Effect.mapError((cause) => error("storage", "digest", cause)),
                 );
 
                 if (digest !== claimed.envelopeDigest)
@@ -675,15 +702,23 @@ export class MessageDeliveryDriver extends Context.Service<
                   const outcome = yield* admitPreparedInput(
                     admission.submit(claimed.envelope),
                     timeout,
-                  ).pipe(Effect.mapError(() => error("corrupt", "admission")));
+                  ).pipe(Effect.mapError((cause) => error("corrupt", "admission", cause)));
 
                   yield* failpoint.hit("message-delivery:admission:after");
                   if (outcome._tag === "Receipt")
                     return yield* commit({ _tag: "Accept", receipt: outcome.receipt });
                   if (outcome._tag === "Refused")
-                    return yield* commit({ _tag: "Refuse", code: outcome.error.code });
+                    return yield* commit({
+                      _tag: "Refuse",
+                      code: outcome.error.code,
+                      diagnostic: FailureDiagnostic.capture(outcome.error),
+                    });
 
-                  return yield* commit({ _tag: "Retry", reason: outcome.reason });
+                  return yield* commit({
+                    _tag: "Retry",
+                    reason: outcome.reason,
+                    diagnostic: outcome.diagnostic,
+                  });
                 }
                 if (claimed.receipt === null) return yield* error("corrupt", "receipt");
                 if (admission.submissionStatus === undefined)
@@ -693,28 +728,51 @@ export class MessageDeliveryDriver extends Context.Service<
                   Effect.timeout(timeout),
                   Effect.map((status) => ({ _tag: "Status" as const, status })),
                   Effect.catchTag("ScheduledInputRetryable", (failure) =>
-                    Effect.succeed({ _tag: "Retry" as const, reason: failure.reason }),
+                    Effect.succeed({
+                      _tag: "Retry" as const,
+                      reason: failure.reason,
+                      diagnostic: FailureDiagnostic.capture(failure),
+                    }),
                   ),
-                  Effect.catchTag("ScheduledInputRefused", () =>
-                    Effect.succeed({ _tag: "Unavailable" as const }),
+                  Effect.catchTag("ScheduledInputRefused", (failure) =>
+                    Effect.succeed({
+                      _tag: "Unavailable" as const,
+                      diagnostic: FailureDiagnostic.capture(failure),
+                    }),
                   ),
-                  Effect.catchTag("TimeoutError", () =>
-                    Effect.succeed({ _tag: "Retry" as const, reason: "timeout" as const }),
+                  Effect.catchTag("TimeoutError", (failure) =>
+                    Effect.succeed({
+                      _tag: "Retry" as const,
+                      reason: "timeout" as const,
+                      diagnostic: FailureDiagnostic.capture(failure),
+                    }),
                   ),
                   Effect.catchTag("ScheduleStorageError", (failure) =>
                     failure.reason === "unavailable"
-                      ? Effect.succeed({ _tag: "Retry" as const, reason: "storage" as const })
-                      : Effect.fail(error("corrupt", "status")),
+                      ? Effect.succeed({
+                          _tag: "Retry" as const,
+                          reason: "storage" as const,
+                          diagnostic: FailureDiagnostic.capture(failure),
+                        })
+                      : Effect.fail(error("corrupt", "status", failure)),
                   ),
                 );
 
                 if (status._tag === "Unavailable")
-                  return yield* commit({ _tag: "Park", reason: "status-unavailable" });
+                  return yield* commit({
+                    _tag: "Park",
+                    reason: "status-unavailable",
+                    diagnostic: status.diagnostic,
+                  });
                 if (status._tag === "Status" && status.status._tag === "settled")
                   return yield* commit({ _tag: "Process", settlement: status.status.settlement });
                 if (status._tag === "Status") return yield* commit({ _tag: "ObservePending" });
 
-                return yield* commit({ _tag: "Retry", reason: status.reason });
+                return yield* commit({
+                  _tag: "Retry",
+                  reason: status.reason,
+                  diagnostic: status.diagnostic,
+                });
               }),
             )
             .pipe(

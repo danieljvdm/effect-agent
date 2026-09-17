@@ -3,6 +3,7 @@ import { Context, Schema, Stream } from "effect";
 
 import type * as Agent from "../core/Agent.ts";
 import type { AgentPolicy } from "../core/AgentPolicy.ts";
+import type * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import type { DelegationId, RunId, SettlementId, ThreadId } from "../core/Identifiers.ts";
 import { type IdempotencyKey, type JoinedToHost, type Receipt } from "../core/Receipt.ts";
 import type { SubagentBudgetReservation } from "../core/SubagentContract.ts";
@@ -63,6 +64,8 @@ export type WorkerObservation =
       readonly outcome: "completed" | "failed" | "aborted";
       readonly encodedParameters: unknown;
       readonly encodedResult: unknown;
+      /** Operator-private failed-settlement evidence; never part of a model Tool result. */
+      readonly diagnostic?: FailureDiagnostic.Failure;
       readonly budgetExhausted: boolean;
     };
 

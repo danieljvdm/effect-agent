@@ -1,5 +1,6 @@
 import { Context, Effect } from "effect";
 
+import * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import type { Receipt } from "./DurableAgentRuntime.ts";
 import { type ScheduledInputFailure, ScheduleStorageError } from "./Schedule.ts";
 import type { SubmissionStatus } from "./SubmissionStatus.ts";
@@ -30,14 +31,26 @@ export const admitPreparedInput = Effect.fn("Thread.admitPreparedInput")(
         Effect.succeed({ _tag: "Refused" as const, error }),
       ),
       Effect.catchTag("ScheduledInputRetryable", (error) =>
-        Effect.succeed({ _tag: "Retry" as const, reason: error.reason }),
+        Effect.succeed({
+          _tag: "Retry" as const,
+          reason: error.reason,
+          diagnostic: FailureDiagnostic.capture(error),
+        }),
       ),
-      Effect.catchTag("TimeoutError", () =>
-        Effect.succeed({ _tag: "Retry" as const, reason: "timeout" as const }),
+      Effect.catchTag("TimeoutError", (error) =>
+        Effect.succeed({
+          _tag: "Retry" as const,
+          reason: "timeout" as const,
+          diagnostic: FailureDiagnostic.capture(error),
+        }),
       ),
       Effect.catchTag("ScheduleStorageError", (error) =>
         error.reason === "unavailable"
-          ? Effect.succeed({ _tag: "Retry" as const, reason: "storage" as const })
+          ? Effect.succeed({
+              _tag: "Retry" as const,
+              reason: "storage" as const,
+              diagnostic: FailureDiagnostic.capture(error),
+            })
           : Effect.fail(ScheduleStorageError.make(error)),
       ),
     ),

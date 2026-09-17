@@ -23,6 +23,7 @@ import {
   type ContextOverflowError,
   type ModelProtocolError,
   type AgentToolAuthorizationDenied,
+  type AgentToolAuthorizationCheckError,
 } from "effect-agent/agent-error";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
@@ -120,6 +121,7 @@ type ExpectedFailure =
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentToolAuthorizationDenied
+  | AgentToolAuthorizationCheckError
   | AgentApprovalPending
   | AgentChildPending;
 

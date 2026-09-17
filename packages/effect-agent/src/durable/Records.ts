@@ -5,6 +5,7 @@ import { InputMessage } from "../capabilities/Messaging.ts";
 import { PolicyLimit } from "../core/AgentError.ts";
 import { AgentPolicy } from "../core/AgentPolicy.ts";
 import { Update } from "../core/AgentUpdates.ts";
+import * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import {
   AgentId,
   AttemptId,
@@ -17,7 +18,6 @@ import {
   ToolCallId,
   TurnId,
 } from "../core/Identifiers.ts";
-import { strictSchema } from "../core/internal/strict-schema.ts";
 import { utf8ByteLength } from "../core/internal/utf8.ts";
 import { IdempotencyKey, Principal } from "../core/Receipt.ts";
 import { ExhaustedLimit } from "../core/RunEvent.ts";
@@ -82,22 +82,12 @@ export type ProducerEpoch = typeof ProducerEpoch.Type;
 const BoundedText = Schema.String.check(Schema.isMaxLength(64 * 1024));
 const BoundedName = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 
-/** Stable, non-empty failure classification carried by a failed durable Settlement. */
-const SettlementFailureTag = Schema.NonEmptyString.check(Schema.isMaxLength(256));
-
-/** Diagnostic text is bounded independently from the broader persisted JSON envelope. */
-const SettlementFailureMessage = Schema.String.check(Schema.isMaxLength(16 * 1024));
-
 /**
- * The complete generic diagnostic allowed on a failed durable Settlement. It deliberately has
- * no raw Cause, stack, provider payload, or application-specific fields; those values can carry
- * secrets and do not form a stable cross-process contract.
+ * Private failed-Settlement evidence. The summary remains the safe public projection; diagnostic
+ * and context preserve structured causal evidence for authorized operators, never model context.
+ * Optional fields allow reading supported Settlements written before causal capture was available.
  */
-export const SettlementFailureDiagnostic = Schema.Struct({
-  errorTag: SettlementFailureTag,
-  message: SettlementFailureMessage,
-}).pipe(
-  strictSchema,
+export const SettlementFailureDiagnostic = FailureDiagnostic.Failure.pipe(
   Schema.annotate({
     identifier: "@effect-agent/thread/SettlementFailureDiagnostic",
   }),

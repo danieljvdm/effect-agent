@@ -164,7 +164,7 @@ describe("Cloudflare replaceable compaction", () => {
     );
   });
 
-  it("settles a typed compactor failure without persisting its cause", async () => {
+  it("settles a typed compactor failure with private structured causal evidence", async () => {
     const thread = lane("typed-failure");
 
     await submitAndSettle(thread, "seed", `${thread}-seed`, "CONTEXT_COMPACTOR");
@@ -180,12 +180,24 @@ describe("Cloudflare replaceable compaction", () => {
     expect(result.terminal.result).toMatchObject({
       errorTag: "CompactionError",
       message: "Context compaction refused",
+      diagnostic: {
+        _tag: "Cause",
+        reasons: [
+          {
+            _tag: "Fail",
+            error: {
+              _tag: "Error",
+              errorTag: "CompactionError",
+              cause: { _tag: "Value", value: "the host compactor refused this context" },
+            },
+          },
+        ],
+      },
     });
     expect(result.terminal.result).not.toHaveProperty("cause");
     const canonical = JSON.stringify(result.records);
 
     expect(canonical).toContain("preserve the refused input");
-    expect(canonical).not.toContain("the host compactor refused this context");
   });
 
   it("DEPLOY-013 acquires once per incarnation and reconstructs from canonical history after eviction", async () => {

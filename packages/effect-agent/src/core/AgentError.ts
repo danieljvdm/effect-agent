@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 
+import * as FailureDiagnostic from "./FailureDiagnostic.ts";
 import { ToolCallId } from "./Identifiers.ts";
 
 /** Run input failed to decode through the agent definition's input Schema. */
@@ -69,6 +70,24 @@ export class AgentToolAuthorizationDenied extends Schema.TaggedError<AgentToolAu
     toolCallId: ToolCallId,
     toolName: Schema.NonEmptyString,
     message: Schema.String,
+    /** Optional original policy evidence, excluded from model-facing ToolCallFailed data. */
+    cause: Schema.optionalKey(FailureDiagnostic.Cause),
+    stack: Schema.optionalKey(Schema.String),
+  },
+) {}
+
+/** The host could not complete its authority check; this is not a policy denial. */
+export class AgentToolAuthorizationCheckError extends Schema.TaggedError<AgentToolAuthorizationCheckError>()(
+  "AgentToolAuthorizationCheckError",
+  {
+    toolCallId: ToolCallId,
+    toolName: Schema.NonEmptyString,
+    /** Safe summary. The original cause is private diagnostic evidence. */
+    message: Schema.String,
+    check: Schema.optionalKey(Schema.String),
+    callId: Schema.optionalKey(Schema.String),
+    cause: FailureDiagnostic.Cause,
+    stack: Schema.optionalKey(Schema.String),
   },
 ) {}
 
@@ -142,6 +161,7 @@ export const AgentError = Schema.Union([
   AgentPolicyError,
   AgentApprovalDenied,
   AgentToolAuthorizationDenied,
+  AgentToolAuthorizationCheckError,
   AgentApprovalPending,
   ModelProtocolError,
   AgentInterrupted,

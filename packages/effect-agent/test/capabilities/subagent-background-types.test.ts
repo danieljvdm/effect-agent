@@ -19,6 +19,7 @@ type Equal<A, B> =
       : false
     : false;
 type Assert<Value extends true> = Value;
+type ModelObservation<Value> = Value extends unknown ? Omit<Value, "diagnostic"> : never;
 class Prepare extends Context.Service<Prepare, string>()("background-types/Prepare") {}
 class Project extends Context.Service<Project, string>()("background-types/Project") {}
 class Encoder extends Context.Service<Encoder, string>()("background-types/Encoder") {}
@@ -143,7 +144,7 @@ const directTypes: [
   Assert<
     Equal<
       Tool.Success<(typeof direct.tools)["typed-background-child_inspect"]>,
-      Subagent.WorkerObservation<Subagent.SubagentResult<typeof text>>
+      ModelObservation<Subagent.WorkerObservation<Subagent.SubagentResult<typeof text>>>
     >
   >,
   Assert<Equal<Layer.Services<typeof direct.layer>, Encoder | Decoder>>,

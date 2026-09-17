@@ -199,9 +199,12 @@ worker call does not replace them. Acquire service dependencies in their layers 
 alive for the runtime's Scope. Durable service hooks must have no unresolved dependencies.
 Preparation failures retain their `AgentInputError`, `MemoryRecallError`, or `CompactionError`
 tags; `RunContextPreparationError` is their type union, not a wrapper. Durable execution records
-failed Runs in Settlements with bounded diagnostics; it does not reconstitute the original error
-object from storage. Authorization returns an allowed or denied
-decision. Configure [prompt preparation](./context-management#prompt-preparation-order)
+failed Runs in Settlements with bounded, structured causal diagnostics and execution correlation;
+it does not reconstitute the original error object from storage. Programmatic Worker inspection
+and awaiting expose this evidence as `diagnostic`, while generated inspect tools and completion
+reports omit it. Authorization returns an allowed or denied decision, or fails with
+`AgentToolAuthorizationCheckError` when its check could not finish.
+Configure [prompt preparation](./context-management#prompt-preparation-order)
 and [tool authorization](./tools#authorize-tool-calls) in their respective services.
 
 ## Understand turn boundaries {#turn-boundaries}

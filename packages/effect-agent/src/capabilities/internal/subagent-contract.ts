@@ -1,5 +1,6 @@
 import { Duration, Schema } from "effect";
 
+import * as FailureDiagnostic from "../../core/FailureDiagnostic.ts";
 import { AgentId, DelegationId } from "../../core/Identifiers.ts";
 import { SubagentDelegationCaps, SubagentReservationAmounts } from "../../core/SubagentContract.ts";
 
@@ -89,6 +90,9 @@ export class SubagentProjectionFailure extends Schema.TaggedError<SubagentProjec
     delegationId: DelegationId,
     stage: Schema.Literals(["input", "result"]),
     message: BoundedFailureText,
+    /** Original validation error; detailed diagnostics are never part of the safe message. */
+    cause: Schema.optionalKey(FailureDiagnostic.Value),
+    stack: Schema.optionalKey(Schema.String),
   },
 ) {}
 

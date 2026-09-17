@@ -122,10 +122,14 @@ import {
 } from "./agent-registration.ts";
 import { lastWorkerReportMessageId } from "./agent-updates.ts";
 
-const failure = (operation: WorkerError["operation"], reason: WorkerError["reason"]) =>
-  WorkerError.make({ operation, reason });
+const failure = (
+  operation: WorkerError["operation"],
+  reason: WorkerError["reason"],
+  cause?: unknown,
+) => WorkerError.make({ operation, reason, ...(cause === undefined ? {} : { cause }) });
 
-const storageFailure = (operation: WorkerError["operation"]) => () => failure(operation, "storage");
+const storageFailure = (operation: WorkerError["operation"]) => (cause: unknown) =>
+  failure(operation, "storage", cause);
 
 const decode = <S extends Schema.Top>(
   schema: S,
@@ -133,7 +137,7 @@ const decode = <S extends Schema.Top>(
   operation: WorkerError["operation"],
 ) =>
   Schema.decodeUnknownEffect(Schema.toType(schema))(value).pipe(
-    Effect.mapError(() => failure(operation, "corrupt")),
+    Effect.mapError((cause) => failure(operation, "corrupt", cause)),
   );
 
 const sameOrigin = Schema.toEquivalence(WorkerOrigin);
@@ -837,7 +841,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       // framework message carries the new information independently of the current input codec.
       if (!retainedFrameworkInput)
         yield* Schema.decodeEffect(Schema.toEncoded(targetBinding.definition.input))(input).pipe(
-          Effect.mapError(() => failure("start", "corrupt")),
+          Effect.mapError((cause) => failure("start", "corrupt", cause)),
         );
 
       const targetRequest = {
@@ -1239,7 +1243,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     },
     Effect.mapError((error) =>
       error.reason === "storage" || error.reason === "corrupt"
-        ? LedgerError.make({ operation: "worker-update", message: error.reason })
+        ? LedgerError.make({ operation: "worker-update", message: error.reason, cause: error })
         : UpdateError.make({ reason: error.reason === "denied" ? "denied" : "unavailable" }),
     ),
   );
@@ -1400,6 +1404,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           outcome: host.outcome,
           encodedParameters: hostAdmission.parameters,
           encodedResult: host.result ?? null,
+          ...(host.outcome === "failed" ? { diagnostic: host.result } : {}),
           budgetExhausted: host.finishReason === "budget-exhausted",
         },
       };
@@ -1589,7 +1594,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     if (Option.isNone(deps.deliveries)) return yield* failure("inspect", "unavailable");
 
     const envelope = yield* Schema.decodeUnknownEffect(PreparedInput)(decision.envelope).pipe(
-      Effect.mapError(() => failure("inspect", "corrupt")),
+      Effect.mapError((cause) => failure("inspect", "corrupt", cause)),
     );
 
     const prepared = yield* withCrypto(
@@ -1716,7 +1721,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
     const binding = (target: Agent.AnyDefinition, operation: WorkerError["operation"]) =>
       resolveDefinitionBinding(deps.bindings, target).pipe(
-        Effect.mapError(() => failure(operation, "declaration-unavailable")),
+        Effect.mapError((cause) => failure(operation, "declaration-unavailable", cause)),
       );
 
     const preparedTarget = Effect.fn("WorkerHost.preparedTarget")(function* (
@@ -1726,7 +1731,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       const resolved = yield* binding(target, "start");
 
       yield* Schema.decodeUnknownEffect(Schema.toEncoded(target.input))(encodedInput).pipe(
-        Effect.mapError(() => failure("start", "corrupt")),
+        Effect.mapError((cause) => failure("start", "corrupt", cause)),
       );
       const input = yield* decode(PersistedJson, encodedInput, "start");
 
@@ -1858,6 +1863,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         outcome: settlement.outcome,
         encodedParameters: admission.parameters,
         encodedResult: result.result ?? null,
+        ...(result.outcome === "failed" ? { diagnostic: result.result } : {}),
         budgetExhausted: result.finishReason === "budget-exhausted",
       };
     });
@@ -1937,6 +1943,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                 error._tag === "MessageDeliveryError" && error.reason === "capacity"
                   ? "capacity"
                   : "storage",
+                error,
               ),
             ),
           );
@@ -1955,16 +1962,20 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
               .pipe(
                 Effect.mapError((error) =>
                   error._tag === "AdmissionConflict" || error._tag === "AgentInputError"
-                    ? ScheduledInputRefused.make({ code: error._tag })
+                    ? ScheduledInputRefused.make({ code: error._tag, cause: error })
                     : error._tag === "AdmissionPolicyError" && error.reason === "refused"
-                      ? ScheduledInputRefused.make({ code: error.code })
-                      : ScheduledInputRetryable.make({ reason: "storage" }),
+                      ? ScheduledInputRefused.make({ code: error.code, cause: error })
+                      : ScheduledInputRetryable.make({ reason: "storage", cause: error }),
                 ),
               ),
           submissionStatus: (receipt) =>
             deps
               .status(receipt)
-              .pipe(Effect.mapError(() => ScheduledInputRetryable.make({ reason: "storage" }))),
+              .pipe(
+                Effect.mapError((error) =>
+                  ScheduledInputRetryable.make({ reason: "storage", cause: error }),
+                ),
+              ),
         }),
         Effect.provideService(Crypto.Crypto, deps.crypto),
         Effect.mapError(storageFailure(operation)),
@@ -1985,6 +1996,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         return yield* failure(
           operation,
           Option.getOrElse(reason, () => "denied"),
+          processed.lastFailureDiagnostic,
         );
       }
 
@@ -1995,6 +2007,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         processed.status === "pending" && processed.retry.lastFailure === null
           ? "delivery-pending"
           : "storage",
+        processed.lastFailureDiagnostic,
       );
     });
 
@@ -2093,7 +2106,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         const sourcePolicy = Option.getOrElse(prepared.source.policyOverride, () => context.policy);
 
         const grant = yield* Schema.decodeUnknownEffect(SubagentGrant)(request.encodedGrant).pipe(
-          Effect.mapError(() => failure("start", "corrupt")),
+          Effect.mapError((cause) => failure("start", "corrupt", cause)),
         );
 
         const messageId = yield* messageIdFor([
@@ -2196,7 +2209,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
         yield* Schema.decodeUnknownEffect(Schema.toEncoded(request.target.input))(
           request.encodedInput,
-        ).pipe(Effect.mapError(() => failure("followUp", "corrupt")));
+        ).pipe(Effect.mapError((cause) => failure("followUp", "corrupt", cause)));
 
         const messageId = yield* messageIdFor([
           context.source.threadId,
@@ -2282,7 +2295,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                         record,
                       }),
                     ),
-                    Effect.mapError(() => failure("observe", "corrupt")),
+                    Effect.mapError((cause) => failure("observe", "corrupt", cause)),
                   ),
                 );
 
@@ -2358,7 +2371,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           )
           .pipe(
             Effect.mapError((error) =>
-              error._tag === "JoinedToHost" ? error : failure("cancel", "storage"),
+              error._tag === "JoinedToHost" ? error : failure("cancel", "storage", error),
             ),
           );
       }),
@@ -2372,7 +2385,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     inputDigest: Digest,
   ) {
     const message = yield* Schema.decodeEffect(FrameworkMessage)(unvalidated).pipe(
-      Effect.mapError(() => failure("followUp", "corrupt")),
+      Effect.mapError((cause) => failure("followUp", "corrupt", cause)),
     );
 
     const childThreadId =
@@ -2409,7 +2422,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     if (frozen === undefined) return yield* failure("followUp", "denied");
 
     const envelope = yield* Schema.decodeUnknownEffect(PreparedInput)(frozen).pipe(
-      Effect.mapError(() => failure("followUp", "corrupt")),
+      Effect.mapError((cause) => failure("followUp", "corrupt", cause)),
     );
 
     if (

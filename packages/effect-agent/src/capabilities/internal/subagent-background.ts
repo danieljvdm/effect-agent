@@ -3,6 +3,7 @@ import { Context, Crypto, Effect, Encoding, Layer, Option, Schema, Stream } from
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import type { AnyDefinition } from "../../core/Agent.ts";
+import * as FailureDiagnostic from "../../core/FailureDiagnostic.ts";
 import { RunId, SettlementId, ThreadId } from "../../core/Identifiers.ts";
 import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { IdempotencyKey, JoinedToHost, Receipt } from "../../core/Receipt.ts";
@@ -93,8 +94,8 @@ export const Worker = <const Name extends string>(declaration: WorkerDeclaration
 
 export type Worker<Name extends string> = ReturnType<typeof Worker<Name>>["Type"];
 
-/** Observes one exact Receipt. Terminal failure data never includes raw child output. */
-export const WorkerObservation = <Success extends Schema.Top>(success: Success) =>
+/** Model-facing projection deliberately excludes operator-private diagnostics. */
+const toolObservation = <Success extends Schema.Top>(success: Success) =>
   Schema.Union([
     Schema.Struct({ _tag: Schema.Literal("Pending"), receipt: Receipt }),
     Schema.Struct({
@@ -114,6 +115,20 @@ export const WorkerObservation = <Success extends Schema.Top>(success: Success) 
       failure: SubagentExecutionFailure,
     }),
   ]);
+
+/** One exact Receipt, including private canonical failure evidence for programmatic callers. */
+export const WorkerObservation = <Success extends Schema.Top>(success: Success) => {
+  const projected = toolObservation(success);
+
+  return Schema.Union([
+    projected.members[0],
+    projected.members[1],
+    Schema.Struct({
+      ...projected.members[2].fields,
+      diagnostic: Schema.optionalKey(FailureDiagnostic.Failure),
+    }),
+  ]);
+};
 
 export type WorkerObservation<Success extends Schema.Top> = ReturnType<
   typeof WorkerObservation<Success>
@@ -149,10 +164,11 @@ const operations = <
 ) => {
   const workerSchema = Worker(declaration);
 
-  const projectionFailure = (stage: "input" | "result") =>
+  const projectionFailure = (stage: "input" | "result", cause?: unknown) =>
     SubagentProjectionFailure.make({
       delegationId: declaration.delegationId,
       stage,
+      ...(cause === undefined ? {} : { cause }),
       message:
         stage === "input"
           ? "Worker input did not satisfy the declaration Schema"
@@ -161,7 +177,7 @@ const operations = <
 
   const validateWorker = (worker: unknown, operation: WorkerError["operation"]) =>
     Schema.decodeUnknownEffect(workerSchema)(worker).pipe(
-      Effect.mapError(() => WorkerError.make({ operation, reason: "worker-mismatch" })),
+      Effect.mapError((cause) => WorkerError.make({ operation, reason: "worker-mismatch", cause })),
     );
 
   const validateReceipt = (
@@ -172,7 +188,9 @@ const operations = <
     Schema.decodeEffect(
       Receipt.check(Schema.makeFilter((value) => value.threadId === worker.threadId)),
     )(receipt).pipe(
-      Effect.mapError(() => WorkerError.make({ operation, reason: "receipt-mismatch" })),
+      Effect.mapError((cause) =>
+        WorkerError.make({ operation, reason: "receipt-mismatch", cause }),
+      ),
     );
 
   const context: Effect.Effect<WorkerContext, WorkerError, SubagentHost> = host.pipe(
@@ -181,7 +199,7 @@ const operations = <
     Effect.mapError((error) =>
       Schema.is(WorkerError)(error)
         ? error
-        : WorkerError.make({ operation: "context", reason: "corrupt" }),
+        : WorkerError.make({ operation: "context", reason: "corrupt", cause: error }),
     ),
   );
 
@@ -190,7 +208,7 @@ const operations = <
     caller: WorkerContext,
   ) {
     const encodedParameters = yield* Schema.encodeEffect(declaration.parameters)(parameters).pipe(
-      Effect.mapError(() => projectionFailure("input")),
+      Effect.mapError((cause) => projectionFailure("input", cause)),
     );
 
     const source = caller.source;
@@ -212,7 +230,7 @@ const operations = <
     const input = yield* declaration.prepareInput(parameters, preparation);
 
     const encodedInput = yield* Schema.encodeEffect(declaration.target.input)(input).pipe(
-      Effect.mapError(() => projectionFailure("input")),
+      Effect.mapError((cause) => projectionFailure("input", cause)),
     );
 
     return { encodedParameters, encodedInput };
@@ -220,7 +238,9 @@ const operations = <
 
   const validateKey = (key: IdempotencyKey, operation: "start" | "followUp") =>
     Schema.decodeEffect(IdempotencyKey)(key).pipe(
-      Effect.mapError(() => WorkerError.make({ operation, reason: "idempotency-conflict" })),
+      Effect.mapError((cause) =>
+        WorkerError.make({ operation, reason: "idempotency-conflict", cause }),
+      ),
     );
 
   const start = Effect.fn("Subagent.start")(function* (
@@ -270,7 +290,7 @@ const operations = <
     );
 
     const encodedGrant = yield* Schema.encodeEffect(SubagentGrant)(grant).pipe(
-      Effect.mapError(() => projectionFailure("input")),
+      Effect.mapError((cause) => projectionFailure("input", cause)),
     );
 
     const started = yield* service.start({
@@ -297,7 +317,9 @@ const operations = <
     });
 
     const validated = yield* Schema.decodeEffect(WorkerStarted)(started).pipe(
-      Effect.mapError(() => WorkerError.make({ operation: "start", reason: "corrupt" })),
+      Effect.mapError((cause) =>
+        WorkerError.make({ operation: "start", reason: "corrupt", cause }),
+      ),
     );
 
     return { worker: yield* validateWorker(validated.worker, "start"), receipt: validated.receipt };
@@ -366,11 +388,11 @@ const operations = <
         ? {}
         : {
             runId: yield* Schema.decodeEffect(RunId)(observed.runId).pipe(
-              Effect.mapError(() => WorkerError.make({ operation, reason: "corrupt" })),
+              Effect.mapError((cause) => WorkerError.make({ operation, reason: "corrupt", cause })),
             ),
           }),
       settlementId: yield* Schema.decodeEffect(SettlementId)(observed.settlementId).pipe(
-        Effect.mapError(() => WorkerError.make({ operation, reason: "corrupt" })),
+        Effect.mapError((cause) => WorkerError.make({ operation, reason: "corrupt", cause })),
       ),
     };
 
@@ -378,6 +400,17 @@ const operations = <
       return {
         ...base,
         outcome: observed.outcome,
+        ...(observed.diagnostic === undefined
+          ? {}
+          : {
+              diagnostic: yield* Schema.decodeEffect(FailureDiagnostic.Failure)(
+                observed.diagnostic,
+              ).pipe(
+                Effect.mapError((cause) =>
+                  WorkerError.make({ operation, reason: "corrupt", cause }),
+                ),
+              ),
+            }),
         failure: SubagentExecutionFailure.make({
           delegationId: declaration.delegationId,
           targetAgentId: declaration.target.id,
@@ -401,11 +434,11 @@ const operations = <
 
     const parameters = yield* Schema.decodeUnknownEffect(declaration.parameters)(
       observed.encodedParameters,
-    ).pipe(Effect.mapError(() => projectionFailure("result")));
+    ).pipe(Effect.mapError((cause) => projectionFailure("result", cause)));
 
     const output = yield* Schema.decodeUnknownEffect(declaration.target.output)(
       observed.encodedResult,
-    ).pipe(Effect.mapError(() => projectionFailure("result")));
+    ).pipe(Effect.mapError((cause) => projectionFailure("result", cause)));
 
     const result = yield* declaration.projectResult(
       output,
@@ -414,11 +447,11 @@ const operations = <
     );
 
     const encoded = yield* Schema.encodeEffect(declaration.success)(result).pipe(
-      Effect.mapError(() => projectionFailure("result")),
+      Effect.mapError((cause) => projectionFailure("result", cause)),
     );
 
     const json = yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
-      Effect.mapError(() => projectionFailure("result")),
+      Effect.mapError((cause) => projectionFailure("result", cause)),
     );
 
     const caller = yield* context;
@@ -432,7 +465,7 @@ const operations = <
 
     return yield* Schema.decodeUnknownEffect(Schema.toType(WorkerObservation(declaration.success)))(
       { ...base, outcome: "completed", result },
-    ).pipe(Effect.mapError(() => projectionFailure("result")));
+    ).pipe(Effect.mapError((cause) => projectionFailure("result", cause)));
   });
 
   const list = Effect.fn("Subagent.list")(function* (
@@ -771,7 +804,7 @@ type ToolSchemas<
   };
   inspect: {
     parameters: ReturnType<typeof ReceiptParameters<Name>>;
-    success: ReturnType<typeof WorkerObservation<Success>>;
+    success: ReturnType<typeof toolObservation<Success>>;
     failure: ReturnType<typeof preparationFailure<Failure>>;
   };
   summary: {
@@ -951,7 +984,7 @@ export const background = <
   const inspectTool = Tool.make(`${declaration.name}_inspect` as const, {
     description: `Inspect one exact ${declaration.name} Receipt without waiting.`,
     parameters: receiptParameters,
-    success: WorkerObservation(declaration.success),
+    success: toolObservation(declaration.success),
     failure,
   })
     .annotate(WorkerOperationTool, true)
@@ -1050,9 +1083,19 @@ export const background = <
         Effect.gen(function* () {
           const service = yield* host;
 
-          return yield* ops
-            .observe("inspect", parameters.worker, parameters.receipt)
-            .pipe(Effect.provideService(SubagentHost, service), Effect.provide(captured));
+          return yield* ops.observe("inspect", parameters.worker, parameters.receipt).pipe(
+            Effect.map((observed) => {
+              if ("diagnostic" in observed) {
+                const { diagnostic: _diagnostic, ...projected } = observed;
+
+                return projected;
+              }
+
+              return observed;
+            }),
+            Effect.provideService(SubagentHost, service),
+            Effect.provide(captured),
+          );
         }),
       [listTool.name]: (parameters: typeof ListParameters.Type) => ops.list(parameters),
       [summaryTool.name]: (parameters: { readonly worker: Worker<Name> }) =>

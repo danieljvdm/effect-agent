@@ -40,6 +40,7 @@
     "./durable-failpoint": "./src/durable/DurableFailpoint.ts",
     "./durable-step": "./src/engine/DurableStep.ts",
     "./event-source": "./src/durable/EventSource.ts",
+    "./failure-diagnostic": "./src/core/FailureDiagnostic.ts",
     "./git-hub-workflow-source": "./src/durable/GitHubWorkflowSource.ts",
     "./id-generator": "./src/core/IdGenerator.ts",
     "./identifiers": "./src/core/Identifiers.ts",

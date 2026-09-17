@@ -41,6 +41,7 @@ import {
   AgentOutputError,
   AgentRunDispositionError,
   AgentToolAuthorizationDenied,
+  type AgentToolAuthorizationCheckError,
   AgentPolicyError,
   ContextBudgetError,
   ContextOverflowError,
@@ -433,6 +434,7 @@ export type AgentRuntimeFailure<
   | ContextOverflowError
   | CompactionError
   | RunContextPreparationError
+  | AgentToolAuthorizationCheckError
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentToolAuthorizationDenied
@@ -1782,20 +1784,21 @@ const preflightToolAuthorization = <HookError, HookRequirements>(
   HookError | ModelProtocolError | AgentToolAuthorizationDenied,
   HookRequirements
 > => {
-  const authorization = isSubagentToolAllowed(
-    options.subagentGrant,
-    options.delegationDepth ?? options.parentLink?.depth ?? 0,
-    call.toolName,
-    annotations,
-  )
-    ? options.toolAuthorization
-    : {
-        authorize: () =>
-          Effect.succeed({
-            _tag: "denied" as const,
-            reason: "Tool exceeds the inherited subagent grant",
-          }),
-      };
+  const authorization: RunToolAuthorizationHook<HookError, HookRequirements> | undefined =
+    isSubagentToolAllowed(
+      options.subagentGrant,
+      options.delegationDepth ?? options.parentLink?.depth ?? 0,
+      call.toolName,
+      annotations,
+    )
+      ? options.toolAuthorization
+      : {
+          authorize: () =>
+            Effect.succeed({
+              _tag: "denied" as const,
+              reason: "Tool exceeds the inherited subagent grant",
+            }),
+        };
 
   if (authorization === undefined) return Stream.empty;
 
@@ -1817,6 +1820,7 @@ const preflightToolAuthorization = <HookError, HookRequirements>(
             toolCallId: call.toolCallId,
             toolName: call.toolName,
             message: decision.reason,
+            ...(decision.cause === undefined ? {} : { cause: decision.cause }),
           });
 
           return Stream.fromEffect(
@@ -7848,7 +7852,10 @@ function streamWithCompletion<
       }
 
       const options: RunOptions<
-        HookError | ThreadHistoryError | RunContextPreparationError,
+        | HookError
+        | ThreadHistoryError
+        | RunContextPreparationError
+        | AgentToolAuthorizationCheckError,
         HookRequirements
       > = {
         ...runOptions,

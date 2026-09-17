@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import { AgentPolicy } from "./AgentPolicy.ts";
 import { Update } from "./AgentUpdates.ts";
+import * as FailureDiagnostic from "./FailureDiagnostic.ts";
 import { AgentId, DelegationId, RunId, SettlementId, ThreadId, ToolCallId } from "./Identifiers.ts";
 import { Receipt } from "./Receipt.ts";
 import { SubagentExecutionFailure, SubagentGrant } from "./SubagentContract.ts";
@@ -82,11 +83,13 @@ export const WorkerHistoryEntry = Schema.Struct({
 export type WorkerHistoryEntry = typeof WorkerHistoryEntry.Type;
 
 /**
- * Closed host-boundary failures. Infrastructure diagnostics remain in host telemetry.
+ * Closed host-boundary failures. Original causes stay private and survive diagnostic transport.
  * `delivery-pending` confirms retained input, not destination acceptance or execution.
  * Keep the same idempotency key and parameters when reconciling; never launch a replacement.
  */
 export class WorkerError extends Schema.TaggedError<WorkerError>()("WorkerError", {
+  cause: Schema.optionalKey(FailureDiagnostic.Value),
+  stack: Schema.optionalKey(Schema.String),
   /** Pending input or concurrency pressure may clear without changing the request. */
   retryable: Schema.optionalKey(Schema.Literal(true)),
   operation: Schema.Literals([

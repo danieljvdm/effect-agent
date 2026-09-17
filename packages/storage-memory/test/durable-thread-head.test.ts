@@ -226,9 +226,24 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       expect(settlements).toHaveLength(1);
       expect(settlements[0]!.record.payload).toMatchObject({
         outcome: "failed",
-        result: { errorTag: "CompactionError", message: failure.message },
+        result: {
+          errorTag: "CompactionError",
+          message: failure.message,
+          diagnostic: {
+            _tag: "Cause",
+            reasons: [
+              {
+                _tag: "Fail",
+                error: {
+                  errorTag: "CompactionError",
+                  cause: { message: original.message, stack: original.stack },
+                },
+              },
+            ],
+          },
+        },
       });
-      expect(JSON.stringify(settlements)).not.toContain(original.message);
+      expect(JSON.stringify(settlements)).not.toContain("private request");
     }).pipe(Effect.annotateLogs({ hostContext: "captured registration" })),
   );
 

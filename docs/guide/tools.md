@@ -439,6 +439,25 @@ already has an abort intent, the runtime records the abort and settles it as abo
 attached children. Other failures retain their original handling. Recovery checks calls that still
 need execution; it reuses recorded results without executing or authorizing them again.
 
+Return a denied decision only for an actual policy refusal. Its optional `cause` retains the
+original policy evidence privately; keep `reason` safe for model context. If storage, transport,
+or state validation prevents a check, fail with `AgentToolAuthorizationCheckError` from
+`effect-agent/agent-error`, supplying the tool identity, a safe `message`, and the original Effect
+`cause`. This distinct failure stops execution and is reported at the failed Run boundary.
+Do not convert interruption or defects into a denial.
+
+`FailureDiagnostic.Value` and `FailureDiagnostic.Cause` from `effect-agent/failure-diagnostic`
+retain original local values and encode structured diagnostic data across private JSON boundaries.
+The projection preserves tags, messages, reason/code, stacks, nested causes and Effect failure kinds;
+it excludes arbitrary payload fields and redacts common credential forms. Diagnostics are private
+operator data, never a ready-made user message. Keep private payloads out of error text; applications
+can provide stricter text redaction to `FailureDiagnostic.capture`. Capture marks cycles and bounds
+explicitly rather than pretending to reconstruct the original error after transport.
+Worker admission and message-delivery failures retain the same causal data: `WorkerError.cause`
+preserves live errors, and the delivery's `lastFailureDiagnostic` survives retries and recovery.
+The delivery's receipt and refusal/retry classification remain the authority for safe retry decisions.
+For tools using `failureMode: "return"`, project these errors into a separate safe failure schema.
+
 Omitting both the service and per-run hook allows calls without this additional host check. Durable hosts use
 `RunToolAuthorization.allowAll` by default. Install a policy before granting tools access to
 protected resources. Authenticate callers and authorize runtime operations as described in

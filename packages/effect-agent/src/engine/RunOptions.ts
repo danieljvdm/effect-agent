@@ -2,7 +2,7 @@ import { type Cause, Effect, Context, type DateTime, Layer, Schema } from "effec
 import type { LanguageModel, Model, Prompt, Response } from "effect/unstable/ai";
 
 import { type AnyDefinition } from "../core/Agent.ts";
-import { type AgentInputError } from "../core/AgentError.ts";
+import { type AgentInputError, type AgentToolAuthorizationCheckError } from "../core/AgentError.ts";
 import { type AgentPolicy } from "../core/AgentPolicy.ts";
 import type { Update, UpdateError } from "../core/AgentUpdates.ts";
 import {
@@ -396,7 +396,13 @@ export interface RunToolCallDescriptor {
 /** Decision returned by a host's action-time Tool authorization policy. */
 export type RunToolAuthorizationDecision =
   | { readonly _tag: "allowed" }
-  | { readonly _tag: "denied"; readonly reason: string };
+  | {
+      readonly _tag: "denied";
+      /** Safe model-facing explanation. */
+      readonly reason: string;
+      /** Original local policy evidence; retained privately at native Run settlement. */
+      readonly cause?: Cause.Cause<unknown>;
+    };
 
 /**
  * Exact authority presented before one application Tool Handler may start.
@@ -459,13 +465,15 @@ export const RunContextPreparationPassthrough: Layer.Layer<RunContextPreparation
 /**
  * Host action-time authority for native and programmatic application Tools. Implementations close over
  * their dependencies at Layer construction and return a denial when execution is not authorized.
+ * A dependency or validation failure instead fails with AgentToolAuthorizationCheckError and
+ * retains its original Cause. Defects and interruption remain in the Effect Cause channel.
  * Durable coordinators capture this service once and retain it across replacement Attempts.
  * Ephemeral Runs also resolve this service at their Run boundary. A typed per-run
  * `RunOptions.toolAuthorization` overrides it while retaining its own error and requirement channel.
  */
 export class RunToolAuthorization extends Context.Service<
   RunToolAuthorization,
-  RunToolAuthorizationHook
+  RunToolAuthorizationHook<AgentToolAuthorizationCheckError>
 >()("@effect-agent/engine/RunToolAuthorization") {
   /** Explicit compatibility policy: Tool execution requires no additional host authorization. */
   static readonly allowAll: Layer.Layer<RunToolAuthorization> = Layer.succeed(

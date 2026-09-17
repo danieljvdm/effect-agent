@@ -14,6 +14,7 @@ export * as ContextHistory from "./engine/ContextHistory.ts";
 export * as ContextTools from "./capabilities/ContextTools.ts";
 export * as ContextWindow from "./engine/ContextWindow.ts";
 export * as DurableStep from "./engine/DurableStep.ts";
+export * as FailureDiagnostic from "./core/FailureDiagnostic.ts";
 export * as InMemory from "./InMemory.ts";
 export * as Thread from "./core/Thread.ts";
 export * as IdGenerator from "./core/IdGenerator.ts";

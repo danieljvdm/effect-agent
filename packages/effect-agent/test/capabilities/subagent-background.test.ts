@@ -15,6 +15,7 @@ import {
 } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import * as FailureDiagnostic from "effect-agent/failure-diagnostic";
 import {
   AgentId,
   DelegationId,
@@ -621,7 +622,11 @@ describe("Subagent background authoring", () => {
           Effect.provideService(SubagentHost, host({ inspect: () => Effect.succeed(malformed) })),
           Effect.flip,
         ),
-      ).toMatchObject({ _tag: "SubagentProjectionFailure", stage: "result" });
+      ).toMatchObject({
+        _tag: "SubagentProjectionFailure",
+        stage: "result",
+        cause: { _tag: "SchemaError" },
+      });
     }),
   );
 
@@ -653,6 +658,69 @@ describe("Subagent background authoring", () => {
         expect(JSON.stringify(result)).not.toContain("PRIVATE-CHILD-DATA");
       }
     }),
+  );
+
+  it.effect(
+    "returns canonical diagnostics to programmatic inspection but omits them from tools and reports",
+    () =>
+      Effect.gen(function* () {
+        const background = Subagent.background(delegation, {
+          start: true,
+          inspect: true,
+          reportToParent: true,
+        });
+
+        const diagnostic = {
+          errorTag: "AuthorityCheckError",
+          message: "Could not verify authority",
+          diagnostic: FailureDiagnostic.capture(
+            Object.assign(new Error("operator-private diagnostic"), { reason: "storage" }),
+          ),
+        };
+
+        const observed = {
+          ...settled,
+          outcome: "failed" as const,
+          diagnostic,
+          encodedResult: diagnostic,
+        };
+
+        const service = host({ inspect: () => Effect.succeed(observed) });
+
+        const result = yield* Subagent.inspect(delegation, worker, receipt).pipe(
+          Effect.provideService(SubagentHost, service),
+        );
+
+        expect(result).toMatchObject({ outcome: "failed", diagnostic });
+        const toolkit = yield* background.toolkit.pipe(Effect.provide(background.layer));
+
+        const tool = yield* toolkit
+          .handle("research_inspect", { worker, receipt })
+          .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(SubagentHost, service));
+
+        expect(tool[0]?.result).toMatchObject({
+          outcome: "failed",
+          failure: { errorTag: "WorkerFailed" },
+        });
+        expect(JSON.stringify(tool)).not.toContain("operator-private diagnostic");
+
+        const reporting = Context.get(
+          background.tools.research_start.annotations,
+          BackgroundReporting,
+        );
+
+        if (reporting === undefined) return yield* Effect.die("Missing reporting descriptor");
+
+        const report = yield* reporting
+          .prepare({ worker, context: caller, observation: observed })
+          .pipe(Effect.provide(background.layer));
+
+        expect(report.message?.report).toMatchObject({
+          outcome: "failed",
+          failure: { errorTag: "WorkerFailed" },
+        });
+        expect(JSON.stringify(report)).not.toContain("operator-private diagnostic");
+      }),
   );
 
   it.effect("interrupts only the waiter and preserves JoinedToHost on explicit cancellation", () =>

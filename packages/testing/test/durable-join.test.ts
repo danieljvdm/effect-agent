@@ -592,9 +592,19 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         joinedSettlement?.record.payload._tag === "SubmissionSettled"
       ) {
         expect(hostSettlement.record.payload.outcome).toBe("failed");
-        expect(hostSettlement.record.payload.result).toEqual({
+        expect(hostSettlement.record.payload.result).toMatchObject({
           errorTag: "AgentOutputError",
           message: expect.any(String),
+          context: { threadId: thread, submissionId: host.submissionId },
+          diagnostic: {
+            _tag: "Cause",
+            reasons: [
+              {
+                _tag: "Fail",
+                error: { errorTag: "AgentOutputError", stack: expect.any(String) },
+              },
+            ],
+          },
         });
         expect(joinedSettlement.record.payload.outcome).toBe("failed");
         expect(joinedSettlement.record.payload.runId).toBe(runIdForSubmission(host.submissionId));

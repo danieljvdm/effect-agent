@@ -1,5 +1,6 @@
 import { Context, Effect, Schema } from "effect";
 
+import * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import { AgentId, ThreadId } from "../core/Identifiers.ts";
 import { Receipt } from "../core/Receipt.ts";
 import { DefinitionDigests, Digest, PersistedJson } from "./Records.ts";
@@ -269,13 +270,21 @@ export class ScheduleStorageError extends Schema.TaggedError<ScheduleStorageErro
 /** Only when the unchanged envelope was not admitted and cannot succeed, including on replay. */
 export class ScheduledInputRefused extends Schema.TaggedError<ScheduledInputRefused>()(
   "ScheduledInputRefused",
-  { code: Name },
+  {
+    code: Name,
+    cause: Schema.optionalKey(FailureDiagnostic.Value),
+    stack: Schema.optionalKey(Schema.String),
+  },
 ) {}
 
 /** Includes lost replies: admission may already have committed. */
 export class ScheduledInputRetryable extends Schema.TaggedError<ScheduledInputRetryable>()(
   "ScheduledInputRetryable",
-  { reason: ScheduleRetryReason },
+  {
+    reason: ScheduleRetryReason,
+    cause: Schema.optionalKey(FailureDiagnostic.Value),
+    stack: Schema.optionalKey(Schema.String),
+  },
 ) {}
 
 export type ScheduledInputFailure =

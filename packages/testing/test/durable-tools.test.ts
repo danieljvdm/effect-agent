@@ -12,6 +12,7 @@ import {
   Exit,
   Fiber,
   Layer,
+  Logger,
   Option,
   Ref,
   Schema,
@@ -19,6 +20,7 @@ import {
   Stream,
 } from "effect";
 import * as Agent from "effect-agent/agent";
+import { AgentToolAuthorizationCheckError } from "effect-agent/agent-error";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { compileRegistrations } from "effect-agent/agent-registration";
 import { digestJson } from "effect-agent/digest";
@@ -32,6 +34,7 @@ import {
   type DurableRuntimeFailpointLocation,
 } from "effect-agent/durable-failpoint";
 import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
+import * as FailureDiagnostic from "effect-agent/failure-diagnostic";
 import { ThreadId, SubmissionId, ToolCallId, RunId } from "effect-agent/identifiers";
 import {
   CanonicalBatch,
@@ -2044,6 +2047,184 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(yield* authorization.requests).toHaveLength(1);
       yield* authorization.reset;
     }),
+  );
+
+  it.effect(
+    "retains an authorization check failure in the canonical settlement and reports its original Cause once",
+    () =>
+      Effect.gen(function* () {
+        const admissionRuntime = yield* DurableAgentRuntime;
+        const desk = yield* makeBookDesk(bookTools);
+
+        const leaf = Object.assign(new Error("Database is locked"), { code: "SQLITE_BUSY_LEAF" });
+        let wrapped: unknown = leaf;
+
+        // Execution, RPC, Worker admission, delivery and driver wrappers must not hide the leaf.
+        for (let index = 0; index < 30; index++) {
+          wrapped = Object.assign(new Error(`Call dependency layer ${index}`), {
+            _tag: `CallDependencyLayer${index}`,
+            cause: wrapped,
+          });
+          if (index % 10 === 9) wrapped = Cause.fail(wrapped);
+        }
+
+        const dependency = Object.assign(new Error("Delivery lookup failed"), {
+          _tag: "DeliveryStorageError",
+          reason: "busy",
+          code: "SQLITE_BUSY",
+          callId: "phone-call-1",
+          cause: wrapped,
+          payload: { private: "private-authority-payload" },
+        });
+
+        const rpcError = Schema.Struct({
+          _tag: Schema.Literal("AuthorityRpcError"),
+          reason: Schema.Literal("unavailable"),
+          cause: FailureDiagnostic.Cause,
+        });
+
+        const rpcExit = Schema.toCodecJson(
+          Schema.Exit(Schema.Void, rpcError, FailureDiagnostic.Value),
+        );
+
+        const encoded = yield* Schema.encodeEffect(rpcExit)(
+          Exit.fail({
+            _tag: "AuthorityRpcError",
+            reason: "unavailable",
+            cause: Cause.fail(dependency),
+          }),
+        );
+
+        const received = yield* Schema.decodeUnknownEffect(rpcExit)(
+          JSON.parse(JSON.stringify(encoded)),
+        );
+
+        if (Exit.isSuccess(received)) throw new Error("Expected the RPC's original failure");
+        const original = received.cause;
+
+        const check = AgentToolAuthorizationCheckError.make({
+          toolCallId: decodeToolCallId("book-check-failed"),
+          toolName: "book",
+          check: "pending-deliveries",
+          message: "Could not verify authority",
+          cause: original,
+        });
+
+        const logs: Array<Cause.Cause<unknown>> = [];
+
+        const logger = Logger.make<unknown, void>(({ message, cause }) => {
+          if (Array.isArray(message) && message.includes("Agent run failed")) logs.push(cause);
+        });
+
+        const scripted = yield* makeScriptedModel(() =>
+          toolTurn(toolCall("book-check-failed", "book", { ref: "r-check" })),
+        );
+
+        const agent = Agent.withModel(bookDefinition, scripted.model);
+
+        const receipt = yield* admissionRuntime.submit(
+          agent,
+          { question: "book it" },
+          submitOptions("thread-check-failed", "check-failed"),
+        );
+
+        const runtime = yield* DurableAgentRuntime.pipe(
+          Effect.provide(
+            Layer.fresh(DurableAgentRuntime.layerWithServices).pipe(
+              Layer.provide(
+                Layer.succeed(RunToolAuthorization, { authorize: () => Effect.fail(check) }),
+              ),
+            ),
+          ),
+        );
+
+        const settlements = yield* runtime
+          .processThread(agent, receipt.threadId)
+          .pipe(Effect.provide([desk.toolLayer, Logger.layer([logger])]));
+
+        expect(yield* desk.count("r-check")).toBe(0);
+        expect(settlements).toHaveLength(1);
+        expect(settlements[0]).toMatchObject({
+          outcome: "failed",
+          failure: {
+            errorTag: "AgentToolAuthorizationCheckError",
+            message: "Could not verify authority",
+            context: { threadId: receipt.threadId, submissionId: receipt.submissionId },
+            diagnostic: {
+              _tag: "Cause",
+              reasons: [
+                {
+                  _tag: "Fail",
+                  error: {
+                    errorTag: "AgentToolAuthorizationCheckError",
+                    context: { check: "pending-deliveries", toolCallId: "book-check-failed" },
+                    cause: {
+                      _tag: "Cause",
+                      reasons: [
+                        {
+                          _tag: "Fail",
+                          error: {
+                            errorTag: "AuthorityRpcError",
+                            reason: { _tag: "Value", value: "unavailable" },
+                            cause: {
+                              _tag: "Cause",
+                              reasons: [
+                                {
+                                  _tag: "Fail",
+                                  error: {
+                                    errorTag: "DeliveryStorageError",
+                                    message: "Delivery lookup failed",
+                                    stack: dependency.stack,
+                                    reason: { _tag: "Value", value: "busy" },
+                                    code: "SQLITE_BUSY",
+                                    context: { callId: "phone-call-1" },
+                                    cause: { _tag: "Cause" },
+                                  },
+                                },
+                              ],
+                            },
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        });
+        expect(logs).toHaveLength(1);
+        expect(Cause.findErrorOption(logs[0]).pipe(Option.getOrThrow)).toBe(check);
+        expect(check.cause).toBe(original);
+        const settled = yield* runtime.awaitSettlement(receipt);
+
+        expect(settled).toEqual(settlements[0]);
+        const records = yield* readLog(receipt.threadId);
+
+        expect(records.some(({ record }) => record.payload._tag === "ToolCallPrepared")).toBe(
+          false,
+        );
+
+        const canonical = records.find(({ record }) => record.payload._tag === "SubmissionSettled")
+          ?.record.payload;
+
+        expect(canonical).toMatchObject({ result: settlements[0]?.failure });
+        const encodedFailure = JSON.stringify(canonical);
+
+        expect(encodedFailure).toContain("SQLITE_BUSY_LEAF");
+        expect(encodedFailure).toContain("Database is locked");
+        for (let index = 0; index < 30; index++)
+          expect(encodedFailure).toContain(`"errorTag":"CallDependencyLayer${index}"`);
+        expect(encodedFailure).not.toContain('"reason":"limit"');
+        expect(encodedFailure).not.toContain("private-authority-payload");
+        expect(
+          yield* runtime
+            .processThread(agent, receipt.threadId)
+            .pipe(Effect.provide(desk.toolLayer)),
+        ).toEqual([]);
+        expect(logs).toHaveLength(1);
+        expect(Schema.is(FailureDiagnostic.Failure)(settlements[0]?.failure)).toBe(true);
+      }),
   );
 
   it.effect("settles aborted when authorization observes cancellation before the watcher", () =>

@@ -59,11 +59,23 @@ const Scan = Schema.Struct({
 
 const codec = Schema.fromJsonString(MessageDeliveryRecord);
 const bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
-const storage = (operation: string) => MessageDeliveryError.make({ reason: "storage", operation });
-const corrupt = (operation: string) => MessageDeliveryError.make({ reason: "corrupt", operation });
+
+const storage = (operation: string, cause?: unknown) =>
+  MessageDeliveryError.make({
+    reason: "storage",
+    operation,
+    ...(cause === undefined ? {} : { cause }),
+  });
+
+const corrupt = (operation: string, cause?: unknown) =>
+  MessageDeliveryError.make({
+    reason: "corrupt",
+    operation,
+    ...(cause === undefined ? {} : { cause }),
+  });
 
 const query = <A>(operation: string, effect: Effect.Effect<A, SqlError>) =>
-  effect.pipe(Effect.mapError(() => storage(operation)));
+  effect.pipe(Effect.mapError((cause) => storage(operation, cause)));
 
 /**
  * Shared SQL implementation over the adapter-owned effect_agent_message_deliveries table.
@@ -92,7 +104,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
     record: MessageDeliveryRecord,
   ) {
     const text = yield* Schema.encodeEffect(codec)(record).pipe(
-      Effect.mapError(() => corrupt("encode")),
+      Effect.mapError((cause) => corrupt("encode", cause)),
     );
 
     if (bytes(text) > maxStoredValueBytes)
@@ -108,7 +120,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
     if (bytes(row.record_json) > maxStoredValueBytes) return yield* corrupt("stored-value-bytes");
 
     const record = yield* Schema.decodeEffect(codec)(row.record_json).pipe(
-      Effect.mapError(() => corrupt("decode")),
+      Effect.mapError((cause) => corrupt("decode", cause)),
     );
 
     if (
@@ -126,7 +138,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
   const decodeRows = (rows: unknown) =>
     Schema.decodeUnknownEffect(Schema.Array(Row))(rows).pipe(
-      Effect.mapError(() => corrupt("rows")),
+      Effect.mapError((cause) => corrupt("rows", cause)),
       Effect.flatMap((rows) => Effect.forEach(rows, decode)),
     );
 
@@ -149,7 +161,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
     const text = yield* encode(record);
 
     const input = yield* Schema.decodeEffect(codec)(text).pipe(
-      Effect.mapError(() => corrupt("insert")),
+      Effect.mapError((cause) => corrupt("insert", cause)),
     );
 
     if (
@@ -190,7 +202,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
         );
 
         const count = (yield* Schema.decodeUnknownEffect(Schema.Array(Count))(counts).pipe(
-          Effect.mapError(() => corrupt("count")),
+          Effect.mapError((cause) => corrupt("count", cause)),
         ))[0];
 
         if (count === undefined) return yield* corrupt("count");
@@ -293,7 +305,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
       );
 
       const decoded = yield* Schema.decodeUnknownEffect(Schema.Array(Deadline))(rows).pipe(
-        Effect.mapError(() => corrupt("next-deadline")),
+        Effect.mapError((cause) => corrupt("next-deadline", cause)),
       );
 
       return decoded[0]?.deadline ?? null;
