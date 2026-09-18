@@ -1004,21 +1004,15 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         );
 
         expect(childReads).toBeGreaterThan(0);
-        expect(reports.find((report) => report.submissionId === parent.submissionId)).toMatchObject(
-          {
-            disposition: "blocked",
-            decision: {
-              _tag: "RecoveryBlocked",
-              failure: {
-                phase: "recovery",
-                errorTag: "ThreadStoreError",
-                operation: "read child history",
-              },
-            },
+        expect(reports.blocked.find((fault) => fault.threadId === parent.threadId)).toMatchObject({
+          failure: {
+            phase: "recovery",
+            errorTag: "ThreadStoreError",
+            operation: "read child history",
           },
-        );
+        });
         expect(
-          reports.find((report) => report.submissionId === independent.submissionId),
+          reports.reports.find((report) => report.submissionId === independent.submissionId),
         ).toMatchObject({
           disposition: "deferred",
           decision: { _tag: "ApplyInput" },
@@ -1101,9 +1095,8 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         Effect.provideService(ThreadStore, conflicting),
       );
 
-      expect(rejected.find((report) => report.submissionId === parent.submissionId)).toMatchObject({
-        disposition: "blocked",
-        decision: { _tag: "RecoveryBlocked", failure: { errorTag: "RunJournalError" } },
+      expect(rejected.blocked.find((fault) => fault.threadId === parent.threadId)).toMatchObject({
+        failure: { errorTag: "RunJournalError" },
       });
 
       const afterSnapshot = yield* ledger.loadRecoverySnapshot(
@@ -1802,10 +1795,15 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           reason: "test abort",
         }),
       );
+
       // PropagateChildAbort: the one idempotent durable child abort command; the parent stays
       // suspended waiting for the join (spec §13.1). Two passes cover either lexical lane
       // order: the child settles after the parent propagates its abort, without running code.
-      const reports = [...(yield* runtime.runRecovery()), ...(yield* runtime.runRecovery())];
+      const reports = [
+        ...(yield* runtime.runRecovery()).reports,
+        ...(yield* runtime.runRecovery()).reports,
+      ];
+
       const parentReport = reports.find((report) => report.submissionId === parent.submissionId);
 
       expect(parentReport?.decision._tag).toBe("PropagateChildAbort");
@@ -1825,7 +1823,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       expect(yield* harness.childInvocations).toBe(0);
       // Replaying the propagation is a no-op repair: the recorded child abort intent IS the
       // marker (DUR-012), and the settled child now classifies as a pending join.
-      const secondReports = yield* runtime.runRecovery();
+      const secondReports = (yield* runtime.runRecovery()).reports;
 
       const secondParentReport = secondReports.find(
         (report) => report.submissionId === parent.submissionId,
@@ -1882,7 +1880,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       yield* clearFailpoint;
 
       // Pass 1: the canonical request alone admits the one intended child (D3, SUB-016).
-      const first = yield* runtime.runRecovery();
+      const first = (yield* runtime.runRecovery()).reports;
       const admissionReport = first.find((report) => report.submissionId === parent.submissionId);
 
       expect(admissionReport?.decision._tag).toBe("CompleteChildAdmission");
@@ -1893,14 +1891,14 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       expect(payloadsOf(childLog, "SubagentLineageRecorded")).toHaveLength(1);
 
       // Pass 2: the exact deterministic start link is appended for the same Receipt.
-      const second = yield* runtime.runRecovery();
+      const second = (yield* runtime.runRecovery()).reports;
       const startReport = second.find((report) => report.submissionId === parent.submissionId);
 
       expect(startReport?.decision._tag).toBe("RepairSubagentStartLink");
       expect(startReport?.disposition).toBe("repaired");
 
       // Pass 3: the waitingForChild checkpoint is restored; the lane holds no permit.
-      const third = yield* runtime.runRecovery();
+      const third = (yield* runtime.runRecovery()).reports;
       const waitingReport = third.find((report) => report.submissionId === parent.submissionId);
 
       expect(waitingReport?.decision._tag).toBe("EnsureWaitingForChild");
@@ -1954,7 +1952,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       );
       expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
 
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const parentReport = reports.find((report) => report.submissionId === parent.submissionId);
 
       expect(parentReport?.decision._tag).toBe("ResumeWaitingParent");
@@ -1993,7 +1991,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           reason: "abandon before request",
         }),
       );
-      const first = yield* runtime.runRecovery();
+      const first = (yield* runtime.runRecovery()).reports;
       const orphanReport = first.find((report) => report.submissionId === parent.submissionId);
 
       expect(orphanReport?.decision._tag).toBe("ReleaseOrphanChildReservation");
@@ -2002,7 +2000,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         "released",
       ]);
 
-      const second = yield* runtime.runRecovery();
+      const second = (yield* runtime.runRecovery()).reports;
       const settleReport = second.find((report) => report.submissionId === parent.submissionId);
 
       expect(settleReport?.decision._tag).toBe("SettleAborted");
@@ -2545,7 +2543,7 @@ layer(faultTestLayer)("S2 durable Subagents under indeterminate admission (SUB-0
 
       expect(failureTag(exit)).toBe("LedgerError");
       // Recovery classifies the wait honestly and defers — no second admission either.
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const parentReport = reports.find((report) => report.submissionId === parent.submissionId);
 
       expect(parentReport?.decision._tag).toBe("AwaitChildAdmissionResolution");

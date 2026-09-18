@@ -786,7 +786,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             // PropagateChildAbort issues the ONE idempotent durable child abort command while
             // the parent stays suspended for the join (spec §13.1); no delegation or child
             // code runs anywhere on the abort path.
-            const reports = yield* runtime.runRecovery();
+            const reports = (yield* runtime.runRecovery()).reports;
 
             const parentReport = reports.find(
               (report) => report.submissionId === receipt.submissionId,

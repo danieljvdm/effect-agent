@@ -82,6 +82,7 @@ import {
   projectionLayer,
 } from "./projection-fixture.ts";
 import { publicationLayer } from "./publication-fixture.ts";
+import { recoveryTestLayer } from "./recovery-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
 import {
   subscriptionAlarmExtensionLayer,
@@ -388,31 +389,33 @@ export class TestThreadObject extends ThreadObject.make(
     Effect.map(Effect.all([makeTestBindings, backgroundWorkerBindings]), ([existing, workers]) =>
       Layer.unwrap(
         Effect.map(ThreadObjectIdentity, ({ threadId }) =>
-          unavailableBindingThreads.has(threadId)
-            ? layerFromBindings([])
-            : upgradedBookBindingThreads.has(threadId)
-              ? Layer.unwrap(
-                  Effect.map(upgradedBookBinding, (replacement) =>
-                    layerFromBindings([
-                      ...existing.filter((binding) => binding.agentId !== replacement.agentId),
-                      replacement,
-                      ...workers,
-                    ]),
-                  ),
-                )
-              : threadId.startsWith("background-cf-custom-") || customRuntimeThreads.has(threadId)
-                ? Layer.fresh(ThreadMaintenance.layer).pipe(
-                    Layer.provideMerge(
-                      DurableAgentRuntime.layerWithBindings([...existing, ...workers]),
+          threadId.startsWith("recovery-alarm-")
+            ? recoveryTestLayer(existing).pipe(Layer.provideMerge(layerFromBindings([])))
+            : unavailableBindingThreads.has(threadId)
+              ? layerFromBindings([])
+              : upgradedBookBindingThreads.has(threadId)
+                ? Layer.unwrap(
+                    Effect.map(upgradedBookBinding, (replacement) =>
+                      layerFromBindings([
+                        ...existing.filter((binding) => binding.agentId !== replacement.agentId),
+                        replacement,
+                        ...workers,
+                      ]),
                     ),
-                    Layer.provideMerge(layerFromBindings([])),
                   )
-                : threadId.startsWith("messages-")
+                : threadId.startsWith("background-cf-custom-") || customRuntimeThreads.has(threadId)
                   ? Layer.fresh(ThreadMaintenance.layer).pipe(
-                      Layer.provide(testMessageRecovery),
-                      Layer.provideMerge(layerFromBindings([...existing, ...workers])),
+                      Layer.provideMerge(
+                        DurableAgentRuntime.layerWithBindings([...existing, ...workers]),
+                      ),
+                      Layer.provideMerge(layerFromBindings([])),
                     )
-                  : layerFromBindings([...existing, ...workers]),
+                  : threadId.startsWith("messages-")
+                    ? Layer.fresh(ThreadMaintenance.layer).pipe(
+                        Layer.provide(testMessageRecovery),
+                        Layer.provideMerge(layerFromBindings([...existing, ...workers])),
+                      )
+                    : layerFromBindings([...existing, ...workers]),
         ),
       ),
     ),

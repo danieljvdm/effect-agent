@@ -39,10 +39,14 @@ import { type DigestError, digestDefinitions, digestJson } from "effect-agent/di
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
+  type RecoveryBlocked,
   type DurableSubmitOptions,
   type DurableWorkerFailure,
 } from "effect-agent/durable-agent-runtime";
-import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
+import {
+  DurableRuntimeFailpoint,
+  DurableRuntimeFailpointError,
+} from "effect-agent/durable-failpoint";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { ThreadId } from "effect-agent/identifiers";
 import { type SubmissionId } from "effect-agent/identifiers";
@@ -73,7 +77,7 @@ import {
   SubmissionLookupById,
   type SubmissionState,
 } from "effect-agent/submission-ledger";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+import { ThreadRead, ThreadStore, ThreadStoreError } from "effect-agent/thread-store";
 import { ReconciliationUncertain, ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
@@ -607,7 +611,10 @@ describe("NodeDurableAgentRuntime", () => {
           const errors: Assert<
             Equal<
               Layer.Error<typeof live>,
-              DigestError | DurableWorkerFailure | NodeDurableAgentRuntimeInitializationError
+              | DigestError
+              | DurableWorkerFailure
+              | RecoveryBlocked
+              | NodeDurableAgentRuntimeInitializationError
             >
           > = true;
 
@@ -768,6 +775,7 @@ describe("NodeDurableAgentRuntime", () => {
         | DigestError
         | NodeDurableAgentRuntimeInitializationError
         | DurableWorkerFailure
+        | RecoveryBlocked
         | ContextSetupError
         | AuthorizationSetupError
         | ReconcilerSetupError
@@ -949,6 +957,98 @@ describe("NodeDurableAgentRuntime", () => {
           ),
         );
       }),
+    );
+  }
+
+  for (const mode of ["failure", "timeout"] as const) {
+    it.effect(`startup keeps admission closed after a recovery ${mode}`, () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const runtime = yield* DurableAgentRuntime;
+          const store = yield* ThreadStore;
+          const ledger = yield* SubmissionLedger;
+          const entered = yield* Deferred.make<void>();
+          let active = 0;
+          let admitted = false;
+
+          const receipt = yield* runtime.submit(
+            { definition: plannerDefinition },
+            { question: "keep the original accepted input" },
+            submitOptions("startup-blocked", "original"),
+          );
+
+          const lookup = SubmissionLookupById.make({ submissionId: receipt.submissionId });
+          const before = yield* ledger.lookup(lookup);
+
+          const blockedStore = ThreadStore.of({
+            ...store,
+            read: () =>
+              Stream.unwrap(
+                Effect.acquireRelease(
+                  Effect.sync(() => {
+                    active++;
+                  }),
+                  () =>
+                    Effect.sync(() => {
+                      active--;
+                    }),
+                ).pipe(
+                  Effect.andThen(Deferred.succeed(entered, undefined)),
+                  Effect.andThen(
+                    mode === "timeout"
+                      ? Effect.never
+                      : ThreadStoreError.make({
+                          operation: "read recovery history",
+                          message: "unreadable retained fixture",
+                        }),
+                  ),
+                ),
+              ),
+          });
+
+          const blockedRuntime = Layer.fresh(DurableAgentRuntime.layer).pipe(
+            Layer.provide(Layer.succeed(ThreadStore, blockedStore)),
+            Layer.provide(
+              Layer.mergeAll(
+                NodeCrypto.layer,
+                DurableRuntimeFailpoint.layer,
+                ToolReconciler.uncertain,
+              ),
+            ),
+          );
+
+          const startup = yield* Effect.forkChild(
+            Effect.gen(function* () {
+              yield* NodeDurableHost;
+              admitted = true;
+            }).pipe(
+              Effect.provide(NodeDurableHost.layer.pipe(Layer.provide(blockedRuntime))),
+              Effect.exit,
+            ),
+          );
+
+          yield* Deferred.await(entered);
+          if (mode === "timeout") yield* TestClock.adjust("30 seconds");
+          expect(failureOf(yield* Fiber.join(startup))).toMatchObject({
+            _tag: "RecoveryBlocked",
+            threadId: receipt.threadId,
+            failure: { phase: "history", reason: mode },
+          });
+          expect(admitted).toBe(false);
+          expect(active).toBe(0);
+          expect(yield* ledger.lookup(lookup)).toEqual(before);
+          expect(
+            yield* runtime.submit(
+              { definition: plannerDefinition },
+              { question: "keep the original accepted input" },
+              submitOptions("startup-blocked", "original"),
+            ),
+          ).toEqual(receipt);
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(NodeDurableAgentRuntime.layer(runtimeOptions(filename))),
+        ),
+      ),
     );
   }
 

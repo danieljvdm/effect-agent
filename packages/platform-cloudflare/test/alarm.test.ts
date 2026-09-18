@@ -679,14 +679,14 @@ describe("DC alarm semantics", () => {
         ),
       );
 
-      expect(recovery.find((report) => report.submissionId === receipt.submissionId)).toMatchObject(
-        {
-          decision: {
-            _tag: unsupportedRetry ? "ApplyUnknownResolutions" : "AwaitUnknownResolution",
-          },
-          disposition: "unknown",
+      expect(
+        recovery.reports.find((report) => report.submissionId === receipt.submissionId),
+      ).toMatchObject({
+        decision: {
+          _tag: unsupportedRetry ? "ApplyUnknownResolutions" : "AwaitUnknownResolution",
         },
-      );
+        disposition: "unknown",
+      });
 
       const follower = await submitTo(plannerDefinition, thread, `${thread}-follower`);
 

@@ -121,12 +121,10 @@ describe("bounded recovery failure isolation", () => {
           }
           const reports = yield* runtime.runRecovery();
 
-          expect(reports).toMatchObject([
-            {
-              threadId: failingThread,
-              disposition: "blocked",
-              decision: {
-                _tag: "RecoveryBlocked",
+          expect(reports).toMatchObject({
+            blocked: [
+              {
+                threadId: failingThread,
                 failure: {
                   phase: "recovery",
                   reason: "failure",
@@ -139,15 +137,21 @@ describe("bounded recovery failure isolation", () => {
                   diagnostic,
                 },
               },
-            },
-            { threadId: healthyThread, disposition: "deferred", decision: { _tag: "ApplyInput" } },
-          ]);
+            ],
+            reports: [
+              {
+                threadId: healthyThread,
+                disposition: "deferred",
+                decision: { _tag: "ApplyInput" },
+              },
+            ],
+          });
           expect(JSON.stringify(reports)).not.toContain("private");
           mixedCause = true;
           const mixedReports = yield* runtime.runRecovery();
 
-          expect(mixedReports[0]).toMatchObject({
-            decision: {
+          expect(mixedReports.blocked).toMatchObject([
+            {
               failure: {
                 reason: "defect",
                 errorTag: "LedgerError",
@@ -159,7 +163,7 @@ describe("bounded recovery failure isolation", () => {
                 diagnostic,
               },
             },
-          });
+          ]);
           expect(JSON.stringify(mixedReports)).not.toContain("private");
           // A global scan has not identified a Thread: preserve its original typed cause.
           const accepted = yield* Stream.runCollect(ledger.scanNonterminal);
@@ -269,12 +273,10 @@ describe("bounded recovery failure isolation", () => {
           }
           expect(Exit.isSuccess(outcome)).toBe(true);
           if (Exit.isFailure(outcome)) return;
-          expect(outcome.value).toMatchObject([
-            {
-              threadId: failingThread,
-              disposition: "blocked",
-              decision: {
-                _tag: "RecoveryBlocked",
+          expect(outcome.value).toMatchObject({
+            blocked: [
+              {
+                threadId: failingThread,
                 failure: {
                   phase: "history",
                   reason: mode,
@@ -286,14 +288,20 @@ describe("bounded recovery failure isolation", () => {
                         : "RecoveryTimeout",
                 },
               },
-            },
-            { threadId: healthyThread, disposition: "deferred", decision: { _tag: "ApplyInput" } },
-          ]);
+            ],
+            reports: [
+              {
+                threadId: healthyThread,
+                disposition: "deferred",
+                decision: { _tag: "ApplyInput" },
+              },
+            ],
+          });
           expect(JSON.stringify(outcome.value)).not.toContain("private");
           reads.length = 0;
-          const due = yield* runtime.runRecovery({ excludeThreads: new Set([failingThread]) });
+          const due = yield* runtime.runRecovery({ threadId: healthyThread });
 
-          expect(due.map((report) => report.threadId)).toEqual([healthyThread]);
+          expect(due.reports.map((report) => report.threadId)).toEqual([healthyThread]);
           expect(reads).not.toContain(failingThread);
         }).pipe(Effect.provide(services));
       }),

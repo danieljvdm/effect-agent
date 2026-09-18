@@ -1697,7 +1697,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ]);
         expect(yield* desk.count("r-resume")).toBe(0);
 
-        const reports = yield* runtime.runRecovery();
+        const reports = (yield* runtime.runRecovery()).reports;
         const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
         expect(report?.decision._tag).toBe("ResumePendingToolBatch");
@@ -2353,7 +2353,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
-        const reports = yield* runtime.runRecovery();
+        const reports = (yield* runtime.runRecovery()).reports;
         const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
         expect(report?.decision._tag).toBe("MarkUnknown");
@@ -2559,7 +2559,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           isFailure: false,
         }),
       );
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
       expect(report?.decision._tag).toBe("MarkUnknown");
@@ -2823,7 +2823,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
       // Precedence (plan §4.2): the recorded terminal outcome beats the open tool call — the
       // next pass finalizes the ledger from history instead of re-marking unknown (DUR-015).
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
       expect(report?.decision._tag).toBe("FinalizeLedgerFromHistory");
@@ -2847,7 +2847,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
       // The recorded terminal outcome is never revisited: settled work leaves the nonterminal
       // recovery scan entirely, so no later pass can re-mark it.
-      const after = yield* runtime.runRecovery();
+      const after = (yield* runtime.runRecovery()).reports;
 
       expect(after.find((entry) => entry.submissionId === receipt.submissionId)).toBeUndefined();
       expect(

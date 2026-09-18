@@ -430,7 +430,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         // reverts to ready (DUR-016) and no `input:{sid}` record exists.
         expect(yield* lookupState(joined.submissionId)).toBe("joining");
         expect(recordsById(yield* readLog(thread)).has(`input:${joined.submissionId}`)).toBe(false);
-        const reports = yield* runtime.runRecovery();
+        const reports = (yield* runtime.runRecovery()).reports;
         const report = reports.find((entry) => entry.submissionId === joined.submissionId);
 
         expect(report?.decision._tag).toBe("RevertJoining");
@@ -486,7 +486,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         // The input is canonical but the joined marker was lost.
         expect(yield* lookupState(joined.submissionId)).toBe("joining");
         expect(recordsById(yield* readLog(thread)).has(`input:${joined.submissionId}`)).toBe(true);
-        const reports = yield* runtime.runRecovery();
+        const reports = (yield* runtime.runRecovery()).reports;
         const report = reports.find((entry) => entry.submissionId === joined.submissionId);
 
         expect(report?.decision._tag).toBe("RepairJoinMarker");
@@ -669,7 +669,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       }
 
       // Recovery completes the reserved host settlement AND the joined prefix.
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const hostReport = reports.find((entry) => entry.submissionId === host.submissionId);
 
       expect(hostReport?.decision._tag).toBe("AppendReservedSettlement");
@@ -717,7 +717,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
 
       expect(intent.submissionId).toBe(joining.submissionId);
 
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const report = reports.find((entry) => entry.submissionId === joining.submissionId);
 
       expect(report?.decision._tag).toBe("RevertJoining");
@@ -775,7 +775,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         yield* clearFailpoint;
         expect(yield* lookupState(joined.submissionId)).toBe("joined");
 
-        const reports = yield* runtime.runRecovery();
+        const reports = (yield* runtime.runRecovery()).reports;
         const hostReport = reports.find((entry) => entry.submissionId === host.submissionId);
         const joinedReport = reports.find((entry) => entry.submissionId === joined.submissionId);
 
@@ -839,7 +839,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       expect(yield* lookupState(host.submissionId)).toBe("settled");
       expect(yield* lookupState(joined.submissionId)).toBe("terminalizing");
 
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const report = reports.find((entry) => entry.submissionId === joined.submissionId);
 
       expect(report?.decision._tag).toBe("AppendReservedSettlement");

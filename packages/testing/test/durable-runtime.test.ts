@@ -2764,7 +2764,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
       expect(intent.submissionId).toBe(receipt.submissionId);
 
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
       expect(report?.decision._tag).toBe("SettleAborted");
@@ -2848,7 +2848,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         }),
       );
 
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const report = reports.find((entry) => entry.submissionId === second.submissionId);
 
       expect(report?.decision._tag).toBe("SettleAborted");
@@ -3161,7 +3161,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         expect(failureTag(killedAdmit)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
-        const reports = yield* runtime.runRecovery();
+        const reports = (yield* runtime.runRecovery()).reports;
         const admitReport = reports.find((entry) => entry.threadId === "thread-recover-admit");
 
         expect(admitReport?.decision._tag).toBe("CompleteMaterialization");
@@ -3185,7 +3185,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         expect(failureTag(killedReady)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
-        const readinessReports = yield* runtime.runRecovery();
+        const readinessReports = (yield* runtime.runRecovery()).reports;
 
         const repaired = readinessReports.find(
           (report) => report.threadId === "thread-recover-ready",
@@ -3219,7 +3219,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
       expect(report?.decision._tag).toBe("ApplyInput");
@@ -3262,7 +3262,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
       expect(report?.decision._tag).toBe("RepairInputMarker");
@@ -3319,7 +3319,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           expect(Option.isSome(claimed)).toBe(true);
         }
 
-        const reports = yield* runtime.runRecovery();
+        const reports = (yield* runtime.runRecovery()).reports;
         const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
         expect(report?.decision._tag).toBe("AppendReservedSettlement");
@@ -3380,7 +3380,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(logTags(beforeRecords)).toContain("SubmissionSettled");
       expect(yield* lookupState(receipt.submissionId)).not.toBe("settled");
 
-      const reports = yield* runtime.runRecovery();
+      const reports = (yield* runtime.runRecovery()).reports;
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
       expect(report?.decision._tag).toBe("FinalizeLedgerFromHistory");

@@ -8,6 +8,7 @@ import {
   type DurableAwaitFailure,
   type DurableWorkerFailure,
   type RecoveryReport,
+  type RecoverySweepResult,
 } from "effect-agent/durable-agent-runtime";
 import { type ThreadId, type SubmissionId } from "effect-agent/identifiers";
 import type { MessagingError } from "effect-agent/messaging";
@@ -74,7 +75,7 @@ const sourceConcurrencyLayer = Layer.effect(
 
 it("keeps bounded worker operations and status reads typed without hidden requirements", () => {
   expectTypeOf<RecoverySweep>().toEqualTypeOf<
-    Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>
+    Effect.Effect<RecoverySweepResult, DurableWorkerFailure>
   >();
   expectTypeOf<Layer.Services<typeof capturedPolicyLayer>>().toEqualTypeOf<PolicyEvidence>();
   expectTypeOf<Layer.Services<typeof sourceConcurrencyLayer>>().toEqualTypeOf<PolicyEvidence>();

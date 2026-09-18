@@ -4,8 +4,8 @@ import {
   storageConfigLayer,
   threadStoreLayer,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
-import { runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Effect, Exit, Layer, Logger, Option, Stream } from "effect";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Logger, Option, Stream } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import {
   OperationDenied,
@@ -14,11 +14,14 @@ import {
   possessionOperationAuthorizer,
 } from "effect-agent/operation-authorizer";
 import {
+  AbortCommand,
+  AbortIntentRequest,
   RecoverySnapshotRequest,
   SubmissionLedger,
   SubmissionLookupById,
+  SubmissionLookupByKey,
 } from "effect-agent/submission-ledger";
-import { ThreadStore } from "effect-agent/thread-store";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
@@ -42,6 +45,8 @@ import {
   supplierCountsFor,
 } from "./fixtures.ts";
 import { scheduledAlarm, stubFor } from "./harness.ts";
+import { recoveryReadHolds, recoveryReplies } from "./recovery-fixture.ts";
+import type { TestThreadObject } from "./worker.ts";
 
 // Reconstruct the real runtime over one physical SQLite owner, retaining its mutation gate.
 // The read probe observes the public port; it never substitutes canonical data or decisions.
@@ -131,6 +136,20 @@ const evict = (owner: string) =>
   storage(owner, (state) => state.abort("recovery status restart")).pipe(
     Effect.catchCause(() => Effect.void),
   );
+
+const reconstructAlarmOwner = Effect.fnUntraced(function* (owner: string) {
+  const previous = yield* Effect.promise(() =>
+    (stubFor(owner) as DurableObjectStub<TestThreadObject>).progressIncarnation(),
+  );
+
+  yield* Effect.promise(() => evictDurableObject(stubFor(owner)));
+
+  const next = yield* Effect.promise(() =>
+    (stubFor(owner) as DurableObjectStub<TestThreadObject>).progressIncarnation(),
+  );
+
+  expect(next).not.toBe(previous);
+});
 
 const status = (thread: string) =>
   Effect.flatMap(ThreadMaintenance, (maintenance) =>
@@ -398,6 +417,267 @@ describe("recovery faults independent of execution history", () => {
         yield* TestClock.adjust(5_000);
         yield* run(observedPass);
         expect(supplierCountsFor(poisoned)).toEqual({ book: 1 });
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
+
+  it("a real alarm publishes a fresh Thread reply while old recovery is stalled and cleanup survives eviction", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const owner = `recovery-alarm-${crypto.randomUUID()}`;
+        const old = `${owner}-old`;
+        const fresh = `${owner}-fresh`;
+        const stoppedReady = `${owner}-ready`;
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const releaseReady = yield* Deferred.make<void>();
+        let activeReads = 0;
+
+        const run = <A, E>(
+          body: Effect.Effect<
+            A,
+            E,
+            ThreadMaintenance | DurableAgentRuntime | SubmissionLedger | ThreadStore
+          >,
+        ) =>
+          Effect.promise(() =>
+            runInDurableObject(stubFor(owner), (instance) =>
+              instance[DurableObject.RunSymbol](body),
+            ),
+          );
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(owner, yield* Clock.Clock);
+
+        const reply = {
+          lookup: SubmissionLookupByKey.make(submitOptions(fresh, "after-clear")),
+          published: [],
+        };
+
+        recoveryReplies.set(owner, reply);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            recoveryReadHolds.delete(old);
+            recoveryReadHolds.delete(stoppedReady);
+            recoveryReplies.delete(owner);
+            maintenanceClocks.delete(owner);
+          }),
+        );
+
+        const original = yield* run(
+          ThreadMaintenance.use((maintenance) =>
+            maintenance.withMutation(
+              DurableAgentRuntime.use((runtime) =>
+                runtime.submitRegistered(
+                  { definition: bookDefinition },
+                  { question: "one simulated action", ref: old },
+                  submitOptions(old, "original"),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        lostBookReplies.add(old);
+        yield* run(
+          DurableAgentRuntime.use((runtime) => runtime.processThreadHead(decodeThreadId(old))).pipe(
+            Effect.exit,
+          ),
+        );
+        expect(supplierCountsFor(old)).toEqual({ book: 1 });
+
+        const command = AbortCommand.make({
+          submissionId: original.submissionId,
+          author: "fixture-owner",
+          reason: "retire the old session",
+        });
+
+        const intent = yield* run(
+          ThreadMaintenance.use((maintenance) =>
+            maintenance.withMutation(DurableAgentRuntime.use((runtime) => runtime.abort(command))),
+          ),
+        );
+
+        const before = yield* run(
+          SubmissionLedger.use((ledger) =>
+            ledger.lookup(SubmissionLookupById.make({ submissionId: original.submissionId })),
+          ),
+        );
+
+        yield* run(submit(stoppedReady, "prior-context"));
+        yield* run(
+          DurableAgentRuntime.use((runtime) =>
+            runtime.processThreadHead(decodeThreadId(stoppedReady)),
+          ),
+        );
+        const queued = yield* run(submit(stoppedReady, "retired-before-claim"));
+
+        const queuedIntent = yield* run(
+          ThreadMaintenance.use((maintenance) =>
+            maintenance.withMutation(
+              DurableAgentRuntime.use((runtime) =>
+                runtime.abort(
+                  AbortCommand.make({
+                    submissionId: queued.submissionId,
+                    author: "fixture-owner",
+                    reason: "retire queued input too",
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        const queuedBefore = yield* run(
+          SubmissionLedger.use((ledger) =>
+            ledger.lookup(SubmissionLookupById.make({ submissionId: queued.submissionId })),
+          ),
+        );
+
+        yield* corruptHistory(owner, stoppedReady, 2);
+        recoveryReadHolds.set(stoppedReady, Deferred.await(releaseReady));
+        yield* corruptHistory(owner, old, 2);
+        recoveryReadHolds.set(
+          old,
+          Effect.acquireUseRelease(
+            Effect.sync(() => {
+              activeReads++;
+            }).pipe(Effect.andThen(Deferred.succeed(entered, undefined))),
+            () => Deferred.await(release),
+            () =>
+              Effect.sync(() => {
+                activeReads--;
+              }),
+          ),
+        );
+
+        const alarm = yield* Effect.forkChild(
+          Effect.promise(() => runDurableObjectAlarm(stubFor(owner))),
+        );
+
+        yield* Effect.addFinalizer(() =>
+          Deferred.succeed(release, undefined).pipe(
+            Effect.andThen(Deferred.succeed(releaseReady, undefined)),
+          ),
+        );
+        yield* Deferred.await(entered);
+        const freshReceipt = yield* run(submit(fresh, "after-clear"));
+
+        // Exercise the existing 100ms scan too; promptness does not depend on a wake hint.
+        for (let elapsed = 0; elapsed < 1_000; elapsed += 100) {
+          yield* TestClock.adjust(100);
+          if (
+            (yield* run(
+              DurableAgentRuntime.use((runtime) => runtime.submissionStatus(freshReceipt)),
+            ))._tag === "settled" &&
+            reply.published.length > 0
+          )
+            break;
+        }
+        expect(
+          yield* run(DurableAgentRuntime.use((runtime) => runtime.submissionStatus(freshReceipt))),
+        ).toMatchObject({
+          _tag: "settled",
+          settlement: { outcome: "completed" },
+        });
+
+        const records = yield* run(
+          ThreadStore.use((store) =>
+            Stream.runCollect(
+              store.read(ThreadRead.make({ threadId: decodeThreadId(fresh), limit: 100 })),
+            ),
+          ),
+        );
+
+        expect(records.map((record) => record.record.payload._tag)).toContain(
+          "ModelResponseRecorded",
+        );
+        expect(
+          records.find((record) => record.record.payload._tag === "RunCompleted")?.record.payload,
+        ).toMatchObject({ output: { answer: "done" } });
+        expect(reply.published).toEqual([{ answer: "done" }]);
+        expect(activeReads).toBe(1);
+        expect(alarm.pollUnsafe()).toBeUndefined();
+        expect(
+          yield* run(
+            SubmissionLedger.use((ledger) =>
+              ledger.lookup(SubmissionLookupById.make({ submissionId: original.submissionId })),
+            ),
+          ),
+        ).toEqual(before);
+        expect(
+          yield* run(
+            SubmissionLedger.use((ledger) =>
+              ledger.readAbortIntent(
+                AbortIntentRequest.make({ submissionId: original.submissionId }),
+              ),
+            ),
+          ),
+        ).toEqual(intent);
+        expect(supplierCountsFor(old)).toEqual({ book: 1 });
+        expect(
+          yield* run(
+            SubmissionLedger.use((ledger) =>
+              ledger.lookup(SubmissionLookupById.make({ submissionId: queued.submissionId })),
+            ),
+          ),
+        ).toEqual(queuedBefore);
+        // Let the second old read expose its poisoned bytes when the bounded old wave reaches it.
+        yield* Deferred.succeed(releaseReady, undefined);
+
+        // The cooperative read timeout closes the old scope and retains an inspectable fault;
+        // it does not pretend cleanup settled or retry the uncertain action.
+        yield* TestClock.adjust(30_000);
+        expect(yield* Fiber.join(alarm)).toBe(true);
+        expect(activeReads).toBe(0);
+        expect(yield* run(status(old))).toMatchObject({
+          _tag: "Some",
+          value: { failure: { reason: "timeout" } },
+        });
+        recoveryReadHolds.delete(old);
+        yield* reconstructAlarmOwner(owner);
+        yield* run(ensure);
+        expect(
+          yield* run(
+            SubmissionLedger.use((ledger) =>
+              ledger.readAbortIntent(
+                AbortIntentRequest.make({ submissionId: original.submissionId }),
+              ),
+            ),
+          ),
+        ).toEqual(intent);
+        expect(
+          yield* run(
+            SubmissionLedger.use((ledger) =>
+              ledger.readAbortIntent(
+                AbortIntentRequest.make({ submissionId: queued.submissionId }),
+              ),
+            ),
+          ),
+        ).toEqual(queuedIntent);
+        expect(yield* run(submit(stoppedReady, "retired-before-claim"))).toEqual(queued);
+        expect(yield* run(submit(fresh, "after-clear"))).toEqual(freshReceipt);
+        const afterEviction = yield* run(submit(`${fresh}-next`, "after-eviction"));
+
+        yield* TestClock.adjust(5_000);
+        expect(yield* Effect.promise(() => runDurableObjectAlarm(stubFor(owner)))).toBe(true);
+        expect(yield* run(status(old))).toMatchObject({
+          _tag: "Some",
+          value: {
+            failure: { reason: "failure", diagnostic: { decoder: "CanonicalRecord", sequence: 2 } },
+          },
+        });
+        expect(
+          yield* run(DurableAgentRuntime.use((runtime) => runtime.submissionStatus(afterEviction))),
+        ).toMatchObject({ _tag: "settled", settlement: { outcome: "completed" } });
+        expect(
+          yield* run(
+            SubmissionLedger.use((ledger) =>
+              ledger.lookup(SubmissionLookupById.make({ submissionId: original.submissionId })),
+            ),
+          ),
+        ).toEqual(before);
+        expect(supplierCountsFor(old)).toEqual({ book: 1 });
+        expect(yield* Effect.promise(() => scheduledAlarm(owner))).not.toBeNull();
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
     ));
 

@@ -137,6 +137,8 @@ with an admission conflict.
 Closing the host's Scope stops admission, releases ownership, and closes SQLite.
 After a crash, replacement workers reclaim work when its lease expires.
 Unconfirmed external tool outcomes require reconciliation or authorized resolution before replay.
+Startup recovery must succeed for every Thread before admission or workers open. A retained-history
+fault or recovery timeout fails host construction with `RecoveryBlocked`; accepted work stays pending.
 
 Inspect `host.startupRecovery`, `host.explain`, `host.verify`, and `host.scanObligations`
 for recovery status. See [operations](../guide/operations) for approvals, schedules, and backups.
