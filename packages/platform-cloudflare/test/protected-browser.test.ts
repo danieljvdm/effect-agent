@@ -367,7 +367,7 @@ it.effect("retains acquisition status once without exporting provider content", 
       return yield* (yield* BrowserRunProtectedTransport).open(policy);
     }).pipe(
       Effect.scoped,
-      Effect.provide(
+      Effect.provide([
         browserRunProtectedBindingLayer({
           browser: {
             fetch: async () => new Response("sentinel-provider-payload", { status: 503 }),
@@ -380,8 +380,8 @@ it.effect("retains acquisition status once without exporting provider content", 
             }),
           ),
         ),
-      ),
-      Effect.provide(ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))])),
+        ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))]),
+      ]),
       Effect.flip,
     );
 
@@ -398,6 +398,51 @@ it.effect("retains acquisition status once without exporting provider content", 
     expect(JSON.stringify(reports)).toContain('"operation":"protected.acquire"');
     expect(JSON.stringify(reports)).toContain('"status":503');
     expect(JSON.stringify({ reports, error })).not.toContain("sentinel-provider-payload");
+
+    const started = yield* Deferred.make<void>();
+    const response = yield* Deferred.make<Response>();
+    const reported = yield* Deferred.make<void>();
+
+    const opening = yield* Effect.gen(function* () {
+      return yield* (yield* BrowserRunProtectedTransport).open(policy);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide([
+        browserRunProtectedBindingLayer({
+          browser: {
+            fetch: () =>
+              Effect.runPromise(
+                Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(response))),
+              ),
+          },
+        }).pipe(
+          Layer.provide(BrowserCrypto.layer),
+          Layer.provide(
+            Layer.succeed(BrowserRunSessionLifecycle, {
+              close: () => Effect.die("No identified session"),
+            }),
+          ),
+        ),
+        ErrorReporter.layer([
+          ErrorReporter.make(({ cause }) => {
+            reports.push(cause);
+            Effect.runSync(Deferred.succeed(reported, undefined));
+          }),
+        ]),
+      ]),
+      Effect.forkChild,
+    );
+
+    yield* Deferred.await(started);
+    yield* Fiber.interrupt(opening);
+    yield* Deferred.succeed(
+      response,
+      new Response("private-late-provider-payload", { status: 503 }),
+    );
+    yield* Deferred.await(reported);
+    expect(reports).toHaveLength(2);
+    expect(JSON.stringify(reports[1])).toContain('"status":503');
+    expect(JSON.stringify(reports)).not.toContain("private-late-provider-payload");
 
     const f = fixture();
 
@@ -422,7 +467,7 @@ it.effect("retains acquisition status once without exporting provider content", 
     );
 
     expect(mixed.reason).toBe("provider");
-    expect(reports).toHaveLength(2);
+    expect(reports).toHaveLength(3);
     expect(JSON.stringify(reports)).toContain('"_tag":"Die"');
     expect(JSON.stringify(reports)).not.toContain("sentinel-private-defect");
     expect(f.stats().closed).toBe(1);

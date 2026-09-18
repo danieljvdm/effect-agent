@@ -46,7 +46,7 @@ import {
 import { PageScreenshotResult } from "effect-agent/page-screenshot";
 import { SandboxImplementation } from "effect-agent/sandbox";
 
-import { acquireBrowserSession, connectBrowserSession } from "./internal/browser-binding.ts";
+import { BrowserRunBinding } from "./internal/browser-binding.ts";
 import {
   BrowserRunFailure,
   reportBrowserCause,
@@ -386,16 +386,17 @@ export class BrowserRunInteractiveBinding extends Context.Service<
     return Layer.effect(BrowserRunInteractiveBinding)(
       Effect.gen(function* () {
         const lifecycle = yield* BrowserRunSessionLifecycle;
+        const binding = yield* BrowserRunBinding;
 
         const viewport =
           options.viewport === undefined ? undefined : yield* decodeViewport(options.viewport);
 
         return {
           acquire: async (keepAliveMillis: number) =>
-            acquireBrowserSession(options.browser, keepAliveMillis, "interactive.acquire"),
+            binding.acquire(keepAliveMillis, "interactive.acquire"),
           connect: async (sessionId: string) =>
             makeProductionBrowser(
-              await connectBrowserSession(options.browser, sessionId, "interactive.connect"),
+              await binding.connect(sessionId, "interactive.connect"),
               viewport,
             ),
           closeSession: (sessionId: Redacted.Redacted<string>) =>
@@ -404,7 +405,7 @@ export class BrowserRunInteractiveBinding extends Context.Service<
               .pipe(Effect.mapError((cause) => actionError("close", cause))),
         };
       }),
-    );
+    ).pipe(Layer.provide(BrowserRunBinding.layer(options.browser)));
   }
 }
 
@@ -786,7 +787,14 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
   const listeners = new Map<BrowserRunInteractiveRequestListener, (request: HTTPRequest) => void>();
 
   return {
-    close: () => closeProductionResource(page.browser(), () => page.close()),
+    close: async () => {
+      if (!page.browser().isConnected()) return;
+      try {
+        await page.close();
+      } catch (cause) {
+        if (!isRemoteClosure(cause)) throw cause;
+      }
+    },
     setBypassServiceWorker: (enabled) => page.setBypassServiceWorker(enabled),
     setRequestInterception: (enabled) => page.setRequestInterception(enabled),
     onRequest: (listener) => {
@@ -1154,7 +1162,14 @@ const makeProductionContext = (
 
     return makeProductionPage(page);
   },
-  close: () => closeProductionResource(context.browser(), () => context.close()),
+  close: async () => {
+    if (!context.browser().isConnected()) return;
+    try {
+      await context.close();
+    } catch (cause) {
+      if (!isRemoteClosure(cause)) throw cause;
+    }
+  },
 });
 
 const makeProductionBrowser = (
@@ -1163,7 +1178,14 @@ const makeProductionBrowser = (
 ): BrowserRunInteractiveBrowser => ({
   createContext: async () => makeProductionContext(await browser.createBrowserContext(), viewport),
   // Exact-session termination may already have closed the provider transport.
-  close: () => closeProductionResource(browser, () => browser.close()),
+  close: async () => {
+    if (!browser.isConnected()) return;
+    try {
+      await browser.close();
+    } catch (cause) {
+      if (!isRemoteClosure(cause)) throw cause;
+    }
+  },
   sessionId: () => browser.sessionId(),
   isConnected: () => browser.isConnected(),
   onDisconnected: (listener) => {
@@ -1173,17 +1195,6 @@ const makeProductionBrowser = (
     browser.off("disconnected", listener);
   },
 });
-
-// Local teardown cannot prove remote cleanup; closeSession owns that evidence. A closed
-// provider transport is expected here after exact-session termination has succeeded.
-const closeProductionResource = async (browser: Browser, close: () => Promise<void>) => {
-  if (!browser.isConnected()) return;
-  try {
-    await close();
-  } catch (cause) {
-    if (!isRemoteClosure(cause)) throw cause;
-  }
-};
 
 const protocolError = (message: string, cause?: unknown): InteractiveBrowserProtocolError =>
   InteractiveBrowserProtocolError.make({
@@ -1292,6 +1303,8 @@ const hostAllowed = (policy: InteractiveBrowserPolicySnapshot, value: string): b
 const keepAliveMillis = (policy: InteractiveBrowserPolicySnapshot): number =>
   Math.max(MIN_KEEP_ALIVE_MILLIS, Math.min(MAX_KEEP_ALIVE_MILLIS, policy.maxElapsedMillis));
 
+class LateBrowserAcquisition extends Error {}
+
 const closeLateAcquisition = async <A>(
   signal: AbortSignal,
   acquire: () => Promise<A>,
@@ -1308,7 +1321,7 @@ const closeLateAcquisition = async <A>(
   } catch {
     // The captured runtime reports cleanup failures before this callback absorbs rejection.
   }
-  throw new Error("The interrupted browser acquisition completed late");
+  throw new LateBrowserAcquisition("The interrupted browser acquisition completed late");
 };
 
 const closeWithWarning = (close: () => Promise<void>, warning: string): Effect.Effect<void> =>
@@ -1958,8 +1971,8 @@ const cdpCommand = <A>(
 
       const cdp = yield* Effect.acquireRelease(
         Effect.tryPromise({
-          try: (signal) =>
-            closeLateAcquisition(signal, page.createCdpSession, (acquired) =>
+          try: (signal) => {
+            const pending = closeLateAcquisition(signal, page.createCdpSession, (acquired) =>
               Effect.runPromiseWith(cleanupContext)(
                 Effect.tryPromise({
                   try: () => acquired.detach(),
@@ -1968,7 +1981,17 @@ const cdpCommand = <A>(
                   Effect.tapCause((cause) => reportBrowserCause("interactive.lateDetach", cause)),
                 ),
               ),
-            ),
+            );
+
+            void pending.then(undefined, (cause) => {
+              if (signal.aborted && !(cause instanceof LateBrowserAcquisition))
+                return Effect.runPromiseWith(cleanupContext)(
+                  reportBrowserCause("interactive.connect", Cause.fail(cause)),
+                );
+            });
+
+            return pending;
+          },
           catch: (cause) =>
             state.disconnected.value || isRemoteClosure(cause)
               ? expiredError()
@@ -2086,6 +2109,16 @@ const makeHostService = (
 
     const cleanupContext = yield* Effect.context<never>();
 
+    const observeLate = <A>(signal: AbortSignal, pending: Promise<A>): Promise<A> => {
+      // Observe the original Promise without creating another rejected continuation.
+      void pending.then(undefined, (cause) => {
+        if (signal.aborted && !(cause instanceof LateBrowserAcquisition))
+          return runCleanup(reportBrowserCause("interactive.acquire", Cause.fail(cause)));
+      });
+
+      return pending;
+    };
+
     const state: HandleState = {
       closed: { value: false },
       disconnected: { value: false },
@@ -2117,15 +2150,18 @@ const makeHostService = (
       withinDeadline(
         Effect.tryPromise({
           try: (signal) =>
-            closeLateAcquisition(
+            observeLate(
               signal,
-              () => binding.acquire(keepAliveMillis(fixedPolicy)),
-              (id) =>
-                runCleanup(
-                  Schema.decodeUnknownEffect(BrowserRunSessionId)(id).pipe(
-                    Effect.flatMap((value) => terminate(Redacted.make(value), [])),
+              closeLateAcquisition(
+                signal,
+                () => binding.acquire(keepAliveMillis(fixedPolicy)),
+                (id) =>
+                  runCleanup(
+                    Schema.decodeUnknownEffect(BrowserRunSessionId)(id).pipe(
+                      Effect.flatMap((value) => terminate(Redacted.make(value), [])),
+                    ),
                   ),
-                ),
+              ),
             ),
           catch: (cause) =>
             isCapacityRefusal(cause)
@@ -2171,10 +2207,13 @@ const makeHostService = (
           withinDeadline(
             Effect.tryPromise({
               try: (signal) =>
-                closeLateAcquisition(
+                observeLate(
                   signal,
-                  () => binding.connect(sessionIdValue),
-                  (acquired) => runCleanup(closeAcquired(acquired)),
+                  closeLateAcquisition(
+                    signal,
+                    () => binding.connect(sessionIdValue),
+                    (acquired) => runCleanup(closeAcquired(acquired)),
+                  ),
                 ),
               catch: (cause) =>
                 protocolError("Connecting to the Browser Run session failed", cause),
@@ -2231,12 +2270,15 @@ const makeHostService = (
           withinDeadline(
             Effect.tryPromise({
               try: (signal) =>
-                closeLateAcquisition(signal, browser.createContext, (acquired) =>
-                  runCleanup(
-                    Effect.tryPromise({
-                      try: () => acquired.close(),
-                      catch: (cause) => actionError("close", cause),
-                    }),
+                observeLate(
+                  signal,
+                  closeLateAcquisition(signal, browser.createContext, (acquired) =>
+                    runCleanup(
+                      Effect.tryPromise({
+                        try: () => acquired.close(),
+                        catch: (cause) => actionError("close", cause),
+                      }),
+                    ),
                   ),
                 ),
               catch: (cause) =>
@@ -2260,12 +2302,15 @@ const makeHostService = (
           withinDeadline(
             Effect.tryPromise({
               try: (signal) =>
-                closeLateAcquisition(signal, context.newPage, (acquired) =>
-                  runCleanup(
-                    Effect.tryPromise({
-                      try: () => acquired.close(),
-                      catch: (cause) => actionError("close", cause),
-                    }),
+                observeLate(
+                  signal,
+                  closeLateAcquisition(signal, context.newPage, (acquired) =>
+                    runCleanup(
+                      Effect.tryPromise({
+                        try: () => acquired.close(),
+                        catch: (cause) => actionError("close", cause),
+                      }),
+                    ),
                   ),
                 ),
               catch: (cause) =>

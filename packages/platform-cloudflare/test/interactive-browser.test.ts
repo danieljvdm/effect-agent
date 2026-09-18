@@ -1207,6 +1207,38 @@ describe("Browser Run interactive browser adapter", () => {
           fixture.calls.filter((call) => call === "binding.terminate:session-id"),
         ).toHaveLength(1);
         expect(closedResources(fixture)).toEqual([]);
+
+        const rejectedStarted = makeGate<void>();
+        const reject = makeGate<void>();
+        const rejectedReported = makeGate<void>();
+
+        const rejecting = makeFixture({
+          launch: async () => {
+            rejectedStarted.resolve(undefined);
+            await reject.promise;
+            throw new TypeError("private-late-sdk-rejection");
+          },
+        });
+
+        const pending = yield* withBrowser(rejecting, () => Effect.void).pipe(
+          Effect.provide(
+            ErrorReporter.layer([
+              ErrorReporter.make(({ cause }) => {
+                reports.push(cause);
+                rejectedReported.resolve(undefined);
+              }),
+            ]),
+          ),
+          Effect.forkChild,
+        );
+
+        yield* Effect.promise(() => rejectedStarted.promise);
+        yield* Fiber.interrupt(pending);
+        reject.resolve(undefined);
+        yield* Effect.promise(() => rejectedReported.promise);
+        expect(reports).toHaveLength(2);
+        expect(JSON.stringify(reports[1])).toContain("interactive.acquire");
+        expect(JSON.stringify(reports)).not.toContain("private-late-sdk-rejection");
       }),
   );
 

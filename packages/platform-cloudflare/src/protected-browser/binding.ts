@@ -4,7 +4,7 @@ import { Cause, Context, Crypto, Effect, Layer, Redacted, Schema, type Scope } f
 import { type InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { ProtectedBrowserError } from "effect-agent/protected-browser";
 
-import { acquireBrowserSession, connectBrowserSession } from "../internal/browser-binding.ts";
+import { BrowserRunBinding } from "../internal/browser-binding.ts";
 import {
   browserFailure,
   BrowserRunFailure,
@@ -57,6 +57,7 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
   Layer.effect(BrowserRunProtectedBinding)(
     Effect.gen(function* () {
       const lifecycle = yield* BrowserRunSessionLifecycle;
+      const binding = yield* BrowserRunBinding;
       const crypto = yield* Crypto.Crypto;
 
       const open = Effect.fn("BrowserRunProtectedTransport.open")(function* (
@@ -138,111 +139,112 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
 
         const acquired = yield* Effect.tryPromise({
           try: async (signal) => {
-            sessionId =
-              identity === undefined
-                ? Redacted.make(
-                    await acquireBrowserSession(
-                      options.browser,
-                      Math.min(600_000, Math.max(10_000, policy.maxElapsedMillis)),
-                      "protected.acquire",
-                    ),
-                  )
-                : identity.sessionId;
-            if (signal.aborted || invalid) {
-              await runCleanup(terminate);
-              throw new ProtectedTransportError({ reason: "stale-reference" });
-            }
-            // Resume only a host-persisted exact page. Never open a replacement page or context.
-            stage = "protected.connect";
-            browser = await connectBrowserSession(
-              options.browser,
-              Redacted.value(sessionId),
-              stage,
-            );
-            if (signal.aborted || invalid) {
-              await runCleanup(terminate);
-              throw new ProtectedTransportError({ reason: "stale-reference" });
-            }
-            let page: Page;
-
-            if (identity === undefined) {
-              stage = "protected.context";
-              const context = await browser.createBrowserContext();
-
-              stage = "protected.page";
-              page = await context.newPage();
-            } else {
-              stage = "protected.resume";
-
-              const context = browser
-                .browserContexts()
-                .find((candidate) => candidate.id === Redacted.value(identity.contextId));
-
-              if (context === undefined)
+            try {
+              sessionId =
+                identity === undefined
+                  ? Redacted.make(
+                      await binding.acquire(
+                        Math.min(600_000, Math.max(10_000, policy.maxElapsedMillis)),
+                        "protected.acquire",
+                      ),
+                    )
+                  : identity.sessionId;
+              if (signal.aborted || invalid) {
+                await runCleanup(terminate);
                 throw new ProtectedTransportError({ reason: "stale-reference" });
-              const pages = await context.pages();
-              let found: Page | undefined;
-
-              for (const candidate of pages) {
-                const client = await candidate.createCDPSession();
-                const info = await client.send("Target.getTargetInfo");
-
-                await client.detach();
-                if (info.targetInfo.targetId === Redacted.value(identity.targetId))
-                  found = candidate;
               }
-              if (found === undefined || pages.length !== 1)
+              // Resume only a host-persisted exact page. Never open a replacement page or context.
+              stage = "protected.connect";
+              browser = await binding.connect(Redacted.value(sessionId), stage);
+              if (signal.aborted || invalid) {
+                await runCleanup(terminate);
                 throw new ProtectedTransportError({ reason: "stale-reference" });
-              page = found;
-            }
-            stage = "protected.control";
-            control = await page.createCDPSession();
-            const info = await control.send("Target.getTargetInfo");
-
-            stage = "protected.identity";
-            providerIdentity = Schema.decodeSync(ProtectedProviderIdentity)({
-              sessionId,
-              contextId: Redacted.make(page.browserContext().id ?? ""),
-              targetId: Redacted.make(info.targetInfo.targetId),
-            });
-
-            stage = "protected.interception";
-            await page.setBypassServiceWorker(true);
-            await page.setRequestInterception(true);
-            page.on("request", (request) => {
-              let allowed = policy.network._tag === "Unrestricted";
-
-              try {
-                const url = new URL(request.url());
-
-                allowed ||=
-                  policy.network._tag === "ExactHosts" &&
-                  url.protocol === "https:" &&
-                  !url.username &&
-                  !url.password &&
-                  policy.network.allowedHosts.includes(url.host);
-              } catch {
-                /* Refuse malformed destinations. */
               }
-              void (
-                allowed && !invalid ? request.continue() : request.abort("blockedbyclient")
-              ).catch(async (cause) => {
-                invalid = true;
-                driver?.invalidate();
-                await runCleanup(reportBrowserCause("protected.interception", Cause.fail(cause)));
+              let page: Page;
+
+              if (identity === undefined) {
+                stage = "protected.context";
+                const context = await browser.createBrowserContext();
+
+                stage = "protected.page";
+                page = await context.newPage();
+              } else {
+                stage = "protected.resume";
+
+                const context = browser
+                  .browserContexts()
+                  .find((candidate) => candidate.id === Redacted.value(identity.contextId));
+
+                if (context === undefined)
+                  throw new ProtectedTransportError({ reason: "stale-reference" });
+                const pages = await context.pages();
+                let found: Page | undefined;
+
+                for (const candidate of pages) {
+                  const client = await candidate.createCDPSession();
+                  const info = await client.send("Target.getTargetInfo");
+
+                  await client.detach();
+                  if (info.targetInfo.targetId === Redacted.value(identity.targetId))
+                    found = candidate;
+                }
+                if (found === undefined || pages.length !== 1)
+                  throw new ProtectedTransportError({ reason: "stale-reference" });
+                page = found;
+              }
+              stage = "protected.control";
+              control = await page.createCDPSession();
+              const info = await control.send("Target.getTargetInfo");
+
+              stage = "protected.identity";
+              providerIdentity = Schema.decodeSync(ProtectedProviderIdentity)({
+                sessionId,
+                contextId: Redacted.make(page.browserContext().id ?? ""),
+                targetId: Redacted.make(info.targetInfo.targetId),
               });
-            });
-            if (signal.aborted || invalid) {
-              await runCleanup(terminate);
-              throw new ProtectedTransportError({ reason: "stale-reference" });
-            }
 
-            return ProtectedNativeSession.of({
-              browser,
-              page,
-              close,
-              release: Effect.suspend(() => (detached ? Effect.void : close.pipe(Effect.asVoid))),
-            });
+              stage = "protected.interception";
+              await page.setBypassServiceWorker(true);
+              await page.setRequestInterception(true);
+              page.on("request", (request) => {
+                let allowed = policy.network._tag === "Unrestricted";
+
+                try {
+                  const url = new URL(request.url());
+
+                  allowed ||=
+                    policy.network._tag === "ExactHosts" &&
+                    url.protocol === "https:" &&
+                    !url.username &&
+                    !url.password &&
+                    policy.network.allowedHosts.includes(url.host);
+                } catch {
+                  /* Refuse malformed destinations. */
+                }
+                void (
+                  allowed && !invalid ? request.continue() : request.abort("blockedbyclient")
+                ).catch(async (cause) => {
+                  invalid = true;
+                  driver?.invalidate();
+                  await runCleanup(reportBrowserCause("protected.interception", Cause.fail(cause)));
+                });
+              });
+              if (signal.aborted || invalid) {
+                await runCleanup(terminate);
+                throw new ProtectedTransportError({ reason: "stale-reference" });
+              }
+
+              return ProtectedNativeSession.of({
+                browser,
+                page,
+                close,
+                release: Effect.suspend(() => (detached ? Effect.void : close.pipe(Effect.asVoid))),
+              });
+            } catch (cause) {
+              if (signal.aborted && !(cause instanceof ProtectedTransportError))
+                await runCleanup(reportBrowserCause(stage, Cause.fail(cause)));
+              throw cause;
+            }
           },
           catch: (cause) => browserFailure(stage, cause),
         }).pipe(
@@ -334,7 +336,7 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
 
       return { open };
     }),
-  );
+  ).pipe(Layer.provide(BrowserRunBinding.layer(options.browser)));
 
 /** One binding implementation serves scoped tools and host-managed protected handoffs. */
 export const browserRunProtectedBindingLayer = (options: {
