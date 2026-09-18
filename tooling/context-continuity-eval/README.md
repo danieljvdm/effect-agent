@@ -137,6 +137,50 @@ The harness consumes the public `SelectiveCompactor.layer` from `effect-agent`. 
 `ContextCompactor` if pruning cannot fit. Calls, retained evidence, and canonical history remain
 intact. See the [consumer setup](../../docs/guide/context-management.md#selective-pruning).
 
+For larger, paired experiments, `compaction:benchmark` generates reproducible synthetic release
+and coordination histories with three sizes and three result profiles. `large-results` explicitly
+raises the per-result bound to 256 KiB; the other profiles retain the default 50 KiB bound. The
+`stress` corpus buries necessary evidence beyond the selector excerpt. The `labeled` corpus adds
+matched large-history controls whose result headers describe that evidence. These are induced
+workloads, not production traffic or a replay of the upstream plugin.
+
+```sh
+vp run -F @effect-agent/example-context-continuity-eval compaction:benchmark --phase validate
+
+# TYPESAFE_API_KEY: six calibration cases, then three samples per held-out case.
+vp run -F @effect-agent/example-context-continuity-eval compaction:benchmark --phase score \
+  --output-dir /absolute/path/scores
+
+# OPENAI_API_KEY: native AgentRuntime continuations on the same frozen histories.
+vp run -F @effect-agent/example-context-continuity-eval compaction:benchmark --phase compare \
+  --scores /absolute/path/scores/scores.json --output-dir /absolute/path/luna
+
+# Repeat score/compare with --corpus labeled for matched controls.
+# Add --model gpt-5.6-sol --subset large for a stronger-model stress cross-check.
+```
+
+Each attempt requires a fresh directory and retains its corpus, source snapshot, scores, exact
+provider requests, usage and failures. Calibration freezes a threshold before holdout scoring;
+continuations compare original history, age pruning, summary, and selective-plus-summary at both
+the default and calibrated thresholds. The oracle checks two exact identifiers, arithmetic and a
+safe next action. It is not sent to either model. A continuation failure remains a failure even
+when its final prompt is much smaller.
+
+`counts.json` uses OpenAI's input-token endpoint on the original request and the body deletions
+selected by Jev. It separates those counterfactual Jev-only counts from actual engine continuation
+and fallback requests in `outcomes.json`. Whole-request framing, tool calls and conversation are
+counted with result bodies blanked; this is not Claude's internal context display. Jev timing
+covers the entire selector pass, including request construction and network time. Continuations
+reuse frozen scores, so their timing excludes live Jev. Calls use fixed paired order and report
+cached usage; they do not establish cold-cache continuation speedups.
+
+Only this explicit manual profile admits up to 922k input tokens, with long-context pricing and
+separate per-attempt ceilings: $60 for Luna stress, $120 for Sol stress, $10 for either labeled
+control run. These ceilings are not a shared cross-process budget; the operator must allocate a
+total across attempts. The selector has at most 60 requests per stress run or 24 per labeled run,
+each with the native 48 KB request bound. Automatic continuity jobs retain their $10/32k limits.
+Prices are conservative list-price estimates, not invoices; there are no inference retries.
+
 Start with the offline wiring probe:
 
 ```sh

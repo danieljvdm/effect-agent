@@ -3,6 +3,10 @@ import { defineConfig } from "vite-plus";
 export default defineConfig({
   run: {
     tasks: {
+      "compaction:benchmark": {
+        command: "node --experimental-transform-types src/compaction-benchmark-main.ts",
+        cache: false,
+      },
       "compaction:eval": {
         command: "node --experimental-transform-types src/selective-eval-main.ts",
         cache: false,

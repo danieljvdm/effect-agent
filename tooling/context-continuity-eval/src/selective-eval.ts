@@ -272,7 +272,7 @@ export const scoreCase = Effect.fn("SelectiveEval.scoreCase")(function* (
   });
 });
 
-const replayLayer = (sample: ScoreSample) =>
+export const replayLayer = (sample: ScoreSample) =>
   Layer.effect(
     DecisionModel.DecisionModel,
     DecisionModel.make({
@@ -346,6 +346,7 @@ export const runCase = Effect.fn("SelectiveEval.runCase")(function* (
   sample: ScoreSample,
   threshold: number,
   capture?: { prompt: Prompt.Prompt },
+  benchmark?: { readonly model: "gpt-5.6-luna" | "gpt-5.6-sol"; readonly maxResultBytes: number },
 ) {
   const model = yield* LanguageModel.LanguageModel;
   let history = Prompt.empty;
@@ -359,8 +360,11 @@ export const runCase = Effect.fn("SelectiveEval.runCase")(function* (
       toolkit: Toolkit.empty,
       policy: {
         maxTurns: 2,
-        maxDuration: "2 minutes",
-        tokenBudget: 120_000,
+        maxDuration: benchmark === undefined ? "2 minutes" : "15 minutes",
+        tokenBudget: benchmark === undefined ? 120_000 : 3_000_000,
+        ...(benchmark === undefined
+          ? {}
+          : { toolResultBounds: { maxBytes: benchmark.maxResultBytes } }),
         completionReserveTokens: MAX_OUTPUT_TOKENS,
         ...(strategy === "uncompacted" ? {} : { contextTokenLimit: scenario.contextTokenLimit }),
         compaction: {
@@ -369,7 +373,11 @@ export const runCase = Effect.fn("SelectiveEval.runCase")(function* (
         },
       },
     }),
-    Model.make("openai", "gpt-5.6-luna", Layer.succeed(LanguageModel.LanguageModel, model)),
+    Model.make(
+      "openai",
+      benchmark?.model ?? "gpt-5.6-luna",
+      Layer.succeed(LanguageModel.LanguageModel, model),
+    ),
   );
 
   const compactor = strategy.startsWith("selective")
