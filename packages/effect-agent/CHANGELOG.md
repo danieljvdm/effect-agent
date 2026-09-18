@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.109
+
+### Patch Changes
+
+- [#545](https://github.com/danieljvdm/effect-agent/pull/545) [`cdbe786`](https://github.com/danieljvdm/effect-agent/commit/cdbe786861e9ba10ecb1dccf3b26f47170a8245e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Exclude native model-call parameter rejections from the tool failure observer while retaining failed tool results and warning telemetry. Continue reporting failures returned by started handlers.
+
 ## 0.1.0-beta.108
 
 ### Minor Changes
