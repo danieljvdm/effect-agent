@@ -31,11 +31,11 @@ const config = DurableRuntimeConfig.layer({
 
 describe("bounded recovery failure isolation", () => {
   it.effect(
-    "isolates loadRecoverySnapshot faults, preserves foreign provenance, and propagates scan failures",
+    "isolates loadRecoverySnapshot faults, retains content-free causes, and propagates scan failures",
     () =>
       Effect.gen(function* () {
         class ForeignSnapshotFailure extends Schema.TaggedError<ForeignSnapshotFailure>()(
-          "ForeignSnapshotFailure",
+          "private_fixture_payload_tag",
           {
             operation: Schema.String,
             message: Schema.String,
@@ -54,7 +54,7 @@ describe("bounded recovery failure isolation", () => {
           operation: "loadRecoverySnapshot",
           message: "private snapshot failure",
           cause: ForeignSnapshotFailure.make({
-            operation: "inspect worker origin",
+            operation: "private_fixture_payload_operation",
             message: "private foreign payload",
             diagnostic,
           }),
@@ -81,7 +81,11 @@ describe("bounded recovery failure isolation", () => {
                     mixedCause
                       ? Cause.combine(
                           Cause.fail(failure),
-                          Cause.die(new Error("private cleanup defect")),
+                          Cause.die(
+                            Object.assign(new Error("private cleanup defect"), {
+                              name: "private_fixture_payload_name",
+                            }),
+                          ),
                         )
                       : Cause.fail(failure),
                   );
@@ -121,6 +125,7 @@ describe("bounded recovery failure isolation", () => {
           }
           const reports = yield* runtime.runRecovery();
 
+          expect(JSON.stringify(reports)).not.toContain("private");
           expect(reports).toMatchObject({
             blocked: [
               {
@@ -130,10 +135,7 @@ describe("bounded recovery failure isolation", () => {
                   reason: "failure",
                   errorTag: "LedgerError",
                   operation: "loadRecoverySnapshot",
-                  causes: [
-                    { errorTag: "LedgerError", operation: "loadRecoverySnapshot" },
-                    { errorTag: "ForeignSnapshotFailure", operation: "inspect worker origin" },
-                  ],
+                  causes: [{ errorTag: "LedgerError" }, { errorTag: "ForeignError" }],
                   diagnostic,
                 },
               },
@@ -146,25 +148,24 @@ describe("bounded recovery failure isolation", () => {
               },
             ],
           });
-          expect(JSON.stringify(reports)).not.toContain("private");
           mixedCause = true;
           const mixedReports = yield* runtime.runRecovery();
 
+          expect(JSON.stringify(mixedReports)).not.toContain("private");
           expect(mixedReports.blocked).toMatchObject([
             {
               failure: {
                 reason: "defect",
                 errorTag: "LedgerError",
                 causes: [
-                  { errorTag: "LedgerError", operation: "loadRecoverySnapshot" },
-                  { errorTag: "ForeignSnapshotFailure", operation: "inspect worker origin" },
-                  { errorTag: "Error" },
+                  { errorTag: "LedgerError" },
+                  { errorTag: "ForeignError" },
+                  { errorTag: "ForeignError" },
                 ],
                 diagnostic,
               },
             },
           ]);
-          expect(JSON.stringify(mixedReports)).not.toContain("private");
           // A global scan has not identified a Thread: preserve its original typed cause.
           const accepted = yield* Stream.runCollect(ledger.scanNonterminal);
 

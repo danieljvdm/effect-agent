@@ -557,6 +557,34 @@ export const recoveryRepairRecordId = (submissionId: SubmissionId, decisionTag: 
  */
 export { Receipt } from "../core/Receipt.ts";
 
+// Foreign names and tags may contain payloads. Retain only these static classifications.
+const RecoveryCauseTag = Schema.Literals([
+  "AdmissionPolicyError",
+  "DigestError",
+  "LedgerError",
+  "OwnershipLost",
+  "SettlementConflict",
+  "ThreadStoreError",
+  "ThreadNotMaterialized",
+  "AppendConflict",
+  "FenceRejected",
+  "RunJournalError",
+  "DurableRuntimeFailpointError",
+  "SchemaError",
+  "Error",
+  "TypeError",
+  "RangeError",
+  "ReferenceError",
+  "SyntaxError",
+  "URIError",
+  "EvalError",
+  "AggregateError",
+  "ForeignError",
+  "NonErrorCause",
+]);
+
+const isRecoveryCauseTag = Schema.is(RecoveryCauseTag);
+
 /** Recovery could not establish execution authority. This is never a Settlement or replay grant. */
 export class RecoveryFailure extends Schema.Class<RecoveryFailure>(
   "@effect-agent/thread/RecoveryFailure",
@@ -566,11 +594,10 @@ export class RecoveryFailure extends Schema.Class<RecoveryFailure>(
   errorTag: Schema.String.check(Schema.isMaxLength(128)),
   /** Static operation names only; error messages and payloads are deliberately excluded. */
   operation: Schema.String.check(Schema.isMaxLength(256)),
-  /** Ordered, bounded causal tags/operations. Messages, stacks and arbitrary fields stay private. */
+  /** Ordered, bounded classifications. Foreign labels, operations and prose stay private. */
   causes: Schema.Array(
     Schema.Struct({
-      errorTag: Schema.String.check(Schema.isMaxLength(128)),
-      operation: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
+      errorTag: RecoveryCauseTag,
     }),
   ).check(Schema.isMaxLength(16)),
   causesTruncated: Schema.optionalKey(Schema.Literal(true)),
@@ -603,12 +630,11 @@ const recoveryFailureDetails = (cause: Cause.Cause<DurableWorkerFailure>) => {
         );
         truncated ||= node.truncated === true;
         break;
-      case "Error":
+      case "Error": {
+        const tag = node.errorTag ?? node.name;
+
         causes.push({
-          errorTag: (node.errorTag ?? node.name ?? "Error").slice(0, 128),
-          ...(node.context?.operation === undefined
-            ? {}
-            : { operation: node.context.operation.slice(0, 256) }),
+          errorTag: isRecoveryCauseTag(tag) ? tag : "ForeignError",
         });
         pending.unshift(
           ...(node.cause === undefined ? [] : [node.cause]),
@@ -617,6 +643,7 @@ const recoveryFailureDetails = (cause: Cause.Cause<DurableWorkerFailure>) => {
         );
         truncated ||= node.truncated === true;
         break;
+      }
       case "Omitted":
         truncated = true;
         break;
@@ -627,7 +654,7 @@ const recoveryFailureDetails = (cause: Cause.Cause<DurableWorkerFailure>) => {
   }
 
   // Local storage adapters retain their schema-validated diagnostic through wrapper causes.
-  // Routed foreign errors still carry the safe causal tags/operations above.
+  // Foreign wrappers retain only approved classifications above, never their operation text.
   let nested: unknown = Option.getOrUndefined(Cause.findErrorOption(cause));
   let diagnostic: ThreadStoreDiagnostic | undefined;
 
