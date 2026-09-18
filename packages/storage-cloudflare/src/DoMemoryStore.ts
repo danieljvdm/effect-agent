@@ -1,6 +1,7 @@
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer, Schema } from "effect";
 import { MemoryStorageError, MemoryMutationFailpoint } from "effect-agent/memory-store";
+import { sqliteLayer } from "effect-agent/sql-dialect";
 import { memoryStoreLayerWithFailpoints, SqlMemoryLimits } from "effect-agent/sql-memory-store";
 
 export class DoMemoryStorageLimits extends Schema.Class<DoMemoryStorageLimits>(
@@ -41,6 +42,7 @@ export const doMemoryStoreLayerWithFailpoints = (
       Effect.map((validated) =>
         memoryStoreLayerWithFailpoints.pipe(
           Layer.provide(Layer.succeed(SqlMemoryLimits, validated)),
+          Layer.provide(sqliteLayer),
           Layer.provide(SqliteClient.layer({ storage })),
         ),
       ),

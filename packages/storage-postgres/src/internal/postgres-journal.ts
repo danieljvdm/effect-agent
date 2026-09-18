@@ -1,22 +1,8 @@
-import { NodeCrypto } from "@effect/platform-node";
-import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect, Exit, Schema } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
-import { ScheduleFailpoint, ScheduleFailpointError } from "effect-agent/schedule";
-import { sqliteLayer } from "effect-agent/sql-dialect";
-import { createMessageDeliveryPendingIndex } from "effect-agent/sql-message-delivery-store";
-import {
-  checkV2ThreadLayout,
-  upgradeV2Schedules,
-  upgradeV2Subscriptions,
-} from "effect-agent/sql-storage-v2-upgrade";
-import {
-  createNativeReadIndexes,
-  seedNativeReadIndexes,
-  indexCanonicalRecord,
-} from "effect-agent/sql-thread-native-reads";
-import { SubscriptionFailpoint, SubscriptionFailpointError } from "effect-agent/subscription";
+import { postgresLayer } from "effect-agent/sql-dialect";
+import { indexCanonicalRecord } from "effect-agent/sql-thread-native-reads";
 import {
   MAX_THREAD_EXPORT_RECORDS,
   CheckpointRejected,
@@ -27,26 +13,19 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
-import { SqliteStorageConfig } from "../SqliteStorageConfig.ts";
-import type { SqliteStorageFailpointError } from "../SqliteStorageError.ts";
+import { PostgresStorageConfig } from "../PostgresStorageConfig.ts";
+import type { PostgresStorageFailpointError } from "../PostgresStorageError.ts";
 import {
-  SqliteAppendConflict,
-  SqliteCheckpointConflict,
-  SqliteFenceRejected,
-  SqliteStorageCompatibilityError,
-  SqliteStorageFailpointLocation,
-  SqliteStorageCorruptionError,
-  SqliteStorageError,
-  SqliteWriteContention,
-} from "../SqliteStorageError.ts";
-import { SqliteStorageFailpoint } from "../SqliteStorageFailpoint.ts";
-import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
-import {
-  CurrentSqliteStorageVersion,
-  createNonterminalIndex,
-  sqliteMigrations,
-} from "./migrations.ts";
-import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
+  PostgresAppendConflict,
+  PostgresCheckpointConflict,
+  PostgresFenceRejected,
+  PostgresStorageCompatibilityError,
+  PostgresStorageCorruptionError,
+  PostgresStorageError,
+  PostgresWriteContention,
+} from "../PostgresStorageError.ts";
+import { PostgresStorageFailpoint } from "../PostgresStorageFailpoint.ts";
+import { CurrentPostgresStorageVersion, createPostgresStorageSchema } from "./migrations.ts";
 
 const BoundedStoredText = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
 const BoundedIdentifier = Schema.NonEmptyString.check(Schema.isMaxLength(1024));
@@ -55,18 +34,52 @@ const MAX_RECORDS_PER_THREAD = MAX_THREAD_EXPORT_RECORDS;
 const ZERO_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 const MAX_STORED_TEXT_BYTES = 16 * 1024 * 1024;
 const MAX_IDENTIFIER_LENGTH = 1_024;
+/**
+ * Enough concurrent statements to grow a cold pool past its first connection, which is what
+ * makes a `search_path` that only one connection carries observable at startup.
+ */
+const SEARCH_PATH_PROBES = 16;
+
+/**
+ * Advisory-lock key serialising this adapter's writers. Advisory locks are scoped to the
+ * database, which is the same scope SQLite's write lock had, so one constant is the whole
+ * protocol. The value is arbitrary but must never change: a different key would let an old
+ * and a new deployment write concurrently.
+ */
+export const WRITER_LOCK_KEY = 7_014_939_142_004_193;
+const VERSION_TABLE = "effect_agent_storage_version";
+
+const REQUIRED_OBJECTS = [
+  "effect_agent_abort_intents",
+  "effect_agent_approval_decisions",
+  "effect_agent_attempts",
+  "effect_agent_canonical_batches",
+  "effect_agent_canonical_records",
+  "effect_agent_checkpoints",
+  "effect_agent_message_deliveries",
+  "effect_agent_message_deliveries_pending",
+  "effect_agent_recovery_checkpoints",
+  "effect_agent_records_call",
+  "effect_agent_records_outstanding",
+  "effect_agent_records_run_input",
+  "effect_agent_records_subtree",
+  "effect_agent_records_worker_input",
+  "effect_agent_schedules",
+  "effect_agent_settlement_reservations",
+  "effect_agent_submission_ownership",
+  "effect_agent_submissions",
+  "effect_agent_submissions_nonterminal",
+  "effect_agent_threads",
+  "effect_agent_unknown_resolutions",
+] as const;
 
 const storedTextBytes = (value: string): number => new TextEncoder().encode(value).byteLength;
 
-class SqliteVersionRow extends Schema.Class<SqliteVersionRow>("SqliteVersionRow")({
-  user_version: NonNegativeInt,
+class PostgresVersionRow extends Schema.Class<PostgresVersionRow>("PostgresVersionRow")({
+  version: NonNegativeInt,
 }) {}
 
-class SqliteJournalModeRow extends Schema.Class<SqliteJournalModeRow>("SqliteJournalModeRow")({
-  journal_mode: Schema.NonEmptyString.check(Schema.isMaxLength(32)),
-}) {}
-
-class SqliteNameRow extends Schema.Class<SqliteNameRow>("SqliteNameRow")({
+class PostgresNameRow extends Schema.Class<PostgresNameRow>("PostgresNameRow")({
   name: BoundedIdentifier,
 }) {}
 
@@ -103,13 +116,13 @@ class CheckpointRow extends Schema.Class<CheckpointRow>("CheckpointRow")({
   through_sequence: CanonicalSequence,
 }) {}
 
-export class RawRecord extends Schema.Class<RawRecord>("@effect-agent/storage-sqlite/RawRecord")({
+export class RawRecord extends Schema.Class<RawRecord>("@effect-agent/storage-postgres/RawRecord")({
   recordId: BoundedIdentifier,
   recordJson: BoundedStoredText,
 }) {}
 
 export class RawAppendRequest extends Schema.Class<RawAppendRequest>(
-  "@effect-agent/storage-sqlite/RawAppendRequest",
+  "@effect-agent/storage-postgres/RawAppendRequest",
 )({
   batchDigest: BoundedStoredText,
   batchId: BoundedIdentifier,
@@ -123,7 +136,7 @@ export class RawAppendRequest extends Schema.Class<RawAppendRequest>(
 }) {}
 
 export class RawAppendResult extends Schema.Class<RawAppendResult>(
-  "@effect-agent/storage-sqlite/RawAppendResult",
+  "@effect-agent/storage-postgres/RawAppendResult",
 )({
   firstSequence: CanonicalSequence,
   lastSequence: CanonicalSequence,
@@ -132,7 +145,7 @@ export class RawAppendResult extends Schema.Class<RawAppendResult>(
 }) {}
 
 export class RawReadRequest extends Schema.Class<RawReadRequest>(
-  "@effect-agent/storage-sqlite/RawReadRequest",
+  "@effect-agent/storage-postgres/RawReadRequest",
 )({
   threadId: BoundedIdentifier,
   fromSequenceExclusive: CanonicalSequence,
@@ -140,7 +153,7 @@ export class RawReadRequest extends Schema.Class<RawReadRequest>(
 }) {}
 
 export class RawCheckpoint extends Schema.Class<RawCheckpoint>(
-  "@effect-agent/storage-sqlite/RawCheckpoint",
+  "@effect-agent/storage-postgres/RawCheckpoint",
 )({
   checkpointJson: BoundedStoredText,
   threadId: BoundedIdentifier,
@@ -149,46 +162,46 @@ export class RawCheckpoint extends Schema.Class<RawCheckpoint>(
 }) {}
 
 export class RawThreadExport extends Schema.Class<RawThreadExport>(
-  "@effect-agent/storage-sqlite/RawThreadExport",
+  "@effect-agent/storage-postgres/RawThreadExport",
 )({
   thread: ThreadRow,
   records: Schema.Array(RecordRow),
 }) {}
 
 type AppendError =
-  | SqliteAppendConflict
-  | SqliteFenceRejected
-  | SqliteStorageCorruptionError
-  | SqliteStorageError
-  | SqliteStorageFailpointError
-  | SqliteWriteContention;
+  | PostgresAppendConflict
+  | PostgresFenceRejected
+  | PostgresStorageCorruptionError
+  | PostgresStorageError
+  | PostgresStorageFailpointError
+  | PostgresWriteContention;
 
 type CheckpointError =
-  | SqliteCheckpointConflict
-  | SqliteStorageCorruptionError
-  | SqliteStorageError
-  | SqliteWriteContention;
+  | PostgresCheckpointConflict
+  | PostgresStorageCorruptionError
+  | PostgresStorageError
+  | PostgresWriteContention;
 
 const storageError =
   (operation: string) =>
-  (error: SqlError): SqliteStorageError =>
-    SqliteStorageError.make({
+  (error: SqlError): PostgresStorageError =>
+    PostgresStorageError.make({
       cause: error,
       operation,
       message: error.message,
     });
 
-/** Decode raw SQLite rows against a Schema, reporting failures as typed corruption. */
-export const decodeRows = Effect.fn("SqliteJournal.decodeRows")(
+/** Decode raw Postgres rows against a Schema, reporting failures as typed corruption. */
+export const decodeRows = Effect.fn("PostgresJournal.decodeRows")(
   <A, I>(
     schema: Schema.Codec<ReadonlyArray<A>, ReadonlyArray<I>>,
     table: string,
     rowKey: string,
     rows: unknown,
-  ): Effect.Effect<ReadonlyArray<A>, SqliteStorageCorruptionError> =>
+  ): Effect.Effect<ReadonlyArray<A>, PostgresStorageCorruptionError> =>
     Schema.decodeUnknownEffect(schema)(rows).pipe(
       Effect.mapError((error) =>
-        SqliteStorageCorruptionError.make({
+        PostgresStorageCorruptionError.make({
           table,
           rowKey,
           message: String(error),
@@ -197,20 +210,57 @@ export const decodeRows = Effect.fn("SqliteJournal.decodeRows")(
     ),
 );
 
-/** Decode exactly one raw SQLite row against a Schema, reporting failures as typed corruption. */
-export const decodeSingleRow = Effect.fn("SqliteJournal.decodeSingleRow")(
+/**
+ * `SET search_path` binds to one connection, and the client is a pool, so a later statement can
+ * land on a connection that never ran it and silently resolve unqualified names in `public`.
+ * `@effect/sql-pg` exposes no startup parameter or per-connection hook to set it for the pool
+ * (its config carries no `options` field, and a URL `options=-c search_path=...` is not
+ * forwarded), so the adapter cannot make a non-default schema safe on its own.
+ *
+ * Opening several pooled connections and checking that each resolves the schema turns that
+ * silent misdirection into a startup failure naming the fix. An operator who wants a dedicated
+ * schema must make it the connection default, with `ALTER ROLE ... SET search_path` or
+ * `ALTER DATABASE ... SET search_path`.
+ */
+const verifySearchPath = Effect.fn("PostgresJournal.verifySearchPath")(function* (schema: string) {
+  const sql = yield* SqlClient.SqlClient;
+
+  const probes = yield* Effect.all(
+    Array.from(
+      { length: SEARCH_PATH_PROBES },
+      () => sql<Record<string, unknown>>`SELECT current_schema() AS name`,
+    ),
+    { concurrency: SEARCH_PATH_PROBES },
+  ).pipe(Effect.mapError(storageError("verify storage schema")));
+
+  for (const rows of probes) {
+    if (rows[0]?.name !== schema) {
+      return yield* PostgresStorageError.make({
+        operation: "verify storage schema",
+        message:
+          `A pooled connection resolved schema ${String(rows[0]?.name)} instead of ${schema}. ` +
+          "`search_path` is per connection and this driver cannot set it for the pool: make " +
+          `${schema} the connection default (ALTER ROLE ... SET search_path TO ${schema}), or ` +
+          "leave the schema option at the connection's own default.",
+      });
+    }
+  }
+});
+
+/** Decode exactly one raw Postgres row against a Schema, reporting failures as typed corruption. */
+export const decodeSingleRow = Effect.fn("PostgresJournal.decodeSingleRow")(
   <A, I>(
     schema: Schema.Codec<ReadonlyArray<A>, ReadonlyArray<I>>,
     table: string,
     rowKey: string,
     rows: unknown,
-  ): Effect.Effect<A, SqliteStorageCorruptionError> =>
+  ): Effect.Effect<A, PostgresStorageCorruptionError> =>
     decodeRows(schema, table, rowKey, rows).pipe(
       Effect.flatMap((decoded) =>
         decoded.length === 1
           ? Effect.succeed(decoded[0])
           : Effect.fail(
-              SqliteStorageCorruptionError.make({
+              PostgresStorageCorruptionError.make({
                 table,
                 rowKey,
                 message: `Expected exactly one row but found ${decoded.length}.`,
@@ -220,621 +270,156 @@ export const decodeSingleRow = Effect.fn("SqliteJournal.decodeSingleRow")(
     ),
 );
 
-/** Column inventory of the supported v8 predecessor, independent of physical column order. */
-const predecessorColumns = {
-  effect_agent_threads: [
-    "thread_id",
-    "created_at",
-    "tail_sequence",
-    "tail_digest",
-    "producer_epoch",
-  ],
-  effect_agent_canonical_batches: [
-    "thread_id",
-    "batch_id",
-    "first_sequence",
-    "last_sequence",
-    "batch_digest",
-    "tail_digest",
-    "batch_json",
-  ],
-  effect_agent_canonical_records: ["thread_id", "sequence", "record_id", "batch_id", "record_json"],
-  effect_agent_checkpoints: ["thread_id", "through_sequence", "tail_digest", "checkpoint_json"],
-  effect_agent_submissions: [
-    "submission_id",
-    "thread_id",
-    "queue_sequence",
-    "principal",
-    "idempotency_key",
-    "agent_id",
-    "agent_digests_json",
-    "deployment_id",
-    "input_json",
-    "input_digest",
-    "receipt_id",
-    "state",
-    "settled_outcome",
-    "created_at",
-    "ready_at",
-    "input_applied_record_id",
-    "input_applied_sequence",
-    "joined_host_submission_id",
-    "suspended_reason_json",
-    "suspended_at",
-    "unknown_reason",
-    "unknown_tool_call_ids_json",
-    "parent_submission_id",
-    "parent_tool_call_id",
-    "admission_group",
-    "admission_fence_json",
-  ],
-  effect_agent_submission_ownership: [
-    "submission_id",
-    "attempt_id",
-    "ownership_token",
-    "producer_epoch",
-    "owner_producer_id",
-    "lease_expires_at",
-  ],
-  effect_agent_attempts: [
-    "attempt_id",
-    "submission_id",
-    "thread_id",
-    "owner_producer_id",
-    "producer_epoch",
-    "claimed_at",
-  ],
-  effect_agent_settlement_reservations: [
-    "submission_id",
-    "settlement_id",
-    "outcome",
-    "record_id",
-    "record_json",
-    "record_digest",
-    "reserved_at",
-    "finalized_at",
-  ],
-  effect_agent_abort_intents: [
-    "submission_id",
-    "author",
-    "reason",
-    "requested_at",
-    "canonical_record_id",
-  ],
-  effect_agent_approval_decisions: [
-    "submission_id",
-    "tool_call_id",
-    "decision",
-    "resolver",
-    "reason",
-    "decided_at",
-  ],
-  effect_agent_unknown_resolutions: [
-    "submission_id",
-    "tool_call_id",
-    "author",
-    "reason",
-    "resolution_json",
-    "resolved_at",
-  ],
-  effect_agent_child_reservations: [
-    "reservation_id",
-    "parent_submission_id",
-    "parent_tool_call_id",
-    "child_submission_id",
-    "status",
-    "allocation_json",
-    "allocation_digest",
-    "accounting_json",
-    "reserved_at",
-    "release_began_at",
-    "released_at",
-  ],
-  effect_agent_schedules: [
-    "tenant_id",
-    "owner_id",
-    "schedule_id",
-    "deadline_at_millis",
-    "record_json",
-  ],
-  effect_agent_subscription_sequences: [
-    "tenant_id",
-    "source_address",
-    "sequence",
-    "event_scan_cursor",
-    "delivery_scan_cursor",
-    "recovery_scan_cursor",
-  ],
-  effect_agent_subscriptions: [
-    "tenant_id",
-    "source_address",
-    "owner_id",
-    "subscription_id",
-    "ordinal",
-    "source_name",
-    "source_version",
-    "matching_key",
-    "state",
-    "expires_at_millis",
-    "recovery_at_millis",
-    "recovery_present",
-    "record_json",
-  ],
-  effect_agent_subscription_events: [
-    "tenant_id",
-    "source_address",
-    "event_id",
-    "source_name",
-    "source_version",
-    "matching_key",
-    "payload_digest",
-    "cutoff",
-    "cursor",
-    "routing_complete",
-    "next_attempt_at_millis",
-    "record_json",
-    "tombstone",
-  ],
-  effect_agent_subscription_deliveries: [
-    "tenant_id",
-    "source_address",
-    "owner_id",
-    "subscription_id",
-    "event_id",
-    "delivery_key",
-    "state",
-    "next_attempt_at_millis",
-    "record_json",
-  ],
-} as const;
-
-const checkPredecessorLayout = Effect.fn("SqliteJournal.checkPredecessorLayout")(function* (
-  version: 8 | 9 | 10,
-) {
+export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const { hit: failpoint } = yield* PostgresStorageFailpoint;
+  const { lockTimeout, schema } = yield* PostgresStorageConfig;
 
-  const messageColumns =
-    version === 8
-      ? predecessorColumns
-      : {
-          ...predecessorColumns,
-          effect_agent_submissions: [
-            ...predecessorColumns.effect_agent_submissions,
-            "worker_admission_json",
-            "message_admission_json",
-          ],
-          effect_agent_message_deliveries: [
-            "owner_thread_id",
-            "message_id",
-            "version",
-            "state",
-            "deadline_at_millis",
-            "record_json",
-          ],
-        };
-
-  const expectedColumns = {
-    ...messageColumns,
-    ...(version === 10
-      ? {
-          effect_agent_recovery_checkpoints: [
-            "thread_id",
-            "through_sequence",
-            "tail_digest",
-            "checkpoint_json",
-          ],
-        }
-      : {}),
-  };
-
-  for (const [table, expected] of Object.entries(expectedColumns)) {
-    const columns = yield* decodeRows(
-      Schema.Array(Schema.Struct({ name: BoundedIdentifier })),
-      table,
-      "schema",
-      yield* sql.unsafe(`PRAGMA table_info(${table})`),
-    );
-
-    const names = new Set<string>(expected);
-
-    if (columns.length !== names.size || columns.some((column) => !names.has(column.name)))
-      return yield* SqliteStorageCompatibilityError.make({
-        actualVersion: version,
-        supportedVersion: CurrentSqliteStorageVersion,
-        message: `The v${version} ${table} columns do not match the supported predecessor; no upgrade was committed.`,
-      });
-  }
-});
-
-export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const { hit: failpoint } = yield* SqliteStorageFailpoint;
-  const { busyTimeout } = yield* SqliteStorageConfig;
-
-  yield* sql`PRAGMA foreign_keys = ON`.pipe(Effect.mapError(storageError("enable foreign keys")));
-  // PRAGMA statements do not accept bound parameters; the value is a schema-validated
-  // non-negative integer, never caller-controlled text.
+  // `CREATE SCHEMA`, `SET` and `search_path` accept no bound parameters, so the schema name is
+  // interpolated. `PostgresStorageConfigValue` validates it against ^[a-z_][a-z0-9_]*$, which
+  // admits no quote, separator or statement syntax; the value can only ever name one schema.
   yield* sql
-    .unsafe(`PRAGMA busy_timeout = ${busyTimeout}`)
-    .pipe(Effect.mapError(storageError("configure busy timeout")));
+    .unsafe(`CREATE SCHEMA IF NOT EXISTS ${schema}`)
+    .pipe(Effect.mapError(storageError("create storage schema")));
+  yield* sql
+    .unsafe(`SET search_path TO ${schema}`)
+    .pipe(Effect.mapError(storageError("select storage schema")));
+  yield* verifySearchPath(schema);
+  // The session-level bound covers statements issued outside a journal transaction; each write
+  // transaction re-applies it with `SET LOCAL` so it holds on whichever connection it reserves.
+  yield* sql
+    .unsafe(`SET lock_timeout = ${lockTimeout}`)
+    .pipe(Effect.mapError(storageError("configure lock timeout")));
 
-  const journalModeRows = yield* sql<Record<string, unknown>>`PRAGMA journal_mode`.pipe(
-    Effect.mapError(storageError("read journal mode")),
+  const existingRows = yield* sql<Record<string, unknown>>`
+    SELECT c.relname AS name
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = ${schema}
+      AND c.relkind IN ('r', 'p')
+      AND starts_with(c.relname, 'effect_agent_')
+    ORDER BY c.relname
+  `.pipe(Effect.mapError(storageError("inspect storage schema")));
+
+  const existing = yield* decodeRows(
+    Schema.Array(PostgresNameRow),
+    "pg_class",
+    "effect_agent_%",
+    existingRows,
   );
 
-  const journalMode = yield* decodeSingleRow(
-    Schema.Array(SqliteJournalModeRow),
-    "pragma_journal_mode",
-    "singleton",
-    journalModeRows,
-  );
-
-  if (journalMode.journal_mode.toLowerCase() !== "wal") {
-    return yield* SqliteStorageCompatibilityError.make({
-      actualVersion: 0,
-      supportedVersion: CurrentSqliteStorageVersion,
-      message: `SQLite WAL mode is required; the database reported ${journalMode.journal_mode}.`,
-    });
-  }
-
-  const versionRows = yield* sql<Record<string, unknown>>`PRAGMA user_version`.pipe(
-    Effect.mapError(storageError("read storage version")),
-  );
-
-  const version = yield* decodeSingleRow(
-    Schema.Array(SqliteVersionRow),
-    "pragma_user_version",
-    "singleton",
-    versionRows,
-  );
-
-  // Support the known beta49/beta50 and immediate predecessor formats atomically.
-  if (
-    version.user_version !== 0 &&
-    version.user_version !== 7 &&
-    version.user_version !== 8 &&
-    version.user_version !== 9 &&
-    version.user_version !== 10 &&
-    version.user_version !== 11 &&
-    version.user_version !== CurrentSqliteStorageVersion
-  ) {
-    return yield* SqliteStorageCompatibilityError.make({
-      actualVersion: version.user_version,
-      supportedVersion: CurrentSqliteStorageVersion,
-      message:
-        `The SQLite file uses unsupported storage version ${version.user_version}; ` +
-        `this build supports exactly version ${CurrentSqliteStorageVersion}. ` +
-        "Only supported v7, v8, v9, v10 and v11 can be upgraded automatically. Keep the original file and use a compatible library version.",
-    });
-  }
-
-  if (
-    version.user_version === 7 ||
-    version.user_version === 8 ||
-    version.user_version === 9 ||
-    version.user_version === 10
-  ) {
-    yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const current = yield* sql<{ user_version: number }>`PRAGMA user_version`;
-
-          if (current.length === 1 && current[0].user_version === CurrentSqliteStorageVersion)
-            return;
-          if (
-            current.length !== 1 ||
-            (current[0].user_version !== 7 &&
-              current[0].user_version !== 8 &&
-              current[0].user_version !== 9 &&
-              current[0].user_version !== 10)
-          )
-            return yield* SqliteStorageCompatibilityError.make({
-              actualVersion: -1,
-              supportedVersion: CurrentSqliteStorageVersion,
-              message: "Storage version changed while acquiring the upgrade transaction.",
-            });
-
-          const required = yield* sql<{
-            name: string;
-          }>`SELECT name FROM sqlite_master WHERE type='table' AND name IN (
-            'effect_agent_threads', 'effect_agent_canonical_batches', 'effect_agent_canonical_records',
-            'effect_agent_checkpoints', 'effect_agent_submissions', 'effect_agent_submission_ownership',
-            'effect_agent_attempts', 'effect_agent_settlement_reservations', 'effect_agent_abort_intents',
-            'effect_agent_approval_decisions', 'effect_agent_unknown_resolutions', 'effect_agent_schedules'
-          )`;
-
-          if (required.length !== 12)
-            return yield* SqliteStorageCompatibilityError.make({
-              actualVersion: current[0].user_version,
-              supportedVersion: CurrentSqliteStorageVersion,
-              message:
-                "The predecessor store is missing required tables; no upgrade was committed.",
-            });
-
-          const recoveryTables =
-            yield* sql`SELECT name FROM sqlite_master WHERE type='table' AND name='effect_agent_recovery_checkpoints'`;
-
-          if (recoveryTables.length !== (current[0].user_version === 10 ? 1 : 0))
-            return yield* SqliteStorageCompatibilityError.make({
-              actualVersion: current[0].user_version,
-              supportedVersion: CurrentSqliteStorageVersion,
-              message:
-                "The predecessor recovery checkpoint storage does not match its version; refusing ambiguous data without mutation.",
-            });
-
-          const indexes =
-            yield* sql`SELECT name FROM sqlite_master WHERE name='effect_agent_submissions_nonterminal'`;
-
-          if (indexes.length !== 0)
-            return yield* SqliteStorageCompatibilityError.make({
-              actualVersion: current[0].user_version,
-              supportedVersion: CurrentSqliteStorageVersion,
-              message:
-                "The predecessor already contains the nonterminal index; refusing ambiguous storage without mutation.",
-            });
-          if (current[0].user_version === 7) {
-            yield* checkV2ThreadLayout();
-            for (const statement of [
-              sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_group TEXT`,
-              sql`ALTER TABLE effect_agent_submissions ADD COLUMN admission_fence_json TEXT`,
-              sql`CREATE INDEX effect_agent_submissions_group ON effect_agent_submissions (thread_id, admission_group, state)`,
-            ]) {
-              yield* failpoint("upgrade:before-mutation");
-              yield* statement;
-              yield* failpoint("upgrade:after-mutation");
-            }
-            yield* upgradeV2Schedules(16 * 1024 * 1024).pipe(
-              Effect.provideService(ScheduleFailpoint, {
-                hit: (point) =>
-                  Schema.decodeUnknownEffect(SqliteStorageFailpointLocation)(point).pipe(
-                    Effect.flatMap(failpoint),
-                    Effect.mapError(() => ScheduleFailpointError.make({ point })),
-                  ),
-              }),
-            );
-            yield* upgradeV2Subscriptions(16 * 1024 * 1024).pipe(
-              Effect.provideService(SubscriptionFailpoint, {
-                hit: (point) =>
-                  Schema.decodeUnknownEffect(SqliteStorageFailpointLocation)(point).pipe(
-                    Effect.flatMap(failpoint),
-                    Effect.mapError(() => SubscriptionFailpointError.make({ point })),
-                  ),
-              }),
-            );
-          }
-          if (
-            current[0].user_version === 8 ||
-            current[0].user_version === 9 ||
-            current[0].user_version === 10
-          )
-            yield* checkPredecessorLayout(current[0].user_version);
-          if (current[0].user_version === 7 || current[0].user_version === 8) {
-            yield* failpoint("upgrade:before-mutation");
-            yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN worker_admission_json TEXT`;
-            yield* failpoint("upgrade:after-mutation");
-            yield* failpoint("upgrade:before-mutation");
-            yield* sql`ALTER TABLE effect_agent_submissions ADD COLUMN message_admission_json TEXT`;
-            yield* failpoint("upgrade:after-mutation");
-            yield* failpoint("upgrade:before-mutation");
-            yield* createMessageDeliveryTables;
-            yield* failpoint("upgrade:after-mutation");
-          }
-          if (current[0].user_version !== 10) {
-            yield* failpoint("upgrade:before-mutation");
-            yield* createRecoveryCheckpointTable;
-            yield* failpoint("upgrade:after-mutation");
-          }
-          yield* failpoint("upgrade:before-mutation");
-          yield* createNonterminalIndex;
-          yield* failpoint("upgrade:after-mutation");
-          yield* failpoint("upgrade:before-version");
-          yield* Effect.provide(createNativeReadIndexes, sqliteLayer);
-          yield* createMessageDeliveryPendingIndex;
-          yield* seedNativeReadIndexes.pipe(
-            Effect.provide(sqliteLayer),
-            Effect.catchTag("ThreadStoreError", (error) =>
-              SqliteStorageCorruptionError.make({
-                table: "effect_agent_canonical_records",
-                rowKey: "upgrade",
-                message: error.message,
-              }),
-            ),
-          );
-          yield* sql`PRAGMA user_version = 12`;
-          yield* failpoint("upgrade:after-version");
-        }),
-      )
-      .pipe(
-        Effect.provide(NodeCrypto.layer),
-        Effect.catchTag("SqliteStorageFailpointError", (error) =>
-          SqliteStorageError.make({
-            cause: error,
-            operation: "upgrade storage",
-            message: error.message,
-          }),
-        ),
-        Effect.catchTag(["ScheduleFailpointError", "SubscriptionFailpointError"], (error) =>
-          SqliteStorageError.make({
-            cause: error,
-            operation: "upgrade storage",
-            message: "Injected storage upgrade failure",
-          }),
-        ),
-        Effect.catchTag("StorageUpgradeError", (error) =>
-          SqliteStorageCorruptionError.make({
-            table: error.table,
-            rowKey: error.rowKey,
-            message: error.message,
-          }),
-        ),
-        Effect.catchTag("SqlError", storageError("upgrade supported storage")),
-        Effect.catchTag("SchemaError", (error) =>
-          SqliteStorageCorruptionError.make({
-            table: "upgrade",
-            rowKey: "v7",
-            message: error.message,
-          }),
-        ),
-      );
-  }
-
-  if (version.user_version === 0) {
-    const existingRows = yield* sql<Record<string, unknown>>`
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table'
-        AND name LIKE 'effect_agent_%'
-      ORDER BY name
-    `.pipe(Effect.mapError(storageError("inspect unversioned storage")));
-
-    const existing = yield* decodeRows(
-      Schema.Array(SqliteNameRow),
-      "sqlite_master",
-      "effect_agent_%",
-      existingRows,
-    );
-
+  // Absence of the version marker means either an empty schema to initialize, or foreign
+  // Effect Agent tables written by something that never versioned them.
+  if (existing.every((relation) => relation.name !== VERSION_TABLE)) {
     if (existing.length > 0) {
-      return yield* SqliteStorageCompatibilityError.make({
+      return yield* PostgresStorageCompatibilityError.make({
         actualVersion: 0,
-        supportedVersion: CurrentSqliteStorageVersion,
+        supportedVersion: CurrentPostgresStorageVersion,
         message:
-          "The SQLite file contains unversioned Effect Agent tables. Refusing to mutate ambiguous stored data; retain it for inspection with its original writer.",
+          `Schema ${schema} contains unversioned Effect Agent tables. Refusing to mutate ` +
+          "ambiguous stored data; retain it for inspection with its original writer.",
       });
     }
 
-    yield* SqliteMigrator.run({ loader: sqliteMigrations }).pipe(
-      Effect.mapError((error) =>
-        SqliteStorageError.make({
-          cause: error,
-          operation: "initialize current storage",
-          message: error.message,
-        }),
-      ),
+    yield* createPostgresStorageSchema.pipe(
+      Effect.provide(postgresLayer),
+      Effect.mapError(storageError("initialize current storage")),
     );
-  }
+  } else {
+    const versionRows = yield* sql<Record<string, unknown>>`
+      SELECT version
+      FROM effect_agent_storage_version
+      WHERE id
+    `.pipe(Effect.mapError(storageError("read storage version")));
 
-  if (version.user_version === 11) {
-    yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const current = yield* sql<{ user_version: number }>`PRAGMA user_version`;
+    const version = yield* decodeSingleRow(
+      Schema.Array(PostgresVersionRow),
+      VERSION_TABLE,
+      "singleton",
+      versionRows,
+    );
 
-          if (current[0]?.user_version === 12) return;
-          if (current[0]?.user_version !== 11)
-            return yield* SqliteStorageCompatibilityError.make({
-              actualVersion: current[0]?.user_version ?? -1,
-              supportedVersion: 12,
-              message: "Storage version changed during native index upgrade",
-            });
-          yield* checkPredecessorLayout(10);
-
-          const requiredIndex =
-            yield* sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'effect_agent_submissions_nonterminal'`;
-
-          if (requiredIndex.length !== 1)
-            return yield* SqliteStorageCompatibilityError.make({
-              actualVersion: 11,
-              supportedVersion: 12,
-              message: "Predecessor storage is missing its required nonterminal index",
-            });
-          yield* failpoint("upgrade:before-mutation");
-          yield* Effect.provide(createNativeReadIndexes, sqliteLayer);
-          yield* createMessageDeliveryPendingIndex;
-          yield* seedNativeReadIndexes.pipe(
-            Effect.provide(sqliteLayer),
-            Effect.catchTag("ThreadStoreError", (error) =>
-              SqliteStorageCorruptionError.make({
-                table: "effect_agent_canonical_records",
-                rowKey: "upgrade",
-                message: error.message,
-              }),
-            ),
-          );
-          yield* failpoint("upgrade:after-mutation");
-          yield* failpoint("upgrade:before-version");
-          yield* sql`PRAGMA user_version = 12`;
-          yield* failpoint("upgrade:after-version");
-        }),
-      )
-      .pipe(
-        Effect.mapError((error) =>
-          SqliteStorageError.make({
-            operation: "upgrade native indexes",
-            message: error.message,
-            cause: error,
-          }),
-        ),
-      );
+    // One adapter, one format: there is no predecessor layout to upgrade from.
+    if (version.version !== CurrentPostgresStorageVersion) {
+      return yield* PostgresStorageCompatibilityError.make({
+        actualVersion: version.version,
+        supportedVersion: CurrentPostgresStorageVersion,
+        message:
+          `Schema ${schema} uses storage version ${version.version}; this build supports ` +
+          `exactly version ${CurrentPostgresStorageVersion}. Keep the original database and ` +
+          "use a compatible library version.",
+      });
+    }
   }
 
   const requiredRows = yield* sql<Record<string, unknown>>`
-    SELECT name
-    FROM sqlite_master
-    WHERE (type = 'table'
-      AND name IN (
-        'effect_agent_threads',
-        'effect_agent_canonical_batches',
-        'effect_agent_canonical_records',
-        'effect_agent_checkpoints',
-        'effect_agent_submissions',
-        'effect_agent_submission_ownership',
-        'effect_agent_attempts',
-        'effect_agent_settlement_reservations',
-        'effect_agent_abort_intents',
-        'effect_agent_approval_decisions',
-        'effect_agent_unknown_resolutions',
-        'effect_agent_schedules',
-        'effect_agent_message_deliveries',
-        'effect_agent_recovery_checkpoints'
-      )) OR (type = 'index' AND name IN ('effect_agent_submissions_nonterminal', 'effect_agent_records_subtree', 'effect_agent_message_deliveries_pending', 'effect_agent_records_outstanding', 'effect_agent_records_call', 'effect_agent_records_run_input', 'effect_agent_records_worker_input'))
-    ORDER BY name
+    SELECT c.relname AS name
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = ${schema}
+      AND c.relkind IN ('r', 'p', 'i')
+      AND c.relname IN ${sql.in(REQUIRED_OBJECTS)}
+    ORDER BY c.relname
   `.pipe(Effect.mapError(storageError("verify storage tables")));
 
   const required = yield* decodeRows(
-    Schema.Array(SqliteNameRow),
-    "sqlite_master",
+    Schema.Array(PostgresNameRow),
+    "pg_class",
     "required_tables",
     requiredRows,
   );
 
-  if (required.length !== 21) {
-    return yield* SqliteStorageCompatibilityError.make({
-      actualVersion: CurrentSqliteStorageVersion,
-      supportedVersion: CurrentSqliteStorageVersion,
+  if (required.length !== REQUIRED_OBJECTS.length) {
+    return yield* PostgresStorageCompatibilityError.make({
+      actualVersion: CurrentPostgresStorageVersion,
+      supportedVersion: CurrentPostgresStorageVersion,
       message:
-        "The SQLite file claims the current format but is missing required tables or its nonterminal index. Retain the original store for inspection.",
+        `Schema ${schema} claims the current format but is missing required tables or ` +
+        "indexes. Retain the original database for inspection.",
     });
   }
 
+  /**
+   * Postgres classification of a lost write race. `@effect/sql-pg` already maps the SQLSTATE
+   * onto a structured reason, so the codes this adapter treats as retryable are read from the
+   * reason tag rather than the message: 40001 serialization_failure is `SerializationError`,
+   * 40P01 deadlock_detected is `DeadlockError`, and 55P03 lock_not_available — which is also
+   * what the configured `lock_timeout` raises — is `LockTimeoutError`. Each of those rolls the
+   * transaction back whole, so no canonical state was mutated.
+   */
   const classifyWriteFailure =
     (operation: string) =>
-    (error: SqlError): SqliteStorageError | SqliteWriteContention =>
+    (error: SqlError): PostgresStorageError | PostgresWriteContention =>
+      error.reason._tag === "SerializationError" ||
+      error.reason._tag === "DeadlockError" ||
       error.reason._tag === "LockTimeoutError"
-        ? SqliteWriteContention.make({
+        ? PostgresWriteContention.make({
             cause: error,
             operation,
-            message: `Another producer holds the SQLite write lock; ${operation} is safe to retry.`,
+            message: `Another producer won the Postgres write race; ${operation} is safe to retry.`,
           })
         : storageError(operation)(error);
 
   /**
-   * Runs one journal write transaction under `BEGIN IMMEDIATE`. SQLite's deferred `BEGIN`
-   * would let a read-then-write transaction start as a reader and fail with
-   * SQLITE_BUSY_SNAPSHOT on upgrade, which `busy_timeout` never retries. Taking the write
-   * lock up front keeps cross-owner contention inside the bounded busy retry; a lock
-   * timeout is classified as the retryable SqliteWriteContention. A failed `BEGIN` leaves
-   * no transaction, so no rollback is attempted for it.
+   * Runs one journal write transaction holding the adapter's writer lock. The read-then-write
+   * invariants — tail comparison, batch idempotency, record identity, ledger admission — are
+   * only sound if no concurrent writer interleaves between the read and the write, which is
+   * what SQLite's `BEGIN IMMEDIATE` gave this code for free. The transaction-scoped advisory
+   * lock restores it, and the lock releases with the transaction however it ends.
+   * `SET LOCAL lock_timeout` bounds the wait on the writer lock to the configured window, so a
+   * blocked producer surfaces the retryable `PostgresWriteContention` rather than holding a
+   * pooled connection indefinitely. A failed `BEGIN` leaves no transaction, so no rollback is
+   * attempted for it.
    *
    * Journal write transactions are always top level. Nesting one inside another would
-   * deadlock the single-connection client, so new journal operations must not wrap this
-   * helper inside another transaction.
+   * deadlock against its own reserved connection, so new journal operations must not wrap
+   * this helper inside another transaction.
    */
   const withWriteTransaction =
     (operation: string) =>
     <A, E>(
       effect: Effect.Effect<A, E>,
-    ): Effect.Effect<A, E | SqliteStorageError | SqliteWriteContention> =>
+    ): Effect.Effect<A, E | PostgresStorageError | PostgresWriteContention> =>
       Effect.uninterruptibleMask((restore) =>
         Effect.scoped(
           Effect.gen(function* () {
@@ -843,7 +428,21 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             );
 
             yield* connection
-              .executeUnprepared("BEGIN IMMEDIATE", [], undefined)
+              .executeUnprepared("BEGIN", [], undefined)
+              .pipe(Effect.mapError(classifyWriteFailure(operation)));
+
+            // SQLite's `BEGIN IMMEDIATE` takes one database-wide write lock, and every store
+            // here was written against that guarantee: read-then-write sequences need no
+            // further protection. This transaction-scoped advisory lock reproduces it exactly.
+            // SERIALIZABLE would also be safe, but it converts a lost race into a 40001 abort
+            // at COMMIT, so operations that SQLite resolved as a typed conflict or an
+            // idempotent replay would instead fail after doing their work.
+            yield* connection
+              .executeUnprepared(`SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`, [], undefined)
+              .pipe(Effect.mapError(classifyWriteFailure(operation)));
+
+            yield* connection
+              .executeUnprepared(`SET LOCAL lock_timeout = '${lockTimeout}ms'`, [], undefined)
               .pipe(Effect.mapError(classifyWriteFailure(operation)));
 
             const exit = yield* restore(
@@ -862,28 +461,28 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             return yield* exit;
           }),
         ).pipe(
-          Effect.withSpan("SqliteJournal.withWriteTransaction", { attributes: { operation } }),
+          Effect.withSpan("PostgresJournal.withWriteTransaction", { attributes: { operation } }),
         ),
       );
 
   /**
-   * Runs a read-only snapshot under a deferred transaction. Effect's SQLite client now
-   * starts every writable-client `withTransaction` with `BEGIN IMMEDIATE`, which is the
-   * right default for mutations but would make exports take the write lock and block a
-   * concurrent append. Reserving the connection and beginning explicitly preserves the
-   * adapter's snapshot-with-concurrent-writer contract. As with the write helper, a failed
-   * `BEGIN` is reported directly because there is no transaction to roll back.
+   * Runs a read-only snapshot under `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY`. Every
+   * statement in the transaction then sees the one snapshot taken at its first read, which is
+   * the adapter's snapshot-with-concurrent-writer contract: a paged export stays internally
+   * consistent while an append commits alongside it. `READ ONLY` also keeps the reader out of
+   * serializable conflict detection, so a scan can never abort a writer. As with the write
+   * helper, a failed `BEGIN` is reported directly because there is no transaction to roll back.
    */
   const withReadTransaction =
     (operation: string) =>
-    <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | SqliteStorageError> =>
+    <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | PostgresStorageError> =>
       Effect.uninterruptibleMask((restore) =>
         Effect.scoped(
           Effect.gen(function* () {
             const connection = yield* sql.reserve.pipe(Effect.mapError(storageError(operation)));
 
             yield* connection
-              .executeUnprepared("BEGIN", [], undefined)
+              .executeUnprepared("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY", [], undefined)
               .pipe(Effect.mapError(storageError(operation)));
 
             const exit = yield* restore(
@@ -901,25 +500,30 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
 
             return yield* exit;
           }),
-        ).pipe(Effect.withSpan("SqliteJournal.withReadTransaction", { attributes: { operation } })),
+        ).pipe(
+          Effect.withSpan("PostgresJournal.withReadTransaction", { attributes: { operation } }),
+        ),
       );
 
-  const materialize = Effect.fn("SqliteJournal.materialize")(function* (
+  const materialize = Effect.fn("PostgresJournal.materialize")(function* (
     threadId: string,
     createdAt: string,
     emptyTailDigest: string,
     producerEpoch: ProducerEpoch,
   ): Effect.fn.Return<
     void,
-    SqliteFenceRejected | SqliteStorageCorruptionError | SqliteStorageError | SqliteWriteContention
+    | PostgresFenceRejected
+    | PostgresStorageCorruptionError
+    | PostgresStorageError
+    | PostgresWriteContention
   > {
     if (
       threadId.length > MAX_IDENTIFIER_LENGTH ||
       storedTextBytes(emptyTailDigest) > MAX_STORED_TEXT_BYTES
     ) {
-      return yield* SqliteStorageError.make({
+      return yield* PostgresStorageError.make({
         operation: "materialize thread",
-        message: "Thread identity or initial digest exceeds the SQLite storage bounds.",
+        message: "Thread identity or initial digest exceeds the Postgres storage bounds.",
       });
     }
     yield* withWriteTransaction("materialize transaction")(
@@ -935,21 +539,21 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           WHERE thread_id = ${threadId}
         `.pipe(Effect.mapError(storageError("read materialized thread")));
 
-        const existing = yield* decodeRows(
+        const existingThreads = yield* decodeRows(
           Schema.Array(ThreadRow),
           "effect_agent_threads",
           threadId,
           existingRows,
         );
 
-        if (existing.length > 1) {
-          return yield* SqliteStorageCorruptionError.make({
+        if (existingThreads.length > 1) {
+          return yield* PostgresStorageCorruptionError.make({
             table: "effect_agent_threads",
             rowKey: threadId,
             message: "A thread primary key returned more than one row.",
           });
         }
-        if (existing.length === 0) {
+        if (existingThreads.length === 0) {
           yield* sql`
             INSERT INTO effect_agent_threads (
               thread_id,
@@ -968,14 +572,14 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
 
           return;
         }
-        if (producerEpoch < existing[0].producer_epoch) {
-          return yield* SqliteFenceRejected.make({
+        if (producerEpoch < existingThreads[0].producer_epoch) {
+          return yield* PostgresFenceRejected.make({
             producerEpoch,
-            actualEpoch: existing[0].producer_epoch,
-            message: `Producer epoch ${producerEpoch} is stale; current epoch is ${existing[0].producer_epoch}.`,
+            actualEpoch: existingThreads[0].producer_epoch,
+            message: `Producer epoch ${producerEpoch} is stale; current epoch is ${existingThreads[0].producer_epoch}.`,
           });
         }
-        if (producerEpoch > existing[0].producer_epoch) {
+        if (producerEpoch > existingThreads[0].producer_epoch) {
           yield* sql`
             UPDATE effect_agent_threads
             SET producer_epoch = ${producerEpoch}
@@ -986,7 +590,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     );
   });
 
-  const getThread = Effect.fn("SqliteJournal.getThread")(function* (threadId: string) {
+  const getThread = Effect.fn("PostgresJournal.getThread")(function* (threadId: string) {
     const rows = yield* sql<Record<string, unknown>>`
       SELECT
         thread_id,
@@ -1001,7 +605,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     return yield* decodeRows(Schema.Array(ThreadRow), "effect_agent_threads", threadId, rows);
   });
 
-  const append = Effect.fn("SqliteJournal.append")(function* (
+  const append = Effect.fn("PostgresJournal.append")(function* (
     request: RawAppendRequest,
   ): Effect.fn.Return<RawAppendResult, AppendError> {
     if (
@@ -1016,9 +620,9 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           storedTextBytes(record.recordJson) > MAX_STORED_TEXT_BYTES,
       )
     ) {
-      return yield* SqliteStorageError.make({
+      return yield* PostgresStorageError.make({
         operation: "append canonical batch",
-        message: "Canonical identifiers or encoded JSON exceed the SQLite storage bounds.",
+        message: "Canonical identifiers or encoded JSON exceed the Postgres storage bounds.",
       });
     }
 
@@ -1027,7 +631,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         const recordIds = request.records.map((record) => record.recordId);
 
         if (new Set(recordIds).size !== recordIds.length) {
-          return yield* SqliteAppendConflict.make({
+          return yield* PostgresAppendConflict.make({
             message: `Batch ${request.batchId} contains duplicate canonical record IDs.`,
             reason: "record-identity",
           });
@@ -1052,7 +656,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         );
 
         if (request.producerEpoch !== thread.producer_epoch) {
-          return yield* SqliteFenceRejected.make({
+          return yield* PostgresFenceRejected.make({
             producerEpoch: request.producerEpoch,
             actualEpoch: thread.producer_epoch,
             message: `Producer epoch ${request.producerEpoch} is not the current epoch ${thread.producer_epoch}.`,
@@ -1081,27 +685,27 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         );
 
         if (batches.length > 1) {
-          return yield* SqliteStorageCorruptionError.make({
+          return yield* PostgresStorageCorruptionError.make({
             table: "effect_agent_canonical_batches",
             rowKey: `${request.threadId}/${request.batchId}`,
             message: "A canonical batch primary key returned more than one row.",
           });
         }
         if (batches.length === 1) {
-          const existing = batches[0];
+          const existingBatch = batches[0];
 
-          if (existing.batch_digest !== request.batchDigest) {
-            return yield* SqliteAppendConflict.make({
+          if (existingBatch.batch_digest !== request.batchDigest) {
+            return yield* PostgresAppendConflict.make({
               message: `Batch ${request.batchId} already exists with different canonical content.`,
               reason: "batch-digest",
             });
           }
 
           return RawAppendResult.make({
-            firstSequence: existing.first_sequence,
-            lastSequence: existing.last_sequence,
+            firstSequence: existingBatch.first_sequence,
+            lastSequence: existingBatch.last_sequence,
             replayed: true,
-            tailDigest: existing.tail_digest,
+            tailDigest: existingBatch.tail_digest,
           });
         }
 
@@ -1109,7 +713,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           request.expectedTailSequence !== thread.tail_sequence ||
           request.expectedTailDigest !== thread.tail_digest
         ) {
-          return yield* SqliteAppendConflict.make({
+          return yield* PostgresAppendConflict.make({
             message:
               `Expected tail ${request.expectedTailSequence}/${request.expectedTailDigest} ` +
               `but found ${thread.tail_sequence}/${thread.tail_digest}.`,
@@ -1119,7 +723,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           });
         }
         if (thread.tail_sequence + request.records.length > MAX_RECORDS_PER_THREAD) {
-          return yield* SqliteStorageError.make({
+          return yield* PostgresStorageError.make({
             operation: "append canonical batch",
             message: `Thread record limit ${MAX_RECORDS_PER_THREAD} would be exceeded.`,
           });
@@ -1146,7 +750,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         );
 
         if (existingRecords.length > 0) {
-          return yield* SqliteAppendConflict.make({
+          return yield* PostgresAppendConflict.make({
             message: `Canonical record ID ${existingRecords[0].record_id} already exists.`,
             reason: "record-identity",
           });
@@ -1156,7 +760,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           thread.tail_sequence + 1,
         ).pipe(
           Effect.mapError((error) =>
-            SqliteStorageError.make({
+            PostgresStorageError.make({
               cause: error,
               operation: "append canonical batch",
               message: error.message,
@@ -1168,7 +772,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           firstSequence + request.records.length - 1,
         ).pipe(
           Effect.mapError((error) =>
-            SqliteStorageError.make({
+            PostgresStorageError.make({
               cause: error,
               operation: "append canonical batch",
               message: error.message,
@@ -1221,7 +825,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
                 record.recordJson,
               ).pipe(
                 Effect.mapError((error) =>
-                  SqliteStorageCorruptionError.make({
+                  PostgresStorageCorruptionError.make({
                     table: "effect_agent_canonical_records",
                     rowKey: record.recordId,
                     message: error.message,
@@ -1230,7 +834,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
               );
 
               yield* indexCanonicalRecord(request.threadId, canonical).pipe(
-                Effect.provide(sqliteLayer),
+                Effect.provide(postgresLayer),
                 Effect.provideService(SqlClient.SqlClient, sql),
                 Effect.mapError(storageError("index canonical record")),
               );
@@ -1259,7 +863,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     );
   });
 
-  const read = Effect.fn("SqliteJournal.read")(function* (request: RawReadRequest) {
+  const read = Effect.fn("PostgresJournal.read")(function* (request: RawReadRequest) {
     const rows = yield* sql<Record<string, unknown>>`
       SELECT
         thread_id,
@@ -1282,7 +886,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     );
   });
 
-  const exportThread = Effect.fn("SqliteJournal.exportThread")(function* (threadId: string) {
+  const exportThread = Effect.fn("PostgresJournal.exportThread")(function* (threadId: string) {
     return yield* withReadTransaction("export transaction")(
       Effect.gen(function* () {
         const threadRows = yield* sql<Record<string, unknown>>`
@@ -1306,7 +910,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         yield* failpoint("export:after-thread-read");
 
         if (thread.tail_sequence > MAX_RECORDS_PER_THREAD)
-          return yield* SqliteStorageError.make({
+          return yield* PostgresStorageError.make({
             operation: "export thread",
             message: "The thread exceeds the current export record limit.",
           });
@@ -1328,7 +932,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             page.length !== limit ||
             page.some((record, index) => record.sequence !== afterSequence + index + 1)
           ) {
-            return yield* SqliteStorageCorruptionError.make({
+            return yield* PostgresStorageCorruptionError.make({
               table: "effect_agent_canonical_records",
               rowKey: threadId,
               message: "The exported canonical prefix is not contiguous through its captured tail.",
@@ -1344,7 +948,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           );
 
         if (beyondTail.length !== 0)
-          return yield* SqliteStorageCorruptionError.make({
+          return yield* PostgresStorageCorruptionError.make({
             table: "effect_agent_canonical_records",
             rowKey: threadId,
             message: "Canonical records exist beyond the captured thread tail.",
@@ -1355,16 +959,16 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     );
   });
 
-  const saveCheckpoint = Effect.fn("SqliteJournal.saveCheckpoint")(function* (
+  const saveCheckpoint = Effect.fn("PostgresJournal.saveCheckpoint")(function* (
     checkpoint: RawCheckpoint,
   ): Effect.fn.Return<void, CheckpointError> {
     if (
       checkpoint.threadId.length > MAX_IDENTIFIER_LENGTH ||
       storedTextBytes(checkpoint.checkpointJson) > MAX_STORED_TEXT_BYTES
     ) {
-      return yield* SqliteStorageError.make({
+      return yield* PostgresStorageError.make({
         operation: "save checkpoint",
-        message: "Checkpoint identity or encoded JSON exceeds the SQLite storage bounds.",
+        message: "Checkpoint identity or encoded JSON exceeds the Postgres storage bounds.",
       });
     }
     yield* withWriteTransaction("checkpoint transaction")(
@@ -1388,7 +992,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         );
 
         if (checkpoint.throughSequence > thread.tail_sequence) {
-          return yield* SqliteCheckpointConflict.make({
+          return yield* PostgresCheckpointConflict.make({
             message:
               `Checkpoint sequence ${checkpoint.throughSequence} is after canonical tail ` +
               `${thread.tail_sequence}.`,
@@ -1406,26 +1010,26 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             AND through_sequence = ${checkpoint.throughSequence}
         `.pipe(Effect.mapError(storageError("read idempotent checkpoint")));
 
-        const existing = yield* decodeRows(
+        const existingCheckpoints = yield* decodeRows(
           Schema.Array(CheckpointRow),
           "effect_agent_checkpoints",
           `${checkpoint.threadId}/${checkpoint.throughSequence}`,
           checkpointRows,
         );
 
-        if (existing.length > 1) {
-          return yield* SqliteStorageCorruptionError.make({
+        if (existingCheckpoints.length > 1) {
+          return yield* PostgresStorageCorruptionError.make({
             table: "effect_agent_checkpoints",
             rowKey: `${checkpoint.threadId}/${checkpoint.throughSequence}`,
             message: "A checkpoint primary key returned more than one row.",
           });
         }
-        if (existing.length === 1) {
+        if (existingCheckpoints.length === 1) {
           if (
-            existing[0].tail_digest !== checkpoint.tailDigest ||
-            existing[0].checkpoint_json !== checkpoint.checkpointJson
+            existingCheckpoints[0].tail_digest !== checkpoint.tailDigest ||
+            existingCheckpoints[0].checkpoint_json !== checkpoint.checkpointJson
           ) {
-            return yield* SqliteCheckpointConflict.make({
+            return yield* PostgresCheckpointConflict.make({
               message: "A different checkpoint already exists at this canonical sequence.",
             });
           }
@@ -1450,7 +1054,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     );
   });
 
-  const saveRecoveryCheckpoint = Effect.fn("SqliteJournal.saveRecoveryCheckpoint")(function* (
+  const saveRecoveryCheckpoint = Effect.fn("PostgresJournal.saveRecoveryCheckpoint")(function* (
     request: SaveRecoveryCheckpointRequest,
     checkpointJson: string,
   ) {
@@ -1460,9 +1064,9 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       checkpoint.threadId.length > MAX_IDENTIFIER_LENGTH ||
       storedTextBytes(checkpointJson) > MAX_STORED_TEXT_BYTES
     ) {
-      return yield* SqliteStorageError.make({
+      return yield* PostgresStorageError.make({
         operation: "save recovery checkpoint",
-        message: "Checkpoint identity or encoded JSON exceeds the SQLite storage bounds.",
+        message: "Checkpoint identity or encoded JSON exceeds the Postgres storage bounds.",
       });
     }
     yield* withWriteTransaction("recovery checkpoint transaction")(
@@ -1510,7 +1114,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     yield* failpoint("save-recovery-checkpoint:after");
   });
 
-  const loadRecoveryCheckpoint = Effect.fn("SqliteJournal.loadRecoveryCheckpoint")(function* (
+  const loadRecoveryCheckpoint = Effect.fn("PostgresJournal.loadRecoveryCheckpoint")(function* (
     threadId: string,
   ) {
     const rows = yield* sql<Record<string, unknown>>`
@@ -1527,7 +1131,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     );
   });
 
-  const loadCheckpoint = Effect.fn("SqliteJournal.loadCheckpoint")(function* (
+  const loadCheckpoint = Effect.fn("PostgresJournal.loadCheckpoint")(function* (
     threadId: string,
     atOrBeforeSequence: CanonicalSequence,
   ) {
@@ -1552,7 +1156,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     );
   });
 
-  const getTailDigestAt = Effect.fn("SqliteJournal.getTailDigestAt")(function* (
+  const getTailDigestAt = Effect.fn("PostgresJournal.getTailDigestAt")(function* (
     threadId: string,
     sequence: CanonicalSequence,
   ) {
@@ -1590,7 +1194,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     return batches.map((batch) => batch.tail_digest);
   });
 
-  const scanStoredPayloads = Effect.fn("SqliteJournal.scanStoredPayloads")(function* () {
+  const scanStoredPayloads = Effect.fn("PostgresJournal.scanStoredPayloads")(function* () {
     return yield* withReadTransaction("startup scan transaction")(
       Effect.gen(function* () {
         const threads = yield* sql<Record<string, unknown>>`
@@ -1685,4 +1289,4 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
   } as const;
 });
 
-export type SqliteJournal = Effect.Success<ReturnType<typeof initializeSqliteJournal>>;
+export type PostgresJournal = Effect.Success<ReturnType<typeof initializePostgresJournal>>;

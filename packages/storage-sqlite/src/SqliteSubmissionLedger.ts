@@ -14,6 +14,7 @@ import {
   RecordEnvelope,
   SettlementOutcome,
 } from "effect-agent/records";
+import { sqliteLayer } from "effect-agent/sql-dialect";
 import {
   AbortCommand,
   AbortIntent,
@@ -3518,7 +3519,7 @@ export const submissionLedgerLayer: Layer.Layer<
   SubmissionLedger,
   SqliteStorageInitializationError,
   SqliteStorageConfig | SqliteStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
-> = Layer.effectContext(makeServices());
+> = Layer.effectContext(makeServices()).pipe(Layer.provide(sqliteLayer));
 
 /**
  * A composition-root convenience Layer for the durable Submission Ledger. Point it at the

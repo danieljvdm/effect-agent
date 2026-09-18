@@ -1,5 +1,4 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
 import {
   Clock,
   Context,
@@ -21,7 +20,7 @@ import {
   Digest,
   ObservationOffset,
 } from "effect-agent/records";
-import { sqliteLayer } from "effect-agent/sql-dialect";
+import { postgresLayer } from "effect-agent/sql-dialect";
 import { makeSelectedReads } from "effect-agent/sql-thread-native-reads";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 import {
@@ -51,32 +50,46 @@ import {
 import type * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
-  initializeSqliteJournal,
+  initializePostgresJournal,
   RawAppendRequest,
   RawCheckpoint,
   RawReadRequest,
-  type SqliteJournal,
-} from "./internal/sqlite-journal.ts";
-import { SqliteStorageConfig, SqliteStorageConfigValue } from "./SqliteStorageConfig.ts";
+  type PostgresJournal,
+} from "./internal/postgres-journal.ts";
+import { storageClientLayer, type PostgresClientOptions } from "./PostgresStorageClient.ts";
+import { PostgresStorageConfig, PostgresStorageConfigValue } from "./PostgresStorageConfig.ts";
 import {
-  type SqliteStorageCompatibilityError,
-  SqliteAppendConflict,
-  SqliteCheckpointConflict,
-  SqliteFenceRejected,
-  type SqliteStorageFailpointLocation,
-  SqliteStorageCorruptionError,
-  SqliteStorageError,
-} from "./SqliteStorageError.ts";
+  type PostgresStorageCompatibilityError,
+  PostgresAppendConflict,
+  PostgresCheckpointConflict,
+  PostgresFenceRejected,
+  type PostgresStorageFailpointLocation,
+  PostgresStorageCorruptionError,
+  PostgresStorageError,
+} from "./PostgresStorageError.ts";
 import {
-  SqliteStorageFailpoint,
-  type SqliteStorageFailpointHandler,
-} from "./SqliteStorageFailpoint.ts";
+  PostgresStorageFailpoint,
+  type PostgresStorageFailpointHandler,
+} from "./PostgresStorageFailpoint.ts";
 
-export interface SqliteStorageOptions {
-  readonly filename: string;
+export interface PostgresStorageOptions {
+  /** Connection configuration for the adapter's own client, minus the type registry it owns. */
+  readonly client: PostgresClientOptions;
+  /**
+   * Postgres schema holding the adapter's tables, created if absent. Defaults to `public`.
+   *
+   * Selecting any other schema requires it to be the *connection's* default, because
+   * `search_path` binds per connection and this driver exposes no way to set one for a pool.
+   * Set it with `ALTER ROLE ... SET search_path` or `ALTER DATABASE ... SET search_path`; the
+   * adapter verifies the effective schema at startup and refuses to run if it disagrees.
+   */
+  readonly schema?: string | undefined;
   readonly observationPollInterval?: number | undefined;
-  /** Bounded SQLITE_BUSY retry window for write-lock acquisition, in milliseconds. */
-  readonly busyTimeout?: number | undefined;
+  /**
+   * Bounded wait for a contended row lock inside a write transaction, in milliseconds. A
+   * transaction that exceeds it fails with the retryable `PostgresWriteContention`.
+   */
+  readonly lockTimeout?: number | undefined;
   /**
    * Submission ownership lease duration in milliseconds (D5). Defaults to
    * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `effect-agent/submission-ledger`.
@@ -88,21 +101,21 @@ export interface SqliteStorageOptions {
    * rows without scanning the whole database on every open.
    */
   readonly verifyOnOpen?: boolean | undefined;
-  readonly failpoint?: SqliteStorageFailpointHandler | undefined;
+  readonly failpoint?: PostgresStorageFailpointHandler | undefined;
 }
 
-export type SqliteStorageInitializationError =
-  | SqliteStorageCompatibilityError
-  | SqliteStorageCorruptionError
-  | SqliteStorageError;
+export type PostgresStorageInitializationError =
+  | PostgresStorageCompatibilityError
+  | PostgresStorageCorruptionError
+  | PostgresStorageError;
 
 const OffsetText = Schema.String.check(Schema.isMaxLength(4 * 1024));
-const SQLITE_OFFSET_PREFIX = "effect-agent-sqlite@1:";
+const POSTGRES_OFFSET_PREFIX = "effect-agent-postgres@1:";
 const ZERO_CANONICAL_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 const isDigest = Schema.is(Digest);
-const isSqliteFenceRejected = Schema.is(SqliteFenceRejected);
-const isSqliteAppendConflict = Schema.is(SqliteAppendConflict);
-const isSqliteCheckpointConflict = Schema.is(SqliteCheckpointConflict);
+const isPostgresFenceRejected = Schema.is(PostgresFenceRejected);
+const isPostgresAppendConflict = Schema.is(PostgresAppendConflict);
+const isPostgresCheckpointConflict = Schema.is(PostgresCheckpointConflict);
 
 const storeError = (operation: string, error: { readonly message: string }) =>
   ThreadStoreError.make({
@@ -118,21 +131,21 @@ const schemaStoreError = (operation: string, error: { readonly message: string }
     message: error.message,
   });
 
-const makeOffset = Effect.fn("SqliteThreadStore.makeOffset")(function* (
+const makeOffset = Effect.fn("PostgresThreadStore.makeOffset")(function* (
   threadId: ThreadMaterialization["threadId"],
   sequence: number,
 ): Effect.fn.Return<ObservationOffset, ThreadStoreError> {
   return yield* Schema.decodeEffect(CanonicalSequence)(sequence).pipe(
     Effect.flatMap((validatedSequence) =>
       Schema.decodeEffect(ObservationOffset)(
-        `${SQLITE_OFFSET_PREFIX}${encodeURIComponent(threadId)}:${validatedSequence}`,
+        `${POSTGRES_OFFSET_PREFIX}${encodeURIComponent(threadId)}:${validatedSequence}`,
       ),
     ),
     Effect.mapError((error) => schemaStoreError("encode observation offset", error)),
   );
 });
 
-const parseOffset = Effect.fn("SqliteThreadStore.parseOffset")(function* (
+const parseOffset = Effect.fn("PostgresThreadStore.parseOffset")(function* (
   threadId: ThreadMaterialization["threadId"],
   offset: ObservationOffset | undefined,
 ): Effect.fn.Return<CanonicalSequence, ThreadStoreError> {
@@ -142,7 +155,7 @@ const parseOffset = Effect.fn("SqliteThreadStore.parseOffset")(function* (
     Effect.mapError((error) => schemaStoreError("decode observation offset", error)),
   );
 
-  const threadPrefix = `${SQLITE_OFFSET_PREFIX}${encodeURIComponent(threadId)}:`;
+  const threadPrefix = `${POSTGRES_OFFSET_PREFIX}${encodeURIComponent(threadId)}:`;
 
   if (!text.startsWith(threadPrefix)) {
     return yield* ThreadStoreError.make({
@@ -164,14 +177,14 @@ const parseOffset = Effect.fn("SqliteThreadStore.parseOffset")(function* (
   );
 });
 
-const mapFence = (threadId: ThreadMaterialization["threadId"], error: SqliteFenceRejected) =>
+const mapFence = (threadId: ThreadMaterialization["threadId"], error: PostgresFenceRejected) =>
   FenceRejected.make({
     threadId,
     actualEpoch: error.actualEpoch,
     attemptedEpoch: error.producerEpoch,
   });
 
-const encodeCanonicalRecord = Effect.fn("SqliteThreadStore.encodeCanonicalRecord")(function* (
+const encodeCanonicalRecord = Effect.fn("PostgresThreadStore.encodeCanonicalRecord")(function* (
   record: CanonicalRecord,
 ): Effect.fn.Return<string, ThreadStoreError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(record).pipe(
@@ -179,7 +192,7 @@ const encodeCanonicalRecord = Effect.fn("SqliteThreadStore.encodeCanonicalRecord
   );
 });
 
-const encodeCanonicalBatch = Effect.fn("SqliteThreadStore.encodeCanonicalBatch")(function* (
+const encodeCanonicalBatch = Effect.fn("PostgresThreadStore.encodeCanonicalBatch")(function* (
   batch: CanonicalBatch,
 ): Effect.fn.Return<string, ThreadStoreError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalBatch))(batch).pipe(
@@ -187,7 +200,7 @@ const encodeCanonicalBatch = Effect.fn("SqliteThreadStore.encodeCanonicalBatch")
   );
 });
 
-const encodeCheckpoint = Effect.fn("SqliteThreadStore.encodeCheckpoint")(function* (
+const encodeCheckpoint = Effect.fn("PostgresThreadStore.encodeCheckpoint")(function* (
   checkpoint: ThreadCheckpoint,
 ): Effect.fn.Return<string, ThreadStoreError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpoint).pipe(
@@ -195,7 +208,7 @@ const encodeCheckpoint = Effect.fn("SqliteThreadStore.encodeCheckpoint")(functio
   );
 });
 
-const decodeEnvelope = Effect.fn("SqliteThreadStore.decodeEnvelope")(function* (row: {
+const decodeEnvelope = Effect.fn("PostgresThreadStore.decodeEnvelope")(function* (row: {
   readonly batch_id: string;
   readonly thread_id: string;
   readonly record_json: string;
@@ -231,7 +244,7 @@ const decodeEnvelope = Effect.fn("SqliteThreadStore.decodeEnvelope")(function* (
   });
 });
 
-const decodeCheckpoint = Effect.fn("SqliteThreadStore.decodeCheckpoint")(function* (
+const decodeCheckpoint = Effect.fn("PostgresThreadStore.decodeCheckpoint")(function* (
   checkpointJson: string,
 ): Effect.fn.Return<ThreadCheckpoint, ThreadStoreError> {
   return yield* Schema.decodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpointJson).pipe(
@@ -239,8 +252,8 @@ const decodeCheckpoint = Effect.fn("SqliteThreadStore.decodeCheckpoint")(functio
   );
 });
 
-const requireThread = Effect.fn("SqliteThreadStore.requireThread")(function* (
-  journal: SqliteJournal,
+const requireThread = Effect.fn("PostgresThreadStore.requireThread")(function* (
+  journal: PostgresJournal,
   threadId: ThreadMaterialization["threadId"],
 ) {
   const rows = yield* journal
@@ -254,8 +267,8 @@ const requireThread = Effect.fn("SqliteThreadStore.requireThread")(function* (
   return rows[0];
 });
 
-const tailDigestAt = Effect.fn("SqliteThreadStore.tailDigestAt")(function* (
-  journal: SqliteJournal,
+const tailDigestAt = Effect.fn("PostgresThreadStore.tailDigestAt")(function* (
+  journal: PostgresJournal,
   threadId: ThreadMaterialization["threadId"],
   sequence: CanonicalSequence,
 ) {
@@ -301,8 +314,8 @@ const groupByKey = <A>(
  * projection checkpoints. Disposable recovery checkpoints are validated when loaded. Routine opens
  * skip this scan: per-operation Schema decoding fails clearly on corrupt canonical rows.
  */
-const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads")(function* (
-  journal: SqliteJournal,
+const decodeStartupPayloads = Effect.fn("PostgresThreadStore.decodeStartupPayloads")(function* (
+  journal: PostgresJournal,
   crypto: Crypto.Crypto,
 ) {
   const stored = yield* journal.scanStoredPayloads();
@@ -311,7 +324,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
     Schema.decodeEffect(Schema.fromJsonString(CanonicalBatch))(batch.batch_json).pipe(
       Effect.map((decoded) => ({ decoded, row: batch })),
       Effect.mapError((error) =>
-        SqliteStorageCorruptionError.make({
+        PostgresStorageCorruptionError.make({
           table: "effect_agent_canonical_batches",
           rowKey: `${batch.thread_id}/${batch.batch_id}`,
           message: error.message,
@@ -324,7 +337,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
     Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(record.record_json).pipe(
       Effect.map((decoded) => ({ decoded, row: record })),
       Effect.mapError((error) =>
-        SqliteStorageCorruptionError.make({
+        PostgresStorageCorruptionError.make({
           table: "effect_agent_canonical_records",
           rowKey: `${record.thread_id}/${record.sequence}`,
           message: error.message,
@@ -337,7 +350,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
     Schema.decodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpoint.checkpoint_json).pipe(
       Effect.map((decoded) => ({ decoded, row: checkpoint })),
       Effect.mapError((error) =>
-        SqliteStorageCorruptionError.make({
+        PostgresStorageCorruptionError.make({
           table: "effect_agent_checkpoints",
           rowKey: `${checkpoint.thread_id}/${checkpoint.through_sequence}`,
           message: error.message,
@@ -368,7 +381,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
         batchRow.first_sequence !== expectedSequence ||
         batchRow.last_sequence !== batchRow.first_sequence + canonicalBatch.records.length - 1
       ) {
-        return yield* SqliteStorageCorruptionError.make({
+        return yield* PostgresStorageCorruptionError.make({
           table: "effect_agent_canonical_batches",
           rowKey: key,
           message: "Canonical batch identity, sequence, or record count is inconsistent.",
@@ -378,7 +391,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
       const digest = yield* digestCanonicalBatch(previousDigest, canonicalBatch).pipe(
         Effect.provideService(Crypto.Crypto, crypto),
         Effect.mapError((error) =>
-          SqliteStorageCorruptionError.make({
+          PostgresStorageCorruptionError.make({
             table: "effect_agent_canonical_batches",
             rowKey: key,
             message: error.message,
@@ -387,7 +400,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
       );
 
       if (batchRow.batch_digest !== digest || batchRow.tail_digest !== digest) {
-        return yield* SqliteStorageCorruptionError.make({
+        return yield* PostgresStorageCorruptionError.make({
           table: "effect_agent_canonical_batches",
           rowKey: key,
           message: "Canonical batch digest does not match its decoded content and prior tail.",
@@ -397,7 +410,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
       const batchRecords = recordsByBatch.get(batchRow.batch_id) ?? [];
 
       if (batchRecords.length !== canonicalBatch.records.length) {
-        return yield* SqliteStorageCorruptionError.make({
+        return yield* PostgresStorageCorruptionError.make({
           table: "effect_agent_canonical_records",
           rowKey: key,
           message: "Canonical batch and record-table counts differ.",
@@ -411,7 +424,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
           expectedRecord,
         ).pipe(
           Effect.mapError((error) =>
-            SqliteStorageCorruptionError.make({
+            PostgresStorageCorruptionError.make({
               table: "effect_agent_canonical_batches",
               rowKey: key,
               message: error.message,
@@ -423,7 +436,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
           storedRecord.decoded,
         ).pipe(
           Effect.mapError((error) =>
-            SqliteStorageCorruptionError.make({
+            PostgresStorageCorruptionError.make({
               table: "effect_agent_canonical_records",
               rowKey: `${key}/${storedRecord.row.sequence}`,
               message: error.message,
@@ -436,7 +449,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
           storedRecord.row.record_id !== expectedRecord.recordId ||
           expectedJson !== storedJson
         ) {
-          return yield* SqliteStorageCorruptionError.make({
+          return yield* PostgresStorageCorruptionError.make({
             table: "effect_agent_canonical_records",
             rowKey: `${key}/${storedRecord.row.sequence}`,
             message: "Canonical record identity, sequence, or payload differs from its batch.",
@@ -454,7 +467,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
       thread.tail_sequence !== expectedSequence - 1 ||
       thread.tail_digest !== previousDigest
     ) {
-      return yield* SqliteStorageCorruptionError.make({
+      return yield* PostgresStorageCorruptionError.make({
         table: "effect_agent_threads",
         rowKey: thread.thread_id,
         message: "Thread tail does not match its canonical batch chain.",
@@ -468,7 +481,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
         checkpoint.decoded.tailDigest !== checkpoint.row.tail_digest ||
         tailDigests.get(checkpoint.row.through_sequence) !== checkpoint.row.tail_digest
       ) {
-        return yield* SqliteStorageCorruptionError.make({
+        return yield* PostgresStorageCorruptionError.make({
           table: "effect_agent_checkpoints",
           rowKey: `${thread.thread_id}/${checkpoint.row.through_sequence}`,
           message: "Checkpoint identity or digest is not bound to a canonical batch tail.",
@@ -482,7 +495,7 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
     records.some(({ row }) => !materializedIds.has(row.thread_id)) ||
     checkpoints.some(({ row }) => !materializedIds.has(row.thread_id))
   ) {
-    return yield* SqliteStorageCorruptionError.make({
+    return yield* PostgresStorageCorruptionError.make({
       table: "effect_agent_threads",
       rowKey: "startup_scan",
       message: "Canonical rows exist without a materialized Thread.",
@@ -490,11 +503,11 @@ const decodeStartupPayloads = Effect.fn("SqliteThreadStore.decodeStartupPayloads
   }
 });
 
-const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
-  const config = yield* SqliteStorageConfig;
-  const failpoint = yield* SqliteStorageFailpoint;
+const makeServices = Effect.fn("PostgresThreadStore.makeServices")(function* () {
+  const config = yield* PostgresStorageConfig;
+  const failpoint = yield* PostgresStorageFailpoint;
   const crypto = yield* Crypto.Crypto;
-  const journal = yield* initializeSqliteJournal();
+  const journal = yield* initializePostgresJournal();
 
   if (config.verifyOnOpen) {
     yield* decodeStartupPayloads(journal, crypto);
@@ -503,15 +516,15 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   const provideCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
     Effect.provideService(effect, Crypto.Crypto, crypto);
 
-  const hitFailpoint = Effect.fn("SqliteThreadStore.hitFailpoint")(
-    (location: SqliteStorageFailpointLocation): Effect.Effect<void, ThreadStoreError> =>
+  const hitFailpoint = Effect.fn("PostgresThreadStore.hitFailpoint")(
+    (location: PostgresStorageFailpointLocation): Effect.Effect<void, ThreadStoreError> =>
       failpoint
         .hit(location)
         .pipe(Effect.mapError((error) => storeError(`storage failpoint ${location}`, error))),
   );
 
   const materialize: ThreadStore["Service"]["materialize"] = Effect.fn(
-    "SqliteThreadStore.materialize",
+    "PostgresThreadStore.materialize",
   )(function* (request: ThreadMaterialization) {
     const validated = yield* Schema.decodeEffect(Schema.toType(ThreadMaterialization))(
       request,
@@ -529,7 +542,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
       )
       .pipe(
         Effect.mapError((error) =>
-          error._tag === "SqliteFenceRejected"
+          error._tag === "PostgresFenceRejected"
             ? mapFence(validated.threadId, error)
             : storeError("materialize thread", error),
         ),
@@ -537,80 +550,80 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
     yield* hitFailpoint("materialize:after");
   });
 
-  const append: ThreadStore["Service"]["append"] = Effect.fn("SqliteThreadStore.append")(function* (
-    request: FencedAppendRequest,
-  ) {
-    const validated = yield* Schema.decodeEffect(Schema.toType(FencedAppendRequest))(request).pipe(
-      Effect.mapError((error) => schemaStoreError("validate canonical append", error)),
-    );
+  const append: ThreadStore["Service"]["append"] = Effect.fn("PostgresThreadStore.append")(
+    function* (request: FencedAppendRequest) {
+      const validated = yield* Schema.decodeEffect(Schema.toType(FencedAppendRequest))(
+        request,
+      ).pipe(Effect.mapError((error) => schemaStoreError("validate canonical append", error)));
 
-    yield* requireThread(journal, validated.threadId);
+      yield* requireThread(journal, validated.threadId);
 
-    const tailDigest = yield* provideCrypto(
-      digestCanonicalBatch(validated.expectedTailDigest, validated.batch),
-    ).pipe(Effect.mapError((error) => storeError("digest canonical append", error)));
+      const tailDigest = yield* provideCrypto(
+        digestCanonicalBatch(validated.expectedTailDigest, validated.batch),
+      ).pipe(Effect.mapError((error) => storeError("digest canonical append", error)));
 
-    const batchJson = yield* encodeCanonicalBatch(validated.batch);
+      const batchJson = yield* encodeCanonicalBatch(validated.batch);
 
-    const rawRecords = yield* Effect.forEach(validated.batch.records, (record) =>
-      encodeCanonicalRecord(record).pipe(
-        Effect.map((recordJson) => ({
-          recordId: record.recordId,
-          recordJson,
-        })),
-      ),
-    );
-
-    const rawRequest = yield* Schema.decodeEffect(RawAppendRequest)({
-      threadId: validated.threadId,
-      batchId: validated.batch.batchId,
-      batchDigest: tailDigest,
-      batchJson,
-      expectedTailSequence: validated.expectedTailSequence,
-      expectedTailDigest: validated.expectedTailDigest,
-      producerEpoch: validated.producerEpoch,
-      records: rawRecords,
-      tailDigest,
-    }).pipe(Effect.mapError((error) => schemaStoreError("encode canonical append", error)));
-
-    yield* hitFailpoint("append:before");
-
-    const result = yield* journal.append(rawRequest).pipe(
-      Effect.mapError((error) => {
-        if (isSqliteFenceRejected(error)) {
-          return mapFence(validated.threadId, error);
-        }
-        if (isSqliteAppendConflict(error)) {
-          return error.actualTailSequence !== undefined && isDigest(error.actualTailDigest)
-            ? AppendConflict.make({
-                threadId: validated.threadId,
-                batchId: validated.batch.batchId,
-                reason: error.reason,
-                actualTailSequence: error.actualTailSequence,
-                actualTailDigest: error.actualTailDigest,
-              })
-            : AppendConflict.make({
-                threadId: validated.threadId,
-                batchId: validated.batch.batchId,
-                reason: error.reason,
-              });
-        }
-
-        return storeError("append canonical batch", error);
-      }),
-      Effect.flatMap((result) =>
-        Schema.decodeEffect(AppendResult)(result).pipe(
-          Effect.mapError((error) => schemaStoreError("decode append result", error)),
+      const rawRecords = yield* Effect.forEach(validated.batch.records, (record) =>
+        encodeCanonicalRecord(record).pipe(
+          Effect.map((recordJson) => ({
+            recordId: record.recordId,
+            recordJson,
+          })),
         ),
-      ),
-    );
+      );
 
-    yield* hitFailpoint("append:after");
+      const rawRequest = yield* Schema.decodeEffect(RawAppendRequest)({
+        threadId: validated.threadId,
+        batchId: validated.batch.batchId,
+        batchDigest: tailDigest,
+        batchJson,
+        expectedTailSequence: validated.expectedTailSequence,
+        expectedTailDigest: validated.expectedTailDigest,
+        producerEpoch: validated.producerEpoch,
+        records: rawRecords,
+        tailDigest,
+      }).pipe(Effect.mapError((error) => schemaStoreError("encode canonical append", error)));
 
-    return result;
-  });
+      yield* hitFailpoint("append:before");
 
-  const loadRecords = Effect.fn("SqliteThreadStore.loadRecords")(function* (
+      const result = yield* journal.append(rawRequest).pipe(
+        Effect.mapError((error) => {
+          if (isPostgresFenceRejected(error)) {
+            return mapFence(validated.threadId, error);
+          }
+          if (isPostgresAppendConflict(error)) {
+            return error.actualTailSequence !== undefined && isDigest(error.actualTailDigest)
+              ? AppendConflict.make({
+                  threadId: validated.threadId,
+                  batchId: validated.batch.batchId,
+                  reason: error.reason,
+                  actualTailSequence: error.actualTailSequence,
+                  actualTailDigest: error.actualTailDigest,
+                })
+              : AppendConflict.make({
+                  threadId: validated.threadId,
+                  batchId: validated.batch.batchId,
+                  reason: error.reason,
+                });
+          }
+
+          return storeError("append canonical batch", error);
+        }),
+        Effect.flatMap((result) =>
+          Schema.decodeEffect(AppendResult)(result).pipe(
+            Effect.mapError((error) => schemaStoreError("decode append result", error)),
+          ),
+        ),
+      );
+
+      yield* hitFailpoint("append:after");
+
+      return result;
+    },
+  );
+
+  const loadRecords = Effect.fn("PostgresThreadStore.loadRecords")(function* (
     request: RawReadRequest,
   ) {
     const rows = yield* journal
@@ -620,7 +633,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
     return yield* Effect.forEach(rows, decodeEnvelope);
   });
 
-  const readEffect = Effect.fn("SqliteThreadStore.read")(function* (request: ThreadReadRequest) {
+  const readEffect = Effect.fn("PostgresThreadStore.read")(function* (request: ThreadReadRequest) {
     const validated = yield* Schema.decodeEffect(Schema.toType(ThreadReadRequest))(request).pipe(
       Effect.mapError((error) => schemaStoreError("validate thread read", error)),
     );
@@ -641,7 +654,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
 
   const read: ThreadStore["Service"]["read"] = (request) => Stream.unwrap(readEffect(request));
 
-  const observeEffect = Effect.fn("SqliteThreadStore.observe")(function* (
+  const observeEffect = Effect.fn("PostgresThreadStore.observe")(function* (
     request: ThreadObservation,
   ) {
     const validated = yield* Schema.decodeEffect(Schema.toType(ThreadObservation))(request).pipe(
@@ -652,7 +665,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
     const initialSequence = yield* parseOffset(validated.threadId, validated.afterOffset);
     const cursor = yield* Ref.make(initialSequence);
 
-    const poll = Effect.fn("SqliteThreadStore.observePoll")(function* () {
+    const poll = Effect.fn("PostgresThreadStore.observePoll")(function* () {
       const fromSequenceExclusive = yield* Ref.get(cursor);
 
       const records = yield* loadRecords(
@@ -679,7 +692,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   const observe: ThreadStore["Service"]["observe"] = (request) =>
     Stream.unwrap(observeEffect(request));
 
-  const exportThread: ThreadStore["Service"]["export"] = Effect.fn("SqliteThreadStore.export")(
+  const exportThread: ThreadStore["Service"]["export"] = Effect.fn("PostgresThreadStore.export")(
     function* (request: ThreadExportRequest) {
       const validated = yield* Schema.decodeEffect(Schema.toType(ThreadExportRequest))(
         request,
@@ -715,7 +728,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   );
 
   const inspectTail: ThreadStore["Service"]["inspectTail"] = Effect.fn(
-    "SqliteThreadStore.inspectTail",
+    "PostgresThreadStore.inspectTail",
   )(function* (request: ThreadTailRequest) {
     const validated = yield* Schema.decodeEffect(Schema.toType(ThreadTailRequest))(request).pipe(
       Effect.mapError((error) => schemaStoreError("validate tail inspection", error)),
@@ -735,7 +748,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
     });
   });
 
-  const saveCheckpoint: ThreadCheckpoints["save"] = Effect.fn("SqliteThreadStore.saveCheckpoint")(
+  const saveCheckpoint: ThreadCheckpoints["save"] = Effect.fn("PostgresThreadStore.saveCheckpoint")(
     function* (request: SaveCheckpointRequest) {
       const validated = yield* Schema.decodeEffect(Schema.toType(SaveCheckpointRequest))(
         request,
@@ -774,7 +787,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
       yield* hitFailpoint("save-checkpoint:before");
       yield* journal.saveCheckpoint(raw).pipe(
         Effect.mapError((error) =>
-          isSqliteCheckpointConflict(error)
+          isPostgresCheckpointConflict(error)
             ? CheckpointRejected.make({
                 threadId: validated.checkpoint.threadId,
                 reason: "digest-mismatch",
@@ -786,7 +799,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
     },
   );
 
-  const loadCheckpoint: ThreadCheckpoints["load"] = Effect.fn("SqliteThreadStore.loadCheckpoint")(
+  const loadCheckpoint: ThreadCheckpoints["load"] = Effect.fn("PostgresThreadStore.loadCheckpoint")(
     function* (request: LoadCheckpointRequest) {
       const validated = yield* Schema.decodeEffect(Schema.toType(LoadCheckpointRequest))(
         request,
@@ -838,7 +851,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   );
 
   const saveRecoveryCheckpoint: ThreadRecoveryCheckpoints["save"] = Effect.fn(
-    "SqliteThreadStore.saveRecoveryCheckpoint",
+    "PostgresThreadStore.saveRecoveryCheckpoint",
   )(function* (request) {
     const validated = yield* Schema.decodeEffect(Schema.toType(SaveRecoveryCheckpointRequest))(
       request,
@@ -860,7 +873,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
   });
 
   const loadRecoveryCheckpoint: ThreadRecoveryCheckpoints["load"] = Effect.fn(
-    "SqliteThreadStore.loadRecoveryCheckpoint",
+    "PostgresThreadStore.loadRecoveryCheckpoint",
   )(function* (request) {
     const validated = yield* Schema.decodeEffect(Schema.toType(LoadCheckpointRequest))(
       request,
@@ -877,7 +890,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
       .loadRecoveryCheckpoint(validated.threadId)
       .pipe(
         Effect.mapError((error) =>
-          error._tag === "SqliteStorageCorruptionError"
+          error._tag === "PostgresStorageCorruptionError"
             ? corrupt()
             : storeError("load recovery checkpoint", error),
         ),
@@ -944,9 +957,9 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
  */
 export const threadStoreLayer: Layer.Layer<
   ThreadStore,
-  SqliteStorageInitializationError,
-  SqliteStorageConfig | SqliteStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
-> = Layer.effectContext(makeServices()).pipe(Layer.provide(sqliteLayer));
+  PostgresStorageInitializationError,
+  PostgresStorageConfig | PostgresStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
+> = Layer.effectContext(makeServices()).pipe(Layer.provide(postgresLayer));
 
 /**
  * Validated SQLite storage configuration Layer with the documented defaults applied. Shared
@@ -954,18 +967,19 @@ export const threadStoreLayer: Layer.Layer<
  * drift.
  */
 export const storageConfigLayer = (
-  options: SqliteStorageOptions,
-): Layer.Layer<SqliteStorageConfig, SqliteStorageError> =>
-  Layer.effect(SqliteStorageConfig)(
-    Schema.decodeEffect(SqliteStorageConfigValue)({
+  options: PostgresStorageOptions,
+): Layer.Layer<PostgresStorageConfig, PostgresStorageError> =>
+  Layer.effect(PostgresStorageConfig)(
+    Schema.decodeEffect(PostgresStorageConfigValue)({
       observationPollInterval: options.observationPollInterval ?? 25,
-      busyTimeout: options.busyTimeout ?? 5_000,
+      lockTimeout: options.lockTimeout ?? 5_000,
+      schema: options.schema ?? "public",
       ownershipLeaseDuration:
         options.ownershipLeaseDuration ?? Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION),
       verifyOnOpen: options.verifyOnOpen ?? false,
     }).pipe(
       Effect.mapError((error) =>
-        SqliteStorageError.make({
+        PostgresStorageError.make({
           cause: error,
           operation: "configure SQLite storage",
           message: error.message,
@@ -976,27 +990,27 @@ export const storageConfigLayer = (
 
 /** The failpoint Layer selected by convenience options: explicit handler or the no-op default. */
 export const storageFailpointLayer = (
-  options: SqliteStorageOptions,
-): Layer.Layer<SqliteStorageFailpoint> =>
+  options: PostgresStorageOptions,
+): Layer.Layer<PostgresStorageFailpoint> =>
   options.failpoint === undefined
-    ? SqliteStorageFailpoint.layer
-    : Layer.succeed(SqliteStorageFailpoint)({ hit: options.failpoint });
+    ? PostgresStorageFailpoint.layer
+    : Layer.succeed(PostgresStorageFailpoint)({ hit: options.failpoint });
 
 /**
  * A composition-root convenience Layer for canonical Threads. Durable accepted work is
  * served by the separate SubmissionLedger port.
  */
 export const layer = (
-  options: SqliteStorageOptions,
-): Layer.Layer<ThreadStore, SqliteStorageInitializationError> =>
+  options: PostgresStorageOptions,
+): Layer.Layer<ThreadStore, PostgresStorageInitializationError> =>
   Layer.unwrap(
-    Effect.map(SqliteStorageConfig, (config) =>
+    Effect.map(PostgresStorageConfig, (config) =>
       threadStoreLayer.pipe(
         Layer.provide(
           Layer.mergeAll(
-            Layer.succeed(SqliteStorageConfig)(config),
+            Layer.succeed(PostgresStorageConfig)(config),
             storageFailpointLayer(options),
-            SqliteClient.layer({ filename: options.filename }),
+            storageClientLayer(options.client),
             NodeCrypto.layer,
           ),
         ),

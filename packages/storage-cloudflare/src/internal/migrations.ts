@@ -1,5 +1,6 @@
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import { Effect } from "effect";
+import { sqliteLayer } from "effect-agent/sql-dialect";
 import { createMessageDeliveryPendingIndex } from "effect-agent/sql-message-delivery-store";
 import { createNativeReadIndexes } from "effect-agent/sql-thread-native-reads";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -267,7 +268,7 @@ export const doMigrations = SqliteMigrator.fromRecord({
       )
     `.withoutTransform;
 
-    yield* createNativeReadIndexes;
+    yield* Effect.provide(createNativeReadIndexes, sqliteLayer);
     yield* createNonterminalIndex;
     yield* createMessageDeliveryTables;
     yield* createMessageDeliveryPendingIndex;

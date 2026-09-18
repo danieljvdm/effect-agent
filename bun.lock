@@ -13,6 +13,7 @@
         "@effect-agent/platform-node": "workspace:*",
         "@effect-agent/sandbox-local": "workspace:*",
         "@effect-agent/storage-memory": "workspace:*",
+        "@effect-agent/storage-postgres": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/testing": "workspace:*",
         "@effect-agent/workflow": "workspace:*",
@@ -21,6 +22,7 @@
         "@effect/platform-browser": "catalog:",
         "@effect/platform-bun": "catalog:",
         "@effect/platform-node": "catalog:",
+        "@effect/sql-pg": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
         "@effect/tsgo": "catalog:",
         "@fontsource-variable/ibm-plex-sans": "catalog:",
@@ -280,6 +282,24 @@
         "effect": "^4.0.0-rc.115",
       },
     },
+    "packages/storage-postgres": {
+      "name": "@effect-agent/storage-postgres",
+      "version": "0.1.0-beta.109",
+      "dependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/sql-pg": "catalog:",
+        "effect-agent": "workspace:*",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "effect": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "^4.0.0-rc.115",
+      },
+    },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
       "version": "0.1.0-beta.110",
@@ -492,6 +512,7 @@
     "@effect/platform-bun": "4.0.0-rc.115",
     "@effect/platform-node": "4.0.0-rc.115",
     "@effect/sql-d1": "4.0.0-rc.115",
+    "@effect/sql-pg": "4.0.0-rc.115",
     "@effect/sql-sqlite-do": "4.0.0-rc.115",
     "@effect/sql-sqlite-node": "4.0.0-rc.115",
     "@effect/tsgo": "0.45.0",
@@ -758,6 +779,8 @@
 
     "@effect-agent/storage-memory": ["@effect-agent/storage-memory@workspace:packages/storage-memory"],
 
+    "@effect-agent/storage-postgres": ["@effect-agent/storage-postgres@workspace:packages/storage-postgres"],
+
     "@effect-agent/storage-sqlite": ["@effect-agent/storage-sqlite@workspace:packages/storage-sqlite"],
 
     "@effect-agent/testing": ["@effect-agent/testing@workspace:packages/testing"],
@@ -779,6 +802,8 @@
     "@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.0-rc.115", "", { "dependencies": { "@types/ws": "^8.18.1", "ws": "^8.21.3" }, "peerDependencies": { "effect": "^4.0.0-rc.115" } }, "sha512-rcBwhDIfb82akJoTv7Vwh8K5x9vC/XfuePS7JjOr+z+dORXzsmKqI1BUQF27ARCN9fTAbDh7I6YvBlWhLjnqNg=="],
 
     "@effect/sql-d1": ["@effect/sql-d1@4.0.0-rc.115", "", { "dependencies": { "@cloudflare/workers-types": "^5.20260905.1" }, "peerDependencies": { "effect": "^4.0.0-rc.115" } }, "sha512-o2JkGjN02NBMxwDtJbwcC4teyMiOApqN085fdVMid4FUC6ixj/WyKyPpe51QGOMQQTTl2BkXccA/IwDIywGXlA=="],
+
+    "@effect/sql-pg": ["@effect/sql-pg@4.0.0-rc.115", "", { "peerDependencies": { "effect": "^4.0.0-rc.115" } }, "sha512-TLdzqBvGF/HwAKpWTw/5ih7JqVkkakVSb4aD6amzMaavFfFl4vsqqeKjSBijwuzbOMANNN0HqnEt/9fgjTsFEA=="],
 
     "@effect/sql-sqlite-do": ["@effect/sql-sqlite-do@4.0.0-rc.115", "", { "peerDependencies": { "effect": "^4.0.0-rc.115" } }, "sha512-7lH9h+w4DW2tI+dus4hEac5mSCy1wgiT+uw/VvjR8YhNDemd3zEFY03NkbD81ipfOpnu2QA1YwgM58ExyPlhug=="],
 

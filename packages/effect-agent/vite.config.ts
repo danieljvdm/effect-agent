@@ -88,6 +88,7 @@ export default defineConfig({
       "src/durable/ScheduleTransition.ts",
       "src/durable/Scheduling.ts",
       "src/durable/SqlMemoryStore.ts",
+      "src/durable/SqlDialect.ts",
       "src/durable/SqlThreadNativeReads.ts",
       "src/durable/SqlStorageV2Upgrade.ts",
       "src/durable/SqlSubscriptionStore.ts",

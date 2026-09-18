@@ -22,6 +22,7 @@ import {
   validateMessageDelivery,
 } from "./MessageDelivery.ts";
 import { ScheduleInstant } from "./Schedule.ts";
+import { SqlDialect } from "./SqlDialect.ts";
 import { IdempotencyKey } from "./SubmissionLedger.ts";
 
 /** The adapter owns the atomic transaction and any associated native wake/alarm update. */
@@ -97,6 +98,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
   );
 
   const sql = yield* SqlClient.SqlClient;
+  const dialect = yield* SqlDialect;
   const transaction = yield* SqlMessageDeliveryTransaction;
   const failpoint = yield* MessageDeliveryFailpoint;
 
@@ -198,7 +200,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
         const counts = yield* query(
           "count",
-          sql`SELECT COUNT(*) AS retained, COALESCE(SUM(CASE WHEN state IN ('pending', 'accepted', 'parked') THEN 1 ELSE 0 END), 0) AS pending FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.key.ownerThreadId} AND COALESCE(json_extract(record_json, '$.envelope.messageAdmission._tag'), '') ${update ? sql`= 'WorkerUpdate'` : sql`<> 'WorkerUpdate'`}`,
+          sql`SELECT COUNT(*) AS retained, COALESCE(SUM(CASE WHEN state IN ('pending', 'accepted', 'parked') THEN 1 ELSE 0 END), 0) AS pending FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.key.ownerThreadId} AND COALESCE(${dialect.jsonText("record_json", ["envelope", "messageAdmission", "_tag"])}, '') ${update ? sql`= 'WorkerUpdate'` : sql`<> 'WorkerUpdate'`}`,
         );
 
         const count = (yield* Schema.decodeUnknownEffect(Schema.Array(Count))(counts).pipe(

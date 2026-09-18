@@ -4,14 +4,14 @@ import {
   MessageDeliveryStore,
   type MessageDeliveryStoreLimits,
 } from "effect-agent/message-delivery";
-import { sqliteLayer } from "effect-agent/sql-dialect";
+import { postgresLayer } from "effect-agent/sql-dialect";
 import {
   makeSqlMessageDeliveryStore,
   SqlMessageDeliveryTransaction,
 } from "effect-agent/sql-message-delivery-store";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { initializeSqliteJournal } from "./internal/sqlite-journal.ts";
+import { initializePostgresJournal } from "./internal/postgres-journal.ts";
 
 const transactions = Layer.effect(
   SqlMessageDeliveryTransaction,
@@ -31,13 +31,13 @@ const transactions = Layer.effect(
   }),
 );
 
-/** Source-owned message obligations in the host's existing SQLite database. */
+/** Source-owned message obligations in the host's existing Postgres database. */
 export const messageDeliveryStoreLayer = (limits?: MessageDeliveryStoreLimits) =>
   Layer.effect(
     MessageDeliveryStore,
     Effect.gen(function* () {
-      yield* initializeSqliteJournal();
+      yield* initializePostgresJournal();
 
       return yield* makeSqlMessageDeliveryStore(limits, { maxStoredValueBytes: 16 * 1024 * 1024 });
     }),
-  ).pipe(Layer.provide(transactions), Layer.provide(sqliteLayer));
+  ).pipe(Layer.provide(transactions), Layer.provide(postgresLayer));
