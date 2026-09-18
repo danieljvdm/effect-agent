@@ -136,7 +136,8 @@ implementations.
 `SelectiveCompactor.layer` (`effect-agent/selective-compactor`) wraps that service with
 [selective result pruning](../guide/context-management#selective-pruning). Supply a provider-neutral
 Decision Model and an existing summary or rollover fallback; Jev is configured through
-`@effect-agent/ai-typesafe`.
+`@effect-agent/ai-typesafe`. Its optional `question` hook builds a probability query in Effect:
+true means keep the result, and the hook's service requirements belong to the compactor Layer.
 
 ## Find a capability {#capability-inventory}
 

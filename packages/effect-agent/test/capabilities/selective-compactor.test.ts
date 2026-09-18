@@ -1,5 +1,16 @@
-import { DecisionModel } from "@effect-agent/ai-decision";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
+import { DecisionModel, DecisionQuery } from "@effect-agent/ai-decision";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { SelectiveCompactor } from "effect-agent";
 import { CompactionPolicy } from "effect-agent/agent-policy";
 import {
@@ -65,6 +76,11 @@ const unmeteredEvaluator = CompactionEvaluator().of({
   evaluate: (operation) => operation.pipe(Effect.map((result) => result.value)),
 });
 
+class QuestionPolicy extends Context.Service<
+  QuestionPolicy,
+  { readonly instructions: Effect.Effect<string, CompactionError> }
+>()("test/SelectiveCompactor/QuestionPolicy") {}
+
 it("pins application-selected tools and supplies bounded result evidence to the classifier", async () => {
   let calls = 0;
 
@@ -111,6 +127,86 @@ it("pins application-selected tools and supplies bounded result evidence to the 
   );
 
   expect(calls).toBe(1);
+  expect(decisions).toEqual([
+    { kind: "clear-tool-results", through: 5, results: [{ messageIndex: 4, toolCallId: "noise" }] },
+  ]);
+});
+
+it("captures custom question services and closes preparation resources before inference", async () => {
+  let prepared = 0;
+  let finalized = 0;
+  const instructions = "Keep this result as supporting evidence for the trip report.";
+  const criteria = { true: "Needed for the report", false: "Superseded evidence" };
+
+  const provider = Layer.effect(
+    DecisionModel.DecisionModel,
+    DecisionModel.make({
+      evaluate: (input) =>
+        Effect.sync(() => {
+          expect(prepared).toBe(1);
+          expect(finalized).toBe(1);
+          expect(Object.values(input.questions)).toEqual([
+            { type: "probability", instructions, criteria },
+          ]);
+
+          return {
+            provider: "test",
+            model: "custom-question",
+            usage: { inputTokens: 1, outputTokens: 1 },
+            answers: Object.fromEntries(
+              Object.keys(input.questions).map((id) => [
+                id,
+                { type: "probability", probability: 0.05 },
+              ]),
+            ),
+          };
+        }),
+    }),
+  );
+
+  const selected = SelectiveCompactor.layer({
+    pinnedTools: ["book_trip"],
+    question: Effect.fn(function* ({ result, state }) {
+      const policy = yield* QuestionPolicy;
+      const instructions = yield* policy.instructions;
+
+      expect(result.tool).toBe("list_files");
+      expect(state.task).toBe("Prepare the trip report.");
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          prepared++;
+        }),
+        () =>
+          Effect.sync(() => {
+            finalized++;
+          }),
+      );
+
+      return DecisionQuery.probability({ instructions, criteria });
+    }),
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        ContextCompactor.layerRollover,
+        provider,
+        Layer.succeed(QuestionPolicy, { instructions: Effect.succeed(instructions) }),
+      ),
+    ),
+  );
+
+  const decisions = await Effect.runPromise(
+    Effect.gen(function* () {
+      const compactor = yield* ContextCompactor;
+
+      expect(prepared).toBe(0);
+
+      return yield* compactor.compact(request).pipe(Stream.runCollect);
+    }).pipe(
+      Effect.provideService(CompactionEvaluator(), unmeteredEvaluator),
+      Effect.provide(selected),
+    ),
+  );
+
   expect(decisions).toEqual([
     { kind: "clear-tool-results", through: 5, results: [{ messageIndex: 4, toolCallId: "noise" }] },
   ]);
@@ -256,6 +352,7 @@ it("fits the complete Unicode request and leaves candidates beyond the bound uns
     );
   }
   let queried = 0;
+  let prepared = 0;
 
   const provider = Layer.effect(
     DecisionModel.DecisionModel,
@@ -266,8 +363,9 @@ it("fits the complete Unicode request and leaves candidates beyond the bound uns
             48_000,
           );
           queried = Object.keys(input.questions).length;
+          expect(prepared).toBe(32);
           expect(queried).toBeGreaterThan(0);
-          expect(queried).toBeLessThanOrEqual(32);
+          expect(queried).toBeLessThan(32);
 
           return {
             provider: "test",
@@ -294,10 +392,16 @@ it("fits the complete Unicode request and leaves candidates beyond the bound uns
     }).pipe(
       Effect.provideService(CompactionEvaluator(), unmeteredEvaluator),
       Effect.provide(
-        SelectiveCompactor.layer().pipe(
-          Layer.provide(ContextCompactor.layer),
-          Layer.provide(provider),
-        ),
+        SelectiveCompactor.layer({
+          question: ({ result }) =>
+            Effect.sync(() => {
+              prepared++;
+
+              return DecisionQuery.probability({
+                instructions: `Keep ${result.id} as evidence: ${"参考資料".repeat(1_000)}`,
+              });
+            }),
+        }).pipe(Layer.provide(ContextCompactor.layer), Layer.provide(provider)),
       ),
     ),
   );
@@ -395,6 +499,121 @@ for (const mode of ["invalid", "failure", "defect", "timeout", "interruption"] a
   });
 }
 
+it("rejects a non-probability question before reserving an evaluation", async () => {
+  const selected = SelectiveCompactor.layer({
+    // @ts-expect-error JavaScript consumers must also be prevented from changing the answer kind.
+    question: () =>
+      Effect.succeed(DecisionQuery.score({ instructions: "Relevance", levels: ["low", "high"] })),
+  }).pipe(
+    Layer.provide(
+      Layer.merge(
+        ContextCompactor.layerRollover,
+        Layer.effect(
+          DecisionModel.DecisionModel,
+          DecisionModel.make({
+            evaluate: () => Effect.die("Unexpected classifier call"),
+          }),
+        ),
+      ),
+    ),
+  );
+
+  const exit = await Effect.runPromiseExit(
+    Effect.gen(function* () {
+      const compactor = yield* ContextCompactor;
+
+      return yield* compactor.compact(request).pipe(Stream.runCollect);
+    }).pipe(
+      Effect.provideService(CompactionEvaluator(), {
+        available: true,
+        evaluate: () => Effect.die("Unexpected evaluation reservation"),
+      }),
+      Effect.provide(selected),
+    ),
+  );
+
+  const error = Exit.isFailure(exit) ? Cause.findErrorOption(exit.cause) : Option.none();
+
+  expect(error).toMatchObject(
+    Option.some({
+      _tag: "CompactionError",
+      message: "Invalid compaction probability question",
+    }),
+  );
+});
+
+for (const mode of ["failure", "defect", "timeout", "interruption"] as const) {
+  it(`finalizes question preparation on ${mode} before reservation, inference or pruning`, async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const failure = CompactionError.make({ message: "Retention policy unavailable" });
+        let finalized = 0;
+        const emitted: Array<CompactionDecision> = [];
+
+        const outcome =
+          mode === "failure"
+            ? Effect.fail(failure)
+            : mode === "defect"
+              ? Effect.die("question defect")
+              : Effect.never;
+
+        const provider = Layer.effect(
+          DecisionModel.DecisionModel,
+          DecisionModel.make({ evaluate: () => Effect.die("Unexpected classifier call") }),
+        );
+
+        const selected = SelectiveCompactor.layer({
+          question: () =>
+            Effect.acquireRelease(Deferred.succeed(started, undefined), () =>
+              Effect.sync(() => {
+                finalized++;
+              }),
+            ).pipe(Effect.andThen(outcome)),
+        }).pipe(Layer.provide(Layer.merge(ContextCompactor.layerRollover, provider)));
+
+        const fiber = yield* Effect.gen(function* () {
+          const compactor = yield* ContextCompactor;
+
+          yield* compactor.compact(request).pipe(
+            Stream.runForEach((decision) =>
+              Effect.sync(() => {
+                emitted.push(decision);
+              }),
+            ),
+          );
+        }).pipe(
+          Effect.provideService(CompactionEvaluator(), {
+            available: true,
+            evaluate: () => Effect.die("Unexpected evaluation reservation"),
+          }),
+          Effect.provide(selected),
+          Effect.forkChild,
+        );
+
+        yield* Deferred.await(started);
+        if (mode === "timeout") yield* TestClock.adjust("6 seconds");
+        if (mode === "interruption") yield* Fiber.interrupt(fiber);
+        const exit = yield* Fiber.await(fiber);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        if (Exit.isFailure(exit)) {
+          if (mode === "defect") expect(Cause.hasDies(exit.cause)).toBe(true);
+          else if (mode === "interruption") expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+          else {
+            const error = Cause.findErrorOption(exit.cause);
+
+            expect(Option.isSome(error) && Schema.is(CompactionError)(error.value)).toBe(true);
+            if (mode === "failure" && Option.isSome(error)) expect(error.value).toBe(failure);
+          }
+        }
+        expect(finalized).toBe(1);
+        expect(emitted).toEqual([]);
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    );
+  });
+}
+
 it("uses replacement after the engine consumes this Turn's selection allowance", async () => {
   let evaluations = 0;
   let replacements = 0;
@@ -419,10 +638,9 @@ it("uses replacement after the engine consumes this Turn's selection allowance",
     },
   });
 
-  const selected = SelectiveCompactor.layer().pipe(
-    Layer.provide(fallback),
-    Layer.provide(provider),
-  );
+  const selected = SelectiveCompactor.layer({
+    question: () => Effect.die("Unexpected question after the selection allowance was consumed"),
+  }).pipe(Layer.provide(fallback), Layer.provide(provider));
 
   const decisions = await Effect.runPromise(
     Effect.gen(function* () {
@@ -460,4 +678,20 @@ it("keeps decision-provider requirements and compaction errors visible", () => {
   expectTypeOf<Layer.Services<typeof withFallback>>().toEqualTypeOf<DecisionModel.DecisionModel>();
   expectTypeOf<Layer.Success<typeof withFallback>>().toEqualTypeOf<ContextCompactor>();
   expectTypeOf(SelectiveCompactor.layer).toEqualTypeOf(DirectSelectiveCompactor.layer);
+
+  const custom = SelectiveCompactor.layer({
+    question: Effect.fn(function* () {
+      const policy = yield* QuestionPolicy;
+      const instructions = yield* policy.instructions;
+
+      yield* Effect.acquireRelease(Effect.void, () => Effect.void);
+
+      return DecisionQuery.probability({ instructions });
+    }),
+  });
+
+  expectTypeOf<Layer.Services<typeof custom>>().toEqualTypeOf<
+    DecisionModel.DecisionModel | ContextCompactor | QuestionPolicy
+  >();
+  expectTypeOf<Layer.Error<typeof custom>>().toEqualTypeOf<CompactionError>();
 });

@@ -1172,11 +1172,57 @@ failed/provider-executed results, and `pinnedTools` remain visible. Each request
 or timeout fail with `CompactionError` before pruning; defects and interruption propagate.
 Missing credentials fail during Layer acquisition.
 
-`dropBelow` is the keep-probability cutoff and defaults to `0.1`. Calibrate it for your workload:
-bounded excerpts can miss relevant evidence. The
+`dropBelow: 0.1` prunes a result only when the model estimates less than a 10% probability that
+its contents still matter for the ongoing task. Higher values prune more aggressively. These
+estimates are fallible, and bounded excerpts can miss relevant evidence. The
 [evaluation harness](https://github.com/danieljvdm/effect-agent/tree/main/tooling/context-continuity-eval#selective-pruning-evaluation)
 compares retention and continuation with the same public Layer. Auxiliary evaluations are charged
 even when nothing is removed; these Runs currently recover through full canonical replay.
+
+Supply an effectful `question` to customize what deserves retention. A true answer must mean
+**keep the result**, so the same `dropBelow` comparison applies:
+
+```ts twoslash
+import { DecisionQuery } from "@effect-agent/ai-decision";
+import { Context, Effect, Layer } from "effect";
+import { SelectiveCompactor } from "effect-agent";
+import { CompactionError } from "effect-agent/context-compactor";
+
+class RetentionPolicy extends Context.Service<
+  RetentionPolicy,
+  { readonly instructions: Effect.Effect<string, CompactionError> }
+>()("app/RetentionPolicy") {}
+
+const custom = SelectiveCompactor.layer({
+  question: Effect.fn(function* ({ result }) {
+    const policy = yield* RetentionPolicy;
+    const instructions = yield* policy.instructions;
+
+    return DecisionQuery.probability({
+      instructions: { proposition: `Keep result ${result.id}.`, policy: instructions },
+      criteria: {
+        true: "Contains sources needed to support the final report",
+        false: "Superseded evidence with no remaining use",
+      },
+    });
+  }),
+});
+
+const withPolicy = custom.pipe(
+  Layer.provide(
+    Layer.succeed(RetentionPolicy, {
+      instructions: Effect.succeed("Retain sources needed to cite the final report."),
+    }),
+  ),
+);
+// Provide the DecisionModel and fallback Layers as in the first example.
+```
+
+The hook receives the candidate and bounded evidence before size trimming. It runs sequentially
+once per candidate, with a five-second deadline for all question preparation. Its service
+requirements belong to the Layer; resources close after each question. Use read-only preparation
+and return expected failures as `CompactionError`. Preparation is not durably recorded or metered
+inference. Failure stops before model evaluation or pruning; trimming never reruns the hook.
 
 ### Start fresh context windows {#context-windows}
 
