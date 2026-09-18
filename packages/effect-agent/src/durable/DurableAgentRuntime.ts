@@ -13,6 +13,7 @@ import {
   Layer,
   Option,
   Ref,
+  Result,
   Schedule,
   Schema,
   Semaphore,
@@ -647,6 +648,58 @@ const recoveryFailureDetails = (cause: Cause.Cause<DurableWorkerFailure>) => {
     ...(diagnostic === undefined ? {} : { diagnostic }),
   };
 };
+
+/** @internal One bounded failure boundary for execution history and host recovery control reads. */
+export const isolateRecovery = Effect.fnUntraced(function* <A, E extends DurableWorkerFailure, R>(
+  body: Effect.Effect<A, E, R>,
+  options: {
+    readonly timeout: Duration.Duration;
+    readonly phase: () => RecoveryFailure["phase"];
+    readonly operation?: string;
+  },
+): Effect.fn.Return<Result.Result<A, RecoveryFailure>, E, Exclude<R, Scope.Scope>> {
+  const outcome = yield* body.pipe(
+    Effect.scoped,
+    Effect.timeoutOption(options.timeout),
+    Effect.exit,
+  );
+
+  if (Exit.isSuccess(outcome) && Option.isSome(outcome.value))
+    return Result.succeed(outcome.value.value);
+  if (
+    Exit.isFailure(outcome) &&
+    (Cause.hasInterrupts(outcome.cause) ||
+      outcome.cause.reasons.some(
+        (reason) => reason._tag === "Fail" && reason.error._tag === "DurableRuntimeFailpointError",
+      ))
+  )
+    return yield* Effect.failCause(outcome.cause);
+
+  const error = Exit.isFailure(outcome) ? Cause.findErrorOption(outcome.cause) : Option.none<E>();
+  const phase = options.phase();
+
+  return Result.fail(
+    RecoveryFailure.make({
+      phase,
+      reason: Exit.isSuccess(outcome)
+        ? "timeout"
+        : Cause.hasDies(outcome.cause)
+          ? "defect"
+          : "failure",
+      errorTag: Option.isSome(error)
+        ? error.value._tag
+        : Exit.isSuccess(outcome)
+          ? "RecoveryTimeout"
+          : "Defect",
+      operation:
+        Option.isSome(error) && "operation" in error.value
+          ? error.value.operation.slice(0, 256)
+          : (options.operation ??
+            (phase === "history" ? "read recovery history" : "recover submission")),
+      ...(Exit.isFailure(outcome) ? recoveryFailureDetails(outcome.cause) : { causes: [] }),
+    }),
+  );
+});
 
 /** One failed Thread remains pending; the host must not claim it before recovery succeeds. */
 export class RecoveryBlocked extends Schema.TaggedError<RecoveryBlocked>()("RecoveryBlocked", {
@@ -9645,74 +9698,47 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       if (first === undefined) break;
       const submissionIds: Array<SubmissionId> = [];
-      let hasStandardReporting = false;
 
       for (let offset = index; offset < nonterminal.length; offset += 1) {
         const entry = nonterminal[offset];
 
         if (entry === undefined || entry.threadId !== first.threadId) break;
         submissionIds.push(entry.submissionId);
-        hasStandardReporting ||= entry.workerAdmission?.origin.reporting?.mode === "standard";
       }
-      const group = nonterminal.slice(index, index + submissionIds.length);
 
-      index += group.length;
+      index += submissionIds.length;
       if (options?.threadId !== undefined && options.threadId !== first.threadId) continue;
-      let phase: RecoveryFailure["phase"] = "history";
+      let phase: RecoveryFailure["phase"] = "recovery";
 
       // A retained record or child read can fail before any new Attempt exists. Isolate the
       // entire Thread: a partial repair never grants a later head permission to run through
       // incomplete evidence. Scope/timeout release resources before the next Thread starts.
-      const outcome = yield* Effect.gen(function* () {
-        const history = yield* readRecoveryHistory(first.threadId, submissionIds);
+      const outcome = yield* isolateRecovery(
+        Effect.gen(function* () {
+          // The worklist contains only control state. Retained input/worker metadata belongs
+          // to this Thread's failure boundary, never to global discovery or fresh admission.
+          const group = yield* Effect.forEach(submissionIds, (submissionId) =>
+            lookupKnownSubmission("recover submission", submissionId),
+          );
 
-        phase = "recovery";
-        if (history.materialized && hasStandardReporting)
-          yield* updateRuntime.repair(first.threadId);
+          phase = "history";
+          const history = yield* readRecoveryHistory(first.threadId, submissionIds);
 
-        return yield* Effect.forEach(group, (submission) => recoverSnapshot(submission, history));
-      }).pipe(Effect.scoped, Effect.timeoutOption(config.recoveryTimeout), Effect.exit);
+          phase = "recovery";
+          if (
+            history.materialized &&
+            group.some((row) => row.workerAdmission?.origin.reporting?.mode === "standard")
+          )
+            yield* updateRuntime.repair(first.threadId);
 
-      if (Exit.isSuccess(outcome) && Option.isSome(outcome.value)) {
-        reports.push(...outcome.value.value);
-        continue;
-      }
+          return yield* Effect.forEach(group, (submission) => recoverSnapshot(submission, history));
+        }),
+        { timeout: config.recoveryTimeout, phase: () => phase },
+      );
 
-      const error = Exit.isFailure(outcome)
-        ? Cause.findErrorOption(outcome.cause)
-        : Option.none<DurableWorkerFailure>();
-
-      // Owner interruption and injected crash boundaries must remain interruption/failure,
-      // never a completed recovery sweep. The prearmed host alarm still owns unfinished work.
-      if (
-        Exit.isFailure(outcome) &&
-        (Cause.hasInterrupts(outcome.cause) ||
-          (Option.isSome(error) && error.value._tag === "DurableRuntimeFailpointError"))
-      )
-        return yield* Effect.failCause(outcome.cause);
-
-      const failure = RecoveryFailure.make({
-        phase,
-        reason: Exit.isSuccess(outcome)
-          ? "timeout"
-          : Cause.hasDies(outcome.cause)
-            ? "defect"
-            : "failure",
-        errorTag: Option.isSome(error)
-          ? error.value._tag
-          : Exit.isSuccess(outcome)
-            ? "RecoveryTimeout"
-            : "Defect",
-        operation:
-          Option.isSome(error) && "operation" in error.value
-            ? error.value.operation.slice(0, 256)
-            : phase === "history"
-              ? "read recovery history"
-              : "recover submission",
-        ...(Exit.isFailure(outcome) ? recoveryFailureDetails(outcome.cause) : { causes: [] }),
-      });
-
-      blocked.push(RecoveryBlocked.make({ threadId: first.threadId, failure }));
+      if (Result.isSuccess(outcome)) reports.push(...outcome.success);
+      else
+        blocked.push(RecoveryBlocked.make({ threadId: first.threadId, failure: outcome.failure }));
     }
 
     return RecoverySweepResult.make({ reports, blocked });
@@ -10351,7 +10377,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     for (const submission of nonterminal) {
       if (submission.threadId !== threadId) continue;
-      explanations.push(yield* explainSubmission(submission));
+      explanations.push(
+        yield* explainSubmission(
+          yield* lookupKnownSubmission("explain Thread", submission.submissionId),
+        ),
+      );
     }
 
     return explanations;
@@ -10369,13 +10399,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     // everything settled (DUR-015).
     const rows = new Map<SubmissionId, SubmissionSnapshot>();
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+    const named = new Set<SubmissionId>();
 
     for (const submission of nonterminal) {
-      if (submission.threadId === threadId) {
-        rows.set(submission.submissionId, submission);
-      }
+      if (submission.threadId === threadId) named.add(submission.submissionId);
     }
-    const named = new Set<SubmissionId>();
 
     for (const envelope of exported.records) {
       const payload = envelope.record.payload;
@@ -10562,10 +10590,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const generatedAt = yield* nowUtc;
     const entries: Array<ObligationEntry> = [];
 
-    for (const submission of nonterminal) {
+    for (const entry of nonterminal) {
       const snapshot = yield* ledger.loadRecoverySnapshot(
-        RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
+        RecoverySnapshotRequest.make({ submissionId: entry.submissionId }),
       );
+
+      const submission = snapshot.submission;
 
       let blockedOn: ObligationBlockedOn;
       let since: DateTime.Utc = submission.readyAt ?? submission.createdAt;

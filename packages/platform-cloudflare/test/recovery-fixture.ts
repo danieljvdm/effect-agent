@@ -4,9 +4,9 @@ import {
   storageConfigLayer,
   threadStoreLayer,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
-import { Clock, Context, DateTime, Effect, Fiber, Layer, Option, Stream } from "effect";
+import { Clock, Context, DateTime, Duration, Effect, Fiber, Layer, Option, Stream } from "effect";
 import { type ResolvedBinding } from "effect-agent/agent-registration";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
 import { type PersistedJson } from "effect-agent/records";
 import { SubmissionLedger, type SubmissionLookupByKey } from "effect-agent/submission-ledger";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
@@ -137,6 +137,7 @@ export const recoveryTestLayer = (bindings: ReadonlyArray<ResolvedBinding>) =>
       const { ctx } = yield* DurableObjectContext;
       const { threadId: owner } = yield* ThreadObjectIdentity;
       const config = yield* CloudflareDurableRuntimeConfig;
+      const runtimeConfig = yield* DurableRuntimeConfig;
 
       const observedStore = Layer.effect(
         ThreadStore,
@@ -177,6 +178,12 @@ export const recoveryTestLayer = (bindings: ReadonlyArray<ResolvedBinding>) =>
               }),
             ),
           ),
+        ),
+        Layer.provide(
+          Layer.succeed(DurableRuntimeConfig, {
+            ...runtimeConfig,
+            recoveryTimeout: Duration.seconds(2),
+          }),
         ),
       );
     }),

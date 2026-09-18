@@ -11,6 +11,7 @@ import {
   Option,
   Random,
   Ref,
+  Result,
   Schema,
   Scope,
   Semaphore,
@@ -20,10 +21,13 @@ import {
 import { type DurableBindingFailure } from "effect-agent/agent-registration";
 import {
   DurableAgentRuntime,
+  DurableRuntimeConfig,
+  isolateRecovery,
+  RecoveryBlocked,
   RecoveryFailure,
   type DurableWorkerFailure,
   type RecoveryReport,
-  type RecoverySweepResult,
+  RecoverySweepResult,
 } from "effect-agent/durable-agent-runtime";
 import { ThreadId, SubmissionId } from "effect-agent/identifiers";
 import {
@@ -34,7 +38,7 @@ import {
 import {
   AbortIntentRequest,
   SubmissionLedger,
-  type SubmissionSnapshot,
+  type SubmissionWorkItem,
 } from "effect-agent/submission-ledger";
 import {
   ThreadProjectionMaintenance,
@@ -487,7 +491,7 @@ const ensureTransactionAlarmBy = async (
 };
 
 const stableExternalWait = (
-  snapshot: SubmissionSnapshot,
+  snapshot: SubmissionWorkItem,
   reports: ReadonlyMap<string, RecoveryReport>,
 ): boolean => {
   const report = reports.get(snapshot.submissionId);
@@ -660,6 +664,7 @@ export class ThreadMaintenance extends Context.Service<
     | ThreadPublication
     | ThreadProjectionMaintenance
     | DurableAgentRuntime
+    | DurableRuntimeConfig
     | SubmissionLedger
     | WakeScheduler
     | DurableAlarmService
@@ -670,6 +675,7 @@ export class ThreadMaintenance extends Context.Service<
   > = Layer.effect(ThreadMaintenance)(
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+      const recoveryConfig = yield* DurableRuntimeConfig;
       const ledger = yield* SubmissionLedger;
       const wakes = yield* WakeScheduler;
       const alarm = yield* DurableAlarmService;
@@ -1046,12 +1052,12 @@ export class ThreadMaintenance extends Context.Service<
         const reports = recovery.reports;
         const recoveryFaults = recovery.faults;
 
-        const waiting = (row: SubmissionSnapshot) =>
+        const waiting = (row: SubmissionWorkItem) =>
           !recovery.pending.has(row.threadId) &&
           !recoveryFaults.has(row.threadId) &&
           stableExternalWait(row, reports);
 
-        const heads = new Map<ThreadId, SubmissionSnapshot>();
+        const heads = new Map<ThreadId, SubmissionWorkItem>();
 
         for (const row of current) {
           // Only recovered uncertainty may release later input; accepted aborts retain FIFO.
@@ -1061,15 +1067,39 @@ export class ThreadMaintenance extends Context.Service<
         const stopping = new Set<ThreadId>();
 
         for (const head of heads.values()) {
+          if (
+            head.state !== "ready" ||
+            recovery.pending.has(head.threadId) ||
+            recoveryFaults.has(head.threadId)
+          )
+            continue;
+
           // An accepted abort is cleanup even when its input was never claimed. This
           // control-only read must not decode the execution journal or a recovery snapshot.
-          if (
-            head.state === "ready" &&
-            (yield* ledger.readAbortIntent(
-              AbortIntentRequest.make({ submissionId: head.submissionId }),
-            )) !== undefined
-          )
-            stopping.add(head.threadId);
+          const intent = yield* isolateRecovery(
+            ledger.readAbortIntent(AbortIntentRequest.make({ submissionId: head.submissionId })),
+            {
+              timeout: recoveryConfig.recoveryTimeout,
+              phase: () => "recovery",
+              operation: "read abort intent",
+            },
+          );
+
+          if (Result.isSuccess(intent)) {
+            if (intent.success !== undefined) stopping.add(head.threadId);
+          } else {
+            const faults = yield* recordRecoveryStatus(
+              RecoverySweepResult.make({
+                reports: [],
+                blocked: [
+                  RecoveryBlocked.make({ threadId: head.threadId, failure: intent.failure }),
+                ],
+              }),
+            );
+
+            for (const [threadId, fault] of faults) recoveryFaults.set(threadId, fault);
+            recovery.recovered++;
+          }
         }
 
         const eligible = [...heads.values()]
@@ -1489,12 +1519,23 @@ export class ThreadMaintenance extends Context.Service<
             until,
           );
 
+          const recoveryDone =
+            recoveryFiber.pollUnsafe() === undefined ? Fiber.await(recoveryFiber) : Effect.never;
+
           const ready = yield* Effect.raceFirst(
-            Effect.raceFirst(notified, Effect.sleep(Math.max(0, next - now))).pipe(Effect.as(true)),
-            Fiber.await(retired).pipe(Effect.as(false)),
+            Effect.raceFirst(notified, Effect.sleep(Math.max(0, next - now))).pipe(
+              Effect.as("native" as const),
+            ),
+            Effect.raceFirst(
+              recoveryDone.pipe(Effect.as("recovery" as const)),
+              Fiber.await(retired).pipe(Effect.as("retired" as const)),
+            ),
           );
 
-          if (!ready || retired.pollUnsafe() !== undefined) break;
+          // Recovery completion closes admission before joining host retirement. It must
+          // wake this loop directly: the public wake hint is allowed to be dropped.
+          if (ready === "recovery") continue;
+          if (ready === "retired" || retired.pollUnsafe() !== undefined) break;
           if (!auxiliaryPending()) continue;
           if ((yield* Clock.currentTimeMillis) >= until) break;
 

@@ -1157,7 +1157,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
 
     const detail = Option.isSome(nonterminal)
       ? Array.from(nonterminal.value)
-          .map((row: SubmissionSnapshot) => `${row.submissionId}(${row.state})`)
+          .map((row) => `${row.submissionId}(${row.state})`)
           .join(", ")
       : "ledger scan failed";
 

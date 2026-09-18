@@ -296,13 +296,15 @@ later deployment that registers the agent. An obsolete pending tool operation do
 historical code: it receives an unavailable result when no mutation was dispatched, or stays
 unknown when an external effect may have occurred.
 
-The scheduler selects ready work from the ledger, then recovers that Thread before its claim.
-Accepted abort intents identify cleanup even for input that was never claimed. Old recovery
+The scheduler and admission limits discover work from the ledger's control-only worklist.
+The scheduler then hydrates and recovers the selected Thread before its claim. Accepted abort
+intents identify cleanup even for input that was never claimed; their reads share the recovery
+timeout and fault boundary, and skip Threads pending recovery or waiting for retry. Old recovery
 runs sequentially in the event Scope with a 30-second bound per Thread; the same alarm and
 wake loop can dispatch fresh Threads and publish their replies while old history is stalled.
 Unfinished cleanup retains its fences and settlement obligations across eviction.
 
-Unreadable history or a failed child recovery blocks only its Thread. Maintenance stores a
+Unreadable retained payloads, history or a failed child recovery block only their Thread. Maintenance stores a
 bounded `ThreadRecoveryFault` outside canonical history and retries after 5, 10, 20, 40, then
 60 seconds. New admissions retain their receipts and do not bypass that Thread's deadline;
 other Threads remain eligible. A successful recovery clears the fault without changing history

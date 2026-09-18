@@ -729,11 +729,11 @@ const verifyLane = Effect.fn("Certification.verifyLane")(function* (
   const exported = yield* store.export(ThreadExportRequest.make({ threadId: lane }));
   const rows = new Map<SubmissionId, SubmissionSnapshot>();
   const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+  const named = new Set<SubmissionId>();
 
   for (const submission of nonterminal) {
-    if (submission.threadId === lane) rows.set(submission.submissionId, submission);
+    if (submission.threadId === lane) named.add(submission.submissionId);
   }
-  const named = new Set<SubmissionId>();
 
   for (const envelope of exported.records) {
     const payload = envelope.record.payload;
