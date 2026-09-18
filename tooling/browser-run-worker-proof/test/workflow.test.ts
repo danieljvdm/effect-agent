@@ -44,6 +44,7 @@ const proofResult = () =>
       cardFilled: true,
       closed: true,
     },
+    fileUpload: { normalInput: true, dynamicChooser: true, checksumMatched: true, closed: true },
   });
 
 describe("Browser Run Worker proof deployment resource", () => {

@@ -21,6 +21,8 @@ import {
 } from "effect";
 import {
   BrowserActionResult,
+  BrowserSelectFileRequest,
+  BrowserFileSelectionResult,
   BrowserScreenshotRequest,
   BrowserScrollRequest,
   BrowserNavigationResult,
@@ -43,6 +45,7 @@ import {
 import { PageScreenshotResult } from "effect-agent/page-screenshot";
 import { SandboxImplementation } from "effect-agent/sandbox";
 
+import { makeFileSelection } from "./internal/browser-file-selection.ts";
 import {
   BrowserRunSessionLifecycle,
   type BrowserRunLifecycleOptions,
@@ -325,6 +328,11 @@ export interface BrowserRunInteractivePage {
   ) => Promise<unknown>;
   readonly click: (
     selector: string,
+    signal: AbortSignal,
+    onDispatch: () => void,
+  ) => Promise<unknown>;
+  readonly selectFile: (
+    request: BrowserSelectFileRequest,
     signal: AbortSignal,
     onDispatch: () => void,
   ) => Promise<unknown>;
@@ -706,6 +714,7 @@ const runObservedPageAction = async (
   signal: AbortSignal,
   onDispatch: () => void,
   action: (element: NonNullable<Awaited<ReturnType<Page["$"]>>>) => Promise<void>,
+  validate?: (element: NonNullable<Awaited<ReturnType<Page["$"]>>>) => Promise<boolean>,
 ): Promise<unknown> => {
   if (signal.aborted) throw new BrowserRunActionUndispatched(0);
 
@@ -737,6 +746,8 @@ const runObservedPageAction = async (
 
   signal.addEventListener("abort", onAbort, { once: true });
   try {
+    if (validate !== undefined && !(await validate(matches[0])))
+      throw new BrowserRunActionUndispatched(1);
     tracker = makeActionRequestTracker(page, signal);
     // No await between the final cancellation fence and SDK dispatch. Once
     // dispatched, interruption is uncertain, even if the SDK later resolves.
@@ -761,6 +772,7 @@ const runObservedPageAction = async (
 };
 
 const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
+  const prepareFileSelection = makeFileSelection(page);
   const listeners = new Map<BrowserRunInteractiveRequestListener, (request: HTTPRequest) => void>();
 
   return {
@@ -1087,6 +1099,22 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
       ),
     click: (selector, signal, onDispatch) =>
       runObservedPageAction(page, selector, signal, onDispatch, (element) => element.click()),
+    selectFile: async (request, signal, onDispatch) => {
+      const selection = await prepareFileSelection(request, signal);
+
+      try {
+        return await runObservedPageAction(
+          page,
+          request.selector,
+          signal,
+          onDispatch,
+          selection.select,
+          selection.validate,
+        );
+      } finally {
+        await selection.close();
+      }
+    },
     // Puppeteer materializes the complete image before returning. The adapter
     // validates the 8 MiB Schema ceiling and pass limit immediately afterward.
     screenshot: (fullPage) => page.screenshot({ type: "png", fullPage }),
@@ -1490,7 +1518,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
     );
 
   const observedAction = (
-    operation: "fill" | "click",
+    operation: "fill" | "click" | "select-file",
     evaluate: (signal: AbortSignal, onDispatch: () => void) => Promise<unknown>,
   ) =>
     Effect.suspend(() => {
@@ -1537,7 +1565,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
   );
 
   const logActionObservation = (
-    operation: "fill" | "click",
+    operation: "fill" | "click" | "select-file",
     observation: typeof ActionObservation.Type,
   ) =>
     Effect.logInfo("Browser interactive action observed").pipe(
@@ -1763,6 +1791,29 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
 
           return yield* decodeActionResult(page, policy);
         }),
+      ),
+    selectFile: (request) =>
+      Schema.decodeEffect(BrowserSelectFileRequest)(request).pipe(
+        Effect.mapError(() => policyError("The browser file selection request is malformed")),
+        Effect.flatMap((decoded) =>
+          run(
+            Effect.gen(function* () {
+              const observation = yield* observedAction("select-file", (signal, onDispatch) =>
+                page.selectFile(decoded, signal, onDispatch),
+              ).pipe(Effect.flatMap(decodeActionObservation));
+
+              yield* logActionObservation("select-file", observation);
+              const result = yield* decodeActionResult(page, policy);
+
+              return BrowserFileSelectionResult.make({
+                url: result.url,
+                fileName: decoded.fileName,
+                mediaType: decoded.mediaType,
+                size: decoded.bytes.length,
+              });
+            }),
+          ),
+        ),
       ),
     screenshot: (request) =>
       Schema.decodeEffect(BrowserScreenshotRequest)(request).pipe(

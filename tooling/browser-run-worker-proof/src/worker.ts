@@ -46,6 +46,7 @@ import {
   PROOF_SOURCE_URL,
 } from "./contract.ts";
 import { protectedFixture, runProtectedProof } from "./protected-browser.ts";
+import { uploadFixture, runUploadProof } from "./uploads.ts";
 
 const proofCapture = WebCapture.make("capture_example_domain", {
   description: "Read the fixed Example Domain proof page as Markdown.",
@@ -301,6 +302,9 @@ const runProof = Effect.gen(function* () {
     const request = yield* Worker.NativeRequest;
     const protectedBrowser = yield* runProtectedProof(new URL(request.url).origin);
 
+    stage = "file-upload";
+    const fileUpload = yield* runUploadProof(new URL(request.url).origin);
+
     return Response.json(
       BrowserRunWorkerProofResult.make({
         sourceUrl: PROOF_SOURCE_URL,
@@ -316,6 +320,7 @@ const runProof = Effect.gen(function* () {
         },
         interactive,
         protectedBrowser,
+        fileUpload,
       }),
     );
   }).pipe(
@@ -346,6 +351,8 @@ export default Worker.make(
   proofLayer.pipe(Layer.provideMerge(BrowserCrypto.layer)),
   Effect.gen(function* () {
     const request = yield* Worker.NativeRequest;
+
+    if (new URL(request.url).pathname.startsWith("/uploads/")) return yield* uploadFixture(request);
 
     return yield* new URL(request.url).pathname.startsWith("/protected/")
       ? protectedFixture(request).pipe(

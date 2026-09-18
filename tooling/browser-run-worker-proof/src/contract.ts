@@ -18,6 +18,7 @@ export const BrowserRunProofStage = Schema.Literals([
   "close",
   "closed-handle",
   "protected-browser",
+  "file-upload",
 ]);
 
 export class BrowserRunWorkerProofFailure extends Schema.Class<BrowserRunWorkerProofFailure>(
@@ -75,6 +76,12 @@ export class BrowserRunWorkerProofResult extends Schema.Class<BrowserRunWorkerPr
     authenticatedContinuation: Schema.Literal(true),
     revokedOfferRefused: Schema.Literal(true),
     cardFilled: Schema.Literal(true),
+    closed: Schema.Literal(true),
+  }),
+  fileUpload: Schema.Struct({
+    normalInput: Schema.Literal(true),
+    dynamicChooser: Schema.Literal(true),
+    checksumMatched: Schema.Literal(true),
     closed: Schema.Literal(true),
   }),
 }) {}

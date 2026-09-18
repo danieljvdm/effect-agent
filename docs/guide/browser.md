@@ -623,6 +623,12 @@ whose outcome is unknown. Interruption cannot reliably cancel an action already 
 Control diagnostics omit field values and HTML. Results, including PNG screenshots, obey the
 pass byte limit. Logs omit URLs, selectors, labels, field values, credentials, and provider errors.
 
+`selectFile(BrowserSelectFileRequest.make({ selector, target: "input", fileName, mediaType, bytes }))`
+selects up to 8 MiB of host-owned bytes without a browser filesystem path. Use `target: "chooser"`
+for a button that creates or opens a file input. The result confirms selection only; inspect the
+website's receipt separately to establish upload or submission. Change handlers may send bytes
+immediately, so authorize the destination before selection and never replay an unknown outcome.
+
 Set the initial `viewport` on `BrowserRunInteractiveBinding.layer` or use the host session's
 `resizeViewport`. Width and height accept integers in `1..2048`; `deviceScaleFactor` accepts
 `1..2`, defaults to `1`, and must satisfy `max(width, height) * deviceScaleFactor <= 2048`.
