@@ -254,22 +254,24 @@ export const browserRunProtectedHostLayer = () =>
                   .pipe(
                     Effect.flatMap(Schema.decodeUnknownEffect(Handoff)),
                     Effect.catchCause((cause) =>
-                      reportBrowserCause("protected.handoff", cause).pipe(
-                        Effect.andThen(state.handle.close),
-                        Effect.flatMap((cleanup) =>
-                          Effect.fail(
-                            reportedBrowserError(
-                              new ProtectedBrowserError({
-                                reason: "outcome-unknown",
-                                dispatch: "possibly-dispatched",
-                                milestone: suspended.milestone,
-                                observation: "closed",
-                                cleanup,
-                              }),
+                      Cause.hasInterruptsOnly(cause)
+                        ? Effect.interrupt
+                        : reportBrowserCause("protected.handoff", cause).pipe(
+                            Effect.andThen(state.handle.close),
+                            Effect.flatMap((cleanup) =>
+                              Effect.fail(
+                                reportedBrowserError(
+                                  new ProtectedBrowserError({
+                                    reason: "outcome-unknown",
+                                    dispatch: "possibly-dispatched",
+                                    milestone: suspended.milestone,
+                                    observation: "closed",
+                                    cleanup,
+                                  }),
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      ),
                     ),
                     Effect.onInterrupt(() => state.handle.close),
                   );
