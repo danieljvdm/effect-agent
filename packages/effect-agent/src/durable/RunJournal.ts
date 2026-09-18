@@ -407,7 +407,12 @@ export interface RunJournalProjection {
   readonly historyBefore: Prompt.Prompt;
   /** Number of canonical Turns already committed for the projected Run. */
   readonly committedTurns: number;
-  /** Summed per-call usage of the projected Run's committed responses; zeros for records predating usage capture. */
+  /** Reserved selector slots survive ownership changes independently of model Turns. */
+  readonly compactionEvaluations?: ReadonlyArray<{
+    readonly turn: number;
+    readonly completed: boolean;
+  }>;
+  /** Committed response and auxiliary usage; legacy records retain their reported aggregates. */
   readonly usage: RunJournalUsage;
   /** Latest committed context window identity, retained across ownership changes. */
   readonly contextWindowId?: string | undefined;
@@ -525,6 +530,8 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
   "ToolApprovalRequested",
   "ToolApprovalDecided",
   "ModelResponseInterrupted",
+  "CompactionEvaluationReserved",
+  "CompactionEvaluationRecorded",
   "SubagentRequested",
   "SubagentStarted",
   "SubagentJoined",
@@ -561,6 +568,12 @@ export interface JournalBoundary {
   readonly sequence: CanonicalSequence;
   readonly tag: "ModelResponseRecorded" | "ToolCallSettled";
   readonly promptLength: number;
+  /** Canonical identity and exact prompt position of an application result. */
+  readonly toolResult?: {
+    readonly recordId: RecordId;
+    readonly toolCallId: ToolCallId;
+    readonly messageIndex: number;
+  };
   /** A declaration without all settled results requires terminal-prior-Run proof for coverage. */
   readonly incomplete?: true | undefined;
   /** The Run terminated after its last response and differs from the projection's owner. */
@@ -670,10 +683,20 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       ? undefined
       : yield* decodePromptMessages(seed.protectedContext);
 
+  const selectedResultIds = new Set(
+    compactions.flatMap(({ payload }) => payload.toolResultRecordIds ?? []),
+  );
+
+  const selectedResultSequences = new Map<RecordId, number>();
+
   if (settledCoverage > 0) {
     yield* Stream.runForEach(records, (envelope) =>
       Effect.gen(function* () {
         const payload = envelope.record.payload;
+
+        if (payload._tag === "ToolCallSettled" && selectedResultIds.has(envelope.record.recordId)) {
+          selectedResultSequences.set(envelope.record.recordId, envelope.sequence);
+        }
 
         if (payload._tag !== "ModelResponseRecorded" || envelope.sequence > settledCoverage) return;
         const messages = yield* decodePromptMessages(payload.messages);
@@ -713,6 +736,17 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     const { runId, coversThrough } = payload;
 
     if (coversThrough <= 0 || coversThrough >= ownSequence) return false;
+    if (
+      payload.toolResultRecordIds !== undefined &&
+      (payload.kind !== "clear-tool-results" ||
+        new Set(payload.toolResultRecordIds).size !== payload.toolResultRecordIds.length ||
+        payload.toolResultRecordIds.some((id) => {
+          const sequence = selectedResultSequences.get(id);
+
+          return sequence === undefined || sequence > coversThrough;
+        }))
+    )
+      return false;
     if (seed !== undefined && ownSequence === seed.compaction.sequence)
       return (
         seed.compaction.record.payload._tag === "CompactionCreated" &&
@@ -742,6 +776,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   let replacement: CompactionCreated | undefined;
   let summarizeSequence = -1;
   let clearBound = 0;
+  const clearedResultIds = new Set<RecordId>();
   let latestWindowId: string | undefined = seed?.contextWindowId;
   let latestWindowSequence = seed?.throughSequence ?? -1;
   let rolloverCoveredThrough = 0;
@@ -764,6 +799,8 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         summarizeSequence = sequence;
         replacement = payload;
       }
+    } else if (payload.toolResultRecordIds !== undefined) {
+      for (const id of payload.toolResultRecordIds) clearedResultIds.add(id);
     } else if (payload.coversThrough > clearBound) {
       clearBound = payload.coversThrough;
     }
@@ -805,6 +842,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       state.before.push(message);
   };
 
+  const compactionEvaluations = new Map<number, boolean>();
   const modelUsage: Array<ModelCallUsage> = [];
   let unobservedModelCalls = seed?.unobservedModelCalls ?? 0;
 
@@ -998,6 +1036,38 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       )
         ownerTerminated = true;
 
+      if (payload._tag === "CompactionEvaluationReserved" && payload.runId === ownerRunId) {
+        if (compactionEvaluations.has(payload.turn))
+          return yield* journalError("Duplicate compaction evaluation reservation");
+        compactionEvaluations.set(payload.turn, false);
+      }
+      if (payload._tag === "CompactionEvaluationRecorded" && payload.runId === ownerRunId) {
+        if (
+          compactionEvaluations.get(payload.turn) !== false ||
+          payload.usage.purpose !== "compaction"
+        )
+          return yield* journalError(
+            "Compaction evaluation accounting requires one unsettled reservation",
+          );
+        compactionEvaluations.set(payload.turn, true);
+        usage.modelCalls = yield* addProjectedUsage("modelCalls", usage.modelCalls, 1);
+        usage.inputTokens = yield* addProjectedUsage(
+          "inputTokens",
+          usage.inputTokens,
+          payload.usage.inputTokens.total,
+        );
+        usage.outputTokens = yield* addProjectedUsage(
+          "outputTokens",
+          usage.outputTokens,
+          payload.usage.outputTokens.total,
+        );
+        usage.costMicrousd = yield* addProjectedUsage(
+          "costMicrousd",
+          usage.costMicrousd,
+          payload.usage.costMicrousd,
+        );
+        modelUsage.push(payload.usage);
+      }
       if (payload._tag === "RunPolicyUsageReserved" && payload.runId === ownerRunId) {
         if (seed !== undefined && envelope.sequence <= seed.throughSequence) return;
         if (
@@ -1059,7 +1129,10 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
           slot.parts[slot.partIndex] = Prompt.makePart("tool-result", {
             id: payload.toolCallId,
             name: payload.toolName,
-            result: envelope.sequence <= clearBound ? CLEARED_TOOL_RESULT : payload.result,
+            result:
+              envelope.sequence <= clearBound || clearedResultIds.has(envelope.record.recordId)
+                ? CLEARED_TOOL_RESULT
+                : payload.result,
             isFailure: payload.isFailure,
             providerExecuted: false,
           });
@@ -1072,6 +1145,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
             sequence: envelope.sequence,
             tag: payload._tag,
             promptLength: state.all.length,
+            toolResult: {
+              recordId: envelope.record.recordId,
+              toolCallId: payload.toolCallId,
+              messageIndex: slot.allIndex,
+            },
             ...(incompleteToolCalls.has(envelope.record.recordId) ? { incomplete: true } : {}),
             ...(isTerminalPriorRun(payload.runId, ownerRunId, Number.POSITIVE_INFINITY)
               ? { terminalPriorRun: true }
@@ -1086,7 +1164,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         ) {
           state = yield* flushTools(state);
         }
-        state.pendingTools.push({ record: payload, cleared: envelope.sequence <= clearBound });
+        state.pendingTools.push({
+          record: payload,
+          cleared:
+            envelope.sequence <= clearBound || clearedResultIds.has(envelope.record.recordId),
+        });
         state = {
           ...state,
           pendingToolsForRun: payload.runId === ownerRunId,
@@ -1095,6 +1177,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
           sequence: envelope.sequence,
           tag: payload._tag,
           promptLength: state.all.length + 1,
+          toolResult: {
+            recordId: envelope.record.recordId,
+            toolCallId: payload.toolCallId,
+            messageIndex: state.all.length,
+          },
           ...(isTerminalPriorRun(payload.runId, ownerRunId, Number.POSITIVE_INFINITY)
             ? { terminalPriorRun: true }
             : {}),
@@ -1229,6 +1316,12 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   emitSummary();
   state = yield* flushTools(state);
 
+  unobservedModelCalls = yield* addProjectedUsage(
+    "unobservedModelCalls",
+    unobservedModelCalls,
+    [...compactionEvaluations.values()].filter((completed) => !completed).length,
+  );
+
   const validatedPolicyUsage = yield* Schema.decodeEffect(RunPolicyUsage)(policyUsage).pipe(
     Effect.mapError((cause) =>
       journalError("Run policy accounting exceeds its Schema bounds", cause),
@@ -1238,6 +1331,14 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   return {
     ...(toolSelection === undefined ? {} : { toolSelection }),
     policyUsage: validatedPolicyUsage,
+    ...(compactionEvaluations.size === 0
+      ? {}
+      : {
+          compactionEvaluations: [...compactionEvaluations].map(([turn, completed]) => ({
+            turn,
+            completed,
+          })),
+        }),
     prompt: Prompt.fromMessages(state.all),
     historyBefore: Prompt.fromMessages(state.before),
     committedTurns: state.committedTurns,

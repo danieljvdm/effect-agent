@@ -1221,6 +1221,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
     readonly handoff?: string | undefined;
     readonly runId?: string;
     readonly turn?: number;
+    readonly toolResultRecordIds?: ReadonlyArray<string>;
   }
 
   const compactionPayload = (
@@ -1237,6 +1238,9 @@ describe("engine compaction records and projection (RUN-026)", () => {
       // `optionalKey` fields must be ABSENT, not undefined.
       ...(summary === undefined ? {} : { summary }),
       ...(overrides.handoff === undefined ? {} : { handoff: overrides.handoff }),
+      ...(overrides.toolResultRecordIds === undefined
+        ? {}
+        : { toolResultRecordIds: overrides.toolResultRecordIds }),
     };
   };
 
@@ -1829,6 +1833,58 @@ describe("engine compaction records and projection (RUN-026)", () => {
         }),
     );
 
+    it.effect(
+      "selective records clear one occurrence without clearing reused call IDs or siblings",
+      () =>
+        Effect.gen(function* () {
+          const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+          const turnTwo = yield* turnCanonicalBatch(turnInput(secondToolTurn, 2));
+          const envelopes = envelopesOf([turnOne, turnTwo]);
+          const selected = toolCallSettledRecordId(RUN_ID, 1, CALL_TWO);
+
+          const makeSelection = (ids: ReadonlyArray<string>, coversThrough = 3) =>
+            envelopeAt(
+              envelopes.length + 1,
+              auditRecord(
+                "selective",
+                compactionPayload({
+                  kind: "clear-tool-results",
+                  summary: undefined,
+                  coversThrough,
+                  toolResultRecordIds: ids,
+                }),
+              ),
+            );
+
+          const projection = yield* projectRunJournal(
+            [...envelopes, makeSelection([selected])],
+            LATER_RUN_ID,
+          );
+
+          expect(toolResults(projection.historyBefore)).toEqual([
+            { bookingRef: "flight-42" },
+            "[tool result cleared by compaction]",
+            { bookingRef: "lodging-7" },
+          ]);
+          for (const invalid of [
+            [selected, selected],
+            ["unknown"],
+            [toolCallSettledRecordId(RUN_ID, 2, CALL_TWO)],
+          ]) {
+            const rejected = yield* projectRunJournal(
+              [...envelopes, makeSelection(invalid)],
+              LATER_RUN_ID,
+            );
+
+            expect(toolResults(rejected.historyBefore)).toEqual([
+              { bookingRef: "flight-42" },
+              { bookingRef: "lodging-7" },
+              { bookingRef: "lodging-7" },
+            ]);
+          }
+        }),
+    );
+
     it.effect("RUN-026: invalid compaction records are ignored fail-safe", () =>
       Effect.gen(function* () {
         const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
@@ -2225,6 +2281,73 @@ layer(NodeCrypto.layer)("Tool exposure journal", (it) => {
             RUN_ID,
           )).toolSelection?.toolNames,
         ).toEqual([]);
+      }),
+  );
+});
+
+layer(NodeCrypto.layer)("Auxiliary compaction accounting journal", (it) => {
+  it.effect(
+    "accounts independent selector usage without advancing the conversation, and rejects unmatched evidence",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* turnCanonicalBatch(
+          turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 100, outputTokens: 10 }),
+        );
+
+        const prefix = envelopesOf([response]);
+
+        const reserved = envelopeAt(
+          prefix.length + 1,
+          auditRecord("evaluation-reserved", {
+            _tag: "CompactionEvaluationReserved",
+            runId: RUN_ID,
+            turn: 2,
+            inputTokensEstimate: 100,
+          }),
+        );
+
+        const usage = {
+          provider: "selector",
+          model: "test",
+          purpose: "compaction" as const,
+          inputTokens: { total: 70, uncached: 70, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 2, text: 2, reasoning: 0 },
+          costMicrousd: 7,
+        };
+
+        const recorded = envelopeAt(
+          prefix.length + 2,
+          auditRecord("evaluation-recorded", {
+            _tag: "CompactionEvaluationRecorded",
+            runId: RUN_ID,
+            turn: 2,
+            usage,
+          }),
+        );
+
+        const pending = yield* projectRunJournal([...prefix, reserved], RUN_ID);
+
+        expect(pending.compactionEvaluations).toEqual([{ turn: 2, completed: false }]);
+        expect(pending.usage.unobservedModelCalls).toBe(1);
+        const complete = yield* projectRunJournal([...prefix, reserved, recorded], RUN_ID);
+
+        expect(complete.prompt).toEqual(pending.prompt);
+        expect(complete.committedTurns).toBe(1);
+        expect(complete.compactionEvaluations).toEqual([{ turn: 2, completed: true }]);
+        expect(complete.usage).toMatchObject({
+          modelCalls: 2,
+          inputTokens: 170,
+          outputTokens: 12,
+          costMicrousd: 7,
+          lastInputTokens: 100,
+          lastOutputTokens: 10,
+        });
+        expect(complete.usage.unobservedModelCalls ?? 0).toBe(0);
+        for (const evidence of [[recorded], [reserved, reserved], [reserved, recorded, recorded]]) {
+          expect(
+            (yield* projectRunJournal([...prefix, ...evidence], RUN_ID).pipe(Effect.flip))._tag,
+          ).toBe("RunJournalError");
+        }
       }),
   );
 });

@@ -66,8 +66,36 @@ export const checkpointSuffixCompatible = (
   seed: JournalCheckpointSeed,
   records: ReadonlyArray<CanonicalRecordEnvelope>,
   retained: ReadonlyArray<CanonicalRecordEnvelope>,
-): boolean =>
-  records.every(({ sequence, record: { payload } }) => {
+): boolean => {
+  // Auxiliary reservations need their complete accounting history. Until the checkpoint seed
+  // carries those slots, always reconstruct these Runs from the canonical log.
+  if (
+    [...retained, ...records].some(
+      ({ record: { payload } }) =>
+        payload._tag === "CompactionEvaluationReserved" ||
+        payload._tag === "CompactionEvaluationRecorded",
+    )
+  )
+    return false;
+
+  // Sparse selections need proof for every target. A cache may have retired an older target
+  // while retaining another; dropping the entire selection would resurrect that newer body.
+  const available = new Set(
+    [...retained, ...records].flatMap(({ record }) =>
+      record.payload._tag === "ToolCallSettled" ? [record.recordId] : [],
+    ),
+  );
+
+  if (
+    [...retained, ...records].some(
+      ({ record: { payload } }) =>
+        payload._tag === "CompactionCreated" &&
+        payload.toolResultRecordIds?.some((id) => !available.has(id)),
+    )
+  )
+    return false;
+
+  return records.every(({ sequence, record: { payload } }) => {
     if ("runId" in payload && payload.runId !== undefined && payload.runId !== seed.runId)
       return false;
     if ("turn" in payload && payload.turn <= seed.committedTurns) return false;
@@ -102,3 +130,4 @@ export const checkpointSuffixCompatible = (
 
     return payload._tag !== "CompactionCreated" || payload.coversThrough >= seed.throughSequence;
   });
+};

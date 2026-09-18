@@ -2,9 +2,19 @@ import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
-import { CLEARED_TOOL_RESULT, CONTEXT_ROLLOVER_PREFIX } from "effect-agent/compaction";
+import {
+  CLEARED_TOOL_RESULT,
+  CONTEXT_ROLLOVER_PREFIX,
+  estimatePromptTokens,
+} from "effect-agent/compaction";
+import {
+  CompactionError,
+  CompactionEvaluator,
+  ContextCompactor,
+  type CompactionRequest,
+} from "effect-agent/context-compactor";
 import { ContextRolloverRequest, ContextRolloverTool } from "effect-agent/context-window";
 import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
 import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
@@ -13,39 +23,529 @@ import { ThreadId } from "effect-agent/identifiers";
 import * as Output from "effect-agent/output";
 import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
 import { projectRunJournal, runIdForSubmission } from "effect-agent/run-journal";
-import { RunToolAuthorization } from "effect-agent/run-options";
+import { RunToolAuthorization, type RunCostEstimator } from "effect-agent/run-options";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
+import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 const digest = Digest.make("a".repeat(64));
 const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools: digest });
 
-const testLayer = DurableAgentRuntime.layer.pipe(
-  Layer.provideMerge(
-    Layer.mergeAll(
-      MemorySubmissionLedgerLive,
-      MemoryThreadStoreLive,
-      WakeScheduler.layerNoop,
-      ToolReconciler.uncertain,
-      RunToolAuthorization.allowAll,
-      DurableRuntimeFailpointTestControl.layer,
-      DurableRuntimeConfig.layer({
-        deploymentId: DeploymentId.make("output-compaction"),
-        producerId: ProducerId.make("output-compaction"),
-      }),
-    ).pipe(Layer.provideMerge(NodeCrypto.layer)),
-  ),
-);
+const makeTestLayer = (
+  compactor: Layer.Layer<ContextCompactor> = ContextCompactor.layer,
+  estimateCostMicrousd?: RunCostEstimator,
+) =>
+  DurableAgentRuntime.layer.pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        MemorySubmissionLedgerLive,
+        compactor,
+        MemoryThreadStoreLive,
+        WakeScheduler.layerNoop,
+        ToolReconciler.uncertain,
+        RunToolAuthorization.allowAll,
+        DurableRuntimeFailpointTestControl.layer,
+        DurableRuntimeConfig.layer({
+          ...(estimateCostMicrousd === undefined ? {} : { estimateCostMicrousd }),
+          deploymentId: DeploymentId.make("output-compaction"),
+          producerId: ProducerId.make("output-compaction"),
+        }),
+      ).pipe(Layer.provideMerge(NodeCrypto.layer)),
+    ),
+  );
+
+const testLayer = makeTestLayer();
 
 const submitOptions = (id: string) => ({
   threadId: ThreadId.make(id),
   principal: Principal.make("output-compaction"),
   idempotencyKey: IdempotencyKey.make(id),
   definitions,
+});
+
+layer(
+  makeTestLayer(
+    Layer.succeed(ContextCompactor, {
+      estimate: estimatePromptTokens,
+      compact: (request) => {
+        const messageIndex = request.source.content.findIndex(
+          (message) =>
+            message.role === "tool" &&
+            message.content.some(
+              (part) =>
+                part.type === "tool-result" &&
+                part.id === "noise" &&
+                part.result !== CLEARED_TOOL_RESULT,
+            ),
+        );
+
+        return messageIndex < 0
+          ? Stream.empty
+          : Stream.succeed({
+              kind: "clear-tool-results",
+              through: messageIndex + 1,
+              results: [{ messageIndex, toolCallId: "noise" }],
+            });
+      },
+    }),
+  ),
+)("durable selective pruning", (it) => {
+  for (const barrier of [
+    "compaction:before-canonical-append",
+    "compaction:after-canonical-append",
+  ] as const) {
+    it.effect(`replays sparse selection across ${barrier}`, () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const control = yield* DurableRuntimeFailpointTestControl;
+
+        const toolkit = Toolkit.make(
+          Tool.make("search", {
+            parameters: Schema.Struct({ key: Schema.String }),
+            success: Schema.String,
+          }),
+        );
+
+        const evidence: Record<string, string> = {
+          receipt: "RECEIPT-42 " + "r".repeat(1_000),
+          noise: "noise " + "n".repeat(5_000),
+          newest: "newest " + "x".repeat(1_000),
+        };
+
+        let executions = 0;
+
+        const handlers = toolkit.toLayer({
+          search: ({ key }) =>
+            Effect.sync(() => {
+              executions++;
+
+              return evidence[key] ?? "unexpected";
+            }),
+        });
+
+        const scripted = scriptedModel((call) =>
+          call === 0
+            ? [
+                {
+                  type: "tool-call",
+                  id: "receipt",
+                  name: "search",
+                  params: { key: "receipt" },
+                  providerExecuted: false,
+                },
+                {
+                  type: "tool-call",
+                  id: "noise",
+                  name: "search",
+                  params: { key: "noise" },
+                  providerExecuted: false,
+                },
+                {
+                  type: "finish",
+                  reason: "tool-calls",
+                  usage: { ...usage, inputTokens: { total: 100 } },
+                },
+              ]
+            : call === 1
+              ? callParts("newest", "search", { key: "newest" }, 1_800)
+              : finalParts("Finished."),
+        );
+
+        const agent = Agent.withModel(
+          Agent.make("selective-pruning", {
+            input: Schema.String,
+            output: Output.text(Schema.String),
+            instructions: "Retain the receipt.",
+            toolkit,
+            policy: {
+              maxTurns: 5,
+              contextTokenLimit: 2_000,
+              compaction: { mode: "prune", keepRecentTokens: 1 },
+            },
+          }),
+          scripted.model,
+        );
+
+        const receipt = yield* runtime.submit(
+          agent,
+          "ORIGINAL-INPUT",
+          submitOptions(`selective-${barrier}`),
+        );
+
+        const process = runtime
+          .processThread(agent, receipt.threadId)
+          .pipe(Effect.provide(handlers));
+
+        yield* control.setHandler((location) =>
+          location === barrier
+            ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
+            : Effect.void,
+        );
+        expectCrash(yield* process.pipe(Effect.exit, Effect.ensuring(control.clear)));
+        expect(executions).toBe(3);
+        const settled = yield* process;
+
+        expect(settled[0]?.outcome).toBe("completed");
+        expect(executions).toBe(3);
+        expect(results(scripted.prompts.at(-1)!)).toEqual([
+          evidence.receipt,
+          CLEARED_TOOL_RESULT,
+          evidence.newest,
+        ]);
+        const records = yield* readLog(receipt.threadId);
+
+        const prunes = records.flatMap(({ record }) =>
+          record.payload._tag === "CompactionCreated" ? [record.payload] : [],
+        );
+
+        const noise = records.find(
+          ({ record }) =>
+            record.payload._tag === "ToolCallSettled" && record.payload.toolCallId === "noise",
+        );
+
+        expect(prunes).toHaveLength(1);
+        expect(prunes[0]?.toolResultRecordIds).toEqual([noise?.record.recordId]);
+        expect(JSON.stringify(records)).toContain(evidence.noise);
+        const replay = yield* projectRunJournal(records, runIdForSubmission(receipt.submissionId));
+
+        expect(results(replay.prompt)).toEqual([
+          evidence.receipt,
+          CLEARED_TOOL_RESULT,
+          evidence.newest,
+        ]);
+      }),
+    );
+  }
+});
+
+let auxiliaryEvaluations = 0;
+let auxiliaryFinalizers = 0;
+let auxiliaryOutcome = "success";
+let auxiliaryEntered: Deferred.Deferred<void> | undefined;
+
+layer(
+  makeTestLayer(
+    Layer.succeed(ContextCompactor, {
+      estimate: estimatePromptTokens,
+      compact: <E, R>(request: CompactionRequest<E, R>) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const evaluator = yield* CompactionEvaluator<E, R>();
+
+            if (evaluator.available) {
+              yield* evaluator.evaluate(
+                Effect.acquireUseRelease(
+                  Effect.void,
+                  () =>
+                    Effect.gen(function* () {
+                      auxiliaryEvaluations++;
+                      if (auxiliaryOutcome === "provider-failure")
+                        return yield* CompactionError.make({ message: "Selector unavailable" });
+                      if (auxiliaryOutcome === "provider-defect")
+                        return yield* Effect.die("selector defect");
+                      if (auxiliaryOutcome === "provider-interruption")
+                        return yield* Effect.interrupt;
+                      if (auxiliaryOutcome === "provider-timeout") {
+                        if (auxiliaryEntered !== undefined)
+                          yield* Deferred.succeed(auxiliaryEntered, undefined);
+
+                        return yield* Effect.never.pipe(
+                          Effect.timeoutOrElse({
+                            duration: "1 millis",
+                            orElse: () => CompactionError.make({ message: "Selector timeout" }),
+                          }),
+                        );
+                      }
+
+                      return {
+                        value: undefined,
+                        provider: "selector",
+                        model: "test-selector",
+                        usage: {
+                          inputTokens: {
+                            total: auxiliaryOutcome === "provider-invalid-usage" ? -1 : 70,
+                          },
+                          outputTokens: { total: 2 },
+                        },
+                      };
+                    }),
+                  () =>
+                    Effect.sync(() => {
+                      auxiliaryFinalizers++;
+                    }),
+                ),
+                100,
+              );
+            }
+            if (auxiliaryOutcome === "empty") return Stream.empty;
+            if (auxiliaryOutcome === "invalid")
+              return Stream.succeed({
+                kind: "clear-tool-results",
+                through: 1,
+                results: [{ messageIndex: 0, toolCallId: "missing" }],
+              });
+
+            const messageIndex = request.source.content.findIndex(
+              (message) =>
+                message.role === "tool" &&
+                message.content.some(
+                  (part) =>
+                    part.type === "tool-result" &&
+                    part.id === "noise" &&
+                    part.result !== CLEARED_TOOL_RESULT,
+                ),
+            );
+
+            return messageIndex < 0
+              ? Stream.empty
+              : Stream.succeed({
+                  kind: "clear-tool-results",
+                  through: messageIndex + 1,
+                  results: [{ messageIndex, toolCallId: "noise" }],
+                });
+          }),
+        ),
+    }),
+    (_usage, request) => Effect.succeed(request.purpose === "compaction" ? 7 : 1),
+  ),
+)("durable auxiliary compaction accounting", (it) => {
+  for (const barrier of [
+    "cost-limit",
+    "empty",
+    "invalid",
+    "provider-failure",
+    "provider-invalid-usage",
+    "provider-defect",
+    "provider-interruption",
+    "provider-timeout",
+    "compaction:before-evaluation-reserve",
+    "compaction:after-evaluation-reserve",
+    "compaction:before-evaluation-accounting",
+    "compaction:after-evaluation-accounting",
+    "compaction:before-canonical-append",
+    "compaction:after-canonical-append",
+  ] as const) {
+    it.effect(`preserves paid selection accounting across ${barrier}`, () =>
+      Effect.gen(function* () {
+        auxiliaryEvaluations = 0;
+        auxiliaryFinalizers = 0;
+        auxiliaryOutcome = barrier;
+        const entered = yield* Deferred.make<void>();
+
+        auxiliaryEntered = entered;
+        const runtime = yield* DurableAgentRuntime;
+        const control = yield* DurableRuntimeFailpointTestControl;
+
+        const toolkit = Toolkit.make(
+          Tool.make("search", {
+            parameters: Schema.Struct({ key: Schema.String }),
+            success: Schema.String,
+          }),
+        );
+
+        const evidence: Record<string, string> = {
+          receipt: "RECEIPT-42 " + "r".repeat(1_000),
+          noise: "noise " + "n".repeat(5_000),
+          newest: "newest " + "x".repeat(1_000),
+        };
+
+        let executions = 0;
+
+        const handlers = toolkit.toLayer({
+          search: ({ key }) =>
+            Effect.sync(() => {
+              executions++;
+
+              return evidence[key] ?? "unexpected";
+            }),
+        });
+
+        const scripted = scriptedModel((call) =>
+          call === 0
+            ? [
+                {
+                  type: "tool-call",
+                  id: "receipt",
+                  name: "search",
+                  params: { key: "receipt" },
+                  providerExecuted: false,
+                },
+                {
+                  type: "tool-call",
+                  id: "noise",
+                  name: "search",
+                  params: { key: "noise" },
+                  providerExecuted: false,
+                },
+                {
+                  type: "finish",
+                  reason: "tool-calls",
+                  usage: { ...usage, inputTokens: { total: 100 } },
+                },
+              ]
+            : call === 1
+              ? callParts("newest", "search", { key: "newest" }, 1_800)
+              : finalParts("Finished."),
+        );
+
+        const agent = Agent.withModel(
+          Agent.make("selective-pruning", {
+            input: Schema.String,
+            output: Output.text(Schema.String),
+            instructions: "Retain the receipt.",
+            toolkit,
+            policy: {
+              ...(auxiliaryOutcome === "cost-limit" ? { costBudgetMicrousd: 5 } : {}),
+              maxTurns: 5,
+              contextTokenLimit: 2_000,
+              compaction: { mode: "prune", keepRecentTokens: 1 },
+            },
+          }),
+          scripted.model,
+        );
+
+        const receipt = yield* runtime.submit(
+          agent,
+          "ORIGINAL-INPUT",
+          submitOptions(`auxiliary-${barrier}`),
+        );
+
+        const process = runtime
+          .processThread(agent, receipt.threadId)
+          .pipe(Effect.provide(handlers));
+
+        yield* control.setHandler((location) =>
+          location === barrier
+            ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
+            : Effect.void,
+        );
+        if (!barrier.startsWith("compaction:")) {
+          if (barrier === "provider-defect" || barrier === "provider-interruption") {
+            expect(Exit.isFailure(yield* Effect.exit(process))).toBe(true);
+          }
+
+          const completed = yield* (
+            barrier === "provider-timeout"
+              ? Effect.gen(function* () {
+                  const fiber = yield* Effect.forkChild(process);
+
+                  yield* Deferred.await(entered);
+                  yield* TestClock.adjust("1 second");
+
+                  return yield* Fiber.join(fiber);
+                })
+              : process
+          ).pipe(Effect.ensuring(control.clear));
+
+          expect(completed[0]?.outcome).toBe("failed");
+          expect(auxiliaryEvaluations).toBe(1);
+          expect(auxiliaryFinalizers).toBe(1);
+          const records = yield* readLog(receipt.threadId);
+
+          expect(
+            records.filter(({ record }) => record.payload._tag === "CompactionCreated"),
+          ).toHaveLength(0);
+          if (barrier === "cost-limit") {
+            expect(completed[0]?.usageSummary?.costMicrousd).toBe(9);
+            expect(records.at(-1)?.record.payload).toMatchObject({ policyLimit: "cost" });
+          }
+
+          const usageRecorded = !barrier.startsWith("provider-");
+
+          expect(
+            records.filter(({ record }) => record.payload._tag === "CompactionEvaluationRecorded"),
+          ).toHaveLength(usageRecorded ? 1 : 0);
+          expect(
+            completed[0]?.usageSummary?.byModel.filter((group) => group.provider === "selector"),
+          ).toHaveLength(usageRecorded ? 1 : 0);
+          if (!usageRecorded) expect(completed[0]?.usageSummary?.unobservedModelCalls).toBe(1);
+          expect(scripted.prompts).toHaveLength(2);
+
+          return;
+        }
+        expectCrash(yield* process.pipe(Effect.exit, Effect.ensuring(control.clear)));
+        expect(executions).toBe(3);
+        expect(auxiliaryEvaluations).toBe(
+          barrier === "compaction:before-evaluation-reserve" ||
+            barrier === "compaction:after-evaluation-reserve"
+            ? 0
+            : 1,
+        );
+        const settled = yield* process;
+
+        const unresolved =
+          barrier === "compaction:after-evaluation-reserve" ||
+          barrier === "compaction:before-evaluation-accounting";
+
+        expect(auxiliaryEvaluations).toBe(
+          barrier === "compaction:after-evaluation-reserve" ? 0 : 1,
+        );
+        expect(settled[0]?.outcome).toBe(unresolved ? "failed" : "completed");
+        expect(auxiliaryFinalizers).toBe(auxiliaryEvaluations);
+        const accountingRecords = yield* readLog(receipt.threadId);
+
+        const accounting = accountingRecords.filter(
+          ({ record }) => record.payload._tag === "CompactionEvaluationRecorded",
+        );
+
+        expect(accounting).toHaveLength(unresolved ? 0 : 1);
+
+        const replayAccounting = yield* projectRunJournal(
+          accountingRecords,
+          runIdForSubmission(receipt.submissionId),
+        );
+
+        expect(
+          replayAccounting.usage.modelUsage.filter((call) => call.purpose === "compaction"),
+        ).toHaveLength(unresolved ? 0 : 1);
+        expect(
+          settled[0]?.usageSummary?.byModel.filter((group) => group.provider === "selector"),
+        ).toMatchObject(
+          unresolved
+            ? []
+            : [{ modelCalls: 1, inputTokens: { total: 70 }, outputTokens: { total: 2 } }],
+        );
+        if (unresolved) {
+          expect(settled[0]?.usageSummary?.unobservedModelCalls).toBe(1);
+          expect(accountingRecords.at(-1)?.record.payload).toMatchObject({ policyLimit: "usage" });
+          expect(scripted.prompts).toHaveLength(2);
+
+          return;
+        }
+        expect(executions).toBe(3);
+        expect(results(scripted.prompts.at(-1)!)).toEqual([
+          evidence.receipt,
+          CLEARED_TOOL_RESULT,
+          evidence.newest,
+        ]);
+        const records = yield* readLog(receipt.threadId);
+
+        const prunes = records.flatMap(({ record }) =>
+          record.payload._tag === "CompactionCreated" ? [record.payload] : [],
+        );
+
+        const noise = records.find(
+          ({ record }) =>
+            record.payload._tag === "ToolCallSettled" && record.payload.toolCallId === "noise",
+        );
+
+        expect(prunes).toHaveLength(1);
+        expect(prunes[0]?.toolResultRecordIds).toEqual([noise?.record.recordId]);
+        expect(JSON.stringify(records)).toContain(evidence.noise);
+        const replay = yield* projectRunJournal(records, runIdForSubmission(receipt.submissionId));
+
+        expect(results(replay.prompt)).toEqual([
+          evidence.receipt,
+          CLEARED_TOOL_RESULT,
+          evidence.newest,
+        ]);
+      }),
+    );
+  }
 });
 
 const usage = { inputTokens: { total: 1_300 }, outputTokens: { total: 10 } };

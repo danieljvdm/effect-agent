@@ -484,6 +484,26 @@ export class ToolApprovalDecided extends Schema.TaggedClass<ToolApprovalDecided>
   reason: BoundedText,
 }) {}
 
+/** One non-refundable selector invocation slot, committed before provider dispatch. */
+export class CompactionEvaluationReserved extends Schema.TaggedClass<CompactionEvaluationReserved>()(
+  "CompactionEvaluationReserved",
+  { runId: RunId, turn: TurnNumber, inputTokensEstimate: Schema.Natural },
+) {}
+
+/** Independent selector accounting; it never adds a conversation Turn or a context decision. */
+export class CompactionEvaluationRecorded extends Schema.TaggedClass<CompactionEvaluationRecorded>()(
+  "CompactionEvaluationRecorded",
+  {
+    runId: RunId,
+    turn: TurnNumber,
+    usage: ModelCallUsage.check(
+      Schema.makeFilter((usage) => usage.purpose === "compaction", {
+        title: "Auxiliary accounting records identify compaction usage",
+      }),
+    ),
+  },
+) {}
+
 /**
  * First-class interruption audit (durability §9): appended by a superseding Attempt before it
  * re-invokes the model for a Turn whose prior owner died without a complete canonical response.
@@ -508,6 +528,8 @@ export class ModelResponseInterrupted extends Schema.TaggedClass<ModelResponseIn
  * re-read the covered range on every wake — the O(history) work compaction
  * exists to remove. Host-supplied ContextCompactor decisions use this same commit path.
  * Summaries exceeding BoundedText are rejected before append, never truncated.
+ * Optional `toolResultRecordIds` narrows `clear-tool-results` to those exact settlements;
+ * every selected record must exist within coverage. It never widens other record kinds.
  * `summary` is present exactly for `summarize` records; the projection
  * treats a summarize record without one as invalid and ignores it fail-safe.
  */
@@ -518,6 +540,10 @@ export class CompactionCreated extends Schema.TaggedClass<CompactionCreated>(
   turn: TurnNumber,
   kind: Schema.Literals(["clear-tool-results", "summarize", "rollover"]),
   coversThrough: CanonicalSequence,
+  /** Sparse result-body removals. Absent means ordinary whole-prefix pruning. */
+  toolResultRecordIds: Schema.optionalKey(
+    Schema.Array(RecordId).check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+  ),
   summary: Schema.optionalKey(BoundedText),
   handoff: Schema.optionalKey(ContextHandoff),
 }) {}
@@ -621,7 +647,7 @@ const RawSubmissionSettled = Schema.Struct({
   policyLimit: Schema.optionalKey(PolicyLimit),
   /** Canonical aggregate of all priced model calls made by this Run. */
   usageSummary: Schema.optionalKey(RunUsageSummary),
-  /** Calls included in usageSummary but not in any ModelResponseRecorded, retained on failure. */
+  /** Calls included in usageSummary without canonical response or auxiliary accounting records. */
   uncommittedModelUsage: Schema.optionalKey(Schema.Array(ModelCallUsage)),
 });
 
@@ -999,6 +1025,8 @@ export const CanonicalRecordPayload = Schema.Union([
   ToolApprovalRequested,
   ToolApprovalDecided,
   ModelResponseInterrupted,
+  CompactionEvaluationReserved,
+  CompactionEvaluationRecorded,
   CompactionCreated,
   RunFailed,
   RunCompleted,

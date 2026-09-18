@@ -1,0 +1,90 @@
+[
+  {
+    "id": "lisbon-accessibility",
+    "messages": [
+      "Help me plan Lisbon for three adults, including my mum. We arrive 17 April 2027 and leave 22 April. We like food, gardens and small museums. Please make a draft; we will not book anything during this chat.",
+      "Mum uses a folding wheelchair for distances. Step-free access to the bedroom and bathroom is essential; an elevator alone is not enough evidence. We will use taxis and public transport, not hire a car. Our lodging budget is EUR 1,800 total.",
+      "Research two or three real hotel candidates around Baixa or the waterfront. Find official accessibility information and save the sources. Be explicit if an accessible room still needs confirmation.",
+      "Correction: our flight arrives on 18 April, not the 17th. We still leave on the 22nd, so four nights. The lodging ceiling is now EUR 1,500 total, including taxes. Those replace my earlier dates and budget.",
+      "I am vegetarian but eggs and dairy are fine. Mum eats everything. Suggest a few food stops near the areas we are considering, with links, and remember that we need somewhere to sit rather than standing food tours.",
+      "We had considered a Sintra day trip, but let's rule it out. Keep the trip inside Lisbon and avoid steep walking routes. Please revise the draft around those choices.",
+      "One friend has dropped out: it is now two adults, me and Mum. We want twin beds, not a double. Keep all the other constraints, including the corrected dates and total lodging budget.",
+      "Could you compare the researched hotels against our current requirements? Reuse the earlier evidence where possible. Separate genuinely verified accessibility from questions we still have to ask the hotel.",
+      "Keep the first afternoon quiet because we land around 15:00. One planned activity a day is enough. Mum needs a rest back at the hotel around 14:00 each day; don't fill that time with travel.",
+      "Please save the current plan and give me a compact handoff: current dates, party, budget, mobility and food constraints, what we rejected, and the outstanding lodging questions. Nothing has been booked."
+    ],
+    "checks": {
+      "destination": "Lisbon",
+      "startDate": "2027-04-18",
+      "endDate": "2027-04-22",
+      "travelers": "2",
+      "lodgingBudget": "EUR 1500 total including taxes",
+      "bedPreference": "twin beds",
+      "diet": "vegetarian; eggs and dairy allowed",
+      "mobility": "step-free bedroom and bathroom; folding wheelchair; avoid steep routes",
+      "transport": "taxis and public transport; no rental car",
+      "rejected": "Sintra day trip",
+      "dailyRest": "14:00 at the hotel",
+      "bookingStatus": "nothing booked"
+    }
+  },
+  {
+    "id": "japan-itinerary-revision",
+    "messages": [
+      "Let's plan six nights in Japan for two adults, arriving 7 November 2026 and leaving 13 November. Initially I am thinking Kyoto the whole time, with temples, coffee and easy rail travel. Please save a draft, without making bookings.",
+      "We have a lodging budget of USD 1,800 total. We want quiet private rooms near rail links. No rental car. I eat vegetarian food and cannot eat fish stock, even if there is no visible fish in the dish.",
+      "Research a few real Kyoto stays with official links and evidence about station access and private bathrooms. You can leave price and availability unverified when the dates cannot be checked.",
+      "Change of plan: move the entire trip one day later, 8 to 14 November. Split it into three nights Kyoto and three nights Osaka, in that order. Please replace the old Kyoto-only plan.",
+      "A friend is joining us, so there will be three adults. We need two private rooms rather than one triple. The total lodging cap can rise to USD 2,100, including taxes; that replaces USD 1,800.",
+      "Research Osaka stays for the second half and a sensible train transfer from Kyoto. We will carry one small suitcase each. Please keep the original no-car and dietary constraints.",
+      "We considered Tokyo as an extra stop, but we have decided against it. Also drop the dawn temple visits: nobody wants to start scheduled activities before 10:00.",
+      "For one Kyoto day we want a tea experience, but skip anything advertised as an animal cafe. For Osaka, find a couple of vegetarian-friendly food options and flag the fish-stock question as something to verify directly.",
+      "Please compare the current accommodation options using the research already collected. Prioritize rail access and quiet rooms over nightlife. Do not quietly revert to the original dates, party size or budget.",
+      "Save the revised itinerary. Give me a short handoff of the final dates and city order, party and room needs, budget, travel and food restrictions, rejected ideas, and what remains unverified. We have made no reservations."
+    ],
+    "checks": {
+      "destinations": "Kyoto then Osaka",
+      "startDate": "2026-11-08",
+      "endDate": "2026-11-14",
+      "cityNights": "3 Kyoto and 3 Osaka",
+      "travelers": "3",
+      "rooms": "two private rooms",
+      "lodgingBudget": "USD 2100 total including taxes",
+      "diet": "vegetarian; no fish stock",
+      "transport": "rail; no rental car",
+      "earliestActivity": "10:00",
+      "rejected": "Tokyo; dawn temple visits; animal cafes",
+      "bookingStatus": "no reservations"
+    }
+  },
+  {
+    "id": "cape-town-group-changes",
+    "messages": [
+      "Please help plan Cape Town for four adults from 10 to 17 February 2027. We'd like surfing, one round of golf, and relaxed evenings together. Start a shared draft, but don't publish a site or book anything.",
+      "Our accommodation ceiling is ZAR 28,000 for the whole stay, not per person. We need at least three bedrooms and two bathrooms. We were considering Camps Bay, but haven't selected a neighborhood.",
+      "Research real self-catering places around Camps Bay and Muizenberg. We need reliable Wi-Fi for one work morning and somewhere to prepare meals. Use actual source pages and distinguish verified facilities from assumptions.",
+      "Two more friends are joining: six adults now. We need four bedrooms and at least three bathrooms. Raise the total accommodation ceiling to ZAR 36,000 including fees; that replaces the old budget and room requirements.",
+      "We have decided to base ourselves in Muizenberg rather than Camps Bay. We are beginner surfers and want lessons, not advice to head out unsupervised. Research a couple of legitimate lesson providers.",
+      "One person does not drive. Plan around arranged transfers and walking nearby; nobody wants to rent a car. We need to work remotely on Friday 12 February from 09:00 to 13:00, so keep that morning free.",
+      "Golf is optional now: keep one beginner-friendly option with a source link, but surfing and accommodation take priority. We considered a shark-cage excursion and decided against it.",
+      "Our flight changed. We arrive 11 February and still leave 17 February, so six nights. Please update the saved dates without losing our other decisions, especially the Friday work block.",
+      "Compare the best accommodation candidates against the latest party, room and budget requirements. One guest has a peanut allergy: save that as a food-safety requirement and don't assume a restaurant is safe just because it has vegetarian dishes.",
+      "Please save a compact final handoff with dates, group size, accommodation requirements and total budget, chosen base, transport, work block, activities, rejected excursion and allergy. Clearly distinguish options from reservations; we have booked nothing."
+    ],
+    "checks": {
+      "destination": "Muizenberg, Cape Town",
+      "startDate": "2027-02-11",
+      "endDate": "2027-02-17",
+      "travelers": "6",
+      "bedrooms": "at least 4",
+      "bathrooms": "at least 3",
+      "lodgingBudget": "ZAR 36000 total including fees",
+      "transport": "arranged transfers and walking; no rental car",
+      "workBlock": "Friday 12 February 09:00 to 13:00",
+      "surfing": "beginner lessons",
+      "rejected": "Camps Bay as base; shark-cage excursion",
+      "allergy": "peanuts",
+      "bookingStatus": "nothing booked; no site published"
+    }
+  }
+]

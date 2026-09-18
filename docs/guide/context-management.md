@@ -1069,6 +1069,27 @@ decisions that make no progress, and more than one prune followed by one replace
 Summary calls must use
 `request.summarize` so metering, response limits, and the run deadline still apply.
 
+A `clear-tool-results` decision may include `results: [{ messageIndex, toolCallId }]` to clear
+only selected application result bodies within `through`. Calls, outcome flags, and other results
+remain visible. Indices address the request's source snapshot. The engine protects current input
+and the newest Tool batch, rejects duplicate or invalid selections, and requires a smaller view.
+Durable hosts persist exact settlement record IDs, so reused Tool Call IDs cannot clear another
+occurrence. Without `results`, pruning retains its existing whole-prefix behavior.
+
+Inside `compact<E, R>`, acquire `yield* CompactionEvaluator<E, R>()` from
+`effect-agent/context-compactor`. The engine supplies this service for each pass; its requirement
+stays in the strategy stream's `R` channel. Direct harnesses provide their own implementation.
+When `evaluator.available` is false, use a replacement fallback. Otherwise,
+`evaluator.evaluate(operation, inputTokensEstimate)` admits one auxiliary model call per turn and
+charges its returned provider, model, and native usage before applying a decision.
+The operation supplies `{ value, provider, model, usage }` and bounds its own request and response.
+Durable runs reserve the evaluation slot before dispatch and commit usage independently of the
+decision, including when the strategy keeps every result or returns an invalid selection. Recovery
+uses completed accounting without repeating the call; an unresolved reservation fails closed
+because its provider usage is unknown. Runs that evaluate during compaction currently use full
+canonical replay during recovery. `SelectiveCompactor.layer` uses this boundary with a supplied
+Decision Model; see [selective pruning](#selective-pruning).
+
 `estimate` must return a non-negative finite integer. Strategy failures use `CompactionError`.
 Defects and interruption retain their Effect meaning.
 
@@ -1111,6 +1132,101 @@ To use a prompt transform and a custom compactor together, provide `RunContextPr
 `ContextCompactor` independently. The runtime captures both when its Layer is acquired and retains
 them across replacement attempts. Providing a different compactor around a worker call does not
 replace the host's choice.
+
+### Select old results before replacement {#selective-pruning}
+
+`SelectiveCompactor.layer` wraps an existing compactor and asks a Decision Model which old Tool result bodies can be removed.
+
+```ts twoslash
+import { SelectiveCompactor } from "effect-agent";
+import { ContextCompactor } from "effect-agent/context-compactor";
+import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
+import { Layer } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+
+const JevLive = TypeSafeDecisionModel.model("jev-latest").pipe(
+  Layer.provide(TypeSafeClient.layer),
+  Layer.provide(TypeSafeClient.Config.layer),
+  Layer.provide(FetchHttpClient.layer),
+);
+
+export const CompactorLive = SelectiveCompactor.layer({
+  dropBelow: 0.1,
+  pinnedTools: ["book_trip"],
+}).pipe(Layer.provide(ContextCompactor.layerRollover), Layer.provide(JevLive));
+```
+
+Set `TYPESAFE_API_KEY` and provide `CompactorLive` to the durable host as shown above.
+For a summary fallback, supply `ContextCompactor.layerWithModel(summaryModel)` instead of
+`layerRollover`, along with that model's client. The default `prune-then-summarize` policy permits
+either replacement strategy; `prune` mode stops after pruning and fails admission if it cannot fit.
+
+On automatic context pressure, the selector prunes first. If the prompt fits, the Run continues
+without a summary or rollover. Otherwise the supplied compactor handles replacement. Explicit
+`new_context` requests and provider overflow go directly to the fallback. Calls and retained
+result bodies remain intact; the canonical log keeps the original evidence.
+
+Only old successful application results are candidates. Protected input, the newest batch,
+failed/provider-executed results, and `pinnedTools` remain visible. Each request contains at most
+32 candidates and 48 KB of UTF-8 input, with a five-second timeout and no retries. Invalid responses
+or timeout fail with `CompactionError` before pruning; defects and interruption propagate.
+Missing credentials fail during Layer acquisition.
+
+`dropBelow: 0.1` prunes a result only when the model estimates less than a 10% probability that
+its contents still matter for the ongoing task. Higher values prune more aggressively. These
+estimates are fallible, and bounded excerpts can miss relevant evidence. The 800-character
+result excerpts include the beginning, end, and passages matching words in the
+current task. Those matches only help the model find evidence; they never authorize pruning.
+Relevant facts expressed with different words can still be missed. Calibrate `dropBelow` against
+your continuation tasks; the conservative default may retain every result.
+
+Auxiliary evaluations are charged even when nothing is removed; these Runs currently recover
+through full canonical replay.
+
+Supply an effectful `question` to customize what deserves retention. A true answer must mean
+**keep the result**, so the same `dropBelow` comparison applies:
+
+```ts twoslash
+import { DecisionQuery } from "@effect-agent/ai-decision";
+import { Context, Effect, Layer } from "effect";
+import { SelectiveCompactor } from "effect-agent";
+import { CompactionError } from "effect-agent/context-compactor";
+
+class RetentionPolicy extends Context.Service<
+  RetentionPolicy,
+  { readonly instructions: Effect.Effect<string, CompactionError> }
+>()("app/RetentionPolicy") {}
+
+const custom = SelectiveCompactor.layer({
+  question: Effect.fn(function* ({ result }) {
+    const policy = yield* RetentionPolicy;
+    const instructions = yield* policy.instructions;
+
+    return DecisionQuery.probability({
+      instructions: { proposition: `Keep result ${result.id}.`, policy: instructions },
+      criteria: {
+        true: "Contains sources needed to support the final report",
+        false: "Superseded evidence with no remaining use",
+      },
+    });
+  }),
+});
+
+const withPolicy = custom.pipe(
+  Layer.provide(
+    Layer.succeed(RetentionPolicy, {
+      instructions: Effect.succeed("Retain sources needed to cite the final report."),
+    }),
+  ),
+);
+// Provide the DecisionModel and fallback Layers as in the first example.
+```
+
+The hook receives the candidate and bounded evidence before size trimming. It runs sequentially
+once per candidate, with a five-second deadline for all question preparation. Its service
+requirements belong to the Layer; resources close after each question. Use read-only preparation
+and return expected failures as `CompactionError`. Preparation is not durably recorded or metered
+inference. Failure stops before model evaluation or pruning; trimming never reruns the hook.
 
 ### Start fresh context windows {#context-windows}
 

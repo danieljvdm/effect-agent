@@ -182,6 +182,12 @@ export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLoc
   // (compaction failpoint idempotence across re-drive).
   "compaction:before-canonical-append",
   "compaction:after-canonical-append",
+  // Paid selector reservation/accounting needs an installed custom compactor. The dedicated
+  // durable-output-compaction.test.ts matrix exercises all four boundaries and recovery.
+  "compaction:before-evaluation-reserve",
+  "compaction:after-evaluation-reserve",
+  "compaction:before-evaluation-accounting",
+  "compaction:after-evaluation-accounting",
   // These shapes use neither programmatic Tools nor grace finalization. Their reservations
   // are exercised before/after append in the public durable-runtime regression suite.
   "policy:before-reservation-append",

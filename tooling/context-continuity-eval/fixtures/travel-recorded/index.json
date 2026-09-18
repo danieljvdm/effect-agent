@@ -1,0 +1,82 @@
+{
+  "fixtureVersion": 1,
+  "recordings": [
+    {
+      "caseId": "lisbon-accessibility",
+      "plannedTurns": 10,
+      "settledTurns": 10,
+      "status": "complete",
+      "modelCalls": 131,
+      "pageReads": 93,
+      "stopReason": null
+    },
+    {
+      "caseId": "japan-itinerary-revision",
+      "plannedTurns": 10,
+      "settledTurns": 9,
+      "status": "incomplete",
+      "modelCalls": 178,
+      "pageReads": 192,
+      "stopReason": "Final save_trip output exceeded the recorder max_output_tokens=4096 limit; response incomplete."
+    },
+    {
+      "caseId": "cape-town-group-changes",
+      "plannedTurns": 10,
+      "settledTurns": 10,
+      "status": "complete",
+      "modelCalls": 156,
+      "pageReads": 133,
+      "stopReason": null
+    }
+  ],
+  "checkpoints": [
+    {
+      "caseId": "lisbon-accessibility",
+      "turn": 5,
+      "file": "lisbon-accessibility-turn-5.json.gz",
+      "visibleMessages": 30,
+      "promptMessages": 91,
+      "sha256": "22d14d0b6145b70598d9878749793b5e55fd4eb732994a13571503e67839cbc9"
+    },
+    {
+      "caseId": "lisbon-accessibility",
+      "turn": 10,
+      "file": "lisbon-accessibility-turn-10.json.gz",
+      "visibleMessages": 50,
+      "promptMessages": 166,
+      "sha256": "11d29d6607ca8295dce8a1aceaf64fd5ffe5aa4330a2689e90f633b123091c43"
+    },
+    {
+      "caseId": "japan-itinerary-revision",
+      "turn": 5,
+      "file": "japan-itinerary-revision-turn-5.json.gz",
+      "visibleMessages": 22,
+      "promptMessages": 108,
+      "sha256": "a506ac768e90ceb5beceeb3f331383303c98d4d04bfac164d9a96175ebd487fc"
+    },
+    {
+      "caseId": "japan-itinerary-revision",
+      "turn": 9,
+      "file": "japan-itinerary-revision-turn-9.json.gz",
+      "visibleMessages": 40,
+      "promptMessages": 62,
+      "sha256": "7d7a6c6890fa2727b6447d22f0771ce53e8d2aa81261784e7477d6576fa4b762"
+    },
+    {
+      "caseId": "cape-town-group-changes",
+      "turn": 5,
+      "file": "cape-town-group-changes-turn-5.json.gz",
+      "visibleMessages": 22,
+      "promptMessages": 117,
+      "sha256": "949382b693b9faafc2521a6dea44191ceda6823a363345f54459e5446a7da2c9"
+    },
+    {
+      "caseId": "cape-town-group-changes",
+      "turn": 10,
+      "file": "cape-town-group-changes-turn-10.json.gz",
+      "visibleMessages": 36,
+      "promptMessages": 51,
+      "sha256": "883027761592fbee87c2813e27a6ed67ad5b60a3abadf8133348bb182f30511e"
+    }
+  ]
+}

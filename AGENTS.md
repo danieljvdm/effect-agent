@@ -96,6 +96,7 @@ concepts succinctly: what a feature does, how it fits, and how to use it.
 
 ```text
 ai-decision <- ai-typesafe
+ai-decision <- effect-agent capabilities
 effect-agent <- storage adapters
 effect-agent <- workflow
 effect-agent + selected adapters <- platform packages

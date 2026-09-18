@@ -265,7 +265,9 @@ import {
   CompactionDecision,
   CompactionError,
   ContextCompactor,
+  CompactionEvaluator,
   type CompactionModelLayer,
+  type CompactionEvaluation,
   type ContextMessageTokenEstimator,
 } from "../ContextCompactor.ts";
 import {
@@ -406,6 +408,7 @@ const usageReportOf = Effect.fn("AgentRuntime.usageReport")(function* (context: 
 const noteIncompleteUsage = Effect.fn("AgentRuntime.noteIncompleteUsage")(function* (
   context: RunContext,
   turn: number,
+  stage = true,
 ) {
   const accounting = yield* ModelUsageAccounting;
 
@@ -414,7 +417,8 @@ const noteIncompleteUsage = Effect.fn("AgentRuntime.noteIncompleteUsage")(functi
     context.usageStatus === "unknown" || context.modelCalls === 0 ? "unknown" : "partial";
   context.pricingStatus =
     context.pricingStatus === "unknown" || context.modelCalls === 0 ? "unknown" : "partial";
-  yield* accounting.noteIncompleteUsage(turn);
+  // Auxiliary reservations already persist this uncertainty; still reflect it in live reports.
+  if (stage) yield* accounting.noteIncompleteUsage(turn);
 });
 
 /** Decoded terminal value produced by reducing a completed agent event stream. */
@@ -582,6 +586,7 @@ interface RunContext {
   readonly compactionTurn: {
     turn: number;
     summaryCalls: number;
+    evaluationCalls: number;
     readonly applied: Set<CompactionDecision["kind"]>;
   };
   /** Finite engine-owned memory ceilings, optionally tightened per Run. */
@@ -3311,8 +3316,8 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
   response: Pick<RunCostEstimateRequest, "response" | "finishMetadata" | "purpose"> = {},
 ): Effect.Effect<
   ConsumedUsage,
-  AgentPolicyError | ModelProtocolError | HookError,
-  HookRequirements | Model.ProviderName | Model.ModelName
+  AgentPolicyError | ModelProtocolError | CompactionError | HookError,
+  HookRequirements | Model.ProviderName | Model.ModelName | ModelUsageAccounting
 > =>
   Effect.gen(function* () {
     if (usage === undefined) {
@@ -3531,10 +3536,13 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     context.costMicrousd = cumulativeCostMicrousd;
     context.lastCostMicrousd = costMicrousd;
 
-    if (options.durability !== undefined) {
-      // Stage before enforcing hard rails: a response that spends past the
-      // cost/token budget still becomes auditable in its canonical Turn and
-      // terminal settlement.
+    const auxiliaryAccounting = (yield* ModelUsageAccounting).compactionEvaluation;
+
+    // Record before enforcing hard rails: a response that spends past the budget remains
+    // auditable through its independent auxiliary record or its canonical Turn.
+    if (response.purpose === "compaction" && auxiliaryAccounting !== undefined) {
+      yield* auxiliaryAccounting.commit({ turn, usage: modelUsage });
+    } else if (options.durability !== undefined) {
       yield* options.durability.noteTurnUsage({ turn, usage: modelUsage });
     }
 
@@ -3936,6 +3944,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
 > =>
   Effect.gen(function* () {
     const state = context.compaction;
+    const auxiliaryAccounting = (yield* ModelUsageAccounting).compactionEvaluation;
     const events: Array<RunEvent> = [];
     const messages = source.content;
     const allowance = context.compactionTurn;
@@ -4036,6 +4045,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
     if (allowance.turn !== turn) {
       allowance.turn = turn;
       allowance.summaryCalls = 0;
+      allowance.evaluationCalls = 0;
       allowance.applied.clear();
     }
     if (allowance.applied.has("summarize") || allowance.applied.has("rollover")) {
@@ -4051,9 +4061,28 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
 
     const summarize = (summarizerPrompt: Prompt.Prompt, model?: CompactionModelLayer) => {
       const generate = Effect.gen(function* () {
+        if (auxiliaryAccounting?.hasUnresolved) {
+          return yield* AgentPolicyError.make({
+            limit: "usage",
+            message: "A reserved compaction evaluation has unknown usage",
+          });
+        }
         if (allowance.summaryCalls++ > 0 || !modelCallAllowed) {
           return yield* CompactionError.make({
             message: "Compaction exceeded its summary-call allowance",
+          });
+        }
+        if (
+          allowance.evaluationCalls > 0 &&
+          agent.definition.policy.tokenBudget !== undefined &&
+          (yield* estimateContextTokens(summarizerPrompt.content, messageTokenEstimator)) >
+            agent.definition.policy.tokenBudget -
+              context.inputTokens -
+              context.outputTokens -
+              agent.definition.policy.completionReserveTokens
+        ) {
+          return yield* CompactionError.make({
+            message: "Insufficient token budget for compaction summary",
           });
         }
         if (
@@ -4229,6 +4258,85 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
       return model === undefined ? generate : Effect.provide(generate, model);
     };
 
+    const evaluate = <A>(
+      operation: Effect.Effect<CompactionEvaluation<A>, CompactionError>,
+      inputTokensEstimate: number,
+    ) =>
+      Effect.gen(function* () {
+        const accounting = auxiliaryAccounting;
+
+        if (options.durability !== undefined && accounting === undefined) {
+          return yield* CompactionError.make({
+            message: "Auxiliary compaction inference requires the durable accounting protocol",
+          });
+        }
+        if (accounting?.reservedTurns.has(turn)) {
+          return yield* CompactionError.make({
+            message: "Compaction evaluation is already reserved",
+          });
+        }
+        if (
+          allowance.evaluationCalls++ > 0 ||
+          !modelCallAllowed ||
+          allowance.applied.has("clear-tool-results")
+        ) {
+          return yield* CompactionError.make({
+            message: "Compaction exceeded its evaluation-call allowance",
+          });
+        }
+        const tokenBudget = agent.definition.policy.tokenBudget;
+
+        if (
+          !Number.isSafeInteger(inputTokensEstimate) ||
+          inputTokensEstimate < 0 ||
+          (tokenBudget !== undefined &&
+            inputTokensEstimate >
+              tokenBudget -
+                context.inputTokens -
+                context.outputTokens -
+                agent.definition.policy.completionReserveTokens)
+        ) {
+          return yield* CompactionError.make({
+            message: "Insufficient token budget for compaction evaluation",
+          });
+        }
+
+        if (accounting !== undefined) yield* accounting.reserve(turn, inputTokensEstimate);
+
+        const evaluation =
+          options.budget === undefined ? operation : options.budget.guard(operation);
+
+        const result = yield* Effect.scoped(evaluation).pipe(
+          Effect.tapCause(() => noteIncompleteUsage(context, turn, accounting === undefined)),
+        );
+
+        const priorModelCalls = context.modelCalls;
+        const wasFinalizing = context.finalizing;
+
+        context.finalizing = true;
+
+        const consumed = yield* consumeUsage(agent, context, result.usage, 0, turn, options, {
+          purpose: "compaction",
+        }).pipe(
+          Effect.provideService(Model.ProviderName, result.provider),
+          Effect.provideService(Model.ModelName, result.model),
+          Effect.tapCause(() =>
+            context.modelCalls === priorModelCalls
+              ? noteIncompleteUsage(context, turn, accounting === undefined)
+              : Effect.void,
+          ),
+          Effect.ensuring(
+            Effect.sync(() => {
+              context.finalizing = wasFinalizing;
+            }),
+          ),
+        );
+
+        events.push(...consumed.warnings);
+
+        return result.value;
+      });
+
     const applied = allowance.applied;
 
     const compactor = yield* ContextCompactor;
@@ -4238,6 +4346,13 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         source,
         state: Object.freeze({
           ...state,
+          ...(state.clearedResults === undefined
+            ? {}
+            : {
+                clearedResults: Object.freeze(
+                  state.clearedResults.map((result) => Object.freeze({ ...result })),
+                ),
+              }),
           replacement:
             state.replacement === undefined ? undefined : Object.freeze({ ...state.replacement }),
         }),
@@ -4255,6 +4370,23 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         summarize,
       })
       .pipe(
+        Stream.provideService(
+          CompactionEvaluator<
+            Effect.Error<ReturnType<typeof summarize>>,
+            Effect.Services<ReturnType<typeof summarize>>
+          >(),
+          {
+            get available() {
+              return (
+                modelCallAllowed &&
+                allowance.evaluationCalls === 0 &&
+                !applied.has("clear-tool-results") &&
+                !auxiliaryAccounting?.reservedTurns.has(turn)
+              );
+            },
+            evaluate,
+          },
+        ),
         Stream.runForEach((candidate) =>
           Effect.gen(function* () {
             const decision = yield* Schema.decodeEffect(CompactionDecision)(candidate).pipe(
@@ -4326,7 +4458,58 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
                   message: "Compaction must advance pruning while retaining the newest Tool result",
                 });
               }
-              next.clearedThrough = decision.through;
+              if (decision.results === undefined) {
+                next.clearedThrough = decision.through;
+              } else {
+                const selected = [...(state.clearedResults ?? [])];
+
+                for (const result of decision.results) {
+                  const message = messages[result.messageIndex];
+
+                  const matches =
+                    message?.role === "tool"
+                      ? message.content.filter(
+                          (part) =>
+                            part.type === "tool-result" &&
+                            !part.providerExecuted &&
+                            part.id === result.toolCallId,
+                        )
+                      : [];
+
+                  if (
+                    result.messageIndex >= decision.through ||
+                    result.messageIndex < state.clearedThrough ||
+                    result.messageIndex < (state.replacement?.through ?? 0) ||
+                    (result.messageIndex >= state.protectedStart &&
+                      result.messageIndex < state.protectedEnd) ||
+                    matches.length !== 1 ||
+                    selected.some(
+                      (prior) =>
+                        prior.messageIndex === result.messageIndex &&
+                        prior.toolCallId === result.toolCallId,
+                    )
+                  ) {
+                    return yield* CompactionError.make({
+                      message:
+                        "Selective pruning must identify unique, eligible application Tool results",
+                    });
+                  }
+                  selected.push(result);
+                }
+                if (selected.length > 4_096) {
+                  return yield* CompactionError.make({
+                    message: "Selective pruning exceeded its retained selection bound",
+                  });
+                }
+                next.clearedResults = selected;
+              }
+            }
+            if (next.clearedResults !== undefined) {
+              next.clearedResults = next.clearedResults.filter(
+                (result) =>
+                  result.messageIndex >=
+                  Math.max(next.clearedThrough, next.replacement?.through ?? 0),
+              );
             }
 
             const after = yield* estimateContextTokens(
@@ -4339,12 +4522,24 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
                 message: "Automatic rollover did not reduce context",
               });
             }
+            if (
+              decision.kind === "clear-tool-results" &&
+              decision.results !== undefined &&
+              after >= before
+            ) {
+              return yield* CompactionError.make({
+                message: "Selective pruning did not reduce context",
+              });
+            }
 
             const commit: RunCompactionCommit = {
               turn,
               source,
               through: decision.through,
               kind: decision.kind,
+              ...(decision.kind === "clear-tool-results" && decision.results !== undefined
+                ? { results: decision.results }
+                : {}),
               ...(decision.kind === "summarize" ? { summary: decision.summary } : {}),
               ...(decision.kind === "rollover" && decision.handoff !== undefined
                 ? { handoff: decision.handoff }
@@ -4360,7 +4555,11 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
             if (preparedSource !== undefined && preparedSnapshot !== undefined) {
               preparedSource.prefix = preparedSnapshot.slice(
                 0,
-                Math.max(next.clearedThrough, next.replacement?.through ?? 0),
+                Math.max(
+                  next.clearedThrough,
+                  next.replacement?.through ?? 0,
+                  ...(next.clearedResults ?? []).map((result) => result.messageIndex + 1),
+                ),
               );
             }
             applied.add(decision.kind);
@@ -6101,6 +6300,14 @@ const makeTurn = <
             }
           }),
         );
+      }
+
+      if ((yield* ModelUsageAccounting).compactionEvaluation?.hasUnresolved) {
+        return yield* AgentPolicyError.make({
+          limit: "usage",
+          message:
+            "A reserved compaction evaluation has unknown usage; further model work is prohibited",
+        });
       }
 
       /** The model-visible view of the Turn basis under current compaction state. */
@@ -7957,6 +8164,12 @@ function streamWithCompletion<
                 "Run resume accounting conflicts with the pending Turn and declared Tool Calls",
             });
           }
+          if ((yield* ModelUsageAccounting).compactionEvaluation?.hasUnresolved) {
+            return yield* AgentPolicyError.make({
+              limit: "usage",
+              message: "A reserved compaction evaluation has unknown usage after ownership loss",
+            });
+          }
           const attemptStartedAtMillis = yield* Clock.currentTimeMillis;
           const maxDurationMillis = Duration.toMillis(agent.definition.policy.maxDuration);
           const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
@@ -8058,7 +8271,7 @@ function streamWithCompletion<
             exhaustedDimension: undefined,
             compaction: initialCompactionState(),
             preparedCompactionSource: undefined,
-            compactionTurn: { turn: 0, summaryCalls: 0, applied: new Set() },
+            compactionTurn: { turn: 0, summaryCalls: 0, evaluationCalls: 0, applied: new Set() },
             windowId: options.initialContextWindowId ?? contextWindowId(runId, 0),
             windowTokens: resumeUsage?.lastInputTokens ?? 0,
             windowContextTokenLimit: agent.definition.policy.contextTokenLimit,

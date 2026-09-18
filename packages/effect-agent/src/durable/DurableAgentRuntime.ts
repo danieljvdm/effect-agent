@@ -179,6 +179,8 @@ import {
   CanonicalBatch,
   CanonicalSequence,
   CompactionCreated,
+  CompactionEvaluationReserved,
+  CompactionEvaluationRecorded,
   ThreadCreated,
   DefinitionDigests,
   ModelResponseInterrupted,
@@ -4390,6 +4392,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
           let compaction: CanonicalRecordEnvelope | undefined;
           let latestResponse: CanonicalSequence | undefined;
+          let hasCompactionEvaluation = false;
           let firstSequence = journalSeed?.firstSequence;
           const orchestrationCalls = new Set<string>();
 
@@ -4397,6 +4400,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             Effect.sync(() => {
               const payload = entry.record.payload;
 
+              if (
+                (payload._tag === "CompactionEvaluationReserved" ||
+                  payload._tag === "CompactionEvaluationRecorded") &&
+                payload.runId === runId
+              )
+                hasCompactionEvaluation = true;
               if (entry.record.recordId === compactionId) compaction = entry;
               if (!("runId" in payload) || payload.runId !== runId) return;
               firstSequence ??= entry.sequence;
@@ -4409,6 +4418,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 orchestrationCalls.add(payload.toolCallId);
             }),
           );
+          if (hasCompactionEvaluation) return;
           if (
             compaction === undefined ||
             compaction.record.payload._tag !== "CompactionCreated" ||
@@ -4802,6 +4812,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         }
       }
 
+      const reservedEvaluationTurns = new Set(
+        (journal.compactionEvaluations ?? []).map(({ turn }) => turn),
+      );
+
+      const unresolvedEvaluationTurns = new Set(
+        (journal.compactionEvaluations ?? [])
+          .filter(({ completed }) => !completed)
+          .map(({ turn }) => turn),
+      );
+
+      const initialUnresolvedEvaluationCount = unresolvedEvaluationTurns.size;
+      const committedEvaluationUsage: Array<ModelCallUsage> = [];
+
       // RUN-023: per-Turn usage staged by the engine's `noteTurnUsage` for the
       // Turn's canonical response record (keyed by CANONICAL turn number).
       const stagedToolExposure = new Map<number, Snapshot>();
@@ -4866,8 +4889,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       const currentUsageSummary = (): Effect.Effect<RunUsageSummary, RunJournalError> =>
         Effect.gen(function* () {
-          const stagedCalls = [...stagedUsage.values()].flatMap((usage) => usage.modelUsage);
-          let unobservedModelCalls = journal.usage.unobservedModelCalls ?? 0;
+          const stagedCalls = [
+            ...committedEvaluationUsage,
+            ...[...stagedUsage.values()].flatMap((usage) => usage.modelUsage),
+          ];
+
+          let unobservedModelCalls =
+            (journal.usage.unobservedModelCalls ?? 0) +
+            unresolvedEvaluationTurns.size -
+            initialUnresolvedEvaluationCount;
 
           for (const count of stagedUnobservedCalls.values()) {
             unobservedModelCalls = yield* addUsageTotal(
@@ -4897,6 +4927,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           for (const usage of stagedUsage.values()) {
             inputTokens = yield* addUsageTotal("inputTokens", inputTokens, usage.inputTokens);
             outputTokens = yield* addUsageTotal("outputTokens", outputTokens, usage.outputTokens);
+            costMicrousd = yield* addUsageTotal("costMicrousd", costMicrousd, usage.costMicrousd);
+          }
+
+          for (const usage of committedEvaluationUsage) {
+            inputTokens = yield* addUsageTotal("inputTokens", inputTokens, usage.inputTokens.total);
+            outputTokens = yield* addUsageTotal(
+              "outputTokens",
+              outputTokens,
+              usage.outputTokens.total,
+            );
             costMicrousd = yield* addUsageTotal("costMicrousd", costMicrousd, usage.costMicrousd);
           }
 
@@ -5694,6 +5734,27 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               });
             }
             const coveredSequence = lastCovered.sequence;
+            const toolResultRecordIds: Array<RecordId> = [];
+
+            for (const result of commit.results ?? []) {
+              const candidates = sourceBoundaries.filter(
+                (boundary) =>
+                  boundary.sequence <= coveredSequence &&
+                  boundary.toolResult !== undefined &&
+                  boundary.toolResult.toolCallId === result.toolCallId &&
+                  comparisonView.prefixLength(boundary.toolResult.messageIndex + 1) - 1 ===
+                    result.messageIndex,
+              );
+
+              const candidate = candidates[0]?.toolResult;
+
+              if (candidates.length !== 1 || candidate === undefined) {
+                return yield* CompactionError.make({
+                  message: "Selective pruning cannot map a result to its canonical record",
+                });
+              }
+              toolResultRecordIds.push(candidate.recordId);
+            }
 
             if (
               commit.kind !== "summarize" &&
@@ -5720,6 +5781,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               turn: canonicalTurn,
               kind: commit.kind,
               coversThrough: lastCovered.sequence,
+              ...(commit.results === undefined ? {} : { toolResultRecordIds }),
               ...(commit.kind === "summarize" ? { summary: commit.summary } : {}),
               ...(commit.kind === "rollover" && commit.handoff !== undefined
                 ? { handoff: commit.handoff }
@@ -7279,6 +7341,85 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 ),
           }),
           Stream.provideService(ModelUsageAccounting, {
+            compactionEvaluation: {
+              reservedTurns: reservedEvaluationTurns,
+              get hasUnresolved() {
+                return unresolvedEvaluationTurns.size > 0;
+              },
+              reserve: (turn, inputTokensEstimate) =>
+                recordHalt(
+                  Effect.gen(function* () {
+                    const recordId = decodeRecordIdSync(`evaluation:${runId}:${turn}:reserved`);
+
+                    if (reservedEvaluationTurns.has(turn))
+                      return yield* RunJournalError.make({
+                        message: "Compaction evaluation is already reserved",
+                      });
+
+                    const record = yield* makeEnvelope(
+                      recordId,
+                      CompactionEvaluationReserved.make({ runId, turn, inputTokensEstimate }),
+                    );
+
+                    yield* hit("compaction:before-evaluation-reserve");
+                    yield* appendBatch(
+                      ctx,
+                      CanonicalBatch.make({
+                        batchId: decodeBatchIdSync(recordId),
+                        producerId: config.producerId,
+                        records: [record],
+                      }),
+                    );
+                    knownIds.add(recordId);
+                    reservedEvaluationTurns.add(turn);
+                    unresolvedEvaluationTurns.add(turn);
+                    yield* hit("compaction:after-evaluation-reserve");
+                  }),
+                ).pipe(
+                  Effect.mapError((cause) =>
+                    CompactionError.make({
+                      message: "Durable compaction accounting could not commit",
+                      cause,
+                    }),
+                  ),
+                ),
+              commit: ({ turn, usage }) =>
+                recordHalt(
+                  Effect.gen(function* () {
+                    if (!unresolvedEvaluationTurns.has(turn))
+                      return yield* RunJournalError.make({
+                        message: "Compaction evaluation has no unsettled reservation",
+                      });
+                    const recordId = decodeRecordIdSync(`evaluation:${runId}:${turn}:recorded`);
+
+                    const record = yield* makeEnvelope(
+                      recordId,
+                      CompactionEvaluationRecorded.make({ runId, turn, usage }),
+                    );
+
+                    yield* hit("compaction:before-evaluation-accounting");
+                    yield* appendBatch(
+                      ctx,
+                      CanonicalBatch.make({
+                        batchId: decodeBatchIdSync(recordId),
+                        producerId: config.producerId,
+                        records: [record],
+                      }),
+                    );
+                    knownIds.add(recordId);
+                    committedEvaluationUsage.push(usage);
+                    unresolvedEvaluationTurns.delete(turn);
+                    yield* hit("compaction:after-evaluation-accounting");
+                  }),
+                ).pipe(
+                  Effect.mapError((cause) =>
+                    CompactionError.make({
+                      message: "Durable compaction accounting could not commit",
+                      cause,
+                    }),
+                  ),
+                ),
+            },
             noteIncompleteUsage: (turn) =>
               Effect.sync(() => {
                 stagedUnobservedCalls.set(turn, (stagedUnobservedCalls.get(turn) ?? 0) + 1);

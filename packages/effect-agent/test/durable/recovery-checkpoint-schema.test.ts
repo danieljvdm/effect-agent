@@ -82,6 +82,25 @@ const state = {
 
 const contents = { state, digest };
 
+it("requires canonical target proof for sparse selections in both cached records and new suffixes", () => {
+  const decoded = Schema.decodeUnknownSync(RecoveryCheckpointContents)(contents);
+
+  const selection = decodeEnvelope(
+    envelope(9, {
+      _tag: "CompactionCreated",
+      runId,
+      turn: 4,
+      kind: "clear-tool-results",
+      coversThrough: 8,
+      toolResultRecordIds: ["record-7"],
+    }),
+  );
+
+  expect(checkpointSuffixCompatible(decoded.state.seed, [selection], [])).toBe(false);
+  expect(checkpointSuffixCompatible(decoded.state.seed, [], [selection])).toBe(false);
+  expect(checkpointSuffixCompatible(decoded.state.seed, [selection], [settled(7)])).toBe(true);
+});
+
 const checkpoint = {
   schemaVersion: 1,
   threadId: "checkpoint-fixture",
@@ -167,4 +186,38 @@ describe("recovery checkpoint compatibility", () => {
     expect(checkpointSuffixCompatible(seed, [settled(7), response(8)], [])).toBe(false);
     expect(checkpointSuffixCompatible(seed, [response(6), settled(7)], [])).toBe(true);
   });
+});
+
+it("falls back to canonical replay for auxiliary accounting outside the checkpoint seed", () => {
+  const decoded = Schema.decodeUnknownSync(RecoveryCheckpointContents)(contents);
+
+  const reservation = decodeEnvelope(
+    envelope(6, {
+      _tag: "CompactionEvaluationReserved",
+      runId,
+      turn: 4,
+      inputTokensEstimate: 100,
+    }),
+  );
+
+  const accounting = decodeEnvelope(
+    envelope(7, {
+      _tag: "CompactionEvaluationRecorded",
+      runId,
+      turn: 4,
+      usage: {
+        provider: "selector",
+        model: "test",
+        purpose: "compaction",
+        inputTokens: { total: 70, uncached: 70, cacheRead: 0, cacheWrite: 0 },
+        outputTokens: { total: 2, text: 2, reasoning: 0 },
+        costMicrousd: 0,
+      },
+    }),
+  );
+
+  for (const record of [reservation, accounting]) {
+    expect(checkpointSuffixCompatible(decoded.state.seed, [record], [])).toBe(false);
+    expect(checkpointSuffixCompatible(decoded.state.seed, [], [record])).toBe(false);
+  }
 });

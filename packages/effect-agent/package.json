@@ -82,6 +82,7 @@
     "./schedule": "./src/durable/Schedule.ts",
     "./schedule-transition": "./src/durable/ScheduleTransition.ts",
     "./scheduling": "./src/durable/Scheduling.ts",
+    "./selective-compactor": "./src/capabilities/SelectiveCompactor.ts",
     "./semantic-memory": "./src/capabilities/SemanticMemory.ts",
     "./semantic-memory-index": "./src/core/SemanticMemoryIndex.ts",
     "./semantic-memory-revalidation": "./src/core/SemanticMemoryRevalidation.ts",
@@ -135,6 +136,9 @@
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vp test --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect-agent/ai-decision": "workspace:*"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",

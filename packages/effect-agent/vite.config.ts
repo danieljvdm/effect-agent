@@ -52,6 +52,7 @@ export default defineConfig({
       "src/engine/RunOptions.ts",
       "src/core/RunPolicyUsage.ts",
       "src/sandbox/Sandbox.ts",
+      "src/capabilities/SelectiveCompactor.ts",
       "src/capabilities/SemanticMemory.ts",
       "src/core/SemanticMemoryIndex.ts",
       "src/core/SemanticMemoryRevalidation.ts",

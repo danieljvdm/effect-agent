@@ -1,5 +1,61 @@
 # Context continuity evaluation
 
+## Travel conversation fixtures
+
+The [recorded corpus](fixtures/travel-recorded/index.json) contains six checkpoints from the actual
+travel planner: Lisbon and Cape Town at turns 5/10, Japan at turns 5/9. Three scripted travelers
+change dates, budgets, party sizes and requirements while real model calls, web search and page
+reads generate the conversation. Japan's tenth turn hit the recorder's 4,096-output-token cap;
+that failed turn is excluded from the completed checkpoints.
+
+Each compressed JSON fixture contains a native `prompt.source`, the settled UI conversation,
+expected trip facts and source hashes. Replay **only the native prompt**: the expected answers are
+an oracle, and the settled conversation includes replies generated after that prompt. Provider
+continuation state is stripped; message positions, tool IDs and factual bodies are preserved.
+The [benchmark snapshot](fixtures/travel-recorded/benchmark.json) records probabilities, token
+breakdowns and continuation outcomes. These are reusable inputs, not a guarantee that every planner response or researched claim is correct.
+
+```sh
+# Re-score a frozen checkpoint with Jev. Requires TYPESAFE_API_KEY.
+vp run travel:score \
+  --input tooling/context-continuity-eval/fixtures/travel-recorded/lisbon-accessibility-turn-5.json.gz \
+  --output /tmp/lisbon-score.json
+
+# Capture a new conversation. Dry-run makes no paid calls.
+vp run travel:record --dry-run --output-dir /tmp/travel-preview
+EFFECT_AGENT_LIVE=1 vp run travel:record --case lisbon-accessibility \
+  --max-cost-usd 15 --output-dir /tmp/travel-lisbon
+```
+
+Scoring accepts `--question` and `--drop-below` (default `0.1`), and records the native decisions,
+probabilities and elapsed milliseconds. The travel benchmark uses cutoff `0.65` and this question:
+
+> Keep this full result if it contains unique, still-useful evidence needed to continue the latest
+> task. Clear redundant copies, routine acknowledgements and superseded state. Keep uncertain or
+> irreplaceable evidence.
+
+The scorer appends the candidate ID and tool name. This is an application-specific policy;
+the library's default question and `0.1` cutoff retained every candidate in these checkpoints.
+
+Capture needs `OPENAI_API_KEY`, `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`. It runs in local
+Miniflare without deployment, booking or publication. Use fresh output paths. To continue a
+**stopped** capture, pass `--resume-from <old-directory>` with a fresh output path and identical
+scenarios. Settled accounting and usage ceilings carry forward; unresolved provider reservations
+block resume. Never copy a running capture's database.
+
+Raw captures preserve native prompts, outgoing provider requests/responses, usage, page reads,
+UI snapshots and canonical thread exports. `complete.json` marks a fully settled capture; retain
+partial attempts too. Conservative model/search cost estimates exclude Cloudflare charges.
+Each capture allows at most 300 page reads. Streaming is buffered, so timing does not represent
+user-visible streaming latency.
+
+Coordinator and worker contexts are separate. Worker reports use the user role but are not traveler
+conversation; older typed traveler inputs are run-scoped, while saved plans and reports carry facts
+forward. The native prompt hook runs before existing compaction, so compare Jev variants against
+that same source. A smaller outgoing provider request may already reflect native pruning.
+
+## Continuity and rollover evaluation
+
 A real OpenAI model maintains one evolving project across 13 user updates and at least 12 native
 rollovers. The model uses public context-history and durable-notes tools. The host never supplies
 a summary or restores notes into the prompt for it. Reference answers stay outside model context.

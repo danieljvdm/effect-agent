@@ -24,6 +24,7 @@ import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import {
   CompactionError,
+  CompactionEvaluator,
   ContextCompactor,
   type CompactionDecision,
   type CompactionRequest,
@@ -289,7 +290,14 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
 /** Drive one scripted run and capture requests, events, and the exit. */
 const driveRun = (setup: RunSetup) => driveRunWith(answerOutput, setup);
 
-const compactionTestLayer = Layer.merge(identifiers, ContextCompactor.layer);
+const compactionTestLayer = Layer.mergeAll(
+  identifiers,
+  ContextCompactor.layer,
+  Layer.succeed(CompactionEvaluator(), {
+    available: false,
+    evaluate: () => Effect.die("This direct harness does not admit auxiliary inference"),
+  }),
+);
 
 const testLayer = Layer.mergeAll(
   compactionTestLayer,
@@ -298,6 +306,264 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("engine compaction and overflow recovery", (it) => {
+  const selectiveSetup: RunSetup = {
+    policy: AgentPolicy.make({
+      ...basePolicy,
+      contextTokenLimit: 2_800,
+      compaction: { mode: "prune", keepRecentTokens: 1 },
+    }),
+    script: [
+      toolCallParts("receipt", "search", {}, usageOf(100, 5)),
+      toolCallParts("noise", "search", {}, usageOf(100, 5)),
+      toolCallParts("newest", "search", {}, usageOf(2_600, 5)),
+      finalParts('{"answer":"done"}', usageOf(100, 5)),
+    ],
+    results: [
+      "receipt-42 " + "a".repeat(2_000),
+      "noise " + "b".repeat(5_000),
+      "newest " + "c".repeat(2_000),
+    ],
+  };
+
+  it.effect("selective pruning keeps earlier evidence and commits before exposing its view", () =>
+    Effect.gen(function* () {
+      const commits: Array<RunCompactionCommit> = [];
+
+      const result = yield* driveRun({
+        ...selectiveSetup,
+        commitCompaction: (commit) =>
+          Effect.sync(() => {
+            commits.push(commit);
+          }),
+      }).pipe(
+        Effect.provideService(ContextCompactor, {
+          estimate: estimatePromptTokens,
+          compact: (request) => {
+            const messageIndex = request.source.content.findIndex(
+              (message) =>
+                message.role === "tool" &&
+                message.content.some((part) => part.type === "tool-result" && part.id === "noise"),
+            );
+
+            return Stream.succeed({
+              kind: "clear-tool-results",
+              through: messageIndex + 1,
+              results: [{ messageIndex, toolCallId: "noise" }],
+            });
+          },
+        }),
+      );
+
+      expect(Exit.isSuccess(result.exit)).toBe(true);
+      expect(commits).toHaveLength(1);
+      expect(commits[0]?.results).toEqual([{ messageIndex: 5, toolCallId: "noise" }]);
+      expect(toolResultValues(result.requests.at(-1)!.prompt)).toEqual([
+        selectiveSetup.results[0],
+        CLEARED_TOOL_RESULT,
+        selectiveSetup.results[2],
+      ]);
+      expect(toolResultValues(result.histories.at(-1)!)).toEqual(selectiveSetup.results);
+    }),
+  );
+
+  for (const invalid of ["newest", "missing", "duplicate"] as const) {
+    it.effect(`rejects ${invalid} selective targets before commit`, () =>
+      Effect.gen(function* () {
+        let commits = 0;
+
+        const result = yield* driveRun({
+          ...selectiveSetup,
+          commitCompaction: () =>
+            Effect.sync(() => {
+              commits++;
+            }),
+        }).pipe(
+          Effect.provideService(ContextCompactor, {
+            estimate: estimatePromptTokens,
+            compact: (request) => {
+              const messageIndex = request.source.content.findIndex(
+                (message) =>
+                  message.role === "tool" &&
+                  message.content.some(
+                    (part) =>
+                      part.type === "tool-result" &&
+                      part.id === (invalid === "newest" ? "newest" : "noise"),
+                  ),
+              );
+
+              const target = {
+                messageIndex,
+                toolCallId:
+                  invalid === "missing" ? "absent" : invalid === "newest" ? "newest" : "noise",
+              };
+
+              return Stream.succeed({
+                kind: "clear-tool-results",
+                through: messageIndex + 1,
+                results: invalid === "duplicate" ? [target, target] : [target],
+              });
+            },
+          }),
+        );
+
+        expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+        expect(commits).toBe(0);
+        expect(result.requests).toHaveLength(3);
+      }),
+    );
+  }
+
+  for (const durable of [false, true]) {
+    it.effect(`meters auxiliary inference before selection; durable=${durable}`, () =>
+      Effect.gen(function* () {
+        const usage: Array<RunUsageDelta> = [];
+        let evaluations = 0;
+
+        const result = yield* driveRun({
+          ...selectiveSetup,
+          ...(durable ? { commitCompaction: () => Effect.void } : {}),
+          consume: (delta) =>
+            Effect.sync(() => {
+              usage.push(delta);
+            }),
+          estimateCostMicrousd: (_usage, request) =>
+            Effect.succeed(request.purpose === "compaction" ? 7 : 1),
+        }).pipe(
+          Effect.provideService(ContextCompactor, {
+            estimate: estimatePromptTokens,
+            compact: <E, R>(request: CompactionRequest<E, R>) =>
+              Stream.fromEffect(
+                Effect.gen(function* () {
+                  const evaluator = yield* CompactionEvaluator<E, R>();
+
+                  yield* evaluator.evaluate(
+                    Effect.sync(() => {
+                      evaluations++;
+
+                      return {
+                        provider: "selector",
+                        model: "jev-test",
+                        value: undefined,
+                        usage: usageOf(70, 2),
+                      };
+                    }),
+                    100,
+                  );
+
+                  const messageIndex = request.source.content.findIndex(
+                    (message) =>
+                      message.role === "tool" &&
+                      message.content.some(
+                        (part) => part.type === "tool-result" && part.id === "noise",
+                      ),
+                  );
+
+                  return {
+                    kind: "clear-tool-results",
+                    through: messageIndex + 1,
+                    results: [{ messageIndex, toolCallId: "noise" }],
+                  } satisfies CompactionDecision;
+                }),
+              ),
+          }),
+        );
+
+        expect(evaluations).toBe(durable ? 0 : 1);
+        if (durable) {
+          expect(failureFrom(result.exit)).toBeInstanceOf(CompactionError);
+        } else {
+          expect(Exit.isSuccess(result.exit)).toBe(true);
+          expect(usage.map((delta) => delta.modelUsage?.purpose)).toEqual([
+            "turn",
+            "turn",
+            "turn",
+            "compaction",
+            "turn",
+          ]);
+          expect(usage[3]).toMatchObject({
+            inputTokens: 70,
+            outputTokens: 2,
+            costMicrousd: 7,
+            modelUsage: { provider: "selector", model: "jev-test" },
+          });
+        }
+      }),
+    );
+  }
+
+  for (const consumedBy of ["evaluation", "prune"] as const) {
+    it.effect(
+      `rejects evaluator reuse after ${consumedBy} even if the strategy ignores availability`,
+      () =>
+        Effect.gen(function* () {
+          let evaluations = 0;
+
+          const result = yield* driveRun(selectiveSetup).pipe(
+            Effect.provideService(ContextCompactor, {
+              estimate: estimatePromptTokens,
+              compact: <E, R>(request: CompactionRequest<E, R>) =>
+                Stream.unwrap(
+                  Effect.gen(function* () {
+                    const evaluator = yield* CompactionEvaluator<E, R>();
+
+                    const operation = Effect.sync(() => {
+                      evaluations++;
+
+                      return {
+                        provider: "selector",
+                        model: "jev-test",
+                        value: undefined,
+                        usage: usageOf(70, 2),
+                      };
+                    });
+
+                    expect(evaluator.available).toBe(true);
+                    if (consumedBy === "evaluation") {
+                      yield* evaluator.evaluate(operation, 100);
+                      expect(evaluator.available).toBe(false);
+                    }
+
+                    const messageIndex = request.source.content.findIndex(
+                      (message) =>
+                        message.role === "tool" &&
+                        message.content.some(
+                          (part) => part.type === "tool-result" && part.id === "noise",
+                        ),
+                    );
+
+                    const decision = {
+                      kind: "clear-tool-results",
+                      through: messageIndex + 1,
+                      results: [{ messageIndex, toolCallId: "noise" }],
+                    } satisfies CompactionDecision;
+
+                    return Stream.succeed(decision).pipe(
+                      Stream.concat(
+                        Stream.fromEffect(
+                          Effect.gen(function* () {
+                            expect(evaluator.available).toBe(false);
+                            yield* evaluator.evaluate(operation, 100);
+
+                            return decision;
+                          }),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+            }),
+          );
+
+          expect(failureFrom(result.exit)).toMatchObject({
+            _tag: "CompactionError",
+            message: "Compaction exceeded its evaluation-call allowance",
+          });
+          expect(evaluations).toBe(consumedBy === "evaluation" ? 1 : 0);
+          expect(result.requests).toHaveLength(3);
+        }),
+    );
+  }
+
   const replacementSetup: RunSetup = {
     policy: AgentPolicy.make({
       ...basePolicy,
@@ -819,7 +1085,13 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             modelCallAllowed: true,
             summarize,
           })
-          .pipe(Stream.runCollect);
+          .pipe(
+            Stream.provideService(CompactionEvaluator<SummaryFailure, SummaryConfig>(), {
+              available: false,
+              evaluate: () => Effect.die("This direct harness does not admit auxiliary inference"),
+            }),
+            Stream.runCollect,
+          );
 
         const errorProof: SummaryFailure extends Effect.Error<typeof program> ? true : false = true;
 
@@ -1753,7 +2025,8 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
                   const kind = request.trigger === "overflow" ? scenario.retry : scenario.first;
                   const through = request.trigger === "overflow" ? 6 : 4;
 
-                  if (kind === "clear-tool-results") return Stream.succeed({ kind, through });
+                  if (kind === "clear-tool-results")
+                    return Stream.succeed<CompactionDecision>({ kind, through });
 
                   return Stream.fromEffect(
                     request.summarize(

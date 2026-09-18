@@ -1,0 +1,1419 @@
+{
+  "fixtureVersion": 1,
+  "recordedOn": "2026-09-18",
+  "selectorModel": "jev-1.13.0",
+  "continuationModel": "gpt-5.6-luna",
+  "question": "Keep this full result if it contains unique, still-useful evidence needed to continue the latest task. Clear redundant copies, routine acknowledgements and superseded state. Keep uncertain or irreplaceable evidence.",
+  "questionSuffix": " Candidate: ${result.id} (${result.tool}).",
+  "dropBelow": 0.65,
+  "method": {
+    "tokenCounts": "OpenAI Responses input_tokens endpoint on identical native-source baselines and body-cleared variants.",
+    "componentCounts": "Marginal token counts from sequential component removal; assistant category includes tool-call arguments.",
+    "timing": "One native selector pass per checkpoint. Cutoff variants reuse the same returned probabilities. Timing includes the Jev request and local selector work; excludes provider token counting and continuation.",
+    "baseline": "Oldest-first and largest-first clear the same number of eligible bodies as Jev at 0.65; not matched token counts.",
+    "quality": "At all six checkpoints, unpruned, Jev and both simple baselines pass all seven structured trip-fact checks and return three URLs present in the original prompt. This does not check every freeform constraint or independently verify researched facts.",
+    "default": "The built-in question and default 0.1 cutoff remove no results at any of these checkpoints.",
+    "promptBoundary": "Native pre-compaction hook. Lisbon turn 10 restores two result bodies cleared between that hook and the recorded provider dispatch; its 93,770-token source is not the 90,671-token dispatched request.",
+    "nativeCutoffVerification": "A separate native Lisbon turn-5 pass at 0.65 removed the same 22 occurrences in 299 ms."
+  },
+  "checkpoints": [
+    {
+      "caseId": "cape-town-group-changes",
+      "turn": 5,
+      "beforeTokens": 98082,
+      "afterTokens": 68285,
+      "reductionPercent": 30.38,
+      "selectorElapsedMs": 362,
+      "candidateCount": 23,
+      "removedResultCount": 23,
+      "prunedByTool": {
+        "list_trips": {
+          "results": 13,
+          "characters": 72864
+        },
+        "save_trip": {
+          "results": 10,
+          "characters": 55708
+        }
+      },
+      "beforeComposition": {
+        "applicationToolResultBodies": 42472,
+        "assistantAndCallFraming": 27092,
+        "workerReports": 20165,
+        "userInput": 144,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "afterComposition": {
+        "applicationToolResultBodies": 12675,
+        "assistantAndCallFraming": 27092,
+        "workerReports": 20165,
+        "userInput": 144,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "defaultQuestionAnswers": {
+        "m114r54": {
+          "type": "probability",
+          "probability": 0.76
+        },
+        "m104r48": {
+          "type": "probability",
+          "probability": 0.75
+        },
+        "m77r37": {
+          "type": "probability",
+          "probability": 0.61
+        },
+        "m69r31": {
+          "type": "probability",
+          "probability": 0.49
+        },
+        "m64r29": {
+          "type": "probability",
+          "probability": 0.62
+        },
+        "m67r30": {
+          "type": "probability",
+          "probability": 0.61
+        },
+        "m102r47": {
+          "type": "probability",
+          "probability": 0.72
+        },
+        "m54r24": {
+          "type": "probability",
+          "probability": 0.61
+        },
+        "m96r44": {
+          "type": "probability",
+          "probability": 0.74
+        },
+        "m94r43": {
+          "type": "probability",
+          "probability": 0.76
+        },
+        "m91r42": {
+          "type": "probability",
+          "probability": 0.66
+        },
+        "m45r21": {
+          "type": "probability",
+          "probability": 0.55
+        },
+        "m48r22": {
+          "type": "probability",
+          "probability": 0.59
+        },
+        "m51r23": {
+          "type": "probability",
+          "probability": 0.61
+        },
+        "m42r20": {
+          "type": "probability",
+          "probability": 0.61
+        },
+        "m88r41": {
+          "type": "probability",
+          "probability": 0.67
+        },
+        "m85r40": {
+          "type": "probability",
+          "probability": 0.67
+        },
+        "m82r39": {
+          "type": "probability",
+          "probability": 0.68
+        },
+        "m79r38": {
+          "type": "probability",
+          "probability": 0.66
+        },
+        "m39r19": {
+          "type": "probability",
+          "probability": 0.57
+        },
+        "m36r18": {
+          "type": "probability",
+          "probability": 0.59
+        },
+        "m34r17": {
+          "type": "probability",
+          "probability": 0.59
+        },
+        "m28r12": {
+          "type": "probability",
+          "probability": 0.65
+        },
+        "m30r13": {
+          "type": "probability",
+          "probability": 0.66
+        }
+      },
+      "customQuestionAnswers": {
+        "m114r54": {
+          "type": "probability",
+          "probability": 0.47
+        },
+        "m104r48": {
+          "type": "probability",
+          "probability": 0.4
+        },
+        "m77r37": {
+          "type": "probability",
+          "probability": 0.29
+        },
+        "m69r31": {
+          "type": "probability",
+          "probability": 0.24
+        },
+        "m64r29": {
+          "type": "probability",
+          "probability": 0.25
+        },
+        "m67r30": {
+          "type": "probability",
+          "probability": 0.16
+        },
+        "m102r47": {
+          "type": "probability",
+          "probability": 0.42
+        },
+        "m54r24": {
+          "type": "probability",
+          "probability": 0.22
+        },
+        "m96r44": {
+          "type": "probability",
+          "probability": 0.37
+        },
+        "m94r43": {
+          "type": "probability",
+          "probability": 0.54
+        },
+        "m91r42": {
+          "type": "probability",
+          "probability": 0.3
+        },
+        "m45r21": {
+          "type": "probability",
+          "probability": 0.23
+        },
+        "m48r22": {
+          "type": "probability",
+          "probability": 0.19
+        },
+        "m51r23": {
+          "type": "probability",
+          "probability": 0.19
+        },
+        "m42r20": {
+          "type": "probability",
+          "probability": 0.2
+        },
+        "m88r41": {
+          "type": "probability",
+          "probability": 0.31
+        },
+        "m85r40": {
+          "type": "probability",
+          "probability": 0.25
+        },
+        "m82r39": {
+          "type": "probability",
+          "probability": 0.31
+        },
+        "m79r38": {
+          "type": "probability",
+          "probability": 0.23
+        },
+        "m39r19": {
+          "type": "probability",
+          "probability": 0.23
+        },
+        "m36r18": {
+          "type": "probability",
+          "probability": 0.21
+        },
+        "m34r17": {
+          "type": "probability",
+          "probability": 0.27
+        },
+        "m28r12": {
+          "type": "probability",
+          "probability": 0.36
+        }
+      },
+      "defaultCutoffRemoved": 0,
+      "continuationFacts": {
+        "startDate": true,
+        "endDate": true,
+        "travelers": true,
+        "lodgingBudgetAmount": true,
+        "lodgingBudgetCurrency": true,
+        "budgetIsPerPerson": true,
+        "anythingBooked": true
+      },
+      "retainedSourceUrls": [
+        "https://www.capetown.gov.za/Family%20and%20home/See-all-city-facilities/Our-recreational-facilities/Beaches/Muizenberg-Beach",
+        "https://www.vrbo.com/4499606ha",
+        "https://www.steenberggolfclub.co.za/visitor"
+      ],
+      "recordedProviderInputTokens": 98082,
+      "bodiesRestoredBeforeNativePruning": 0,
+      "nativePromptSha256": "563f4c41b7b76c4db2634520a842e8d026cc466f52cd4f9691285b6bbee95d1f",
+      "providerRequestSha256": "7b4bdb7e740e5604027e197967542024efa49efda186c6cc58b856349257bd43",
+      "continuationAnswer": {
+        "startDate": "2027-02-10",
+        "endDate": "2027-02-17",
+        "travelers": 6,
+        "lodgingBudgetAmount": 36000,
+        "lodgingBudgetCurrency": "ZAR",
+        "budgetIsPerPerson": false,
+        "anythingBooked": false,
+        "constraints": "Base is Muizenberg rather than Camps Bay. Six adults, beginner surfers who want legitimate supervised lessons\u2014not unsupervised surfing. Accommodation must be a whole home with at least 4 bedrooms and 3 bathrooms, genuine kitchen, reliable Wi-Fi for one work morning, and a maximum total of ZAR 36,000 including fees for the full stay. One relaxed golf round remains planned, preferably with a pre-booked private/group vehicle that can carry six adults and six golf bags. No bookings or publication have been made.",
+        "evidence": [
+          {
+            "name": "Muizenberg Beach / Surfers\u2019 Corner",
+            "url": "https://www.capetown.gov.za/Family%20and%20home/See-all-city-facilities/Our-recreational-facilities/Beaches/Muizenberg-Beach",
+            "detail": "The City identifies Surfers\u2019 Corner as excellent for novice and beginner surfers and says nearby surf shops hire boards and offer lessons. The page also lists lifeguards, parking, toilets, walkways, restaurants and shops.",
+            "uncertainty": "This is an official beach source, not confirmation of a particular lesson provider. Provider schedules, lesson prices, equipment inclusion and February 2027 availability remain unverified."
+          },
+          {
+            "name": "Tranquil Waters in Marina da Gama",
+            "url": "https://www.vrbo.com/4499606ha",
+            "detail": "The inspected listing states 4 bedrooms and 3+ bathrooms, sleeps up to 10, and describes a kitchen, waterfront deck/jetty, patio/braai area, hot tub and 24-hour marina security.",
+            "uncertainty": "Wi-Fi and work suitability were not verified. Exact 10\u201317 February 2027 availability and the fee-inclusive total were not shown, so compliance with the ZAR 36,000 ceiling is unconfirmed."
+          },
+          {
+            "name": "Steenberg Golf Club",
+            "url": "https://www.steenberggolfclub.co.za/visitor",
+            "detail": "The official visitor page welcomes tourists and international guests and provides visitor tee-sheet access. The course research also supports equipment hire and carts/caddies subject to arrangements.",
+            "uncertainty": "February 2027 tee-time availability, final green fees, equipment costs, transfer pricing and vehicle capacity for six golfers plus six golf bags are unverified."
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "cape-town-group-changes",
+      "turn": 10,
+      "beforeTokens": 52891,
+      "afterTokens": 36389,
+      "reductionPercent": 31.2,
+      "selectorElapsedMs": 323,
+      "candidateCount": 12,
+      "removedResultCount": 11,
+      "prunedByTool": {
+        "list_trips": {
+          "results": 5,
+          "characters": 38611
+        },
+        "save_trip": {
+          "results": 4,
+          "characters": 31613
+        },
+        "deliver_response": {
+          "results": 2,
+          "characters": 4106
+        }
+      },
+      "beforeComposition": {
+        "applicationToolResultBodies": 18642,
+        "assistantAndCallFraming": 17084,
+        "workerReports": 7921,
+        "userInput": 1035,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "afterComposition": {
+        "applicationToolResultBodies": 2140,
+        "assistantAndCallFraming": 17084,
+        "workerReports": 7921,
+        "userInput": 1035,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "defaultQuestionAnswers": {
+        "m48r11": {
+          "type": "probability",
+          "probability": 0.79
+        },
+        "m42r9": {
+          "type": "probability",
+          "probability": 0.83
+        },
+        "m40r8": {
+          "type": "probability",
+          "probability": 0.74
+        },
+        "m36r6": {
+          "type": "probability",
+          "probability": 0.82
+        },
+        "m34r5": {
+          "type": "probability",
+          "probability": 0.7
+        },
+        "m30r3": {
+          "type": "probability",
+          "probability": 0.66
+        },
+        "m28r2": {
+          "type": "probability",
+          "probability": 0.69
+        },
+        "m25r1": {
+          "type": "probability",
+          "probability": 0.72
+        },
+        "m22r0": {
+          "type": "probability",
+          "probability": 0.72
+        },
+        "m32r4": {
+          "type": "probability",
+          "probability": 0.82
+        },
+        "m44r10": {
+          "type": "probability",
+          "probability": 0.87
+        },
+        "m38r7": {
+          "type": "probability",
+          "probability": 0.91
+        }
+      },
+      "customQuestionAnswers": {
+        "m48r11": {
+          "type": "probability",
+          "probability": 0.52
+        },
+        "m42r9": {
+          "type": "probability",
+          "probability": 0.58
+        },
+        "m40r8": {
+          "type": "probability",
+          "probability": 0.43
+        },
+        "m36r6": {
+          "type": "probability",
+          "probability": 0.44
+        },
+        "m34r5": {
+          "type": "probability",
+          "probability": 0.38
+        },
+        "m30r3": {
+          "type": "probability",
+          "probability": 0.33
+        },
+        "m28r2": {
+          "type": "probability",
+          "probability": 0.39
+        },
+        "m25r1": {
+          "type": "probability",
+          "probability": 0.34
+        },
+        "m22r0": {
+          "type": "probability",
+          "probability": 0.47
+        },
+        "m32r4": {
+          "type": "probability",
+          "probability": 0.47
+        },
+        "m44r10": {
+          "type": "probability",
+          "probability": 0.69
+        },
+        "m38r7": {
+          "type": "probability",
+          "probability": 0.35
+        }
+      },
+      "defaultCutoffRemoved": 0,
+      "continuationFacts": {
+        "startDate": true,
+        "endDate": true,
+        "travelers": true,
+        "lodgingBudgetAmount": true,
+        "lodgingBudgetCurrency": true,
+        "budgetIsPerPerson": true,
+        "anythingBooked": true
+      },
+      "retainedSourceUrls": [
+        "https://www.airbnb.com/rooms/45933205",
+        "https://surfemporium.co.za/group-surf-lesson/",
+        "https://www.milnertongolf.co.za/facilities/"
+      ],
+      "recordedProviderInputTokens": 52891,
+      "bodiesRestoredBeforeNativePruning": 0,
+      "nativePromptSha256": "867265d2731a5bfda4eb7d03859f41dd243a37eb60b8b367ef87595a3d745c1e",
+      "providerRequestSha256": "feb6e548f2894d231f8bb2846376590d2004d5baad0ecd47a858baeee480c421",
+      "continuationAnswer": {
+        "startDate": "2027-02-11",
+        "endDate": "2027-02-17",
+        "travelers": 6,
+        "lodgingBudgetAmount": 36000,
+        "lodgingBudgetCurrency": "ZAR",
+        "budgetIsPerPerson": false,
+        "anythingBooked": false,
+        "constraints": "Six adults for six nights, based in walkable Surfers Corner/Muizenberg. Accommodation should be a whole home with at least 4 bedrooms and 3 bathrooms, kitchen, reliable Wi-Fi/work setup and preferably backup power, with a total ceiling of ZAR 36,000 including fees. No rental car: use pre-booked private transfers and walking, confirming capacity for six plus luggage and any surf or golf equipment. Friday 12 February 2027 is protected for remote work from 09:00\u201313:00; supervised beginner surfing is planned for the afternoon, preferably with two instructors for six participants. Surfing and accommodation are priorities; golf is optional. One traveler has a peanut allergy, requiring direct ingredient and cross-contact checks at every venue plus safe backup food. The shark-cage excursion is rejected and excluded. All options, prices, availability, lessons, transfers and restaurant seating remain unconfirmed; nothing is booked, reserved, paid or published.",
+        "evidence": [
+          {
+            "name": "Imagine \u2013 Surfers Corner Muizenberg Village",
+            "url": "https://www.airbnb.com/rooms/45933205",
+            "detail": "Inspected listing evidence supports an entire home with 4 bedrooms, 3.5 bathrooms, 4 beds, 7-guest capacity, kitchen, Wi-Fi, dedicated workspace and washer, about two minutes\u2019 walk from Surfers Corner and the beach.",
+            "uncertainty": "Exact 11\u201317 February 2027 availability and all-in price were not displayed. Wi-Fi reliability, backup power, cancellation terms, kitchen cleanliness and peanut-allergy suitability still require host confirmation."
+          },
+          {
+            "name": "Surf Emporium \u2014 Group Surf Lesson",
+            "url": "https://surfemporium.co.za/group-surf-lesson/",
+            "detail": "The inspected official page describes a 1.5-hour Muizenberg group lesson with a qualified instructor present for the full duration, structured instruction, board and wetsuit included, and a 1:5 instructor-to-participant ratio.",
+            "uncertainty": "For six beginners, confirm two-instructor staffing and a Friday-afternoon slot after the work block. February 2027 availability and pricing are not confirmed."
+          },
+          {
+            "name": "Milnerton Golf Club \u2014 Facilities",
+            "url": "https://www.milnertongolf.co.za/facilities/",
+            "detail": "The inspected official page supports a beginner-oriented fallback with a driving range, putting/chipping facilities and a PGA Teaching Pro who can arrange a lesson or practice session.",
+            "uncertainty": "Golf is optional and should be dropped if it competes with surfing or weather plans. February 2027 lesson pricing, club hire, availability and transfer logistics are unverified."
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "japan-itinerary-revision",
+      "turn": 5,
+      "beforeTokens": 106628,
+      "afterTokens": 75925,
+      "reductionPercent": 28.79,
+      "selectorElapsedMs": 331,
+      "candidateCount": 22,
+      "removedResultCount": 22,
+      "prunedByTool": {
+        "deliver_response": {
+          "results": 3,
+          "characters": 16738
+        },
+        "list_trips": {
+          "results": 10,
+          "characters": 55826
+        },
+        "save_trip": {
+          "results": 9,
+          "characters": 51084
+        }
+      },
+      "beforeComposition": {
+        "applicationToolResultBodies": 47291,
+        "assistantAndCallFraming": 31135,
+        "workerReports": 19842,
+        "userInput": 151,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "afterComposition": {
+        "applicationToolResultBodies": 16588,
+        "assistantAndCallFraming": 31135,
+        "workerReports": 19842,
+        "userInput": 151,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "defaultQuestionAnswers": {
+        "m52r26": {
+          "type": "probability",
+          "probability": 0.57
+        },
+        "m105r55": {
+          "type": "probability",
+          "probability": 0.73
+        },
+        "m99r50": {
+          "type": "probability",
+          "probability": 0.68
+        },
+        "m97r49": {
+          "type": "probability",
+          "probability": 0.66
+        },
+        "m94r48": {
+          "type": "probability",
+          "probability": 0.62
+        },
+        "m92r47": {
+          "type": "probability",
+          "probability": 0.65
+        },
+        "m89r46": {
+          "type": "probability",
+          "probability": 0.57
+        },
+        "m70r38": {
+          "type": "probability",
+          "probability": 0.57
+        },
+        "m66r33": {
+          "type": "probability",
+          "probability": 0.54
+        },
+        "m58r30": {
+          "type": "probability",
+          "probability": 0.54
+        },
+        "m50r25": {
+          "type": "probability",
+          "probability": 0.57
+        },
+        "m63r32": {
+          "type": "probability",
+          "probability": 0.55
+        },
+        "m60r31": {
+          "type": "probability",
+          "probability": 0.57
+        },
+        "m87r45": {
+          "type": "probability",
+          "probability": 0.63
+        },
+        "m84r44": {
+          "type": "probability",
+          "probability": 0.62
+        },
+        "m48r24": {
+          "type": "probability",
+          "probability": 0.55
+        },
+        "m45r23": {
+          "type": "probability",
+          "probability": 0.55
+        },
+        "m25r12": {
+          "type": "probability",
+          "probability": 0.38
+        },
+        "m19r9": {
+          "type": "probability",
+          "probability": 0.36
+        },
+        "m39r21": {
+          "type": "probability",
+          "probability": 0.6
+        },
+        "m42r22": {
+          "type": "probability",
+          "probability": 0.59
+        },
+        "m36r20": {
+          "type": "probability",
+          "probability": 0.61
+        },
+        "m81r43": {
+          "type": "probability",
+          "probability": 0.63
+        }
+      },
+      "customQuestionAnswers": {
+        "m52r26": {
+          "type": "probability",
+          "probability": 0.47
+        },
+        "m105r55": {
+          "type": "probability",
+          "probability": 0.45
+        },
+        "m99r50": {
+          "type": "probability",
+          "probability": 0.4
+        },
+        "m97r49": {
+          "type": "probability",
+          "probability": 0.36
+        },
+        "m94r48": {
+          "type": "probability",
+          "probability": 0.4
+        },
+        "m92r47": {
+          "type": "probability",
+          "probability": 0.33
+        },
+        "m89r46": {
+          "type": "probability",
+          "probability": 0.31
+        },
+        "m70r38": {
+          "type": "probability",
+          "probability": 0.31
+        },
+        "m66r33": {
+          "type": "probability",
+          "probability": 0.32
+        },
+        "m58r30": {
+          "type": "probability",
+          "probability": 0.29
+        },
+        "m50r25": {
+          "type": "probability",
+          "probability": 0.29
+        },
+        "m63r32": {
+          "type": "probability",
+          "probability": 0.22
+        },
+        "m60r31": {
+          "type": "probability",
+          "probability": 0.22
+        },
+        "m87r45": {
+          "type": "probability",
+          "probability": 0.3
+        },
+        "m84r44": {
+          "type": "probability",
+          "probability": 0.32
+        },
+        "m48r24": {
+          "type": "probability",
+          "probability": 0.25
+        },
+        "m45r23": {
+          "type": "probability",
+          "probability": 0.27
+        },
+        "m25r12": {
+          "type": "probability",
+          "probability": 0.28
+        },
+        "m19r9": {
+          "type": "probability",
+          "probability": 0.26
+        },
+        "m39r21": {
+          "type": "probability",
+          "probability": 0.3
+        },
+        "m42r22": {
+          "type": "probability",
+          "probability": 0.22
+        },
+        "m36r20": {
+          "type": "probability",
+          "probability": 0.34
+        }
+      },
+      "defaultCutoffRemoved": 0,
+      "continuationFacts": {
+        "startDate": true,
+        "endDate": true,
+        "travelers": true,
+        "lodgingBudgetAmount": true,
+        "lodgingBudgetCurrency": true,
+        "budgetIsPerPerson": true,
+        "anythingBooked": true
+      },
+      "retainedSourceUrls": [
+        "https://www.hotelvischio-osaka.com/en/access/",
+        "https://www.hotelmonterey.co.jp/en/osaka/",
+        "https://osaka-info.jp/en/spot/miyako-city-osaka-tennoji/"
+      ],
+      "recordedProviderInputTokens": 106628,
+      "bodiesRestoredBeforeNativePruning": 0,
+      "nativePromptSha256": "b492fe6b5ee96c39070ff6051131084527ed9532c9911538cc124ebb84275544",
+      "providerRequestSha256": "a436604abbacde1590921604862f394f319f1a601827dd4d981279e67cc43801",
+      "continuationAnswer": {
+        "startDate": "2026-11-08",
+        "endDate": "2026-11-14",
+        "travelers": 3,
+        "lodgingBudgetAmount": 2100,
+        "lodgingBudgetCurrency": "USD",
+        "budgetIsPerPerson": false,
+        "anythingBooked": false,
+        "constraints": "Six-night split stay: Kyoto for three nights, then Osaka for three nights. Three adults requiring two private rooms, with a total lodging cap of USD 2,100 including taxes. Prefer quiet private rooms near rail links, private bathrooms, non-smoking rooms, and good sound conditions. No rental car. One traveler requires strictly vegetarian food with no fish, seafood, bonito, fish stock, or dashi, including in sauces, soups, seasonings, cooking oil, and shared preparation; restaurant and hotel breakfast details must be confirmed directly. Current priorities are temples, coffee, easy rail travel, and a relaxed Kyoto-to-Osaka transfer on November 10 or 11 as scheduled.",
+        "evidence": [
+          {
+            "name": "Hotel Vischio Osaka by Granvia",
+            "url": "https://www.hotelvischio-osaka.com/en/access/",
+            "detail": "The official site states the hotel is about a five-minute walk from JR Osaka Station, making it a strong Osaka base for the Kyoto transfer and regional rail.",
+            "uncertainty": "November 11\u201314, 2026 availability, the total price for two private rooms including taxes, room-specific bathroom layouts, quietness, and suitability for the dietary requirement are unverified. Its official vegetarian-breakfast page notes shared kitchen, utensils, and frying oil, so breakfast should not be assumed dashi-free."
+          },
+          {
+            "name": "Hotel Monterey Osaka",
+            "url": "https://www.hotelmonterey.co.jp/en/osaka/",
+            "detail": "The official site places the hotel close to JR Osaka and Umeda Subway stations and lists double/twin rooms with bath amenities.",
+            "uncertainty": "The displayed or referenced rates are not November 2026 quotes. Availability for two private rooms, total taxes, exact private-bath configuration, quietness, and dietary-safe breakfast or dining are unverified."
+          },
+          {
+            "name": "Miyako City Osaka Tennoji",
+            "url": "https://osaka-info.jp/en/spot/miyako-city-osaka-tennoji/",
+            "detail": "The official Osaka tourism listing says the hotel is directly connected to the Tennoji/Abenobashi terminal and is in front of JR Tennoji East Exit, with access toward Osaka, Nara, and the airports.",
+            "uncertainty": "Availability for two private rooms on November 11\u201314, 2026, total price including taxes, room-specific private bathrooms, sound conditions, and strict no-dashi dining suitability are unverified."
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "japan-itinerary-revision",
+      "turn": 9,
+      "beforeTokens": 71074,
+      "afterTokens": 45917,
+      "reductionPercent": 35.4,
+      "selectorElapsedMs": 699,
+      "candidateCount": 19,
+      "removedResultCount": 19,
+      "prunedByTool": {
+        "list_trips": {
+          "results": 7,
+          "characters": 51249
+        },
+        "save_trip": {
+          "results": 5,
+          "characters": 37230
+        },
+        "deliver_response": {
+          "results": 4,
+          "characters": 8455
+        },
+        "research_scout_follow_up": {
+          "results": 3,
+          "characters": 867
+        }
+      },
+      "beforeComposition": {
+        "applicationToolResultBodies": 27529,
+        "assistantAndCallFraming": 22246,
+        "workerReports": 11670,
+        "userInput": 1420,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "afterComposition": {
+        "applicationToolResultBodies": 2372,
+        "assistantAndCallFraming": 22246,
+        "workerReports": 11670,
+        "userInput": 1420,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "defaultQuestionAnswers": {
+        "m23r2": {
+          "type": "probability",
+          "probability": 0.71
+        },
+        "m20r1": {
+          "type": "probability",
+          "probability": 0.71
+        },
+        "m55r17": {
+          "type": "probability",
+          "probability": 0.83
+        },
+        "m17r0": {
+          "type": "probability",
+          "probability": 0.64
+        },
+        "m30r5": {
+          "type": "probability",
+          "probability": 0.7
+        },
+        "m26r3": {
+          "type": "probability",
+          "probability": 0.72
+        },
+        "m46r14": {
+          "type": "probability",
+          "probability": 0.66
+        },
+        "m49r15": {
+          "type": "probability",
+          "probability": 0.64
+        },
+        "m52r16": {
+          "type": "probability",
+          "probability": 0.65
+        },
+        "m43r13": {
+          "type": "probability",
+          "probability": 0.71
+        },
+        "m40r12": {
+          "type": "probability",
+          "probability": 0.69
+        },
+        "m32r6": {
+          "type": "probability",
+          "probability": 0.73
+        },
+        "m28r4": {
+          "type": "probability",
+          "probability": 0.66
+        },
+        "m57r18": {
+          "type": "probability",
+          "probability": 0.73
+        },
+        "m34r7": {
+          "type": "probability",
+          "probability": 0.58
+        },
+        "m38r11": {
+          "type": "probability",
+          "probability": 0.46
+        },
+        "m36r8": {
+          "type": "probability",
+          "probability": 0.76
+        },
+        "m36r9": {
+          "type": "probability",
+          "probability": 0.74
+        },
+        "m36r10": {
+          "type": "probability",
+          "probability": 0.72
+        }
+      },
+      "customQuestionAnswers": {
+        "m23r2": {
+          "type": "probability",
+          "probability": 0.45
+        },
+        "m20r1": {
+          "type": "probability",
+          "probability": 0.36
+        },
+        "m55r17": {
+          "type": "probability",
+          "probability": 0.6
+        },
+        "m17r0": {
+          "type": "probability",
+          "probability": 0.34
+        },
+        "m30r5": {
+          "type": "probability",
+          "probability": 0.43
+        },
+        "m26r3": {
+          "type": "probability",
+          "probability": 0.36
+        },
+        "m46r14": {
+          "type": "probability",
+          "probability": 0.46
+        },
+        "m49r15": {
+          "type": "probability",
+          "probability": 0.34
+        },
+        "m52r16": {
+          "type": "probability",
+          "probability": 0.31
+        },
+        "m43r13": {
+          "type": "probability",
+          "probability": 0.38
+        },
+        "m40r12": {
+          "type": "probability",
+          "probability": 0.38
+        },
+        "m32r6": {
+          "type": "probability",
+          "probability": 0.3
+        },
+        "m28r4": {
+          "type": "probability",
+          "probability": 0.32
+        },
+        "m57r18": {
+          "type": "probability",
+          "probability": 0.49
+        },
+        "m34r7": {
+          "type": "probability",
+          "probability": 0.21
+        },
+        "m38r11": {
+          "type": "probability",
+          "probability": 0.2
+        },
+        "m36r8": {
+          "type": "probability",
+          "probability": 0.43
+        },
+        "m36r9": {
+          "type": "probability",
+          "probability": 0.38
+        },
+        "m36r10": {
+          "type": "probability",
+          "probability": 0.4
+        }
+      },
+      "defaultCutoffRemoved": 0,
+      "continuationFacts": {
+        "startDate": true,
+        "endDate": true,
+        "travelers": true,
+        "lodgingBudgetAmount": true,
+        "lodgingBudgetCurrency": true,
+        "budgetIsPerPerson": true,
+        "anythingBooked": true
+      },
+      "retainedSourceUrls": [
+        "https://eph-hotel.com/kyoto/rooms/twin-kitchen/",
+        "https://www.hotelvischio-osaka.com/en/rooms/moderate-twin/",
+        "https://www.viainn.com/en/shinosaka/room/"
+      ],
+      "recordedProviderInputTokens": 71074,
+      "bodiesRestoredBeforeNativePruning": 0,
+      "nativePromptSha256": "88d1fbdaa8eb8e22dbab4e1afebef607b8ec5c12043125c534e17b5da41f6eec",
+      "providerRequestSha256": "ac30e46da9d02ec00b336de1be3a62f76aa3e945e58378e96110b82e489e7199",
+      "continuationAnswer": {
+        "startDate": "2026-11-08",
+        "endDate": "2026-11-14",
+        "travelers": 3,
+        "lodgingBudgetAmount": 2100,
+        "lodgingBudgetCurrency": "USD",
+        "budgetIsPerPerson": false,
+        "anythingBooked": false,
+        "constraints": "Six nights total: Kyoto Nov 8\u201311, then Osaka Nov 11\u201314, 2026. Tokyo is excluded. Three adults need two private rooms, with a total lodging ceiling of USD 2,100 including taxes. No rental car; prioritize easy rail access and quiet rooms over nightlife. No scheduled sightseeing, dining reservation, hotel departure, or rail transfer should begin before 10:00. Priorities are temples, coffee, relaxed area-based sightseeing, and strict vegetarian dining: fish, seafood, bonito, fish stock, dashi, unsafe sauces, shared oil, and cross-contact must be explicitly checked. Prices, taxes, availability, exact room assignments, and bookings remain unverified.",
+        "evidence": [
+          {
+            "name": "eph KYOTO \u2014 Twin Deluxe Kitchen",
+            "url": "https://eph-hotel.com/kyoto/rooms/twin-kitchen/",
+            "detail": "The official room page lists a Twin Deluxe Kitchen room for up to two guests, with two single beds and an ensuite bathroom; two rooms could accommodate three adults privately. The hotel is about three minutes from Kyoto Station.",
+            "uncertainty": "Two rooms for Nov 8\u201311, 2026, tax-inclusive pricing, availability, quiet-room placement, and the exact total under USD 2,100 are unverified."
+          },
+          {
+            "name": "Hotel Vischio Osaka by Granvia \u2014 Moderate Twin",
+            "url": "https://www.hotelvischio-osaka.com/en/rooms/moderate-twin/",
+            "detail": "The official room information lists the Moderate Twin as 20.5 m\u00b2 for two guests with two beds; the hotel is about five minutes from JR Osaka Station, making it a strong fit for the direct Kyoto\u2013Osaka rail transfer and a Umeda base.",
+            "uncertainty": "Two rooms for Nov 11\u201314, 2026, tax-inclusive pricing, exact private-bath wording for the selected category, availability, and quiet-room placement are unverified."
+          },
+          {
+            "name": "VIA INN SHIN-OSAKA \u2014 Twin plus Single",
+            "url": "https://www.viainn.com/en/shinosaka/room/",
+            "detail": "The official room page lists a Twin for two people/17 m\u00b2 and a Single for one person/12 m\u00b2, each with a private bath; the hotel is about three minutes from JR Shin-Osaka\u2019s East Exit. This is an exact two-room configuration for three adults and maximizes rail convenience.",
+            "uncertainty": "Nov 11\u201314, 2026 rates, taxes, availability, quietness, and the final total under USD 2,100 are unverified. The hotel breakfast includes dashi broth and pork miso soup, so room-only lodging or a separately confirmed safe breakfast is required."
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "lisbon-accessibility",
+      "turn": 5,
+      "beforeTokens": 86793,
+      "afterTokens": 57329,
+      "reductionPercent": 33.95,
+      "selectorElapsedMs": 256,
+      "candidateCount": 22,
+      "removedResultCount": 22,
+      "prunedByTool": {
+        "list_trips": {
+          "results": 10,
+          "characters": 56706
+        },
+        "save_trip": {
+          "results": 10,
+          "characters": 58382
+        },
+        "deliver_response": {
+          "results": 2,
+          "characters": 9992
+        }
+      },
+      "beforeComposition": {
+        "applicationToolResultBodies": 40714,
+        "assistantAndCallFraming": 27559,
+        "workerReports": 10164,
+        "userInput": 147,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "afterComposition": {
+        "applicationToolResultBodies": 11250,
+        "assistantAndCallFraming": 27559,
+        "workerReports": 10164,
+        "userInput": 147,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "defaultQuestionAnswers": {
+        "m70r41": {
+          "type": "probability",
+          "probability": 0.72
+        },
+        "m66r36": {
+          "type": "probability",
+          "probability": 0.65
+        },
+        "m84r47": {
+          "type": "probability",
+          "probability": 0.78
+        },
+        "m64r35": {
+          "type": "probability",
+          "probability": 0.65
+        },
+        "m60r33": {
+          "type": "probability",
+          "probability": 0.68
+        },
+        "m82r46": {
+          "type": "probability",
+          "probability": 0.71
+        },
+        "m79r45": {
+          "type": "probability",
+          "probability": 0.73
+        },
+        "m57r32": {
+          "type": "probability",
+          "probability": 0.72
+        },
+        "m53r30": {
+          "type": "probability",
+          "probability": 0.69
+        },
+        "m41r22": {
+          "type": "probability",
+          "probability": 0.64
+        },
+        "m36r20": {
+          "type": "probability",
+          "probability": 0.73
+        },
+        "m47r27": {
+          "type": "probability",
+          "probability": 0.67
+        },
+        "m51r29": {
+          "type": "probability",
+          "probability": 0.65
+        },
+        "m43r23": {
+          "type": "probability",
+          "probability": 0.67
+        },
+        "m76r44": {
+          "type": "probability",
+          "probability": 0.7
+        },
+        "m72r42": {
+          "type": "probability",
+          "probability": 0.73
+        },
+        "m86r48": {
+          "type": "probability",
+          "probability": 0.74
+        },
+        "m25r12": {
+          "type": "probability",
+          "probability": 0.69
+        },
+        "m33r19": {
+          "type": "probability",
+          "probability": 0.64
+        },
+        "m29r17": {
+          "type": "probability",
+          "probability": 0.71
+        },
+        "m27r16": {
+          "type": "probability",
+          "probability": 0.69
+        },
+        "m23r11": {
+          "type": "probability",
+          "probability": 0.67
+        },
+        "m18r9": {
+          "type": "probability",
+          "probability": 0.7
+        }
+      },
+      "customQuestionAnswers": {
+        "m70r41": {
+          "type": "probability",
+          "probability": 0.41
+        },
+        "m66r36": {
+          "type": "probability",
+          "probability": 0.3
+        },
+        "m84r47": {
+          "type": "probability",
+          "probability": 0.62
+        },
+        "m64r35": {
+          "type": "probability",
+          "probability": 0.3
+        },
+        "m60r33": {
+          "type": "probability",
+          "probability": 0.22
+        },
+        "m82r46": {
+          "type": "probability",
+          "probability": 0.44
+        },
+        "m79r45": {
+          "type": "probability",
+          "probability": 0.28
+        },
+        "m57r32": {
+          "type": "probability",
+          "probability": 0.37
+        },
+        "m53r30": {
+          "type": "probability",
+          "probability": 0.29
+        },
+        "m41r22": {
+          "type": "probability",
+          "probability": 0.31
+        },
+        "m36r20": {
+          "type": "probability",
+          "probability": 0.35
+        },
+        "m47r27": {
+          "type": "probability",
+          "probability": 0.3
+        },
+        "m51r29": {
+          "type": "probability",
+          "probability": 0.28
+        },
+        "m43r23": {
+          "type": "probability",
+          "probability": 0.24
+        },
+        "m76r44": {
+          "type": "probability",
+          "probability": 0.44
+        },
+        "m72r42": {
+          "type": "probability",
+          "probability": 0.37
+        },
+        "m86r48": {
+          "type": "probability",
+          "probability": 0.54
+        },
+        "m25r12": {
+          "type": "probability",
+          "probability": 0.44
+        },
+        "m33r19": {
+          "type": "probability",
+          "probability": 0.26
+        },
+        "m29r17": {
+          "type": "probability",
+          "probability": 0.27
+        },
+        "m27r16": {
+          "type": "probability",
+          "probability": 0.34
+        },
+        "m23r11": {
+          "type": "probability",
+          "probability": 0.3
+        }
+      },
+      "defaultCutoffRemoved": 0,
+      "continuationFacts": {
+        "startDate": true,
+        "endDate": true,
+        "travelers": true,
+        "lodgingBudgetAmount": true,
+        "lodgingBudgetCurrency": true,
+        "budgetIsPerPerson": true,
+        "anythingBooked": true
+      },
+      "retainedSourceUrls": [
+        "https://all.accor.com/booking/en/accor/hotel/8501?dateIn=2027-04-18&nights=4&compositions=1-3-0&stayplus=false&snu=false&hideHotelDetails=true",
+        "https://www.aptiin.com/en/oriente/",
+        "https://www.ihg.com/vignettecollection/hotels/gb/en/lisbon/liscs/hoteldetail/amenities"
+      ],
+      "recordedProviderInputTokens": 86793,
+      "bodiesRestoredBeforeNativePruning": 0,
+      "nativePromptSha256": "6f9b57d1a716344b2e0675301d7025b67a8f3e0471398edc30a984cac40ee8cd",
+      "providerRequestSha256": "9565e357f84b30cbea8b2d99b12a7bbdde946da57b81a2e4e202e8c9e3bc61f4",
+      "continuationAnswer": {
+        "startDate": "2027-04-18",
+        "endDate": "2027-04-22",
+        "travelers": 3,
+        "lodgingBudgetAmount": 1500,
+        "lodgingBudgetCurrency": "EUR",
+        "budgetIsPerPerson": false,
+        "anythingBooked": false,
+        "constraints": "Four-night Lisbon trip. Arrive 18 April 2027 and depart 22 April 2027. Mum uses a folding wheelchair for distances; step-free access from the street through to the bedroom and bathroom is essential, and an elevator alone is not sufficient evidence. Prefer taxis and public transport rather than hiring a car. Vegetarian traveler eats eggs and dairy; Mum eats everything. Food stops should be seated restaurants or caf\u00e9s, not standing or long walking food tours. Interests are food, gardens, and small museums. Lodging ceiling is EUR 1,500 total including taxes. All availability, prices, accessibility assignments, and bookings remain unconfirmed.",
+        "evidence": [
+          {
+            "name": "ibis Lisboa Parque das Na\u00e7\u00f5es",
+            "url": "https://all.accor.com/booking/en/accor/hotel/8501?dateIn=2027-04-18&nights=4&compositions=1-3-0&stayplus=false&snu=false&hideHotelDetails=true",
+            "detail": "The exact-date Accor search for 3 people in 1 room displayed 4 rooms available. The associated official hotel information lists wheelchair accessibility and a 44 m\u00b2 suite/apartment for up to 4 people.",
+            "uncertainty": "No numeric rate was exposed, so the EUR 1,500 all-in budget is unverified. The inspected evidence does not confirm an accessible-room assignment, complete step-free street-to-bedroom-and-bathroom route, shower details, or three usable sleeping places."
+          },
+          {
+            "name": "Oriente Apartments, Parque das Na\u00e7\u00f5es",
+            "url": "https://www.aptiin.com/en/oriente/",
+            "detail": "The official site lists one-, two-, and three-bedroom apartment categories, supports 3 adults in its booking interface, and advertises up to 30% direct-booking discounts.",
+            "uncertainty": "No date-specific price or accessibility specification was exposed. Step-free access, bathroom suitability, sleeping configuration for Mum, and availability for 18\u201322 April 2027 require direct confirmation."
+          },
+          {
+            "name": "Convent Square Lisbon, Vignette Collection",
+            "url": "https://www.ihg.com/vignettecollection/hotels/gb/en/lisbon/liscs/hoteldetail/amenities",
+            "detail": "The official IHG accessibility information lists accessible guest rooms and routes, ramp access, roll-in showers, grab bars, bathroom turning space, and accessible vanity clearance.",
+            "uncertainty": "The page does not confirm a specific suitable room for 3 adults, continuous street-to-room access for the assigned room, exact sleeping places, price, or availability for 18\u201322 April 2027."
+          }
+        ]
+      }
+    },
+    {
+      "caseId": "lisbon-accessibility",
+      "turn": 10,
+      "beforeTokens": 93770,
+      "afterTokens": 89939,
+      "reductionPercent": 4.09,
+      "selectorElapsedMs": 252,
+      "candidateCount": 4,
+      "removedResultCount": 3,
+      "prunedByTool": {
+        "list_trips": {
+          "results": 1,
+          "characters": 6534
+        },
+        "save_trip": {
+          "results": 1,
+          "characters": 6532
+        },
+        "deliver_response": {
+          "results": 1,
+          "characters": 2995
+        }
+      },
+      "beforeComposition": {
+        "applicationToolResultBodies": 7938,
+        "assistantAndCallFraming": 57740,
+        "workerReports": 19739,
+        "userInput": 144,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "afterComposition": {
+        "applicationToolResultBodies": 4107,
+        "assistantAndCallFraming": 57740,
+        "workerReports": 19739,
+        "userInput": 144,
+        "systemInstructions": 1337,
+        "toolDefinitions": 6866,
+        "requestFraming": 6
+      },
+      "defaultQuestionAnswers": {
+        "m159r2": {
+          "type": "probability",
+          "probability": 0.89
+        },
+        "m157r1": {
+          "type": "probability",
+          "probability": 0.82
+        },
+        "m154r0": {
+          "type": "probability",
+          "probability": 0.86
+        },
+        "m161r3": {
+          "type": "probability",
+          "probability": 0.83
+        }
+      },
+      "customQuestionAnswers": {
+        "m159r2": {
+          "type": "probability",
+          "probability": 0.73
+        },
+        "m157r1": {
+          "type": "probability",
+          "probability": 0.51
+        },
+        "m154r0": {
+          "type": "probability",
+          "probability": 0.48
+        },
+        "m161r3": {
+          "type": "probability",
+          "probability": 0.54
+        }
+      },
+      "defaultCutoffRemoved": 0,
+      "continuationFacts": {
+        "startDate": true,
+        "endDate": true,
+        "travelers": true,
+        "lodgingBudgetAmount": true,
+        "lodgingBudgetCurrency": true,
+        "budgetIsPerPerson": true,
+        "anythingBooked": true
+      },
+      "retainedSourceUrls": [
+        "https://all.accor.com/hotel/2117/index.en.shtml",
+        "https://www.ihg.com/vignettecollection/hotels/gb/en/lisbon/liscs/hoteldetail/amenities",
+        "https://www.stayhotels.pt/stayhotellisboacentrosaldanha/en/hotel-rooms.html"
+      ],
+      "recordedProviderInputTokens": 90671,
+      "bodiesRestoredBeforeNativePruning": 2,
+      "nativePromptSha256": "2323f65f2bfa4dc32f5ee20982fa6bcbd27167efffaa3611fc9f5b061c360a3c",
+      "providerRequestSha256": "438616f600aa16fb228c50b1f22e2c128a7296027b3ffdeea0cbf9b3b5fd4700",
+      "continuationAnswer": {
+        "startDate": "2027-04-18",
+        "endDate": "2027-04-22",
+        "travelers": 2,
+        "lodgingBudgetAmount": 1500,
+        "lodgingBudgetCurrency": "EUR",
+        "budgetIsPerPerson": false,
+        "anythingBooked": false,
+        "constraints": "Lisbon only; four nights, arriving around 15:00 on 18 April and departing 22 April 2027. Travelers are the user and Mum. Mum uses a folding wheelchair for distances. Lodging must have two separate twin beds, not a double, and genuinely step-free access from taxi drop-off/street through the bedroom and bathroom; an elevator alone is insufficient. Taxis and public transport are preferred. Protect Mum's hotel rest around 14:00\u201316:00 daily, return by about 13:30, and plan only one principal morning activity per day. Keep the arrival afternoon and departure morning quiet. Vegetarian food is needed for the user; eggs and dairy are acceptable, while Mum eats everything. Prefer short, flat clusters and seated meals. Excluded: Sintra, steep routes, hilltop viewpoints, Alfama, Mouraria, Gra\u00e7a, Bairro Alto, long walking food tours, and Loreto underground visits. Nothing has been booked or published.",
+        "evidence": [
+          {
+            "name": "ibis Lisboa Centro Saldanha",
+            "url": "https://all.accor.com/hotel/2117/index.en.shtml",
+            "detail": "The official Accor page lists twin rooms, two rooms designed for reduced mobility, accessible bathrooms, elevators, and wheelchair accessibility.",
+            "uncertainty": "The exact accessible twin-room assignment, continuous step-free route from taxi drop-off to bathroom, shower and transfer details, total tax-inclusive price, and 18\u201322 April 2027 availability remain unverified."
+          },
+          {
+            "name": "Convent Square Lisbon, Vignette Collection",
+            "url": "https://www.ihg.com/vignettecollection/hotels/gb/en/lisbon/liscs/hoteldetail/amenities",
+            "detail": "The official IHG amenities page lists accessible rooms and routes, ramp access, elevators, roll-in showers, grab bars, and bathroom turning space.",
+            "uncertainty": "The exact accessible room with two separate beds, complete street-to-bedroom-to-bathroom route, tax-inclusive price, and availability for the dates remain unverified. The rooms page indicates some categories may have twin beds but does not confirm the accessible assignment."
+          },
+          {
+            "name": "Stay Hotel Lisboa Centro Saldanha",
+            "url": "https://www.stayhotels.pt/stayhotellisboacentrosaldanha/en/hotel-rooms.html",
+            "detail": "The official rooms page lists twin rooms with two single beds and states that adapted rooms for reduced mobility are available.",
+            "uncertainty": "It does not confirm that an adapted room can be configured as a twin, nor does it establish detailed bathroom equipment, the complete step-free route, total price, taxes, or 18\u201322 April 2027 availability."
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -235,6 +235,14 @@ export default defineConfig({
         cache: false,
         command: "node --experimental-transform-types tooling/context-continuity-eval/src/main.ts",
       },
+      "travel:record": {
+        cache: false,
+        command: "bun tooling/context-continuity-eval/src/travel-capture.ts",
+      },
+      "travel:score": {
+        cache: false,
+        command: "bun tooling/context-continuity-eval/src/travel-score.ts",
+      },
       "release:checked-publish": {
         cache: false,
         command: "vp run --no-cache release:publish --check-continuity",

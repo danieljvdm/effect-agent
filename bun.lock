@@ -125,6 +125,9 @@
     "packages/effect-agent": {
       "name": "effect-agent",
       "version": "0.1.0-beta.111",
+      "dependencies": {
+        "@effect-agent/ai-decision": "workspace:*",
+      },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
@@ -384,6 +387,8 @@
       "name": "@effect-agent/example-context-continuity-eval",
       "version": "0.0.0",
       "dependencies": {
+        "@effect-agent/ai-decision": "workspace:*",
+        "@effect-agent/ai-typesafe": "workspace:*",
         "@effect-agent/platform-cloudflare": "workspace:*",
         "@effect-agent/platform-node": "workspace:*",
         "@effect/ai-openai": "catalog:",

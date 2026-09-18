@@ -1,7 +1,7 @@
 import { Option, Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
-import type { ContextMessageTokenEstimator } from "../ContextCompactor.ts";
+import type { ContextMessageTokenEstimator, ToolResultSelection } from "../ContextCompactor.ts";
 import { boundedCanonicalJsonSnapshot } from "./provider-result-staging.ts";
 
 /**
@@ -167,6 +167,8 @@ export interface ContextCompactionState {
   protectSystemMessages?: boolean;
   /** Tool messages at source index below this bound render as cleared. */
   clearedThrough: number;
+  /** Sparse body removals, bound to source positions. Replacements discard covered selections. */
+  clearedResults?: ToolResultSelection;
   /**
    * Source messages below this bound (outside the protected block) are
    * replaced by a summary or a fresh-window marker. Absent before the first replacement.
@@ -216,7 +218,10 @@ const isProtected = (
   return source[index]?.role === "system";
 };
 
-const clearedToolMessage = (message: Prompt.Message): Prompt.Message => {
+const clearedToolMessage = (
+  message: Prompt.Message,
+  selected?: ReadonlySet<string>,
+): Prompt.Message => {
   if (message.role !== "tool" || typeof message.content === "string") {
     return message;
   }
@@ -224,14 +229,16 @@ const clearedToolMessage = (message: Prompt.Message): Prompt.Message => {
   // Structural rebuild keeps the message's pairing identity (same part ids
   // and names) while replacing only the result payloads the model would see.
   return Prompt.makeMessage("tool", {
+    options: message.options,
     content: message.content.map((part) =>
-      part.type === "tool-result"
+      part.type === "tool-result" && (selected === undefined || selected.has(part.id))
         ? Prompt.makePart("tool-result", {
             id: part.id,
             name: part.name,
             result: CLEARED_TOOL_RESULT,
             isFailure: part.isFailure,
             providerExecuted: part.providerExecuted,
+            options: part.options,
           })
         : part,
     ),
@@ -242,8 +249,15 @@ const renderMessage = (
   state: ContextCompactionState,
   message: Prompt.Message,
   index: number,
-): Prompt.Message =>
-  index < state.clearedThrough && message.role === "tool" ? clearedToolMessage(message) : message;
+): Prompt.Message => {
+  if (message.role !== "tool") return message;
+  if (index < state.clearedThrough) return clearedToolMessage(message);
+  const selected = state.clearedResults?.filter((result) => result.messageIndex === index);
+
+  return selected === undefined || selected.length === 0
+    ? message
+    : clearedToolMessage(message, new Set(selected.map((result) => result.toolCallId)));
+};
 
 const summaryMessage = (summary: string): Prompt.Message =>
   Prompt.makeMessage("user", {
@@ -260,7 +274,11 @@ export const buildCompactedView = (
   source: ReadonlyArray<Prompt.Message>,
   state: ContextCompactionState,
 ): ReadonlyArray<Prompt.Message> => {
-  if (state.replacement === undefined && state.clearedThrough === 0) {
+  if (
+    state.replacement === undefined &&
+    state.clearedThrough === 0 &&
+    !state.clearedResults?.length
+  ) {
     return source;
   }
   const view: Array<Prompt.Message> = [];
