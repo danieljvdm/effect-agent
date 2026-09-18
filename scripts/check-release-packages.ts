@@ -13,17 +13,19 @@ const Manifest = Schema.Struct({
   ),
 });
 
-const Packs = Schema.Array(
-  Schema.Struct({
-    name: Schema.String,
-    version: Schema.String,
-    files: Schema.Array(Schema.Struct({ path: Schema.String })),
-  }),
-);
+const Pack = Schema.Struct({
+  name: Schema.String,
+  version: Schema.String,
+  files: Schema.Array(Schema.Struct({ path: Schema.String })),
+});
+
+// npm 12 publication returns a package-name map; CI's bundled npm 11 returns an array.
+const Packs = Schema.Union([Schema.Array(Pack), Schema.Record(Schema.String, Pack)]);
 
 /** Inspect the npm file list against the actual versioned, built export map. */
 export const verifyPackedFiles = (manifest: typeof Manifest.Type, packs: typeof Packs.Type) => {
-  const pack = packs[0];
+  const entries = Object.values(packs);
+  const pack = entries[0];
 
   const required = [
     "package.json",
@@ -33,7 +35,7 @@ export const verifyPackedFiles = (manifest: typeof Manifest.Type, packs: typeof 
     ]),
   ];
 
-  return packs.length === 1 &&
+  return entries.length === 1 &&
     pack?.name === manifest.name &&
     pack.version === manifest.version &&
     required.every((path) => pack.files.some((file) => file.path === path))
