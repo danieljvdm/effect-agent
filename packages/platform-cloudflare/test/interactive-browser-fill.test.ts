@@ -16,12 +16,13 @@ import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-life
 const sdk = vi.hoisted(() => ({ connect: vi.fn<() => Promise<object>>() }));
 
 vi.mock("@cloudflare/puppeteer", () => ({
-  default: { ...sdk, acquire: async () => ({ sessionId: "fill-regression" }) },
+  default: sdk,
 }));
 
 // Only the SDK transport is replaced: fill runs the production element callback.
 const nativeLayer = (element: object) => {
   const page = {
+    browser: () => ({ isConnected: () => true }),
     evaluate: async () => ({ matchCount: 1 }),
     $$: async (selector: string) =>
       selector === "#field"
@@ -43,10 +44,11 @@ const nativeLayer = (element: object) => {
 
   sdk.connect.mockResolvedValue({
     createBrowserContext: async () => ({
+      browser: () => ({ isConnected: () => true }),
       newPage: async () => page,
       close: async () => {},
     }),
-    sessionId: () => "fill-regression",
+    sessionId: () => "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
     isConnected: () => true,
     on: () => {},
     off: () => {},
@@ -60,7 +62,10 @@ const nativeLayer = (element: object) => {
   return browserRunInteractiveLayer().pipe(
     Layer.provide(
       BrowserRunInteractiveBinding.layer({
-        browser: { fetch: unusedRpc, quickAction: unusedRpc },
+        browser: {
+          fetch: async () => Response.json({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }),
+          quickAction: unusedRpc,
+        },
       }).pipe(
         Layer.provide(Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void })),
       ),
