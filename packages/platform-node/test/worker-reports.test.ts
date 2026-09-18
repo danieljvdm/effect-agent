@@ -43,7 +43,7 @@ const input = Schema.Struct({ question: Schema.String });
 const output = Schema.Struct({ answer: Schema.String });
 
 const withReportClock = Effect.fnUntraced(function* <A, E, R>(
-  scenario: (clock: Clock.Clock, advanceTo: (millis: number) => void) => Effect.Effect<A, E, R>,
+  scenario: (advanceTo: (millis: number) => void) => Effect.Effect<A, E, R>,
 ): Effect.fn.Return<A, E, Exclude<R, Scope.Scope>> {
   const native = yield* Clock.Clock;
   let offset = 0;
@@ -61,7 +61,7 @@ const withReportClock = Effect.fnUntraced(function* <A, E, R>(
     ),
   };
 
-  return yield* scenario(clock, (millis) => {
+  return yield* scenario((millis) => {
     offset = Math.max(offset, millis - native.currentTimeMillisUnsafe());
   }).pipe(Effect.scoped, Effect.provideService(Clock.Clock, clock));
 });
@@ -219,8 +219,9 @@ for (const mode of ["custom", "mapped", "standard"] as const)
   ] as const)(
     `${mode}: recovers hosted search completion and one report for joined child inputs after %s and a Node restart`,
     (failpoint) =>
-      withReportClock((clock, advanceTo) =>
+      withReportClock((advanceTo) =>
         Effect.gen(function* () {
+          const clock = yield* Clock.Clock;
           const fs = yield* FileSystem.FileSystem;
           const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-report-" });
           const native = hostedChild();
