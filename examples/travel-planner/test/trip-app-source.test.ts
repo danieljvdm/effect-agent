@@ -91,7 +91,7 @@ const repository = (name: string): ArtifactsRepo & Disposable => ({
   revokeToken: async (id) => tokens.delete(id),
   listTokens: async () => ({ tokens: [], total: 0 }),
   fork: async (target, options) => {
-    expect(name).toBe("trip-app-template-v1");
+    expect(name).toBe("trip-app-template-alchemy-v1");
     expect(options).toEqual({ defaultBranchOnly: true });
     if (names.has(target)) throw { code: "ALREADY_EXISTS" };
     forks.push(target);
@@ -253,6 +253,42 @@ afterEach(async () => {
 });
 
 it("uses native forks, preserves parent history, replaces the complete tree, and reads old commits", async () => {
+  const legacyName = "trip-app-template-v1";
+  const legacyDirectory = join(directory, `${legacyName}.git`);
+  const legacySource = "export const title = 'Previous template';\n";
+
+  await command(["init", "--bare", "--initial-branch=main", legacyDirectory]);
+  names.add(legacyName);
+
+  const blob = await command(
+    ["--git-dir", legacyDirectory, "hash-object", "-w", "--stdin"],
+    new TextEncoder().encode(legacySource),
+  );
+
+  const tree = await command(
+    ["--git-dir", legacyDirectory, "mktree"],
+    new TextEncoder().encode(`100644 blob ${blob.toString().trim()}\tlegacy.ts\n`),
+  );
+
+  const legacyCommit = await command(
+    ["--git-dir", legacyDirectory, "commit-tree", tree.toString().trim(), "-m", "Previous seed"],
+    new Uint8Array(),
+    {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Fixture",
+      GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+      GIT_COMMITTER_NAME: "Fixture",
+      GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+    },
+  );
+
+  await command([
+    "--git-dir",
+    legacyDirectory,
+    "update-ref",
+    "refs/heads/main",
+    legacyCommit.toString().trim(),
+  ]);
   const seed = await fork();
 
   expect(await fork()).toEqual(seed);
@@ -285,6 +321,15 @@ it("uses native forks, preserves parent history, replaces the complete tree, and
     [...desired].sort((a, b) => a.path.localeCompare(b.path)),
   );
   expect(await read("trip-one", seed.commitId)).toHaveLength(2);
+  await expect(commit(seed.commitId, initial, legacyName)).rejects.toMatchObject({
+    code: "invalid",
+  });
+  expect((await command(["--git-dir", legacyDirectory, "rev-parse", "main"])).toString()).toBe(
+    legacyCommit.toString(),
+  );
+  expect((await command(["--git-dir", legacyDirectory, "show", "main:legacy.ts"])).toString()).toBe(
+    legacySource,
+  );
   expect(await commit(seed.commitId, desired)).toEqual(updated);
   await expect(commit(seed.commitId, initial)).rejects.toMatchObject({ code: "conflict" });
   await expect(
@@ -324,6 +369,8 @@ it("recovers a committed fork and push after lost acknowledgements without anoth
 }, 30_000);
 
 it("rejects unsafe, duplicate, and oversized sources before any binding call", async () => {
+  for (const template of ["trip-app-template-v1", "trip-app-template-alchemy-v1"])
+    await expect(fork(template)).rejects.toMatchObject({ code: "invalid" });
   for (const path of [
     "/absolute",
     "../escape",

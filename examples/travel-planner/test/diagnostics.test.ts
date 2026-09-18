@@ -8,6 +8,7 @@ import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
 import { diagnosticDetail, RecordedDiagnostics } from "../src/server/diagnostics.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 let directory: string;
 let script: string;
@@ -30,6 +31,7 @@ beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "planner-diagnostics-"));
 
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/diagnostics-worker.ts")],
     bundle: true,
     write: false,

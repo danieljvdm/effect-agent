@@ -1,5 +1,4 @@
 import { Effect, Layer, Redacted, Schema } from "effect";
-import { DurableObject } from "effect-cf";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { PlannerError, TripSiteStore } from "../../src/domain.ts";
@@ -44,9 +43,9 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
   plannerApplication(FixtureModel, "fixture-script-v1", "Test model", FixtureBrowserLive).pipe(
     Layer.provideMerge(failures),
   ),
-) {
-  fetch(request: Request): Promise<Response> {
-    return this[DurableObject.RunSymbol](
+  {},
+  {
+    fixtureRequest: (request: Request) =>
       Effect.gen(function* () {
         const sql = yield* SqlClient;
 
@@ -64,12 +63,18 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
           ),
         );
       }),
-    );
-  }
-}
+  },
+) {}
 
 export default {
-  async fetch(request: Request, env: Cloudflare.Env & { readonly PLANNER_TOKEN?: string }) {
+  async fetch(
+    request: Request,
+    env: Omit<Cloudflare.Env, "ACCOUNT_THREADS"> & {
+      readonly PLANNER_TOKEN?: string;
+      readonly ACCOUNT_THREADS: DurableObjectNamespace<TravelPlannerThread>;
+    },
+    ctx: ExecutionContext,
+  ) {
     const url = new URL(request.url);
 
     if (url.pathname === "/__test/credentials") {
@@ -102,7 +107,7 @@ export default {
 
         return Response.json(resolved);
       }
-      const response = await env.ACCOUNT_THREADS.getByName(owner).fetch(request);
+      using response = await env.ACCOUNT_THREADS.getByName(owner).fixtureRequest(request);
 
       return new Response(await response.arrayBuffer(), {
         status: response.status,
@@ -110,6 +115,6 @@ export default {
       });
     }
 
-    return fixtureWorker.fetch(request, env);
+    return fixtureWorker.fetch(request, env, ctx);
   },
 };

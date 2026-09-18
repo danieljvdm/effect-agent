@@ -15,6 +15,7 @@ import {
   PublishedSite,
   Trip,
 } from "../src/domain.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 import { ownerEmail } from "./fixtures/identity.ts";
 import { fixtureTravelContent } from "./fixtures/models.ts";
 
@@ -34,8 +35,9 @@ const RpcExit = Schema.Struct({
   ]),
 });
 
-it("isolates conversations while retaining owner trips, native mutations, publication, and recovery", async () => {
+it("runs the Alchemy host with account isolation, durable mutations, publication, and restart recovery", async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/worker.ts")],
     bundle: true,
     write: false,

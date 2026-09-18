@@ -10,6 +10,7 @@
   "fixed": [
     [
       "@effect-agent/ai-decision",
+      "@effect-agent/platform-alchemy-cloudflare",
       "@effect-agent/platform-cloudflare",
       "@effect-agent/platform-node",
       "@effect-agent/pr-review",

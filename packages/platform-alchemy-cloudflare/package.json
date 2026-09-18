@@ -1,0 +1,61 @@
+{
+  "name": "@effect-agent/platform-alchemy-cloudflare",
+  "version": "0.1.0-beta.111",
+  "description": "Alchemy Effect-native Cloudflare hosts for Effect Agent.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "directory": "packages/platform-alchemy-cloudflare"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./thread-object": "./src/ThreadObject.ts",
+    "./memory-object": "./src/MemoryObject.ts",
+    "./scheduling": "./src/Scheduling.ts",
+    "./subscriptions": "./src/Subscriptions.ts",
+    "./rpc": "./src/Rpc.ts",
+    "./alarms": "./src/Alarms.ts",
+    "./alarm": "./src/Alarm.ts",
+    "./cloudflare-thread-client": "./src/CloudflareThreadClient.ts",
+    "./cloudflare-bindings": "./src/CloudflareBindings.ts",
+    "./cloudflare-browser": "./src/CloudflareBrowser.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@effect-agent/platform-cloudflare": "workspace:*",
+    "@effect-agent/storage-cloudflare": "workspace:*",
+    "effect-agent": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
+    "@effect-agent/testing": "workspace:*",
+    "@effect/platform-browser": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "alchemy": "catalog:",
+    "effect": "catalog:",
+    "esbuild": "catalog:",
+    "miniflare": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "alchemy": "^2.0.0-beta.79",
+    "effect": "^4.0.0-rc.116"
+  }
+}

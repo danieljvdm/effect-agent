@@ -10,7 +10,9 @@ Install storage, platform, sandbox execution, and testing packages as needed.
 
 Keep all framework packages at the same exact release. They require `effect@^4.0.0-rc.116`;
 this repository tests Effect and its OpenAI/Anthropic providers at `4.0.0-rc.116`.
-The Cloudflare platform requires `effect@^4.0.0-rc.116` and `effect-cf@^0.44.1`.
+The native `platform-cloudflare` hosts also require `effect-cf@^0.44.1`; their shared host
+subpaths do not. The experimental Alchemy host requires the patched Alchemy version described
+in the [Cloudflare guide](../platforms/cloudflare#alchemy-host).
 Before 1.0, APIs and stored data may change without a migration path.
 
 ## Public imports
@@ -373,6 +375,9 @@ The separate memory protocol defines bounded batch requests, responses, and type
 ### `@effect-agent/platform-cloudflare`
 
 Assembles the durable host, RPC client, alarms, and Code Mode executor.
+The native factories use `effect-cf`. Shared `/thread-object-host`, `/memory-object-host`,
+`/schedule-owner-host`, `/subscription-partition-host`, and `/cloudflare-thread-client-host`
+subpaths expose the same runtime and protocols without importing that optional peer.
 See the [Cloudflare guide](../platforms/cloudflare) for bindings, service lifetimes, and admission limits.
 The [Code Mode guide](../guide/code-mode#run-generated-code-on-cloudflare) covers the independent
 Dynamic Worker executor and Worker Loader binding.
@@ -395,6 +400,18 @@ Durable hosts and the other browser adapters do not need Puppeteer.
 
 See [browser setup and limits](../guide/browser) for credentials, network policies,
 action failures, and cleanup.
+
+### `@effect-agent/platform-alchemy-cloudflare`
+
+Experimental Alchemy Effect runtime hosts for Threads, Memory owners, Schedule Owners, and
+Subscription Partitions. `ThreadObject.make`, `MemoryObject.make`, `Scheduling.make`, and
+`Subscriptions.make` return constructors for Alchemy Durable Object declarations. The package
+reuses the Cloudflare host logic, schemas, clients, and storage without loading `effect-cf`.
+
+Alchemy owns construction and event scopes; the framework owns durable admission, execution,
+and recovery. Application authorizers remain explicit. This repository uses a patched Alchemy
+`2.0.0-beta.79` for constructor cleanup and transactional alarm handling; the package's peer
+range alone does not install that patch. See [setup and adoption limits](../platforms/cloudflare#alchemy-host).
 
 ### `@effect-agent/pr-review`
 

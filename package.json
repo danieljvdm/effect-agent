@@ -30,6 +30,7 @@
     "@changesets/changelog-github": "0.7.0",
     "@changesets/cli": "2.31.0",
     "@effect-agent/ai-decision": "workspace:*",
+    "@effect-agent/platform-alchemy-cloudflare": "workspace:*",
     "@effect-agent/platform-cloudflare": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/sandbox-local": "workspace:*",
@@ -51,12 +52,11 @@
     "@shikijs/vitepress-twoslash": "catalog:",
     "@stylistic/eslint-plugin": "5.10.0",
     "@types/node": "catalog:",
-    "alchemy": "2.0.0-beta.77",
+    "alchemy": "catalog:",
     "effect": "catalog:",
     "effect-agent": "workspace:*",
     "effect-cf": "catalog:",
     "esbuild": "catalog:",
-    "mime": "4.1.0",
     "oxfmt": "0.64.0",
     "oxlint": "1.79.0",
     "typescript": "catalog:",
@@ -138,19 +138,11 @@
     "wrangler": "4.123.0",
     "isomorphic-git": "1.41.9",
     "memfs": "4.71.0",
-    "@alchemy.run/cloudflare-runtime": "2.0.0-beta.77",
+    "alchemy": "2.0.0-beta.79",
+    "@alchemy.run/cloudflare-runtime": "2.0.0-beta.79",
     "jose": "6.2.12"
   },
   "patchedDependencies": {
-    "alchemy@2.0.0-beta.77": "patches/alchemy@2.0.0-beta.77.patch",
-    "@alchemy.run/cloudflare-runtime@2.0.0-beta.77": "patches/@alchemy.run%2Fcloudflare-runtime@2.0.0-beta.77.patch",
-    "@distilled.cloud/core@1.0.0-rc.9": "patches/@distilled.cloud%2Fcore@1.0.0-rc.9.patch",
-    "@distilled.cloud/aws@1.0.0-rc.9": "patches/@distilled.cloud%2Faws@1.0.0-rc.9.patch",
-    "@distilled.cloud/axiom@1.0.0-rc.9": "patches/@distilled.cloud%2Faxiom@1.0.0-rc.9.patch",
-    "@distilled.cloud/cloudflare@1.0.0-rc.9": "patches/@distilled.cloud%2Fcloudflare@1.0.0-rc.9.patch",
-    "@distilled.cloud/fly-io@1.0.0-rc.9": "patches/@distilled.cloud%2Ffly-io@1.0.0-rc.9.patch",
-    "@distilled.cloud/hetzner@1.0.0-rc.9": "patches/@distilled.cloud%2Fhetzner@1.0.0-rc.9.patch",
-    "@distilled.cloud/planetscale@1.0.0-rc.9": "patches/@distilled.cloud%2Fplanetscale@1.0.0-rc.9.patch",
-    "@distilled.cloud/railway@1.0.0-rc.9": "patches/@distilled.cloud%2Frailway@1.0.0-rc.9.patch"
+    "alchemy@2.0.0-beta.79": "patches/alchemy@2.0.0-beta.79.patch"
   }
 }

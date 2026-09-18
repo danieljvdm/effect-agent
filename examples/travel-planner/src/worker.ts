@@ -1,13 +1,22 @@
 import type { Sandbox } from "@cloudflare/sandbox";
 import start from "@tanstack/react-start/server-entry";
+import { makeWorkerBridge, makeWorkflowBridge } from "alchemy/Cloudflare/Bridge";
+import { Request as WorkerRequest } from "alchemy/Cloudflare/Workers/Request";
+import { Worker } from "alchemy/Cloudflare/Workers/Worker";
+import {
+  WorkerExecutionContext,
+  WorkerEnvironment,
+} from "alchemy/Cloudflare/Workers/WorkerRuntime";
+import { WorkerEntrypoint, WorkflowEntrypoint } from "cloudflare:workers";
 import { Effect, Layer, Schema } from "effect";
-import { CloudflareTracer, Worker, WorkerEnvironment } from "effect-cf";
+import { HttpServerResponse } from "effect/unstable/http";
 
 import { artifactsLayer } from "./artifacts";
 import { captureCallbackScript } from "./auth/callback";
 import type { AuthConfiguration } from "./auth/server";
 import { authenticate, type PlannerAuth } from "./auth/worker";
 import { Trip, TripId, TripSiteStore, type AppBuildRequest } from "./domain";
+import { plannerEnvironment, runtimeStack } from "./server/alchemy.ts";
 import { makeTravelPlannerThread } from "./server/cloudflare";
 import { credentialSourceLayer, type CredentialEnvironment } from "./server/credentials";
 import { serveProgress } from "./server/progress-http";
@@ -15,16 +24,31 @@ import { plannerOwner } from "./server/tenancy";
 import { serveVoice } from "./server/voice-http";
 import { appNameFromHost } from "./trip-app/addresses.ts";
 import { AppBuildBucketLive } from "./trip-app/bindings.ts";
+import { siteBuild } from "./trip-app/build.ts";
 import { serveTripApp } from "./trip-app/gateway.ts";
 
 export { PlannerAuth } from "./auth/worker";
 export { Sandbox } from "@cloudflare/sandbox";
-export { SiteBuild } from "./trip-app/build.ts";
 export { TripData } from "./trip-app/gateway.ts";
+
+const workflowEntrypoint = Worker(
+  "PlannerWorkflows",
+  { main: import.meta.url },
+  Effect.gen(function* () {
+    yield* (yield* Worker).export("SiteBuild", siteBuild);
+
+    return { fetch: Effect.succeed(HttpServerResponse.empty({ status: 404 })) };
+  }),
+);
+
+export class SiteBuild extends makeWorkflowBridge(WorkflowEntrypoint, {
+  entrypoint: workflowEntrypoint,
+  stack: runtimeStack,
+})("SiteBuild") {}
 
 export class AccountPlannerThread extends makeTravelPlannerThread(
   Layer.unwrap(
-    Effect.map(WorkerEnvironment, (env) => artifactsLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE)),
+    Effect.map(plannerEnvironment, (env) => artifactsLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE)),
   ),
 ) {}
 
@@ -296,20 +320,27 @@ export const handleRequest = (verify = authenticate) =>
   });
 
 // Test fixtures may substitute session verification; production always uses authenticate.
-export const makeWorker = (verify = authenticate) => ({
-  fetch: (request: Request, env: Cloudflare.Env, ctx?: ExecutionContext) =>
-    Effect.runPromise(
-      handleRequest(verify)(request, env, ctx).pipe(Effect.provideService(WorkerEnvironment, env)),
-    ),
-});
+export const makeWorker = (verify = authenticate) => {
+  const entrypoint = Worker(
+    "PlannerIngress",
+    { main: import.meta.url },
+    Effect.succeed({
+      fetch: Effect.gen(function* () {
+        const request = yield* WorkerRequest;
+        const env = yield* plannerEnvironment;
+        const ctx = yield* WorkerExecutionContext;
+        const response = yield* handleRequest(verify)(request, env, ctx.raw as ExecutionContext);
 
-export default Worker.make(Layer.empty, {
-  eventLayer: CloudflareTracer.layer,
-  fetch: Effect.gen(function* () {
-    const request = yield* Worker.NativeRequest;
-    const env = yield* WorkerEnvironment;
-    const ctx = yield* Worker.ExecutionContext;
+        return HttpServerResponse.fromWeb(response);
+      }).pipe(Effect.orDie),
+    }),
+  );
 
-    return yield* handleRequest()(request, env, ctx);
-  }),
-});
+  // The public bridge creates fetch dynamically; keep that native boundary explicit.
+  return makeWorkerBridge(WorkerEntrypoint, { entrypoint, stack: runtimeStack }) as unknown as new (
+    ctx: ExecutionContext,
+    env: Cloudflare.Env,
+  ) => { fetch(request: Request): Promise<Response> };
+};
+
+export default makeWorker();

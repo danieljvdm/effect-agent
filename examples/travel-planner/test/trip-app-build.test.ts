@@ -1,3 +1,8 @@
+import type {
+  WorkflowOperationError,
+  WorkflowStep,
+  WorkflowStepError,
+} from "alchemy/Cloudflare/Workflows";
 import type { Effect } from "effect";
 import { Schema } from "effect";
 import { build } from "esbuild";
@@ -10,16 +15,19 @@ import {
   TripApp,
   TripAppBuildEvent,
 } from "../src/domain.ts";
+import type { SiteBuildBinding } from "../src/trip-app/bindings.ts";
 import type { AppBuildBucket } from "../src/trip-app/bucket.ts";
 import type {
   AppBuilder,
   buildTripApp,
   readBuild,
   recordBuildProgress,
+  runSiteBuild,
   settleBuild,
 } from "../src/trip-app/build.ts";
 import type { AppRepository } from "../src/trip-app/repository.ts";
 import type { AppSourceStore } from "../src/trip-app/source.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 const request: AppBuildRequest = {
   owner: "test-owner",
@@ -49,16 +57,21 @@ let runtime: Miniflare;
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     stdin: {
       resolveDir: import.meta.dirname,
       loader: "ts",
       contents: `
-    import { DurableObject, RpcTarget } from "cloudflare:workers";
-    import { Cause, Effect, Layer, Schema } from "effect";
-    import { R2, WorkerEnvironment } from "effect-cf";
+    import { DurableObject, RpcTarget, WorkflowEntrypoint } from "cloudflare:workers";
+    import { Cause, Deferred, Effect, Fiber, Layer, Schema } from "effect";
+    import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
+    import { Worker } from "alchemy/Cloudflare/Workers/Worker";
+    import { makeWorkflowBridge, wrapWorkflowStep } from "alchemy/Cloudflare/Workflows/WorkflowBridge";
+    import { task, WorkflowStep } from "alchemy/Cloudflare/Workflows";
+    import { AppBuildBucket } from "../src/trip-app/bucket.ts";
     import { AppBuildRequest, PlannerError, TripApp, TripAppBuildEvent } from "../src/domain.ts";
     import { AppBuilder, AppBuilderLive, buildTripApp, readBuild, recordBuildProgress, runSiteBuild, settleBuild, buildPrefix } from "../src/trip-app/build.ts";
-    import { AppBuildBucketLive, AppBuildSandbox, SiteBuildBinding } from "../src/trip-app/bindings.ts";
+    import { AppBuildBucketLive, AppBuildSandboxLive, SiteBuildBinding, SiteBuildBindingLive } from "../src/trip-app/bindings.ts";
     import { AppSourceStore } from "../src/trip-app/source.ts";
     import { AppRepository } from "../src/trip-app/repository.ts";
     import { TripFailpoint } from "../src/server/trips.ts";
@@ -100,7 +113,34 @@ beforeAll(async () => {
     }) });
     const storage = AppBuildBucketLive;
     const services = Layer.mergeAll(apps, source, builder, failures, storage);
-    export class TestBuild extends SiteBuildBinding.make(services, { run: runSiteBuild }) {}
+    const workflow = {
+      kind: "workflow",
+      make: (env) => Effect.succeed((input) => Schema.decodeUnknownEffect(AppBuildRequest)(input).pipe(
+        Effect.flatMap(runSiteBuild), Effect.provide(services), Effect.provideService(WorkerEnvironment, env), Effect.orDie,
+      )),
+    };
+    const failedWorkflow = {
+      kind: "workflow",
+      make: (env) => Effect.succeed((input) => Schema.decodeUnknownEffect(AppBuildRequest)(input).pipe(
+        Effect.flatMap((request) => task("Expected failure", Effect.fail(new PlannerError({code: "unavailable", message: "Fixture compilation failed"})), {retries: {limit: 0, delay: "1 millisecond"}}).pipe(
+          Effect.catchTag("WorkflowStepError", (error) => task("Record failed build", settleBuild(request, error.message)).pipe(
+            Effect.as({failureTag: error._tag, operation: error.operation}),
+          )),
+        )),
+        Effect.provide(services), Effect.provideService(WorkerEnvironment, env), Effect.orDie,
+      )),
+    };
+    const workflowEntrypoint = Worker("BuildFixture", {main: import.meta.url}, Effect.gen(function* () {
+      const worker = yield* Worker;
+      yield* worker.export("TestBuild", workflow);
+      yield* worker.export("FailedBuild", failedWorkflow);
+      return {fetch: Effect.die("Unused workflow ingress")};
+    }));
+    const bridge = makeWorkflowBridge(WorkflowEntrypoint, {
+      entrypoint: workflowEntrypoint, stack: {name: "trip-app-build-test", stage: "test"},
+    });
+    export class TestBuild extends bridge("TestBuild") {}
+    export class FailedBuild extends bridge("FailedBuild") {}
     class Subscription extends RpcTarget {
       delivered = false; resolve;
       async next() {
@@ -146,19 +186,65 @@ beforeAll(async () => {
       if(input.fault !== undefined) fault=input.fault;
       let action = Effect.void;
       if (input.kind === "build") action = buildTripApp(request);
-      if (input.kind === "build-sdk") action = buildTripApp(request).pipe(Effect.provide(AppBuilderLive.pipe(Layer.provide(AppBuildSandbox.layer({binding:"APP_SANDBOX"})))));
+      if (input.kind === "build-sdk") action = buildTripApp(request).pipe(Effect.provide(AppBuilderLive.pipe(Layer.provide(AppBuildSandboxLive))));
       if (input.kind === "settle") action = settleBuild(request, input.error ?? null);
       if (input.kind === "progress") action = Effect.forEach(Schema.decodeUnknownSync(Schema.Array(TripAppBuildEvent))(input.updates), (event) => recordBuildProgress(request, event), {discard:true});
       if (input.kind === "corrupt") action = Effect.promise(() => env.APP_BUILDS.put(buildPrefix(request.appId, request.commitId)+"manifest.json", input.value));
       if (input.kind === "sdk") action = Effect.flatMap(AppBuilder, (builder) => builder.compile(request, [{path:"index.ts",content:"export {}"}])).pipe(
-        Effect.provide(AppBuilderLive.pipe(Layer.provide(AppBuildSandbox.layer({binding:"APP_SANDBOX"})))),
+        Effect.provide(AppBuilderLive.pipe(Layer.provide(AppBuildSandboxLive))),
         ...(mode === "hang" || mode === "capacity-wait" ? [Effect.timeoutOrElse({duration:"100 millis",orElse:()=>Effect.fail(new PlannerError({code:"unavailable",message:"Fixture deadline"}))})] : []),
       );
-      if (input.kind === "workflow") action = SiteBuildBinding.create(request, {id:input.id}).pipe(Effect.provide(SiteBuildBinding.layer({binding:"SITE_BUILD"})));
-      if (input.kind === "status") action = Effect.flatMap(SiteBuildBinding.get(input.id), (instance) => instance.status).pipe(Effect.provide(SiteBuildBinding.layer({binding:"SITE_BUILD"})));
+      if (input.kind === "workflow") action = Effect.flatMap(SiteBuildBinding, (workflow) => workflow.create({params:request,id:input.id})).pipe(Effect.provide(SiteBuildBindingLive));
+      if (input.kind === "status") action = Effect.flatMap(SiteBuildBinding, (workflow) => workflow.get(input.id).pipe(Effect.flatMap((instance) => instance.status()))).pipe(Effect.provide(SiteBuildBindingLive));
+      if (input.kind === "workflow-rollback") action = Effect.gen(function* () {
+        let saved;
+        const bridge = wrapWorkflowStep({do: (name, config, callback, rollback) => {
+          saved = rollback.rollback;
+          return callback({step: {name, count: 1}, attempt: 1, config});
+        }});
+        const output = yield* task("Successful step", Effect.succeed("step output"), {
+          retries: {limit: 0, delay: "1 millisecond"},
+          rollback: ({output}) => Effect.acquireUseRelease(
+            Effect.sync(() => events.push("rollback-acquired:" + output)),
+            () => Effect.sleep("10 millis"),
+            () => Effect.sleep("10 millis").pipe(Effect.andThen(Effect.sync(() => events.push("rollback-released")))),
+          ),
+        }).pipe(Effect.provideService(WorkflowStep, bridge));
+        events.push("step-returned");
+        yield* Effect.promise(() => saved({error: new Error("Subsequent workflow failure"), output}));
+        events.push("rollback-returned");
+      });
+      if (input.kind === "workflow-interrupt") action = Effect.gen(function* () {
+        const entered = yield* Deferred.make();
+        const held = Effect.acquireUseRelease(
+          Effect.sync(() => events.push("callback-acquired")),
+          () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+          () => Effect.sleep("25 millis").pipe(Effect.andThen(Effect.sync(() => events.push("callback-released")))),
+        );
+        const bridge = wrapWorkflowStep({do: (name, config, callback, rollback) => mode === "rollback"
+          ? rollback.rollback({error: new Error("Native rollback"), output: undefined})
+          : callback({step: {name, count: 1}, attempt: 1, config})});
+        const fiber = yield* task("Interrupted task", mode === "rollback" ? Effect.void : held, {
+          retries: {limit: 0, delay: "1 millisecond"},
+          ...(mode === "rollback" ? {rollback: () => held} : {}),
+        }).pipe(Effect.provideService(WorkflowStep, bridge), Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(fiber);
+        events.push("interrupt-returned");
+      });
+      if (input.kind === "r2-body") action = Effect.gen(function* () {
+        const bucket = yield* AppBuildBucket;
+        yield* bucket.put("body-lifecycle", "native R2");
+        const object = yield* bucket.get("body-lifecycle");
+        if (object === null) return yield* Effect.die("Missing fixture object");
+        const before = object.bodyUsed;
+        const body = yield* object.text();
+        return {before, body, after: object.bodyUsed};
+      });
+      if (input.failure) action = action.pipe(Effect.provideService(WorkerEnvironment, {...env, SITE_BUILD: env.FAILURE_BUILD}));
       const exit = await Effect.runPromise(action.pipe(Effect.provide(services),Effect.provideService(WorkerEnvironment,env),Effect.exit));
       const manifest = await Effect.runPromise(readBuild(request.appId,request.commitId).pipe(Effect.provide(storage),Effect.provideService(WorkerEnvironment,env),Effect.result));
-      return Response.json({exit:exit._tag === "Success" ? {tag:"Success",...(input.kind==="status"?{value:exit.value}:{})}:{tag:"Failure",error:Cause.pretty(exit.cause)},app,compiles,reads,saves,destroyed,subscriptions,mkdirCalls,events,commands,manifest:manifest._tag === "Success" ? manifest.success : null});
+      return Response.json({exit:exit._tag === "Success" ? {tag:"Success",...(["status","r2-body"].includes(input.kind)?{value:exit.value}:{})}:{tag:"Failure",error:Cause.pretty(exit.cause)},app,compiles,reads,saves,destroyed,subscriptions,mkdirCalls,events,commands,manifest:manifest._tag === "Success" ? manifest.success : null});
     }};
   `,
     },
@@ -187,7 +273,10 @@ beforeAll(async () => {
       compatibilityFlags: ["nodejs_compat"],
       r2Buckets: ["APP_BUILDS"],
       durableObjects: { APP_SANDBOX: { className: "FakeSandbox", useSQLite: true } },
-      workflows: { SITE_BUILD: { name: "trip-app-build-test", className: "TestBuild" } },
+      workflows: {
+        SITE_BUILD: { name: "trip-app-build-test", className: "TestBuild" },
+        FAILURE_BUILD: { name: "trip-app-failed-build-test", className: "FailedBuild" },
+      },
     }),
   );
 });
@@ -233,6 +322,22 @@ const call = async (kind: string, extra: Record<string, unknown> = {}) => {
   if (!response.ok) throw new Error(await response.text());
 
   return Schema.decodeUnknownSync(Result)(await response.json());
+};
+
+const waitForWorkflow = async (id: string, failure = false) => {
+  let last = await call("status", { id, failure });
+
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const state = Schema.decodeUnknownSync(Schema.Struct({ status: Schema.String }))(
+      last.exit.value,
+    );
+
+    if (state.status === "complete" || state.status === "errored") break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    last = await call("status", { id, failure });
+  }
+
+  return last;
 };
 
 const reset = () => call("reset", { app: initial });
@@ -429,7 +534,7 @@ it("re-reads CAS conflicts, refuses stale activation, and preserves the active v
   expect(exhausted.app.status).toBe("building");
 });
 
-it("uses the actual Sandbox SDK through effect-cf and cleans up success, command failure, timeout, and invalid output", async () => {
+it("uses the actual Sandbox SDK through the Alchemy environment and cleans up success, command failure, timeout, and invalid output", async () => {
   for (const mode of ["", "command-fail", "hang", "symlink", "cleanup-fail"]) {
     await reset();
     const result = await call("sdk", { mode });
@@ -498,25 +603,16 @@ it("does not retry unknown startup failures and releases capacity waiters on int
   expect(interrupted.app.buildProgress?.map(({ phase }) => phase)).toEqual(["queued"]);
 }, 30_000);
 
-it("runs the typed effect-cf Workflow against real R2 and validates its result", async () => {
+it("runs the Alchemy Workflow bridge against real R2 and validates its result", async () => {
   await reset();
   const id = "workflow-build";
 
   expect((await call("workflow", { id })).exit.tag).toBe("Success");
-  let last = await call("status", { id });
+  const last = await waitForWorkflow(id);
 
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const state = Schema.decodeUnknownSync(Schema.Struct({ status: Schema.String }))(
-      last.exit.value,
-    );
-
-    if (state.status === "complete" || state.status === "errored") break;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    last = await call("status", { id });
-  }
-  expect(last.exit.value).toMatchObject({
+  expect(last.exit.value, JSON.stringify(last.exit.value)).toMatchObject({
     status: "complete",
-    output: { _tag: "Some", value: { commitId: request.commitId } },
+    output: { commitId: request.commitId },
   });
   expect(last.app.activeCommit).toBe(request.commitId);
   expect(last.manifest?.files).toHaveLength(2);
@@ -540,3 +636,61 @@ it("runs the typed effect-cf Workflow against real R2 and validates its result",
     Effect.Error<ReturnType<typeof recordBuildProgress>>
   >().toEqualTypeOf<PlannerError>();
 }, 30_000);
+
+it("recovers a native Workflow step rejection through its typed error and persists the failure step", async () => {
+  await reset();
+  const id = "workflow-failure";
+
+  expect((await call("workflow", { id, failure: true })).exit.tag).toBe("Success");
+  const last = await waitForWorkflow(id, true);
+
+  expect(last.exit.value, JSON.stringify(last.exit.value)).toMatchObject({
+    status: "complete",
+    output: { failureTag: "WorkflowStepError", operation: "Expected failure" },
+  });
+  expect(last.app).toMatchObject({
+    status: "failed",
+    pendingCommit: null,
+    activeCommit: initial.activeCommit,
+  });
+  expect(last.app.error).toContain("Fixture compilation failed");
+  expect(last.app.buildProgress?.at(-1)?.phase).toBe("failed");
+  expectTypeOf<Effect.Error<ReturnType<typeof runSiteBuild>>>().toEqualTypeOf<WorkflowStepError>();
+  expectTypeOf<Effect.Services<ReturnType<typeof runSiteBuild>>>().toEqualTypeOf<
+    WorkflowStep | AppBuildBucket | AppBuilder | AppSourceStore | AppRepository
+  >();
+  expectTypeOf<
+    Effect.Error<ReturnType<SiteBuildBinding["Service"]["create"]>>
+  >().toEqualTypeOf<WorkflowOperationError>();
+});
+
+it("tracks the native R2 body's consumed state after reading it", async () => {
+  await reset();
+  expect((await call("r2-body")).exit).toEqual({
+    tag: "Success",
+    value: { before: false, body: "native R2", after: true },
+  });
+});
+
+it("joins interrupted Workflow callback and rollback finalizers before returning", async () => {
+  for (const mode of ["callback", "rollback"]) {
+    await reset();
+    const result = await call("workflow-interrupt", { mode });
+
+    expect(result.exit.tag).toBe("Success");
+    expect(result.events).toEqual(["callback-acquired", "callback-released", "interrupt-returned"]);
+  }
+});
+
+it("runs a saved native rollback after the successful Workflow task has returned", async () => {
+  await reset();
+  const result = await call("workflow-rollback");
+
+  expect(result.exit.tag).toBe("Success");
+  expect(result.events).toEqual([
+    "step-returned",
+    "rollback-acquired:step output",
+    "rollback-released",
+    "rollback-returned",
+  ]);
+});

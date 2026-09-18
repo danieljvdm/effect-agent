@@ -1,4 +1,4 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
 import { Context, Effect, Option, Schema, Stream } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
@@ -10,7 +10,6 @@ import {
 } from "effect-agent/submission-ledger";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { FrameworkMessage } from "effect-agent/worker";
-import { WorkerEnvironment } from "effect-cf";
 
 import { mergeSpeech } from "../conversation.ts";
 import {
@@ -31,6 +30,7 @@ import { publishTripAppAddress } from "../trip-app/addresses.ts";
 import { editorOverview } from "../trip-app/editor-state.ts";
 import { AppRepository } from "../trip-app/repository.ts";
 import { plannerActivity } from "./activity.ts";
+import { plannerEnvironment } from "./alchemy.ts";
 import { completedAnswer, type Messages } from "./conversation.ts";
 import { readDiagnostics } from "./diagnostics.ts";
 import {
@@ -337,7 +337,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
       : yield* Effect.flatMap(AppRepository, (apps) => apps.get(currentTrip.id));
 
   if (app !== null && conversationId !== null) {
-    const env = yield* WorkerEnvironment;
+    const env = yield* plannerEnvironment;
 
     if (env.APP_BUILDS && env.APP_DOMAIN) {
       // Repair the derived address index for pre-publication member apps on their next view.

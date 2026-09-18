@@ -1,12 +1,12 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
 import { DateTime, Effect, Layer, Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 
 import { AppCommit, AppId, PlannerError, type AppFile, type TripApp } from "../domain.ts";
+import { plannerEnvironment } from "../server/alchemy.ts";
 import { ownerOfThread } from "../server/tenancy.ts";
 import { TripFailpoint } from "../server/trips.ts";
 import { publishTripAppAddress, tripAppHostname } from "./addresses.ts";
-import { SiteBuildBinding } from "./bindings.ts";
+import { SiteBuildBinding, SiteBuildBindingLive } from "./bindings.ts";
 import { AppRepository } from "./repository.ts";
 import { requireAppTrip } from "./scope.ts";
 import { AppSourceStore, appSourceLayer } from "./source.ts";
@@ -32,7 +32,7 @@ const requireApp = Effect.fn("requireTripApp")(function* (tripId: string) {
 });
 
 const startBuild = Effect.fn("startTripAppBuild")(function* (app: TripApp, label: string) {
-  const env = yield* WorkerEnvironment;
+  const env = yield* plannerEnvironment;
   const identity = yield* ThreadObjectIdentity;
   const failpoint = yield* TripFailpoint;
 
@@ -54,11 +54,11 @@ const startBuild = Effect.fn("startTripAppBuild")(function* (app: TripApp, label
       label,
     };
 
-    yield* workflow.create(params, { id }).pipe(
+    yield* workflow.create({ params, id }).pipe(
       Effect.catch((error) =>
         Effect.gen(function* () {
           const existing = yield* workflow.get(id);
-          const status = yield* existing.status;
+          const status = yield* existing.status();
 
           if (status.status === "errored" || status.status === "terminated")
             yield* existing.restart();
@@ -69,7 +69,7 @@ const startBuild = Effect.fn("startTripAppBuild")(function* (app: TripApp, label
       ),
     );
   }).pipe(
-    Effect.provide(SiteBuildBinding.layer({ binding: "SITE_BUILD" })),
+    Effect.provide(SiteBuildBindingLive),
     Effect.mapError(() =>
       failed("The source is saved, but the build couldn't start. Retry the build."),
     ),
@@ -86,7 +86,7 @@ export const createTripApp = Effect.fn("createTripApp")(function* (tripId: strin
 
   if (existing !== null)
     return existing.status === "building" ? yield* startBuild(existing, "Build app") : existing;
-  const env = yield* WorkerEnvironment;
+  const env = yield* plannerEnvironment;
 
   if (!env.APP_DOMAIN || !env.SITE_BUILD || !env.APP_BUILDS)
     return yield* failed("The app builder isn't configured.");
@@ -276,5 +276,5 @@ export const restoreTripApp = Effect.fn("restoreTripApp")(function* (
 });
 
 export const AppSourceLive = Layer.unwrap(
-  Effect.map(WorkerEnvironment, (env) => appSourceLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE)),
+  Effect.map(plannerEnvironment, (env) => appSourceLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE)),
 );

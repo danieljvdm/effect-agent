@@ -53,6 +53,7 @@ const fixture = (
         }),
       ),
     read: (request) => {
+      if (!("limit" in request)) return Stream.die("Unexpected indexed history read");
       requests.push(request);
 
       return Stream.suspend(() =>

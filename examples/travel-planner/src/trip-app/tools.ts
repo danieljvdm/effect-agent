@@ -1,4 +1,4 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
 import { Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
@@ -59,7 +59,7 @@ export const AppTools = Toolkit.make(
   }),
   Tool.make("edit_trip_app", {
     description:
-      "Commit actual source file changes and build the trip app. Supply complete content for changed files, not patches, plus paths to delete. Preserve unrelated user changes. Use the last read commit. The prior working version stays live while building. Server API data is provided only through fixed TRIP_DATA; account credentials and arbitrary server network access are unavailable. Build must output dist/web/index.html and dist/server/index.js. Use effect-cf for Cloudflare code.",
+      "Commit actual source file changes and build the trip app. Supply complete content for changed files, not patches, plus paths to delete. Preserve unrelated user changes. Use the last read commit. The prior working version stays live while building. Server API data is provided only through fixed TRIP_DATA; account credentials and arbitrary server network access are unavailable. Build must output dist/web/index.html and dist/server/index.js. Use Alchemy's Effect Cloudflare runtime for Worker code and preserve its pinned runtime dependency and export-map patch.",
     parameters: Schema.Struct({
       tripId: TripId,
       expectedCommit: AppCommit,

@@ -765,6 +765,16 @@ describe("DC alarm semantics", () => {
       await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
       const follower = await submitTo(plannerDefinition, thread, `${thread}-follower`);
 
+      // Runtime failpoints target the Thread, so finish the follower before arming an
+      // eviction intended for the head's abort. Otherwise it can evict before abort commits.
+      await drainAlarmsUntil(thread, async () =>
+        (await laneRows(thread)).some(
+          (row) => row.submission_id === follower.submissionId && row.state === "settled",
+        ),
+      );
+      expect(
+        (await laneRows(thread)).find((row) => row.submission_id === receipt.submissionId)?.state,
+      ).toBe("unknown");
       expect(supplierCountsFor(thread)).toEqual({ book: 1 });
 
       const unknownBefore = (await readCanonical(thread)).filter(
@@ -788,7 +798,16 @@ describe("DC alarm semantics", () => {
         }),
       );
 
-      expect(accepted.ok).toBe(eviction !== "abort:after-intent");
+      // The committed abort wakes an alarm before its RPC reply is delivered. A concurrent
+      // terminalization eviction may therefore lose that reply too; canonical recovery below
+      // must prove the abort took effect without another mutation or a replayed tool call.
+      if (eviction === undefined) expect(accepted.ok).toBe(true);
+      if (eviction === "abort:after-intent") expect(accepted.ok).toBe(false);
+      if (!accepted.ok) {
+        expect(
+          Cause.isCause(accepted.error) ? Cause.findErrorOption(accepted.error) : accepted.error,
+        ).toMatchObject({ _tag: "Some", value: { _tag: "ThreadClientError", retryable: true } });
+      }
       await drainAlarmsUntil(thread, allSettled(thread));
       await assertConvergence(thread, {
         supplier: { ref: thread, counts: { book: 1 } },

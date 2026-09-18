@@ -7,7 +7,6 @@ import { Receipt, IdempotencyKey } from "effect-agent/receipt";
 import { RunToolAuthorization } from "effect-agent/run-options";
 import { SubmissionLedger, SubmissionLookupById } from "effect-agent/submission-ledger";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { FrameworkMessage } from "effect-agent/worker";
 import { Toolkit } from "effect/unstable/ai";
 
 import { PlannerError, PlannerInput } from "../domain.ts";
@@ -27,9 +26,6 @@ import {
   ConversationInput,
   researchCoordinatorIds,
   ScoutInput,
-  ScoutReportInput,
-  ScoutProgressInput,
-  EditorReportInput,
   LiveConversationInput,
   progressCoordinatorIds,
 } from "./contracts.ts";
@@ -328,7 +324,7 @@ export const scoutAttemptLayer = (
     }),
   );
 
-/** A completion report cannot create another research generation without a new canonical user input. */
+/** Reports joined into a user Run cannot inherit delegation or publication authority. */
 export const ResearchAuthorizationLive = Layer.effect(
   RunToolAuthorization,
   Effect.gen(function* () {
@@ -337,12 +333,6 @@ export const ResearchAuthorizationLive = Layer.effect(
     return RunToolAuthorization.of({
       authorize: (request) => {
         if (
-          (request.frameworkMessage === undefined &&
-            Option.isNone(
-              Schema.decodeUnknownOption(
-                Schema.Union([ScoutReportInput, ScoutProgressInput, EditorReportInput]),
-              )(request.input),
-            )) ||
           ![
             "research_scout_start",
             "research_scout_follow_up",
@@ -351,6 +341,7 @@ export const ResearchAuthorizationLive = Layer.effect(
             "previous_recoverable_research_scout_follow_up",
             "app_editor_start",
             "app_editor_follow_up",
+            "publish_trip_site",
           ].includes(request.call.toolName)
         )
           return publicationAuthorization.authorize(request);
@@ -358,21 +349,43 @@ export const ResearchAuthorizationLive = Layer.effect(
         const denied = {
           _tag: "denied" as const,
           reason:
-            "Report the completed research. A new user request is required to start or steer another research pass.",
+            request.call.toolName === "publish_trip_site"
+              ? "Ask the user to select this trip and explicitly publish its current revision."
+              : "Report the completed research. A new user request is required to start or steer another research pass.",
         };
 
         return store.export(ThreadExportRequest.make({ threadId: request.threadId })).pipe(
-          Effect.map((history) =>
-            history.records.some(
+          Effect.flatMap((history): ReturnType<typeof publicationAuthorization.authorize> => {
+            const response = history.records.findIndex(
               ({ record }) =>
-                record.payload._tag === "UserInputRecorded" &&
+                record.payload._tag === "ModelResponseRecorded" &&
                 record.payload.runId === request.runId &&
-                !Schema.is(FrameworkMessage)(record.payload.messageAdmission) &&
-                Schema.is(PlannerInput)(record.payload.input),
-            )
-              ? { _tag: "allowed" as const }
-              : denied,
-          ),
+                record.payload.turnId === request.turnId &&
+                record.payload.turn === request.turn,
+            );
+
+            if (response < 0) return Effect.succeed(denied);
+
+            // Later admissions cannot authorize an already-declared call. In particular, a
+            // joined report supersedes the original user input even within the same Run.
+            const input = history.records
+              .slice(0, response)
+              .findLast(
+                ({ record }) =>
+                  record.payload._tag === "UserInputRecorded" &&
+                  record.payload.runId === request.runId,
+              )?.record.payload;
+
+            return input?._tag === "UserInputRecorded" &&
+              input.messageAdmission === undefined &&
+              Schema.is(PlannerInput)(input.input)
+              ? publicationAuthorization.authorize({
+                  ...request,
+                  input: input.input,
+                  frameworkMessage: undefined,
+                })
+              : Effect.succeed(denied);
+          }),
           Effect.orElseSucceed(() => denied),
         );
       },

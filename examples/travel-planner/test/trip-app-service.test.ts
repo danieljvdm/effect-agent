@@ -2,9 +2,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import type { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
+import type { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { type Effect, Schema } from "effect";
-import type { WorkerEnvironment } from "effect-cf";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
@@ -16,6 +16,7 @@ import type { AppBuildBucket } from "../src/trip-app/bucket.ts";
 import type { AppRepository } from "../src/trip-app/repository.ts";
 import type { createTripApp } from "../src/trip-app/service.ts";
 import type { AppSourceStore } from "../src/trip-app/source.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 let runtime: Miniflare;
 let directory: string;
@@ -39,15 +40,16 @@ beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "trip-app-service-"));
 
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     stdin: {
       resolveDir: import.meta.dirname,
       loader: "ts",
       contents: `
 import { DurableObject } from "cloudflare:workers";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
 import { Cause, Effect, Layer } from "effect";
-import { WorkerEnvironment } from "effect-cf";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { PlannerError } from "../src/domain.ts";
 import { TripRepository, TripRepositoryLive, TripFailpoint } from "../src/server/trips.ts";
 import { AppRepository, AppRepositoryLive } from "../src/trip-app/repository.ts";

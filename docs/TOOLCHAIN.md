@@ -7,50 +7,58 @@ Framework packages live in `packages/*`; runnable examples live in `examples/*`.
 
 The root [package.json](../package.json) owns shared dependency versions.
 Workspace manifests use `catalog:` for those dependencies and `workspace:*` for internal packages.
-The travel planner is a release consumer: its Effect Agent dependencies and compatible
-`effect-cf` version pin exact npm versions and advance together after publication.
+The travel planner normally consumes exact published Effect Agent versions. Its Alchemy
+runtime preview temporarily uses the matching workspace packages together so the application
+and unreleased host share one set of services and contracts. Restore exact published framework
+pins before a release deployment; unrelated demo fixes still follow the published-package rule.
 `bunfig.toml` disables implicit workspace linking, so only explicit `workspace:` dependencies
 use local source; registry dependencies, including transitive ones, stay on published packages.
 Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 
-| Tool                                                    | Repository version                                  |
-| ------------------------------------------------------- | --------------------------------------------------- |
-| Bun                                                     | `1.4.2`                                             |
-| Vite+                                                   | `0.3.2`                                             |
-| Alchemy and its Cloudflare runtime                      | `2.0.0-beta.77` with upstream compatibility patches |
-| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.116`                                      |
-| `effect-cf`                                             | `0.44.1`                                            |
-| TypeScript                                              | `7.0.2`                                             |
-| `@effect/tsgo`                                          | `0.45.0`                                            |
-| Node.js                                                 | `22.18+` or `24.11+`                                |
+| Tool                                                    | Repository version                                      |
+| ------------------------------------------------------- | ------------------------------------------------------- |
+| Bun                                                     | `1.4.2`                                                 |
+| Vite+                                                   | `0.3.2`                                                 |
+| Alchemy and its Cloudflare runtime                      | `2.0.0-beta.79`; Alchemy has a repository runtime patch |
+| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.116`                                          |
+| `effect-cf`                                             | `0.44.1`                                                |
+| TypeScript                                              | `7.0.2`                                                 |
+| `@effect/tsgo`                                          | `0.45.0`                                                |
+| Node.js                                                 | `22.18+` or `24.11+`                                    |
 
 Public packages require `effect@^4.0.0-rc.116` as a peer. The exact catalog pin supplies the
 development version. Raise the peer minimum when code needs a newer API.
 Private examples declare Effect as a regular dependency. Adapters depend on the platform and
 SQL implementations they use.
 
-`platform-cloudflare` requires `effect-cf@^0.44.1` and `effect@^4.0.0-rc.116` as host peers
-and uses the exact catalog versions for development. Supply Effect SQL packages compatible with
-rc.116 for `effect-cf`. Consumers provide the shared runtime.
+The native `platform-cloudflare` hosts require `effect-cf@^0.44.1` and `effect@^4.0.0-rc.116`
+and use the exact catalog versions for development. The `effect-cf` peer is optional for
+shared host subpaths and helpers that do not import it. Supply Effect SQL packages compatible
+with rc.116 when using `effect-cf`. The experimental `platform-alchemy-cloudflare` package
+uses the shared hosts with Alchemy instead. Consumers provide the chosen runtime.
 
 Root overrides keep Effect, its Node/browser platforms, shared SQL adapters, and test packages
 on the catalog versions, including dependencies of published consumers.
 The root also installs Alchemy's optional `@effect/platform-bun` peer at the shared Effect
 version so its Bun entry points remain available.
-Vite+ supplies Vitest except in the two Cloudflare packages, whose Workers pool requires a
+Vite+ supplies Vitest except in the Cloudflare packages, whose Workers pool requires a
 direct catalog-pinned Vitest dependency and a Vite task. Run those tasks through `vp run`.
 Operational harnesses under `tooling/*` also use Vite tasks for Miniflare tests.
 
 VitePress uses its own Vite dependency. Keep the root Vite+ core alias required by Vite+;
 do not add a global Vite override.
 
-Alchemy and its Cloudflare runtime advance together. Their published beta.77 packages and
-Distilled rc.9 clients still use Effect APIs renamed in rc.113. The version-specific Bun
-patches backport [Alchemy's compatibility fix](https://github.com/alchemy-run/alchemy/pull/1562)
-and [Distilled's matching fix](https://github.com/alchemy-run/distilled/pull/575), including the
-published JavaScript entry points. The root declares `mime` because the Cloudflare runtime
-imports it without declaring the dependency. Keep these corrections until a published upgrade
-includes them; verify that upgrade with a frozen install and `vp run check:deploy`.
+Alchemy and its Cloudflare runtime advance together. Beta.79 and Distilled rc.12 include the
+Effect API compatibility fixes previously carried here. The remaining Bun patch for
+`alchemy@2.0.0-beta.79` supplies scoped Durable Object construction, native RPC dispatch,
+transactional scheduled events, and runtime entry points needed by the experimental Alchemy host.
+The travel planner also uses its typed Workflow failures and native R2 client. Its runtime and
+newly generated trip apps use Alchemy; the original `platform-cloudflare` remains the `effect-cf` option.
+Failed or interrupted alarm work remains recoverable, and successful handlers acknowledge only
+the event they handled.
+The patch includes published JavaScript and declarations; a compatible peer version alone is
+insufficient. Keep it until an upstream release includes these runtime contracts, then verify
+with a frozen install, `vp run check:deploy`, and the Alchemy host's workerd and restart tests.
 
 ## Current workspace
 
@@ -60,6 +68,7 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | ---------------------------------- | ------------------------------------------------------- |
 | `packages/*`                       | Framework and private PR-review integration packages    |
 | `examples/travel-planner`          | Canonical Cloudflare application, deployed with Alchemy |
+| `examples/alchemy-cloudflare`      | Minimal application using the Alchemy Effect host       |
 | `tooling/runtime-benchmark`        | Deterministic runtime comparisons                       |
 | `tooling/context-continuity-eval`  | Release continuity gates and deployed performance       |
 | `tooling/cloudflare-memory`        | Thread-to-Memory latency and heap measurements          |
@@ -188,14 +197,14 @@ retain a cached preview after a deployment.
 
 ## Releasing to npm
 
-All eleven public packages share one Changesets fixed group and publish to `beta`
+All public packages share one Changesets fixed group and publish to `beta`
 as `X.Y.Z-beta.N`. Keep the group in `.changeset/config.json` aligned with public workspaces.
 The travel planner is a private application with no package version. It does not receive
 changesets, version bumps, changelogs, package tags, or npm releases. Private-package versioning
 and tagging remain disabled in the Changesets configuration.
 Changesets updates internal dependency ranges only when they use `workspace:`. Exact registry
-pins, including the travel planner's published Effect Agent dependencies, stay unchanged during
-versioning. Upgrade those consumers and their import paths separately after publication; otherwise the version task's
+pins stay unchanged during versioning. Upgrade published consumers and their import paths
+separately after publication; otherwise the version task's
 install would request packages that have not been published yet.
 The project is in prerelease mode. Leaving it requires an explicit release decision and
 `vp run changeset pre exit`.

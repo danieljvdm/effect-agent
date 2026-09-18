@@ -16,6 +16,7 @@ import {
   TripApp,
   type PlannerSettings,
 } from "../src/domain.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 import { ownerEmail } from "./fixtures/identity.ts";
 
 const token = "editor-worker-fixture";
@@ -52,6 +53,7 @@ const makeRuntime = () =>
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/editor-worker.ts")],
     bundle: true,
     write: false,

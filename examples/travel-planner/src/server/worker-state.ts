@@ -1,4 +1,4 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
 import { Effect, Option, Schema, Stream } from "effect";
 import { AgentUpdates } from "effect-agent";
 import { ThreadId } from "effect-agent/identifiers";
@@ -9,12 +9,12 @@ import { SubmissionLedger, SubmissionLookupByKey } from "effect-agent/submission
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { WorkerRef } from "effect-agent/worker";
 import { WorkerHostAuthorizer } from "effect-agent/worker-host";
-import { WorkerEnvironment } from "effect-cf";
 
 import { PlannerError, PlannerWorkerDetail, PlannerWorkerRequest } from "../domain.ts";
 import { ScoutFindings } from "../research/contracts.ts";
 import { ResearchScout, updatingResearchScout } from "../research/scout.ts";
 import { plannerActivity } from "./activity.ts";
+import { plannerEnvironment } from "./alchemy.ts";
 import { readDiagnostics } from "./diagnostics.ts";
 import { ProgressStore } from "./progress.ts";
 import { ownerOfThread } from "./tenancy.ts";
@@ -100,7 +100,7 @@ export const plannerWorker = Effect.fn("plannerWorker")(
       refused: delivery?.status === "refused",
     });
 
-    const env = yield* WorkerEnvironment;
+    const env = yield* plannerEnvironment;
 
     const reply = yield* Effect.tryPromise({
       try: () => env.ACCOUNT_THREADS.getByName(worker.threadId).plannerWorkerStatus(request),

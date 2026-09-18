@@ -13,7 +13,12 @@ It uses Cloudflare:
   **Dynamic Workers** to serve them.
 - **Email Sending** for email sign-in, alongside GitHub OAuth.
 
-The app consumes published Effect Agent packages and uses Effect Atom for client state.
+The app uses the experimental Alchemy Cloudflare runtime and Effect Atom
+for client state. This draft exercises the unreleased host through a coherent set of workspace
+packages; restore exact published dependencies before release deployment. Alchemy beta.79
+also requires the repository's runtime patch. Worker, Durable Object, Workflow, and R2
+services use Alchemy; container operations use the Cloudflare Sandbox SDK. Generated trip
+apps use Alchemy too. The production build rejects `effect-cf` runtime imports.
 [alchemy.run.ts](alchemy.run.ts) defines the Cloudflare resources and required configuration.
 
 Authentication uses matching versions of `@yielded/auth` and `@yielded/auth-persistence`.
@@ -63,8 +68,18 @@ active work on the worker; an older pending delivery is not reconstructed as a n
 Activity is a recent window, not a complete audit log. Reads never admit, recover, or replay
 work. Diagnostics retain the existing redaction boundary.
 
-These queries use the exact published framework dependencies in this example. They do not
+Inspect the delivery status returned by a worker start. Pending means retained for retry;
+only a destination receipt confirms admission, and neither means execution has finished.
+The app's worker limit returns a definite `worker-capacity` refusal, which remains refused
+after restart instead of silently starting extra work when capacity opens.
+
+Research delegation and trip publication use the latest canonical user input visible to the
+specific model turn. A joined worker report cannot inherit an earlier user's authority, and a
+later user request cannot authorize a call already declared. Publication still requires the
+explicit grant for the selected trip and revision.
+
+These queries use the same framework contracts under the Alchemy host. They do not
 change the framework's general `Subagent.inspect` or `Subagent.observe` contracts. Any future
-framework optimization belongs in a separate library PR, followed by publication and an exact
-consumer dependency upgrade before integration. Local Miniflare checks establish behavior and
+framework optimization belongs in a separate library PR. Outside this runtime preview,
+integrate it after publication with an exact dependency upgrade. Local Miniflare checks establish behavior and
 work budgets; deployed latency requires a separately authorized deployment and measurement.

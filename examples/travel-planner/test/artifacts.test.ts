@@ -3,6 +3,7 @@ import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { expect, it } from "vite-plus/test";
 
 import type { Trip } from "../src/domain.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 // Captured from the empty sample repository's real Artifacts Git discovery.
 const discovery =
@@ -34,6 +35,7 @@ const trip: Trip = {
 
 it("uses native repository handles for Git discovery, publication, clone negotiation, and safe redirects", async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     stdin: {
       resolveDir: import.meta.dirname,
       loader: "ts",

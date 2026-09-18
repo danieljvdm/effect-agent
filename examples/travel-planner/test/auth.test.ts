@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { OAuthSignInAuthorization, OAuthRegistrationRequired } from "@yielded/auth/OAuth";
 import { ProofRequestReceipt, ProofContinuation } from "@yielded/auth/Proofs";
+import type { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { type Effect, Redacted, Schema } from "effect";
-import type { WorkerEnvironment } from "effect-cf";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
@@ -15,6 +15,7 @@ import { GithubRejectionReason } from "../src/auth/oauth-diagnostics";
 import type { authenticate } from "../src/auth/worker";
 import type { PlannerSettings } from "../src/domain";
 import { defaultPlannerSettings } from "../src/domain";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 let mf: Miniflare;
 let directory: string;
@@ -26,6 +27,7 @@ const githubIssuer = "https://github.com/login/oauth";
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/auth-worker.ts")],
     bundle: true,
     write: false,
@@ -49,11 +51,21 @@ beforeAll(async () => {
       modulesRoot: "/",
       compatibilityDate: "2026-07-01",
       compatibilityFlags: ["nodejs_compat"],
+      bindings: {
+        AUTH_ORIGIN: "https://planner.test",
+        AUTH_BINDING_KEY: Buffer.alloc(32, 42).toString("base64url"),
+        AUTH_PROOF_KEY: Buffer.alloc(32, 42).toString("base64url"),
+        AUTH_TRANSACTION_KEY: Buffer.alloc(32, 42).toString("base64url"),
+        AUTH_GITHUB_CLIENT_ID: "fixture-github",
+        AUTH_GITHUB_CLIENT_SECRET: "fixture-github-secret",
+        AUTH_EMAIL_FROM: "signin@example.invalid",
+      },
       r2Buckets: ["APP_BUILDS"],
       serviceBindings: { ASSETS: () => new Response("Fixture asset") },
       durableObjects: {
         ACCOUNT_THREADS: { className: "TravelPlannerThread", useSQLite: true },
         AUTH: { className: "AuthFixture", useSQLite: true },
+        AUTH_NATIVE: { className: "PlannerAuth", useSQLite: true },
         STORAGE: { className: "AuthStorageFixture", useSQLite: true },
       },
       durableObjectsPersist: directory,
@@ -89,7 +101,7 @@ afterAll(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
-const makeClient = () => {
+const makeClient = (prefix = "") => {
   const cookies = new Map<string, string>();
 
   const request = async (
@@ -100,7 +112,7 @@ const makeClient = () => {
 
     headers.set("cookie", [...cookies].map(([k, v]) => `${k}=${v}`).join("; "));
 
-    const response = await mf.dispatchFetch(`https://planner.test${path}`, {
+    const response = await mf.dispatchFetch(`https://planner.test${prefix}${path}`, {
       ...init,
       redirect: "manual",
       headers: Object.fromEntries(headers),
@@ -471,6 +483,41 @@ const githubStart = async (client: ReturnType<typeof makeClient>) => {
     },
   };
 };
+
+it("registers, authorizes and revokes a session through the production Alchemy auth object", async () => {
+  const client = makeClient("/_fixture/native");
+
+  expect((await client.request("/_internal/session")).status).toBe(401);
+  const first = await githubStart(client);
+
+  const registration = Schema.decodeUnknownSync(OAuthRegistrationRequired)(
+    await client.call("completeSignIn", first),
+  );
+
+  expect(
+    await client.call("register", {
+      flowId: first.flowId,
+      commandId: "alchemy-auth-register",
+      reference: registration.reference,
+      registration: { displayName: "Alchemy traveler" },
+    }),
+  ).toMatchObject({ _tag: "RegistrationAccepted" });
+  expect(await client.call("getSession")).toBeNull();
+  expect(await client.call("completeSignIn", await githubStart(client))).toMatchObject({
+    completion: { _tag: "Authenticated" },
+  });
+
+  const session = Schema.decodeUnknownSync(
+    Schema.Struct({ subjectId: Schema.String, displayName: Schema.String }),
+  )(await (await client.request("/_internal/session")).json());
+
+  expect(session.displayName).toBe("River Traveler");
+  expect(await client.call("getSession")).toMatchObject({ subjectId: session.subjectId });
+  expect((await makeClient("/_fixture/native").request("/_internal/session")).status).toBe(401);
+  await client.call("signOut", {});
+  expect((await client.request("/_internal/session")).status).toBe(401);
+  expect(await client.call("getSession")).toBeNull();
+});
 
 it("rejects invalid and replayed GitHub callbacks, and handles denial without exchanging a token", async () => {
   const client = makeClient();

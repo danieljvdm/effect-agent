@@ -4,7 +4,7 @@ import {
 } from "@effect-agent/storage-cloudflare/port-routing";
 import { Effect, Layer } from "effect";
 
-import { callThreadObject, ThreadObjectNamespace } from "../CloudflareBindings.ts";
+import { callThreadObject, ThreadObjectNamespace } from "../CloudflareHostBindings.ts";
 
 /**
  * `ThreadPortTransport` over native Durable Object JS RPC (decision D-P6-3): one

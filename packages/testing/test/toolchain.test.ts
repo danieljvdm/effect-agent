@@ -99,6 +99,7 @@ const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).repla
 const packageNames = [
   "ai-decision",
   "effect-agent",
+  "platform-alchemy-cloudflare",
   "platform-cloudflare",
   "platform-node",
   "pr-review",
@@ -115,7 +116,7 @@ const privatePackageNames = ["pr-review-action"] as const;
 /** Provider bindings belong to leaf applications, never framework packages. */
 const providerConsumingPackages = new Set<string>();
 
-const exampleNames = ["travel-planner"];
+const exampleNames = ["alchemy-cloudflare", "travel-planner"];
 
 const toolingNames = [
   "context-continuity-eval",
@@ -129,6 +130,7 @@ const toolingNames = [
 const effectTestPackageNames = [
   "ai-decision",
   "effect-agent",
+  "platform-alchemy-cloudflare",
   "platform-cloudflare",
   "platform-node",
   "pr-review",
@@ -143,6 +145,7 @@ const effectTestPackageNames = [
 const productionPackageNames = [
   "ai-decision",
   "effect-agent",
+  "platform-alchemy-cloudflare",
   "platform-cloudflare",
   "platform-node",
   "pr-review",
@@ -153,11 +156,15 @@ const productionPackageNames = [
   "workflow",
 ] as const;
 
-// Only these two packages may carry Cloudflare dependencies. The shared
+// Only these packages may carry Cloudflare dependencies. The shared
 // allowance is types plus the in-workerd test harness; provider SDKs are
 // admitted separately to the outward adapter that owns them. Wrangler and
 // application scaffolds stay banned everywhere.
-const cloudflarePackageNames: ReadonlyArray<string> = ["platform-cloudflare", "storage-cloudflare"];
+const cloudflarePackageNames: ReadonlyArray<string> = [
+  "platform-alchemy-cloudflare",
+  "platform-cloudflare",
+  "storage-cloudflare",
+];
 
 const allowedCloudflareToolchainDependencies = new Set([
   "@cloudflare/vitest-pool-workers",
@@ -167,7 +174,7 @@ const allowedCloudflareToolchainDependencies = new Set([
 const platformCloudflareProviderDependencies = new Set(["@cloudflare/puppeteer"]);
 
 // Phase 6 exit gate "Agent/core/engine packages import no Cloudflare platform
-// types", audited at the manifest layer: only the two Cloudflare packages may
+// types", audited at the manifest layer: only the Cloudflare packages may
 // depend on @cloudflare/* or the Durable Object SqlClient, in ANY dependency
 // section. Everything inward of them must stay platform-clean so the semantic
 // coordinator never gains a conditional platform branch (deployment spec §3.1).
@@ -210,6 +217,12 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
 const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
   "ai-decision": [],
   "effect-agent": [],
+  "platform-alchemy-cloudflare": [
+    "effect-agent",
+    "platform-cloudflare",
+    "storage-cloudflare",
+    "testing",
+  ],
   "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
   "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
   "pr-review": ["effect-agent"],
@@ -1591,9 +1604,9 @@ esac
         ).toEqual([]);
       }
 
-      // The confinement side: every workspace consumer of the Durable Object
-      // SqlClient is one of the two Cloudflare packages, catalog-pinned.
-      for (const packageName of cloudflarePackageNames) {
+      // The native storage owners depend directly on the catalog-pinned SqlClient;
+      // the Alchemy host reuses their stores through the shared host modules.
+      for (const packageName of ["platform-cloudflare", "storage-cloudflare"]) {
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
@@ -1680,14 +1693,14 @@ esac
       const prReviewDependencies = manifestDependencies(prReviewAction);
 
       expect(demo.name).toBe("@effect-agent/example-travel-planner");
-      expect(demo.dependencies?.["@effect-agent/platform-cloudflare"]).toMatch(
-        /^\d+\.\d+\.\d+-beta\.\d+$/,
-      );
+      expect(demo.dependencies?.["@effect-agent/platform-alchemy-cloudflare"]).toBe("workspace:*");
       expect(demo.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(demo.dependencies?.["@effect/atom-react"]).toBe("catalog:");
       expect(demo.dependencies?.effect).toBe("catalog:");
       expect(root.catalog?.["@effect/ai-openai"]).toBe(root.catalog?.effect);
       expect(root.catalog?.["@effect/ai-anthropic"]).toBe(root.catalog?.effect);
+      expect(demoDependencies).not.toContain("@effect-agent/platform-cloudflare");
+      expect(demoDependencies).not.toContain("effect-cf");
       expect(demoDependencies).not.toContain("@effect-agent/platform-node");
       expect(demoDependencies).not.toContain("@effect-agent/sandbox-local");
       // The GitHub channel owns the concrete provider and platform edges;
@@ -1732,7 +1745,7 @@ esac
     }),
   );
 
-  it.effect("resolves the demo and its transitive framework dependencies from npm", () =>
+  it.effect("resolves the Alchemy demo preview to one coherent workspace framework", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const pending = [`${repositoryRoot}/examples/travel-planner/package.json`];
@@ -1747,17 +1760,19 @@ esac
         const resolve = createRequire(manifestPath).resolve;
 
         for (const [name, version] of Object.entries(manifest.dependencies ?? {})) {
-          if (!name.startsWith("@effect-agent/")) continue;
-          expect(version).toMatch(/^\d+\.\d+\.\d+-beta\.\d+$/);
+          if (name !== "effect-agent" && !name.startsWith("@effect-agent/")) continue;
+          // The unreleased Alchemy host and its application must share service identities
+          // and storage contracts. Restore the published-consumer check when it is released.
+          expect(version).toBe("workspace:*");
           const entry = resolve(name);
+          const directory = name.replace(/^@effect-agent\//, "");
+          const packageRoot = path.join(repositoryRoot, "packages", directory);
 
-          expect(entry).toContain("/node_modules/");
-          expect(entry).toMatch(/\/dist\/index\.mjs$/);
-          const dependencyPath = path.resolve(path.dirname(entry), "../package.json");
+          expect(entry).toBe(path.join(packageRoot, "src", "index.ts"));
+          const dependencyPath = path.join(packageRoot, "package.json");
           const dependency = yield* readManifest(dependencyPath);
 
           expect(dependency.name).toBe(name);
-          expect(dependency.version).toBe(version);
           pending.push(dependencyPath);
         }
       }
@@ -1826,15 +1841,10 @@ esac
 
           // No production package ever SHIPS depending on the testing package.
           expect(Object.keys(manifest.dependencies ?? {})).not.toContain("@effect-agent/testing");
-          // Exactly two packages may consume it as a devDependency: platform-cloudflare's
-          // DC Travel Planner equivalence suite must assemble the SAME fixtures the DN
-          // suite runs (P6 plan §6), and storage-cloudflare's in-workerd certification
-          // runner executes `certifyDurableAdapters` against the real Durable Object
-          // adapters (P7 WP2; the memory/SQLite runners live inside packages/testing
-          // because vp's task graph rejects the storage-* → testing dev-edge cycle).
-          // Both edges are dev-only and test-only; every other production package stays
-          // clean in every dependency section.
-          if (packageName !== "platform-cloudflare" && packageName !== "storage-cloudflare") {
+          // Cloudflare hosts and stores reuse the shared deterministic fixtures and
+          // adapter certification runner inside workerd. These edges remain dev-only;
+          // every other production package stays clean in every dependency section.
+          if (!cloudflarePackageNames.includes(packageName)) {
             expect(manifestDependencies(manifest)).not.toContain("@effect-agent/testing");
           }
         }

@@ -1,4 +1,4 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
 import { OpenAiTool } from "@effect/ai-openai";
 import { Effect } from "effect";
 import { Subagent, Agent } from "effect-agent";

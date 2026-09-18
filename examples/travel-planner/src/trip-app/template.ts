@@ -23,7 +23,14 @@ export const TRIP_APP_TEMPLATE_FILES: Readonly<Record<string, string>> = {
     "vite": "npm:@voidzero-dev/vite-plus-core@0.3.2",
     "vite-plus": "0.3.2"
   },
-  "packageManager": "bun@1.4.2"
+  "overrides": {
+    "@effect/platform-node": "4.0.0-rc.116",
+    "effect": "4.0.0-rc.116"
+  },
+  "packageManager": "bun@1.4.2",
+  "patchedDependencies": {
+    "alchemy@2.0.0-beta.79": "patches/alchemy@2.0.0-beta.79.patch"
+  }
 }
 `,
   "tsconfig.json": `{
@@ -36,6 +43,7 @@ export const TRIP_APP_TEMPLATE_FILES: Readonly<Record<string, string>> = {
     "noEmit": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
+    "types": ["vite/client", "@cloudflare/workers-types"],
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
   "include": ["packages", "vite.config.ts", "vite.server.config.ts"]
@@ -61,14 +69,37 @@ export default defineConfig({
 `,
   "vite.server.config.ts": `import { defineConfig } from "vite-plus";
 export default defineConfig({
+  define: { "globalThis.__ALCHEMY_RUNTIME__": "true" },
   ssr: { noExternal: true, external: ["cloudflare:workers", "cloudflare:workflows"] },
   build: {
     ssr: "packages/server/src/index.ts",
     outDir: "dist/server",
     emptyOutDir: true,
-    rolldownOptions: { external: ["cloudflare:workers", "cloudflare:workflows", "node:async_hooks"], output: { entryFileNames: "index.js" } },
+    rolldownOptions: {
+      platform: "browser",
+      external: [/^cloudflare:/, /^node:/],
+      output: { entryFileNames: "index.js", codeSplitting: false },
+    },
   },
 });
+`,
+  // Generated apps use only the Worker runtime; keep its upstream export-map fix with their source.
+  "patches/alchemy@2.0.0-beta.79.patch": `diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -187,6 +187,12 @@
+       "bun": "./src/Cloudflare/*/index.ts",
+       "worker": "./src/Cloudflare/*/index.ts",
+       "import": "./lib/Cloudflare/*/index.js"
++    },
++    "./Cloudflare/Workers/*": {
++      "types": "./lib/Cloudflare/Workers/*.d.ts",
++      "bun": "./src/Cloudflare/Workers/*.ts",
++      "worker": "./src/Cloudflare/Workers/*.ts",
++      "import": "./lib/Cloudflare/Workers/*.js"
+     },
+     "./Drizzle": {
+       "types": "./lib/Drizzle/index.d.ts",
 `,
   "packages/contracts/package.json": `{
   "name": "@trip/contracts",
@@ -87,9 +118,10 @@ export default defineConfig({
   "private": true,
   "type": "module",
   "dependencies": {
+    "@effect/platform-node": "4.0.0-rc.116",
     "@trip/contracts": "workspace:*",
-    "effect": "4.0.0-rc.116",
-    "effect-cf": "0.43.0"
+    "alchemy": "2.0.0-beta.79",
+    "effect": "4.0.0-rc.116"
   }
 }
 `,
@@ -154,42 +186,59 @@ export const TripApi = HttpApi.make("trip-app").add(
   ),
 );
 `,
-  "packages/server/src/index.ts": `import { Effect, Layer, Schema } from "effect";
-import { ServiceBinding, Worker } from "effect-cf";
-import { HttpRouter, HttpServer } from "effect/unstable/http";
+  "packages/server/src/index.ts": `import { makeWorkerBridge } from "alchemy/Cloudflare/Bridge";
+import { Request as WorkerRequest } from "alchemy/Cloudflare/Workers/Request";
+import { Worker } from "alchemy/Cloudflare/Workers/Worker";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { Effect, Layer, Schema } from "effect";
+import { HttpRouter, HttpServer, HttpServerResponse } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { Trip, TripApi, TripUnavailable } from "@trip/contracts";
 
-class TripData extends ServiceBinding.Service<TripData>()("TripData", { binding: "TRIP_DATA" }) {}
 const unavailable = () =>
   new TripUnavailable({ message: "This trip is temporarily unavailable. Please try again." });
 export const readTrip = Effect.gen(function* () {
-  const service = yield* TripData;
+  const tripData: Fetcher = (yield* WorkerEnvironment).TRIP_DATA;
+  const controller = yield* Effect.acquireRelease(
+    Effect.sync(() => new AbortController()),
+    (controller) => Effect.sync(() => controller.abort()),
+  );
   // The host fixes this binding to one authorized trip; no caller IDs or cookies are forwarded.
-  const response = yield* service.fetch("https://trip-data/api/trip").pipe(Effect.mapError(unavailable));
+  const response = yield* Effect.tryPromise({
+    try: () => tripData.fetch("https://trip-data/api/trip", { signal: controller.signal }),
+    catch: unavailable,
+  });
   if (!response.ok) return yield* unavailable();
   const json = yield* Effect.tryPromise({ try: () => response.json(), catch: unavailable });
   return yield* Schema.decodeUnknownEffect(Trip)(json).pipe(Effect.mapError(unavailable));
-});
-const handlers = HttpApiBuilder.group(TripApi, "trip", Effect.fn(function* (group) {
-  const service = yield* TripData;
-  return group.handle("get", () => readTrip.pipe(Effect.provideService(TripData, service)));
-})).pipe(Layer.provide(TripData.layer));
+}).pipe(Effect.scoped);
+const handlers = HttpApiBuilder.group(TripApi, "trip", (group) =>
+  group.handle("get", () => readTrip),
+);
 const routes = HttpApiBuilder.layer(TripApi).pipe(
   Layer.provide(handlers),
   Layer.provide(HttpServer.layerServices),
 );
-const application = routes.pipe(Layer.provideMerge(HttpRouter.layer));
 
-// The trusted host serves dist/web and routes /api/* to this Effect Worker.
-export default Worker.make(application, {
-  fetch: Effect.gen(function* () {
-    const request = yield* Worker.NativeRequest;
-    const url = new URL(request.url);
-    if (url.pathname !== "/api/trip" || url.search !== "") return new Response("Not found", { status: 404 });
-    const router = yield* HttpRouter.HttpRouter;
-    return yield* router.asHttpEffect();
+// The trusted host serves dist/web and routes /api/* to this Alchemy Effect Worker.
+const entrypoint = Worker(
+  "TripApp",
+  { main: import.meta.url },
+  Effect.succeed({
+    fetch: Effect.gen(function* () {
+      const request = yield* WorkerRequest;
+      const url = new URL(request.url);
+      if (url.pathname !== "/api/trip" || url.search !== "")
+        return HttpServerResponse.text("Not found", { status: 404 });
+      const handle = yield* HttpRouter.toHttpEffect(routes);
+      return yield* handle;
+    }),
   }),
+);
+export default makeWorkerBridge(WorkerEntrypoint, {
+  entrypoint,
+  stack: { name: "elsewhere-trip", stage: "runtime" },
 });
 `,
   "packages/web/index.html": `<!doctype html>
@@ -495,6 +544,8 @@ This is real source: change packages/web/src/App.tsx for layouts, styles.css for
 packages/server/src/index.ts for server behavior, and packages/contracts/src/index.ts for shared schemas/API.
 Run vp install, vp check, and vp run build. Bun 1.4.2 and Vite+ 0.3.2 are pinned.
 The web output is dist/web; the bundled Worker entry is dist/server/index.js.
+The Worker uses Alchemy's Effect runtime. Keep the bundled export-map patch until Alchemy
+publishes those runtime entry points; its Node platform peer is required by the native bridge.
 vp dev previews the web UI; it requires the host's same-origin /api/trip route to load trip data.
 
 GET /api/trip returns the shared Trip schema. Its server reads only the host-provided TRIP_DATA.fetch

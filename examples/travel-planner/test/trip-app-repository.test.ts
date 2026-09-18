@@ -9,6 +9,7 @@ import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
 
 import { type TripApp, type PlannerError } from "../src/domain.ts";
 import type { AppRepository } from "../src/trip-app/repository.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 const app: TripApp = {
   id: "a".repeat(32),
@@ -46,6 +47,7 @@ beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "trip-app-repository-"));
 
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     stdin: {
       resolveDir: import.meta.dirname,
       loader: "ts",

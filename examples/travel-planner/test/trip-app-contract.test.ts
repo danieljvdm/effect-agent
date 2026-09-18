@@ -1,4 +1,4 @@
-import type { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import type { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
 import { type Crypto, Effect, Schema } from "effect";
 import { AgentRuntime, ThreadHistory } from "effect-agent";
 import type { WorkerReportPreparationFailure } from "effect-agent/subagent-host";

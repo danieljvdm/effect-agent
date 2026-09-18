@@ -12,7 +12,7 @@ import {
 } from "effect-agent/schedule";
 import { type PreparedInput } from "effect-agent/subscription";
 
-import { CloudflareThreadClient, type ThreadClientError } from "../CloudflareThreadClient.ts";
+import { CloudflareThreadClient, type ThreadClientError } from "../CloudflareThreadClientHost.ts";
 
 const passthroughAgent = (agentId: AgentId): DurableSubmitAgent<typeof PersistedJson> => ({
   definition: { id: agentId, input: PersistedJson },

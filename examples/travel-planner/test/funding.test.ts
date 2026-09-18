@@ -6,6 +6,8 @@ import { build } from "esbuild";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
+
 const admin = "00000000-0000-0000-0000-000000000001";
 const email = "00000000-0000-0000-0000-000000000002";
 const github = "00000000-0000-0000-0000-000000000003";
@@ -33,6 +35,7 @@ const start = () =>
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/funding-worker.ts")],
     bundle: true,
     write: false,
