@@ -528,7 +528,7 @@ fixed cleanup warning, never provider diagnostics or secret-bearing page data.
 ### Durable human takeover
 
 Use the host-only `BrowserRunProtectedHost` from `@effect-agent/platform-cloudflare/protected-browser`
-when a human must continue the **same** protected page. Compose `browserRunProtectedHostLayer()`
+when a workflow pause or human takeover must retain the **same** protected page. Compose `browserRunProtectedHostLayer()`
 with `browserRunProtectedBindingLayer`, `BrowserRunSessionLifecycle`, and `BrowserCrypto.layer`.
 Its `open(policy)` and `resume(checkpoint)` require an invocation-specific `BrowserCredentialAccess`
 and `Scope`. Keep the returned `session.handle` as the only agent capability.
@@ -537,9 +537,11 @@ The application owns controller generations, authorized human recipients, operat
 checkpoint integrity, and expiry cleanup. These are required host responsibilities:
 
 1. Fence the agent and call `session.suspend`. Atomically persist its schema-encoded
-   `BrowserRunProtectedCheckpoint` with the pending human-control request and the host’s own
+   `BrowserRunProtectedCheckpoint` with the workflow continuation and the host’s own
    credential exposure ledger. Call `session.detach` only after that durable commit.
-2. The receiving host calls `resume(checkpoint)`. It remains quiesced. An authorized human’s
+2. The receiving host calls `resume(checkpoint)`. It remains quiesced. For an information pause,
+   restore the current worker’s authority and call `returnControl`, then `handle.observe` before
+   acting. This does not start or query a provider handoff. An authorized human’s
    takeover calls `handoff(request)` and persists the updated checkpoint, which now includes a
    handoff ID. Only then expose a short-lived `getLiveView(request)` URL to that specific human.
 3. Query `getHandoffState` and require completion before committing Return. If the host needs
@@ -547,8 +549,8 @@ checkpoint integrity, and expiry cleanup. These are required host responsibiliti
    provider’s current top origin after that handoff completes and leaves agent tools paused.
    Transfer the latest checkpoint and original credential exposure ledger to the continuing worker under a new
    controller generation. Detach the old attachment before resuming another.
-4. Resume with the current worker’s credential authority and call `returnControl`. The provider
-   must report the same completed handoff. The host’s `observation` hook must approve current
+4. Resume with the current worker’s credential authority and call `returnControl`. For a recorded
+   human handoff, the provider must report that same handoff completed. The host’s `observation` hook must approve current
    origins; it receives `humanExposure` and `humanOrigins` captured before human takeover, even
    when no vault credential was used. The agent must `observe` again before any other operation.
 
@@ -568,7 +570,7 @@ ordinary uncertain browser mutations remain non-replayable.
 Hosted takeover requires `Unrestricted` network policy because attachment-local interception
 cannot enforce `ExactHosts` while detached. Current origin-specific credential and observation
 grants still apply. The original elapsed deadline includes human time; Cloudflare’s shorter idle
-expiry may end the session first. The host must reconcile expiry and perform exact-session cleanup
+expiry may end the session first. Workflow pauses retain these same deadlines. The host must reconcile expiry and perform exact-session cleanup
 with `closeSession`. This API does not add popup, wallet, passkey, or 3DS automation support.
 
 ## Limits, cleanup, and network boundaries

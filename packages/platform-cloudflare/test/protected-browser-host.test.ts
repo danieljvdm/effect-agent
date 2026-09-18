@@ -249,8 +249,9 @@ const fixture = () => {
 };
 
 it.effect(
-  "suspends, transfers and resumes the exact protected page without exposing credentials or reviving refs",
+  "resumes the same protected page across information pauses and human Return without reviving refs",
   () => {
+    // Regression: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-45
     const f = fixture();
 
     return Effect.gen(function* () {
@@ -293,9 +294,34 @@ it.effect(
       expect(f.closed()).toBe(false);
       const checkpoint = yield* Schema.decodeEffect(BrowserRunProtectedCheckpoint)(first.encoded);
 
-      const human = yield* Effect.scoped(
+      const waiting = yield* Effect.scoped(
         Effect.gen(function* () {
           const session = yield* host.resume(checkpoint);
+
+          yield* session.returnControl;
+          expect(f.commands).toEqual([]);
+          expect((yield* session.handle.click({ ref: first.ref }).pipe(Effect.flip)).reason).toBe(
+            "stale-reference",
+          );
+          const observation = yield* session.handle.observe;
+
+          expect(observation.observation).toBe("approved-after-exposure");
+          yield* session.handle.click({ ref: observation.controls[1]!.ref });
+          const next = yield* session.suspend;
+
+          expect(next.protected.actions).toBeGreaterThan(checkpoint.protected.actions);
+          expect(next.protected.startedAt).toBe(checkpoint.protected.startedAt);
+          expect(next.protected.humanExposure).toBe(false);
+          expect(next.protected.exposures).toEqual([target]);
+          yield* session.detach;
+
+          return next;
+        }),
+      );
+
+      const human = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* host.resume(waiting);
           const receipt = yield* session.handoff(takeover);
 
           expect(receipt.protected.humanExposure).toBe(true);
@@ -333,6 +359,7 @@ it.effect(
       expect(f.restored.map((entry) => Redacted.value(entry.targetId))).toEqual([
         "exact-page",
         "exact-page",
+        "exact-page",
       ]);
       expect(f.observations.at(-1)).toMatchObject({
         humanExposure: true,
@@ -361,7 +388,7 @@ it.effect("preserves exhausted action budgets and elapsed deadlines across host 
         const session = yield* host.open({ ...policy, maxActions: 1 });
 
         yield* session.handle.observe;
-        const checkpoint = yield* session.handoff(takeover);
+        const checkpoint = yield* session.suspend;
 
         yield* session.detach;
 
@@ -369,7 +396,6 @@ it.effect("preserves exhausted action budgets and elapsed deadlines across host 
       }),
     );
 
-    f.complete();
     yield* Effect.scoped(
       Effect.gen(function* () {
         const session = yield* host.resume(checkpoint);
