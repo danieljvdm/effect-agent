@@ -1,15 +1,13 @@
 import { DecisionModel, type DecisionSchema } from "@effect-agent/ai-decision";
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
 import { Console, Effect, Layer, Schema, Stream } from "effect";
-import { Agent, AgentRuntime, InMemory } from "effect-agent";
+import { Agent, AgentRuntime, InMemory, SelectiveCompactor } from "effect-agent";
 import { CLEARED_TOOL_RESULT, estimatePromptTokens } from "effect-agent/compaction";
 import { ContextCompactor } from "effect-agent/context-compactor";
 import type { ModelCallUsage } from "effect-agent/usage";
 import { LanguageModel, Model, Prompt, Toolkit } from "effect/unstable/ai";
 import { Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
-
-import { layerSelective } from "./selective-compactor.ts";
 
 export const receiptEvidence =
   "The booking receipt is RECEIPT-42. Preserve it for the final answer. " + "r".repeat(800);
@@ -161,7 +159,7 @@ export const runProbe = Effect.fn("SelectiveSpike.runProbe")(function* (
   const compactor =
     strategy === "age"
       ? ContextCompactor.layer
-      : layerSelective().pipe(
+      : SelectiveCompactor.layer().pipe(
           Layer.provide(ContextCompactor.layerRollover),
           Layer.provide(observedDecisionLayer),
         );

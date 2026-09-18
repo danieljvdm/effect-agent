@@ -133,6 +133,11 @@ Use the `ContextCompactor` service to customize compaction and `AgentPolicy.runS
 messages. Token estimators and the `ContextCompactionState` type remain public for compactor
 implementations.
 
+`SelectiveCompactor.layer` (`effect-agent/selective-compactor`) wraps that service with
+[selective result pruning](../guide/context-management#selective-pruning). Supply a provider-neutral
+Decision Model and an existing summary or rollover fallback; Jev is configured through
+`@effect-agent/ai-typesafe`.
+
 ## Find a capability {#capability-inventory}
 
 | Need                                       | Guide                                                             | Your application supplies                                                |

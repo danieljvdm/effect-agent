@@ -46,6 +46,7 @@ export * as RunHooks from "./capabilities/RunHooks.ts";
 export * as RunOptions from "./engine/RunOptions.ts";
 export * as RunPolicyUsage from "./core/RunPolicyUsage.ts";
 export * as Sandbox from "./sandbox/Sandbox.ts";
+export * as SelectiveCompactor from "./capabilities/SelectiveCompactor.ts";
 export * as SemanticMemory from "./capabilities/SemanticMemory.ts";
 export * as SemanticMemoryIndex from "./core/SemanticMemoryIndex.ts";
 export * as SemanticMemoryRevalidation from "./core/SemanticMemoryRevalidation.ts";

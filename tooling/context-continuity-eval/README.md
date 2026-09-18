@@ -130,12 +130,12 @@ A partial report, provider outage, exhausted budget, missing credential, unsettl
 failed assertion is a failed gate. Pricing is an estimate, not an invoice. There are no inference
 retries or model fallbacks; server-side conversation state and automatic truncation are disabled.
 
-## Selective pruning spike
+## Selective pruning evaluation
 
-`src/selective-compactor.ts` supplies an experimental `ContextCompactor` Layer that asks the
-existing `DecisionModel` which old result bodies remain relevant. The engine clears only selected
-bodies; calls, retained evidence, and canonical history remain intact. Supply another
-`ContextCompactor` as its summary or rollover fallback.
+The harness consumes the public `SelectiveCompactor.layer` from `effect-agent`. It asks a supplied
+`DecisionModel` which old result bodies remain relevant, then delegates to the supplied
+`ContextCompactor` if pruning cannot fit. Calls, retained evidence, and canonical history remain
+intact. See the [consumer setup](../../docs/guide/context-management.md#selective-pruning).
 
 Start with the offline wiring probe:
 

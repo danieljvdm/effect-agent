@@ -1,15 +1,20 @@
-/** Experimental result-body selection. Jev is supplied through the DecisionModel Layer. */
+/**
+ * Selective result-body pruning through a provider-neutral DecisionModel.
+ *
+ * @since 0.1.0
+ */
 import { DecisionModel, DecisionQuery } from "@effect-agent/ai-decision";
 import { Effect, Layer, Schema, Stream } from "effect";
-import { CLEARED_TOOL_RESULT, estimatePromptTokens } from "effect-agent/compaction";
+import { Prompt } from "effect/unstable/ai";
+
+import { CLEARED_TOOL_RESULT, estimatePromptTokens } from "../engine/Compaction.ts";
 import {
   CompactionError,
   ContextCompactor,
   type CompactionDecision,
   type CompactionRequest,
   type ToolResultSelection,
-} from "effect-agent/context-compactor";
-import { Prompt } from "effect/unstable/ai";
+} from "../engine/ContextCompactor.ts";
 
 const Candidate = Schema.Struct({
   id: Schema.NonEmptyString,
@@ -22,7 +27,12 @@ const Candidate = Schema.Struct({
   excerpt: Schema.String.check(Schema.isMaxLength(800)),
 });
 
-/** Input is bounded independently of the agent's model context capacity. */
+/**
+ * Bounded evidence submitted to the DecisionModel. Excerpts may omit relevant evidence.
+ *
+ * @category schemas
+ * @since 0.1.0
+ */
 export const SelectionState = Schema.Struct({
   instructions: Schema.String,
   task: Schema.String.check(Schema.isMaxLength(4_000)),
@@ -162,17 +172,35 @@ const selectionInput = Effect.fn("SelectiveCompactor.selectionInput")(function* 
 });
 
 /**
- * One bounded decision request per pressure pass. Missing/invalid responses and timeout fail
- * typed without pruning; defects and interruption propagate. No retry or background fiber.
- * A replacement fallback is supplied through ContextCompactor (normally layerRollover).
+ * Application-owned pruning policy. Unscored results are not selected for removal.
+ *
+ * @category models
+ * @since 0.1.0
  */
-export const layerSelective = (
-  options: {
-    /** Drop only below this keep probability; default 0.1 is deliberately conservative. */
-    readonly dropBelow?: number;
-    readonly pinnedTools?: ReadonlyArray<string>;
-  } = {},
-) =>
+export interface Options {
+  /** Drop only below this keep probability. Defaults to 0.1; calibrate for your workload. */
+  readonly dropBelow?: number;
+  /** Tool names excluded from selective pruning. The supplied fallback keeps its own policy. */
+  readonly pinnedTools?: ReadonlyArray<string>;
+}
+
+/**
+ * Wrap a supplied ContextCompactor with selective pruning under automatic context pressure.
+ * Provide a DecisionModel and the existing compactor through Layer.provide. If pruning fits,
+ * continue without replacement; otherwise use the supplied fallback unless policy.mode is prune.
+ * Explicit rollover and provider overflow go directly to the fallback.
+ *
+ * Evaluations contain at most 32 candidates and 48 KB of UTF-8 input, with a five-second
+ * timeout and no retries. Invalid responses and timeout fail with CompactionError before
+ * pruning; defects and interruption propagate. The engine owns evaluation Scope and accounting.
+ * Failed/provider-executed results, protected input, the newest batch and pinned tools stay intact.
+ *
+ * @category layers
+ * @since 0.1.0
+ */
+export const layer = (
+  options: Options = {},
+): Layer.Layer<ContextCompactor, CompactionError, DecisionModel.DecisionModel | ContextCompactor> =>
   Layer.effect(
     ContextCompactor,
     Effect.gen(function* () {

@@ -125,6 +125,9 @@
     "packages/effect-agent": {
       "name": "effect-agent",
       "version": "0.1.0-beta.106",
+      "dependencies": {
+        "@effect-agent/ai-decision": "workspace:*",
+      },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",

@@ -14,7 +14,7 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { Agent, AgentRuntime, InMemory } from "effect-agent";
+import { Agent, AgentRuntime, InMemory, SelectiveCompactor } from "effect-agent";
 import { CompactionPolicy } from "effect-agent/agent-policy";
 import { CLEARED_TOOL_RESULT, estimatePromptTokens } from "effect-agent/compaction";
 import { ContextCompactor, type CompactionRequest } from "effect-agent/context-compactor";
@@ -29,7 +29,6 @@ import { ModelUsage } from "./contracts.ts";
 import { makeLiveClient, MAX_OUTPUT_TOKENS } from "./live-model.ts";
 import { RequestAudit, RequestAuditSink } from "./request-audit.ts";
 import { cases, CompactionCase } from "./selective-cases.ts";
-import { layerSelective, SelectionState } from "./selective-compactor.ts";
 
 // Frozen before any corpus inference. Calibration selects only from this grid.
 export const thresholds = [0.05, 0.1, 0.2, 0.35, 0.5, 0.65] as const;
@@ -51,7 +50,7 @@ export const ScoreSample = Schema.Struct({
   repeat: Schema.Natural,
   elapsedMs: Schema.Finite,
   error: Schema.NullOr(Schema.String),
-  state: Schema.NullOr(SelectionState),
+  state: Schema.NullOr(SelectiveCompactor.SelectionState),
   response: Schema.NullOr(DecisionSchema.EvaluateResponse),
 });
 
@@ -193,7 +192,7 @@ export const scoreCase = Effect.fn("SelectiveEval.scoreCase")(function* (
   repeat: number,
 ) {
   const native = yield* DecisionModel.DecisionModel;
-  let state: typeof SelectionState.Type | null = null;
+  let state: typeof SelectiveCompactor.SelectionState.Type | null = null;
   let response: DecisionSchema.EvaluateResponse | null = null;
 
   const observer = Layer.effect(
@@ -201,9 +200,9 @@ export const scoreCase = Effect.fn("SelectiveEval.scoreCase")(function* (
     DecisionModel.make({
       evaluate: (request) =>
         Effect.gen(function* () {
-          state = yield* Schema.decodeUnknownEffect(SelectionState)(request.state).pipe(
-            Effect.mapError(invalidState),
-          );
+          state = yield* Schema.decodeUnknownEffect(SelectiveCompactor.SelectionState)(
+            request.state,
+          ).pipe(Effect.mapError(invalidState));
           response = yield* native.evaluate(request);
 
           return response;
@@ -247,7 +246,7 @@ export const scoreCase = Effect.fn("SelectiveEval.scoreCase")(function* (
     yield* compactor.compact(request).pipe(Stream.runDrain);
   }).pipe(
     Effect.provide(
-      layerSelective({ dropBelow: 0, pinnedTools: scenario.pinnedTools }).pipe(
+      SelectiveCompactor.layer({ dropBelow: 0, pinnedTools: scenario.pinnedTools }).pipe(
         Layer.provide(ContextCompactor.layer),
         Layer.provide(observer),
       ),
@@ -275,9 +274,9 @@ const replayLayer = (sample: ScoreSample) =>
           if (sample.error !== null || sample.state === null || sample.response === null)
             return yield* invalidState();
 
-          const state = yield* Schema.decodeUnknownEffect(SelectionState)(request.state).pipe(
-            Effect.mapError(invalidState),
-          );
+          const state = yield* Schema.decodeUnknownEffect(SelectiveCompactor.SelectionState)(
+            request.state,
+          ).pipe(Effect.mapError(invalidState));
 
           const saved = sample.response;
 
@@ -367,7 +366,7 @@ export const runCase = Effect.fn("SelectiveEval.runCase")(function* (
   );
 
   const compactor = strategy.startsWith("selective")
-    ? layerSelective({ dropBelow: threshold, pinnedTools: scenario.pinnedTools }).pipe(
+    ? SelectiveCompactor.layer({ dropBelow: threshold, pinnedTools: scenario.pinnedTools }).pipe(
         Layer.provide(ContextCompactor.layer),
         Layer.provide(replayLayer(sample)),
       )
@@ -510,9 +509,9 @@ export const validateCases = Effect.fn("SelectiveEval.validateCases")(function* 
       DecisionModel.make({
         evaluate: (request) =>
           Effect.gen(function* () {
-            const state = yield* Schema.decodeUnknownEffect(SelectionState)(request.state).pipe(
-              Effect.mapError(invalidState),
-            );
+            const state = yield* Schema.decodeUnknownEffect(SelectiveCompactor.SelectionState)(
+              request.state,
+            ).pipe(Effect.mapError(invalidState));
 
             return {
               provider: "oracle",

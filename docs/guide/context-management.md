@@ -1083,9 +1083,8 @@ Durable runs reserve the evaluation slot before dispatch and commit usage indepe
 decision, including when the strategy keeps every result or returns an invalid selection. Recovery
 uses completed accounting without repeating the call; an unresolved reservation fails closed
 because its provider usage is unknown. Runs that evaluate during compaction currently use full
-canonical replay during recovery. The
-[selective pruning spike](https://github.com/danieljvdm/effect-agent/tree/main/tooling/context-continuity-eval#selective-pruning-spike)
-connects this boundary to the existing Jev decision provider.
+canonical replay during recovery. `SelectiveCompactor.layer` uses this boundary with a supplied
+Decision Model; see [selective pruning](#selective-pruning).
 
 `estimate` must return a non-negative finite integer. Strategy failures use `CompactionError`.
 Defects and interruption retain their Effect meaning.
@@ -1129,6 +1128,51 @@ To use a prompt transform and a custom compactor together, provide `RunContextPr
 `ContextCompactor` independently. The runtime captures both when its Layer is acquired and retains
 them across replacement attempts. Providing a different compactor around a worker call does not
 replace the host's choice.
+
+### Select old results before replacement {#selective-pruning}
+
+`SelectiveCompactor.layer` wraps an existing compactor and asks a Decision Model which old Tool result bodies can be removed.
+
+```ts twoslash
+import { SelectiveCompactor } from "effect-agent";
+import { ContextCompactor } from "effect-agent/context-compactor";
+import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
+import { Layer } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+
+const JevLive = TypeSafeDecisionModel.model("jev-latest").pipe(
+  Layer.provide(TypeSafeClient.layer),
+  Layer.provide(TypeSafeClient.Config.layer),
+  Layer.provide(FetchHttpClient.layer),
+);
+
+export const CompactorLive = SelectiveCompactor.layer({
+  dropBelow: 0.1,
+  pinnedTools: ["book_trip"],
+}).pipe(Layer.provide(ContextCompactor.layerRollover), Layer.provide(JevLive));
+```
+
+Set `TYPESAFE_API_KEY` and provide `CompactorLive` to the durable host as shown above.
+For a summary fallback, supply `ContextCompactor.layerWithModel(summaryModel)` instead of
+`layerRollover`, along with that model's client. The default `prune-then-summarize` policy permits
+either replacement strategy; `prune` mode stops after pruning and fails admission if it cannot fit.
+
+On automatic context pressure, the selector prunes first. If the prompt fits, the Run continues
+without a summary or rollover. Otherwise the supplied compactor handles replacement. Explicit
+`new_context` requests and provider overflow go directly to the fallback. Calls and retained
+result bodies remain intact; the canonical log keeps the original evidence.
+
+Only old successful application results are candidates. Protected input, the newest batch,
+failed/provider-executed results, and `pinnedTools` remain visible. Each request contains at most
+32 candidates and 48 KB of UTF-8 input, with a five-second timeout and no retries. Invalid responses
+or timeout fail with `CompactionError` before pruning; defects and interruption propagate.
+Missing credentials fail during Layer acquisition.
+
+`dropBelow` is the keep-probability cutoff and defaults to `0.1`. Calibrate it for your workload:
+bounded excerpts can miss relevant evidence. The
+[evaluation harness](https://github.com/danieljvdm/effect-agent/tree/main/tooling/context-continuity-eval#selective-pruning-evaluation)
+compares retention and continuation with the same public Layer. Auxiliary evaluations are charged
+even when nothing is removed; these Runs currently recover through full canonical replay.
 
 ### Start fresh context windows {#context-windows}
 

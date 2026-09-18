@@ -2,4 +2,4 @@
 "effect-agent": minor
 ---
 
-Allow custom compactors to clear selected tool-result bodies while preserving other evidence and replaying exact durable selections. Add metered auxiliary compaction inference with durable reservations and independent usage accounting.
+Add `SelectiveCompactor.layer` to prune old tool-result bodies through a supplied DecisionModel before falling back to the existing summary or rollover strategy. Support exact durable selections and metered auxiliary compaction inference with independent usage accounting.
