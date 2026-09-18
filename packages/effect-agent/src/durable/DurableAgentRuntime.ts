@@ -606,7 +606,7 @@ export class RecoveryFailure extends Schema.Class<RecoveryFailure>(
 
 const decodeRecoveryCause = Schema.decodeUnknownOption(
   Schema.Struct({
-    diagnostic: Schema.optionalKey(ThreadStoreDiagnostic),
+    diagnostic: Schema.optionalKey(Schema.Unknown),
     cause: Schema.optionalKey(Schema.Unknown),
   }),
 );
@@ -653,7 +653,7 @@ const recoveryFailureDetails = (cause: Cause.Cause<DurableWorkerFailure>) => {
     }
   }
 
-  // Local storage adapters retain their schema-validated diagnostic through wrapper causes.
+  // Retain only adapter-created diagnostics, never reify a foreign structural lookalike.
   // Foreign wrappers retain only approved classifications above, never their operation text.
   let nested: unknown = Option.getOrUndefined(Cause.findErrorOption(cause));
   let diagnostic: ThreadStoreDiagnostic | undefined;
@@ -662,7 +662,7 @@ const recoveryFailureDetails = (cause: Cause.Cause<DurableWorkerFailure>) => {
     const decoded = decodeRecoveryCause(nested);
 
     if (Option.isNone(decoded)) break;
-    if (decoded.value.diagnostic !== undefined) {
+    if (decoded.value.diagnostic instanceof ThreadStoreDiagnostic) {
       diagnostic = decoded.value.diagnostic;
       break;
     }

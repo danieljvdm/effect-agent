@@ -1370,7 +1370,9 @@ export class ThreadMaintenance extends Context.Service<
           Effect.catch(() => Effect.never),
         );
 
-        let started = yield* beginNative(observed);
+        // A wake may observe temporary backoff while this event's recovery is still running.
+        // Its completion must retain the original actionable observation for acknowledgement.
+        const started = yield* beginNative(observed);
 
         // This scope owns auxiliary dispatch and listeners, independently of native progress.
         // Close it before final alarm rearming, including on failure or event interruption.
@@ -1495,7 +1497,9 @@ export class ThreadMaintenance extends Context.Service<
           recoveryFiber.pollUnsafe() === undefined;
 
         while (true) {
-          if (recoveryFiber.pollUnsafe() !== undefined) {
+          const recoveryFinished = recoveryFiber.pollUnsafe() !== undefined;
+
+          if (recoveryFinished) {
             if (recovery.needsCheckpoint) {
               yield* Fiber.join(recoveryFiber);
               // A head released by old recovery gets its native opportunity before the
@@ -1519,8 +1523,8 @@ export class ThreadMaintenance extends Context.Service<
             until,
           );
 
-          const recoveryDone =
-            recoveryFiber.pollUnsafe() === undefined ? Fiber.await(recoveryFiber) : Effect.never;
+          // A completion racing this iteration stays armed until the loop handles it.
+          const recoveryDone = recoveryFinished ? Effect.never : Fiber.await(recoveryFiber);
 
           const ready = yield* Effect.raceFirst(
             Effect.raceFirst(notified, Effect.sleep(Math.max(0, next - now))).pipe(
@@ -1539,8 +1543,9 @@ export class ThreadMaintenance extends Context.Service<
           if (!auxiliaryPending()) continue;
           if ((yield* Clock.currentTimeMillis) >= until) break;
 
-          started = yield* beginNative(observed);
-          result = yield* advance(started, yieldAfter, observed, recovery);
+          const awakened = yield* beginNative(observed);
+
+          result = yield* advance(awakened, yieldAfter, observed, recovery);
           if (result.phase === "actionable") phase = "actionable";
           settled += result.settled;
           observed.nativeOnly = false;

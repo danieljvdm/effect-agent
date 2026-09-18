@@ -39,7 +39,8 @@ describe("bounded recovery failure isolation", () => {
           {
             operation: Schema.String,
             message: Schema.String,
-            diagnostic: ThreadStoreDiagnostic,
+            diagnostic: Schema.Unknown,
+            cause: Schema.Defect(),
           },
         ) {}
 
@@ -56,7 +57,16 @@ describe("bounded recovery failure isolation", () => {
           cause: ForeignSnapshotFailure.make({
             operation: "private_fixture_payload_operation",
             message: "private foreign payload",
-            diagnostic,
+            diagnostic: {
+              causeTag: "private_fixture_payload_tag",
+              operation: "private_fixture_payload_operation",
+              decoder: "private_fixture_payload_decoder",
+            },
+            cause: ThreadStoreError.make({
+              operation: "decode worker admission",
+              message: "private storage payload",
+              diagnostic,
+            }),
           }),
         });
 
@@ -135,7 +145,11 @@ describe("bounded recovery failure isolation", () => {
                   reason: "failure",
                   errorTag: "LedgerError",
                   operation: "loadRecoverySnapshot",
-                  causes: [{ errorTag: "LedgerError" }, { errorTag: "ForeignError" }],
+                  causes: [
+                    { errorTag: "LedgerError" },
+                    { errorTag: "ForeignError" },
+                    { errorTag: "ThreadStoreError" },
+                  ],
                   diagnostic,
                 },
               },
@@ -160,6 +174,7 @@ describe("bounded recovery failure isolation", () => {
                 causes: [
                   { errorTag: "LedgerError" },
                   { errorTag: "ForeignError" },
+                  { errorTag: "ThreadStoreError" },
                   { errorTag: "ForeignError" },
                 ],
                 diagnostic,

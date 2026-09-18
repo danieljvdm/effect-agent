@@ -436,7 +436,11 @@ export class LoadCheckpointRequest extends Schema.Class<LoadCheckpointRequest>(
   atOrBeforeSequence: Schema.optionalKey(CanonicalSequence),
 }) {}
 
-/** Content-free storage provenance. Never include rejected values, SQL, or schema messages. */
+/**
+ * Content-free storage provenance constructed by adapters from source-authored labels.
+ * Raw foreign lookalikes are not trusted diagnostics. Never include rejected values, SQL,
+ * or schema messages.
+ */
 export class ThreadStoreDiagnostic extends Schema.Class<ThreadStoreDiagnostic>(
   "@effect-agent/thread/ThreadStoreDiagnostic",
 )({
