@@ -19,6 +19,7 @@ import {
   MemoryStorageError,
   MemoryWriter,
 } from "effect-agent/memory-store";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import { memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import * as ThreadContextHistory from "effect-agent/thread-context-history";
@@ -288,9 +289,10 @@ const application = Layer.unwrap(
         const services = yield* Effect.context<ThreadObject.Services>();
 
         const adapters = yield* Layer.build(
-          Layer.mergeAll(memoryStoreLayer, ThreadContextHistory.layer({ maxRecords: 16_384 })).pipe(
-            Layer.provide(Layer.succeedContext(services)),
-          ),
+          Layer.mergeAll(
+            memoryStoreLayer.pipe(Layer.provide(SqlDialect.layerSqlite)),
+            ThreadContextHistory.layer({ maxRecords: 16_384 }),
+          ).pipe(Layer.provide(Layer.succeedContext(services))),
         );
 
         reader = Context.get(adapters, MemoryReader);

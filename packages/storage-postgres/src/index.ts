@@ -1,5 +1,5 @@
-export * as PostgresMessageDeliveryStore from "./PostgresMessageDeliveryStore.ts";
 export * as PostgresActivityStore from "./PostgresActivityStore.ts";
+export * as PostgresMessageDeliveryStore from "./PostgresMessageDeliveryStore.ts";
 export * as PostgresScheduleStore from "./PostgresScheduleStore.ts";
 export * as PostgresStorageClient from "./PostgresStorageClient.ts";
 export * as PostgresStorageConfig from "./PostgresStorageConfig.ts";

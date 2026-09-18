@@ -1,5 +1,5 @@
 import { Effect, Layer, Schema } from "effect";
-import { postgresLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import {
   makeSqlSubscriptionStore,
   SqlSubscriptionTransaction,
@@ -9,8 +9,8 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { initializePostgresJournal } from "./internal/postgres-journal.ts";
 import type { PostgresStorageConfig } from "./PostgresStorageConfig.ts";
+import type { PostgresStorageInitializationError } from "./PostgresStorageError.ts";
 import type { PostgresStorageFailpoint } from "./PostgresStorageFailpoint.ts";
-import type { PostgresStorageInitializationError } from "./PostgresThreadStore.ts";
 
 const transactionLayer = Layer.effect(
   SqlSubscriptionTransaction,
@@ -44,7 +44,7 @@ const makeSubscriptionStore = Effect.fn("PostgresSubscriptionStore.make")(functi
   });
 });
 
-export const subscriptionStoreLayer = (
+export const layer = (
   partition: SourcePartition,
 ): Layer.Layer<
   SubscriptionStore,
@@ -53,5 +53,5 @@ export const subscriptionStoreLayer = (
 > =>
   Layer.effect(SubscriptionStore, makeSubscriptionStore(partition)).pipe(
     Layer.provide(transactionLayer),
-    Layer.provide(postgresLayer),
+    Layer.provide(SqlDialect.layerPostgres),
   );

@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { postgresLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import { createMessageDeliveryPendingIndex } from "effect-agent/sql-message-delivery-store";
 import { createNativeReadIndexes } from "effect-agent/sql-thread-native-reads";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -348,7 +348,7 @@ export const createPostgresStorageSchema = Effect.gen(function* () {
     `;
   yield* sql`CREATE INDEX effect_agent_subscription_deliveries_pending ON effect_agent_subscription_deliveries (tenant_id, source_address, state, next_attempt_at_millis, delivery_key)`;
   yield* sql`CREATE INDEX effect_agent_subscription_deliveries_registration ON effect_agent_subscription_deliveries (tenant_id, source_address, owner_id, subscription_id, delivery_key)`;
-  yield* Effect.provide(createNativeReadIndexes, postgresLayer);
+  yield* Effect.provide(createNativeReadIndexes, SqlDialect.layerPostgres);
   yield* createNonterminalIndex;
   yield* createMessageDeliveryTables;
   yield* createMessageDeliveryPendingIndex;

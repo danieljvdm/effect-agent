@@ -22,14 +22,14 @@ import {
   applyScheduleChange,
   scheduleDeadline,
 } from "effect-agent/schedule-transition";
-import { postgresLayer, SqlDialect } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { initializePostgresJournal } from "./internal/postgres-journal.ts";
 import { withWriterLockTransaction } from "./internal/postgres-transactions.ts";
 import type { PostgresStorageConfig } from "./PostgresStorageConfig.ts";
+import type { PostgresStorageInitializationError } from "./PostgresStorageError.ts";
 import type { PostgresStorageFailpoint } from "./PostgresStorageFailpoint.ts";
-import type { PostgresStorageInitializationError } from "./PostgresThreadStore.ts";
 
 // Configuration and the immutable pending envelope may each carry the canonical input. Leave
 // room for JSON escaping and bounded status while rejecting an unreadable oversized row.
@@ -398,8 +398,8 @@ const makeScheduleStore = Effect.gen(function* () {
 });
 
 /** Postgres implementation of the atomic ScheduleStore port. */
-export const scheduleStoreLayer: Layer.Layer<
+export const layer: Layer.Layer<
   ScheduleStore,
   PostgresStorageInitializationError,
   PostgresStorageConfig | PostgresStorageFailpoint | SqlClientService.SqlClient
-> = Layer.effect(ScheduleStore)(makeScheduleStore).pipe(Layer.provide(postgresLayer));
+> = Layer.effect(ScheduleStore)(makeScheduleStore).pipe(Layer.provide(SqlDialect.layerPostgres));

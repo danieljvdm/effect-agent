@@ -13,7 +13,7 @@ import {
   RecordEnvelope,
   SettlementOutcome,
 } from "effect-agent/records";
-import { postgresLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import {
   AbortCommand,
   AbortIntent,
@@ -90,22 +90,21 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { decodeRows, initializePostgresJournal } from "./internal/postgres-journal.ts";
-import { storageClientLayer } from "./PostgresStorageClient.ts";
-import { PostgresStorageConfig } from "./PostgresStorageConfig.ts";
+import * as PostgresStorageClient from "./PostgresStorageClient.ts";
+import {
+  layerConfig,
+  PostgresStorageConfig,
+  type PostgresStorageOptions,
+} from "./PostgresStorageConfig.ts";
 import {
   PostgresLedgerError,
   PostgresStorageCorruptionError,
   PostgresStorageError,
   PostgresWriteContention,
   type PostgresStorageFailpointLocation,
-} from "./PostgresStorageError.ts";
-import { PostgresStorageFailpoint } from "./PostgresStorageFailpoint.ts";
-import {
-  storageConfigLayer,
-  storageFailpointLayer,
   type PostgresStorageInitializationError,
-  type PostgresStorageOptions,
-} from "./PostgresThreadStore.ts";
+} from "./PostgresStorageError.ts";
+import { layerFailpoint, PostgresStorageFailpoint } from "./PostgresStorageFailpoint.ts";
 
 type SubmissionId = SubmissionSnapshot["submissionId"];
 
@@ -326,7 +325,7 @@ const internalFailure =
 /**
  * Classify raw SQL failures: a transaction that lost a concurrency race stays retryable typed
  * contention. Postgres reports that race in three shapes — a lock timeout (55P03), a deadlock
- * (40P01), and a serialization failure (40001) — where SQLite only ever reports a busy writer.
+ * (40P01), and a serialization failure (40001).
  */
 const sqlFailure =
   (operation: string) =>
@@ -367,10 +366,10 @@ const makeServices = Effect.fn("PostgresSubmissionLedger.makeServices")(function
     failpoint.hit(location).pipe(Effect.mapError((error) => internalFailure(operation)(error)));
 
   /**
-   * Run one ledger mutation under the journal's write transaction so ownership-token and
-   * epoch checks are atomic with their writes (DUR-006). Transaction
-   * acquisition failures surface as LedgerError carrying the typed retryable
-   * PostgresWriteContention (or PostgresStorageError) as cause.
+   * Run one ledger mutation under the journal's write transaction so ownership-token and epoch
+   * checks are atomic with their writes (DUR-006). Transaction acquisition failures surface as
+   * LedgerError carrying the typed retryable PostgresWriteContention (or PostgresStorageError)
+   * as cause.
    */
   const inWriteTransaction = <
     A,
@@ -3522,30 +3521,30 @@ const makeServices = Effect.fn("PostgresSubmissionLedger.makeServices")(function
  * transaction discipline, and producer-epoch fencing substrate. Configuration, failpoint,
  * SQL, and Crypto authority stay visible in the input channel.
  */
-export const submissionLedgerLayer: Layer.Layer<
+export const layerWithServices: Layer.Layer<
   SubmissionLedger,
   PostgresStorageInitializationError,
   PostgresStorageConfig | PostgresStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
-> = Layer.effectContext(makeServices()).pipe(Layer.provide(postgresLayer));
+> = Layer.effectContext(makeServices()).pipe(Layer.provide(SqlDialect.layerPostgres));
 
 /**
  * A composition-root convenience Layer for the durable Submission Ledger. Point it at the
  * same database and schema as the ThreadStore so claims fence the same producer epochs.
  */
-export const ledgerLayer = (
+export const layer = (
   options: PostgresStorageOptions,
 ): Layer.Layer<SubmissionLedger, PostgresStorageInitializationError> =>
   Layer.unwrap(
     Effect.map(PostgresStorageConfig, (config) =>
-      submissionLedgerLayer.pipe(
+      layerWithServices.pipe(
         Layer.provide(
           Layer.mergeAll(
             Layer.succeed(PostgresStorageConfig)(config),
-            storageFailpointLayer(options),
-            storageClientLayer(options.client),
+            layerFailpoint(options),
+            PostgresStorageClient.layer(options.client),
             NodeCrypto.layer,
           ),
         ),
       ),
     ),
-  ).pipe(Layer.provide(storageConfigLayer(options)));
+  ).pipe(Layer.provide(layerConfig(options)));

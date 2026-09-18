@@ -1,4 +1,9 @@
-import { Context, Schema } from "effect";
+import { Duration, Effect, Layer, Schema, Context } from "effect";
+import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
+
+import type { PostgresClientOptions } from "./PostgresStorageClient.ts";
+import { PostgresStorageError } from "./PostgresStorageError.ts";
+import type { PostgresStorageFailpointHandler } from "./PostgresStorageFailpoint.ts";
 
 const ObservationPollInterval = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const LockTimeoutMillis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
@@ -19,9 +24,8 @@ export class PostgresStorageConfigValue extends Schema.Class<PostgresStorageConf
 )({
   observationPollInterval: ObservationPollInterval,
   /**
-   * Bounded `lock_timeout` applied to write transactions, in milliseconds. A transaction that
-   * cannot take a contended row lock inside this window fails with `PostgresWriteContention`
-   * instead of blocking a connection indefinitely.
+   * Bounded wait on the writer lock, in milliseconds. Exceeding it fails with the retryable
+   * `PostgresWriteContention` rather than holding a pooled connection indefinitely.
    */
   lockTimeout: LockTimeoutMillis,
   /**
@@ -37,10 +41,7 @@ export class PostgresStorageConfigValue extends Schema.Class<PostgresStorageConf
    * scan is an explicit opt-in integrity audit rather than a startup requirement.
    */
   verifyOnOpen: Schema.Boolean,
-  /**
-   * Postgres schema holding the adapter's tables. A dedicated schema keeps agent storage
-   * separable from application tables in the same database; it is created if absent.
-   */
+  /** Postgres schema holding the adapter's tables, verified against the connection at startup. */
   schema: SchemaName,
 }) {}
 
@@ -49,3 +50,43 @@ export class PostgresStorageConfig extends Context.Service<
   PostgresStorageConfig,
   PostgresStorageConfigValue
 >()("@effect-agent/storage-postgres/PostgresStorageConfig") {}
+
+export interface PostgresStorageOptions {
+  readonly client: PostgresClientOptions;
+  /**
+   * Postgres schema holding the adapter's tables, created if absent. Defaults to `public`.
+   *
+   * Selecting any other schema requires it to be the *connection's* default, because
+   * `search_path` binds per connection and this driver exposes no way to set one for a pool.
+   * Set it with `ALTER ROLE ... SET search_path` or `ALTER DATABASE ... SET search_path`; the
+   * adapter verifies the effective schema at startup and refuses to run if it disagrees.
+   */
+  readonly schema?: string | undefined;
+  readonly observationPollInterval?: number | undefined;
+  readonly lockTimeout?: number | undefined;
+  readonly ownershipLeaseDuration?: number | undefined;
+  readonly verifyOnOpen?: boolean | undefined;
+  readonly failpoint?: PostgresStorageFailpointHandler | undefined;
+}
+
+export const layerConfig = (
+  options: PostgresStorageOptions,
+): Layer.Layer<PostgresStorageConfig, PostgresStorageError> =>
+  Layer.effect(PostgresStorageConfig)(
+    Schema.decodeEffect(PostgresStorageConfigValue)({
+      observationPollInterval: options.observationPollInterval ?? 25,
+      lockTimeout: options.lockTimeout ?? 5_000,
+      schema: options.schema ?? "public",
+      ownershipLeaseDuration:
+        options.ownershipLeaseDuration ?? Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION),
+      verifyOnOpen: options.verifyOnOpen ?? false,
+    }).pipe(
+      Effect.mapError((error) =>
+        PostgresStorageError.make({
+          cause: error,
+          operation: "configure Postgres storage",
+          message: error.message,
+        }),
+      ),
+    ),
+  );

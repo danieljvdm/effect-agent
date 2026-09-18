@@ -9,7 +9,7 @@ import { MemoryAccess } from "effect-agent/memory-revalidation";
 import { MemoryScope, MemoryKey, MemoryWriter } from "effect-agent/memory-store";
 import { indexMemorySource, querySemanticMemory } from "effect-agent/semantic-memory";
 import { SemanticMemoryIndex, SemanticMemoryProfile } from "effect-agent/semantic-memory-index";
-import { sqliteLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import { memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { TestClock } from "effect/testing";
 import { AiError, EmbeddingModel } from "effect/unstable/ai";
@@ -47,7 +47,7 @@ const queryLimits = {
 const sql = SqliteClient.layer({ filename: ":memory:" });
 
 const services = Layer.mergeAll(
-  memoryStoreLayer.pipe(Layer.provide(sqliteLayer), Layer.provide(sql)),
+  memoryStoreLayer.pipe(Layer.provide(SqlDialect.layerSqlite), Layer.provide(sql)),
   inMemorySemanticIndexLayer(profile, { maxSources: 1, maxChunks: 8 }),
   Layer.effect(
     EmbeddingModel.EmbeddingModel,

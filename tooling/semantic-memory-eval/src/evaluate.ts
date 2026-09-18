@@ -50,6 +50,7 @@ import {
   querySemanticMemory,
 } from "effect-agent/semantic-memory";
 import { SemanticMemoryProfile } from "effect-agent/semantic-memory-index";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import { memoryStoreLayer } from "effect-agent/sql-memory-store";
 import {
   FencedAppendRequest,
@@ -611,7 +612,7 @@ export const runEvaluation = Effect.fn("runSemanticMemoryEvaluation")(function* 
   const storage = Layer.mergeAll(
     sqliteThreadStoreLayer({ filename: database, busyTimeout: 5_000 }),
     activityProcessorStoreLayer.pipe(Layer.provide(sql)),
-    memoryStoreLayer.pipe(Layer.provide(sql)),
+    memoryStoreLayer.pipe(Layer.provide(SqlDialect.layerSqlite), Layer.provide(sql)),
     NodeCrypto.layer,
   );
 

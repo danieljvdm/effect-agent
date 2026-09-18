@@ -22,7 +22,7 @@ import {
   applyScheduleChange,
   scheduleDeadline,
 } from "effect-agent/schedule-transition";
-import { sqliteLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { initializeSqliteJournal } from "./internal/sqlite-journal.ts";
@@ -402,4 +402,4 @@ export const scheduleStoreLayer: Layer.Layer<
   ScheduleStore,
   SqliteStorageInitializationError,
   SqliteStorageConfig | SqliteStorageFailpoint | SqlClientService.SqlClient
-> = Layer.effect(ScheduleStore)(makeScheduleStore).pipe(Layer.provide(sqliteLayer));
+> = Layer.effect(ScheduleStore)(makeScheduleStore).pipe(Layer.provide(SqlDialect.layerSqlite));

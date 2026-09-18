@@ -1,4 +1,4 @@
-import { layer } from "@effect-agent/storage-postgres/postgres-thread-store";
+import * as PostgresThreadStore from "@effect-agent/storage-postgres/postgres-thread-store";
 import { PgClient } from "@effect/sql-pg";
 import { describe, it } from "@effect/vitest";
 import { Effect, Redacted } from "effect";
@@ -56,7 +56,7 @@ const withTemporaryDatabase = <A, E>(
 const withStorage = <A, E>(url: string, effect: Effect.Effect<A, E, ThreadStore>) =>
   Effect.provide(
     effect,
-    layer({ client: { url: Redacted.make(url) }, observationPollInterval: 1 }),
+    PostgresThreadStore.layer({ client: { url: Redacted.make(url) }, observationPollInterval: 1 }),
   );
 
 describe("PostgresThreadStore", () => {

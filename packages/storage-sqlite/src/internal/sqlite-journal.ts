@@ -4,7 +4,7 @@ import { Effect, Exit, Schema } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
 import { ScheduleFailpoint, ScheduleFailpointError } from "effect-agent/schedule";
-import { sqliteLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import { createMessageDeliveryPendingIndex } from "effect-agent/sql-message-delivery-store";
 import {
   checkV2ThreadLayout,
@@ -628,10 +628,10 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           yield* createNonterminalIndex;
           yield* failpoint("upgrade:after-mutation");
           yield* failpoint("upgrade:before-version");
-          yield* Effect.provide(createNativeReadIndexes, sqliteLayer);
+          yield* Effect.provide(createNativeReadIndexes, SqlDialect.layerSqlite);
           yield* createMessageDeliveryPendingIndex;
           yield* seedNativeReadIndexes.pipe(
-            Effect.provide(sqliteLayer),
+            Effect.provide(SqlDialect.layerSqlite),
             Effect.catchTag("ThreadStoreError", (error) =>
               SqliteStorageCorruptionError.make({
                 table: "effect_agent_canonical_records",
@@ -739,10 +739,10 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
               message: "Predecessor storage is missing its required nonterminal index",
             });
           yield* failpoint("upgrade:before-mutation");
-          yield* Effect.provide(createNativeReadIndexes, sqliteLayer);
+          yield* Effect.provide(createNativeReadIndexes, SqlDialect.layerSqlite);
           yield* createMessageDeliveryPendingIndex;
           yield* seedNativeReadIndexes.pipe(
-            Effect.provide(sqliteLayer),
+            Effect.provide(SqlDialect.layerSqlite),
             Effect.catchTag("ThreadStoreError", (error) =>
               SqliteStorageCorruptionError.make({
                 table: "effect_agent_canonical_records",
@@ -1230,7 +1230,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
               );
 
               yield* indexCanonicalRecord(request.threadId, canonical).pipe(
-                Effect.provide(sqliteLayer),
+                Effect.provide(SqlDialect.layerSqlite),
                 Effect.provideService(SqlClient.SqlClient, sql),
                 Effect.mapError(storageError("index canonical record")),
               );
