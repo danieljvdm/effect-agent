@@ -45,7 +45,7 @@ import {
 import { PageScreenshotResult } from "effect-agent/page-screenshot";
 import { SandboxImplementation } from "effect-agent/sandbox";
 
-import { prepareFileSelection } from "./internal/browser-file-selection.ts";
+import { makeFileSelection } from "./internal/browser-file-selection.ts";
 import {
   BrowserRunSessionLifecycle,
   type BrowserRunLifecycleOptions,
@@ -772,6 +772,7 @@ const runObservedPageAction = async (
 };
 
 const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
+  const prepareFileSelection = makeFileSelection(page);
   const listeners = new Map<BrowserRunInteractiveRequestListener, (request: HTTPRequest) => void>();
 
   return {
@@ -1099,7 +1100,7 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
     click: (selector, signal, onDispatch) =>
       runObservedPageAction(page, selector, signal, onDispatch, (element) => element.click()),
     selectFile: async (request, signal, onDispatch) => {
-      const selection = await prepareFileSelection(page, request, signal);
+      const selection = await prepareFileSelection(request, signal);
 
       try {
         return await runObservedPageAction(

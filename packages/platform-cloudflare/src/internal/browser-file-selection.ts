@@ -1,4 +1,4 @@
-import type { CDPSession, Page } from "@cloudflare/puppeteer";
+import type { Page } from "@cloudflare/puppeteer";
 import { Encoding } from "effect";
 import type { BrowserSelectFileRequest } from "effect-agent/interactive-browser";
 
@@ -36,97 +36,91 @@ function setFileSelection(element: object, encoded: string, name: string, type: 
   Reflect.apply(dispatch, element, [new Event("change", { bubbles: true })]);
 }
 
-const chooseFile = async (
-  session: CDPSession,
-  element: Element,
-  request: BrowserSelectFileRequest,
-  encoded: string,
-  signal: AbortSignal,
-): Promise<void> => {
-  let onOpened: (event: { backendNodeId?: number }) => void = () => {};
-  let onAbort: () => void = () => {};
-  let timer: ReturnType<typeof setTimeout> | undefined;
+export const makeFileSelection =
+  (page: Page) => async (request: BrowserSelectFileRequest, signal: AbortSignal) => {
+    const encoded = Encoding.encodeBase64(request.bytes);
+    const session = request.target === "chooser" ? await page.createCDPSession() : undefined;
 
-  const opened = new Promise<number>((resolve, reject) => {
-    onOpened = (event) =>
-      event.backendNodeId === undefined
-        ? reject(new Error("The chooser has no file input"))
-        : resolve(event.backendNodeId);
-    onAbort = () => reject(new Error("File selection interrupted"));
-    session.on("Page.fileChooserOpened", onOpened);
-    signal.addEventListener("abort", onAbort, { once: true });
-    timer = setTimeout(() => reject(new Error("No file chooser opened")), 5_000);
-    if (signal.aborted) onAbort();
-  });
-
-  try {
-    const [backendNodeId] = await Promise.all([opened, element.click()]);
-
-    if (signal.aborted) throw new Error("File selection interrupted");
-    const resolved = await session.send("DOM.resolveNode", { backendNodeId });
-
-    const objectId = resolved.object.objectId;
-
-    if (objectId === undefined) throw new Error("The chooser has no file input");
-    if (signal.aborted) throw new Error("File selection interrupted");
-
-    const result = await session.send("Runtime.callFunctionOn", {
-      objectId,
-      functionDeclaration: `function(encoded, name, type) { (${setFileSelection.toString()})(this, encoded, name, type); }`,
-      arguments: [{ value: encoded }, { value: request.fileName }, { value: request.mediaType }],
-      returnByValue: true,
-    });
-
-    if (result.exceptionDetails !== undefined)
-      throw new Error("The chooser did not select the file");
-  } finally {
-    clearTimeout(timer);
-    session.off("Page.fileChooserOpened", onOpened);
-    signal.removeEventListener("abort", onAbort);
-    // Detaching the owned session releases all remote object handles, including
-    // after timeout, interruption, or a navigation during change handlers.
-  }
-};
-
-export const prepareFileSelection = async (
-  page: Page,
-  request: BrowserSelectFileRequest,
-  signal: AbortSignal,
-) => {
-  const encoded = Encoding.encodeBase64(request.bytes);
-  const session = request.target === "chooser" ? await page.createCDPSession() : undefined;
-
-  if (session !== undefined) {
-    try {
-      await session.send("Page.enable");
-      await session.send("Page.setInterceptFileChooserDialog", { enabled: true });
-    } catch (cause) {
-      await session.detach();
-      throw cause;
-    }
-  }
-
-  return {
-    validate: async (element: Element): Promise<boolean> =>
-      request.target === "chooser" ||
-      (await element.evaluate(
-        (input) =>
-          Reflect.get(input, "type") === "file" &&
-          !Reflect.get(input, "disabled") &&
-          !Reflect.get(input, "webkitdirectory"),
-      )),
-    select: (element: Element): Promise<void> =>
-      session === undefined
-        ? element.evaluate(setFileSelection, encoded, request.fileName, request.mediaType)
-        : chooseFile(session, element, request, encoded, signal),
-    close: async (): Promise<void> => {
-      if (session !== undefined) {
-        try {
-          await session.send("Page.setInterceptFileChooserDialog", { enabled: false });
-        } finally {
-          await session.detach();
-        }
+    if (session !== undefined) {
+      try {
+        await session.send("Page.enable");
+        await session.send("Page.setInterceptFileChooserDialog", { enabled: true });
+      } catch (cause) {
+        await session.detach();
+        throw cause;
       }
-    },
+    }
+
+    const select = async (element: Element): Promise<void> => {
+      if (session === undefined)
+        return element.evaluate(setFileSelection, encoded, request.fileName, request.mediaType);
+      let onOpened: (event: { backendNodeId?: number }) => void = () => {};
+      let onAbort: () => void = () => {};
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const opened = new Promise<number>((resolve, reject) => {
+        onOpened = (event) =>
+          event.backendNodeId === undefined
+            ? reject(new Error("The chooser has no file input"))
+            : resolve(event.backendNodeId);
+        onAbort = () => reject(new Error("File selection interrupted"));
+        session.on("Page.fileChooserOpened", onOpened);
+        signal.addEventListener("abort", onAbort, { once: true });
+        timer = setTimeout(() => reject(new Error("No file chooser opened")), 5_000);
+        if (signal.aborted) onAbort();
+      });
+
+      try {
+        const [backendNodeId] = await Promise.all([opened, element.click()]);
+
+        if (signal.aborted) throw new Error("File selection interrupted");
+        const resolved = await session.send("DOM.resolveNode", { backendNodeId });
+
+        const objectId = resolved.object.objectId;
+
+        if (objectId === undefined) throw new Error("The chooser has no file input");
+        if (signal.aborted) throw new Error("File selection interrupted");
+
+        const result = await session.send("Runtime.callFunctionOn", {
+          objectId,
+          functionDeclaration: `function(encoded, name, type) { (${setFileSelection.toString()})(this, encoded, name, type); }`,
+          arguments: [
+            { value: encoded },
+            { value: request.fileName },
+            { value: request.mediaType },
+          ],
+          returnByValue: true,
+        });
+
+        if (result.exceptionDetails !== undefined)
+          throw new Error("The chooser did not select the file");
+      } finally {
+        clearTimeout(timer);
+        session.off("Page.fileChooserOpened", onOpened);
+        signal.removeEventListener("abort", onAbort);
+        // Detaching the owned session releases all remote object handles, including
+        // after timeout, interruption, or a navigation during change handlers.
+      }
+    };
+
+    return {
+      validate: async (element: Element): Promise<boolean> =>
+        request.target === "chooser" ||
+        (await element.evaluate(
+          (input) =>
+            Reflect.get(input, "type") === "file" &&
+            !Reflect.get(input, "disabled") &&
+            !Reflect.get(input, "webkitdirectory"),
+        )),
+      select,
+      close: async (): Promise<void> => {
+        if (session !== undefined) {
+          try {
+            await session.send("Page.setInterceptFileChooserDialog", { enabled: false });
+          } finally {
+            await session.detach();
+          }
+        }
+      },
+    };
   };
-};
