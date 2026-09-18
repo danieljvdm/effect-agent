@@ -1,4 +1,3 @@
-import { Effect, Layer } from "effect";
 import { type EventSources } from "@yielded/agent/event-source";
 import {
   type SubscriptionError,
@@ -7,6 +6,7 @@ import {
   defaultSubscriptionLimits,
 } from "@yielded/agent/subscription";
 import { type SubscriptionInputBindings } from "@yielded/agent/subscription-input";
+import { Effect, Layer } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectState as EffectCfDurableObjectState,

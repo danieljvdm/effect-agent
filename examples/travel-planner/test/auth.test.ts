@@ -9,6 +9,8 @@ import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
+
 let mf: Miniflare;
 let directory: string;
 let githubExchanges = 0;
@@ -19,6 +21,7 @@ const githubIssuer = "https://github.com/login/oauth";
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/auth-worker.ts")],
     bundle: true,
     write: false,

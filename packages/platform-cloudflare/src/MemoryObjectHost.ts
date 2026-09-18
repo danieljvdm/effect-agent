@@ -49,7 +49,7 @@ export class MemoryObjectNamespace extends Context.Service<
   {
     readonly namespace: DurableObjectNamespace<MemoryObjectRpc>;
   }
->()("@yielded/agent-platform-cloudflare/MemoryObjectNamespace") {}
+>()("@effect-agent/platform-cloudflare/MemoryObjectNamespace") {}
 
 /** Namespace version and identity are already canonicalized by MemoryNamespace. */
 export const memoryObjectName = (namespace: MemoryNamespace.Any): string => namespace.address;

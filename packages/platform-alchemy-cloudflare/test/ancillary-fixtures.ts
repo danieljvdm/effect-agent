@@ -1,13 +1,10 @@
+import { BrowserCrypto } from "@effect/platform-browser";
 import { threadNamespaceLayer } from "@yielded/agent-platform-cloudflare/cloudflare-host-bindings";
 import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   MemoryRpcError,
 } from "@yielded/agent-storage-cloudflare/memory-protocol";
-import { BrowserCrypto } from "@effect/platform-browser";
-import { DurableObject as AlchemyDurableObject } from "alchemy/Cloudflare/Workers/DurableObject";
-import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
-import { Effect, Layer, Schema } from "effect";
 import { digestDefinitions } from "@yielded/agent/digest";
 import { EventSources, makeEventSource } from "@yielded/agent/event-source";
 import * as MemoryNamespace from "@yielded/agent/memory-namespace";
@@ -20,6 +17,9 @@ import {
   makeSubscriptionInputBinding,
   SubscriptionInputBindings,
 } from "@yielded/agent/subscription-input";
+import { DurableObject as AlchemyDurableObject } from "alchemy/Cloudflare/Workers/DurableObject";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
+import { Effect, Layer, Schema } from "effect";
 
 import * as MemoryObject from "../src/MemoryObject.ts";
 import * as Scheduling from "../src/Scheduling.ts";

@@ -8,6 +8,7 @@ import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
 import { type TripApp } from "../src/domain.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 const app: TripApp = {
   id: "a".repeat(32),
@@ -45,6 +46,7 @@ beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "trip-app-repository-"));
 
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     stdin: {
       resolveDir: import.meta.dirname,
       loader: "ts",

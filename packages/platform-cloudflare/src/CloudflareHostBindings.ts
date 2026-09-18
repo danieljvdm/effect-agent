@@ -70,7 +70,7 @@ export class ThreadObjectNamespace extends Context.Service<
     /** Stable binding name for opted-in native RPC tracing; absent by default. */
     readonly rpcTracing?: string;
   }
->()("@yielded/agent-platform-cloudflare/ThreadObjectNamespace") {
+>()("@effect-agent/platform-cloudflare/ThreadObjectNamespace") {
   static layer(
     namespace: DurableObjectNamespace<ThreadObjectRpc>,
     options: { readonly rpcTracing?: string } = {},
@@ -174,7 +174,7 @@ export class DurableObjectContext extends Context.Service<
     readonly ctx: DurableObjectState;
     readonly env: unknown;
   }
->()("@yielded/agent-platform-cloudflare/DurableObjectContext") {
+>()("@effect-agent/platform-cloudflare/DurableObjectContext") {
   static layer(ctx: DurableObjectState, env: unknown): Layer.Layer<DurableObjectContext> {
     return Layer.succeed(DurableObjectContext)({ ctx, env });
   }
@@ -191,10 +191,10 @@ export class ThreadObjectIdentity extends Context.Service<
     readonly threadId: ThreadId;
     readonly producerId: ProducerId;
   }
->()("@yielded/agent-platform-cloudflare/ThreadObjectIdentity") {}
+>()("@effect-agent/platform-cloudflare/ThreadObjectIdentity") {}
 
 /** Logical Threads whose canonical stores and admission ledger live in this physical Object. */
 export class ThreadObjectPlacement extends Context.Service<
   ThreadObjectPlacement,
   { readonly ownsThread: (threadId: ThreadId) => boolean }
->()("@yielded/agent-platform-cloudflare/ThreadObjectPlacement") {}
+>()("@effect-agent/platform-cloudflare/ThreadObjectPlacement") {}

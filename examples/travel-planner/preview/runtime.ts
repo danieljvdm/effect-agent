@@ -4,6 +4,8 @@ import { Effect, FileSystem, Schema } from "effect";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 
+import { alchemyRuntimeBundle } from "../test/fixtures/alchemy-bundle.ts";
+
 export class PreviewError extends Schema.TaggedError<PreviewError>()("PreviewError", {
   message: Schema.String,
   cause: Schema.Defect(),
@@ -33,6 +35,7 @@ export const localPreview = Effect.fn("localPreview")(function* (
   const bundle = yield* Effect.tryPromise({
     try: () =>
       build({
+        ...alchemyRuntimeBundle,
         entryPoints: [`${root}preview/planner.ts`],
         bundle: true,
         write: false,

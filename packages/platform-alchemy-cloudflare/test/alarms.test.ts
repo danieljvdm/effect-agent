@@ -300,7 +300,7 @@ describe("alarm host adoption", () => {
 
         expect(events).toMatchObject([
           {
-            id: "@yielded/agent/alarm:reminder:one",
+            id: "effect-agent/alarm:reminder:one",
             payload: { tag: "reminder", id: "one", payload: { version: 3 } },
           },
         ]);
@@ -371,7 +371,7 @@ describe("alarm host adoption", () => {
       Effect.gen(function* () {
         yield* scheduledEventsTransaction((tx) =>
           tx.upsert({
-            id: "@yielded/agent/alarm:reminder:one",
+            id: "effect-agent/alarm:reminder:one",
             runAt: Date.now(),
             payload: {
               _tag: "EffectAgentAlarm",

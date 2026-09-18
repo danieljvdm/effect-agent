@@ -48,7 +48,7 @@ import {
   cloudflareScheduledInputAdmissionLayer,
 } from "./internal/prepared-admission.ts";
 
-const SCHEDULE_ALARM_TAG = "@yielded/agent/ScheduleOwnerWake";
+const SCHEDULE_ALARM_TAG = "effect-agent/ScheduleOwnerWake";
 const SCHEDULE_ALARM_ID = "driver";
 
 const ScheduleAlarmPayload = Schema.Struct({
@@ -170,7 +170,7 @@ export interface ScheduleOwnerObjectRpc extends Rpc.DurableObjectBranded {
 export class ScheduleOwnerNamespace extends Context.Service<
   ScheduleOwnerNamespace,
   { readonly namespace: DurableObjectNamespace<ScheduleOwnerObjectRpc> }
->()("@yielded/agent-platform-cloudflare/ScheduleOwnerNamespace") {}
+>()("@effect-agent/platform-cloudflare/ScheduleOwnerNamespace") {}
 
 const passthroughAgent = (agentId: AgentId): DurableSubmitAgent<typeof PersistedJson> => ({
   definition: { id: agentId, input: PersistedJson },
@@ -387,7 +387,7 @@ export class CloudflareSchedulingClient {
 export class ScheduleOwnerIdentity extends Context.Service<
   ScheduleOwnerIdentity,
   { readonly owner: ScheduleOwner }
->()("@yielded/agent-platform-cloudflare/ScheduleOwnerIdentity") {}
+>()("@effect-agent/platform-cloudflare/ScheduleOwnerIdentity") {}
 
 const decodeOwnerName = Effect.fn("decodeScheduleOwnerName")(function* (
   name: string | null | undefined,

@@ -8,6 +8,7 @@ import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
 import { Trip, TripApp } from "../src/domain.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 let runtime: Miniflare;
 let directory: string;
@@ -31,15 +32,16 @@ beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "trip-app-service-"));
 
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     stdin: {
       resolveDir: import.meta.dirname,
       loader: "ts",
       contents: `
 import { DurableObject } from "cloudflare:workers";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-alchemy-cloudflare/cloudflare-bindings";
 import { Cause, Effect, Layer } from "effect";
-import { WorkerEnvironment } from "effect-cf";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { PlannerError } from "../src/domain.ts";
 import { TripRepository, TripRepositoryLive } from "../src/server/trips.ts";
 import { AppRepository, AppRepositoryLive } from "../src/trip-app/repository.ts";

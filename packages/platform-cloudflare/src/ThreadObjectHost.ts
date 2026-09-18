@@ -633,14 +633,14 @@ const resolveUnknownEndpoint = (
 
 /** Explain one Submission (`submissionId` present) or every nonterminal lane member. */
 export class AdminExplainRequest extends Schema.Class<AdminExplainRequest>(
-  "@yielded/agent-platform-cloudflare/AdminExplainRequest",
+  "@effect-agent/platform-cloudflare/AdminExplainRequest",
 )({
   submissionId: Schema.optionalKey(SubmissionId),
 }) {}
 
 /** Verify carries no parameters — the addressed Object IS the lane. */
 export class AdminVerifyRequest extends Schema.Class<AdminVerifyRequest>(
-  "@yielded/agent-platform-cloudflare/AdminVerifyRequest",
+  "@effect-agent/platform-cloudflare/AdminVerifyRequest",
 )({}) {}
 
 /** Every typed failure of the four admin entry points, plus the protocol's own errors. */
@@ -666,32 +666,32 @@ export const AdminFailure = Schema.Union([
 export type AdminFailure = typeof AdminFailure.Type;
 
 export class ExplainedRecovery extends Schema.TaggedClass<ExplainedRecovery>(
-  "@yielded/agent-platform-cloudflare/ExplainedRecovery",
+  "@effect-agent/platform-cloudflare/ExplainedRecovery",
 )("ExplainedRecovery", {
   explanations: Schema.Array(RecoveryExplanation).check(Schema.isMaxLength(1_024)),
 }) {}
 
 export class VerifiedIntegrity extends Schema.TaggedClass<VerifiedIntegrity>(
-  "@yielded/agent-platform-cloudflare/VerifiedIntegrity",
+  "@effect-agent/platform-cloudflare/VerifiedIntegrity",
 )("VerifiedIntegrity", {
   report: IntegrityReport,
 }) {}
 
 export class RetryExecuted extends Schema.TaggedClass<RetryExecuted>(
-  "@yielded/agent-platform-cloudflare/RetryExecuted",
+  "@effect-agent/platform-cloudflare/RetryExecuted",
 )("RetryExecuted", {
   report: RecoveryReport,
 }) {}
 
 export class ObligationsScanned extends Schema.TaggedClass<ObligationsScanned>(
-  "@yielded/agent-platform-cloudflare/ObligationsScanned",
+  "@effect-agent/platform-cloudflare/ObligationsScanned",
 )("ObligationsScanned", {
   report: ObligationReport,
 }) {}
 
 /** The admin entry point failed TYPED on the Object; the failure re-decodes verbatim. */
 export class AdminFailed extends Schema.TaggedClass<AdminFailed>(
-  "@yielded/agent-platform-cloudflare/AdminFailed",
+  "@effect-agent/platform-cloudflare/AdminFailed",
 )("AdminFailed", {
   failure: AdminFailure,
 }) {}

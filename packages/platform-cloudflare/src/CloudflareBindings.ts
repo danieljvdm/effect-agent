@@ -1,5 +1,5 @@
-import { Effect } from "effect";
 import type { ThreadId } from "@yielded/agent/identifiers";
+import { Effect } from "effect";
 
 import * as Host from "./CloudflareHostBindings.ts";
 import { effectCfRpcLayer } from "./internal/effect-cf-rpc.ts";

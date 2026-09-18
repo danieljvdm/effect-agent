@@ -26,8 +26,12 @@ import {
   defaultSubscriptionLimits,
 } from "@yielded/agent/subscription";
 import { type SubscriptionInputBindings } from "@yielded/agent/subscription-input";
+import {
+  SubscriptionDriver,
+  SubscriptionIntake,
+  Subscriptions,
+} from "@yielded/agent/subscriptions";
 import { Cause, Clock, Context, DateTime, Effect, Layer, Schema, type Scope } from "effect";
-import { SubscriptionDriver, SubscriptionIntake, Subscriptions } from "@yielded/agent/subscriptions";
 
 import { CloudflareAlarms, processDue, type AlarmEvent } from "./CloudflareAlarms.ts";
 import { DurableObjectContext } from "./CloudflareHostBindings.ts";
@@ -35,7 +39,7 @@ import { type ThreadObjectNamespace } from "./CloudflareHostBindings.ts";
 import { CloudflareThreadClient } from "./CloudflareThreadClientHost.ts";
 import { cloudflarePreparedInputAdmissionLayer } from "./internal/prepared-admission.ts";
 
-const SUBSCRIPTION_ALARM_TAG = "@yielded/agent/SubscriptionPartitionWake";
+const SUBSCRIPTION_ALARM_TAG = "effect-agent/SubscriptionPartitionWake";
 const SUBSCRIPTION_ALARM_ID = "driver";
 const MAX_ALARM_WALL_MILLIS = 12 * 60_000;
 const MAX_ALARMS_PER_INVOCATION = 16;
@@ -73,7 +77,7 @@ export interface SubscriptionPartitionAlarmHandler<R = SubscriptionPartitionAlar
 /** Host-only handlers; the framework reserves its namespace and rejects every unknown tag. */
 export const SubscriptionPartitionAlarmExtension = Context.Reference<{
   readonly handlers: ReadonlyArray<SubscriptionPartitionAlarmHandler>;
-}>("@yielded/agent-platform-cloudflare/SubscriptionPartitionAlarmExtension", {
+}>("@effect-agent/platform-cloudflare/SubscriptionPartitionAlarmExtension", {
   defaultValue: () => ({ handlers: [] }),
 });
 
@@ -109,7 +113,7 @@ export const makeSubscriptionPartitionAlarmHandler = Effect.fn(
   if (
     options.tag.length === 0 ||
     options.tag.length > 128 ||
-    options.tag.startsWith("@yielded/agent/") ||
+    options.tag.startsWith("effect-agent/") ||
     !Number.isSafeInteger(options.timeoutMillis) ||
     options.timeoutMillis < 1 ||
     options.timeoutMillis > MAX_ANCILLARY_ALARM_MILLIS
@@ -342,7 +346,7 @@ export interface SubscriptionPartitionObjectRpc extends Rpc.DurableObjectBranded
 export class SubscriptionPartitionNamespace extends Context.Service<
   SubscriptionPartitionNamespace,
   { readonly namespace: DurableObjectNamespace<SubscriptionPartitionObjectRpc> }
->()("@yielded/agent-platform-cloudflare/SubscriptionPartitionNamespace") {}
+>()("@effect-agent/platform-cloudflare/SubscriptionPartitionNamespace") {}
 
 const storageFailure = (code: string): SubscriptionError =>
   SubscriptionError.make({ reason: "storage", code });
@@ -610,7 +614,7 @@ export class CloudflareSubscriptionsClient {
 export class SubscriptionPartitionIdentity extends Context.Service<
   SubscriptionPartitionIdentity,
   { readonly partition: SourcePartition }
->()("@yielded/agent-platform-cloudflare/SubscriptionPartitionIdentity") {}
+>()("@effect-agent/platform-cloudflare/SubscriptionPartitionIdentity") {}
 
 const decodePartitionName = Effect.fn("decodeSubscriptionPartitionName")(function* (
   name: string | null | undefined,
@@ -841,7 +845,7 @@ const alarmHandler = (limits: SubscriptionLimits) =>
           const handler = matches[0];
 
           if (
-            event.tag.startsWith("@yielded/agent/") ||
+            event.tag.startsWith("effect-agent/") ||
             matches.length !== 1 ||
             handler === undefined
           )
@@ -959,7 +963,7 @@ export const makeRuntime = <E, R>(
           tags.length > MAX_ALARMS_PER_INVOCATION ||
           new Set(tags).size !== tags.length ||
           tags.some(
-            (tag) => tag.length === 0 || tag.length > 128 || tag.startsWith("@yielded/agent/"),
+            (tag) => tag.length === 0 || tag.length > 128 || tag.startsWith("effect-agent/"),
           )
         )
           return yield* SubscriptionAlarmProtocolError.make({

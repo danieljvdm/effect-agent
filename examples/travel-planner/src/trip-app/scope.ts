@@ -1,4 +1,4 @@
-import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-alchemy-cloudflare/cloudflare-bindings";
 import { Effect } from "effect";
 
 import { PlannerError } from "../domain.ts";

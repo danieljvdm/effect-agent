@@ -1,7 +1,7 @@
 import { EmailProofDelivery } from "@yielded/auth/Proofs";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Redacted } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 
 import { handleRequest } from "../../src/worker";
 export { TravelPlannerThread } from "./worker";

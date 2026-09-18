@@ -1,8 +1,8 @@
 import { Effect, Layer, Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 
 import { AccountError } from "../../src/auth/account.ts";
 import { PlannerError, TripSiteStore } from "../../src/domain.ts";
+import { plannerEnvironment } from "../../src/server/alchemy.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
 import { TripFailpoint } from "../../src/server/trips.ts";
 import { makeWorker } from "../../src/worker.ts";
@@ -21,7 +21,7 @@ const fixtureAuthorized = (request: Request, env: TestEnvironment) =>
 // Only this bundled test entrypoint accepts a bearer fixture and caller-selected identity.
 const worker = makeWorker(
   Effect.fn("Fixture.authenticate")(function* (request: Request) {
-    const env = yield* WorkerEnvironment;
+    const env = yield* plannerEnvironment;
 
     if (!fixtureAuthorized(request, env))
       return yield* new AccountError({
@@ -78,7 +78,11 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
 ) {}
 
 export default {
-  fetch(request: Request, env: Cloudflare.Env & TestEnvironment): Response | Promise<Response> {
+  fetch(
+    request: Request,
+    env: Cloudflare.Env & TestEnvironment,
+    ctx: ExecutionContext,
+  ): Response | Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/__test/progress") {
@@ -104,6 +108,6 @@ export default {
         fixtureSession(headers.get("x-test-email") ?? ownerEmail).subjectId,
       );
 
-    return worker.fetch(new Request(request, { headers }), env);
+    return new worker(ctx, env).fetch(new Request(request, { headers }));
   },
 };

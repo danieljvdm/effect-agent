@@ -12,6 +12,7 @@ import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
 import type { PlannerSettings } from "../src/domain.ts";
 import { PlannerSnapshot, PlannerWorkerDetail } from "../src/domain.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 import { fixtureOwner } from "./fixtures/identity.ts";
 
 const token = "research-worker-fixture";
@@ -46,6 +47,7 @@ const makeRuntime = () =>
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/research-worker.ts")],
     bundle: true,
     write: false,

@@ -5,9 +5,9 @@ import {
   type MemoryOwnerIdentity,
   type MemoryRpcLimits,
 } from "@yielded/agent-storage-cloudflare/memory-protocol";
+import { type MemoryMutationFailpoint } from "@yielded/agent/memory-store";
 import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { Effect, Layer } from "effect";
-import { type MemoryMutationFailpoint } from "@yielded/agent/memory-store";
 
 import {
   acquire,

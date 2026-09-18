@@ -7,11 +7,11 @@
     "dev": "vp exec alchemy dev alchemy.run.ts"
   },
   "dependencies": {
-    "@yielded/agent-platform-alchemy-cloudflare": "workspace:*",
     "@effect/ai-openai": "catalog:",
+    "@yielded/agent": "workspace:*",
+    "@yielded/agent-platform-alchemy-cloudflare": "workspace:*",
     "alchemy": "catalog:",
-    "effect": "catalog:",
-    "@yielded/agent": "workspace:*"
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",

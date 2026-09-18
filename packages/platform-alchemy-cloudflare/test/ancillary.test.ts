@@ -1,13 +1,13 @@
 import { type MemoryObjectRpc } from "@yielded/agent-platform-cloudflare/memory-object-host";
 import { type ScheduleOwnerObjectRpc } from "@yielded/agent-platform-cloudflare/schedule-owner-host";
 import { type SubscriptionPartitionObjectRpc } from "@yielded/agent-platform-cloudflare/subscription-partition-host";
-import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Effect, Layer } from "effect";
 import { ThreadId } from "@yielded/agent/identifiers";
 import { ScheduleId } from "@yielded/agent/schedule";
 import { scheduleOwnerKey } from "@yielded/agent/schedule-transition";
 import { Scheduling } from "@yielded/agent/scheduling";
 import { SubscriptionIntake, Subscriptions } from "@yielded/agent/subscriptions";
+import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import { CloudflareMemoryClient } from "../src/MemoryObject.ts";

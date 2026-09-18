@@ -151,7 +151,7 @@ const run: typeof Run.Type = {
 };
 
 const jobs: typeof Jobs.Type = {
-  total_count: 12,
+  total_count: 13,
   jobs: [
     ["Static checks", "Format, lint, and type checks"],
     ["Tests (workspace)", "Run workspace test suites"],
@@ -161,6 +161,7 @@ const jobs: typeof Jobs.Type = {
     ["Tests (platform-node)", "Run workspace test suites"],
     ["Tests (testing)", "Run workspace test suites"],
     ["Tests (platform-cloudflare)", "Run workspace test suites"],
+    ["Tests (platform-alchemy-cloudflare)", "Run workspace test suites"],
     ["Tests (storage-cloudflare)", "Run workspace test suites"],
     ["Tests (storage-postgres-16)", "Run workspace test suites"],
     ["Tests (storage-postgres-18)", "Run workspace test suites"],

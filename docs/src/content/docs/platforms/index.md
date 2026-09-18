@@ -19,7 +19,7 @@ track worker ownership, and recover after restarts.
 Choose Node.js when you operate a process and persistent disk.
 Choose Cloudflare when your application uses Workers and Durable Objects.
 For Alchemy's Effect-native Worker runtime, the experimental
-[`@effect-agent/platform-alchemy-cloudflare`](./cloudflare#alchemy-host) alternative shares
+[`@yielded/agent-platform-alchemy-cloudflare`](/platforms/cloudflare/#alchemy-host) alternative shares
 the Cloudflare storage and recovery contracts. It currently requires the repository's
 Alchemy runtime patch.
 

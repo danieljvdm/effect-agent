@@ -6,11 +6,11 @@ import {
   defaultMemoryRpcLimits,
   type MemoryOwnerFailure,
 } from "@yielded/agent-storage-cloudflare/memory-protocol";
-import { Effect, Layer } from "effect";
 import type * as MemoryNamespace from "@yielded/agent/memory-namespace";
 import { type MemoryAccess } from "@yielded/agent/memory-revalidation";
 import type { MemoryMutationFailpoint } from "@yielded/agent/memory-store";
 import { type Principal } from "@yielded/agent/submission-ledger";
+import { Effect, Layer } from "effect";
 import {
   DurableObject as EffectCfDurableObject,
   DurableObjectState,

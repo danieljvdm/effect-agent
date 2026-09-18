@@ -51,6 +51,12 @@
     },
     {
       "path": "./packages/ai-decision"
+    },
+    {
+      "path": "./packages/platform-alchemy-cloudflare"
+    },
+    {
+      "path": "./examples/alchemy-cloudflare"
     }
   ]
 }

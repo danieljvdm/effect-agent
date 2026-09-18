@@ -113,7 +113,7 @@ export class ThreadClientError extends Schema.TaggedError<ThreadClientError>()(
  * Thread identity is deliberately absent — the addressed Object IS the lane.
  */
 export class SubmitRequest extends Schema.Class<SubmitRequest>(
-  "@yielded/agent-platform-cloudflare/SubmitRequest",
+  "@effect-agent/platform-cloudflare/SubmitRequest",
 )({
   agentId: AgentId,
   principal: Principal,
@@ -128,7 +128,7 @@ export class SubmitRequest extends Schema.Class<SubmitRequest>(
 
 /** One bounded page of canonical records after an optional sequence. */
 export class ObservePageRequest extends Schema.Class<ObservePageRequest>(
-  "@yielded/agent-platform-cloudflare/ObservePageRequest",
+  "@effect-agent/platform-cloudflare/ObservePageRequest",
 )({
   afterSequence: Schema.optionalKey(CanonicalSequence),
   limit: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1_024)),
@@ -136,7 +136,7 @@ export class ObservePageRequest extends Schema.Class<ObservePageRequest>(
 
 /** One event-driven wait for canonical progress strictly after this sequence. */
 export class AwaitProgressRequest extends Schema.Class<AwaitProgressRequest>(
-  "@yielded/agent-platform-cloudflare/AwaitProgressRequest",
+  "@effect-agent/platform-cloudflare/AwaitProgressRequest",
 )({
   afterSequence: CanonicalSequence,
   waiterId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
@@ -144,7 +144,7 @@ export class AwaitProgressRequest extends Schema.Class<AwaitProgressRequest>(
 
 /** Best-effort cancellation of one in-flight progress RPC. */
 export class CancelProgressRequest extends Schema.Class<CancelProgressRequest>(
-  "@yielded/agent-platform-cloudflare/CancelProgressRequest",
+  "@effect-agent/platform-cloudflare/CancelProgressRequest",
 )({
   waiterId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
 }) {}
@@ -183,57 +183,57 @@ export const HostFailure = Schema.Union([
 export type HostFailure = typeof HostFailure.Type;
 
 export class SubmitSucceeded extends Schema.TaggedClass<SubmitSucceeded>(
-  "@yielded/agent-platform-cloudflare/SubmitSucceeded",
+  "@effect-agent/platform-cloudflare/SubmitSucceeded",
 )("SubmitSucceeded", {
   receipt: Receipt,
 }) {}
 
 export class SubmissionStatusResponse extends Schema.TaggedClass<SubmissionStatusResponse>(
-  "@yielded/agent-platform-cloudflare/SubmissionStatusResponse",
+  "@effect-agent/platform-cloudflare/SubmissionStatusResponse",
 )("SubmissionStatusResponse", { status: SubmissionStatus }) {}
 
 export class SettlementReached extends Schema.TaggedClass<SettlementReached>(
-  "@yielded/agent-platform-cloudflare/SettlementReached",
+  "@effect-agent/platform-cloudflare/SettlementReached",
 )("SettlementReached", {
   settlement: Settlement,
 }) {}
 
 export class ObservedPage extends Schema.TaggedClass<ObservedPage>(
-  "@yielded/agent-platform-cloudflare/ObservedPage",
+  "@effect-agent/platform-cloudflare/ObservedPage",
 )("ObservedPage", {
   records: Schema.Array(CanonicalRecordEnvelope).check(Schema.isMaxLength(1_024)),
 }) {}
 
 /** A record was already committed or an incarnation-local hint says the caller should re-read. */
 export class ProgressObserved extends Schema.TaggedClass<ProgressObserved>(
-  "@yielded/agent-platform-cloudflare/ProgressObserved",
+  "@effect-agent/platform-cloudflare/ProgressObserved",
 )("ProgressObserved", {}) {}
 
 export class ProgressCancelled extends Schema.TaggedClass<ProgressCancelled>(
-  "@yielded/agent-platform-cloudflare/ProgressCancelled",
+  "@effect-agent/platform-cloudflare/ProgressCancelled",
 )("ProgressCancelled", {}) {}
 
 export class AbortRecorded extends Schema.TaggedClass<AbortRecorded>(
-  "@yielded/agent-platform-cloudflare/AbortRecorded",
+  "@effect-agent/platform-cloudflare/AbortRecorded",
 )("AbortRecorded", {
   intent: AbortIntent,
 }) {}
 
 export class ApprovalRecorded extends Schema.TaggedClass<ApprovalRecorded>(
-  "@yielded/agent-platform-cloudflare/ApprovalRecorded",
+  "@effect-agent/platform-cloudflare/ApprovalRecorded",
 )("ApprovalRecorded", {
   intent: ApprovalDecisionIntent,
 }) {}
 
 export class UnknownResolutionRecorded extends Schema.TaggedClass<UnknownResolutionRecorded>(
-  "@yielded/agent-platform-cloudflare/UnknownResolutionRecorded",
+  "@effect-agent/platform-cloudflare/UnknownResolutionRecorded",
 )("UnknownResolutionRecorded", {
   intent: UnknownResolutionIntent,
 }) {}
 
 /** The entry point failed TYPED on the Object; the failure re-decodes verbatim. */
 export class HostFailed extends Schema.TaggedClass<HostFailed>(
-  "@yielded/agent-platform-cloudflare/HostFailed",
+  "@effect-agent/platform-cloudflare/HostFailed",
 )("HostFailed", {
   failure: HostFailure,
 }) {}
@@ -428,7 +428,7 @@ export class CloudflareThreadClient extends Context.Service<
       command: UnknownResolutionCommand,
     ) => Effect.Effect<UnknownResolutionIntent, ClientUnknownFailure>;
   }
->()("@yielded/agent-platform-cloudflare/CloudflareThreadClient") {
+>()("@effect-agent/platform-cloudflare/CloudflareThreadClient") {
   /**
    * Assemble the client from a resolved namespace and the platform Crypto implementation.
    * rpcTracing is the binding name and remains opt-in. Caller authentication, principals,

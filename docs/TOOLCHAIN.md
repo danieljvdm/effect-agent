@@ -7,8 +7,8 @@ Framework packages live in `packages/*`; runnable examples live in `examples/*`.
 
 The root [package.json](../package.json) owns shared dependency versions.
 Workspace manifests use `catalog:` for those dependencies and `workspace:*` for internal packages.
-The travel planner consumes explicit Effect Agent workspace dependencies and the shared
-Effect and `effect-cf` catalog versions, so it validates the current framework.
+The travel planner consumes explicit Yielded Agent workspace dependencies and the shared
+Effect and Alchemy catalog versions, so it validates the current framework.
 `bunfig.toml` disables implicit workspace linking, so only explicit `workspace:` dependencies
 use local source; registry dependencies, including transitive ones, stay on published packages.
 Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
@@ -38,7 +38,7 @@ on the catalog versions, including dependencies of published consumers. Publishe
 packages still importing `effect/unstable/*` cannot run on stable Effect.
 The root also installs Alchemy's optional `@effect/platform-bun` peer at the shared Effect
 version so its Bun entry points remain available.
-Vite+ supplies Vitest except in the two Cloudflare packages, whose Workers pool requires a
+Vite+ supplies Vitest except in the three Cloudflare packages, whose Workers pool requires a
 direct catalog-pinned Vitest dependency and a Vite task. Run those tasks through `vp run`.
 The repository retains Vitest 4.1.11 for the Workers pool despite `@effect/vitest` declaring
 a Vitest 5 peer minimum, as it did on Effect rc.117. Verify this compatibility with the
@@ -48,10 +48,12 @@ Operational harnesses under `tooling/*` also use Vite tasks for Miniflare tests.
 Astro uses its own Vite dependency. Keep the root Vite+ core alias required by Vite+;
 do not add a global Vite override.
 
-Alchemy is deployment tooling; framework packages do not depend on it at runtime.
-Alchemy and its Cloudflare runtime advance together. Their published beta.80 packages and
-Distilled rc.13 clients support stable Effect 4 directly, without repository compatibility
-patches. Verify upgrades with a frozen install and `vp run check:deploy`.
+Alchemy and its Cloudflare runtime advance together. Their beta.80 packages and Distilled
+rc.13 clients support stable Effect 4 directly. The experimental
+`@yielded/agent-platform-alchemy-cloudflare` host also consumes Alchemy at runtime and requires
+`patches/alchemy@2.0.0-beta.80.patch` for Object lifetimes, native clients, and transactional
+alarms. Root `patchedDependencies` applies it; a peer dependency alone does not.
+Verify upgrades with a frozen install, the existing Alchemy host suites, and `vp run check:deploy`.
 
 The demo uses Auth beta.11 and its compatible Drizzle, GitHub, and crypto companions,
 which support stable Effect directly. Verify auth upgrades with the existing integration checks
@@ -128,7 +130,7 @@ Include `vp env doctor` output when asking for toolchain help.
 
 Local tests run with at most four workspace tasks at once and without dependency ordering.
 CI gives the travel planner, context-continuity evaluation, runtime benchmark, Node platform,
-testing package, and both Cloudflare packages separate runners. The remaining workspace suites
+testing package, and all three Cloudflare packages separate runners. The remaining workspace suites
 share one runner and run sequentially. Each suite keeps its own Vitest/workerd worker limits;
 running more heavy suites on one runner can starve ownership-lease renewals in crash tests.
 Builds follow dependency order. Process-kill and adapter contract suites are part of
@@ -229,7 +231,7 @@ under `/agent`, preserving query strings. Retain the domain and redirects.
 
 ## Releasing to npm
 
-All thirteen public packages share one Changesets fixed group and publish to `beta`
+All fourteen public packages share one Changesets fixed group and publish to `beta`
 as `X.Y.Z-beta.N`. Keep the group in `.changeset/config.json` aligned with public workspaces.
 The travel planner is a private application with no package version. It does not receive
 changesets, version bumps, changelogs, package tags, or npm releases. Private-package versioning
@@ -606,7 +608,7 @@ task fingerprints. Ordinary task results are reused only when task inputs match.
 
 ### Release metadata CI {#release-metadata-ci}
 
-`scripts/release-ci.ts` reuses static checks and all ten test-matrix gates from ordinary
+`scripts/release-ci.ts` reuses static checks and all eleven test-matrix gates from ordinary
 `CI` on the exact source base, both on the version PR and after its merge. The verifier and its
 dependencies run from that base, with read-only contents, Actions and pull-request permissions.
 Candidate files are read as Git objects; the proof does not execute candidate code.

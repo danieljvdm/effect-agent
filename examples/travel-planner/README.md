@@ -14,6 +14,10 @@ It uses Cloudflare:
 - **Email Sending** for email sign-in, alongside GitHub OAuth.
 
 The app consumes the repository's Effect Agent workspace packages and uses Effect Atom for client state.
+Workers, Durable Objects, Workflows, and R2 use the Alchemy Effect runtime;
+container operations use the Cloudflare Sandbox SDK. Generated trip apps use Alchemy too.
+The production build rejects `effect-cf` runtime imports. Alchemy beta.80 uses the
+repository's runtime patch.
 [alchemy.run.ts](alchemy.run.ts) defines the Cloudflare resources and required configuration.
 
 New trip sites fork an immutable starter identified by its source contents. Updating the
@@ -118,6 +122,16 @@ before decoding and activity projection. Status describes that selected request 
 active work on the worker; an older pending delivery is not reconstructed as a new task.
 Activity is a recent window, not a complete audit log. Reads never admit, recover, or replay
 work. Diagnostics retain the existing redaction boundary.
+
+Worker start and follow-up replies include their delivery status. Pending means retained for
+retry; a destination receipt confirms admission, and neither means execution has finished.
+Refused or parked work requires attention; inspect the returned delivery reference instead
+of resending the same request.
+
+Research delegation and trip publication use the latest canonical user input visible to the
+specific model turn. A joined worker report cannot inherit an earlier user's authority, and a
+later user request cannot authorize a call already declared. Publication still requires the
+explicit grant for the selected trip and revision.
 
 These queries use the framework workspace dependencies in this example. They do not
 change the framework's general `Subagent.inspect` or `Subagent.observe` contracts. Any future

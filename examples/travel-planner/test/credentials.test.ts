@@ -8,6 +8,7 @@ import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
 import { OpenAiConnection } from "../src/credential-domain.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 import { ownerEmail } from "./fixtures/identity.ts";
 
 const token = "preference-test-token";
@@ -55,6 +56,7 @@ const makeRuntime = () =>
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/credentials-worker.ts")],
     bundle: true,
     write: false,

@@ -54,9 +54,8 @@ export default Alchemy.Stack(
       assets: { runWorkerFirst: true },
       env: {
         ...(Redacted.value(serverOpenAiKey) ? { SERVER_OPENAI_KEY: serverOpenAiKey } : {}),
-        // Alchemy keys env-bound Objects by the binding name, overriding the
-        // declaration ID. Change both binding and class for this clean start.
-        // Keep both stable after release; changing them deletes account data.
+        // The Alchemy runtime bridge preserves this existing namespace and class.
+        // Keep both identities stable so accounts continue using their stored data.
         ACCOUNT_THREADS: Cloudflare.DurableObject("AccountThreadsV1", {
           className: "AccountPlannerThread",
         }),

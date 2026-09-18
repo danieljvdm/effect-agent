@@ -45,6 +45,7 @@
     "@types/node": "catalog:",
     "@yielded/agent": "workspace:*",
     "@yielded/agent-ai-decision": "workspace:*",
+    "@yielded/agent-platform-alchemy-cloudflare": "workspace:*",
     "@yielded/agent-platform-cloudflare": "workspace:*",
     "@yielded/agent-platform-node": "workspace:*",
     "@yielded/agent-sandbox-local": "workspace:*",
@@ -63,8 +64,7 @@
     "typescript": "catalog:",
     "typescript-twoslash": "catalog:",
     "vite": "catalog:",
-    "vite-plus": "catalog:",
-    "@yielded/agent-platform-alchemy-cloudflare": "workspace:*"
+    "vite-plus": "catalog:"
   },
   "overrides": {
     "@effect/platform-browser": "catalog:",
@@ -79,6 +79,9 @@
     "node": "^22.18.0 || >=24.11.0"
   },
   "packageManager": "bun@1.4.2",
+  "patchedDependencies": {
+    "alchemy@2.0.0-beta.80": "patches/alchemy@2.0.0-beta.80.patch"
+  },
   "catalog": {
     "alchemy": "2.0.0-beta.80",
     "@base-ui/react": "1.6.0",

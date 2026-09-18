@@ -33,17 +33,17 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@yielded/agent": "workspace:*",
     "@yielded/agent-platform-cloudflare": "workspace:*",
-    "@yielded/agent-storage-cloudflare": "workspace:*",
-    "@yielded/agent": "workspace:*"
+    "@yielded/agent-storage-cloudflare": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "catalog:",
     "@cloudflare/workers-types": "catalog:",
-    "@yielded/agent-testing": "workspace:*",
     "@effect/platform-browser": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
+    "@yielded/agent-testing": "workspace:*",
     "alchemy": "catalog:",
     "effect": "catalog:",
     "esbuild": "catalog:",

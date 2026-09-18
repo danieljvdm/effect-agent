@@ -1,12 +1,12 @@
 import { type ThreadObjectNamespace } from "@yielded/agent-platform-cloudflare/cloudflare-host-bindings";
 import * as Host from "@yielded/agent-platform-cloudflare/schedule-owner-host";
-import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
-import { Effect, Layer, type Scope } from "effect";
 import {
   type ScheduleAuthorizer,
   defaultSchedulingLimits,
   type SchedulingLimits,
 } from "@yielded/agent/schedule";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
+import { Effect, Layer, type Scope } from "effect";
 
 import * as Alarms from "./Alarms.ts";
 import {

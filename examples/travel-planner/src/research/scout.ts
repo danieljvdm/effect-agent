@@ -1,6 +1,6 @@
 import { OpenAiTool } from "@effect/ai-openai";
 import { Subagent, Agent } from "@yielded/agent";
-import { ThreadObjectIdentity } from "@yielded/agent-platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@yielded/agent-platform-alchemy-cloudflare/cloudflare-bindings";
 import { SubagentGrant } from "@yielded/agent/subagent-contract";
 import { Effect } from "effect";
 import { Toolkit } from "effect/ai";

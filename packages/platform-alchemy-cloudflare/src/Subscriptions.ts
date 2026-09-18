@@ -1,7 +1,5 @@
 import { type ThreadObjectNamespace } from "@yielded/agent-platform-cloudflare/cloudflare-host-bindings";
 import * as Host from "@yielded/agent-platform-cloudflare/subscription-partition-host";
-import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
-import { Effect, Layer, type Scope } from "effect";
 import { type EventSources } from "@yielded/agent/event-source";
 import {
   type SubscriptionAuthorizer,
@@ -9,6 +7,8 @@ import {
   type SubscriptionLimits,
 } from "@yielded/agent/subscription";
 import { type SubscriptionInputBindings } from "@yielded/agent/subscription-input";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
+import { Effect, Layer, type Scope } from "effect";
 
 import * as Alarms from "./Alarms.ts";
 import {
