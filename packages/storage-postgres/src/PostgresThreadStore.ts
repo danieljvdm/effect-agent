@@ -1,16 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
-import {
-  Clock,
-  Context,
-  Crypto,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
+import { Clock, Context, Crypto, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import {
   CanonicalBatch,
@@ -20,9 +9,8 @@ import {
   Digest,
   ObservationOffset,
 } from "effect-agent/records";
-import { postgresLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import { makeSelectedReads } from "effect-agent/sql-thread-native-reads";
-import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 import {
   AppendConflict,
   AppendResult,
@@ -56,58 +44,21 @@ import {
   RawReadRequest,
   type PostgresJournal,
 } from "./internal/postgres-journal.ts";
-import { storageClientLayer, type PostgresClientOptions } from "./PostgresStorageClient.ts";
-import { PostgresStorageConfig, PostgresStorageConfigValue } from "./PostgresStorageConfig.ts";
+import * as PostgresStorageClient from "./PostgresStorageClient.ts";
 import {
-  type PostgresStorageCompatibilityError,
+  layerConfig,
+  PostgresStorageConfig,
+  type PostgresStorageOptions,
+} from "./PostgresStorageConfig.ts";
+import {
   PostgresAppendConflict,
   PostgresCheckpointConflict,
   PostgresFenceRejected,
   type PostgresStorageFailpointLocation,
   PostgresStorageCorruptionError,
-  PostgresStorageError,
+  type PostgresStorageInitializationError,
 } from "./PostgresStorageError.ts";
-import {
-  PostgresStorageFailpoint,
-  type PostgresStorageFailpointHandler,
-} from "./PostgresStorageFailpoint.ts";
-
-export interface PostgresStorageOptions {
-  /** Connection configuration for the adapter's own client, minus the type registry it owns. */
-  readonly client: PostgresClientOptions;
-  /**
-   * Postgres schema holding the adapter's tables, created if absent. Defaults to `public`.
-   *
-   * Selecting any other schema requires it to be the *connection's* default, because
-   * `search_path` binds per connection and this driver exposes no way to set one for a pool.
-   * Set it with `ALTER ROLE ... SET search_path` or `ALTER DATABASE ... SET search_path`; the
-   * adapter verifies the effective schema at startup and refuses to run if it disagrees.
-   */
-  readonly schema?: string | undefined;
-  readonly observationPollInterval?: number | undefined;
-  /**
-   * Bounded wait for a contended row lock inside a write transaction, in milliseconds. A
-   * transaction that exceeds it fails with the retryable `PostgresWriteContention`.
-   */
-  readonly lockTimeout?: number | undefined;
-  /**
-   * Submission ownership lease duration in milliseconds (D5). Defaults to
-   * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `effect-agent/submission-ledger`.
-   */
-  readonly ownershipLeaseDuration?: number | undefined;
-  /**
-   * Re-verify every stored payload and digest chain while opening the store. Defaults to
-   * off: per-operation Schema decoding and the digest chain already fail clearly on corrupt
-   * rows without scanning the whole database on every open.
-   */
-  readonly verifyOnOpen?: boolean | undefined;
-  readonly failpoint?: PostgresStorageFailpointHandler | undefined;
-}
-
-export type PostgresStorageInitializationError =
-  | PostgresStorageCompatibilityError
-  | PostgresStorageCorruptionError
-  | PostgresStorageError;
+import { layerFailpoint, PostgresStorageFailpoint } from "./PostgresStorageFailpoint.ts";
 
 const OffsetText = Schema.String.check(Schema.isMaxLength(4 * 1024));
 const POSTGRES_OFFSET_PREFIX = "effect-agent-postgres@1:";
@@ -955,46 +906,17 @@ const makeServices = Effect.fn("PostgresThreadStore.makeServices")(function* () 
  * SQLite Thread Store implementation with configuration, failpoint, SQL, and Crypto
  * authority kept visible in its input channel.
  */
-export const threadStoreLayer: Layer.Layer<
+export const layerWithServices: Layer.Layer<
   ThreadStore,
   PostgresStorageInitializationError,
   PostgresStorageConfig | PostgresStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
-> = Layer.effectContext(makeServices()).pipe(Layer.provide(postgresLayer));
+> = Layer.effectContext(makeServices()).pipe(Layer.provide(SqlDialect.layerPostgres));
 
 /**
  * Validated SQLite storage configuration Layer with the documented defaults applied. Shared
  * by the ThreadStore and SubmissionLedger convenience layers so their defaults cannot
  * drift.
  */
-export const storageConfigLayer = (
-  options: PostgresStorageOptions,
-): Layer.Layer<PostgresStorageConfig, PostgresStorageError> =>
-  Layer.effect(PostgresStorageConfig)(
-    Schema.decodeEffect(PostgresStorageConfigValue)({
-      observationPollInterval: options.observationPollInterval ?? 25,
-      lockTimeout: options.lockTimeout ?? 5_000,
-      schema: options.schema ?? "public",
-      ownershipLeaseDuration:
-        options.ownershipLeaseDuration ?? Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION),
-      verifyOnOpen: options.verifyOnOpen ?? false,
-    }).pipe(
-      Effect.mapError((error) =>
-        PostgresStorageError.make({
-          cause: error,
-          operation: "configure SQLite storage",
-          message: error.message,
-        }),
-      ),
-    ),
-  );
-
-/** The failpoint Layer selected by convenience options: explicit handler or the no-op default. */
-export const storageFailpointLayer = (
-  options: PostgresStorageOptions,
-): Layer.Layer<PostgresStorageFailpoint> =>
-  options.failpoint === undefined
-    ? PostgresStorageFailpoint.layer
-    : Layer.succeed(PostgresStorageFailpoint)({ hit: options.failpoint });
 
 /**
  * A composition-root convenience Layer for canonical Threads. Durable accepted work is
@@ -1005,15 +927,15 @@ export const layer = (
 ): Layer.Layer<ThreadStore, PostgresStorageInitializationError> =>
   Layer.unwrap(
     Effect.map(PostgresStorageConfig, (config) =>
-      threadStoreLayer.pipe(
+      layerWithServices.pipe(
         Layer.provide(
           Layer.mergeAll(
             Layer.succeed(PostgresStorageConfig)(config),
-            storageFailpointLayer(options),
-            storageClientLayer(options.client),
+            layerFailpoint(options),
+            PostgresStorageClient.layer(options.client),
             NodeCrypto.layer,
           ),
         ),
       ),
     ),
-  ).pipe(Layer.provide(storageConfigLayer(options)));
+  ).pipe(Layer.provide(layerConfig(options)));

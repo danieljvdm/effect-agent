@@ -1,12 +1,12 @@
-import { messageDeliveryStoreLayer } from "@effect-agent/storage-postgres/postgres-message-delivery-store";
-import { scheduleStoreLayer } from "@effect-agent/storage-postgres/postgres-schedule-store";
-import { storageClientLayer } from "@effect-agent/storage-postgres/postgres-storage-client";
+import * as PostgresMessageDeliveryStore from "@effect-agent/storage-postgres/postgres-message-delivery-store";
+import * as PostgresScheduleStore from "@effect-agent/storage-postgres/postgres-schedule-store";
+import * as PostgresStorageClient from "@effect-agent/storage-postgres/postgres-storage-client";
 import {
   PostgresStorageConfig,
   PostgresStorageConfigValue,
 } from "@effect-agent/storage-postgres/postgres-storage-config";
 import { PostgresStorageFailpoint } from "@effect-agent/storage-postgres/postgres-storage-failpoint";
-import { subscriptionStoreLayer } from "@effect-agent/storage-postgres/postgres-subscription-store";
+import * as PostgresSubscriptionStore from "@effect-agent/storage-postgres/postgres-subscription-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import { describe, it } from "@effect/vitest";
@@ -64,7 +64,7 @@ const storageServices = (url: string) =>
       }),
     ),
     PostgresStorageFailpoint.layer,
-    storageClientLayer({ url: Redacted.make(url) }),
+    PostgresStorageClient.layer({ url: Redacted.make(url) }),
   );
 
 describe("PostgresScheduleStore", () => {
@@ -72,7 +72,7 @@ describe("PostgresScheduleStore", () => {
     it.effect(conformanceCase.name, () =>
       withTemporaryDatabase((url) =>
         conformanceCase.run.pipe(
-          Effect.provide(scheduleStoreLayer.pipe(Layer.provide(storageServices(url)))),
+          Effect.provide(PostgresScheduleStore.layer.pipe(Layer.provide(storageServices(url)))),
         ),
       ),
     );
@@ -85,7 +85,7 @@ describe("PostgresSubscriptionStore", () => {
       withTemporaryDatabase((url) =>
         conformanceCase.run.pipe(
           Effect.provide(
-            subscriptionStoreLayer(subscriptionConformancePartition).pipe(
+            PostgresSubscriptionStore.layer(subscriptionConformancePartition).pipe(
               Layer.provide(storageServices(url)),
             ),
           ),
@@ -102,7 +102,7 @@ describe("PostgresMessageDeliveryStore", () => {
         conformanceCase.run.pipe(
           Effect.provide(
             Layer.mergeAll(
-              messageDeliveryStoreLayer().pipe(Layer.provide(storageServices(url))),
+              PostgresMessageDeliveryStore.layer().pipe(Layer.provide(storageServices(url))),
               NodeCrypto.layer,
             ),
           ),

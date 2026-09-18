@@ -169,3 +169,9 @@ export class PostgresStorageFailpointError extends Schema.TaggedError<PostgresSt
     return `Injected Postgres storage failure at ${this.location}.`;
   }
 }
+
+/** Every way opening Postgres storage can fail before it serves a request. */
+export type PostgresStorageInitializationError =
+  | PostgresStorageCompatibilityError
+  | PostgresStorageCorruptionError
+  | PostgresStorageError;

@@ -23,7 +23,7 @@ import * as AgentRuntime from "effect-agent/agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
 import { MemoryReader } from "effect-agent/memory-store";
 import { RunContextPreparationPassthrough } from "effect-agent/run-options";
-import { sqliteLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import { memoryReaderLayer } from "effect-agent/sql-memory-store";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { LanguageModel, Model, type Response, Toolkit } from "effect/unstable/ai";
@@ -94,7 +94,7 @@ const activityLayer = (filename: string) =>
 
 const readerLayer = (filename: string) =>
   memoryReaderLayer.pipe(
-    Layer.provide(sqliteLayer),
+    Layer.provide(SqlDialect.layerSqlite),
     Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })),
   );
 

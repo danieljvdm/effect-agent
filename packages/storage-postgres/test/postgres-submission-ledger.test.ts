@@ -1,4 +1,4 @@
-import { ledgerLayer } from "@effect-agent/storage-postgres/postgres-submission-ledger";
+import * as PostgresSubmissionLedger from "@effect-agent/storage-postgres/postgres-submission-ledger";
 import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import { describe, it } from "@effect/vitest";
@@ -47,7 +47,7 @@ describe("PostgresSubmissionLedger", () => {
           conformanceCase.run.pipe(
             Effect.provide(
               Layer.mergeAll(
-                ledgerLayer({ client: { url: Redacted.make(url) } }),
+                PostgresSubmissionLedger.layer({ client: { url: Redacted.make(url) } }),
                 NodeCrypto.layer,
               ),
             ),

@@ -8,26 +8,32 @@ import { Redacted } from "effect";
 
 const storage = PostgresThreadStore.layer({
   client: { url: Redacted.make(process.env.DATABASE_URL) },
-  schema: "effect_agent",
 });
 ```
+
+`PostgresSubmissionLedger.layer` serves durable accepted work from the same options. Each store
+also exposes `layerWithServices`, which takes the config, failpoint, client and crypto services
+from the composition root instead of owning them.
 
 ## Requirements
 
 - Postgres 16 or newer. The adapter uses the `IS JSON` predicate, which arrived in 16.
-- A role permitted to `CREATE SCHEMA`, or a pre-created schema it may own.
+- A role permitted to create the adapter's tables in the connection's schema.
 
 ## What differs from the SQLite adapter
 
-**Schema, not file.** Tables live in a dedicated schema (`effect_agent` by default) rather than a
-database of their own, so agent storage stays separable from application tables on one instance.
+**The schema must be the connection's.** Tables live in whatever schema the connection resolves,
+`public` by default. `search_path` binds per connection while the client is a pool, and this
+driver exposes no way to set one for the pool, so selecting another schema means making it the
+connection default (`ALTER ROLE ... SET search_path`). Startup verifies the effective schema
+across concurrent connections and refuses to run if they disagree, rather than writing some
+statements to the wrong place.
 
-**Serializable write transactions.** SQLite serializes writers, so a read-then-write inside
-`BEGIN IMMEDIATE` is safe by construction. Postgres does not, so canonical appends, fence checks,
-and ledger compare-and-set run at `SERIALIZABLE` with a bounded `lock_timeout`. A transaction the
-database rolls back for a serialization failure, a deadlock, or a lock timeout surfaces as the
-retryable `PostgresWriteContention` — the same signal, and the same caller contract, as the
-SQLite adapter's busy-timeout error.
+**One writer at a time.** SQLite's `BEGIN IMMEDIATE` is a database-wide write lock, and the
+stores' read-then-write invariants — tail comparison, batch idempotency, ledger admission — were
+written against it. Write transactions take a transaction-scoped advisory lock to reproduce it.
+A bounded `lock_timeout` turns a blocked writer into the retryable `PostgresWriteContention`
+rather than an indefinitely held connection.
 
 **Snapshot reads.** Exports and paged reads run at `REPEATABLE READ READ ONLY`, preserving the
 snapshot-with-concurrent-writer contract without taking a write lock.
@@ -36,6 +42,8 @@ snapshot-with-concurrent-writer contract without taking a write lock.
 This adapter starts at version 1: an absent schema is created, a current schema is used, and any
 other version fails with `PostgresStorageCompatibilityError`.
 
-**Integers.** Stored sequences, ordinals, and epoch milliseconds are `BIGINT`. The adapter's
-client registers an `int8` codec that decodes to a JavaScript number and rejects anything outside
-the safe-integer range, so the shared row schemas stay identical across adapters.
+**Integers.** Stored sequences, ordinals, and epoch milliseconds are `BIGINT`, which the driver
+reports as `BigInt`. `PostgresStorageClient.layer` registers an `int8` codec that decodes to a
+JavaScript number and rejects anything outside the safe-integer range, so the shared row schemas
+stay identical across adapters. Build the client with that Layer; one built elsewhere will not
+decode stored values correctly.

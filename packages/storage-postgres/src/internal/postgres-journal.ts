@@ -1,7 +1,7 @@
 import { Effect, Exit, Schema } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
-import { postgresLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import { indexCanonicalRecord } from "effect-agent/sql-thread-native-reads";
 import {
   MAX_THREAD_EXPORT_RECORDS,
@@ -41,10 +41,9 @@ const MAX_IDENTIFIER_LENGTH = 1_024;
 const SEARCH_PATH_PROBES = 16;
 
 /**
- * Advisory-lock key serialising this adapter's writers. Advisory locks are scoped to the
- * database, which is the same scope SQLite's write lock had, so one constant is the whole
- * protocol. The value is arbitrary but must never change: a different key would let an old
- * and a new deployment write concurrently.
+ * Advisory-lock key serialising this adapter's writers. Advisory locks are database scoped, so
+ * this one constant is the whole protocol. The value is arbitrary but must never change: a
+ * different key would let an old and a new deployment write concurrently.
  */
 export const WRITER_LOCK_KEY = 7_014_939_142_004_193;
 const VERSION_TABLE = "effect_agent_storage_version";
@@ -210,43 +209,6 @@ export const decodeRows = Effect.fn("PostgresJournal.decodeRows")(
     ),
 );
 
-/**
- * `SET search_path` binds to one connection, and the client is a pool, so a later statement can
- * land on a connection that never ran it and silently resolve unqualified names in `public`.
- * `@effect/sql-pg` exposes no startup parameter or per-connection hook to set it for the pool
- * (its config carries no `options` field, and a URL `options=-c search_path=...` is not
- * forwarded), so the adapter cannot make a non-default schema safe on its own.
- *
- * Opening several pooled connections and checking that each resolves the schema turns that
- * silent misdirection into a startup failure naming the fix. An operator who wants a dedicated
- * schema must make it the connection default, with `ALTER ROLE ... SET search_path` or
- * `ALTER DATABASE ... SET search_path`.
- */
-const verifySearchPath = Effect.fn("PostgresJournal.verifySearchPath")(function* (schema: string) {
-  const sql = yield* SqlClient.SqlClient;
-
-  const probes = yield* Effect.all(
-    Array.from(
-      { length: SEARCH_PATH_PROBES },
-      () => sql<Record<string, unknown>>`SELECT current_schema() AS name`,
-    ),
-    { concurrency: SEARCH_PATH_PROBES },
-  ).pipe(Effect.mapError(storageError("verify storage schema")));
-
-  for (const rows of probes) {
-    if (rows[0]?.name !== schema) {
-      return yield* PostgresStorageError.make({
-        operation: "verify storage schema",
-        message:
-          `A pooled connection resolved schema ${String(rows[0]?.name)} instead of ${schema}. ` +
-          "`search_path` is per connection and this driver cannot set it for the pool: make " +
-          `${schema} the connection default (ALTER ROLE ... SET search_path TO ${schema}), or ` +
-          "leave the schema option at the connection's own default.",
-      });
-    }
-  }
-});
-
 /** Decode exactly one raw Postgres row against a Schema, reporting failures as typed corruption. */
 export const decodeSingleRow = Effect.fn("PostgresJournal.decodeSingleRow")(
   <A, I>(
@@ -270,23 +232,61 @@ export const decodeSingleRow = Effect.fn("PostgresJournal.decodeSingleRow")(
     ),
 );
 
+/**
+ * The adapter cannot select its own schema: `SET search_path` binds to one connection while the
+ * client is a pool, and `@effect/sql-pg` exposes no startup parameter or per-connection hook (its
+ * config carries no `options` field, and a URL `options=-c search_path=...` is not forwarded).
+ *
+ * So the configured schema must already be the connection's. Probing several pooled connections
+ * turns a mismatch into a startup failure naming the fix, rather than statements silently
+ * resolving in `public`.
+ */
+const verifySearchPath = Effect.fn("PostgresJournal.verifySearchPath")(function* (schema: string) {
+  const sql = yield* SqlClient.SqlClient;
+
+  const probes = yield* Effect.all(
+    Array.from(
+      { length: SEARCH_PATH_PROBES },
+      () => sql<Record<string, unknown>>`SELECT current_schema() AS name`,
+    ),
+    { concurrency: SEARCH_PATH_PROBES },
+  ).pipe(Effect.mapError(storageError("verify storage schema")));
+
+  for (const rows of probes) {
+    const resolved = yield* decodeSingleRow(
+      Schema.Array(PostgresNameRow),
+      "current_schema",
+      "singleton",
+      rows,
+    );
+
+    if (resolved.name !== schema) {
+      return yield* PostgresStorageError.make({
+        operation: "verify storage schema",
+        message:
+          `A pooled connection resolved schema ${resolved.name} instead of ${schema}. ` +
+          "`search_path` is per connection and this driver cannot set it for the pool: make " +
+          `${schema} the connection default (ALTER ROLE ... SET search_path TO ${schema}), or ` +
+          "leave the schema option at the connection's own default.",
+      });
+    }
+  }
+});
+
 export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")(function* () {
   const sql = yield* SqlClient.SqlClient;
   const { hit: failpoint } = yield* PostgresStorageFailpoint;
   const { lockTimeout, schema } = yield* PostgresStorageConfig;
 
-  // `CREATE SCHEMA`, `SET` and `search_path` accept no bound parameters, so the schema name is
-  // interpolated. `PostgresStorageConfigValue` validates it against ^[a-z_][a-z0-9_]*$, which
-  // admits no quote, separator or statement syntax; the value can only ever name one schema.
+  // `CREATE SCHEMA` and `SET` accept no bound parameters, so the schema name is interpolated.
+  // `PostgresStorageConfigValue` validates it against ^[a-z_][a-z0-9_]*$, which admits no quote,
+  // separator or statement syntax; the value can only ever name one schema.
   yield* sql
     .unsafe(`CREATE SCHEMA IF NOT EXISTS ${schema}`)
     .pipe(Effect.mapError(storageError("create storage schema")));
-  yield* sql
-    .unsafe(`SET search_path TO ${schema}`)
-    .pipe(Effect.mapError(storageError("select storage schema")));
   yield* verifySearchPath(schema);
-  // The session-level bound covers statements issued outside a journal transaction; each write
-  // transaction re-applies it with `SET LOCAL` so it holds on whichever connection it reserves.
+  // Statements outside a journal transaction run on whichever connection the pool hands out, so
+  // this session bound is best effort; each write transaction re-applies it with `SET LOCAL`.
   yield* sql
     .unsafe(`SET lock_timeout = ${lockTimeout}`)
     .pipe(Effect.mapError(storageError("configure lock timeout")));
@@ -308,8 +308,6 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
     existingRows,
   );
 
-  // Absence of the version marker means either an empty schema to initialize, or foreign
-  // Effect Agent tables written by something that never versioned them.
   if (existing.every((relation) => relation.name !== VERSION_TABLE)) {
     if (existing.length > 0) {
       return yield* PostgresStorageCompatibilityError.make({
@@ -322,7 +320,7 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
     }
 
     yield* createPostgresStorageSchema.pipe(
-      Effect.provide(postgresLayer),
+      Effect.provide(SqlDialect.layerPostgres),
       Effect.mapError(storageError("initialize current storage")),
     );
   } else {
@@ -380,12 +378,11 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
   }
 
   /**
-   * Postgres classification of a lost write race. `@effect/sql-pg` already maps the SQLSTATE
-   * onto a structured reason, so the codes this adapter treats as retryable are read from the
-   * reason tag rather than the message: 40001 serialization_failure is `SerializationError`,
-   * 40P01 deadlock_detected is `DeadlockError`, and 55P03 lock_not_available — which is also
-   * what the configured `lock_timeout` raises — is `LockTimeoutError`. Each of those rolls the
-   * transaction back whole, so no canonical state was mutated.
+   * `@effect/sql-pg` maps the SQLSTATE onto a structured reason, so the codes this adapter treats
+   * as retryable are read from the reason tag rather than the message: 40001 serialization_failure,
+   * 40P01 deadlock_detected, and 55P03 lock_not_available — which is also what the configured
+   * `lock_timeout` raises. Each of those rolls the transaction back whole, so no canonical state
+   * was mutated.
    */
   const classifyWriteFailure =
     (operation: string) =>
@@ -403,9 +400,9 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
   /**
    * Runs one journal write transaction holding the adapter's writer lock. The read-then-write
    * invariants — tail comparison, batch idempotency, record identity, ledger admission — are
-   * only sound if no concurrent writer interleaves between the read and the write, which is
-   * what SQLite's `BEGIN IMMEDIATE` gave this code for free. The transaction-scoped advisory
-   * lock restores it, and the lock releases with the transaction however it ends.
+   * only sound if no concurrent writer interleaves between the read and the write, which the
+   * transaction-scoped advisory lock guarantees; the lock releases with the transaction however
+   * it ends.
    * `SET LOCAL lock_timeout` bounds the wait on the writer lock to the configured window, so a
    * blocked producer surfaces the retryable `PostgresWriteContention` rather than holding a
    * pooled connection indefinitely. A failed `BEGIN` leaves no transaction, so no rollback is
@@ -431,12 +428,9 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
               .executeUnprepared("BEGIN", [], undefined)
               .pipe(Effect.mapError(classifyWriteFailure(operation)));
 
-            // SQLite's `BEGIN IMMEDIATE` takes one database-wide write lock, and every store
-            // here was written against that guarantee: read-then-write sequences need no
-            // further protection. This transaction-scoped advisory lock reproduces it exactly.
             // SERIALIZABLE would also be safe, but it converts a lost race into a 40001 abort
-            // at COMMIT, so operations that SQLite resolved as a typed conflict or an
-            // idempotent replay would instead fail after doing their work.
+            // at COMMIT, so operations that resolve as a typed conflict or an idempotent replay
+            // would instead fail after doing their work.
             yield* connection
               .executeUnprepared(`SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`, [], undefined)
               .pipe(Effect.mapError(classifyWriteFailure(operation)));
@@ -834,7 +828,7 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
               );
 
               yield* indexCanonicalRecord(request.threadId, canonical).pipe(
-                Effect.provide(postgresLayer),
+                Effect.provide(SqlDialect.layerPostgres),
                 Effect.provideService(SqlClient.SqlClient, sql),
                 Effect.mapError(storageError("index canonical record")),
               );

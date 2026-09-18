@@ -4,11 +4,14 @@ import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { PostgresStorageError } from "./PostgresStorageError.ts";
 
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+const MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER);
+
 /**
- * Postgres reports `bigint` columns as JS `BigInt`, while every stored sequence, ordinal, and
- * epoch-millisecond value in this schema decodes through `Schema.Int`. Registering a
- * safe-integer codec for `int8` keeps the shared row schemas identical across adapters;
- * a stored value outside the safe range is corruption rather than a number to round.
+ * Postgres reports `int8` as a JS `BigInt`, while every sequence, ordinal and epoch-millisecond
+ * value this adapter stores decodes through `Schema.Int`. Decoding to a safe integer keeps the
+ * shared row schemas identical across adapters; a value beyond that range is corruption rather
+ * than a number to round.
  */
 export const safeIntegerInt8Codec: PgTypes.Codec<number> = {
   encode: (value) => PgTypes.encode(BigInt(value), PgTypes.OID.int8),
@@ -18,12 +21,9 @@ export const safeIntegerInt8Codec: PgTypes.Codec<number> = {
     if (Result.isFailure(decoded)) return Result.fail(decoded.failure);
     const value = decoded.success;
 
-    if (typeof value !== "bigint") {
-      return Result.fail(
-        new PgTypes.CodecError({ message: "int8 did not decode to a bigint value" }),
-      );
-    }
-    if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
+    if (typeof value !== "bigint")
+      return Result.fail(new PgTypes.CodecError({ message: "int8 decoded to a non-bigint value" }));
+    if (value > MAX_SAFE || value < MIN_SAFE) {
       return Result.fail(
         new PgTypes.CodecError({
           message: `Stored int8 ${value} is outside the JavaScript safe integer range.`,
@@ -35,8 +35,8 @@ export const safeIntegerInt8Codec: PgTypes.Codec<number> = {
   },
 };
 
-/** A registry whose only difference from the default is the safe-integer `int8` decoding. */
-export const makeStorageTypeRegistry = (): PgTypes.Registry => {
+/** The default registry with `int8` decoding replaced. */
+export const makeTypeRegistry = (): PgTypes.Registry => {
   const registry = PgTypes.makeRegistry();
 
   registry.register(PgTypes.OID.int8, safeIntegerInt8Codec);
@@ -48,15 +48,14 @@ export const makeStorageTypeRegistry = (): PgTypes.Registry => {
 export type PostgresClientOptions = Omit<PgClient.PgClientConfig, "types">;
 
 /**
- * The Postgres client this adapter expects: the storage type registry applied, and the
- * caller's remaining connection configuration untouched. A connection that cannot be
- * established is reported in the adapter's own vocabulary, so a composition root sees one
- * storage error type rather than two.
+ * The client this adapter's stores expect. Its row decoding depends on the registry above, so a
+ * client built elsewhere will not decode stored values correctly. A connection that cannot be
+ * established is reported in the adapter's own error vocabulary.
  */
-export const storageClientLayer = (
+export const layer = (
   config: PostgresClientOptions,
 ): Layer.Layer<PgClient.PgClient | SqlClient.SqlClient, PostgresStorageError> =>
-  PgClient.layer({ ...config, types: makeStorageTypeRegistry() }).pipe(
+  PgClient.layer({ ...config, types: makeTypeRegistry() }).pipe(
     Layer.catchTag("SqlError", (cause) =>
       Layer.effectContext(
         Effect.fail(

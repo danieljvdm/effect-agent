@@ -17,6 +17,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./postgres-activity-store": "./src/PostgresActivityStore.ts",
+    "./postgres-message-delivery-store": "./src/PostgresMessageDeliveryStore.ts",
     "./postgres-schedule-store": "./src/PostgresScheduleStore.ts",
     "./postgres-storage-client": "./src/PostgresStorageClient.ts",
     "./postgres-storage-config": "./src/PostgresStorageConfig.ts",
@@ -26,8 +27,7 @@
     "./postgres-submission-ledger": "./src/PostgresSubmissionLedger.ts",
     "./postgres-subscription-store": "./src/PostgresSubscriptionStore.ts",
     "./postgres-thread-store": "./src/PostgresThreadStore.ts",
-    "./testing/postgres-storage-failpoint-testing": "./src/PostgresStorageFailpointTesting.ts",
-    "./postgres-message-delivery-store": "./src/PostgresMessageDeliveryStore.ts"
+    "./testing/postgres-storage-failpoint-testing": "./src/PostgresStorageFailpointTesting.ts"
   },
   "publishConfig": {
     "access": "public"

@@ -14,7 +14,7 @@ import {
   PreparedActivity,
 } from "effect-agent/activity-store";
 import { Digest } from "effect-agent/records";
-import { postgresLayer, SqlDialect } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
@@ -515,15 +515,17 @@ const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
 });
 
 /** Postgres activity progress with mutation failpoints kept injectable for recovery tests. */
-export const activityProcessorStoreLayerWithFailpoints: Layer.Layer<
+export const layerWithFailpoints: Layer.Layer<
   ActivityProcessorStore,
   PostgresActivityInitializationError,
   SqlClientService.SqlClient | ActivityMutationFailpoint
-> = Layer.effect(ActivityProcessorStore, makeActivityStore()).pipe(Layer.provide(postgresLayer));
+> = Layer.effect(ActivityProcessorStore, makeActivityStore()).pipe(
+  Layer.provide(SqlDialect.layerPostgres),
+);
 
 /** Postgres activity progress with the production no-op mutation failpoint. */
-export const activityProcessorStoreLayer: Layer.Layer<
+export const layer: Layer.Layer<
   ActivityProcessorStore,
   PostgresActivityInitializationError,
   SqlClientService.SqlClient
-> = activityProcessorStoreLayerWithFailpoints.pipe(Layer.provide(ActivityMutationFailpoint.layer));
+> = layerWithFailpoints.pipe(Layer.provide(ActivityMutationFailpoint.layer));

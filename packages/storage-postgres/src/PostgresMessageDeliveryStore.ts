@@ -4,7 +4,7 @@ import {
   MessageDeliveryStore,
   type MessageDeliveryStoreLimits,
 } from "effect-agent/message-delivery";
-import { postgresLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import {
   makeSqlMessageDeliveryStore,
   SqlMessageDeliveryTransaction,
@@ -32,7 +32,7 @@ const transactions = Layer.effect(
 );
 
 /** Source-owned message obligations in the host's existing Postgres database. */
-export const messageDeliveryStoreLayer = (limits?: MessageDeliveryStoreLimits) =>
+export const layer = (limits?: MessageDeliveryStoreLimits) =>
   Layer.effect(
     MessageDeliveryStore,
     Effect.gen(function* () {
@@ -40,4 +40,4 @@ export const messageDeliveryStoreLayer = (limits?: MessageDeliveryStoreLimits) =
 
       return yield* makeSqlMessageDeliveryStore(limits, { maxStoredValueBytes: 16 * 1024 * 1024 });
     }),
-  ).pipe(Layer.provide(transactions), Layer.provide(postgresLayer));
+  ).pipe(Layer.provide(transactions), Layer.provide(SqlDialect.layerPostgres));

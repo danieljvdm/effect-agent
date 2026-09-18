@@ -4,7 +4,7 @@ import {
   MessageDeliveryStore,
   type MessageDeliveryStoreLimits,
 } from "effect-agent/message-delivery";
-import { sqliteLayer } from "effect-agent/sql-dialect";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import {
   makeSqlMessageDeliveryStore,
   SqlMessageDeliveryTransaction,
@@ -51,4 +51,4 @@ export const doMessageDeliveryStoreLayer = (limits?: MessageDeliveryStoreLimits)
         maxStoredValueBytes: config.maxStoredValueBytes,
       });
     }),
-  ).pipe(Layer.provide(transactions), Layer.provide(sqliteLayer));
+  ).pipe(Layer.provide(transactions), Layer.provide(SqlDialect.layerSqlite));

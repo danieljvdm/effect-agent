@@ -25,6 +25,7 @@ import * as MemoryNotes from "effect-agent/memory-notes";
 import { MemoryKey, MemoryReader } from "effect-agent/memory-store";
 import { CanonicalRecordEnvelope, DefinitionDigestInput } from "effect-agent/records";
 import { runIdForSubmission } from "effect-agent/run-journal";
+import { SqlDialect } from "effect-agent/sql-dialect";
 import { memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import * as ThreadContextHistory from "effect-agent/thread-context-history";
@@ -434,7 +435,10 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
           : Effect.void,
     }).pipe(Layer.provide(observedCompactor((evidence) => compactions.push(evidence))));
 
-    const memory = memoryStoreLayer.pipe(Layer.provide(host));
+    const memory = memoryStoreLayer.pipe(
+      Layer.provide(SqlDialect.layerSqlite),
+      Layer.provide(host),
+    );
 
     const handlers = MemoryNotes.layer({
       key,
