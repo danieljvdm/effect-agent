@@ -51,13 +51,13 @@ const JsonSchemaDefinitions = Schema.Record(
 );
 
 const decodeJsonSchemaDefinitions = Schema.decodeUnknownSync(JsonSchemaDefinitions);
-const decodeToolJsonSchema = Schema.decodeUnknownSync(McpSchema.ToolJsonSchema);
+const decodeToolJson = Schema.decodeUnknownSync(McpSchema.ToolJson);
 
-const flattenTopLevelRef = (schema: JsonSchema.JsonSchema): McpSchema.ToolJsonSchema => {
+const flattenTopLevelRef = (schema: JsonSchema.JsonSchema): McpSchema.ToolJson => {
   const ref = schema["$ref"];
 
   if (typeof ref !== "string") {
-    return decodeToolJsonSchema(schema);
+    return decodeToolJson(schema);
   }
 
   const defs = decodeJsonSchemaDefinitions(schema["$defs"]);
@@ -68,7 +68,7 @@ const flattenTopLevelRef = (schema: JsonSchema.JsonSchema): McpSchema.ToolJsonSc
 
   const resolved = key !== undefined && Object.hasOwn(defs, key) ? defs[key] : undefined;
 
-  return decodeToolJsonSchema(resolved ?? schema);
+  return decodeToolJson(resolved ?? schema);
 };
 
 const fetchDocumentOutputSchema = flattenTopLevelRef(

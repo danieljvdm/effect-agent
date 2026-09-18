@@ -15,13 +15,13 @@ import {
   Effect,
   Layer,
   Redacted,
-  Ref,
   Schema,
   Semaphore,
   Scope,
 } from "effect";
 import {
   BrowserActionResult,
+  BrowserExpectedTargetState,
   BrowserSelectFileRequest,
   BrowserFileSelectionResult,
   BrowserScreenshotRequest,
@@ -40,7 +40,9 @@ import {
   InteractiveBrowserTargetUrl,
   InteractiveBrowserUnsupportedError,
   type BrowserHandle,
+  type BrowserExpectedTarget,
   type InteractiveBrowserError,
+  type InteractiveBrowserFailureEvidence,
   type InteractiveBrowserNetworkPolicy,
 } from "effect-agent/interactive-browser";
 import { PageScreenshotResult } from "effect-agent/page-screenshot";
@@ -126,24 +128,21 @@ const ActionObservation = Schema.Struct({
   after: Schema.optionalKey(ActionTargetState),
   afterUnavailable: Schema.Boolean,
   network: ActionNetworkState,
+  inputMillis: Schema.optionalKey(Schema.Finite),
+  observationMillis: Schema.optionalKey(Schema.Finite),
 });
 
-const PageObservation = Schema.fromJsonString(
+export const BrowserRunPageObservation = Schema.fromJsonString(
   Schema.Struct({
+    documentId: Schema.NonEmptyString,
     pageText: BoundedRemoteText,
     selectorMatchCount: Schema.Natural,
     controlsTruncated: Schema.Boolean,
     controls: Schema.Array(
       Schema.Struct({
+        nodeId: Schema.NonEmptyString,
         selector: BoundedRemoteText,
-        kind: BoundedRemoteText,
-        label: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200))),
-        checked: Schema.optionalKey(Schema.Boolean),
-        selected: Schema.optionalKey(Schema.Boolean),
-        disabled: Schema.optionalKey(Schema.Boolean),
-        required: Schema.optionalKey(Schema.Boolean),
-        valid: Schema.optionalKey(Schema.Boolean),
-        formValid: Schema.optionalKey(Schema.Boolean),
+        ...BrowserExpectedTargetState.fields,
       }),
     ).check(Schema.isMaxLength(MAX_OBSERVED_CONTROLS)),
   }),
@@ -319,6 +318,7 @@ export interface BrowserRunInteractiveCdpSession {
 
 /** Narrow page boundary used by deterministic tests; SDK values remain in this package. */
 export interface BrowserRunInteractivePage {
+  readonly identity?: () => Promise<BrowserRunPageIdentity>;
   readonly close: () => Promise<void>;
   readonly setBypassServiceWorker: (enabled: boolean) => Promise<void>;
   readonly setRequestInterception: (enabled: boolean) => Promise<void>;
@@ -332,16 +332,21 @@ export interface BrowserRunInteractivePage {
     value: string,
     signal: AbortSignal,
     onDispatch: () => void,
+    onComplete?: () => void,
+    expectedTarget?: BrowserExpectedTarget,
   ) => Promise<unknown>;
   readonly click: (
     selector: string,
     signal: AbortSignal,
     onDispatch: () => void,
+    onComplete?: () => void,
+    expectedTarget?: BrowserExpectedTarget,
   ) => Promise<unknown>;
   readonly selectFile: (
     request: BrowserSelectFileRequest,
     signal: AbortSignal,
     onDispatch: () => void,
+    onComplete?: () => void,
   ) => Promise<unknown>;
   readonly screenshot: (fullPage: boolean) => Promise<unknown>;
   readonly scroll: (deltaX: number, deltaY: number) => Promise<void>;
@@ -355,6 +360,13 @@ export interface BrowserRunInteractiveContext {
 }
 
 export interface BrowserRunInteractiveBrowser {
+  readonly detach?: () => Promise<void>;
+  readonly reattach?: (
+    identity: BrowserRunPageIdentity,
+  ) => Promise<
+    | { readonly context: BrowserRunInteractiveContext; readonly page: BrowserRunInteractivePage }
+    | undefined
+  >;
   readonly createContext: () => Promise<BrowserRunInteractiveContext>;
   readonly close: () => Promise<void>;
   readonly sessionId: () => unknown;
@@ -409,13 +421,43 @@ export class BrowserRunInteractiveBinding extends Context.Service<
   }
 }
 
+/** Private target identity; never include this checkpoint in model-visible records. */
+export class BrowserRunPageIdentity extends Schema.Class<BrowserRunPageIdentity>(
+  "BrowserRunPageIdentity",
+)({
+  contextId: BrowserRunSessionId,
+  targetId: BrowserRunSessionId,
+}) {}
+
+/** Host-owned recovery data. Persist with the application's input receipts and ownership fence. */
+export class BrowserRunInteractiveCheckpoint extends Schema.Class<BrowserRunInteractiveCheckpoint>(
+  "BrowserRunInteractiveCheckpoint",
+)({
+  sessionId: Schema.RedactedFromValue(BrowserRunSessionId),
+  page: BrowserRunPageIdentity,
+  policy: InteractiveBrowserPolicy,
+  startedAt: Schema.Natural,
+  consumedActions: Schema.Natural.check(Schema.isLessThanOrEqualTo(1_000)),
+  inputState: Schema.Literals(["idle", "running", "unknown"]),
+}) {}
+
+export type BrowserRunInputState = "idle" | "running" | "unknown";
+
 export interface BrowserRunInteractiveSession {
   readonly handle: BrowserHandle;
+  readonly checkpoint: Effect.Effect<BrowserRunInteractiveCheckpoint, InteractiveBrowserError>;
+  /** Invalidate this owner and disconnect locally, retaining the exact remote page until its deadline.
+   * Checkpoint and durable input receipts must be persisted first. Never grants another owner authority.
+   */
+  readonly detach: Effect.Effect<void, InteractiveBrowserError>;
+  readonly inputState: Effect.Effect<BrowserRunInputState>;
+  /** Wait at most 500 ms for local SDK input. A restart/transport-unknown fence cannot be drained. */
+  readonly drainInput: Effect.Effect<BrowserRunInputState>;
   readonly sessionId: Redacted.Redacted<string>;
   /**
    * Resize without charging an agent action or changing emulation modes. Shares
    * the handle's fail-fast lock, page-policy preflight, and elapsed deadline.
-   * A timeout or interruption leaves the session unusable; no resize is retried.
+   * An interrupted resize fences further input until the SDK settles; no resize is retried.
    * The host must authorize callers. No viewer ownership or durable state is added.
    */
   readonly resizeViewport: (
@@ -448,6 +490,14 @@ export class BrowserRunInteractiveHost extends Context.Service<
     ) => Effect.Effect<BrowserRunInteractiveAcquisition, InteractiveBrowserError, Scope.Scope>;
     readonly open: (
       policy: InteractiveBrowserPolicy,
+    ) => Effect.Effect<BrowserRunInteractiveSession, InteractiveBrowserError, Scope.Scope>;
+    /** Requires exclusive host ownership. Never allocates a replacement page or replays an action.
+     * pendingInput must include durable receipts written after the checkpoint. Unknown input keeps
+     * mutations and human control fenced; reads remain available. Only confirmed close ends that fence.
+     */
+    readonly resume: (
+      checkpoint: BrowserRunInteractiveCheckpoint,
+      options: { readonly pendingInput: boolean },
     ) => Effect.Effect<BrowserRunInteractiveSession, InteractiveBrowserError, Scope.Scope>;
     readonly closeSession: (
       sessionId: Redacted.Redacted<string>,
@@ -719,6 +769,366 @@ const disposeActionHandles = async (handles: ReadonlyArray<{ dispose: () => Prom
   );
 };
 
+/** Runs entirely in the page realm for both observations and the last bound-element guard. */
+const observePage = (
+  target: object | undefined,
+  requestedSelector: string | undefined,
+  maximum: number,
+  maximumControls: number,
+  input?: {
+    readonly mode: "click" | "fill";
+    readonly expectedTarget: BrowserExpectedTarget;
+    readonly value?: string;
+  },
+) => {
+  const pageDocument = Reflect.get(globalThis, "document");
+
+  const matches =
+    requestedSelector === undefined
+      ? undefined
+      : Reflect.apply(Reflect.get(pageDocument, "querySelectorAll"), pageDocument, [
+          requestedSelector,
+        ]);
+
+  const selectorMatchCount =
+    matches === undefined || matches === null
+      ? 1
+      : Math.min(10_000, Reflect.get(matches, "length"));
+
+  const element =
+    target ??
+    (matches === undefined || matches === null
+      ? Reflect.get(pageDocument, "body")
+      : Reflect.get(matches, 0));
+
+  if (target !== undefined && Reflect.get(target, "isConnected") !== true)
+    return { _tag: "MissingElement" };
+
+  if (element === null) return { _tag: "MissingElement" };
+  if (element === undefined) return { _tag: "MissingElement" };
+  const innerText = Reflect.get(element, "innerText");
+  const textContent = Reflect.get(element, "textContent");
+
+  const pageText =
+    typeof innerText === "string" ? innerText : typeof textContent === "string" ? textContent : "";
+
+  const primaryControlSelector =
+    'input,select,textarea,label,button,[role="checkbox"],[role="radio"],[role="option"],[role="switch"],[role="tab"],[role="button"]';
+
+  const optionSelector = "select option";
+  const secondaryControlSelector = "a[href]";
+  const controlSelector = `${primaryControlSelector},${optionSelector},${secondaryControlSelector}`;
+
+  const selectorFor = (candidate: object) => {
+    const parts: Array<string> = [];
+    let current: object | null = candidate;
+
+    while (current !== null && current !== undefined) {
+      const tagName = String(Reflect.get(current, "tagName") ?? "").toLowerCase();
+
+      if (tagName === "") break;
+      const parent: object | null = Reflect.get(current, "parentElement");
+
+      if (parent === null) {
+        parts.push(tagName);
+        break;
+      }
+      let sibling = Reflect.get(current, "previousElementSibling");
+      let index = 1;
+
+      while (sibling !== null && sibling !== undefined) {
+        if (String(Reflect.get(sibling, "tagName") ?? "").toLowerCase() === tagName) index++;
+        sibling = Reflect.get(sibling, "previousElementSibling");
+      }
+      parts.push(`${tagName}:nth-of-type(${index})`);
+      current = parent;
+    }
+
+    return parts.reverse().join(" > ");
+  };
+
+  const visible = (candidate: object) => {
+    const hidden = Reflect.get(candidate, "hidden");
+
+    const ariaHidden = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
+      "aria-hidden",
+    ]);
+
+    const rects = Reflect.apply(Reflect.get(candidate, "getClientRects"), candidate, []);
+
+    return (
+      hidden !== true &&
+      ariaHidden !== "true" &&
+      typeof rects === "object" &&
+      rects !== null &&
+      Reflect.get(rects, "length") > 0
+    );
+  };
+
+  const candidates: Array<object> = [];
+  let controlsTruncated = false;
+
+  const consider = (candidate: object) => {
+    const tagName = String(Reflect.get(candidate, "tagName") ?? "").toLowerCase();
+
+    // Collapsed native options have no client rects. Their owning
+    // select determines visibility; observe text/selection, never value.
+    const visibilityTarget =
+      tagName === "option"
+        ? Reflect.apply(Reflect.get(candidate, "closest"), candidate, ["select"])
+        : candidate;
+
+    const actionable = tagName !== "label" || Reflect.get(candidate, "control") !== null;
+
+    if (
+      !actionable ||
+      typeof visibilityTarget !== "object" ||
+      visibilityTarget === null ||
+      !visible(visibilityTarget)
+    )
+      return;
+    candidates.push(candidate);
+    if (candidates.length > maximumControls) controlsTruncated = true;
+  };
+
+  const elementMatches = Reflect.get(element, "matches");
+
+  if (
+    typeof elementMatches === "function" &&
+    Reflect.apply(elementMatches, element, [controlSelector])
+  ) {
+    consider(element);
+  }
+
+  const considerSelector = (candidateSelector: string) => {
+    const descendants = Reflect.apply(Reflect.get(element, "querySelectorAll"), element, [
+      candidateSelector,
+    ]);
+
+    if (typeof descendants !== "object" || descendants === null) return;
+    const descendantCount = Reflect.get(descendants, "length");
+
+    for (let index = 0; index < descendantCount && !controlsTruncated; index++) {
+      consider(Reflect.get(descendants, index));
+    }
+  };
+
+  considerSelector(primaryControlSelector);
+  if (!controlsTruncated) considerSelector(optionSelector);
+  if (!controlsTruncated) considerSelector(secondaryControlSelector);
+
+  const identityKey = Symbol.for("@effect-agent/browser-observation");
+  let identity = Reflect.get(globalThis, identityKey);
+
+  if (identity === undefined || identity.document !== pageDocument) {
+    identity = {
+      document: pageDocument,
+      documentId: crypto.getRandomValues(new Uint32Array(4)).join("-"),
+      nodes: new WeakMap<object, string>(),
+    };
+    Reflect.set(globalThis, identityKey, identity);
+  }
+
+  const controls = candidates.slice(0, maximumControls).map((candidate) => {
+    let nodeId = identity.nodes.get(candidate);
+
+    if (nodeId === undefined) {
+      nodeId = crypto.getRandomValues(new Uint32Array(4)).join("-");
+      identity.nodes.set(candidate, nodeId);
+    }
+    const associated = Reflect.get(candidate, "control") ?? candidate;
+    const tagName = String(Reflect.get(candidate, "tagName") ?? "").toLowerCase();
+    const inputType = String(Reflect.get(associated, "type") ?? "").toLowerCase();
+
+    const role = String(
+      Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, ["role"]) ?? "",
+    ).toLowerCase();
+
+    const ariaLabel = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
+      "aria-label",
+    ]);
+
+    const candidateText =
+      tagName === "textarea" || tagName === "input" || tagName === "select"
+        ? undefined
+        : Reflect.get(candidate, tagName === "option" ? "label" : "innerText");
+
+    const associatedLabels = Reflect.get(associated, "labels");
+
+    const associatedLabel =
+      associatedLabels !== undefined &&
+      associatedLabels !== null &&
+      Reflect.get(associatedLabels, "length") > 0
+        ? Reflect.get(Reflect.get(associatedLabels, 0), "innerText")
+        : undefined;
+
+    const label = String(
+      typeof ariaLabel === "string" && ariaLabel !== ""
+        ? ariaLabel
+        : typeof candidateText === "string" && candidateText !== ""
+          ? candidateText
+          : (associatedLabel ?? ""),
+    )
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 200);
+
+    const checked = Reflect.get(associated, "checked");
+
+    const selected =
+      tagName === "select"
+        ? Reflect.get(associated, "selectedIndex") >= 0
+        : Reflect.get(associated, "selected");
+
+    const disabled = Reflect.get(associated, "disabled");
+    const required = Reflect.get(associated, "required");
+    const validity = Reflect.get(associated, "validity");
+    const form = Reflect.get(associated, "form");
+
+    const formMatches =
+      form === null || form === undefined ? undefined : Reflect.get(form, "matches");
+
+    const ariaChecked = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
+      "aria-checked",
+    ]);
+
+    const ariaSelected = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
+      "aria-selected",
+    ]);
+
+    const ariaDisabled = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
+      "aria-disabled",
+    ]);
+
+    return {
+      nodeId,
+      ...(inputType === "" ? {} : { inputType: inputType.slice(0, 64) }),
+      selector: selectorFor(candidate),
+      kind: (tagName === "label"
+        ? `label:${inputType || "control"}`
+        : tagName === "input"
+          ? `input:${inputType || "text"}`
+          : role !== ""
+            ? `role:${role}`
+            : tagName
+      ).slice(0, 128),
+      ...(label === "" ? {} : { label }),
+      ...(typeof checked === "boolean"
+        ? { checked }
+        : ariaChecked === "true" || ariaChecked === "false"
+          ? { checked: ariaChecked === "true" }
+          : {}),
+      ...(typeof selected === "boolean"
+        ? { selected }
+        : ariaSelected === "true" || ariaSelected === "false"
+          ? { selected: ariaSelected === "true" }
+          : {}),
+      ...(typeof disabled === "boolean"
+        ? { disabled }
+        : ariaDisabled === "true" || ariaDisabled === "false"
+          ? { disabled: ariaDisabled === "true" }
+          : {}),
+      ...(typeof required === "boolean" ? { required } : {}),
+      ...(validity !== undefined && typeof Reflect.get(validity, "valid") === "boolean"
+        ? { valid: Reflect.get(validity, "valid") }
+        : {}),
+      ...(typeof formMatches === "function"
+        ? { formValid: Reflect.apply(formMatches, form, [":valid"]) }
+        : {}),
+    };
+  });
+
+  if (input !== undefined) {
+    const expected = input.expectedTarget;
+    const control = controls.find((candidate) => candidate.nodeId === expected.nodeId);
+
+    const fields = [
+      "kind",
+      "inputType",
+      "label",
+      "checked",
+      "selected",
+      "disabled",
+      "required",
+      "valid",
+      "formValid",
+    ] as const;
+
+    if (
+      target === undefined ||
+      identity.documentId !== expected.documentId ||
+      identity.nodes.get(target) !== expected.nodeId ||
+      control === undefined ||
+      (expected.state !== undefined &&
+        fields.some((field) => control[field] !== expected.state?.[field])) ||
+      Reflect.get(target, "isConnected") !== true
+    )
+      return { _tag: "MissingElement" };
+    if (expected.scopeSelector !== undefined) {
+      let roots;
+
+      try {
+        roots = Reflect.apply(Reflect.get(pageDocument, "querySelectorAll"), pageDocument, [
+          expected.scopeSelector,
+        ]);
+      } catch {
+        return { _tag: "MissingElement" };
+      }
+      if (typeof roots !== "object" || roots === null) return { _tag: "MissingElement" };
+      const root = Reflect.get(roots, 0);
+
+      if (
+        Reflect.get(roots, "length") !== 1 ||
+        root === undefined ||
+        !Reflect.apply(Reflect.get(root, "contains"), root, [target])
+      )
+        return { _tag: "MissingElement" };
+    }
+    // Validation and dispatch share one page JS task. No coordinate lookup, selector
+    // re-resolution, or asynchronous boundary can select a replacement node.
+    if (input.mode === "click") {
+      const prototype = Reflect.get(Reflect.get(globalThis, "HTMLElement"), "prototype");
+
+      Reflect.apply(Reflect.get(prototype, "click"), target, []);
+    } else {
+      let prototype = Reflect.getPrototypeOf(target);
+      let setValue: ((value: string) => void) | undefined;
+
+      while (prototype !== null) {
+        const setter = Reflect.getOwnPropertyDescriptor(prototype, "value")?.set;
+
+        if (typeof setter === "function") {
+          setValue = setter;
+          break;
+        }
+        prototype = Reflect.getPrototypeOf(prototype);
+      }
+      if (setValue === undefined || input.value === undefined) return { _tag: "MissingElement" };
+      Reflect.apply(setValue, target, [input.value]);
+      const dispatchEvent = Reflect.get(target, "dispatchEvent");
+
+      Reflect.apply(dispatchEvent, target, [new Event("input", { bubbles: true })]);
+      Reflect.apply(dispatchEvent, target, [new Event("change", { bubbles: true })]);
+    }
+
+    return { _tag: "Text", text: "" };
+  }
+
+  // JSON is the bounded wire representation of this existing text result.
+  // eslint-disable-next-line no-restricted-properties
+  const text = JSON.stringify({
+    documentId: identity.documentId,
+    pageText,
+    selectorMatchCount,
+    controls,
+    controlsTruncated,
+  });
+
+  const observed = new TextEncoder().encode(text).byteLength;
+
+  return observed > maximum ? { _tag: "OverLimit", observed } : { _tag: "Text", text };
+};
+
 const runObservedPageAction = async (
   page: Page,
   selector: string,
@@ -726,6 +1136,7 @@ const runObservedPageAction = async (
   onDispatch: () => void,
   action: (element: NonNullable<Awaited<ReturnType<Page["$"]>>>) => Promise<void>,
   validate?: (element: NonNullable<Awaited<ReturnType<Page["$"]>>>) => Promise<boolean>,
+  onComplete?: () => void,
 ): Promise<unknown> => {
   if (signal.aborted) throw new BrowserRunActionUndispatched(0);
 
@@ -764,13 +1175,20 @@ const runObservedPageAction = async (
     // dispatched, interruption is uncertain, even if the SDK later resolves.
     if (signal.aborted) throw new BrowserRunActionUndispatched(1);
     onDispatch();
+    const inputStarted = performance.now();
+
     await action(matches[0]);
+    const inputFinished = performance.now();
+
+    onComplete?.();
     tracker.markActionSettled();
     const network = await tracker.wait();
     const after = signal.aborted ? undefined : await readActionTargetAfter(page, selector);
 
     return {
       before,
+      inputMillis: Math.max(0, inputFinished - inputStarted),
+      observationMillis: Math.max(0, performance.now() - inputFinished),
       ...(after === undefined ? {} : { after }),
       afterUnavailable: after === undefined,
       network,
@@ -782,11 +1200,42 @@ const runObservedPageAction = async (
   }
 };
 
+const guardedPageInput = async (
+  element: NonNullable<Awaited<ReturnType<Page["$"]>>>,
+  expectedTarget: BrowserExpectedTarget,
+  mode: "click" | "fill",
+  value?: string,
+): Promise<void> => {
+  const observed = Schema.decodeUnknownSync(TextObservation)(
+    await element.evaluate(observePage, undefined, 256 * 1024, 1, {
+      mode,
+      expectedTarget,
+      ...(value === undefined ? {} : { value }),
+    }),
+  );
+
+  if (observed._tag !== "Text") throw new BrowserRunActionUndispatched(1);
+};
+
 const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
   const prepareFileSelection = makeFileSelection(page);
   const listeners = new Map<BrowserRunInteractiveRequestListener, (request: HTTPRequest) => void>();
 
   return {
+    identity: async () => {
+      const cdp = await page.createCDPSession();
+
+      try {
+        const { targetInfo } = await cdp.send("Target.getTargetInfo");
+
+        return Schema.decodeUnknownSync(BrowserRunPageIdentity)({
+          contextId: targetInfo.browserContextId,
+          targetId: targetInfo.targetId,
+        });
+      } finally {
+        await cdp.detach();
+      }
+    },
     close: async () => {
       if (!page.browser().isConnected()) return;
       try {
@@ -817,307 +1266,68 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
     url: () => page.url(),
     readText: async (selector, maximumBytes) => {
       const observation = Schema.decodeUnknownSync(TextObservation)(
-        await page.evaluate(
-          (requestedSelector, maximum, maximumControls) => {
-            const pageDocument = Reflect.get(globalThis, "document");
-
-            const matches =
-              requestedSelector === undefined
-                ? undefined
-                : Reflect.apply(Reflect.get(pageDocument, "querySelectorAll"), pageDocument, [
-                    requestedSelector,
-                  ]);
-
-            const selectorMatchCount =
-              matches === undefined || matches === null
-                ? 1
-                : Math.min(10_000, Reflect.get(matches, "length"));
-
-            const element =
-              matches === undefined || matches === null
-                ? Reflect.get(pageDocument, "body")
-                : Reflect.get(matches, 0);
-
-            if (element === null) return { _tag: "MissingElement" };
-            if (element === undefined) return { _tag: "MissingElement" };
-            const innerText = Reflect.get(element, "innerText");
-            const textContent = Reflect.get(element, "textContent");
-
-            const pageText =
-              typeof innerText === "string"
-                ? innerText
-                : typeof textContent === "string"
-                  ? textContent
-                  : "";
-
-            const primaryControlSelector =
-              'input,select,textarea,label,button,[role="checkbox"],[role="radio"],[role="option"],[role="switch"],[role="tab"],[role="button"]';
-
-            const optionSelector = "select option";
-            const secondaryControlSelector = "a[href]";
-            const controlSelector = `${primaryControlSelector},${optionSelector},${secondaryControlSelector}`;
-
-            const selectorFor = (candidate: object) => {
-              const parts: Array<string> = [];
-              let current: object | null = candidate;
-
-              while (current !== null && current !== undefined) {
-                const tagName = String(Reflect.get(current, "tagName") ?? "").toLowerCase();
-
-                if (tagName === "") break;
-                const parent: object | null = Reflect.get(current, "parentElement");
-
-                if (parent === null) {
-                  parts.push(tagName);
-                  break;
-                }
-                let sibling = Reflect.get(current, "previousElementSibling");
-                let index = 1;
-
-                while (sibling !== null && sibling !== undefined) {
-                  if (String(Reflect.get(sibling, "tagName") ?? "").toLowerCase() === tagName)
-                    index++;
-                  sibling = Reflect.get(sibling, "previousElementSibling");
-                }
-                parts.push(`${tagName}:nth-of-type(${index})`);
-                current = parent;
-              }
-
-              return parts.reverse().join(" > ");
-            };
-
-            const visible = (candidate: object) => {
-              const hidden = Reflect.get(candidate, "hidden");
-
-              const ariaHidden = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
-                "aria-hidden",
-              ]);
-
-              const rects = Reflect.apply(Reflect.get(candidate, "getClientRects"), candidate, []);
-
-              return (
-                hidden !== true &&
-                ariaHidden !== "true" &&
-                typeof rects === "object" &&
-                rects !== null &&
-                Reflect.get(rects, "length") > 0
-              );
-            };
-
-            const candidates: Array<object> = [];
-            let controlsTruncated = false;
-
-            const consider = (candidate: object) => {
-              const tagName = String(Reflect.get(candidate, "tagName") ?? "").toLowerCase();
-
-              // Collapsed native options have no client rects. Their owning
-              // select determines visibility; observe text/selection, never value.
-              const visibilityTarget =
-                tagName === "option"
-                  ? Reflect.apply(Reflect.get(candidate, "closest"), candidate, ["select"])
-                  : candidate;
-
-              const actionable = tagName !== "label" || Reflect.get(candidate, "control") !== null;
-
-              if (
-                !actionable ||
-                typeof visibilityTarget !== "object" ||
-                visibilityTarget === null ||
-                !visible(visibilityTarget)
-              )
-                return;
-              candidates.push(candidate);
-              if (candidates.length > maximumControls) controlsTruncated = true;
-            };
-
-            const elementMatches = Reflect.get(element, "matches");
-
-            if (
-              typeof elementMatches === "function" &&
-              Reflect.apply(elementMatches, element, [controlSelector])
-            ) {
-              consider(element);
-            }
-
-            const considerSelector = (candidateSelector: string) => {
-              const descendants = Reflect.apply(Reflect.get(element, "querySelectorAll"), element, [
-                candidateSelector,
-              ]);
-
-              if (typeof descendants !== "object" || descendants === null) return;
-              const descendantCount = Reflect.get(descendants, "length");
-
-              for (let index = 0; index < descendantCount && !controlsTruncated; index++) {
-                consider(Reflect.get(descendants, index));
-              }
-            };
-
-            considerSelector(primaryControlSelector);
-            if (!controlsTruncated) considerSelector(optionSelector);
-            if (!controlsTruncated) considerSelector(secondaryControlSelector);
-
-            const controls = candidates.slice(0, maximumControls).map((candidate) => {
-              const associated = Reflect.get(candidate, "control") ?? candidate;
-              const tagName = String(Reflect.get(candidate, "tagName") ?? "").toLowerCase();
-              const inputType = String(Reflect.get(associated, "type") ?? "").toLowerCase();
-
-              const role = String(
-                Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, ["role"]) ?? "",
-              ).toLowerCase();
-
-              const ariaLabel = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
-                "aria-label",
-              ]);
-
-              const candidateText =
-                tagName === "textarea" || tagName === "input" || tagName === "select"
-                  ? undefined
-                  : Reflect.get(candidate, tagName === "option" ? "label" : "innerText");
-
-              const associatedLabels = Reflect.get(associated, "labels");
-
-              const associatedLabel =
-                associatedLabels !== undefined &&
-                associatedLabels !== null &&
-                Reflect.get(associatedLabels, "length") > 0
-                  ? Reflect.get(Reflect.get(associatedLabels, 0), "innerText")
-                  : undefined;
-
-              const label = String(
-                typeof ariaLabel === "string" && ariaLabel !== ""
-                  ? ariaLabel
-                  : typeof candidateText === "string" && candidateText !== ""
-                    ? candidateText
-                    : (associatedLabel ?? ""),
-              )
-                .replace(/\s+/g, " ")
-                .trim()
-                .slice(0, 200);
-
-              const checked = Reflect.get(associated, "checked");
-
-              const selected =
-                tagName === "select"
-                  ? Reflect.get(associated, "selectedIndex") >= 0
-                  : Reflect.get(associated, "selected");
-
-              const disabled = Reflect.get(associated, "disabled");
-              const required = Reflect.get(associated, "required");
-              const validity = Reflect.get(associated, "validity");
-              const form = Reflect.get(associated, "form");
-
-              const formMatches =
-                form === null || form === undefined ? undefined : Reflect.get(form, "matches");
-
-              const ariaChecked = Reflect.apply(Reflect.get(candidate, "getAttribute"), candidate, [
-                "aria-checked",
-              ]);
-
-              const ariaSelected = Reflect.apply(
-                Reflect.get(candidate, "getAttribute"),
-                candidate,
-                ["aria-selected"],
-              );
-
-              const ariaDisabled = Reflect.apply(
-                Reflect.get(candidate, "getAttribute"),
-                candidate,
-                ["aria-disabled"],
-              );
-
-              return {
-                selector: selectorFor(candidate),
-                kind:
-                  tagName === "label"
-                    ? `label:${inputType || "control"}`
-                    : tagName === "input"
-                      ? `input:${inputType || "text"}`
-                      : role !== ""
-                        ? `role:${role}`
-                        : tagName,
-                ...(label === "" ? {} : { label }),
-                ...(typeof checked === "boolean"
-                  ? { checked }
-                  : ariaChecked === "true" || ariaChecked === "false"
-                    ? { checked: ariaChecked === "true" }
-                    : {}),
-                ...(typeof selected === "boolean"
-                  ? { selected }
-                  : ariaSelected === "true" || ariaSelected === "false"
-                    ? { selected: ariaSelected === "true" }
-                    : {}),
-                ...(typeof disabled === "boolean"
-                  ? { disabled }
-                  : ariaDisabled === "true" || ariaDisabled === "false"
-                    ? { disabled: ariaDisabled === "true" }
-                    : {}),
-                ...(typeof required === "boolean" ? { required } : {}),
-                ...(validity !== undefined && typeof Reflect.get(validity, "valid") === "boolean"
-                  ? { valid: Reflect.get(validity, "valid") }
-                  : {}),
-                ...(typeof formMatches === "function"
-                  ? { formValid: Reflect.apply(formMatches, form, [":valid"]) }
-                  : {}),
-              };
-            });
-
-            // JSON is the bounded wire representation of this existing text result.
-            // eslint-disable-next-line no-restricted-properties
-            const text = JSON.stringify({
-              pageText,
-              selectorMatchCount,
-              controls,
-              controlsTruncated,
-            });
-
-            const observed = new TextEncoder().encode(text).byteLength;
-
-            return observed > maximum ? { _tag: "OverLimit", observed } : { _tag: "Text", text };
-          },
-          selector,
-          maximumBytes,
-          MAX_OBSERVED_CONTROLS,
-        ),
+        await page.evaluate(observePage, undefined, selector, maximumBytes, MAX_OBSERVED_CONTROLS),
       );
 
-      if (observation._tag === "Text") Schema.decodeSync(PageObservation)(observation.text);
+      if (observation._tag === "Text")
+        Schema.decodeSync(BrowserRunPageObservation)(observation.text);
 
       return observation;
     },
-    fill: (selector, value, signal, onDispatch) =>
-      runObservedPageAction(page, selector, signal, onDispatch, (element) =>
-        element.evaluate((element, nextValue) => {
-          // Bypass instance setters so React can detect the change when events fire.
-          let prototype = Reflect.getPrototypeOf(element);
-          let setValue: ((value: string) => void) | undefined;
+    fill: (selector, value, signal, onDispatch, onComplete, expectedTarget) =>
+      runObservedPageAction(
+        page,
+        selector,
+        signal,
+        onDispatch,
+        (element) =>
+          expectedTarget !== undefined
+            ? guardedPageInput(element, expectedTarget, "fill", value)
+            : element.evaluate((element, nextValue) => {
+                // Bypass instance setters so React can detect the change when events fire.
+                let prototype = Reflect.getPrototypeOf(element);
+                let setValue: ((value: string) => void) | undefined;
 
-          while (prototype !== null) {
-            const setter = Reflect.getOwnPropertyDescriptor(prototype, "value")?.set;
+                while (prototype !== null) {
+                  const setter = Reflect.getOwnPropertyDescriptor(prototype, "value")?.set;
 
-            if (typeof setter === "function") {
-              setValue = setter;
-              break;
-            }
-            prototype = Reflect.getPrototypeOf(prototype);
-          }
-          if (setValue === undefined) {
-            throw new Error("The selector did not resolve to a fillable field");
-          }
-          const focus = Reflect.get(element, "focus");
+                  if (typeof setter === "function") {
+                    setValue = setter;
+                    break;
+                  }
+                  prototype = Reflect.getPrototypeOf(prototype);
+                }
+                if (setValue === undefined) {
+                  throw new Error("The selector did not resolve to a fillable field");
+                }
+                const focus = Reflect.get(element, "focus");
 
-          if (typeof focus === "function") Reflect.apply(focus, element, []);
-          Reflect.apply(setValue, element, [nextValue]);
-          const dispatchEvent = Reflect.get(element, "dispatchEvent");
+                if (typeof focus === "function") Reflect.apply(focus, element, []);
+                Reflect.apply(setValue, element, [nextValue]);
+                const dispatchEvent = Reflect.get(element, "dispatchEvent");
 
-          if (typeof dispatchEvent === "function") {
-            Reflect.apply(dispatchEvent, element, [new Event("input", { bubbles: true })]);
-            Reflect.apply(dispatchEvent, element, [new Event("change", { bubbles: true })]);
-          }
-        }, value),
+                if (typeof dispatchEvent === "function") {
+                  Reflect.apply(dispatchEvent, element, [new Event("input", { bubbles: true })]);
+                  Reflect.apply(dispatchEvent, element, [new Event("change", { bubbles: true })]);
+                }
+              }, value),
+        undefined,
+        onComplete,
       ),
-    click: (selector, signal, onDispatch) =>
-      runObservedPageAction(page, selector, signal, onDispatch, (element) => element.click()),
-    selectFile: async (request, signal, onDispatch) => {
+    click: (selector, signal, onDispatch, onComplete, expectedTarget) =>
+      runObservedPageAction(
+        page,
+        selector,
+        signal,
+        onDispatch,
+        (element) =>
+          expectedTarget === undefined
+            ? element.click()
+            : guardedPageInput(element, expectedTarget, "click"),
+        undefined,
+        onComplete,
+      ),
+    selectFile: async (request, signal, onDispatch, onComplete) => {
       const selection = await prepareFileSelection(request, signal);
 
       try {
@@ -1128,6 +1338,7 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
           onDispatch,
           selection.select,
           selection.validate,
+          onComplete,
         );
       } finally {
         await selection.close();
@@ -1176,6 +1387,26 @@ const makeProductionBrowser = (
   browser: Browser,
   viewport?: BrowserRunViewport,
 ): BrowserRunInteractiveBrowser => ({
+  detach: () => browser.disconnect(),
+  reattach: async (identity) => {
+    const context = browser
+      .browserContexts()
+      .find((candidate) => candidate.id === identity.contextId);
+
+    if (context === undefined) return undefined;
+    const pages = await context.pages();
+
+    if (pages.length > 64) throw new Error("The browser target inventory exceeds its bound");
+    for (const candidate of pages) {
+      const page = makeProductionPage(candidate);
+      const current = await page.identity?.();
+
+      if (current?.targetId === identity.targetId)
+        return { context: makeProductionContext(context), page };
+    }
+
+    return undefined;
+  },
   createContext: async () => makeProductionContext(await browser.createBrowserContext(), viewport),
   // Exact-session termination may already have closed the provider transport.
   close: async () => {
@@ -1203,10 +1434,34 @@ const protocolError = (message: string, cause?: unknown): InteractiveBrowserProt
     ...(cause === undefined ? {} : { cause }),
   });
 
-const actionError = (operation: BrowserOperation, cause?: unknown): InteractiveBrowserActionError =>
+const failReportedProtocol = (
+  operation: string,
+  error: InteractiveBrowserProtocolError,
+  evidence = error.evidence,
+) =>
+  reportBrowserCause(operation, Cause.fail(error)).pipe(
+    Effect.andThen(
+      Effect.fail(
+        reportedBrowserError(
+          InteractiveBrowserProtocolError.make({
+            implementation: browserRunInteractiveImplementation,
+            message: error.message,
+            ...(evidence === undefined ? {} : { evidence }),
+          }),
+        ),
+      ),
+    ),
+  );
+
+const actionError = (
+  operation: BrowserOperation,
+  cause?: unknown,
+  evidence?: InteractiveBrowserFailureEvidence,
+): InteractiveBrowserActionError =>
   InteractiveBrowserActionError.make({
     implementation: browserRunInteractiveImplementation,
     operation,
+    ...(evidence === undefined ? {} : { evidence }),
     message: `The interactive browser ${operation} operation failed`,
     ...(cause === undefined ? {} : { cause }),
   });
@@ -1216,14 +1471,14 @@ const undispatchedActionError = (operation: BrowserOperation): InteractiveBrowse
     implementation: browserRunInteractiveImplementation,
     operation,
     message: `The interactive browser ${operation} operation was not dispatched`,
+    evidence: { stage: "preparation", dispatch: "not-dispatched", session: "attached" },
   });
 
 /** Recognizes a local pre-dispatch refusal without exposing selector or page content. */
 export const isBrowserRunUndispatchedActionError = (error: unknown): boolean =>
   Schema.is(InteractiveBrowserActionError)(error) &&
   error.implementation.identity === browserRunInteractiveImplementation.identity &&
-  (error.operation === "click" || error.operation === "fill") &&
-  error.message === `The interactive browser ${error.operation} operation was not dispatched`;
+  error.evidence?.dispatch === "not-dispatched";
 
 const policyError = (message: string): InteractiveBrowserPolicyDeniedError =>
   InteractiveBrowserPolicyDeniedError.make({
@@ -1231,10 +1486,11 @@ const policyError = (message: string): InteractiveBrowserPolicyDeniedError =>
     message,
   });
 
-const expiredError = (): InteractiveBrowserExpiredError =>
+const expiredError = (session: "lost" | "disconnected" = "lost"): InteractiveBrowserExpiredError =>
   InteractiveBrowserExpiredError.make({
     implementation: browserRunInteractiveImplementation,
     message: "The remote browser is no longer usable",
+    evidence: { stage: "preparation", dispatch: "not-dispatched", session },
   });
 
 const causeText = (cause: unknown): string => {
@@ -1250,6 +1506,11 @@ const isRemoteClosure = (cause: unknown): boolean =>
   /target closed|browser.*closed|session.*closed|connection.*closed|not connected|websocket.*closed/i.test(
     causeText(cause),
   );
+
+const inputMayStillRun = (cause: unknown): boolean =>
+  isRemoteClosure(cause) ||
+  (cause instanceof Error && cause.name === "TimeoutError") ||
+  (cause instanceof BrowserRunFailure && cause.reason === "timeout");
 
 const snapshotPolicy = Effect.fn("BrowserRunInteractive.snapshotPolicy")(function* (
   input: InteractiveBrowserPolicy,
@@ -1380,15 +1641,45 @@ interface HandleState {
   readonly closed: { value: boolean };
   readonly disconnected: { value: boolean };
   readonly uncertain: { value: boolean };
+  readonly pendingInputs: Set<Promise<unknown>>;
+  readonly actions: { value: number };
   readonly violation: { value: BrowserFailure | undefined };
   readonly pendingRequests: Set<Promise<void>>;
 }
 
+const trackPendingInput = <A>(state: HandleState, pending: Promise<A>): Promise<A> => {
+  state.pendingInputs.add(pending);
+  void pending.then(
+    () => state.pendingInputs.delete(pending),
+    (cause) => {
+      state.pendingInputs.delete(pending);
+      if (state.disconnected.value || inputMayStillRun(cause)) state.uncertain.value = true;
+      if (isRemoteClosure(cause)) state.disconnected.value = true;
+    },
+  );
+
+  return pending;
+};
+
+const makeHostInputObserver = Effect.fnUntraced(function* (state: HandleState, operation: string) {
+  const reporterContext = yield* Effect.context<never>();
+
+  return <A>(pending: Promise<A>, signal: AbortSignal): Promise<A> => {
+    void pending.then(undefined, (cause) => {
+      if (signal.aborted)
+        return Effect.runPromiseWith(reporterContext)(
+          reportBrowserCause(operation, Cause.fail(cause)),
+        );
+    });
+
+    return trackPendingInput(state, pending);
+  };
+});
+
 const stateFailure = (state: HandleState): BrowserFailure | undefined => {
   if (state.violation.value !== undefined) return state.violation.value;
-  if (state.closed.value || state.disconnected.value || state.uncertain.value) {
-    return expiredError();
-  }
+  if (state.closed.value) return expiredError();
+  if (state.disconnected.value) return expiredError("disconnected");
 
   return undefined;
 };
@@ -1409,6 +1700,7 @@ interface HandleRuntime {
     effect: Effect.Effect<A, BrowserFailure>,
     preflight?: Effect.Effect<void, BrowserFailure>,
     consumeAction?: boolean,
+    mutating?: boolean,
   ) => Effect.Effect<A, BrowserFailure>;
 }
 
@@ -1528,75 +1820,131 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
   close: Effect.Effect<void, InteractiveBrowserError>,
 ): Effect.fn.Return<HandleRuntime> {
   const permits = yield* Semaphore.make(1);
-  const actions = yield* Ref.make(0);
+  let currentOperation: BrowserOperation | undefined;
+  let generation = 0;
 
-  const remote = <A>(operation: BrowserOperation, evaluate: (signal: AbortSignal) => Promise<A>) =>
-    Effect.tryPromise({
-      try: evaluate,
-      catch: (cause) => new BrowserRunRemoteFailure(cause),
-    }).pipe(
-      Effect.catch(
-        (
-          failure,
-        ): Effect.Effect<never, InteractiveBrowserActionError | InteractiveBrowserExpiredError> => {
-          const cause = failure.cause;
+  let evidence: InteractiveBrowserFailureEvidence = {
+    stage: "preparation",
+    dispatch: "not-dispatched",
+    session: "attached",
+  };
 
-          if (cause instanceof BrowserRunActionUndispatched) {
+  const reporterContext = yield* Effect.context<never>();
+
+  const remote = <A>(
+    operation: BrowserOperation,
+    evaluate: (signal: AbortSignal) => Promise<A>,
+    observed = false,
+  ) =>
+    Effect.suspend(() => {
+      currentOperation = operation;
+      const mutating = operation !== "read-text" && operation !== "screenshot";
+      const currentGeneration = ++generation;
+
+      evidence = {
+        stage: observed ? "preparation" : mutating ? "input" : "observation",
+        dispatch: observed || !mutating ? "not-dispatched" : "running",
+        session: "attached",
+      };
+
+      return Effect.tryPromise({
+        try: (signal) => {
+          const pending = evaluate(signal);
+
+          if (mutating) trackPendingInput(state, pending);
+          void pending.then(
+            () => {
+              if (mutating && generation === currentGeneration)
+                evidence = { ...evidence, stage: "observation", dispatch: "completed" };
+            },
+            (cause) => {
+              if (state.disconnected.value || isRemoteClosure(cause)) {
+                state.disconnected.value = true;
+                if (mutating) state.uncertain.value = true;
+              }
+              if (generation === currentGeneration && evidence.dispatch === "running")
+                evidence = { ...evidence, dispatch: "unknown" };
+              if (signal.aborted && !(cause instanceof BrowserRunActionUndispatched))
+                void Effect.runPromiseWith(reporterContext)(
+                  reportBrowserCause("interactive.input.late", Cause.fail(cause)),
+                );
+            },
+          );
+
+          return pending;
+        },
+        catch: (cause) => new BrowserRunRemoteFailure(cause),
+      }).pipe(
+        Effect.catch((failure) => {
+          if (failure.cause instanceof BrowserRunActionUndispatched)
             return Effect.logInfo("Browser interactive action was not dispatched").pipe(
               Effect.annotateLogs({
                 "browser.action": operation,
-                "browser.selector_match_count": cause.matchCount,
+                "browser.selector_match_count": failure.cause.matchCount,
               }),
               Effect.andThen(Effect.fail(undispatchedActionError(operation))),
             );
-          }
-          if (state.disconnected.value || isRemoteClosure(cause)) {
+          if (mutating && inputMayStillRun(failure.cause)) state.uncertain.value = true;
+          if (isRemoteClosure(failure.cause)) {
             state.disconnected.value = true;
-
-            return Effect.fail(expiredError());
+            if (mutating) state.uncertain.value = true;
           }
+          evidence = {
+            ...evidence,
+            dispatch: evidence.dispatch === "running" ? "unknown" : evidence.dispatch,
+            session: state.disconnected.value ? "disconnected" : "attached",
+          };
 
-          return Effect.fail(actionError(operation, cause));
-        },
-      ),
-    );
+          return reportBrowserCause(
+            `interactive.${operation}.${evidence.stage}.${evidence.dispatch}`,
+            Cause.fail(failure.cause),
+          ).pipe(
+            Effect.andThen(
+              Effect.fail(reportedBrowserError(actionError(operation, undefined, evidence))),
+            ),
+          );
+        }),
+      );
+    });
 
   const observedAction = (
     operation: "fill" | "click" | "select-file",
-    evaluate: (signal: AbortSignal, onDispatch: () => void) => Promise<unknown>,
+    evaluate: (
+      signal: AbortSignal,
+      onDispatch: () => void,
+      onComplete: () => void,
+    ) => Promise<unknown>,
   ) =>
-    Effect.suspend(() => {
-      let dispatched = false;
-      let pending: Promise<unknown> | undefined;
+    remote(
+      operation,
+      (signal) => {
+        const observedGeneration = generation;
 
-      return remote(operation, (signal) => {
-        pending = evaluate(signal, () => {
-          dispatched = true;
-        });
-
-        return pending;
-      }).pipe(
-        Effect.onInterrupt(() =>
-          Effect.gen(function* () {
-            state.uncertain.value = true;
-            // Retain evidence before Scope teardown, without claiming SDK
-            // cancellation or success. A late completion never makes this replayable.
-            yield* Effect.logWarning("Browser interactive action interrupted").pipe(
-              Effect.annotateLogs({
-                "browser.action": operation,
-                "browser.action_dispatched": dispatched,
-                "browser.action_outcome_unknown": dispatched,
-              }),
-            );
-            const completion = pending;
-
-            if (completion !== undefined) {
-              yield* Effect.promise(() => boundedBestEffort(completion, 500));
-            }
+        return evaluate(
+          signal,
+          () => {
+            if (generation === observedGeneration)
+              evidence = { ...evidence, stage: "input", dispatch: "running" };
+          },
+          () => {
+            if (generation === observedGeneration)
+              evidence = { ...evidence, stage: "observation", dispatch: "completed" };
+          },
+        );
+      },
+      true,
+    ).pipe(
+      Effect.onInterrupt(() =>
+        Effect.logWarning("Browser interactive action interrupted").pipe(
+          Effect.annotateLogs({
+            "browser.action": operation,
+            "browser.action_dispatched": evidence.dispatch !== "not-dispatched",
+            "browser.action_outcome_unknown":
+              evidence.dispatch === "running" || evidence.dispatch === "unknown",
           }),
         ),
-      );
-    });
+      ),
+    );
 
   const decodeActionObservation = Effect.fn("BrowserRunInteractive.decodeActionObservation")(
     function* (raw: unknown) {
@@ -1615,6 +1963,8 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
     Effect.logInfo("Browser interactive action observed").pipe(
       Effect.annotateLogs({
         "browser.action": operation,
+        "browser.input_millis": observation.inputMillis,
+        "browser.observation_millis": observation.observationMillis,
         "browser.selector_match_count": observation.before.matchCount,
         ...(observation.before.kind === undefined
           ? {}
@@ -1671,21 +2021,52 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
     effect: Effect.Effect<A, BrowserFailure>,
     preflight: Effect.Effect<void, BrowserFailure> = Effect.void,
     consumeAction = true,
+    mutating = true,
   ) =>
     permits
       .withPermitsIfAvailable(1)(
         Effect.gen(function* () {
           const unavailable = stateFailure(state);
 
-          if (unavailable !== undefined) return yield* unavailable;
+          if (unavailable !== undefined) {
+            if (unavailable._tag === "InteractiveBrowserProtocolError") {
+              yield* reportBrowserCause("interactive.policy", Cause.fail(unavailable));
+
+              const safe = reportedBrowserError(
+                InteractiveBrowserProtocolError.make({
+                  implementation: browserRunInteractiveImplementation,
+                  message: unavailable.message,
+                  evidence: unavailable.evidence ?? {
+                    stage: "preparation",
+                    dispatch: "not-dispatched",
+                    session: "attached",
+                  },
+                }),
+              );
+
+              if (state.violation.value === unavailable) state.violation.value = safe;
+
+              return yield* safe;
+            }
+
+            return yield* unavailable;
+          }
+          if (mutating && (state.uncertain.value || state.pendingInputs.size > 0))
+            return yield* InteractiveBrowserBusyError.make({
+              implementation: browserRunInteractiveImplementation,
+              message: "Earlier browser input has not been proven stopped",
+            });
+          currentOperation = undefined;
+          generation++;
           yield* preflight;
 
           if (consumeAction) {
-            const admitted = yield* Ref.modify(actions, (count) =>
-              count >= policy.maxActions
-                ? [{ allowed: false, observed: count + 1 }, count]
-                : [{ allowed: true, observed: count + 1 }, count + 1],
-            );
+            const admitted = {
+              allowed: state.actions.value < policy.maxActions,
+              observed: state.actions.value + 1,
+            };
+
+            if (admitted.allowed) state.actions.value++;
 
             if (!admitted.allowed) {
               return yield* InteractiveBrowserLimitError.make({
@@ -1699,45 +2080,66 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           }
 
           const completed = effect.pipe(
-            Effect.catch((error) => {
-              const failure = stateFailure(state);
-
-              return Effect.fail(failure ?? error);
-            }),
             Effect.flatMap((result) =>
               awaitPendingRequests(state).pipe(
-                Effect.flatMap(() => {
-                  const failure = stateFailure(state);
+                Effect.andThen(
+                  Effect.suspend(() => {
+                    const failure = stateFailure(state);
 
-                  return failure === undefined ? Effect.succeed(result) : Effect.fail(failure);
-                }),
+                    return failure === undefined ? Effect.succeed(result) : Effect.fail(failure);
+                  }),
+                ),
               ),
             ),
           );
 
-          return yield* withinDeadline(completed, policy, startedAt, () => {
-            state.uncertain.value = true;
-          }).pipe(
-            Effect.onInterrupt(() =>
-              Effect.sync(() => {
-                state.uncertain.value = true;
-              }),
+          return yield* withinDeadline(completed, policy, startedAt).pipe(
+            Effect.mapError((error) =>
+              currentOperation === undefined
+                ? error
+                : error._tag === "InteractiveBrowserLimitError"
+                  ? InteractiveBrowserLimitError.make({
+                      implementation: error.implementation,
+                      limit: error.limit,
+                      maximum: error.maximum,
+                      observed: error.observed,
+                      message: error.message,
+                      evidence,
+                    })
+                  : error._tag === "InteractiveBrowserPolicyDeniedError"
+                    ? InteractiveBrowserPolicyDeniedError.make({
+                        implementation: error.implementation,
+                        message: error.message,
+                        evidence,
+                      })
+                    : error,
             ),
-            Effect.catch((error) => {
-              if (Schema.is(InteractiveBrowserLimitError)(error) && error.limit === "elapsed") {
-                return Effect.fail(error);
-              }
-              const failure = stateFailure(state);
+            Effect.catchIf(
+              (error) =>
+                currentOperation !== undefined &&
+                error._tag !== "InteractiveBrowserActionError" &&
+                error._tag !== "InteractiveBrowserLimitError" &&
+                error._tag !== "InteractiveBrowserPolicyDeniedError" &&
+                error._tag !== "InteractiveBrowserExpiredError",
+              (error) => {
+                const safe = reportedBrowserError(
+                  error._tag === "InteractiveBrowserProtocolError"
+                    ? InteractiveBrowserProtocolError.make({
+                        implementation: browserRunInteractiveImplementation,
+                        message: error.message,
+                        evidence,
+                      })
+                    : actionError(currentOperation ?? "read-text", undefined, evidence),
+                );
 
-              if (
-                Schema.is(InteractiveBrowserActionError)(error) &&
-                !isBrowserRunUndispatchedActionError(error)
-              ) {
-                state.uncertain.value = true;
-              }
+                if (state.violation.value === error) state.violation.value = safe;
 
-              return Effect.fail(failure ?? error);
-            }),
+                return reportBrowserCause(
+                  `interactive.${currentOperation}.observation`,
+                  Cause.fail(error),
+                ).pipe(Effect.andThen(Effect.fail(safe)));
+              },
+            ),
           );
         }),
       )
@@ -1780,7 +2182,7 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
           );
 
           if (observation._tag === "MissingElement") {
-            return yield* actionError("read-text");
+            return yield* actionError("read-text", undefined, evidence);
           }
           if (observation._tag === "OverLimit") {
             return yield* InteractiveBrowserLimitError.make({
@@ -1811,12 +2213,22 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
             ),
           );
         }),
+        Effect.void,
+        true,
+        false,
       ),
     fill: (request) =>
       run(
         Effect.gen(function* () {
-          const observation = yield* observedAction("fill", (signal, onDispatch) =>
-            page.fill(request.selector, request.value, signal, onDispatch),
+          const observation = yield* observedAction("fill", (signal, onDispatch, onComplete) =>
+            page.fill(
+              request.selector,
+              request.value,
+              signal,
+              onDispatch,
+              onComplete,
+              request.expectedTarget,
+            ),
           ).pipe(Effect.flatMap(decodeActionObservation));
 
           yield* logActionObservation("fill", observation);
@@ -1827,8 +2239,8 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
     click: (request) =>
       run(
         Effect.gen(function* () {
-          const observation = yield* observedAction("click", (signal, onDispatch) =>
-            page.click(request.selector, signal, onDispatch),
+          const observation = yield* observedAction("click", (signal, onDispatch, onComplete) =>
+            page.click(request.selector, signal, onDispatch, onComplete, request.expectedTarget),
           ).pipe(Effect.flatMap(decodeActionObservation));
 
           yield* logActionObservation("click", observation);
@@ -1842,8 +2254,10 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
         Effect.flatMap((decoded) =>
           run(
             Effect.gen(function* () {
-              const observation = yield* observedAction("select-file", (signal, onDispatch) =>
-                page.selectFile(decoded, signal, onDispatch),
+              const observation = yield* observedAction(
+                "select-file",
+                (signal, onDispatch, onComplete) =>
+                  page.selectFile(decoded, signal, onDispatch, onComplete),
               ).pipe(Effect.flatMap(decodeActionObservation));
 
               yield* logActionObservation("select-file", observation);
@@ -1894,6 +2308,8 @@ const makeHandle = Effect.fn("BrowserRunInteractive.makeHandle")(function* (
               );
             }),
             decodeActionResult(page, policy).pipe(Effect.asVoid),
+            true,
+            false,
           ),
         ),
       ),
@@ -1968,6 +2384,7 @@ const cdpCommand = <A>(
   Effect.scoped(
     Effect.gen(function* () {
       const cleanupContext = yield* Effect.context<never>();
+      const observeInput = yield* makeHostInputObserver(state, "interactive.control.late");
 
       const cdp = yield* Effect.acquireRelease(
         Effect.tryPromise({
@@ -2006,7 +2423,11 @@ const cdpCommand = <A>(
       );
 
       const raw = yield* Effect.tryPromise({
-        try: () => cdp.send(command, parameters),
+        try: (signal) => {
+          const pending = cdp.send(command, parameters);
+
+          return command === "Cloudflare.getHandoffState" ? pending : observeInput(pending, signal);
+        },
         catch: (cause) =>
           state.disconnected.value || isRemoteClosure(cause)
             ? expiredError()
@@ -2021,12 +2442,25 @@ const cdpCommand = <A>(
         ),
       );
     }),
+  ).pipe(
+    Effect.catchTag("InteractiveBrowserProtocolError", (error) =>
+      failReportedProtocol("interactive.control", error),
+    ),
   );
 
 const makeHostService = (
   binding: BrowserRunInteractiveBinding["Service"],
 ): BrowserRunInteractiveHost["Service"] => {
-  const closeSession = binding.closeSession;
+  const owners = new Map<string, symbol>();
+
+  const closeSession: BrowserRunInteractiveHost["Service"]["closeSession"] = (sessionId) =>
+    binding.closeSession(sessionId).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          owners.delete(Redacted.value(sessionId));
+        }),
+      ),
+    );
 
   const terminate = Effect.fn("BrowserRunInteractiveHost.terminate")(function* (
     sessionId: Redacted.Redacted<string>,
@@ -2094,10 +2528,12 @@ const makeHostService = (
 
   const acquire = Effect.fn("BrowserRunInteractiveHost.acquire")(function* (
     policy: InteractiveBrowserPolicy,
+    resume?: BrowserRunInteractiveCheckpoint,
+    pendingInput = false,
   ): Effect.fn.Return<BrowserRunInteractiveAcquisition, InteractiveBrowserError, Scope.Scope> {
     const scope = yield* Scope.Scope;
     const fixedPolicy = yield* snapshotPolicy(policy);
-    const startedAt = yield* Effect.clockWith((clock) => clock.currentTimeMillis);
+    const startedAt = resume?.startedAt ?? (yield* Clock.currentTimeMillis);
 
     // Late SDK replies retain this pass's clock and private reporting scope.
     const runCleanup = <A, E>(effect: Effect.Effect<A, E>) =>
@@ -2122,20 +2558,23 @@ const makeHostService = (
     const state: HandleState = {
       closed: { value: false },
       disconnected: { value: false },
-      uncertain: { value: false },
+      uncertain: { value: pendingInput || (resume !== undefined && resume.inputState !== "idle") },
+      pendingInputs: new Set(),
+      actions: { value: resume?.consumedActions ?? 0 },
       violation: { value: undefined },
       pendingRequests: new Set(),
     };
 
     const lifecycle = {
       managedTeardownInstalled: false,
+      retained: resume !== undefined,
     };
 
     const closers: Array<CloseEntry> = [];
 
     const releaseBeforeManaged = (entry: CloseEntry): Effect.Effect<void> =>
       Effect.suspend(() =>
-        lifecycle.managedTeardownInstalled
+        lifecycle.managedTeardownInstalled || lifecycle.retained
           ? Effect.void
           : entry.close.pipe(
               Effect.catchCause((cause) =>
@@ -2148,34 +2587,36 @@ const makeHostService = (
 
     const sessionIdValue = yield* Effect.acquireRelease(
       withinDeadline(
-        Effect.tryPromise({
-          try: (signal) =>
-            observeLate(
-              signal,
-              closeLateAcquisition(
-                signal,
-                () => binding.acquire(keepAliveMillis(fixedPolicy)),
-                (id) =>
-                  runCleanup(
-                    Schema.decodeUnknownEffect(BrowserRunSessionId)(id).pipe(
-                      Effect.flatMap((value) => terminate(Redacted.make(value), [])),
-                    ),
+        resume === undefined
+          ? Effect.tryPromise({
+              try: (signal) =>
+                observeLate(
+                  signal,
+                  closeLateAcquisition(
+                    signal,
+                    () => binding.acquire(keepAliveMillis(fixedPolicy)),
+                    (id) =>
+                      runCleanup(
+                        Schema.decodeUnknownEffect(BrowserRunSessionId)(id).pipe(
+                          Effect.flatMap((value) => terminate(Redacted.make(value), [])),
+                        ),
+                      ),
                   ),
+                ),
+              catch: (cause) =>
+                isCapacityRefusal(cause)
+                  ? InteractiveBrowserCapacityError.make({
+                      implementation: browserRunInteractiveImplementation,
+                      message: "Browser Run has no capacity for a new browser session",
+                    })
+                  : protocolError("Acquiring the Browser Run session failed", cause),
+            }).pipe(
+              Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunSessionId)),
+              Effect.catchTag("SchemaError", () =>
+                protocolError("The Browser Run session identity was malformed"),
               ),
-            ),
-          catch: (cause) =>
-            isCapacityRefusal(cause)
-              ? InteractiveBrowserCapacityError.make({
-                  implementation: browserRunInteractiveImplementation,
-                  message: "Browser Run has no capacity for a new browser session",
-                })
-              : protocolError("Acquiring the Browser Run session failed", cause),
-        }).pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunSessionId)),
-          Effect.catchTag("SchemaError", () =>
-            protocolError("The Browser Run session identity was malformed"),
-          ),
-        ),
+            )
+          : Effect.succeed(Redacted.value(resume.sessionId)),
         fixedPolicy,
         startedAt,
       ),
@@ -2184,7 +2625,7 @@ const makeHostService = (
           state.closed.value = true;
           state.disconnected.value = true;
 
-          return lifecycle.managedTeardownInstalled
+          return lifecycle.managedTeardownInstalled || lifecycle.retained
             ? Effect.void
             : terminate(Redacted.make(id), []).pipe(
                 Effect.catchCause((cause) =>
@@ -2197,12 +2638,33 @@ const makeHostService = (
       { interruptible: true },
     );
 
+    const owner = Symbol();
+
+    const releaseOwner = () => {
+      if (owners.get(sessionIdValue) === owner) owners.delete(sessionIdValue);
+    };
+
     const connect = yield* Effect.cached(
       Effect.gen(function* (): Effect.fn.Return<
         BrowserRunInteractiveSession,
         InteractiveBrowserError,
         Scope.Scope
       > {
+        if (owners.has(sessionIdValue))
+          return yield* InteractiveBrowserBusyError.make({
+            implementation: browserRunInteractiveImplementation,
+            message: "The previous local browser owner must detach before resuming",
+          });
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            owners.set(sessionIdValue, owner);
+          }),
+          () =>
+            Effect.sync(() => {
+              if (!lifecycle.managedTeardownInstalled) releaseOwner();
+            }),
+        );
+
         const browser = yield* Effect.acquireRelease(
           withinDeadline(
             Effect.tryPromise({
@@ -2212,22 +2674,60 @@ const makeHostService = (
                   closeLateAcquisition(
                     signal,
                     () => binding.connect(sessionIdValue),
-                    (acquired) => runCleanup(closeAcquired(acquired)),
+                    (acquired) =>
+                      runCleanup(
+                        resume === undefined
+                          ? closeAcquired(acquired)
+                          : closeEntry(
+                              acquired.detach ?? (async () => {}),
+                              "Detaching the browser failed",
+                            ).close,
+                      ),
                   ),
                 ),
               catch: (cause) =>
-                protocolError("Connecting to the Browser Run session failed", cause),
-            }),
+                resume !== undefined &&
+                cause instanceof BrowserRunFailure &&
+                (cause.status === 404 || cause.status === 410)
+                  ? expiredError()
+                  : protocolError("Connecting to the Browser Run session failed", cause),
+            }).pipe(
+              Effect.timeoutOrElse({
+                duration: "10 seconds",
+                orElse: () =>
+                  Effect.fail(protocolError("Connecting to the Browser Run session timed out")),
+              }),
+            ),
             fixedPolicy,
             startedAt,
           ),
           (acquired) =>
-            releaseBeforeManaged(
-              closeEntry(acquired.close, "Closing the local browser connection failed"),
-            ),
+            lifecycle.managedTeardownInstalled
+              ? Effect.void
+              : lifecycle.retained
+                ? closeEntry(
+                    acquired.detach ?? (async () => {}),
+                    "Detaching the browser failed",
+                  ).close.pipe(
+                    Effect.tap(() => Effect.sync(releaseOwner)),
+                    Effect.catchCause((cause) => reportBrowserCause("interactive.detach", cause)),
+                  )
+                : releaseBeforeManaged(
+                    closeEntry(acquired.close, "Closing the local browser connection failed"),
+                  ),
           { interruptible: true },
         );
 
+        if (resume !== undefined) {
+          const actualSession = yield* Effect.try({
+            try: browser.sessionId,
+            catch: (cause) =>
+              protocolError("Reading the reattached browser identity failed", cause),
+          });
+
+          if (actualSession !== sessionIdValue)
+            return yield* protocolError("The reattached browser session identity did not match");
+        }
         closers.push(closeEntry(browser.close, "Closing the interactive browser failed"));
 
         const disconnected = () => {
@@ -2266,67 +2766,97 @@ const makeHostService = (
           return yield* expiredError();
         }
 
-        const context = yield* Effect.acquireRelease(
-          withinDeadline(
-            Effect.tryPromise({
-              try: (signal) =>
-                observeLate(
-                  signal,
-                  closeLateAcquisition(signal, browser.createContext, (acquired) =>
-                    runCleanup(
-                      Effect.tryPromise({
-                        try: () => acquired.close(),
-                        catch: (cause) => actionError("close", cause),
-                      }),
+        const reattached =
+          resume === undefined
+            ? undefined
+            : yield* withinDeadline(
+                Effect.tryPromise({
+                  try: async () => {
+                    if (browser.reattach === undefined || browser.detach === undefined)
+                      throw new Error("The browser binding does not support exact reattachment");
+
+                    return await browser.reattach(resume.page);
+                  },
+                  catch: (cause) =>
+                    protocolError("Reattaching the exact browser page failed", cause),
+                }).pipe(
+                  Effect.timeoutOrElse({
+                    duration: "10 seconds",
+                    orElse: () =>
+                      Effect.fail(protocolError("Reattaching the exact browser page timed out")),
+                  }),
+                ),
+                fixedPolicy,
+                startedAt,
+              );
+
+        if (resume !== undefined && reattached === undefined) return yield* expiredError();
+
+        const context =
+          reattached?.context ??
+          (yield* Effect.acquireRelease(
+            withinDeadline(
+              Effect.tryPromise({
+                try: (signal) =>
+                  observeLate(
+                    signal,
+                    closeLateAcquisition(signal, browser.createContext, (acquired) =>
+                      runCleanup(
+                        Effect.tryPromise({
+                          try: () => acquired.close(),
+                          catch: (cause) => actionError("close", cause),
+                        }),
+                      ),
                     ),
                   ),
-                ),
-              catch: (cause) =>
-                state.disconnected.value || isRemoteClosure(cause)
-                  ? expiredError()
-                  : protocolError("Creating the browser context failed", cause),
-            }),
-            fixedPolicy,
-            startedAt,
-          ),
-          (acquired) =>
-            releaseBeforeManaged(
-              closeEntry(acquired.close, "Closing the interactive browser context failed"),
+                catch: (cause) =>
+                  state.disconnected.value || isRemoteClosure(cause)
+                    ? expiredError()
+                    : protocolError("Creating the browser context failed", cause),
+              }),
+              fixedPolicy,
+              startedAt,
             ),
-          { interruptible: true },
-        );
+            (acquired) =>
+              releaseBeforeManaged(
+                closeEntry(acquired.close, "Closing the interactive browser context failed"),
+              ),
+            { interruptible: true },
+          ));
 
         closers.push(closeEntry(context.close, "Closing the interactive browser context failed"));
 
-        const page = yield* Effect.acquireRelease(
-          withinDeadline(
-            Effect.tryPromise({
-              try: (signal) =>
-                observeLate(
-                  signal,
-                  closeLateAcquisition(signal, context.newPage, (acquired) =>
-                    runCleanup(
-                      Effect.tryPromise({
-                        try: () => acquired.close(),
-                        catch: (cause) => actionError("close", cause),
-                      }),
+        const page =
+          reattached?.page ??
+          (yield* Effect.acquireRelease(
+            withinDeadline(
+              Effect.tryPromise({
+                try: (signal) =>
+                  observeLate(
+                    signal,
+                    closeLateAcquisition(signal, context.newPage, (acquired) =>
+                      runCleanup(
+                        Effect.tryPromise({
+                          try: () => acquired.close(),
+                          catch: (cause) => actionError("close", cause),
+                        }),
+                      ),
                     ),
                   ),
-                ),
-              catch: (cause) =>
-                state.disconnected.value || isRemoteClosure(cause)
-                  ? expiredError()
-                  : protocolError("Creating the browser page failed", cause),
-            }),
-            fixedPolicy,
-            startedAt,
-          ),
-          (acquired) =>
-            releaseBeforeManaged(
-              closeEntry(acquired.close, "Closing the interactive browser page failed"),
+                catch: (cause) =>
+                  state.disconnected.value || isRemoteClosure(cause)
+                    ? expiredError()
+                    : protocolError("Creating the browser page failed", cause),
+              }),
+              fixedPolicy,
+              startedAt,
             ),
-          { interruptible: true },
-        );
+            (acquired) =>
+              releaseBeforeManaged(
+                closeEntry(acquired.close, "Closing the interactive browser page failed"),
+              ),
+            { interruptible: true },
+          ));
 
         closers.push(closeEntry(page.close, "Closing the interactive browser page failed"));
 
@@ -2376,6 +2906,34 @@ const makeHostService = (
 
         if (setupFailure !== undefined) return yield* setupFailure;
 
+        const detach = yield* Effect.cached(
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              if (browser.detach === undefined)
+                return yield* protocolError("The browser binding does not support detachment");
+              lifecycle.retained = true;
+              state.closed.value = true;
+              state.disconnected.value = true;
+              if (state.pendingInputs.size > 0) state.uncertain.value = true;
+              yield* closeEntry(async () => {
+                page.offRequest(requestListener);
+                browser.offDisconnected(disconnected);
+                await browser.detach?.();
+              }, "Detaching the browser transport failed").close;
+              releaseOwner();
+            }).pipe(
+              Effect.catchTag("InteractiveBrowserActionError", (error) =>
+                reportBrowserCause("interactive.detach", Cause.fail(error)).pipe(
+                  Effect.andThen(Effect.fail(reportedBrowserError(actionError("close")))),
+                ),
+              ),
+              Effect.catchTag("InteractiveBrowserProtocolError", (error) =>
+                failReportedProtocol("interactive.detach", error),
+              ),
+            ),
+          ),
+        );
+
         const teardown = yield* Effect.uninterruptible(
           Effect.gen(function* () {
             const cached = yield* Effect.cached(
@@ -2386,13 +2944,14 @@ const makeHostService = (
             );
 
             lifecycle.managedTeardownInstalled = true;
+            lifecycle.retained = false;
             yield* Effect.addFinalizer(() =>
               Effect.uninterruptible(
                 Effect.sync(() => {
                   state.closed.value = true;
                   state.disconnected.value = true;
                 }).pipe(
-                  Effect.andThen(cached),
+                  Effect.andThen(Effect.suspend(() => (lifecycle.retained ? detach : cached))),
                   Effect.catchCause((cause) =>
                     reportBrowserCause("interactive.close", cause).pipe(
                       Effect.andThen(
@@ -2409,10 +2968,13 @@ const makeHostService = (
         );
 
         const close: Effect.Effect<void, InteractiveBrowserError> = Effect.uninterruptible(
-          Effect.sync(() => {
+          Effect.suspend(() => {
+            if (lifecycle.retained || owners.get(sessionIdValue) !== owner) return Effect.void;
             state.closed.value = true;
             state.disconnected.value = true;
-          }).pipe(Effect.andThen(teardown)),
+
+            return teardown;
+          }),
         );
 
         const runtime = yield* makeHandle(page, fixedPolicy, startedAt, state, close);
@@ -2429,15 +2991,61 @@ const makeHostService = (
             ),
           );
 
+        const inputState = Effect.sync((): BrowserRunInputState =>
+          state.uncertain.value ? "unknown" : state.pendingInputs.size > 0 ? "running" : "idle",
+        );
+
+        const pageIdentity = yield* Effect.cached(
+          Effect.tryPromise({
+            try: async () => {
+              if (page.identity === undefined)
+                throw new Error("The browser binding does not expose page identity");
+
+              return await page.identity();
+            },
+            catch: (cause) =>
+              protocolError("Reading the exact browser page identity failed", cause),
+          }).pipe(
+            Effect.catchTag("InteractiveBrowserProtocolError", (error) =>
+              failReportedProtocol("interactive.checkpoint", error),
+            ),
+          ),
+        );
+
+        const observeResize = yield* makeHostInputObserver(state, "interactive.resize.late");
+
         return {
           handle: runtime.handle,
+          checkpoint: withinDeadline(
+            Effect.gen(function* () {
+              const identity = resume?.page ?? (yield* pageIdentity);
+
+              return BrowserRunInteractiveCheckpoint.make({
+                sessionId: Redacted.make(sessionIdValue),
+                page: identity,
+                policy: InteractiveBrowserPolicy.make(fixedPolicy),
+                startedAt,
+                consumedActions: state.actions.value,
+                inputState: yield* inputState,
+              });
+            }),
+            fixedPolicy,
+            startedAt,
+          ),
+          detach,
+          inputState,
+          drainInput: Effect.suspend(() =>
+            Effect.promise(() =>
+              boundedBestEffort(Promise.allSettled(state.pendingInputs), 500),
+            ).pipe(Effect.andThen(inputState)),
+          ),
           sessionId: Redacted.make(sessionIdValue),
           resizeViewport: (viewport) =>
             decodeViewport(viewport).pipe(
               Effect.flatMap((decoded) =>
                 runtime.run(
                   Effect.tryPromise({
-                    try: () => page.setViewport(decoded),
+                    try: (signal) => observeResize(page.setViewport(decoded), signal),
                     catch: (cause) => {
                       if (state.disconnected.value || isRemoteClosure(cause)) {
                         state.disconnected.value = true;
@@ -2447,7 +3055,11 @@ const makeHostService = (
 
                       return protocolError("Resizing the browser viewport failed", cause);
                     },
-                  }),
+                  }).pipe(
+                    Effect.catchTag("InteractiveBrowserProtocolError", (error) =>
+                      failReportedProtocol("interactive.resize", error),
+                    ),
+                  ),
                   currentPagePreflight,
                   false,
                 ),
@@ -2479,6 +3091,8 @@ const makeHostService = (
                   currentPagePreflight.pipe(
                     Effect.andThen(requestFitsSession(decoded.expiresInMs)),
                   ),
+                  true,
+                  true,
                 ),
               ),
             ),
@@ -2535,6 +3149,8 @@ const makeHostService = (
               ),
             ),
             currentPagePreflight,
+            true,
+            false,
           ),
           close,
         };
@@ -2550,6 +3166,19 @@ const makeHostService = (
   return BrowserRunInteractiveHost.of({
     acquire,
     open: (policy) => acquire(policy).pipe(Effect.flatMap((acquired) => acquired.connect)),
+    resume: (checkpoint, options) =>
+      Schema.decodeEffect(Schema.toType(BrowserRunInteractiveCheckpoint))(checkpoint).pipe(
+        Effect.mapError(() => policyError("The browser checkpoint is malformed")),
+        Effect.flatMap((decoded) => acquire(decoded.policy, decoded, options.pendingInput)),
+        Effect.flatMap((acquired) => acquired.connect),
+        Effect.catchTag("InteractiveBrowserProtocolError", (error) =>
+          failReportedProtocol("interactive.resume", error, {
+            stage: "preparation",
+            dispatch: "not-dispatched",
+            session: "disconnected",
+          }),
+        ),
+      ),
     closeSession,
     cleanupSemantics: "confirmed-terminal",
   });

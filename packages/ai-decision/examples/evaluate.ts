@@ -1,5 +1,5 @@
-import type { TypeSafeSchema } from "@effect-agent/ai-typesafe";
-import { TypeSafeClient } from "@effect-agent/ai-typesafe";
+import type { TypeSafeSchema } from "@effect/ai-typesafe";
+import { TypeSafeClient } from "@effect/ai-typesafe";
 import { Effect, Layer, Schedule } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -18,22 +18,19 @@ export const questions = {
     type: "noul",
     instructions: "Does the customer need immediate help?",
   },
-} satisfies TypeSafeSchema.Questions;
+} satisfies (typeof TypeSafeSchema.SystemOneRequest.Encoded)["questions"];
 
 export const evaluateTicket = Effect.gen(function* () {
   const client = yield* TypeSafeClient.TypeSafeClient;
 
-  return yield* client.evaluate({
+  return yield* client.systemOne({
     model: "jev-latest",
     state: { message: "I was charged twice. Please refund the duplicate." },
     questions,
   });
 });
 
-export const ClientLive = TypeSafeClient.layer.pipe(
-  Layer.provide(TypeSafeClient.Config.layer),
-  Layer.provide(FetchHttpClient.layer),
-);
+export const ClientLive = TypeSafeClient.layerConfig().pipe(Layer.provide(FetchHttpClient.layer));
 
 // Retry at most twice. The timeout covers the entire operation, including backoff.
 export const program = evaluateTicket.pipe(

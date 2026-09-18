@@ -24,8 +24,8 @@ export const TRIP_APP_TEMPLATE_FILES: Readonly<Record<string, string>> = {
     "vite-plus": "0.3.2"
   },
   "overrides": {
-    "@effect/platform-node": "4.0.0-rc.115",
-    "effect": "4.0.0-rc.115"
+    "@effect/platform-node": "4.0.0-rc.116",
+    "effect": "4.0.0-rc.116"
   },
   "packageManager": "bun@1.4.2",
   "patchedDependencies": {
@@ -109,7 +109,7 @@ export default defineConfig({
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.115"
+    "effect": "4.0.0-rc.116"
   }
 }
 `,
@@ -118,10 +118,10 @@ export default defineConfig({
   "private": true,
   "type": "module",
   "dependencies": {
-    "@effect/platform-node": "4.0.0-rc.115",
+    "@effect/platform-node": "4.0.0-rc.116",
     "@trip/contracts": "workspace:*",
     "alchemy": "2.0.0-beta.79",
-    "effect": "4.0.0-rc.115"
+    "effect": "4.0.0-rc.116"
   }
 }
 `,
@@ -130,10 +130,10 @@ export default defineConfig({
   "private": true,
   "type": "module",
   "dependencies": {
-    "@effect/atom-react": "4.0.0-rc.115",
+    "@effect/atom-react": "4.0.0-rc.116",
     "@trip/contracts": "workspace:*",
     "@types/leaflet": "1.9.21",
-    "effect": "4.0.0-rc.115",
+    "effect": "4.0.0-rc.116",
     "leaflet": "1.9.4",
     "react": "19.2.8",
     "react-dom": "19.2.8"

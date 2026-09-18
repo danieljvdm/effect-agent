@@ -163,9 +163,9 @@ Closing the host Scope stops its repair trigger and closes acquired resources.
 ## Node.js with SQLite {#node}
 
 Install `@effect-agent/platform-node@beta`, `effect-agent@beta`,
-`@effect/ai-openai@4.0.0-rc.115`,
-`@effect/platform-node@4.0.0-rc.115`, and `@effect/sql-sqlite-node@4.0.0-rc.115` alongside
-`effect@4.0.0-rc.115` and the Workflow package.
+`@effect/ai-openai@4.0.0-rc.116`,
+`@effect/platform-node@4.0.0-rc.116`, and `@effect/sql-sqlite-node@4.0.0-rc.116` alongside
+`effect@4.0.0-rc.116` and the Workflow package.
 
 This example reuses `node-agent.ts` from the [Node.js guide](../platforms/node#create-an-agent),
 including its model client and registration versions.

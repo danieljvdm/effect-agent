@@ -1,8 +1,8 @@
-import { AutoModel, DecisionModel, type DecisionSchema } from "@effect-agent/ai-decision";
+import { AutoModel } from "@effect-agent/ai-decision";
 import { expect, it } from "@effect/vitest";
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
-import { AiError, LanguageModel, Model } from "effect/unstable/ai";
+import { DecisionModel, AiError, LanguageModel, Model } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
 
 const nativeModel = (name: string) =>
@@ -26,13 +26,11 @@ const models = {
   difficult: { model: large, description: "Higher cost; difficult tasks" },
 };
 
-const answer = (choice = "routine") => ({
-  provider: "fixture",
-  model: "selector-v1",
+const answer = (choice = "routine"): DecisionModel.ProviderResponse => ({
   answers: {
     model: {
-      type: "choice",
-      choice,
+      _tag: "Classify",
+      label: choice,
       probabilities: {
         routine: choice === "routine" ? 1 : 0,
         difficult: choice === "difficult" ? 1 : 0,
@@ -43,14 +41,20 @@ const answer = (choice = "routine") => ({
 });
 
 const decisionLayer = (
-  evaluate: (request: DecisionSchema.EvaluateRequest) => Effect.Effect<unknown, AiError.AiError>,
-) => Layer.effect(DecisionModel.DecisionModel, DecisionModel.make({ evaluate }));
+  evaluate: (
+    request: DecisionModel.ProviderOptions,
+  ) => Effect.Effect<DecisionModel.ProviderResponse, AiError.AiError>,
+) =>
+  Layer.effect(
+    DecisionModel.DecisionModel,
+    DecisionModel.make({ decide: (request) => evaluate(request).pipe(Effect.scoped) }),
+  );
 
 it.effect(
   "selects independently for child threads and restores a thread without another decision",
   () =>
     Effect.gen(function* () {
-      const requests: Array<DecisionSchema.EvaluateRequest> = [];
+      const requests: Array<DecisionModel.ProviderOptions> = [];
 
       const auto = AutoModel.make({
         models,
@@ -93,9 +97,9 @@ it.effect(
         "routine parent task",
         "hard child task",
       ]);
-      expect(requests[0]?.questions).toEqual({
+      expect(requests[0]?.decisions).toEqual({
         model: {
-          type: "choice",
+          _tag: "Classify",
           instructions: "Pick for the whole thread",
           criteria: {
             routine: "Low cost; routine tasks",
@@ -172,7 +176,7 @@ it.effect("snapshots profile bindings and descriptions when constructing the cat
     const selected = yield* auto.select({ threadId: "thread", state: "task" }).pipe(
       Effect.provide(
         decisionLayer((request) => {
-          expect(request.questions.model).toMatchObject({
+          expect(request.decisions.model).toMatchObject({
             criteria: { routine: "Low cost; routine tasks" },
           });
 
@@ -201,9 +205,16 @@ it.effect(
 
       const invalidCatalogs: ReadonlyArray<readonly [AutoModel.AutoModel<unknown>, string]> = [
         [AutoModel.make({ models: {}, version: "v1" }), "thread"],
+        [AutoModel.make({ models: { routine: models.routine }, version: "v1" }), "thread"],
         [AutoModel.make({ models, version: "" }), "thread"],
         [AutoModel.make({ models, version: "v1" }), ""],
-        [AutoModel.make({ models: { "": models.routine }, version: "v1" }), "thread"],
+        [
+          AutoModel.make({
+            models: { "": models.routine, difficult: models.difficult },
+            version: "v1",
+          }),
+          "thread",
+        ],
       ];
 
       for (const [catalog, threadId] of invalidCatalogs) {
@@ -233,7 +244,7 @@ it.effect("fails closed on incompatible or corrupt thread selections without res
       .pipe(Effect.provide(decisionLayer(() => Effect.succeed(answer()))));
 
     for (const invalid of [
-      { ...record, version: 2 },
+      { ...record, version: 1 },
       { ...record, threadId: "another-thread" },
       { ...record, catalogVersion: "v2" },
       { ...record, profileId: "toString" },
@@ -285,7 +296,7 @@ it.effect("interrupts and times out selection with provider resources released",
       const live = Layer.effect(
         DecisionModel.DecisionModel,
         DecisionModel.make({
-          evaluate: () =>
+          decide: () =>
             Effect.gen(function* () {
               yield* Effect.acquireRelease(Effect.void, () =>
                 Effect.sync(() => {
@@ -295,7 +306,7 @@ it.effect("interrupts and times out selection with provider resources released",
               yield* Deferred.succeed(started, undefined);
 
               return yield* Effect.never;
-            }),
+            }).pipe(Effect.scoped),
         }),
       );
 
@@ -401,7 +412,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>();
-      const calls: Array<DecisionSchema.Content> = [];
+      const calls: Array<Schema.Json> = [];
       const auto = AutoModel.make({ models, version: "v1" });
 
       const live = decisionLayer((request) =>

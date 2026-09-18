@@ -308,7 +308,7 @@ The Action uses explicit-only caching with a 30-minute TTL and a stable head-bas
 It marks reusable instructions, the diff, and completed tool batches before the ephemeral run-status
 message, retaining earlier boundaries as history grows. Cache fields are added only at the native
 Effect OpenAI client boundary; canonical history and provider encoding remain unchanged. This works
-with the pinned Effect `4.0.0-rc.115` client, which serializes the additional request fields unchanged.
+with the pinned Effect `4.0.0-rc.116` client, which serializes the additional request fields unchanged.
 Required finalization selects `submit_review` through the native exact-tool choice, preserving
 the research tool definitions and their order in the encoded request.
 Compaction can change prefixes, and routing and cache availability still affect hits. See

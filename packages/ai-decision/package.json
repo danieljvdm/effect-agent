@@ -1,7 +1,7 @@
 {
   "name": "@effect-agent/ai-decision",
-  "version": "0.1.0-beta.110",
-  "description": "Provider-neutral choice, score, and probability evaluations with Effect.",
+  "version": "0.1.0-beta.111",
+  "description": "Thread-owned automatic model selection using native Effect decisions.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,11 +16,7 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./auto-model": "./src/AutoModel.ts",
-    "./decision-model": "./src/DecisionModel.ts",
-    "./decision-query": "./src/DecisionQuery.ts",
-    "./decision-schema": "./src/DecisionSchema.ts",
-    "./decision-set": "./src/DecisionSet.ts"
+    "./auto-model": "./src/AutoModel.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -31,12 +27,13 @@
     "test": "vp test"
   },
   "devDependencies": {
+    "@effect/ai-typesafe": "catalog:",
     "@effect/vitest": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "effect": "^4.0.0-rc.115"
+    "effect": "^4.0.0-rc.116"
   }
 }

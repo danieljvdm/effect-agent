@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/platform-alchemy-cloudflare",
-  "version": "0.1.0-beta.110",
+  "version": "0.1.0-beta.111",
   "description": "Alchemy Effect-native Cloudflare hosts for Effect Agent.",
   "license": "MIT",
   "repository": {
@@ -56,6 +56,6 @@
   },
   "peerDependencies": {
     "alchemy": "^2.0.0-beta.79",
-    "effect": "^4.0.0-rc.115"
+    "effect": "^4.0.0-rc.116"
   }
 }

@@ -418,17 +418,8 @@ describe("MemorySubmissionLedger", () => {
           inputDigest: "not-a-digest",
         };
 
-        const admitBoundary: unknown = ledger.admit;
-
-        if (typeof admitBoundary !== "function") {
-          return yield* Effect.die(new Error("Expected an admit function"));
-        }
-        const unvalidatedResult: unknown = admitBoundary(invalid);
-
-        if (!Effect.isEffect(unvalidatedResult)) {
-          return yield* Effect.die(new Error("Expected admit to return an Effect"));
-        }
-        const failure = yield* unvalidatedResult.pipe(Effect.flip);
+        // @ts-expect-error Deliberately bypass the typed request to exercise runtime validation.
+        const failure = yield* ledger.admit(invalid).pipe(Effect.flip);
 
         if (!isLedgerError(failure)) {
           return yield* Effect.die(new Error("Expected a LedgerError"));

@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.111
+
+### Patch Changes
+
+- [#554](https://github.com/danieljvdm/effect-agent/pull/554) [`b2cf08c`](https://github.com/danieljvdm/effect-agent/commit/b2cf08c14d3c455990724fb30062bdd5544dcabb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve browser dispatch evidence and add exact-page checkpoint recovery with pending-input fences. Expose structured page observations and refuse stale click/fill targets before dispatch.
+
 ## 0.1.0-beta.110
 
 ### Patch Changes

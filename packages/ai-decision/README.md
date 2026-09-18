@@ -1,62 +1,41 @@
 # @effect-agent/ai-decision
 
-Ask typed questions about application state. A `DecisionSet` defines the input and questions;
-a `DecisionModel` evaluates them through a provider. Your application owns thresholds,
-routing, and side effects.
-
-```text
-input + DecisionSet → DecisionModel → typed answers → application action
-                           ↑
-                     provider Layer
-```
+Choose a native Effect language model once per thread with `AutoModel`. Follow-up runs retain
+that choice, while each child thread selects independently. The upstream `DecisionModel`
+service evaluates the application-approved catalog.
 
 ```ts
-import { DecisionModel, DecisionQuery, DecisionSet } from "@effect-agent/ai-decision";
-import { Effect, Schema } from "effect";
+import { AutoModel } from "@effect-agent/ai-decision";
+import { OpenAiLanguageModel } from "@effect/ai-openai";
 
-const TicketAssessment = DecisionSet.make({
-  input: Schema.Struct({ message: Schema.String }),
-  questions: {
-    department: DecisionQuery.choice({
-      instructions: "Which team should handle this ticket?",
-      options: { billing: "Payments and refunds", technical: "Bugs and outages" },
-    }),
+const ThreadModels = AutoModel.make({
+  version: "profiles-v1",
+  models: {
+    routine: {
+      description: "Low cost; routine tasks",
+      model: OpenAiLanguageModel.model("gpt-5.6-luna"),
+    },
+    complex: {
+      description: "Difficult reasoning and ambiguous requirements",
+      model: OpenAiLanguageModel.model("gpt-6-astra"),
+    },
   },
-});
-
-const assess = Effect.gen(function* () {
-  const model = yield* DecisionModel.DecisionModel;
-  const { answers } = yield* model.evaluate(TicketAssessment, {
-    message: "Please refund my duplicate charge.",
-  });
-  return answers.department.choice; // "billing" | "technical"
 });
 ```
 
-Supply a provider Layer such as `TypeSafeDecisionModel.model("jev-latest")` from
-[`@effect-agent/ai-typesafe`](../ai-typesafe). The [complete example](../ai-typesafe/examples/decision.ts)
-includes provider setup and an application state transition.
+Provide `ThreadModels`, a native `DecisionModel` such as
+`TypeSafeDecisionModel.model("jev-latest")` from `@effect/ai-typesafe`, provider clients, and one
+shared `AutoModel.layerMemory()` around your agent and subagent handlers. At least two profiles
+are required. Selection does not acquire candidate models until generation starts.
 
-Use `choice` for named alternatives, `score` for ordered levels, and `probability` for a yes/no
-estimate. Questions in a set evaluate independently against the same schema-encoded input.
-Only include input the provider should receive. Returned probabilities are evidence for your
-application's policy, not authorization to act.
+Durable hosts provide `AutoModel.SelectionStore` to atomically retain version 2 selection records.
+Wrong-thread, missing-profile, catalog-version, and record-version mismatches fail without
+reselection or mutation. Explicit `select`, `restore`, and `resolve` support host-owned admission.
 
-Read the [guide](https://effect-agent.com/guide/tools#decision-transitions) for the mental model
-and the [reference](https://effect-agent.com/reference/decision-models) for query options,
-results, errors, and provider behavior.
+For ordinary assessments, import `Decision` and `DecisionModel` from `effect/unstable/ai`.
+This package exports only `AutoModel`; the local decision and TypeSafe implementations have
+been replaced by Effect rc.116.
 
-## Choose a thread's model
-
-`AutoModel.make({ version, models })` builds a native model Layer from `{ model, description }`
-profiles. Use `AgentRuntime.run(assistant, input).pipe(Effect.provide(ThreadModels))` to satisfy
-the model requirement. `Subagent.layer(delegation).pipe(Layer.provide(ThreadModels))` uses the same
-catalog while selecting independently for each new child. Selection happens on each thread's
-first turn. Supply `DecisionModel`, native provider clients, and a shared `AutoModel.layerMemory()`
-to retain choices across follow-ups.
-
-Durable hosts provide `AutoModel.SelectionStore` to atomically retain selection records across
-restarts. Missing profiles, catalog version mismatches, and wrong-thread records fail without
-reselecting. Explicit `select` and `restore` remain available for host-owned admission.
-See [AutoModel](https://effect-agent.com/reference/decision-models#automodel) for configuration
-and a complete Jev example.
+See the [reference](https://effect-agent.com/reference/decision-models#automodel) for ownership,
+configuration, and migration details, or the runnable [decision](examples/decision.ts),
+[direct client](examples/evaluate.ts), and [tool](examples/tool.ts) examples.

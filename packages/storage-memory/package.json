@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/storage-memory",
-  "version": "0.1.0-beta.110",
+  "version": "0.1.0-beta.111",
   "description": "In-memory Thread store and submission ledger reference adapters for Effect Agent tests and conformance suites.",
   "license": "MIT",
   "repository": {
@@ -42,6 +42,6 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "effect": "^4.0.0-rc.115"
+    "effect": "^4.0.0-rc.116"
   }
 }

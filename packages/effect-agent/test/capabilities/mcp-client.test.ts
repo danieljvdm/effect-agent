@@ -390,7 +390,7 @@ describe("MCP discovery validation for other connectors", () => {
         success: Schema.Struct({ value: Schema.String }),
       });
 
-      const decodeToolJsonSchema = Schema.decodeUnknownEffect(McpSchema.ToolJsonSchema);
+      const decodeToolJsonSchema = Schema.decodeUnknownEffect(McpSchema.ToolJson);
 
       const discovery = yield* validateMcpDiscovery(request, {
         identity: McpServerIdentity.make({
@@ -405,7 +405,7 @@ describe("MCP discovery validation for other connectors", () => {
           McpSchema.Tool.make({
             name: "lookup",
             inputSchema: yield* decodeToolJsonSchema(Tool.getJsonSchema(Lookup)),
-            outputSchema: yield* decodeToolJsonSchema(
+            outputSchema: yield* Schema.decodeUnknownEffect(McpSchema.ToolOutputJson)(
               Tool.getJsonSchemaFromSchema(Lookup.successSchema),
             ),
           }),

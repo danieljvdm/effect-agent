@@ -18,8 +18,8 @@ uses Alchemy's Effect runtime with the same thread, memory, scheduling, and subs
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Also install `effect@4.0.0-rc.115`, `effect-cf@^0.44.1`, `effect-agent@beta`,
-`@effect/ai-openai@4.0.0-rc.115` for the examples below.
+Also install `effect@4.0.0-rc.116`, `effect-cf@^0.44.1`, `effect-agent@beta`,
+`@effect/ai-openai@4.0.0-rc.116` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
 ## AI Gateway {#ai-gateway}
