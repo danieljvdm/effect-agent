@@ -8,7 +8,7 @@ import { WakeScheduler } from "@yielded/agent/wake-scheduler";
 import { Clock, Context, Effect, Layer, Option } from "effect";
 
 import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "../Alarm.ts";
-import { ThreadObjectPlacement } from "../CloudflareBindings.ts";
+import { ThreadObjectPlacement } from "../CloudflareHostBindings.ts";
 import * as DueQueue from "./due-queue.ts";
 
 /** Every write prearms its owner; the delivery due index owns its recovery deadline. */

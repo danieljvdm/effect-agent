@@ -45,8 +45,8 @@ import { DurableObjectStorage } from "effect-cf";
 import { SqlClient } from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 
-import { DurableObjectContext } from "./CloudflareBindings.ts";
 import { AuxiliaryDispatchMillis, CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";
+import { DurableObjectContext } from "./CloudflareHostBindings.ts";
 import { safeCauseMessage } from "./internal/boundary.ts";
 import * as DueQueue from "./internal/due-queue.ts";
 

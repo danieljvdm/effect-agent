@@ -113,17 +113,17 @@ import {
   type ThreadMaintenanceFailpointHandler,
 } from "../Alarm.ts";
 import {
-  ThreadObjectIdentity,
-  ThreadObjectPlacement,
-  DurableObjectContext,
-} from "../CloudflareBindings.ts";
-import {
   CLOUDFLARE_RUNTIME_DEFAULTS,
   CloudflareDurableRuntimeConfig,
   CloudflareDurableRuntimeConfigValue,
   CloudflarePlatformConfigError,
 } from "../CloudflareConfig.ts";
-import { CloudflareThreadClient } from "../CloudflareThreadClient.ts";
+import {
+  ThreadObjectIdentity,
+  ThreadObjectPlacement,
+  DurableObjectContext,
+} from "../CloudflareHostBindings.ts";
+import { CloudflareThreadClient } from "../CloudflareThreadClientHost.ts";
 import { cloudflareWakeSchedulerLayer } from "../WakeScheduler.ts";
 import * as DueQueue from "./due-queue.ts";
 import {

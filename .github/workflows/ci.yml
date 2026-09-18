@@ -140,6 +140,7 @@ jobs:
               -F '!@yielded/agent-testing'
               -F '!@yielded/agent-storage-postgres'
               -F '!@yielded/agent-platform-cloudflare'
+              -F '!@yielded/agent-platform-alchemy-cloudflare'
               -F '!@yielded/agent-storage-cloudflare'
               -F '!@yielded/agent-example-travel-planner'
               -F '!@yielded/agent-example-context-continuity-eval'
@@ -168,6 +169,8 @@ jobs:
             filters: -F @yielded/agent-storage-postgres
             postgres: "18"
             cache-seed: storage-postgres
+          - suite: platform-alchemy-cloudflare
+            filters: -F @yielded/agent-platform-alchemy-cloudflare
           - suite: platform-cloudflare
             filters: -F @yielded/agent-platform-cloudflare
           - suite: storage-cloudflare

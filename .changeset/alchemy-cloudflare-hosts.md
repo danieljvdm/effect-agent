@@ -1,0 +1,6 @@
+---
+"@yielded/agent-platform-alchemy-cloudflare": minor
+"@yielded/agent-platform-cloudflare": minor
+---
+
+Add Alchemy Effect-native Cloudflare hosts for durable Threads, Memory, Schedules, and Subscriptions. Share the existing Cloudflare storage and recovery contracts while keeping `effect-cf` optional for consumers of the host-neutral modules.

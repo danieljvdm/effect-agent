@@ -6,7 +6,7 @@ import type { ThreadId } from "@yielded/agent/identifiers";
 import { Effect, Layer } from "effect";
 import { RpcTracing } from "effect-cf";
 
-import { callThreadObject, ThreadObjectNamespace } from "../CloudflareBindings.ts";
+import { callThreadObject, ThreadObjectNamespace } from "../CloudflareHostBindings.ts";
 
 /**
  * `ThreadPortTransport` over native Durable Object JS RPC (decision D-P6-3): one

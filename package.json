@@ -63,7 +63,8 @@
     "typescript": "catalog:",
     "typescript-twoslash": "catalog:",
     "vite": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "@yielded/agent-platform-alchemy-cloudflare": "workspace:*"
   },
   "overrides": {
     "@effect/platform-browser": "catalog:",
