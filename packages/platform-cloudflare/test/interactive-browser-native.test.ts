@@ -13,6 +13,7 @@ import {
   BrowserFillRequest,
   BrowserNavigateRequest,
   BrowserReadTextRequest,
+  BrowserSelectFileRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
 } from "effect-agent/interactive-browser";
@@ -62,6 +63,7 @@ it.live(
 
       if (Option.isNone(executable)) return context.skip();
       let cartRequests = 0;
+      const received: Uint8Array[] = [];
 
       const html = `<!doctype html><html><body>
     <nav>${Array.from({ length: 80 }, (_, i) => `<a href="#nav${i}">Navigation ${i}</a>`).join("")}</nav>
@@ -72,7 +74,16 @@ it.live(
       <input type="password" value="private-credential"><textarea>private-textarea-default</textarea>
       <button>Add to Cart</button>
     </form>
-    <script>document.querySelector('#cart').addEventListener('submit', e => { e.preventDefault(); setTimeout(() => fetch('/cart', {method:'POST',body:'private-body'}), 100); });</script>
+    <input id="file" type="file"><button id="choose" type="button">Choose file</button>
+    <script>
+    document.querySelector('#cart').addEventListener('submit', e => { e.preventDefault(); setTimeout(() => fetch('/cart', {method:'POST',body:'private-body'}), 100); });
+    const upload = event => fetch('/upload', {method:'POST',body:event.target.files[0]});
+    document.querySelector('#file').addEventListener('change', upload);
+    document.querySelector('#choose').onclick = () => {
+      const input = document.createElement('input'); input.type = 'file'; input.hidden = true;
+      document.body.append(input); input.addEventListener('change', upload); input.click();
+    };
+    </script>
   </body></html>`;
 
       // Node HTTP is isolated to this scoped test fixture, with all connection and
@@ -84,7 +95,15 @@ it.live(
           () =>
             new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
               const server = createServer((request, response) => {
-                if (request.url === "/cart") {
+                if (request.url === "/upload") {
+                  const chunks: Uint8Array[] = [];
+
+                  request.on("data", (chunk: Uint8Array) => chunks.push(chunk));
+                  request.on("end", () => {
+                    received.push(Buffer.concat(chunks));
+                    response.writeHead(200).end("received");
+                  });
+                } else if (request.url === "/cart") {
                   cartRequests++;
 
                   const timer = setTimeout(() => {
@@ -234,6 +253,29 @@ it.live(
           "browser.fetch_xhr_pending": 0,
           "browser.network_settle_timed_out": false,
         });
+        const bytes = new TextEncoder().encode("%PDF-1.7\nsynthetic remote byte selection\n%%EOF");
+
+        for (const target of ["input", "chooser"] as const) {
+          const selection = yield* handle.selectFile(
+            BrowserSelectFileRequest.make({
+              selector: target === "input" ? "#file" : "#choose",
+              target,
+              fileName: "synthetic.pdf",
+              mediaType: "application/pdf",
+              bytes,
+            }),
+          );
+
+          expect(selection).toMatchObject({
+            fileName: "synthetic.pdf",
+            mediaType: "application/pdf",
+            size: bytes.length,
+          });
+        }
+        expect(received.map((bytes) => Array.from(bytes))).toEqual([
+          Array.from(bytes),
+          Array.from(bytes),
+        ]);
         expect(page.listenerCount("requestfinished")).toBe(0);
         expect(page.listenerCount("requestfailed")).toBe(0);
         expect(page.listenerCount("request")).toBe(requestListenerBaseline + 1);

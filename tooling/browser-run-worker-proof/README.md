@@ -53,6 +53,11 @@ frame. The hosted proof uses one origin; it does not establish PCI compliance or
 hostile recipients. Ordinary CI does not establish hosted-provider behavior: run the opt-in command
 with your account to verify it. Protected sessions never create a viewer, handoff, or recording.
 
+A final ordinary session selects a synthetic PDF through a file input and a button that creates
+a chooser dynamically. The controlled multipart receiver computes SHA-256 from the received bytes;
+both receipts must match the source before the session closes. Selection and server receipt are
+checked separately, without browser filesystem paths or a container.
+
 Required environment:
 
 - `CLOUDFLARE_ACCOUNT_ID`: the 32-character account ID;

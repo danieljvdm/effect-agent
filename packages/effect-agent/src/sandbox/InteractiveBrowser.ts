@@ -108,6 +108,34 @@ export class BrowserClickRequest extends Schema.Class<BrowserClickRequest>("Brow
   selector: Selector,
 }) {}
 
+/** Caller-owned bytes; no host filesystem paths or model-supplied script crosses this port. */
+export class BrowserSelectFileRequest extends Schema.Class<BrowserSelectFileRequest>(
+  "BrowserSelectFileRequest",
+)({
+  selector: Selector,
+  target: Schema.Literals(["input", "chooser"]),
+  fileName: Schema.NonEmptyString.check(
+    Schema.isMaxLength(200),
+    // oxlint-disable-next-line no-control-regex -- File names cannot contain control characters or paths.
+    Schema.isPattern(/^[^/\\\x00-\x1f\x7f]+$/),
+  ),
+  mediaType: Schema.NonEmptyString.check(
+    Schema.isMaxLength(127),
+    Schema.isPattern(/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/),
+  ),
+  bytes: Schema.Uint8Array.check(Schema.isMinLength(1), Schema.isMaxLength(8 * 1024 * 1024)),
+}) {}
+
+/** Confirms selection in the input. It does not confirm a website received or submitted the file. */
+export class BrowserFileSelectionResult extends Schema.Class<BrowserFileSelectionResult>(
+  "BrowserFileSelectionResult",
+)({
+  url: InteractiveBrowserTargetUrl,
+  fileName: BrowserSelectFileRequest.fields.fileName,
+  mediaType: BrowserSelectFileRequest.fields.mediaType,
+  size: PositiveInt.check(Schema.isLessThanOrEqualTo(8 * 1024 * 1024)),
+}) {}
+
 /** Capture the current page without navigating or opening another browser. */
 export class BrowserScreenshotRequest extends Schema.Class<BrowserScreenshotRequest>(
   "BrowserScreenshotRequest",
@@ -163,6 +191,7 @@ export class InteractiveBrowserActionError extends Schema.TaggedError<Interactiv
       "read-text",
       "fill",
       "click",
+      "select-file",
       "screenshot",
       "scroll",
       "close",
@@ -201,6 +230,7 @@ export class InteractiveBrowserUnsupportedError extends Schema.TaggedError<Inter
       "read-text",
       "fill",
       "click",
+      "select-file",
       "screenshot",
       "scroll",
       "policy",
@@ -236,6 +266,9 @@ export interface BrowserHandle {
   readonly click: (
     request: BrowserClickRequest,
   ) => Effect.Effect<BrowserActionResult, InteractiveBrowserError>;
+  readonly selectFile: (
+    request: BrowserSelectFileRequest,
+  ) => Effect.Effect<BrowserFileSelectionResult, InteractiveBrowserError>;
   /** PNG bytes are caller-owned and bounded by the pass's per-result byte limit. */
   readonly screenshot: (
     request: BrowserScreenshotRequest,

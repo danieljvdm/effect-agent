@@ -292,6 +292,11 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
 
       return observation;
     },
+    selectFile: async (_request, _signal, onDispatch) => {
+      onDispatch();
+
+      return observation;
+    },
     screenshot: async (fullPage) => {
       calls.push(`page.screenshot:${String(fullPage)}`);
 
