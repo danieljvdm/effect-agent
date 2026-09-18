@@ -885,7 +885,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
     // Expire any lease a faulted Attempt left behind (D5): virtual time is the
     // adapter-neutral reclaim lever — a live lease may block every new claim.
     yield* TestClock.adjust(leaseAdvance);
-    yield* Effect.exit(runtime.runRecovery);
+    yield* Effect.exit(runtime.runRecovery());
     for (const lane of lanes) {
       yield* Effect.exit(driveLane(lane));
     }

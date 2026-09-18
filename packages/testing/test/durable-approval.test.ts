@@ -573,7 +573,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       );
       // A suspended head is never worker-claimable, so the durable abort settles through the
       // recovery pass (durability §13: inactive accepted work settles aborted).
-      const reports = yield* runtime.runRecovery;
+      const reports = yield* runtime.runRecovery();
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
       expect(report?.decision._tag).toBe("SettleAborted");
@@ -627,7 +627,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
       // The request is canonical but the ledger never suspended: recovery repairs the
       // suspension from history — no execution, no settlement (plan §4.3).
       expect(yield* lookupState(receipt.submissionId)).toBe("input-applied");
-      const reports = yield* runtime.runRecovery;
+      const reports = yield* runtime.runRecovery();
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
       expect(report?.decision._tag).toBe("AwaitApprovalDecision");
@@ -772,7 +772,7 @@ layer(testLayer)("DUR P5 durable approval suspension (plan §2.6)", (it) => {
         // The suspend transaction committed before the kill: the lane is durably suspended and
         // recovery has nothing to repair — it waits for the authorized decision path.
         expect(yield* lookupState(receipt.submissionId)).toBe("suspended");
-        const reports = yield* runtime.runRecovery;
+        const reports = yield* runtime.runRecovery();
         const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
         expect(report?.decision._tag).toBe("AwaitApprovalDecision");

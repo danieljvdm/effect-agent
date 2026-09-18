@@ -70,7 +70,7 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: bool
   // stays a visible obligation for `runWorkers`; submissions parked on an Unknown Outcome are
   // reported `unknown` and wait for the authorized `resolveUnknown` path (DUR-017) — they consume
   // no worker permit while the settlement obligation stays owed and later input can run.
-  const startupRecovery = yield* runtime.runRecovery;
+  const startupRecovery = yield* runtime.runRecovery();
 
   const admission = yield* Ref.make(true);
 

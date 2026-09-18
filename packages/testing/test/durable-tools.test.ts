@@ -584,7 +584,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             ],
           });
           yield* clearFailpoint;
-          yield* runtime.runRecovery;
+          yield* runtime.runRecovery();
 
           const completed = yield* runtime
             .processThread(agent, receipt.threadId)
@@ -919,7 +919,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           expect(failureTag(first)).toBe("DurableRuntimeFailpointError");
           expect(searchCalls).toBe(location === "turn:after-response-append" ? 0 : 1);
           yield* clearFailpoint;
-          yield* runtime.runRecovery;
+          yield* runtime.runRecovery();
 
           const settled = yield* runtime
             .processThread(agent, decodeThreadId(thread))
@@ -1190,7 +1190,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       yield* Deferred.await(acted);
       yield* Fiber.interrupt(attempt);
       expect(yield* Ref.get(starts)).toBe(1);
-      yield* runtime.runRecovery;
+      yield* runtime.runRecovery();
       expect(
         yield* runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(handlers)),
       ).toEqual([]);
@@ -1309,7 +1309,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
         expect(failureTag(interrupted)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
-        yield* runtime.runRecovery;
+        yield* runtime.runRecovery();
         yield* runtime.resolveUnknown(
           UnknownResolutionCommand.make({
             submissionId: receipt.submissionId,
@@ -1697,7 +1697,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         ]);
         expect(yield* desk.count("r-resume")).toBe(0);
 
-        const reports = yield* runtime.runRecovery;
+        const reports = yield* runtime.runRecovery();
         const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
         expect(report?.decision._tag).toBe("ResumePendingToolBatch");
@@ -2353,7 +2353,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
-        const reports = yield* runtime.runRecovery;
+        const reports = yield* runtime.runRecovery();
         const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
         expect(report?.decision._tag).toBe("MarkUnknown");
@@ -2451,7 +2451,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
-        yield* runtime.runRecovery;
+        yield* runtime.runRecovery();
         expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
 
         // book-1 completed externally (recovered supplier truth); book-2 provably never started.
@@ -2559,7 +2559,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           isFailure: false,
         }),
       );
-      const reports = yield* runtime.runRecovery;
+      const reports = yield* runtime.runRecovery();
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
       expect(report?.decision._tag).toBe("MarkUnknown");
@@ -2816,14 +2816,14 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       // Kill the aborting recovery between the canonical settlement append and the ledger
       // finalization: history now carries BOTH the terminal outcome and the open tool call.
       yield* armFailpoint("terminalize:after-canonical-append");
-      const killedRecovery = yield* Effect.exit(runtime.runRecovery);
+      const killedRecovery = yield* Effect.exit(runtime.runRecovery());
 
       expect(failureTag(killedRecovery)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       // Precedence (plan §4.2): the recorded terminal outcome beats the open tool call — the
       // next pass finalizes the ledger from history instead of re-marking unknown (DUR-015).
-      const reports = yield* runtime.runRecovery;
+      const reports = yield* runtime.runRecovery();
       const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
       expect(report?.decision._tag).toBe("FinalizeLedgerFromHistory");
@@ -2847,7 +2847,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
       // The recorded terminal outcome is never revisited: settled work leaves the nonterminal
       // recovery scan entirely, so no later pass can re-mark it.
-      const after = yield* runtime.runRecovery;
+      const after = yield* runtime.runRecovery();
 
       expect(after.find((entry) => entry.submissionId === receipt.submissionId)).toBeUndefined();
       expect(
@@ -2884,7 +2884,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
       );
       yield* clearFailpoint;
-      yield* runtime.runRecovery;
+      yield* runtime.runRecovery();
       expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
 
       yield* runtime.resolveUnknown(
@@ -2944,7 +2944,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
         );
         yield* clearFailpoint;
-        yield* runtime.runRecovery;
+        yield* runtime.runRecovery();
 
         const command = UnknownResolutionCommand.make({
           submissionId: receipt.submissionId,

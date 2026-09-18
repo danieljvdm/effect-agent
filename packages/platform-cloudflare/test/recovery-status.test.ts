@@ -5,9 +5,14 @@ import {
   threadStoreLayer,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
 import { runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Effect, Exit, Layer, Option, Stream } from "effect";
+import { Cause, Clock, Effect, Exit, Layer, Logger, Option, Stream } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { OperationAuthorizer, OperationDenied } from "effect-agent/operation-authorizer";
+import {
+  OperationDenied,
+  type OperationAuthorizerService,
+  operationAuthorizerLayer,
+  possessionOperationAuthorizer,
+} from "effect-agent/operation-authorizer";
 import {
   RecoverySnapshotRequest,
   SubmissionLedger,
@@ -41,7 +46,15 @@ import { scheduledAlarm, stubFor } from "./harness.ts";
 // Reconstruct the real runtime over one physical SQLite owner, retaining its mutation gate.
 // The read probe observes the public port; it never substitutes canonical data or decisions.
 const localRun =
-  (owner: string, reads: Array<string>, hit?: ThreadMaintenanceFailpointHandler) =>
+  (
+    owner: string,
+    reads: Array<string>,
+    options: {
+      readonly hit?: ThreadMaintenanceFailpointHandler;
+      readonly authorizer?: OperationAuthorizerService;
+      readonly readFailureDefect?: Error;
+    } = {},
+  ) =>
   <A, E>(
     body: Effect.Effect<
       A,
@@ -65,7 +78,17 @@ const localRun =
                     Stream.suspend(() => {
                       reads.push(request.threadId);
 
-                      return store.read(request);
+                      return store
+                        .read(request)
+                        .pipe(
+                          Stream.catchCause((cause) =>
+                            Stream.failCause(
+                              options.readFailureDefect === undefined
+                                ? cause
+                                : Cause.combine(cause, Cause.die(options.readFailureDefect)),
+                            ),
+                          ),
+                        );
                     }),
                 }),
               ),
@@ -85,12 +108,15 @@ const localRun =
               Layer.provideMerge(DurableAgentRuntime.layerWithBindings(bindings)),
               Layer.provideMerge(ports),
               Layer.provide(WakeScheduler.layerNoop),
+              Layer.provide(
+                operationAuthorizerLayer(options.authorizer ?? possessionOperationAuthorizer),
+              ),
             );
 
             return yield* body.pipe(
               Effect.provide(services),
               Effect.provideService(ThreadMaintenanceFailpoint, {
-                hit: hit ?? (() => Effect.void),
+                hit: options.hit ?? (() => Effect.void),
               }),
             );
           }),
@@ -166,6 +192,17 @@ describe("recovery faults independent of execution history", () => {
         const healthy = `${owner}-z`;
         const reads: Array<string> = [];
         const run = localRun(owner, reads);
+        const errors: Array<{ cause: Cause.Cause<unknown>; message: unknown }> = [];
+
+        const observedPass = pass.pipe(
+          Effect.provide(
+            Logger.layer([
+              Logger.make(({ cause, message, logLevel }) => {
+                if (logLevel === "Error") errors.push({ cause, message });
+              }),
+            ]),
+          ),
+        );
 
         yield* TestClock.setTime(Date.now() + 86_400_000);
         maintenanceClocks.set(owner, yield* Clock.Clock);
@@ -208,7 +245,7 @@ describe("recovery faults independent of execution history", () => {
 
         expect(before.ownership).toBeUndefined();
 
-        const report = yield* run(pass);
+        const report = yield* run(observedPass);
 
         expect(report.settled).toBe(1);
         expect(report.alarm).toBe("rearmed");
@@ -234,6 +271,12 @@ describe("recovery faults independent of execution history", () => {
           },
         });
         expect(JSON.stringify(fault)).not.toContain("private_fixture_payload");
+        expect(errors.map(({ cause }) => Cause.findErrorOption(cause))).toEqual([
+          Option.some(fault.value.failure),
+        ]);
+        expect(errors.flatMap(({ cause }) => Cause.prettyErrors(cause))).toHaveLength(1);
+        expect(JSON.stringify(errors)).not.toContain("private_fixture_payload");
+        expect(JSON.stringify(errors)).not.toContain("never expose this value");
         expect(fault.value.retryAt - fault.value.lastFailedAt).toBe(5_000);
 
         yield* evict(owner);
@@ -249,7 +292,7 @@ describe("recovery faults independent of execution history", () => {
         const fresh = yield* run(submit(`${healthy}-new`, "new-admission"));
 
         reads.length = 0;
-        expect((yield* run(pass)).settled).toBe(1);
+        expect((yield* run(observedPass)).settled).toBe(1);
         expect(reads).not.toContain(poisoned);
         expect(yield* run(status(poisoned))).toEqual(fault);
         expect(
@@ -266,24 +309,24 @@ describe("recovery faults independent of execution history", () => {
         ).toEqual(before);
         expect(supplierCountsFor(poisoned)).toEqual({ book: 1 });
 
-        // Authorization precedes even status decoding.
+        // The construction-only policy must survive into later service calls, before decoding.
         const key = `effect-agent:thread-recovery-fault:v1:${poisoned}`;
         const saved = yield* storage(owner, (state) => state.storage.get(key));
 
         yield* storage(owner, (state) => state.storage.put(key, "unreadable status"));
 
-        const denied = yield* run(
-          status(poisoned).pipe(
-            Effect.provideService(OperationAuthorizer, {
-              authorize: (request) => OperationDenied.make({ ...request, reason: "denied" }),
-            }),
-            Effect.exit,
-          ),
-        );
+        const deniedRun = localRun(owner, reads, {
+          authorizer: {
+            authorize: (request) => OperationDenied.make({ ...request, reason: "denied" }),
+          },
+        });
+
+        const denied = yield* deniedRun(status(poisoned).pipe(Effect.exit));
 
         expect(Exit.isFailure(denied) ? Cause.squash(denied.cause) : undefined).toMatchObject({
           _tag: "OperationDenied",
           operation: "explain",
+          threadId: poisoned,
         });
         yield* storage(owner, (state) => state.storage.put(key, saved));
 
@@ -291,7 +334,7 @@ describe("recovery faults independent of execution history", () => {
 
         for (const delay of [10_000, 20_000, 40_000, 60_000, 60_000]) {
           yield* TestClock.adjust(latest.retryAt - (yield* Clock.currentTimeMillis));
-          yield* run(pass);
+          yield* run(observedPass);
           const retried = yield* run(status(poisoned));
 
           expect(Option.isSome(retried)).toBe(true);
@@ -301,17 +344,18 @@ describe("recovery faults independent of execution history", () => {
           expect(retried.value.retryAt - retried.value.lastFailedAt).toBe(delay);
           latest = retried.value;
         }
+        expect(errors).toHaveLength(1);
 
         // Restore only the fixture's deliberately altered bytes. Ordinary recovery must reuse
         // the original unknown action and receipt; the later accepted input can then progress.
         yield* restoreHistory(owner, poisoned, bytes, 2);
         yield* TestClock.adjust(latest.retryAt - (yield* Clock.currentTimeMillis));
-        yield* run(pass);
+        yield* run(observedPass);
         expect(yield* run(status(poisoned))).toEqual(Option.none());
         expect(
           yield* run(DurableAgentRuntime.use((runtime) => runtime.submissionStatus(pending))),
         ).toMatchObject({ _tag: "settled" });
-        yield* run(pass);
+        yield* run(observedPass);
         expect(
           yield* run(DurableAgentRuntime.use((runtime) => runtime.submissionStatus(duringFault))),
         ).toMatchObject({ _tag: "settled" });
@@ -327,6 +371,33 @@ describe("recovery faults independent of execution history", () => {
         expect(Option.isSome(retained) ? retained.value.receiptId : undefined).toBe(
           original.receiptId,
         );
+
+        // A later outage with both the storage failure and a cleanup defect stays a defect
+        // at the reporter, retaining the original bounded storage provenance.
+        yield* run(submit(poisoned, "mixed-cause"));
+        yield* corruptHistory(owner, poisoned, 2);
+
+        const defectiveRun = localRun(owner, reads, {
+          readFailureDefect: new Error("private cleanup defect"),
+        });
+
+        yield* defectiveRun(observedPass);
+        const mixed = yield* run(status(poisoned));
+
+        expect(Option.isSome(mixed) ? mixed.value.failure : undefined).toMatchObject({
+          reason: "defect",
+          errorTag: "ThreadStoreError",
+          causes: expect.arrayContaining([{ errorTag: "Error" }]),
+          diagnostic: { causeTag: "SchemaError", decoder: "CanonicalRecord", sequence: 2 },
+        });
+        expect(errors.map(({ cause }) => Cause.hasDies(cause))).toEqual([false, true]);
+        expect(errors.flatMap(({ cause }) => Cause.prettyErrors(cause))).toHaveLength(2);
+        expect(JSON.stringify(errors)).not.toContain("private cleanup defect");
+        expect(JSON.stringify(errors)).not.toContain("private_fixture_payload");
+        yield* restoreHistory(owner, poisoned, bytes, 2);
+        yield* TestClock.adjust(5_000);
+        yield* run(observedPass);
+        expect(supplierCountsFor(poisoned)).toEqual({ book: 1 });
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
     ));
 
@@ -342,14 +413,15 @@ describe("recovery faults independent of execution history", () => {
             const reads: Array<string> = [];
             let crashAt: ThreadMaintenanceFailpointLocation | undefined;
 
-            const run = localRun(owner, reads, (at) =>
-              Effect.gen(function* () {
-                if (crashAt !== at) return;
-                crashAt = undefined;
+            const run = localRun(owner, reads, {
+              hit: (at) =>
+                Effect.gen(function* () {
+                  if (crashAt !== at) return;
+                  crashAt = undefined;
 
-                return yield* Effect.die("simulated recovery status commit crash");
-              }),
-            );
+                  return yield* Effect.die("simulated recovery status commit crash");
+                }),
+            });
 
             yield* TestClock.setTime(Date.now() + 86_400_000);
             maintenanceClocks.set(owner, yield* Clock.Clock);

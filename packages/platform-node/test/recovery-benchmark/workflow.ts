@@ -613,7 +613,7 @@ export const benchmark = Effect.gen(function* () {
 
       phase = "recovery";
       const recoveryStarted = nowMillis();
-      const reports = yield* runtime.runRecovery;
+      const reports = yield* runtime.runRecovery();
       const recoveryMs = nowMillis() - recoveryStarted;
       const afterRecovery = memoryUsage();
 

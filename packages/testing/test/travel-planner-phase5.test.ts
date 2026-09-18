@@ -515,7 +515,7 @@ layer(reconciledTestLayer)(
 
           // Recovery defers to the worker (SafeToRetry), and the re-entered handler re-executes
           // the uncommitted Step.
-          const reports = yield* runtime.runRecovery;
+          const reports = yield* runtime.runRecovery();
 
           const recoveryReport = reports.find(
             (entry) => entry.submissionId === receipt.submissionId,
@@ -579,7 +579,7 @@ layer(reconciledTestLayer)(
         // Recovery consults TravelSupplierReconciler, which finds the confirmed booking under
         // the derived idempotency key: the recovered supplier truth becomes canonical WITHOUT
         // executing anything.
-        const reports = yield* runtime.runRecovery;
+        const reports = yield* runtime.runRecovery();
         const recoveryReport = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
         expect(recoveryReport?.decision._tag).toBe("MarkUnknown");
@@ -682,7 +682,7 @@ layer(reconciledTestLayer)(
 
         // The declared idempotency contract lets recovery defer to plain re-execution: no
         // reconciliation proof, no Unknown Outcome.
-        const reports = yield* runtime.runRecovery;
+        const reports = yield* runtime.runRecovery();
         const recoveryReport = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
         expect(recoveryReport?.decision._tag).toBe("MarkUnknown");
@@ -899,7 +899,7 @@ layer(reconciledTestLayer)(
           expect(recordsById(yield* readLog(thread)).has(`input:${followUp.submissionId}`)).toBe(
             false,
           );
-          const reports = yield* runtime.runRecovery;
+          const reports = yield* runtime.runRecovery();
           const joinReport = reports.find((entry) => entry.submissionId === followUp.submissionId);
 
           expect(joinReport?.decision._tag).toBe("RevertJoining");
@@ -978,7 +978,7 @@ layer(reconciledTestLayer)(
           expect(recordsById(yield* readLog(thread)).has(`input:${followUp.submissionId}`)).toBe(
             true,
           );
-          const reports = yield* runtime.runRecovery;
+          const reports = yield* runtime.runRecovery();
           const joinReport = reports.find((entry) => entry.submissionId === followUp.submissionId);
 
           expect(joinReport?.decision._tag).toBe("RepairJoinMarker");
@@ -1053,7 +1053,7 @@ layer(uncertainTestLayer)(
           expect(yield* desk.callCount(key)).toBe(1);
 
           // No proof either way: the outcome is Unknown and the lane blocks durably (DUR-009).
-          const reports = yield* runtime.runRecovery;
+          const reports = yield* runtime.runRecovery();
 
           const recoveryReport = reports.find(
             (entry) => entry.submissionId === receipt.submissionId,
@@ -1116,7 +1116,7 @@ layer(uncertainTestLayer)(
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
             hold.held,
           );
-          yield* runtime.runRecovery;
+          yield* runtime.runRecovery();
           expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
 
           // The operator recovers supplier truth out of band (here: the desk itself) and

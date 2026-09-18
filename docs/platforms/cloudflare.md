@@ -314,8 +314,9 @@ const status = ThreadMaintenance.use((maintenance) =>
 // Effect<Option<ThreadRecoveryFault>, DurableAlarmError | OperationDenied, ThreadMaintenance>
 ```
 
-`recoveryStatus` authorizes `explain` before reading storage. The host verifies local Thread
-membership before exposing it over RPC. `Some` carries failure phase, content-free diagnostics,
+`recoveryStatus` authorizes `explain` before reading storage, using the `OperationAuthorizer`
+provided when constructing `ThreadMaintenance.layer`. The host verifies local Thread membership
+before exposing it over RPC. `Some` carries failure phase, content-free diagnostics,
 first/last failure time, retry time and attempt count; `None` means no recorded fault. Neither
 proves settlement or health. Source-owned accepted-message notices must not wait for native
 settlement: a pre-claim fault can occur before any reply obligation or binding attempt exists.

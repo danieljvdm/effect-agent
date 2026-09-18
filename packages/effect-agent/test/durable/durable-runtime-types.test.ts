@@ -42,7 +42,7 @@ type Head = ReturnType<Runtime["processThreadHead"]>;
 type Status = ReturnType<Runtime["submissionStatus"]>;
 type Inspection = ReturnType<Runtime["inspectSubmissionStatus"]>;
 type Recovery = ReturnType<Runtime["recoverSubmission"]>;
-type RecoverySweep = ReturnType<Runtime["recoverThreads"]>;
+type RecoverySweep = ReturnType<Runtime["runRecovery"]>;
 
 class PolicyEvidence extends Context.Service<PolicyEvidence, { readonly policy: AgentPolicy }>()(
   "test/PolicyEvidence",

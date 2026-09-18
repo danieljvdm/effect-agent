@@ -61,6 +61,7 @@ describe("bounded recovery failure isolation", () => {
         });
 
         let scanFails = false;
+        let mixedCause = false;
 
         const observedLedger = Layer.effect(
           SubmissionLedger,
@@ -74,7 +75,16 @@ describe("bounded recovery failure isolation", () => {
                 Effect.gen(function* () {
                   const snapshot = yield* ledger.loadRecoverySnapshot(request);
 
-                  return snapshot.submission.threadId === failingThread ? yield* failure : snapshot;
+                  if (snapshot.submission.threadId !== failingThread) return snapshot;
+
+                  return yield* Effect.failCause(
+                    mixedCause
+                      ? Cause.combine(
+                          Cause.fail(failure),
+                          Cause.die(new Error("private cleanup defect")),
+                        )
+                      : Cause.fail(failure),
+                  );
                 }),
             }),
           ),
@@ -95,6 +105,7 @@ describe("bounded recovery failure isolation", () => {
 
         yield* Effect.gen(function* () {
           const runtime = yield* DurableAgentRuntime;
+          const ledger = yield* SubmissionLedger;
 
           for (const threadId of [failingThread, healthyThread]) {
             yield* runtime.submit(
@@ -108,7 +119,7 @@ describe("bounded recovery failure isolation", () => {
               },
             );
           }
-          const reports = yield* runtime.runRecovery;
+          const reports = yield* runtime.runRecovery();
 
           expect(reports).toMatchObject([
             {
@@ -118,6 +129,7 @@ describe("bounded recovery failure isolation", () => {
                 _tag: "RecoveryBlocked",
                 failure: {
                   phase: "recovery",
+                  reason: "failure",
                   errorTag: "LedgerError",
                   operation: "loadRecoverySnapshot",
                   causes: [
@@ -131,9 +143,31 @@ describe("bounded recovery failure isolation", () => {
             { threadId: healthyThread, disposition: "deferred", decision: { _tag: "ApplyInput" } },
           ]);
           expect(JSON.stringify(reports)).not.toContain("private");
+          mixedCause = true;
+          const mixedReports = yield* runtime.runRecovery();
+
+          expect(mixedReports[0]).toMatchObject({
+            decision: {
+              failure: {
+                reason: "defect",
+                errorTag: "LedgerError",
+                causes: [
+                  { errorTag: "LedgerError", operation: "loadRecoverySnapshot" },
+                  { errorTag: "ForeignSnapshotFailure", operation: "inspect worker origin" },
+                  { errorTag: "Error" },
+                ],
+                diagnostic,
+              },
+            },
+          });
+          expect(JSON.stringify(mixedReports)).not.toContain("private");
           // A global scan has not identified a Thread: preserve its original typed cause.
+          const accepted = yield* Stream.runCollect(ledger.scanNonterminal);
+
           scanFails = true;
-          expect(yield* runtime.runRecovery.pipe(Effect.flip)).toBe(failure);
+          expect(yield* runtime.runRecovery().pipe(Effect.flip)).toBe(failure);
+          scanFails = false;
+          expect(yield* Stream.runCollect(ledger.scanNonterminal)).toEqual(accepted);
         }).pipe(Effect.provide(services));
       }),
   );
@@ -219,7 +253,7 @@ describe("bounded recovery failure isolation", () => {
             );
           }
           armed = true;
-          const fiber = yield* Effect.forkChild(runtime.runRecovery);
+          const fiber = yield* Effect.forkChild(runtime.runRecovery());
 
           yield* Deferred.await(entered);
           if (mode === "timeout") yield* TestClock.adjust(1_000);
@@ -257,7 +291,7 @@ describe("bounded recovery failure isolation", () => {
           ]);
           expect(JSON.stringify(outcome.value)).not.toContain("private");
           reads.length = 0;
-          const due = yield* runtime.recoverThreads({ excludeThreads: new Set([failingThread]) });
+          const due = yield* runtime.runRecovery({ excludeThreads: new Set([failingThread]) });
 
           expect(due.map((report) => report.threadId)).toEqual([healthyThread]);
           expect(reads).not.toContain(failingThread);

@@ -215,7 +215,7 @@ describe("disposable durable recovery checkpoint", () => {
         );
         expect(Exit.isFailure(yield* Effect.exit(runtime.processThreadHead(threadId)))).toBe(true);
         yield* failpoints.clear;
-        yield* runtime.runRecovery;
+        yield* runtime.runRecovery();
         expect(
           (yield* ledger.loadRecoverySnapshot(
             RecoverySnapshotRequest.make({ submissionId: older.submissionId }),
@@ -555,7 +555,7 @@ describe("disposable durable recovery checkpoint", () => {
       const resumed = yield* makeRuntime.pipe(Effect.provideService(ThreadStore, observed));
 
       if (scenario === "gap") {
-        expect(yield* resumed.runRecovery).toMatchObject([
+        expect(yield* resumed.runRecovery()).toMatchObject([
           { disposition: "blocked", decision: { _tag: "RecoveryBlocked" } },
         ]);
         expect(requests).toHaveLength(requestsBefore);
@@ -563,7 +563,7 @@ describe("disposable durable recovery checkpoint", () => {
 
         return;
       }
-      yield* resumed.runRecovery;
+      yield* resumed.runRecovery();
       if (scenario === "approval") {
         yield* resumed.resolveApproval(
           ApprovalDecisionCommand.make({

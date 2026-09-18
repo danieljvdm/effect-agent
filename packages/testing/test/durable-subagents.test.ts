@@ -925,12 +925,12 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         yield* TestClock.adjust(Duration.seconds(31));
         expect(yield* Fiber.join(firstAttempt)).toEqual([]);
         expect(yield* run(parent.threadId)).toEqual([]);
-        yield* runtime.runRecovery;
+        yield* runtime.runRecovery();
         expect((yield* parentState(parent.submissionId)).state).not.toBe("unknown");
         const childThreadId = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
 
         expect((yield* run(childThreadId)).map((entry) => entry.outcome)).toEqual(["completed"]);
-        yield* runtime.runRecovery;
+        yield* runtime.runRecovery();
         expect((yield* parentState(parent.submissionId)).state).not.toBe("unknown");
         expect(yield* run(parent.threadId)).toEqual([]);
         expect((yield* parentState(parent.submissionId)).state).toBe("unknown");
@@ -998,7 +998,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         });
 
         const reports = yield* DurableAgentRuntime.pipe(
-          Effect.flatMap((runtime) => runtime.runRecovery),
+          Effect.flatMap((runtime) => runtime.runRecovery()),
           Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
           Effect.provideService(ThreadStore, unavailable),
         );
@@ -1034,7 +1034,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           )).ownership,
         ).toBeUndefined();
         expect(yield* harness.childInvocations).toBe(0);
-        yield* harness.runtime.runRecovery;
+        yield* harness.runtime.runRecovery();
         expect(payloadsOf(yield* readLog(parent.threadId), "SubagentStarted")).toHaveLength(1);
         expect((yield* run(childThread)).map((entry) => entry.outcome)).toEqual(["completed"]);
         expect((yield* run(parent.threadId)).map((entry) => entry.outcome)).toEqual(["completed"]);
@@ -1096,7 +1096,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       });
 
       const rejected = yield* DurableAgentRuntime.pipe(
-        Effect.flatMap((hostileRuntime) => hostileRuntime.runRecovery),
+        Effect.flatMap((hostileRuntime) => hostileRuntime.runRecovery()),
         Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
         Effect.provideService(ThreadStore, conflicting),
       );
@@ -1120,7 +1120,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         "reserved",
       ]);
 
-      yield* runtime.runRecovery;
+      yield* runtime.runRecovery();
       expect(payloadsOf(yield* readLog(parent.threadId), "SubagentJoined")).toHaveLength(1);
       expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
         "released",
@@ -1805,7 +1805,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       // PropagateChildAbort: the one idempotent durable child abort command; the parent stays
       // suspended waiting for the join (spec §13.1). Two passes cover either lexical lane
       // order: the child settles after the parent propagates its abort, without running code.
-      const reports = [...(yield* runtime.runRecovery), ...(yield* runtime.runRecovery)];
+      const reports = [...(yield* runtime.runRecovery()), ...(yield* runtime.runRecovery())];
       const parentReport = reports.find((report) => report.submissionId === parent.submissionId);
 
       expect(parentReport?.decision._tag).toBe("PropagateChildAbort");
@@ -1825,7 +1825,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       expect(yield* harness.childInvocations).toBe(0);
       // Replaying the propagation is a no-op repair: the recorded child abort intent IS the
       // marker (DUR-012), and the settled child now classifies as a pending join.
-      const secondReports = yield* runtime.runRecovery;
+      const secondReports = yield* runtime.runRecovery();
 
       const secondParentReport = secondReports.find(
         (report) => report.submissionId === parent.submissionId,
@@ -1882,7 +1882,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       yield* clearFailpoint;
 
       // Pass 1: the canonical request alone admits the one intended child (D3, SUB-016).
-      const first = yield* runtime.runRecovery;
+      const first = yield* runtime.runRecovery();
       const admissionReport = first.find((report) => report.submissionId === parent.submissionId);
 
       expect(admissionReport?.decision._tag).toBe("CompleteChildAdmission");
@@ -1893,14 +1893,14 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       expect(payloadsOf(childLog, "SubagentLineageRecorded")).toHaveLength(1);
 
       // Pass 2: the exact deterministic start link is appended for the same Receipt.
-      const second = yield* runtime.runRecovery;
+      const second = yield* runtime.runRecovery();
       const startReport = second.find((report) => report.submissionId === parent.submissionId);
 
       expect(startReport?.decision._tag).toBe("RepairSubagentStartLink");
       expect(startReport?.disposition).toBe("repaired");
 
       // Pass 3: the waitingForChild checkpoint is restored; the lane holds no permit.
-      const third = yield* runtime.runRecovery;
+      const third = yield* runtime.runRecovery();
       const waitingReport = third.find((report) => report.submissionId === parent.submissionId);
 
       expect(waitingReport?.decision._tag).toBe("EnsureWaitingForChild");
@@ -1954,7 +1954,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       );
       expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
 
-      const reports = yield* runtime.runRecovery;
+      const reports = yield* runtime.runRecovery();
       const parentReport = reports.find((report) => report.submissionId === parent.submissionId);
 
       expect(parentReport?.decision._tag).toBe("ResumeWaitingParent");
@@ -1993,7 +1993,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           reason: "abandon before request",
         }),
       );
-      const first = yield* runtime.runRecovery;
+      const first = yield* runtime.runRecovery();
       const orphanReport = first.find((report) => report.submissionId === parent.submissionId);
 
       expect(orphanReport?.decision._tag).toBe("ReleaseOrphanChildReservation");
@@ -2002,7 +2002,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         "released",
       ]);
 
-      const second = yield* runtime.runRecovery;
+      const second = yield* runtime.runRecovery();
       const settleReport = second.find((report) => report.submissionId === parent.submissionId);
 
       expect(settleReport?.decision._tag).toBe("SettleAborted");
@@ -2425,7 +2425,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           "DurableRuntimeFailpointError",
         );
         yield* clearFailpoint;
-        yield* runtime.runRecovery;
+        yield* runtime.runRecovery();
         expect((yield* parentState(original.submissionId)).state).toBe("unknown");
         const retained = yield* readLog(original.threadId);
 
@@ -2545,7 +2545,7 @@ layer(faultTestLayer)("S2 durable Subagents under indeterminate admission (SUB-0
 
       expect(failureTag(exit)).toBe("LedgerError");
       // Recovery classifies the wait honestly and defers — no second admission either.
-      const reports = yield* runtime.runRecovery;
+      const reports = yield* runtime.runRecovery();
       const parentReport = reports.find((report) => report.submissionId === parent.submissionId);
 
       expect(parentReport?.decision._tag).toBe("AwaitChildAdmissionResolution");

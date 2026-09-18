@@ -9621,7 +9621,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     return yield* recoverSnapshot(found.value, history);
   });
 
-  const runRecoveryImpl = Effect.fn("DurableAgentRuntime.runRecovery")(function* (
+  const runRecovery = Effect.fn("DurableAgentRuntime.runRecovery")(function* (
     options?: RecoverySweepOptions,
   ): Effect.fn.Return<ReadonlyArray<RecoveryReport>, DurableWorkerFailure> {
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
@@ -9686,7 +9686,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       const failure = RecoveryFailure.make({
         phase,
-        reason: Exit.isSuccess(outcome) ? "timeout" : Option.isSome(error) ? "failure" : "defect",
+        reason: Exit.isSuccess(outcome)
+          ? "timeout"
+          : Cause.hasDies(outcome.cause)
+            ? "defect"
+            : "failure",
         errorTag: Option.isSome(error)
           ? error.value._tag
           : Exit.isSuccess(outcome)
@@ -10758,8 +10762,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     processThreadHead: processThreadHeadImpl,
     runWorker: runWorkerImpl,
     runResolvedWorker: runResolvedWorkerImpl,
-    runRecovery: runRecoveryImpl(),
-    recoverThreads: runRecoveryImpl,
+    runRecovery,
     recoverSubmission,
   });
 });
@@ -11060,13 +11063,10 @@ export class DurableAgentRuntime extends Context.Service<
      * configured timeout return RecoveryBlocked reports; hosts must retain their visibility
      * outside execution history and exclude those Threads from claims. Ledger scan failures,
      * owner interruption and injected crash boundaries still fail the whole sweep.
-     */
-    readonly runRecovery: Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
-    /**
-     * The same sweep with host-owned retry exclusions. Excluded Threads are not read or
+     * Optional exclusions retain host-owned retry deadlines. Excluded Threads are not read or
      * reported and must remain ineligible for claims until a later successful recovery.
      */
-    readonly recoverThreads: (
+    readonly runRecovery: (
       options?: RecoverySweepOptions,
     ) => Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
     /** Apply one recovery decision; untouched ready input is deferred to its worker claim. */

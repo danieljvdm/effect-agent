@@ -295,7 +295,7 @@ describe("DurableAgentRuntime recovery history", () => {
           yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
         }
         yield* probe.reset;
-        const reports = yield* runtime.runRecovery;
+        const reports = yield* runtime.runRecovery();
 
         expect(reports.map((report) => report.disposition)).toEqual([
           "deferred",
@@ -359,7 +359,7 @@ describe("DurableAgentRuntime recovery history", () => {
       yield* ledger.markReady(MarkReadyRequest.make({ submissionId: fourth.submissionId }));
 
       yield* probe.reset;
-      const reports = yield* runtime.runRecovery;
+      const reports = yield* runtime.runRecovery();
 
       expect(reports.map((report) => report.decision._tag)).toEqual([
         "RepairReadiness",
@@ -462,7 +462,7 @@ describe("DurableAgentRuntime recovery history", () => {
 
       yield* probe.reset;
       yield* probe.failReadAfter(prefixTail);
-      const reports = yield* runtime.runRecovery;
+      const reports = yield* runtime.runRecovery();
 
       expect(reports).toHaveLength(2);
       for (const report of reports)

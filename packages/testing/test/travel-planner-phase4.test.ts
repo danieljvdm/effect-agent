@@ -356,7 +356,7 @@ describe("Travel Planner durable admission and recovery", () => {
           // record, finalizes the ledger, and the accepted work settles once.
           const recovered = yield* Effect.gen(function* () {
             const runtime = yield* DurableAgentRuntime;
-            const reports = yield* runtime.runRecovery;
+            const reports = yield* runtime.runRecovery();
 
             const report = reports.find(
               (candidate) => candidate.submissionId === crashed.receipt.submissionId,
@@ -492,7 +492,7 @@ describe("Travel Planner durable admission and recovery", () => {
 
           expect(intent.submissionId).toBe(receipt.submissionId);
 
-          const reports = yield* runtime.runRecovery;
+          const reports = yield* runtime.runRecovery();
 
           const report = reports.find(
             (candidate) => candidate.submissionId === receipt.submissionId,

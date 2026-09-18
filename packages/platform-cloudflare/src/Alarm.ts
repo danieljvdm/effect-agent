@@ -620,6 +620,7 @@ export class ThreadMaintenance extends Context.Service<
      * Authorize `explain`, then read one bounded local record without reading execution history.
      * None means no recorded fault, not proof of health or settlement. The host authenticates
      * callers and verifies local Thread membership before exposing this service across RPC.
+     * Provide OperationAuthorizer when constructing this Layer, as for DurableAgentRuntime.
      */
     readonly recoveryStatus: (
       threadId: ThreadId,
@@ -663,6 +664,7 @@ export class ThreadMaintenance extends Context.Service<
       const projection = yield* ThreadProjectionMaintenance;
       const messages = yield* ThreadMessageDelivery;
       const host = yield* ThreadHostMaintenance;
+      const authorizer = yield* OperationAuthorizer;
 
       // A broken disposable index still needs a retry alarm and must not prevent startup.
       const projectionDeadline = projection.pendingDeadline.pipe(
@@ -690,8 +692,6 @@ export class ThreadMaintenance extends Context.Service<
       const recoveryStatus = Effect.fn("ThreadMaintenance.recoveryStatus")(function* (
         threadId: ThreadId,
       ) {
-        const authorizer = yield* OperationAuthorizer;
-
         yield* authorizer.authorize(
           OperationAuthorizationRequest.make({ operation: "explain", threadId }),
         );
@@ -758,10 +758,12 @@ export class ThreadMaintenance extends Context.Service<
 
         yield* failpoint.hit("maintenance:recovery-status:after");
         for (const fault of result.newlyBlocked)
-          yield* Effect.logError("Native Thread recovery blocked; accepted work remains pending", {
-            threadId: fault.threadId,
-            failure: fault.failure,
-          });
+          yield* Effect.logError(
+            "Native Thread recovery blocked; accepted work remains pending",
+            fault.failure.reason === "defect"
+              ? Cause.die(fault.failure)
+              : Cause.fail(fault.failure),
+          ).pipe(Effect.annotateLogs({ threadId: fault.threadId }));
 
         return result.faults;
       });
@@ -1013,7 +1015,7 @@ export class ThreadMaintenance extends Context.Service<
           return faults;
         });
 
-        const recovered: ReadonlyArray<RecoveryReport> = yield* runtime.recoverThreads({
+        const recovered: ReadonlyArray<RecoveryReport> = yield* runtime.runRecovery({
           excludeThreads: new Set(deferredFaults.keys()),
         });
 

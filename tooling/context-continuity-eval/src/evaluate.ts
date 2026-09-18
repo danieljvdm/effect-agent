@@ -528,7 +528,7 @@ export const runEvaluation = Effect.fn("ContextContinuity.runEvaluation")(functi
           evidence = { ...evidence, killConfirmed: true };
         }
         report = { ...report, restarts: [...report.restarts, evidence] };
-        yield* runtime.runRecovery;
+        yield* runtime.runRecovery();
       }
 
       const exit = pressure
