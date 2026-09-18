@@ -1069,6 +1069,24 @@ decisions that make no progress, and more than one prune followed by one replace
 Summary calls must use
 `request.summarize` so metering, response limits, and the run deadline still apply.
 
+A `clear-tool-results` decision may include `results: [{ messageIndex, toolCallId }]` to clear
+only selected application result bodies within `through`. Calls, outcome flags, and other results
+remain visible. Indices address the request's source snapshot. The engine protects current input
+and the newest Tool batch, rejects duplicate or invalid selections, and requires a smaller view.
+Durable hosts persist exact settlement record IDs, so reused Tool Call IDs cannot clear another
+occurrence. Without `results`, pruning retains its existing whole-prefix behavior.
+
+Experimental `request.evaluate(operation, inputTokensEstimate)` admits one auxiliary model call
+per turn and charges its returned provider, model, and native usage before applying a decision.
+The operation supplies `{ value, provider, model, usage }` and bounds its own request and response.
+Durable runs reserve the evaluation slot before dispatch and commit usage independently of the
+decision, including when the strategy keeps every result or returns an invalid selection. Recovery
+uses completed accounting without repeating the call; an unresolved reservation fails closed
+because its provider usage is unknown. Runs that evaluate during compaction currently use full
+canonical replay during recovery. The
+[selective pruning spike](https://github.com/danieljvdm/effect-agent/tree/main/tooling/context-continuity-eval#selective-pruning-spike)
+connects this boundary to the existing Jev decision provider.
+
 `estimate` must return a non-negative finite integer. Strategy failures use `CompactionError`.
 Defects and interruption retain their Effect meaning.
 

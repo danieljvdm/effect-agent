@@ -8,6 +8,7 @@ import {
   type AgentRuntimeRequirements,
   type AgentCompletionProjectionRequirements,
 } from "effect-agent/agent-runtime";
+import { type CompactionError, type CompactionRequest } from "effect-agent/context-compactor";
 import { ModelCallContext } from "effect-agent/context-window";
 import {
   AgentUpdateAcceptance,
@@ -663,4 +664,19 @@ it("preserves visibility Layer dependencies and construction failures", () => {
   expectTypeOf<Effect.Error<typeof visibleRun>>().toEqualTypeOf<
     Effect.Error<typeof run> | TurnHostError
   >();
+});
+
+it("preserves auxiliary compaction callback and accounting service requirements", () => {
+  type Evaluation = ReturnType<NonNullable<CompactionRequest<TurnHostError, TurnHost>["evaluate"]>>;
+  expectTypeOf<Effect.Error<Evaluation>>().toEqualTypeOf<TurnHostError | CompactionError>();
+  expectTypeOf<Effect.Services<Evaluation>>().toEqualTypeOf<TurnHost>();
+
+  const reserve = Effect.gen(function* () {
+    const accounting = yield* ModelUsageAccounting;
+
+    yield* accounting.compactionEvaluation?.reserve(1, 100) ?? Effect.void;
+  });
+
+  expectTypeOf<Effect.Error<typeof reserve>>().toEqualTypeOf<CompactionError>();
+  expectTypeOf<Effect.Services<typeof reserve>>().toEqualTypeOf<ModelUsageAccounting>();
 });

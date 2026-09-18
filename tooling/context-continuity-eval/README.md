@@ -130,6 +130,69 @@ A partial report, provider outage, exhausted budget, missing credential, unsettl
 failed assertion is a failed gate. Pricing is an estimate, not an invoice. There are no inference
 retries or model fallbacks; server-side conversation state and automatic truncation are disabled.
 
+## Selective pruning spike
+
+`src/selective-compactor.ts` supplies an experimental `ContextCompactor` Layer that asks the
+existing `DecisionModel` which old result bodies remain relevant. The engine clears only selected
+bodies; calls, retained evidence, and canonical history remain intact. Supply another
+`ContextCompactor` as its summary or rollover fallback.
+
+Start with the offline wiring probe:
+
+```sh
+vp run -F @effect-agent/example-context-continuity-eval compaction:spike
+```
+
+The selector and continuations in this probe are scripted. Add `--live` with `TYPESAFE_API_KEY`
+configured to make one real `jev-latest` selection call; the continuation remains a literal evidence
+probe. Scores and usage are retained even when subsequent context admission fails.
+
+For calibration and a live continuation comparison, use three separate phases:
+
+```sh
+vp run -F @effect-agent/example-context-continuity-eval compaction:eval --phase validate
+
+# Requires TYPESAFE_API_KEY; makes 40 bounded selector requests.
+vp run -F @effect-agent/example-context-continuity-eval compaction:eval --phase score \
+  --output-dir /tmp/compaction-scores
+
+# Requires OPENAI_API_KEY; reuses the saved selector responses.
+vp run -F @effect-agent/example-context-continuity-eval compaction:eval --phase compare \
+  --scores /tmp/compaction-scores/scores.json --output-dir /tmp/compaction-comparison
+```
+
+The fixed corpus has eight calibration cases and sixteen held-out cases, each scored twice.
+Calibration chooses from a fixed threshold grid before holdout scoring. Oracle validation checks
+that required evidence fits through the real engine; literal continuation probes measure evidence
+retention separately from language-model quality. The corpus stresses old exact identifiers, tool
+parameters, failed replacements, task pivots, pinned results, Unicode, and misleading tool content.
+It is synthetic and does not estimate production task success rates.
+
+The comparison uses `gpt-5.6-luna` on unchanged context, age pruning, direct summarization, and
+selective pruning with summary fallback. It preserves per-case outcomes, failures, native usage,
+and outgoing provider requests. The OpenAI client preflights each request and caps the whole phase
+at $3 and 160 model calls, without retries. Jev usage is reported separately; its price is not assumed
+to be zero. Comparison elapsed time excludes the replayed selector's network latency; selector
+latency is recorded in `scores.json`. Use a new output directory for every attempt.
+After a preflight failure, `--resume <previous-comparison-directory>` reuses completed outcomes
+and carries forward the spending ledger and request log. An unsettled reservation or a mismatch
+between that log and the saved usage remains a hard stop.
+Synthetic provider-executed records lack native OpenAI replay provenance, so their live comparisons
+are reported as unsupported. Their retention remains covered by the offline engine checks.
+
+Selection requests contain at most 32 candidates, 800-character result excerpts, 1,000-character
+tool inputs, 16,000 characters of conversation, and 48 KB of complete encoded input. Calls have a
+five-second deadline. Only successful old application results are candidates; the newest batch,
+failed/provider-executed results, and configurable `pinnedTools` remain untouched. Excerpts can miss
+important evidence. `dropBelow` defaults to 0.1; a threshold selected by this corpus is not a universal
+safety boundary. Prune-only mode fails normal context admission if reduction is insufficient.
+Classifier failure leaves the view unchanged and fails the pass.
+
+Sparse selections replay from exact canonical settlement identities. Durable auxiliary inference
+reserves its per-turn slot before dispatch and commits native usage independently of the selection.
+An unresolved reservation blocks recovery; completed accounting permits fallback without another
+selector call. This avoids replaying a paid call whose outcome is unknown.
+
 ## Manual deployed performance evaluation
 
 `vp run perf:cloudflare` deploys a separate disposable Worker and SQLite Durable Object namespace

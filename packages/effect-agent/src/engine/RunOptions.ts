@@ -34,7 +34,11 @@ import {
   type ModelCallUsage,
 } from "../core/Usage.ts";
 import type { WorkerBudgetScope, FrameworkMessage } from "../core/Worker.ts";
-import type { CompactionError, ContextMessageTokenEstimator } from "./ContextCompactor.ts";
+import type {
+  CompactionError,
+  ContextMessageTokenEstimator,
+  ToolResultSelection,
+} from "./ContextCompactor.ts";
 import type { ContextRolloverSelection, ModelCallContext } from "./ContextWindow.ts";
 import type { RunStepHook, ToolExecutionClassValue } from "./DurableStep.ts";
 
@@ -346,7 +350,7 @@ export interface RunCostEstimateRequest {
     | undefined;
   /** Native Effect AI provider metadata, runtime-only; HTTP details are excluded. */
   readonly finishMetadata?: Response.FinishPart["metadata"] | undefined;
-  readonly purpose?: "turn" | "summary" | undefined;
+  readonly purpose?: "turn" | "summary" | "compaction" | undefined;
 }
 
 /**
@@ -511,6 +515,8 @@ export interface RunCompactionCommit {
   readonly source: Prompt.Prompt;
   readonly through: number;
   readonly kind: "clear-tool-results" | "summarize" | "rollover";
+  /** Sparse source occurrences for selective result clearing. */
+  readonly results?: ToolResultSelection | undefined;
   /** Present exactly when `kind` is `"summarize"`. */
   readonly summary?: string | undefined;
   /** Optional continuation state for a rollover; never a generated summary. */
@@ -526,14 +532,32 @@ export interface RunTurnUsage {
 }
 
 /**
- * Attempt-local accounting for provider invocations without retained usage.
- * Staging is infallible and does not itself persist records. Durable runtime
- * composition supplies the canonical Turn accumulator; ephemeral entry points
- * explicitly supply the no-op implementation.
+ * Attempt-local model accounting. Incomplete ordinary calls stage uncertainty for the Turn;
+ * auxiliary calls reserve and commit independently. The durable composition root supplies the
+ * canonical implementation, while ephemeral entry points supply the no-op implementation.
  */
 export class ModelUsageAccounting extends Context.Service<
   ModelUsageAccounting,
-  { readonly noteIncompleteUsage: (turn: number) => Effect.Effect<void> }
+  {
+    readonly noteIncompleteUsage: (turn: number) => Effect.Effect<void>;
+    /**
+     * Optional durable auxiliary-inference protocol. Mutations must be fenced and canonical
+     * before returning. An adapter records infrastructure failure at its Attempt boundary before
+     * translating it to CompactionError, so it cannot become a terminal model failure.
+     * Durable hosts without this protocol reject auxiliary inference before dispatch.
+     */
+    readonly compactionEvaluation?: {
+      /** Live reservation state, updated before reserve/commit returns. */
+      readonly reservedTurns: ReadonlySet<number>;
+      /** A getter reflects failed or incomplete invocations in this Attempt. */
+      readonly hasUnresolved: boolean;
+      readonly reserve: (
+        turn: number,
+        inputTokensEstimate: number,
+      ) => Effect.Effect<void, CompactionError>;
+      readonly commit: (usage: RunTurnUsage) => Effect.Effect<void, CompactionError>;
+    };
+  }
 >()("@effect-agent/engine/ModelUsageAccounting") {
   static readonly layerEphemeral = Layer.succeed(ModelUsageAccounting, {
     noteIncompleteUsage: () => Effect.void,

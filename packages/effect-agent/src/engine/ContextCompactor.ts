@@ -1,5 +1,5 @@
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
-import { type LanguageModel, type Model, Prompt } from "effect/unstable/ai";
+import { type LanguageModel, type Model, Prompt, type Response } from "effect/unstable/ai";
 
 import { type CompactionPolicy } from "../core/AgentPolicy.ts";
 import { type RunId, type ThreadId } from "../core/Identifiers.ts";
@@ -19,6 +19,24 @@ import {
   type ContextCompactionState,
 } from "./internal/compaction.ts";
 
+/** Exact result occurrences in the immutable source snapshot; calls remain visible. */
+export const ToolResultSelection = Schema.Array(
+  Schema.Struct({
+    messageIndex: Schema.Natural,
+    toolCallId: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
+  }),
+).check(Schema.isMinLength(1), Schema.isMaxLength(256));
+
+export type ToolResultSelection = typeof ToolResultSelection.Type;
+
+/** A completed auxiliary model evaluation. The interpreter owns Run accounting. */
+export interface CompactionEvaluation<A> {
+  readonly value: A;
+  readonly provider: string;
+  readonly model: string;
+  readonly usage: Response.Usage;
+}
+
 /**
  * A proposed view change. Source indices are exclusive prefix bounds, never record sequences.
  * Summaries contain at most 65,536 characters; the interpreter rejects oversized decisions
@@ -30,7 +48,12 @@ export const CompactionDecision = Schema.Union([
     through: Schema.Natural,
     handoff: Schema.optionalKey(ContextHandoff),
   }),
-  Schema.Struct({ kind: Schema.Literal("clear-tool-results"), through: Schema.Natural }),
+  Schema.Struct({
+    kind: Schema.Literal("clear-tool-results"),
+    through: Schema.Natural,
+    /** Omit to clear the whole prefix; otherwise clear only these result bodies. */
+    results: Schema.optionalKey(ToolResultSelection),
+  }),
   Schema.Struct({
     kind: Schema.Literal("summarize"),
     through: Schema.Natural,
@@ -61,7 +84,8 @@ export type ContextMessageTokenEstimator = (message: Prompt.Message) => number |
  * One bounded pass over an immutable source snapshot. A harness owns state, metering, and
  * application of decisions. The interpreter permits at most one prune followed by one replacement
  * (summary or rollover), and one call to summarize per Turn, shared across every trigger.
- * All model work must use summarize so it is metered.
+ * Model work must use summarize or evaluate so it is metered. At most one auxiliary evaluation
+ * is admitted per Turn; it must bound its own provider request and response.
  * Callback failures and requirements pass through unchanged; strategy dependencies belong to
  * its construction Layer. Protected messages cannot be removed and Tool pairs cannot be split by a decision.
  */
@@ -84,6 +108,16 @@ export interface CompactionRequest<E, R> {
     prompt: Prompt.Prompt,
     model?: CompactionModelLayer,
   ) => Effect.Effect<string, E, R>;
+  /**
+   * Auxiliary inference with independently committed durable accounting. Absent once this Turn
+   * has evaluated or pruned, including after recovery; use a replacement fallback. A lost decision
+   * is not replayed. An unresolved reserved invocation fails the Run with unknown accounting.
+   * Standalone harnesses may omit this callback.
+   */
+  readonly evaluate?: <A>(
+    operation: Effect.Effect<CompactionEvaluation<A>, CompactionError>,
+    inputTokensEstimate: number,
+  ) => Effect.Effect<A, E | CompactionError, R>;
 }
 
 export interface ContextCompaction {
