@@ -462,12 +462,17 @@ describe("DurableAgentRuntime recovery history", () => {
 
       yield* probe.reset;
       yield* probe.failReadAfter(prefixTail);
-      const failure = yield* runtime.runRecovery.pipe(Effect.flip);
+      const reports = yield* runtime.runRecovery;
 
-      expect(failure).toMatchObject({
-        _tag: "ThreadStoreError",
-        operation: "read recovery history",
-      });
+      expect(reports).toHaveLength(2);
+      for (const report of reports)
+        expect(report).toMatchObject({
+          disposition: "blocked",
+          decision: {
+            _tag: "RecoveryBlocked",
+            failure: { errorTag: "ThreadStoreError", operation: "read recovery history" },
+          },
+        });
 
       const requests = (yield* probe.requests).map((request) => ({
         afterSequence: request.afterSequence,

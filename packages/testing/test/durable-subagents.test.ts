@@ -67,7 +67,7 @@ import {
   submissionSettlementId,
 } from "effect-agent/submission-ledger";
 import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
+import { ThreadRead, ThreadStore, ThreadStoreError } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
@@ -960,6 +960,88 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
       }),
   );
 
+  it.effect(
+    "a failed child history read blocks its parent without stopping independent recovery",
+    () =>
+      Effect.gen(function* () {
+        yield* clearFailpoint;
+        const ledger = yield* SubmissionLedger;
+        const store = yield* ThreadStore;
+        const harness = yield* makeHarness();
+        const run = drive(harness);
+        const parent = yield* harness.submitParent("child-history-failure", "parent");
+        const childThread = childThreadIdFor(parent.submissionId, DELEGATE_CALL);
+
+        yield* armFailpoint("subagent:after-child-ready");
+        expect(failureTag(yield* Effect.exit(run(parent.threadId)))).toBe(
+          "DurableRuntimeFailpointError",
+        );
+        yield* clearFailpoint;
+        const independent = yield* harness.submitParent("independent-recovery", "independent");
+        let childReads = 0;
+
+        const unavailable = ThreadStore.of({
+          ...store,
+          read: (request) =>
+            request.threadId !== childThread
+              ? store.read(request)
+              : Stream.suspend(() => {
+                  childReads++;
+
+                  return Stream.fail(
+                    ThreadStoreError.make({
+                      operation: "read child history",
+                      message: "private child history is unavailable",
+                    }),
+                  );
+                }),
+        });
+
+        const reports = yield* DurableAgentRuntime.pipe(
+          Effect.flatMap((runtime) => runtime.runRecovery),
+          Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+          Effect.provideService(ThreadStore, unavailable),
+        );
+
+        expect(childReads).toBeGreaterThan(0);
+        expect(reports.find((report) => report.submissionId === parent.submissionId)).toMatchObject(
+          {
+            disposition: "blocked",
+            decision: {
+              _tag: "RecoveryBlocked",
+              failure: {
+                phase: "recovery",
+                errorTag: "ThreadStoreError",
+                operation: "read child history",
+              },
+            },
+          },
+        );
+        expect(
+          reports.find((report) => report.submissionId === independent.submissionId),
+        ).toMatchObject({
+          disposition: "deferred",
+          decision: { _tag: "ApplyInput" },
+        });
+        expect(JSON.stringify(reports)).not.toContain("private child");
+        const after = yield* readLog(parent.threadId);
+
+        expect(payloadsOf(after, "SubagentJoined")).toHaveLength(0);
+        expect(payloadsOf(after, "SubmissionSettled")).toHaveLength(0);
+        expect(
+          (yield* ledger.loadRecoverySnapshot(
+            RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
+          )).ownership,
+        ).toBeUndefined();
+        expect(yield* harness.childInvocations).toBe(0);
+        yield* harness.runtime.runRecovery;
+        expect(payloadsOf(yield* readLog(parent.threadId), "SubagentStarted")).toHaveLength(1);
+        expect((yield* run(childThread)).map((entry) => entry.outcome)).toEqual(["completed"]);
+        expect((yield* run(parent.threadId)).map((entry) => entry.outcome)).toEqual(["completed"]);
+        expect(yield* harness.childInvocations).toBe(1);
+      }),
+  );
+
   it.effect("RUN-030: recovery rejects conflicting canonical Run starts before child cleanup", () =>
     Effect.gen(function* () {
       yield* clearFailpoint;
@@ -1013,18 +1095,15 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           ),
       });
 
-      const rejected = yield* Effect.exit(
-        DurableAgentRuntime.pipe(
-          Effect.flatMap((hostileRuntime) => hostileRuntime.runRecovery),
-          Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
-          Effect.provideService(ThreadStore, conflicting),
-        ),
+      const rejected = yield* DurableAgentRuntime.pipe(
+        Effect.flatMap((hostileRuntime) => hostileRuntime.runRecovery),
+        Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
+        Effect.provideService(ThreadStore, conflicting),
       );
 
-      expect(failureTag(rejected)).toBe("RunJournalError");
-      if (Exit.isSuccess(rejected)) throw new Error("Expected conflicting recovery to fail");
-      expect(Option.getOrUndefined(Cause.findErrorOption(rejected.cause))).toMatchObject({
-        message: expect.stringContaining("conflicting start evidence"),
+      expect(rejected.find((report) => report.submissionId === parent.submissionId)).toMatchObject({
+        disposition: "blocked",
+        decision: { _tag: "RecoveryBlocked", failure: { errorTag: "RunJournalError" } },
       });
 
       const afterSnapshot = yield* ledger.loadRecoverySnapshot(

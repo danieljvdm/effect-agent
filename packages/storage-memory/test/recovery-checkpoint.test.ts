@@ -555,7 +555,9 @@ describe("disposable durable recovery checkpoint", () => {
       const resumed = yield* makeRuntime.pipe(Effect.provideService(ThreadStore, observed));
 
       if (scenario === "gap") {
-        expect(Exit.isFailure(yield* Effect.exit(resumed.runRecovery))).toBe(true);
+        expect(yield* resumed.runRecovery).toMatchObject([
+          { disposition: "blocked", decision: { _tag: "RecoveryBlocked" } },
+        ]);
         expect(requests).toHaveLength(requestsBefore);
         expect(calls).toBe(callsBefore);
 

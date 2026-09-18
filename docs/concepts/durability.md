@@ -78,6 +78,13 @@ later input can run in the same Thread while the original settlement obligation 
 Suspended, joining, and joined work retain their ordering barriers. At most one live owner can
 claim a Thread; a wake hint does not acquire ownership or advance its fencing epoch.
 
+`runRecovery` isolates history and child-recovery faults by Thread. Its successful result can
+contain `RecoveryBlocked` reports: those Threads cannot be claimed until recovery succeeds.
+The host owns durable fault visibility and retry scheduling outside the execution log. The
+default cooperative recovery bound is 30 seconds per Thread (`recoveryTimeout`). Interruption
+and ledger-scan failures still fail the sweep. A recovery fault never settles accepted work,
+proves an external effect failed, or authorizes replay.
+
 ```text
 thread log              submission ledger
 what happened                 what is still owed
