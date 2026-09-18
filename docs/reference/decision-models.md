@@ -60,6 +60,88 @@ Raw questions use `criteria` for choice options and score levels. Use
 `satisfies DecisionSchema.Questions` to retain literals when defining raw questions separately.
 With dynamic question or option maps, check for missing entries and narrow mixed answers by `type`.
 
+## AutoModel
+
+Choose a native model once when a thread starts, then reuse it for every turn and follow-up run:
+
+<<< @/snippets/travel-planner/auto-model.ts#catalog{ts twoslash}
+
+Import `AutoModel` from `@effect-agent/ai-decision`. Supply Jev with the
+[`TypeSafeDecisionModel` Layer](#typesafe-client); another `DecisionModel` implementation works
+with the same catalog. Each profile pairs an existing native Effect model Layer with a description.
+Configure reasoning effort and other provider settings on that Layer. Descriptions should explain
+capability, cost, and when a profile is appropriate; there is no built-in model catalog.
+
+```ts twoslash
+import { ThreadModels } from "./auto-model.ts";
+import { Effect } from "effect";
+// ---cut---
+const createSelection = ThreadModels.select({
+  threadId: "research-thread",
+  state: {
+    task: "Investigate why invoice totals differ from the ledger",
+    tools: ["read_document", "calculate"],
+    constraints: ["Explain each discrepancy"],
+  },
+});
+
+const reuseSelection = Effect.gen(function* () {
+  const selected = yield* createSelection;
+  // Save selected.record in the host's thread metadata before starting work.
+  return yield* ThreadModels.restore("research-thread", selected.record);
+});
+```
+
+Bind `selected.model` using `Agent.withModel(agent, selected.model)`. It is the original model,
+so its identity, client requirements, streaming, tools, and structured output remain native.
+The [complete example](https://github.com/danieljvdm/effect-agent/blob/main/docs/snippets/travel-planner/auto-model.ts)
+includes provider Layers and two runs on the same thread.
+
+### Thread ownership
+
+The host atomically saves `selected.record` with its thread metadata before generation. On a
+follow-up or restart, load that record and call `restore`; it requires no decision provider.
+Concurrent thread creators must use the stored winning record before either starts work. A crash
+before commitment can require another selector call; this API makes no exactly-once execution claim.
+
+Select separately for each subagent thread using its delegated task and available tools. Follow-ups
+to that child restore its original selection. Keep selection at the host's thread-creation boundary;
+selecting while constructing a shared `Subagent.layer` would give all its children the same choice.
+For durable hosts, retain the record in application-owned admission/thread data and restore the
+model through the existing [resolved model context](../guide/context-management#resolve-routing-and-capacity-together).
+Keep context limits and pricing aligned with that same profile.
+
+Stable model settings avoid implicit model changes that can reduce prompt-cache reuse; cache hits
+still depend on provider behavior and prompt prefixes. AutoModel neither changes prompts nor
+adds generation-time routing. Re-executing `select` makes a new decision, so retain the record
+instead of calling it on each run.
+
+### Configuration and records
+
+| API or field                               | Behavior                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `make({ models, version, instructions? })` | Pure catalog construction; profiles and model bindings are snapshotted                     |
+| `version`                                  | Required nonempty application version for the catalog's model configuration                |
+| `instructions`                             | Optional Choice policy; defaults to the least expensive capable profile for the whole task |
+| `select({ threadId, state })`              | One Choice evaluation; requires `DecisionModel`, fails with `AiError`                      |
+| `restore(threadId, record)`                | Validates unknown stored data and returns the configured native model without I/O          |
+| `SelectionRecord`                          | Schema for format version, thread ID, catalog version, profile ID, and decision evidence   |
+
+Use `Schema.encodeEffect(AutoModel.SelectionRecord)` at storage boundaries. Model Layers are live
+definitions and are not serialized. Change the catalog version whenever a profile's model, effort,
+or settings change, and retain previous catalogs for active threads. A missing profile, version
+mismatch, wrong thread, or malformed record fails with `AiError.InvalidRequestError`; restoration
+never substitutes another profile. Jev's reported probability precision is retained in the record.
+
+The host must authorize the thread and restrict candidates to compatible, approved profiles.
+Selection is not an authorization decision. Only send task context the decision provider may receive.
+State should include the whole task, relevant documents, constraints, and available tools.
+
+Selection has no default retries, deadlines, fallbacks, or confidence threshold. Apply Effect
+policies before committing the record. Selector usage and provider metadata live in
+`record.decision`, separately from generative run accounting. `AutoModel.select` tracing records
+the chosen profile ID; it adds no task-body logging.
+
 ## Results and evidence
 
 | Field                                     | Meaning                                                        |

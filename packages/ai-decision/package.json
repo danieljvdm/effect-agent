@@ -16,6 +16,7 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
+    "./auto-model": "./src/AutoModel.ts",
     "./decision-model": "./src/DecisionModel.ts",
     "./decision-query": "./src/DecisionQuery.ts",
     "./decision-schema": "./src/DecisionSchema.ts",

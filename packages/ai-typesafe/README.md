@@ -28,6 +28,10 @@ Provide `DecisionLive` to the Effect that evaluates your decision set.
 The adapter maps shared `probability` questions to Jev's `noul` and retains
 choice and score distributions. Application code chooses how to use the answers.
 
+The same `DecisionLive` powers [`AutoModel`](https://effect-agent.com/reference/decision-models#automodel):
+describe your native Effect models, select one when a thread starts, and retain its selection
+record for follow-ups. Each child thread can select independently from its own task.
+
 There are no default retries or deadlines. Add those policies with Effect or to the supplied
 HttpClient. See the [configuration and error reference](https://effect-agent.com/reference/decision-models#typesafe-client)
 for details, including Jev's [rounded probabilities](https://effect-agent.com/reference/decision-models#probability-validation).

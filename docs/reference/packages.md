@@ -186,6 +186,8 @@ in your host.
 Provider-neutral questions (`DecisionQuery`), reusable assessments (`DecisionSet`), and the
 evaluation service (`DecisionModel`). `DecisionSchema` defines their shared values. The package
 depends only on Effect; application code owns routing, transitions, and side effects.
+[`AutoModel`](./decision-models#automodel) selects a native model from described profiles at thread
+creation and restores that choice for later runs. The host owns the selection record's storage.
 
 Start with the [decision guide](../guide/tools#decision-transitions), then use the
 [API reference](./decision-models) for options and results.

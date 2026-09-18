@@ -45,3 +45,16 @@ application's policy, not authorization to act.
 Read the [guide](https://effect-agent.com/guide/tools#decision-transitions) for the mental model
 and the [reference](https://effect-agent.com/reference/decision-models) for query options,
 results, errors, and provider behavior.
+
+## Choose a thread's model
+
+`AutoModel.make({ version, models })` builds a catalog of `{ model, description }` profiles.
+`select({ threadId, state })` asks the supplied `DecisionModel` to choose one and returns the
+original native model plus a schema-backed record. Save that record with the thread, then use
+`restore(threadId, record)` for every later run. Each subagent thread can have its own selection.
+
+The host owns atomic thread creation and persistence. Restoring a missing profile, a different
+catalog version, or another thread's record fails without making a new selection. Provider
+clients, model settings, and dependencies remain on the native model Layers.
+See [AutoModel](https://effect-agent.com/reference/decision-models#automodel) for configuration
+and a complete Jev example.
