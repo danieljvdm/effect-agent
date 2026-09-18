@@ -46,7 +46,7 @@ import {
   lookupByKey,
   readLog,
   runWorkerToExit,
-  waitOutChildLease,
+  waitAfterChildExit,
   withCrashSite,
   withHost,
   withRuntime,
@@ -159,7 +159,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(killed);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
             expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
 
             // ---------------------------------------------------------------

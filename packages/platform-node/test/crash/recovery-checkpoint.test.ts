@@ -25,7 +25,7 @@ import {
   lookupByKey,
   readLog,
   runWorkerToExit,
-  waitOutChildLease,
+  waitAfterChildExit,
   withCrashSite,
   withHost,
   withRuntime,
@@ -98,7 +98,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
               }),
             );
 
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
             yield* withHost(
               site.db,
               Effect.gen(function* () {

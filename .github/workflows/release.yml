@@ -1,26 +1,81 @@
 name: Release
 
 on:
-  # Generate the version PR only after the exact main revision has finished CI.
-  # This event waits without reserving a runner; the PR proof still fails closed.
+  # PR generation starts immediately; only publication waits for successful CI.
+  push:
+    branches: [main]
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
 
 concurrency:
-  group: release
+  # A paid publication must not delay updates to the next version PR.
+  group: release-${{ github.event_name }}
   cancel-in-progress: false
 
 permissions: {}
 
 jobs:
+  version:
+    name: Update release pull request
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      CI: "true"
+      VP_GIT_HOOKS: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install dependencies (frozen, scripts suppressed)
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # App-authored updates trigger PR CI, unlike GITHUB_TOKEN pushes.
+      - name: Mint the release token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.EFFECT_AGENT_APP_ID }}
+          private-key: ${{ secrets.EFFECT_AGENT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check current main
+        id: current
+        run: |
+          set -euo pipefail
+          LATEST_MAIN="$(git ls-remote --exit-code origin refs/heads/main | cut -f1)"
+          echo "current=$([ "$LATEST_MAIN" = "$GITHUB_SHA" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Create release pull request
+        if: ${{ steps.current.outputs.current == 'true' }}
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
+        with:
+          title: "chore: version packages"
+          commit: "chore: version packages"
+          version: ./node_modules/.bin/vp run --no-cache ci:version
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
   release:
     name: Release
     # workflow_run has write authority: accept only this repo's successful main
     # push. Changesets uses github.sha internally, so it MUST equal the tested
     # head (workflow_run's default-branch SHA can otherwise have moved ahead).
-    if: ${{ github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.repository.full_name == github.repository && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.head_sha == github.sha }}
+    if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.repository.full_name == github.repository && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.head_sha == github.sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 70
     permissions:
@@ -55,10 +110,20 @@ jobs:
       - name: Patch Effect TypeScript-Go
         run: ./node_modules/.bin/vp run patch:tsgo
 
+      # Only the push job owns PR updates. Changesets status excludes changesets
+      # already consumed by pre.json, unlike counting the retained Markdown files.
+      - name: Check for pending changesets
+        id: pending
+        run: |
+          set -euo pipefail
+          # The SHA checkout is detached; status compares against config.baseBranch.
+          git branch --force main "$GITHUB_SHA"
+          ./node_modules/.bin/vp run --no-cache changeset status --output "$RUNNER_TEMP/changeset-status.json"
+          echo "empty=$(jq -r '.changesets | length == 0' "$RUNNER_TEMP/changeset-status.json")" >> "$GITHUB_OUTPUT"
+
       - name: Upgrade npm for trusted publishing
         run: npm install --global npm@12.0.2
 
-      # App-authored updates trigger ordinary PR CI, unlike GITHUB_TOKEN pushes.
       - name: Mint the release token
         id: app-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
@@ -68,12 +133,10 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Create release pull request or publish
+      - name: Publish release
+        if: ${{ steps.pending.outputs.empty == 'true' }}
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
         with:
-          title: "chore: version packages"
-          commit: "chore: version packages"
-          version: ./node_modules/.bin/vp run --no-cache ci:version
           publish: ./node_modules/.bin/vp run --no-cache release:checked-publish
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

@@ -3,6 +3,7 @@ import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
+  Clock,
   Context,
   Effect,
   Exit,
@@ -22,7 +23,12 @@ import { MessageDeliveryStore } from "effect-agent/message-delivery";
 import { DefinitionDigestInput } from "effect-agent/records";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentHost } from "effect-agent/subagent-host";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
+import {
+  IdempotencyKey,
+  Principal,
+  RecoverySnapshotRequest,
+  SubmissionLedger,
+} from "effect-agent/submission-ledger";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerError } from "effect-agent/worker";
 import { WorkerHostAuthorizer } from "effect-agent/worker-host";
@@ -35,6 +41,30 @@ const key = Schema.decodeSync(IdempotencyKey);
 const definitions = DefinitionDigestInput.make({ agent: "report-v1", model: "v1", tools: [] });
 const input = Schema.Struct({ question: Schema.String });
 const output = Schema.Struct({ answer: Schema.String });
+
+const withReportClock = Effect.fnUntraced(function* <A, E, R>(
+  scenario: (clock: Clock.Clock, advanceTo: (millis: number) => void) => Effect.Effect<A, E, R>,
+): Effect.fn.Return<A, E, Exclude<R, Scope.Scope>> {
+  const native = yield* Clock.Clock;
+  let offset = 0;
+
+  // Only persisted wall-clock deadlines move; polling and timeouts keep native timers.
+  const clock: Clock.Clock = {
+    sleep: (duration) => native.sleep(duration),
+    monotonicTimeNanosUnsafe: () => native.monotonicTimeNanosUnsafe(),
+    monotonicTimeNanos: native.monotonicTimeNanos,
+    currentTimeMillisUnsafe: () => native.currentTimeMillisUnsafe() + offset,
+    currentTimeMillis: Effect.sync(() => native.currentTimeMillisUnsafe() + offset),
+    currentTimeNanosUnsafe: () => native.currentTimeNanosUnsafe() + BigInt(offset) * 1000000n,
+    currentTimeNanos: Effect.sync(
+      () => native.currentTimeNanosUnsafe() + BigInt(offset) * 1000000n,
+    ),
+  };
+
+  return yield* scenario(clock, (millis) => {
+    offset = Math.max(offset, millis - native.currentTimeMillisUnsafe());
+  }).pipe(Effect.scoped, Effect.provideService(Clock.Clock, clock));
+});
 
 const parts: ReadonlyArray<Response.StreamPartEncoded> = [
   { type: "text-start", id: "reply" },
@@ -189,7 +219,7 @@ for (const mode of ["custom", "mapped", "standard"] as const)
   ] as const)(
     `${mode}: recovers hosted search completion and one report for joined child inputs after %s and a Node restart`,
     (failpoint) =>
-      Effect.scoped(
+      withReportClock((clock, advanceTo) =>
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-report-" });
@@ -274,6 +304,7 @@ for (const mode of ["custom", "mapped", "standard"] as const)
             }).pipe(
               Layer.provide(authority),
               Layer.provide(Layer.merge(native.handlers, background.layer)),
+              Layer.provide(Layer.succeedContext(Clock.Clock.context(clock))),
             ),
           ).pipe(Scope.provide(firstScope));
 
@@ -357,12 +388,74 @@ for (const mode of ["custom", "mapped", "standard"] as const)
             NodeHost.layer(registrations, options).pipe(
               Layer.provide(authority),
               Layer.provide(Layer.merge(native.handlers, background.layer)),
+              Layer.provide(Layer.succeedContext(Clock.Clock.context(clock))),
             ),
           );
 
           const reopened = Context.get(second, DurableAgentRuntime);
           const store = Context.get(second, ThreadStore);
           const deliveries = Context.get(second, MessageDeliveryStore);
+          const ledger = Context.get(second, SubmissionLedger);
+
+          const report = yield* Effect.gen(function* () {
+            for (;;) {
+              const rows = yield* deliveries.list({
+                ownerThreadId: started.worker.threadId,
+                limit: 100,
+              });
+
+              const row = rows.items[0];
+
+              if (rows.items.length === 1 && row !== undefined && row.receipt !== null)
+                return { key: row.key, receipt: row.receipt };
+              yield* Effect.sleep("10 millis");
+            }
+          }).pipe(Effect.timeout("10 seconds"));
+
+          const firstResult = yield* reopened.awaitSettlement(started.delivery.receipt!);
+          const joinedResult = yield* reopened.awaitSettlement(joined.receipt!);
+
+          expect(firstResult.outcome).toBe("completed");
+          expect(joinedResult.outcome).toBe("completed");
+          expect((yield* reopened.awaitSettlement(report.receipt)).outcome).toBe("completed");
+
+          // Canonical settlement may precede ledger finalization. Wait until every involved
+          // submission has released ownership before advancing the report's persisted poll.
+          yield* Effect.gen(function* () {
+            for (;;) {
+              let settled = true;
+
+              for (const receipt of [
+                sourceReceipt,
+                started.delivery.receipt!,
+                joined.receipt!,
+                report.receipt,
+              ]) {
+                const snapshot = yield* ledger.loadRecoverySnapshot(
+                  RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+                );
+
+                if (snapshot.submission.state !== "settled" || snapshot.ownership !== undefined)
+                  settled = false;
+              }
+              if (settled) return;
+              yield* Effect.sleep("10 millis");
+            }
+          }).pipe(Effect.timeout("10 seconds"));
+
+          const delivery = yield* deliveries.get(report.key);
+
+          expect(delivery).not.toBeNull();
+          if (delivery === null) throw new Error("Expected the completion report delivery");
+          if (delivery.status !== "processed") {
+            expect(delivery.status).toBe("accepted");
+            expect(delivery.leaseUntilMillis).toBeNull();
+            expect(
+              Math.max(clock.currentTimeMillisUnsafe(), delivery.retry.nextAttemptAtMillis),
+            ).toBeLessThan(delivery.deadlineAtMillis);
+            // No yield between observing the idle delivery and changing its clock.
+            advanceTo(delivery.retry.nextAttemptAtMillis);
+          }
 
           yield* Effect.gen(function* () {
             for (;;) {
@@ -375,11 +468,6 @@ for (const mode of ["custom", "mapped", "standard"] as const)
               yield* Effect.sleep("10 millis");
             }
           }).pipe(Effect.timeout("10 seconds"));
-          const firstResult = yield* reopened.awaitSettlement(started.delivery.receipt!);
-          const joinedResult = yield* reopened.awaitSettlement(joined.receipt!);
-
-          expect(firstResult.outcome).toBe("completed");
-          expect(joinedResult.outcome).toBe("completed");
 
           const childLog = yield* store.export(
             ThreadExportRequest.make({ threadId: started.worker.threadId }),

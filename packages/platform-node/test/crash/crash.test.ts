@@ -73,6 +73,7 @@ import {
   startWorker,
   touchFile,
   waitForFile,
+  waitAfterChildExit,
   waitOutChildLease,
   withCrashSite,
   withHost,
@@ -353,7 +354,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             yield* withHost(
               site.db,
@@ -416,7 +417,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     leaseMillis: CHILD_LEASE_MS,
                   }),
                 );
-                yield* waitOutChildLease;
+                yield* waitAfterChildExit;
                 yield* withHost(
                   site.db,
                   Effect.gen(function* () {
@@ -465,7 +466,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             yield* withHost(
               site.db,
@@ -561,7 +562,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             );
 
             expect(exit.signal).toBe("SIGKILL");
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             yield* withHost(
               site.db,
@@ -746,7 +747,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             yield* withHost(
               site.db,
@@ -803,7 +804,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             yield* withHost(
               site.db,
@@ -1205,7 +1206,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             yield* withHost(
               site.db,
@@ -1290,7 +1291,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             yield* withHost(
               site.db,
@@ -1361,7 +1362,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             yield* withHost(
               site.db,
@@ -1472,7 +1473,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             );
 
             expect(exit.signal).toBe("SIGKILL");
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
             expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
 
             yield* withHost(
@@ -1558,7 +1559,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
             expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
 
             // Deliberately NO recovery pass: a recovery pass has no Agent Binding, so the
@@ -1629,7 +1630,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
             // Step 1 executed and committed; step 2 never ran; the handler entered once.
             expect(supplierCount(site.supplier, "itinerary-enter", STEP_REF)).toBe(1);
             expect(supplierCount(site.supplier, "reserve-flight", STEP_REF)).toBe(1);
@@ -1726,7 +1727,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             // Before recovery: the request is canonical, the ledger never suspended.
             yield* withRuntime(
@@ -1976,7 +1977,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             // Before recovery: the claim is durable, the canonical input never committed.
             const queuedId = yield* withRuntime(
@@ -2052,7 +2053,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             // Before recovery: the input is canonical, only the joined marker was lost.
             const queuedId = yield* withRuntime(
@@ -2136,7 +2137,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             );
 
             expect(exit.signal).toBe("SIGKILL");
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             // Durable state: `joined` with a nonterminal host and an uncovered canonical input.
             const queuedId = yield* withRuntime(

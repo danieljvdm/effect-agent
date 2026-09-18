@@ -343,6 +343,7 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
     undefined,
     FixtureSource,
   ),
+  { ownershipLeaseDuration: 3_000, leaseRenewalInterval: 500 },
 ) {
   fetch(_request: Request): Promise<Response> {
     return this[DurableObject.RunSymbol](

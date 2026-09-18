@@ -965,31 +965,182 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     { timeout: 30_000 },
   );
 
-  it.effect("retains required release gates and App-authored Changesets updates", () =>
+  it.effect("creates release PRs on push while retaining CI-gated publication", () =>
     Effect.gen(function* () {
       const ci = yield* readWorkflow(".github/workflows/ci.yml");
       const release = yield* readWorkflow(".github/workflows/release.yml");
 
       expect(ci.on).toHaveProperty("pull_request");
       expect(ci.on.pull_request).toBeNull();
-      const checkout = workflowStep(release, "release", "Check out repository");
+      const checkout = workflowStep(release, "version", "Check out repository");
 
       expect(checkout?.with?.["persist-credentials"]).toBe(false);
-      const token = workflowStep(release, "release", "Mint the release token");
+      const token = workflowStep(release, "version", "Mint the release token");
 
       expect(token?.with?.["permission-contents"]).toBe("write");
       expect(token?.with?.["permission-pull-requests"]).toBe("write");
-      const changesets = workflowStep(release, "release", "Create release pull request or publish");
+      const changesets = workflowStep(release, "version", "Create release pull request");
 
       expect(changesets?.env?.GITHUB_TOKEN).toBe("${{ steps.app-token.outputs.token }}");
-      expect(changesets?.with?.publish).toBe(
+      expect(changesets?.with?.publish).toBeUndefined();
+      expect(changesets?.env?.OPENAI_API_KEY).toBeUndefined();
+      expect(release.jobs.version?.permissions).toEqual({ contents: "read" });
+      expect(release.jobs.version?.needs).toBeUndefined();
+      const publish = workflowStep(release, "release", "Publish release");
+
+      expect(publish?.with?.publish).toBe(
         "./node_modules/.bin/vp run --no-cache release:checked-publish",
       );
+      expect(publish?.if).toBe("${{ steps.pending.outputs.empty == 'true' }}");
       expect(release.jobs.release?.permissions?.["id-token"]).toBe("write");
       expect(release.on).toEqual({
+        push: { branches: ["main"] },
         workflow_run: { workflows: ["CI"], types: ["completed"], branches: ["main"] },
       });
+      expect(release.concurrency).toEqual({
+        group: "release-${{ github.event_name }}",
+        "cancel-in-progress": false,
+      });
       expect(checkout?.with?.ref).toBe("${{ github.sha }}");
+
+      const repository = "danieljvdm/effect-agent";
+
+      const successfulRun = {
+        event: "push",
+        conclusion: "success",
+        head_branch: "main",
+        repository: { full_name: repository },
+        head_repository: { full_name: repository },
+        path: ".github/workflows/ci.yml",
+        head_sha: "a".repeat(40),
+      };
+
+      for (const [event, run, version, publication] of [
+        ["push", undefined, true, false],
+        ["workflow_run", successfulRun, false, true],
+        ["workflow_run", { ...successfulRun, conclusion: "failure" }, false, false],
+        ["workflow_run", { ...successfulRun, conclusion: "cancelled" }, false, false],
+        ["workflow_run", { ...successfulRun, event: "pull_request" }, false, false],
+        ["workflow_run", { ...successfulRun, head_branch: "feature" }, false, false],
+        ["workflow_run", { ...successfulRun, head_sha: "b".repeat(40) }, false, false],
+        ["workflow_run", { ...successfulRun, path: ".github/workflows/other.yml" }, false, false],
+        ["workflow_run", { ...successfulRun, repository: { full_name: "fork" } }, false, false],
+        [
+          "workflow_run",
+          { ...successfulRun, head_repository: { full_name: "fork" } },
+          false,
+          false,
+        ],
+      ] as const) {
+        for (const [job, expected] of [
+          ["version", version],
+          ["release", publication],
+        ] as const) {
+          const condition = release.jobs[job]?.if;
+
+          if (condition === undefined) return yield* Effect.die("Missing release event gate");
+          expect(
+            runInNewContext(condition.replace(/^\$\{\{\s*|\s*\}\}$/g, ""), {
+              github: {
+                event_name: event,
+                ref: "refs/heads/main",
+                sha: successfulRun.head_sha,
+                repository,
+                event: { workflow_run: run },
+              },
+            }),
+          ).toBe(expected);
+        }
+      }
+    }),
+  );
+
+  it.effect("publishes only after all prerelease changesets have been versioned", () =>
+    Effect.gen(function* () {
+      const release = yield* readWorkflow(".github/workflows/release.yml");
+      const script = workflowStep(release, "release", "Check for pending changesets")?.run;
+
+      if (script === undefined) return yield* Effect.die("Missing pending changeset gate");
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "release-pending-test-" });
+      const git = (...args: ReadonlyArray<string>) => runFixtureCommand(root, "git", args);
+
+      yield* fs.makeDirectory(`${root}/.changeset`);
+      yield* fs.makeDirectory(`${root}/packages/core`, { recursive: true });
+      yield* fs.makeDirectory(`${root}/node_modules`);
+      yield* fs.symlink(`${repositoryRoot}/node_modules/.bin`, `${root}/node_modules/.bin`);
+      yield* fs.writeFileString(
+        `${root}/package.json`,
+        JSON.stringify({
+          name: "release-fixture",
+          private: true,
+          workspaces: ["packages/*"],
+          packageManager: "bun@1.4.2",
+          scripts: { changeset: "changeset" },
+        }),
+      );
+      yield* fs.writeFileString(
+        `${root}/packages/core/package.json`,
+        JSON.stringify({
+          name: "effect-agent",
+          version: "0.1.0-beta.1",
+        }),
+      );
+      yield* fs.writeFileString(
+        `${root}/.changeset/config.json`,
+        JSON.stringify({
+          baseBranch: "main",
+          fixed: [["effect-agent"]],
+          changelog: false,
+        }),
+      );
+      yield* fs.writeFileString(
+        `${root}/.changeset/fix-example.md`,
+        '---\n"effect-agent": patch\n---\nFix the example.\n',
+      );
+      yield* fs.writeFileString(
+        `${root}/.gitignore`,
+        "node_modules/\noutput\nchangeset-status.json\n",
+      );
+      yield* git("init", "--initial-branch=main");
+      yield* git("config", "user.name", "Release test");
+      yield* git("config", "user.email", "release-test@example.test");
+      yield* git("config", "commit.gpgsign", "false");
+      yield* git("config", "core.hooksPath", `${root}/.git/hooks`);
+
+      for (const [consumed, expected] of [
+        [[], "empty=false"],
+        [["fix-example"], "empty=true"],
+      ] as const) {
+        yield* fs.writeFileString(
+          `${root}/.changeset/pre.json`,
+          JSON.stringify({
+            mode: "pre",
+            tag: "beta",
+            initialVersions: { "effect-agent": "0.0.0" },
+            changesets: consumed,
+          }),
+        );
+        yield* git("add", ".");
+        yield* git("commit", "-m", "Record prerelease state");
+        const sha = yield* git("rev-parse", "HEAD");
+
+        yield* git("checkout", "--detach", sha);
+        yield* git("branch", "-D", "main");
+        yield* fs.writeFileString(`${root}/output`, "");
+        yield* runFixtureCommand(root, "env", [
+          `GITHUB_SHA=${sha}`,
+          `GITHUB_OUTPUT=${root}/output`,
+          `RUNNER_TEMP=${root}`,
+          "bash",
+          "-e",
+          "-c",
+          script,
+        ]);
+        expect((yield* fs.readFileString(`${root}/output`)).trim()).toBe(expected);
+        // The publication guard must leave Changesets' input files untouched.
+        expect(yield* git("status", "--porcelain")).toBe("");
+      }
     }),
   );
 

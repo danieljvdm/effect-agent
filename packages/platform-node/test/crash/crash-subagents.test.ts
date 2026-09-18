@@ -47,6 +47,7 @@ import {
   startWorker,
   touchFile,
   waitForFile,
+  waitAfterChildExit,
   waitOutChildLease,
   withCrashSite,
   withHost,
@@ -247,7 +248,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 });
 
                 expectKilled(result);
-                yield* waitOutChildLease;
+                yield* waitAfterChildExit;
 
                 const bindings = yield* restartBindings(site);
 
@@ -328,7 +329,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             // Abort the parent from a client-only restart before any recovery pass runs.
             const parentId = yield* withRuntime(
@@ -425,7 +426,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             });
 
             expectKilled(result);
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             // Before recovery: the child is settled and its parent wake is already durable.
             const ids = yield* withRuntime(
@@ -517,7 +518,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 });
 
                 expectKilled(result);
-                yield* waitOutChildLease;
+                yield* waitAfterChildExit;
                 // The child ran exactly once BEFORE the kill; everything after is replay.
                 expect(childModelInvocations(site.supplier), row.location).toBe(1);
 
@@ -847,7 +848,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(childExit.signal).toBe("SIGKILL");
               }),
             );
-            yield* waitOutChildLease;
+            yield* waitAfterChildExit;
 
             const bindings = yield* restartBindings(site);
 

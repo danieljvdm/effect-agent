@@ -1,4 +1,3 @@
-import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Schema } from "effect";
 import type { Layer, Crypto } from "effect";
 import {
@@ -76,18 +75,12 @@ type SourceRequirementsProof = Assert<
 type BindingFailureProof = Assert<Equal<Effect.Error<typeof bindingEffect>, never>>;
 type BindingRequirementsProof = Assert<Equal<Effect.Services<typeof bindingEffect>, PrepareInput>>;
 
-describe("Subscription Tool and GitHub source public types", () => {
-  it("keeps typed failures, requirements, and sanitized Tool failures visible", () => {
-    const proofs: readonly [
-      ToolsFailureProof,
-      ToolsRequirementsProof,
-      NoDurableStepFailurePayloadProof,
-      SourceFailureProof,
-      SourceRequirementsProof,
-      BindingFailureProof,
-      BindingRequirementsProof,
-    ] = [true, true, true, true, true, true, true];
-
-    expect(proofs).toEqual([true, true, true, true, true, true, true]);
-  });
-});
+export const proofs: readonly [
+  ToolsFailureProof,
+  ToolsRequirementsProof,
+  NoDurableStepFailurePayloadProof,
+  SourceFailureProof,
+  SourceRequirementsProof,
+  BindingFailureProof,
+  BindingRequirementsProof,
+] = [true, true, true, true, true, true, true];

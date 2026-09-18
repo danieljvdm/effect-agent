@@ -1,4 +1,3 @@
-import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Schema, type Crypto, type Scope } from "effect";
 import {
   ActivityProcessorKey,
@@ -85,10 +84,4 @@ type Requirements = Assert<
   >
 >;
 
-describe("committed activity public composition", () => {
-  it("preserves application failures and requirements while owning callback scopes", () => {
-    const proof: readonly [Errors, Requirements] = [true, true];
-
-    expect(proof).toEqual([true, true]);
-  });
-});
+export const proof: readonly [Errors, Requirements] = [true, true];
