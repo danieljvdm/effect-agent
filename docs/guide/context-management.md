@@ -1180,10 +1180,8 @@ current task. Those matches only help the model find evidence; they never author
 Relevant facts expressed with different words can still be missed. Calibrate `dropBelow` against
 your continuation tasks; the conservative default may retain every result.
 
-The
-[evaluation harness](https://github.com/danieljvdm/effect-agent/tree/main/tooling/context-continuity-eval#selective-pruning-evaluation)
-compares retention and continuation with the same public Layer. Auxiliary evaluations are charged
-even when nothing is removed; these Runs currently recover through full canonical replay.
+Auxiliary evaluations are charged even when nothing is removed; these Runs currently recover
+through full canonical replay.
 
 Supply an effectful `question` to customize what deserves retention. A true answer must mean
 **keep the result**, so the same `dropBelow` comparison applies:

@@ -69,7 +69,6 @@ interface Reservation {
   readonly phase: number;
   readonly tokens: number;
   readonly cost: number;
-  readonly price: { readonly input: number; readonly cached: number; readonly output: number };
 }
 interface Spending {
   readonly closed: boolean;
@@ -92,8 +91,6 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
   readonly initialUsage?: ModelUsage;
   readonly maxModelCalls?: number;
   readonly maxInputTokens?: number;
-  /** Explicit manual benchmark only; automatic continuity jobs keep their $10 / 32k limits. */
-  readonly profile?: "large-compaction";
   /** Optional example-owned instrumentation; dispatch itself is observed at Fetch. */
   readonly observe?: (
     kind: "preflight-start" | "preflight-end" | "first-provider-delta",
@@ -103,7 +100,6 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
   const native = yield* OpenAiClient.OpenAiClient;
   const auditSink = yield* RequestAuditSink;
   const price = prices[options.model];
-  const large = options.profile === "large-compaction";
 
   const state = yield* Ref.make<Spending>({
     closed:
@@ -148,13 +144,8 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
       .pipe(Effect.catch(() => refuse("Could not preserve evaluation request evidence")));
 
   const admit = Effect.fn("ContextContinuity.admit")(function* (original: Payload) {
-    if (
-      options.maxCostMicrousd > (large ? 199_000_000 : MAX_COST_MICROUSD) ||
-      options.maxCostMicrousd <= 0
-    )
-      return yield* refuse("Evaluation spending ceiling escaped the selected profile");
-    if (large && options.model !== "gpt-5.6-luna" && options.model !== "gpt-5.6-sol")
-      return yield* refuse("Large compaction pricing is verified only for Luna and Sol");
+    if (options.maxCostMicrousd > MAX_COST_MICROUSD || options.maxCostMicrousd <= 0)
+      return yield* refuse("Evaluation spending ceiling must be positive and no greater than $10");
     if (options.model === "gpt-5.6-sol" && (yield* Clock.currentTimeMillis) >= 1_795_305_600_000)
       return yield* refuse("Refresh the Sol pricing card after its guaranteed promotional period");
     if (
@@ -173,8 +164,7 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
 
     if (
       before.closed ||
-      before.calls >=
-        Math.min(options.maxModelCalls ?? MAX_MODEL_CALLS, large ? 600 : MAX_MODEL_CALLS)
+      before.calls >= Math.min(options.maxModelCalls ?? MAX_MODEL_CALLS, MAX_MODEL_CALLS)
     )
       return yield* refuse("Evaluation stopped or reached its model-call limit");
     const payload: Payload = { ...original, truncation: "disabled" };
@@ -198,25 +188,14 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
       .pipe(
         Effect.flatMap(HttpClientResponse.schemaBodyJson(TokenCount)),
         Effect.map((value) => value.input_tokens),
-        Effect.timeout(large ? "2 minutes" : "15 seconds"),
+        Effect.timeout("15 seconds"),
         Effect.catch(() => refuse("Input-token preflight failed; no inference dispatched")),
       );
 
     yield* options.observe?.("preflight-end", before.calls + 1) ?? Effect.void;
-    if (
-      tokens >
-      Math.min(options.maxInputTokens ?? MAX_INPUT_TOKENS, large ? 922_000 : MAX_INPUT_TOKENS)
-    )
+    if (tokens > Math.min(options.maxInputTokens ?? MAX_INPUT_TOKENS, MAX_INPUT_TOKENS))
       return yield* refuse("Outgoing input exceeded the evaluation's configured token bound");
-
-    // The entire request moves to long-context pricing above 272k, including output.
-    // Source: https://developers.openai.com/api/docs/pricing (2026-09-17).
-    const requestPrice =
-      large && tokens > 272_000
-        ? { input: price.input * 2, cached: price.cached * 2, output: price.output * 1.5 }
-        : price;
-
-    const cost = Math.ceil(tokens * requestPrice.input + MAX_OUTPUT_TOKENS * requestPrice.output);
+    const cost = Math.ceil(tokens * price.input + MAX_OUTPUT_TOKENS * price.output);
 
     if (before.cost + outstanding(before) + cost > options.maxCostMicrousd)
       return yield* refuse("Insufficient evaluation budget for this entire request");
@@ -226,7 +205,6 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
       phase: yield* Ref.get(options.phase),
       tokens,
       cost,
-      price: requestPrice,
     };
 
     yield* Ref.set(state, {
@@ -257,9 +235,9 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
     );
 
     const cost = Math.ceil(
-      (usage.input_tokens - usage.input_tokens_details.cached_tokens) * reservation.price.input +
-        usage.input_tokens_details.cached_tokens * reservation.price.cached +
-        usage.output_tokens * reservation.price.output,
+      (usage.input_tokens - usage.input_tokens_details.cached_tokens) * price.input +
+        usage.input_tokens_details.cached_tokens * price.cached +
+        usage.output_tokens * price.output,
     );
 
     if (
@@ -304,14 +282,14 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
       let firstDelta = true;
 
       const [response, stream] = yield* native.createResponseStream(payload).pipe(
-        Effect.timeout(large ? "10 minutes" : "3 minutes"),
+        Effect.timeout("3 minutes"),
         Effect.catch(() => refuse("Provider stream could not start; retain the reservation")),
       );
 
       return [
         response,
         stream.pipe(
-          Stream.timeout(large ? "10 minutes" : "3 minutes"),
+          Stream.timeout("3 minutes"),
           Stream.tap((event) => {
             if (
               event.type !== "response.completed" &&

@@ -788,16 +788,7 @@ describe("DC alarm semantics", () => {
         }),
       );
 
-      // The automatic alarm can evict the Object after the abort intent commits but
-      // before its RPC reply arrives. Only that armed eviction may lose the reply;
-      // canonical intent, settlement and no-replay assertions below remain authoritative.
-      if (eviction === undefined) expect(accepted.ok).toBe(true);
-      else if (eviction === "abort:after-intent") expect(accepted.ok).toBe(false);
-      if (!accepted.ok) {
-        expect(
-          Cause.isCause(accepted.error) ? Cause.pretty(accepted.error) : String(accepted.error),
-        ).toContain("armed runtime eviction failpoint");
-      }
+      expect(accepted.ok).toBe(eviction !== "abort:after-intent");
       await drainAlarmsUntil(thread, allSettled(thread));
       await assertConvergence(thread, {
         supplier: { ref: thread, counts: { book: 1 } },

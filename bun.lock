@@ -387,8 +387,6 @@
       "name": "@effect-agent/example-context-continuity-eval",
       "version": "0.0.0",
       "dependencies": {
-        "@effect-agent/ai-decision": "workspace:*",
-        "@effect-agent/ai-typesafe": "workspace:*",
         "@effect-agent/platform-cloudflare": "workspace:*",
         "@effect-agent/platform-node": "workspace:*",
         "@effect/ai-openai": "catalog:",

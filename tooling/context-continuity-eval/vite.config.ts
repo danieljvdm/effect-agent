@@ -3,19 +3,6 @@ import { defineConfig } from "vite-plus";
 export default defineConfig({
   run: {
     tasks: {
-      "compaction:benchmark": {
-        command: "node --experimental-transform-types src/compaction-benchmark-main.ts",
-        cache: false,
-      },
-      "compaction:eval": {
-        command: "node --experimental-transform-types src/selective-eval-main.ts",
-        cache: false,
-      },
-      "compaction:spike": {
-        command: "node --experimental-transform-types src/selective-main.ts",
-        // Live probes must inherit provider credentials and always execute.
-        cache: false,
-      },
       // Embed the actual checkout identity on every build, including clean/dirty state.
       build: { command: "bun src/build-cloudflare.ts", cache: false },
       // Like the neighboring workerd examples, drive Miniflare through a Vite task.
