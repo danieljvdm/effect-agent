@@ -67,7 +67,7 @@ All three forms enforce permissions and budgets. Parent tools are not inherited.
 <a id="define-a-delegation"></a>
 <a id="give-the-parent-the-delegation-tool"></a>
 <a id="bind-models-and-run"></a>
-Child definitions, delegation tools, and model bindings now live in the
+Child definitions, delegation tools, and model Layers live in the
 [in-memory attached walkthrough](./subagents/in-memory-attached).
 
 <a id="keep-children-attached"></a>

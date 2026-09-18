@@ -8,7 +8,10 @@ import { Research } from "./delegation.ts";
 import { definitions, ModelLive, OpenAiLive } from "./node-agent.ts";
 import { TravelToolsLive } from "./tools.ts";
 
-const ResearchLive = Subagent.layer(Research, ModelLive).pipe(Layer.provide(TravelToolsLive));
+const ResearchLive = Subagent.layer(Research).pipe(
+  Layer.provide(ModelLive),
+  Layer.provide(TravelToolsLive),
+);
 
 export const HostLive = NodeDurableHost.layer(
   [

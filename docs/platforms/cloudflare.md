@@ -135,7 +135,8 @@ const OpenAiLive = OpenAiClient.layerConfig({
 
 const RuntimeLive = ThreadObject.layer([
   {
-    agent: Agent.withModel(TravelPlanner, OpenAiLanguageModel.model(modelName)),
+    agent: TravelPlanner,
+    model: OpenAiLanguageModel.model(modelName),
     definitions: travelDefinitions,
   },
 ]).pipe(Layer.provide(OpenAiLive));
@@ -147,8 +148,8 @@ export class TravelThread extends ThreadObject.make(RuntimeLive, {
 }) {}
 ```
 
-Each registration pairs a model-bound agent with explicit agent, model, and tool versions. The
-submitter passes `digestDefinitions(travelDefinitions)` through
+Each registration supplies an agent definition, its model Layer, and explicit agent, model, and
+tool versions. The submitter passes `digestDefinitions(travelDefinitions)` through
 `DurableSubmitOptions.definitions`. Bump the agent revision when instructions, schemas, or policy
 change. Version tool implementations and model configuration when they change. Register one
 current binding per stable `agentId`: queued and resumed work uses the current binding without

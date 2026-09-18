@@ -5,13 +5,15 @@ description: Run a parent and child in one process, and return the child's findi
 
 # In-memory attached subagents
 
-Bind a model to the child, then run the parent:
+Provide model services to the parent and child, then run the parent:
 
 <<< @/snippets/travel-planner/delegation-live.ts{ts twoslash}
 
 `Coordinator` calls the `Research` tool, waits for its findings, and builds an itinerary.
-`Subagent.layer` supplies the child's model and tool handlers. The parent and child can
-use different models.
+`Subagent.layer(Research)` builds the child's tool handlers and requires model services.
+`Layer.provideMerge(ModelLive)` supplies that model to the handlers and exposes it to the parent.
+To give a child its own model, provide it directly to that child's handler Layer with
+`Layer.provide(ChildModel)`.
 
 `InMemory.layer` keeps parent and child conversations in memory and shares one reservation
 ledger across the parent’s subagents. Provide it once around all child handler Layers, as above.

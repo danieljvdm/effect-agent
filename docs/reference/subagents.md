@@ -61,9 +61,9 @@ import { Research, ResearchFailed } from "./delegation-custom.ts";
 import { ModelLive } from "./node-agent.ts";
 import { TravelToolsLive } from "./tools.ts";
 
-const ResearchLive = Subagent.layer(Research, ModelLive, {
+const ResearchLive = Subagent.layer(Research, undefined, {
   mapChildFailure: (error) => ResearchFailed.make({ reason: error._tag }),
-}).pipe(Layer.provide(TravelToolsLive));
+}).pipe(Layer.provide(ModelLive), Layer.provide(TravelToolsLive));
 ```
 
 Update the parent's instructions to read `activities` and check `partial` when using this
