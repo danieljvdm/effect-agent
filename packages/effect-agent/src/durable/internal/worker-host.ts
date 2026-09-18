@@ -357,6 +357,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         | SubtreeBudgetReserved,
       current: Pick<ThreadExport, "tailSequence" | "tailDigest" | "records">,
       phase: "source" | "origin" | "completion" | "subtree" | "report",
+      acknowledgements: ReadonlyArray<WorkerInputCompleted> = [],
     ) {
       const operation = "start";
       const tail = yield* deps.store.inspectTail(ThreadTailRequest.make({ threadId }));
@@ -393,6 +394,18 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                   deploymentId: deps.deploymentId,
                   payload,
                 }),
+                ...acknowledgements.map((completion) =>
+                  RecordEnvelope.make({
+                    recordId: Schema.decodeSync(RecordId)(
+                      `worker-effects-resolved:${completion.messageId}`,
+                    ),
+                    family: "thread",
+                    schemaVersion: 1,
+                    createdAt: DateTime.makeUnsafe(completion.completedAtMillis),
+                    deploymentId: deps.deploymentId,
+                    payload: completion,
+                  }),
+                ),
               ],
             }),
           }),
@@ -414,10 +427,58 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       record.payload._tag === "WorkerInputRequested" ? [record.payload] : [],
     );
 
+  // Completion is published in the child's own journal. Only the source, while
+  // admitting work, reads those exact receipts to release its capacity reservations.
+  const completedInputs = Effect.fn("WorkerHost.completedInputs")(function* (
+    rows: ReadonlyArray<WorkerInputRequested>,
+    sourceRecords: ThreadExport["records"],
+  ) {
+    const completed = new Set<string>(
+      sourceRecords.flatMap(({ record }) =>
+        record.payload._tag === "WorkerInputCompleted" && record.payload.effectsResolved
+          ? [record.payload.messageId]
+          : [],
+      ),
+    );
+
+    const acknowledgements: Array<WorkerInputCompleted> = [];
+
+    for (const { admission } of rows) {
+      if (completed.has(admission.messageId)) continue;
+
+      const receipt = Option.getOrUndefined(
+        yield* getRecord({
+          threadId: admission.origin.worker.threadId,
+          recordId: Schema.decodeSync(RecordId)(`worker-effects-resolved:${admission.messageId}`),
+        }).pipe(
+          Effect.provideService(ThreadStore, deps.store),
+          // A source reservation can precede child materialization. It still consumes
+          // capacity; absence of storage is never a completion acknowledgement.
+          Effect.catchTag("ThreadNotMaterialized", () => Effect.succeed(Option.none())),
+          Effect.mapError(storageFailure("start")),
+        ),
+      )?.record.payload;
+
+      if (receipt === undefined) continue;
+      if (
+        receipt._tag !== "WorkerInputCompleted" ||
+        !receipt.effectsResolved ||
+        receipt.messageId !== admission.messageId ||
+        receipt.workerThreadId !== admission.origin.worker.threadId
+      )
+        return yield* failure("start", "corrupt");
+      completed.add(admission.messageId);
+      acknowledgements.push(receipt);
+    }
+
+    return { completed, acknowledgements };
+  });
+
   const reportIntent = Effect.fn("WorkerHost.reportIntent")(function* (
     source: ResolvedBinding,
     target: ResolvedBinding,
     delegationId: WorkerRef["delegationId"],
+    authority: Effect.Success<ReturnType<typeof sourceAuthority>>,
   ): Effect.fn.Return<WorkerOrigin["reporting"], WorkerError> {
     const reports = source.reporting?.filter((entry) => entry.delegationId === delegationId) ?? [];
     const report = reports[0];
@@ -431,9 +492,39 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     )
       return yield* failure("start", "declaration-unavailable");
 
+    let returnAddress: NonNullable<WorkerOrigin["reporting"]>["returnAddress"];
+
+    if (report.mode === "standard") {
+      const submission = authority.submission;
+
+      if (
+        submission === undefined ||
+        (authority.depth !== 0 && submission.workerAdmission === undefined)
+      )
+        return yield* failure("start", "denied");
+
+      const retained =
+        submission.workerAdmission === undefined
+          ? undefined
+          : yield* Schema.encodeEffect(WorkerAdmission)(submission.workerAdmission).pipe(
+              Effect.flatMap(Schema.decodeEffect(PersistedJson)),
+              Effect.mapError(storageFailure("start")),
+            );
+
+      returnAddress = {
+        input: submission.inputPayload,
+        principal: submission.principal,
+        policy: authority.policy,
+        depth: authority.depth,
+        ...(authority.grant === undefined ? {} : { grant: authority.grant }),
+        ...(retained === undefined ? {} : { workerAdmission: retained }),
+      };
+    }
+
     return {
       sourceDigests: source.digests,
       ...(report.mode === undefined ? {} : { mode: report.mode }),
+      ...(returnAddress === undefined ? {} : { returnAddress }),
       ...(report.destination === undefined
         ? {}
         : { destinationDelegationId: report.destination.delegationId }),
@@ -743,10 +834,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       // Include unreconciled reservations conservatively; only canonical completion frees an
       // active slot. A worker Thread consumes one slot even when multiple inputs safely join it.
-      const completedWorkers = new Set<string>(
-        source.current.records.flatMap(({ record }) =>
-          record.payload._tag === "WorkerInputCompleted" ? [record.payload.messageId] : [],
-        ),
+      const completedWorkers = yield* completedInputs(
+        requests(source.current.records),
+        source.current.records,
       );
 
       const completedAttached = new Set<string>(
@@ -759,7 +849,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         rows
           .filter((row) =>
             row.lifetime === "background"
-              ? !completedWorkers.has(row.reservationId)
+              ? !completedWorkers.completed.has(row.reservationId)
               : !completedAttached.has(row.reservationId),
           )
           .map((row) => row.childThreadId),
@@ -771,7 +861,17 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           Math.min(caps.maxConcurrentChildren ?? Infinity, source.policy.toolConcurrency)
       )
         return yield* failure("start", "capacity");
-      if (yield* append(sourceThreadId, recordId, payload, source.current, "subtree")) return;
+      if (
+        yield* append(
+          sourceThreadId,
+          recordId,
+          payload,
+          source.current,
+          "subtree",
+          completedWorkers.acknowledgements,
+        )
+      )
+        return;
     }
 
     return yield* failure("start", "storage");
@@ -895,7 +995,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (
         prior === undefined &&
         !sameReporting(
-          yield* reportIntent(sourceBinding, targetBinding, origin.worker.delegationId),
+          yield* reportIntent(sourceBinding, targetBinding, origin.worker.delegationId, source),
           origin.reporting,
         )
       )
@@ -941,15 +1041,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           return yield* failure("start", "capacity");
       }
 
-      // Child owners append acknowledgements before ledger finalization. This works through
-      // routed canonical storage; source-local delivery rows are never read from a child owner.
-      const completed = new Set(
-        current.records.flatMap(({ record }) =>
-          record.payload._tag === "WorkerInputCompleted" ? [record.payload.messageId] : [],
-        ),
-      );
+      const completed = yield* completedInputs(rows, current.records);
 
-      const pendingRows = rows.filter((row) => !completed.has(row.admission.messageId));
+      const pendingRows = rows.filter((row) => !completed.completed.has(row.admission.messageId));
       const activeWorkers = new Set(pendingRows.map((row) => row.admission.origin.worker.threadId));
 
       const pendingOwn = pendingRows.filter(
@@ -1013,6 +1107,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           WorkerInputRequested.make({ admission, inputDigest }),
           current,
           "source",
+          completed.acknowledgements,
         )
       )
         return;
@@ -1111,28 +1206,16 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (update.threadId !== submission.threadId || update.agentId !== origin.worker.targetAgentId)
         return yield* failure("followUp", "worker-mismatch");
 
-      const first = Option.getOrUndefined(
-        yield* exactRecord(
-          origin.source.threadId,
-          workerInputRecordId(origin.firstMessageId),
-          "followUp",
-        ),
-      )?.record.payload;
+      const destination = intent.returnAddress;
 
-      if (
-        first?._tag !== "WorkerInputRequested" ||
-        first.admission.messageId !== origin.firstMessageId ||
-        !sameOrigin(first.admission.origin, origin)
-      )
-        return yield* failure("followUp", "corrupt");
+      if (destination === undefined) return yield* failure("followUp", "corrupt");
 
-      const source = yield* sourceAuthority(
-        origin.source.threadId,
-        first.admission.sourceSubmissionId,
-      );
-
-      if (source.binding === undefined || source.submission === undefined)
-        return yield* failure("followUp", "declaration-unavailable");
+      const retained =
+        destination.workerAdmission === undefined
+          ? undefined
+          : yield* Schema.decodeUnknownEffect(WorkerAdmission)(destination.workerAdmission).pipe(
+              Effect.mapError((cause) => failure("followUp", "corrupt", cause)),
+            );
 
       const sourceBinding = currentBinding(origin.source.agentId);
       const targetBinding = currentBinding(origin.worker.targetAgentId);
@@ -1152,14 +1235,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       )
         return yield* failure("followUp", "declaration-unavailable");
 
-      const recorded = source.current.records.find(
-        ({ record }) => record.payload._tag === "WorkerOriginRecorded",
-      )?.record.payload;
+      const receivingOrigin = retained?.origin;
 
-      const receivingOrigin =
-        recorded?._tag === "WorkerOriginRecorded" ? recorded.origin : undefined;
-
-      if (source.depth !== 0 && receivingOrigin === undefined)
+      if (destination.depth !== 0 && receivingOrigin === undefined)
         return yield* failure("followUp", "denied");
       const now = yield* Clock.currentTimeMillis;
 
@@ -1169,19 +1247,13 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       );
 
       if (now >= deadlineAtMillis) return yield* failure("followUp", "denied");
-      const input = source.submission.inputPayload;
+      const input = destination.input;
 
       let workerAdmission: WorkerAdmission | undefined;
-      let principal = submission.principal;
 
-      if (receivingOrigin !== undefined) {
-        const retained = source.submission.workerAdmission;
-
-        if (retained === undefined || !sameOrigin(retained.origin, receivingOrigin))
-          return yield* failure("followUp", "denied");
-        principal = source.submission.principal;
+      if (retained !== undefined) {
         workerAdmission = {
-          origin: receivingOrigin,
+          origin: retained.origin,
           reportKind: "update",
           messageId,
           parameters: retained.parameters,
@@ -1191,20 +1263,6 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
             : { sourceSubmissionId: retained.sourceSubmissionId }),
         };
       }
-
-      const sourceSubmissionId =
-        receivingOrigin === undefined
-          ? first.admission.sourceSubmissionId
-          : workerAdmission?.sourceSubmissionId;
-
-      const authorized = yield* deps.authorizer.authorize({
-        sourceThreadId: receivingOrigin?.source.threadId ?? origin.source.threadId,
-        ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
-        principal,
-        operation: "followUp",
-        access: "send",
-        worker: receivingOrigin?.worker ?? origin.worker,
-      });
 
       const message = WorkerUpdate.make({
         _tag: "WorkerUpdate",
@@ -1216,7 +1274,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       const envelope: PreparedInput = {
         schemaVersion: 1,
         threadId: origin.source.threadId,
-        deliveryPrincipal: authorized,
+        deliveryPrincipal: destination.principal,
         agentId: origin.source.agentId,
         definitions: intent.sourceDigests,
         input,
@@ -1228,7 +1286,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         messageAdmission: message,
         ...(workerAdmission === undefined
           ? {}
-          : { workerAdmission: { ...workerAdmission, deliveryPrincipal: authorized } }),
+          : { workerAdmission: { ...workerAdmission, deliveryPrincipal: destination.principal } }),
       };
 
       return {
@@ -1305,29 +1363,84 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       const hostSubmission = selected.value;
       const hostAdmission = selected.value.workerAdmission;
 
-      const firstInput = Option.getOrUndefined(
-        yield* exactRecord(
+      // Standard reports use only the accepted return address. Application-mapped
+      // projections retain their explicit source-context contract.
+      const source = yield* Effect.gen(function* () {
+        if (intent.mode === "standard") {
+          const address = intent.returnAddress;
+
+          if (address === undefined) return yield* failure("inspect", "corrupt");
+
+          const retained =
+            address.workerAdmission === undefined
+              ? undefined
+              : yield* Schema.decodeUnknownEffect(WorkerAdmission)(address.workerAdmission).pipe(
+                  Effect.mapError((cause) => failure("inspect", "corrupt", cause)),
+                );
+
+          return { ...address, admission: retained, sourceSubmissionId: undefined };
+        }
+
+        const first = Option.getOrUndefined(
+          yield* exactRecord(
+            origin.source.threadId,
+            workerInputRecordId(origin.firstMessageId),
+            "inspect",
+          ),
+        )?.record.payload;
+
+        if (
+          first?._tag !== "WorkerInputRequested" ||
+          first.admission.messageId !== origin.firstMessageId ||
+          !sameOrigin(first.admission.origin, origin)
+        )
+          return yield* failure("inspect", "corrupt");
+
+        const authority = yield* sourceAuthority(
           origin.source.threadId,
-          workerInputRecordId(origin.firstMessageId),
-          "inspect",
-        ),
-      )?.record.payload;
+          first.admission.sourceSubmissionId,
+        );
 
-      if (
-        firstInput?._tag !== "WorkerInputRequested" ||
-        firstInput.admission.messageId !== origin.firstMessageId ||
-        !sameOrigin(firstInput.admission.origin, origin)
-      )
-        return yield* failure("inspect", "corrupt");
+        const recorded = authority.current.records.find(
+          ({ record }) => record.payload._tag === "WorkerOriginRecorded",
+        )?.record.payload;
 
-      // Reporting stays with the original owner even when a later input came from another
-      // source revision. Per-input parameters still belong to the settled Run.
-      const source = yield* sourceAuthority(
-        origin.source.threadId,
-        firstInput.admission.sourceSubmissionId,
-      );
+        let retained: WorkerAdmission | undefined;
+        let principal = hostSubmission.principal;
 
-      if (source.binding === undefined) return refused("declaration-unavailable");
+        if (recorded?._tag === "WorkerOriginRecorded") {
+          if (hostAdmission.sourceSubmissionId === undefined)
+            return yield* failure("inspect", "denied");
+
+          const snapshot = yield* deps.ledger
+            .lookup(
+              SubmissionLookupById.make({
+                submissionId: hostAdmission.sourceSubmissionId,
+              }),
+            )
+            .pipe(Effect.mapError(storageFailure("inspect")));
+
+          if (
+            Option.isNone(snapshot) ||
+            snapshot.value.threadId !== origin.source.threadId ||
+            snapshot.value.workerAdmission === undefined ||
+            !sameOrigin(snapshot.value.workerAdmission.origin, recorded.origin)
+          )
+            return yield* failure("inspect", "denied");
+          retained = snapshot.value.workerAdmission;
+          principal = snapshot.value.principal;
+        }
+
+        return {
+          policy: authority.policy,
+          depth: authority.depth,
+          grant: authority.grant,
+          input: authority.submission?.inputPayload,
+          admission: retained,
+          principal,
+          sourceSubmissionId: first.admission.sourceSubmissionId,
+        };
+      });
 
       const sourceBinding = currentBinding(origin.source.agentId);
       const targetBinding = currentBinding(origin.worker.targetAgentId);
@@ -1354,12 +1467,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       )
         return refused("declaration-unavailable");
 
-      const sourceOriginRecord = source.current.records.find(
-        ({ record }) => record.payload._tag === "WorkerOriginRecorded",
-      )?.record.payload;
-
-      const sourceOrigin =
-        sourceOriginRecord?._tag === "WorkerOriginRecorded" ? sourceOriginRecord.origin : undefined;
+      const sourceOrigin = source.admission?.origin;
 
       if (source.depth !== 0 && sourceOrigin === undefined) return refused("destination");
       if (
@@ -1429,7 +1537,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       if (descriptor.mode === "standard") {
         const message = projection.value.message;
 
-        if (source.submission === undefined || !Schema.is(WorkerCompletion)(message))
+        if (source.input === undefined || !Schema.is(WorkerCompletion)(message))
           return refused("input");
         if (
           !Schema.toEquivalence(WorkerRef)(message.report.worker, origin.worker) ||
@@ -1443,9 +1551,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       } else if (projection.value.message !== undefined) return refused("input");
 
       const reportInput =
-        descriptor.mode === "standard"
-          ? source.submission?.inputPayload
-          : projection.value.encodedInput;
+        descriptor.mode === "standard" ? source.input : projection.value.encodedInput;
 
       const validated = yield* (
         descriptor.mode === "standard"
@@ -1463,44 +1569,26 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       );
 
       let workerAdmission: WorkerAdmission | undefined;
-      let principal = hostSubmission.principal;
+      const principal = source.principal;
 
       if (sourceOrigin !== undefined) {
-        const ownerId =
-          descriptor.mode === "standard"
-            ? firstInput.admission.sourceSubmissionId
-            : hostAdmission.sourceSubmissionId;
+        const retained = source.admission;
 
-        if (ownerId === undefined) return refused("destination");
-
-        const sourceSnapshot = yield* deps.ledger
-          .lookup(SubmissionLookupById.make({ submissionId: ownerId }))
-          .pipe(Effect.mapError(storageFailure("inspect")));
-
-        if (
-          Option.isNone(sourceSnapshot) ||
-          sourceSnapshot.value.threadId !== origin.source.threadId ||
-          sourceSnapshot.value.workerAdmission === undefined ||
-          !sameOrigin(sourceSnapshot.value.workerAdmission.origin, sourceOrigin)
-        )
-          return refused("destination");
+        if (retained === undefined) return refused("destination");
 
         const parameters = yield* Schema.decodeUnknownEffect(PersistedJson)(
-          descriptor.mode === "standard"
-            ? sourceSnapshot.value.workerAdmission.parameters
-            : projection.value.encodedParameters,
+          descriptor.mode === "standard" ? retained.parameters : projection.value.encodedParameters,
         ).pipe(Effect.option);
 
         if (Option.isNone(parameters)) return refused("destination");
-        principal = sourceSnapshot.value.principal;
         workerAdmission = {
           origin: sourceOrigin,
           messageId,
           parameters: parameters.value,
           createdAtMillis: now,
-          ...(sourceSnapshot.value.workerAdmission.sourceSubmissionId === undefined
+          ...(retained.sourceSubmissionId === undefined
             ? {}
-            : { sourceSubmissionId: sourceSnapshot.value.workerAdmission.sourceSubmissionId }),
+            : { sourceSubmissionId: retained.sourceSubmissionId }),
         };
       }
 
@@ -1508,28 +1596,33 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       // or starts another Run. Nested reports authorize the enclosing worker's source owner.
       const authorizationSourceSubmissionId =
         sourceOrigin === undefined
-          ? firstInput.admission.sourceSubmissionId
+          ? source.sourceSubmissionId
           : workerAdmission?.sourceSubmissionId;
 
-      const authorized = yield* deps.authorizer
-        .authorize({
-          sourceThreadId: sourceOrigin?.source.threadId ?? origin.source.threadId,
-          ...(authorizationSourceSubmissionId === undefined
-            ? {}
-            : { sourceSubmissionId: authorizationSourceSubmissionId }),
-          principal,
-          operation: "followUp",
-          access: "send",
-          worker: sourceOrigin?.worker ?? origin.worker,
-        })
-        .pipe(
-          Effect.map(Option.some),
-          Effect.catchTag("WorkerError", (error) =>
-            error.reason === "storage" || error.reason === "unavailable"
-              ? Effect.fail(error)
-              : Effect.succeed(Option.none<Principal>()),
-          ),
-        );
+      // Standard framework messages are reauthorized by validateCompletion at
+      // their destination. Persisting an outbound report does not admit input there.
+      const authorized =
+        intent.mode === "standard"
+          ? Option.some(principal)
+          : yield* deps.authorizer
+              .authorize({
+                sourceThreadId: sourceOrigin?.source.threadId ?? origin.source.threadId,
+                ...(authorizationSourceSubmissionId === undefined
+                  ? {}
+                  : { sourceSubmissionId: authorizationSourceSubmissionId }),
+                principal,
+                operation: "followUp",
+                access: "send",
+                worker: sourceOrigin?.worker ?? origin.worker,
+              })
+              .pipe(
+                Effect.map(Option.some),
+                Effect.catchTag("WorkerError", (error) =>
+                  error.reason === "storage" || error.reason === "unavailable"
+                    ? Effect.fail(error)
+                    : Effect.succeed(Option.none<Principal>()),
+                ),
+              );
 
       if (Option.isNone(authorized)) return refused("denied");
 
@@ -1665,9 +1758,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     });
 
     for (let attempt = 0; attempt < 16; attempt++) {
-      const source = yield* read(admission.origin.source.threadId, "inspect");
+      const current = yield* read(submission.threadId, "inspect");
 
-      const existing = source.records.findLast(
+      const existing = current.records.findLast(
         ({ record }) =>
           record.payload._tag === "WorkerInputCompleted" &&
           record.payload.messageId === admission.messageId,
@@ -1687,10 +1780,10 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       }
       if (
         yield* append(
-          admission.origin.source.threadId,
+          submission.threadId,
           `worker-effects-resolved:${admission.messageId}`,
           payload,
-          source,
+          current,
           "completion",
         )
       )
@@ -2129,7 +2222,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
         const reporting =
           previousOrigin === undefined
-            ? yield* reportIntent(sourceBinding, resolved, request.delegationId)
+            ? yield* reportIntent(sourceBinding, resolved, request.delegationId, prepared.source)
             : previousOrigin.reporting;
 
         if (reporting?.mode === "standard" && sourceSubmissionId === undefined)
@@ -2472,6 +2565,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     const sourceSubmissionId =
       receiving === undefined ? first.admission.sourceSubmissionId : receiving.sourceSubmissionId;
 
+    // Emission only persists the child's outbound message. The receiving runtime
+    // calls this before acceptance and checks live permission, including revocation.
+    // A frozen return address never substitutes for destination authorization.
     const principal = yield* deps.authorizer.authorize({
       sourceThreadId: receiving?.origin.source.threadId ?? origin.source.threadId,
       ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),

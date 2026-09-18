@@ -12,9 +12,14 @@ import {
   CanonicalRecordEnvelope,
   CanonicalSequence,
   DeploymentId,
+  Digest,
+  ModelResponseRecorded,
   ObservationOffset,
   ProducerId,
   RecordEnvelope,
+  ToolCallPrepared,
+  ToolCallUnknown,
+  ToolOperation,
 } from "effect-agent/records";
 import {
   childThreadIdFor,
@@ -35,6 +40,8 @@ import {
   subagentStartedBatchId,
   subagentStartedRecordId,
   toolCallSettledRecordId,
+  toolCallPreparedRecordId,
+  toolCallUnknownRecordId,
   turnCanonicalBatch,
   turnIdForRun,
   turnPreparedBatchId,
@@ -456,6 +463,116 @@ describe("run journal batch split (plan §2.1)", () => {
           runDisposition: { channel: "support" },
         });
       }),
+    );
+
+    // Regression: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-9M
+    // Authorization failed before preparation, but later history claimed the action may have run.
+    it.effect(
+      "distinguishes an undispatched historical call from a prepared unknown operation",
+      () =>
+        Effect.gen(function* () {
+          const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
+          const record = response.records[0]!;
+
+          if (record.payload._tag !== "ModelResponseRecorded")
+            return yield* Effect.die("Expected a model response");
+
+          const operations = [CALL_ONE, CALL_TWO].map((toolCallId, index) =>
+            ToolOperation.make({
+              toolCallId,
+              toolName: index === 0 ? "book_flight" : "book_lodging",
+              executionClass: "uncertain",
+              executionKind: "ordinary",
+              replay: Digest.make("f".repeat(64)),
+            }),
+          );
+
+          const records = [
+            envelopeAt(
+              1,
+              RecordEnvelope.make({
+                ...record,
+                payload: ModelResponseRecorded.make({
+                  ...record.payload,
+                  toolOperations: operations,
+                }),
+              }),
+            ),
+            envelopeAt(
+              2,
+              RecordEnvelope.make({
+                ...record,
+                recordId: toolCallPreparedRecordId(RUN_ID, 1, CALL_TWO),
+                payload: ToolCallPrepared.make({
+                  ...operations[1]!,
+                  runId: RUN_ID,
+                  turnId: turnIdForRun(RUN_ID, 1),
+                  turn: 1,
+                  parameters: { nights: 3 },
+                  parametersDigest: Digest.make("e".repeat(64)),
+                }),
+              }),
+            ),
+          ];
+
+          const later = yield* projectRunJournal(records, LATER_RUN_ID);
+
+          expect(toolResults(later.prompt)).toEqual([
+            expect.objectContaining({ _tag: "ToolUnavailable", execution: "not-executed" }),
+            expect.objectContaining({ _tag: "ToolOutcomeUnknown" }),
+          ]);
+          const recovering = yield* projectRunJournal(records, RUN_ID);
+
+          expect(toolResults(recovering.prompt)).toEqual([]);
+          expect(records.some(({ record }) => record.payload._tag === "ToolCallSettled")).toBe(
+            false,
+          );
+
+          const unknown = envelopeAt(
+            3,
+            RecordEnvelope.make({
+              ...record,
+              recordId: toolCallUnknownRecordId(RUN_ID, 1, CALL_ONE),
+              payload: ToolCallUnknown.make({
+                runId: RUN_ID,
+                turn: 1,
+                toolCallId: CALL_ONE,
+                toolName: "book_flight",
+                reason: "The external outcome was not recorded",
+              }),
+            }),
+          );
+
+          const uncertain = yield* projectRunJournal([...records, unknown], LATER_RUN_ID);
+
+          expect(toolResults(uncertain.prompt)[0]).toMatchObject({ _tag: "ToolOutcomeUnknown" });
+
+          const readonly = yield* projectRunJournal(
+            [
+              envelopeAt(
+                1,
+                RecordEnvelope.make({
+                  ...record,
+                  payload: ModelResponseRecorded.make({
+                    ...record.payload,
+                    toolOperations: operations.map((operation) =>
+                      ToolOperation.make({
+                        ...operation,
+                        executionClass: "readonly",
+                      }),
+                    ),
+                  }),
+                }),
+              ),
+            ],
+            LATER_RUN_ID,
+          );
+
+          expect(toolResults(readonly.prompt)).toEqual([
+            expect.objectContaining({ _tag: "ToolOutcomeUnknown" }),
+            expect.objectContaining({ _tag: "ToolOutcomeUnknown" }),
+          ]);
+        }),
     );
 
     it.effect("closes an earlier incomplete Tool turn only in the later model view", () =>

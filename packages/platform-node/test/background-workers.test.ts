@@ -589,12 +589,15 @@ it.effect(
 
         expect(
           sourceLog.records.filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
-        ).toHaveLength(2);
+        ).toHaveLength(1); // The source acknowledged the first completion while admitting the follow-up.
 
         const childLog = yield* Context.get(second, ThreadStore).export(
           ThreadExportRequest.make({ threadId: started.worker.threadId }),
         );
 
+        expect(
+          childLog.records.filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
+        ).toHaveLength(2);
         expect(
           childLog.records.filter(({ record }) => record.payload._tag === "WorkerOriginRecorded"),
         ).toHaveLength(1);

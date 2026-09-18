@@ -206,6 +206,12 @@ const harness = Effect.fn("workerHostHarness")(function* (
   let denied: "read" | "send" | "control" | undefined;
   let joined: SubmissionId | undefined;
   let admissionFailure = false;
+  let isolatedThread: ThreadId | undefined;
+
+  const checkThread = (threadId: ThreadId | undefined) => {
+    if (isolatedThread !== undefined) expect(threadId).toBe(isolatedThread);
+  };
+
   let sequence = 0;
   const auth: Array<string> = [];
 
@@ -299,6 +305,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
     Effect.provideService(WorkerHostAuthorizer, {
       authorize: (request) =>
         Effect.suspend(() => {
+          checkThread(request.sourceThreadId);
           auth.push(request.access);
 
           return request.access === denied ||
@@ -321,6 +328,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
     Effect.provideService(ThreadStore, {
       read: (request) =>
         Stream.suspend(() => {
+          checkThread(request.threadId);
           const all = logs.get(request.threadId) ?? [];
           const selection = "selection" in request ? request.selection : undefined;
           let records = all;
@@ -360,6 +368,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
         }),
       export: ({ threadId }) =>
         Effect.suspend(() => {
+          checkThread(threadId);
           const records = logs.get(threadId);
 
           reads.exported += records?.length ?? 0;
@@ -378,6 +387,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
         }),
       inspectTail: ({ threadId }) =>
         Effect.suspend(() => {
+          checkThread(threadId);
           const records = logs.get(threadId);
 
           return records === undefined
@@ -393,6 +403,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
         }),
       append: (request) =>
         Effect.gen(function* () {
+          checkThread(request.threadId);
           yield* Effect.yieldNow;
           const records = logs.get(request.threadId) ?? [];
 
@@ -455,8 +466,14 @@ const harness = Effect.fn("workerHostHarness")(function* (
     }),
     Effect.provideService(SubmissionLedger, {
       lookup: (request) =>
-        Effect.sync(() =>
-          request._tag === "SubmissionLookupById"
+        Effect.sync(() => {
+          checkThread(
+            request._tag === "SubmissionLookupById"
+              ? submissions.get(request.submissionId)?.threadId
+              : request.threadId,
+          );
+
+          return request._tag === "SubmissionLookupById"
             ? lookup(request.submissionId)
             : Option.fromNullishOr(
                 [...submissions.values()].find(
@@ -465,8 +482,8 @@ const harness = Effect.fn("workerHostHarness")(function* (
                     row.principal === request.principal &&
                     row.idempotencyKey === request.idempotencyKey,
                 ),
-              ),
-        ),
+              );
+        }),
 
       capabilities: Effect.die("Worker fixture only implements ledger lookup"),
       scanNonterminal: Stream.die("Worker fixture only implements ledger lookup"),
@@ -661,6 +678,9 @@ const harness = Effect.fn("workerHostHarness")(function* (
     auth,
     settle,
     push,
+    isolate: (value: ThreadId | undefined) => {
+      isolatedThread = value;
+    },
     deny: (value: typeof denied) => {
       denied = value;
     },
@@ -804,7 +824,7 @@ layer(NodeCrypto.layer)((it) => {
       yield* h.settle(first.receipt, "reported result");
       expect(
         h.logs
-          .get(sourceId)!
+          .get(first.worker.threadId)!
           .filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
       ).toEqual([]);
       expect(yield* h.host.start(initial)).toEqual(first);
@@ -873,6 +893,8 @@ layer(NodeCrypto.layer)((it) => {
     "update:before-delivery-insert",
     "update:after-delivery-insert",
     "stored-byte-capacity",
+    // Regression: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-9M
+    "source-unavailable",
   ] as const) {
     it.effect(`repairs an accepted parent update after ${point} without re-emission`, () =>
       Effect.gen(function* () {
@@ -959,6 +981,73 @@ layer(NodeCrypto.layer)((it) => {
               .get(started.worker.threadId)
               ?.filter(({ record }) => record.payload._tag === "AgentUpdateEmitted"),
           ).toHaveLength(0);
+
+          return;
+        }
+        if (point === "source-unavailable") {
+          const sourceLength = h.logs.get(sourceId)!.length;
+
+          h.isolate(started.worker.threadId);
+          h.deny("send");
+          yield* h.updates.emit(emission);
+          yield* h.settle(started.receipt);
+          h.isolate(undefined);
+          expect(h.logs.get(sourceId)).toHaveLength(sourceLength);
+
+          const published = [...h.deliveries.values()].filter(
+            (row) => row.key.ownerThreadId === started.worker.threadId,
+          );
+
+          expect(published).toHaveLength(2);
+          for (const row of published) {
+            const message = row.envelope.messageAdmission;
+
+            if (!Schema.is(WorkerUpdate)(message) && !Schema.is(WorkerCompletion)(message))
+              throw new Error("Expected a framework report");
+
+            const options = {
+              threadId: row.envelope.threadId,
+              principal: row.envelope.deliveryPrincipal,
+              idempotencyKey: row.envelope.admissionKey,
+              definitions: row.envelope.definitions,
+            };
+
+            // The destination's live permission check is independent of publication.
+            expect(
+              yield* h.runtime
+                .validateCompletion(
+                  message,
+                  options,
+                  row.envelope.agentId,
+                  row.envelope.inputDigest,
+                )
+                .pipe(Effect.flip),
+            ).toMatchObject({ reason: "denied" });
+            h.deny(undefined);
+            expect(
+              yield* h.runtime.validateCompletion(
+                message,
+                options,
+                row.envelope.agentId,
+                row.envelope.inputDigest,
+              ),
+            ).toEqual(message);
+            h.deny("send");
+          }
+          h.deny(undefined);
+
+          const steered = yield* host.followUp({
+            worker: started.worker,
+            target,
+            idempotencyKey: Schema.decodeSync(IdempotencyKey)("steering-after-report"),
+            encodedInput: { text: "new information" },
+            encodedParameters: { note: "steering" },
+          });
+
+          expect(h.submissions.get(steered.submissionId)?.inputPayload).toEqual({
+            text: "new information",
+          });
+          yield* host.cancel({ worker: started.worker, target, receipt: steered });
 
           return;
         }
@@ -2098,14 +2187,14 @@ layer(NodeCrypto.layer)((it) => {
       expect(second.worker.threadId).not.toBe(first.worker.threadId);
 
       const completed = h.logs
-        .get(sourceId)
+        .get(first.worker.threadId)
         ?.filter(({ record }) => record.payload._tag === "WorkerInputCompleted");
 
       expect(completed).toHaveLength(1);
       yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
       expect(
         h.logs
-          .get(sourceId)
+          .get(first.worker.threadId)
           ?.filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
       ).toHaveLength(1);
     }),
@@ -3205,7 +3294,7 @@ layer(NodeCrypto.layer)((it) => {
         yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
         expect(
           h.logs
-            .get(sourceId)
+            .get(first.worker.threadId)
             ?.filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
         ).toHaveLength(1);
       }),

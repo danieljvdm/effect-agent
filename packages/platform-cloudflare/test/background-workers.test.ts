@@ -139,8 +139,9 @@ it("delivers an accepted worker update before completion after eviction with onl
     expect(interrupted.filter(({ record }) => record.payload._tag === "RunCompleted")).toHaveLength(
       0,
     );
-    await evict(started.worker.threadId);
 
+    // The post-append failpoint already evicted the child. A second uncontrolled
+    // eviction could instead kill recovery's newly acquired delivery lease.
     const recoveredAlarm = runDurableObjectAlarm(stubFor(started.worker.threadId)).catch(
       () => false,
     );
@@ -647,6 +648,11 @@ it("reopens a background worker and admits follow-up input across Objects after 
 
     expect(
       sourceLog.records.filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
+    ).toHaveLength(1); // Source admission acknowledges completion; the child never appends here.
+    expect(
+      (await readCanonical(started.worker.threadId)).filter(
+        ({ record }) => record.payload._tag === "WorkerInputCompleted",
+      ),
     ).toHaveLength(2);
     expect(
       sourceLog.records

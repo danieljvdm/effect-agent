@@ -417,6 +417,17 @@ Application-driven starts with standard reports must acquire the host facet with
 `sourceSubmissionId` whose application input supplies parent context. Model tool calls already
 carry that identity. No current or latest input is guessed for a programmatic caller.
 
+Standard reporting freezes its return address in the accepted worker origin. Progress and
+completion preparation use the child's own admission, execution records, and delivery outbox;
+they do not read the parent journal, ledger, or current authorization state. The receiving host
+verifies the canonical delivery proof and current send permission before accepting the message,
+so revocation can refuse delivery without preventing the child from durably publishing its result.
+Application-mapped reporting retains its explicit source-context contract.
+
+Workers publish effects-resolved completion receipts in their own journals. The source reads
+those exact receipts when admitting more work and copies acknowledgements into its reservation
+batch under the source's fence. An unresolved external operation cannot release that capacity.
+
 Launch intent pins reporting before acceptance. Each actual child Run has one logical report,
 even when several steering Receipts join it; an input cancelled before any Run starts has no Run
 report. The declaration's result projection and optional mapper produce a frozen `PreparedInput` before

@@ -805,11 +805,25 @@ export class SubagentLineageRecorded extends Schema.TaggedClass<SubagentLineageR
 }) {}
 
 export const WorkerReportingIntent = Schema.Struct({
-  /** Omitted preserves existing application-mapped reports. */
+  /** Standard framework reports or an application-mapped input projection. */
   mode: Schema.optionalKey(Schema.Literal("standard")),
   sourceDigests: DefinitionDigests,
   destinationDelegationId: Schema.optionalKey(DelegationId),
-});
+  /** Frozen by the sender before acceptance. Standard emission never reads the source runtime. */
+  returnAddress: Schema.optionalKey(
+    Schema.Struct({
+      input: PersistedJson,
+      principal: Principal,
+      policy: Schema.toCodecJson(AgentPolicy),
+      depth: Schema.Natural,
+      grant: Schema.optionalKey(SubagentGrant),
+      /** Encoded to bound recursive worker origins at the admission boundary. */
+      workerAdmission: Schema.optionalKey(PersistedJson),
+    }),
+  ),
+}).check(
+  Schema.makeFilter((value) => (value.mode === "standard") === (value.returnAddress !== undefined)),
+);
 
 /** Immutable worker Thread origin. Each input has its own digest and parameters separately. */
 export const WorkerOrigin = Schema.Struct({

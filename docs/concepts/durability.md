@@ -176,9 +176,12 @@ call without executing it. `SafeToRetry` does not authorize changed code or eras
 about an unsupported operation. Unproven effects stay unknown.
 
 Later model requests preserve earlier user intent, assistant text, and settled sibling results.
-For an incomplete earlier batch, the model-facing history supplies an explicit unknown result for
-each missing call. That explanatory view creates no canonical tool settlement or compaction
-coverage and does not resolve the original operation. A committed `RunCompleted` output and
+For an incomplete earlier batch, the model-facing history uses `ToolUnavailable` with
+`execution: "not-executed"` when the recorded operation required preparation and no preparation
+or unknown-outcome evidence exists. Other missing results remain explicitly unknown, including
+ordinary readonly calls that can run without preparation. This explanatory view creates no
+canonical tool settlement or compaction coverage and does not resolve a dispatched operation.
+A committed `RunCompleted` output and
 disposition remain authoritative across later codec or completion-projector changes.
 
 ## Attached subagents

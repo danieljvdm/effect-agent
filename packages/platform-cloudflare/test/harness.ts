@@ -324,13 +324,15 @@ export const readCanonical = (
   thread: string,
   namespace: TestNamespace = "THREADS",
 ): Promise<ReadonlyArray<CanonicalRecordEnvelope>> =>
-  runClient(
-    Effect.gen(function* () {
-      const client = yield* CloudflareThreadClient;
+  withAbortedInstanceRetry(() =>
+    runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareThreadClient;
 
-      return yield* client.readAll(decodeThreadId(thread));
-    }),
-    namespace,
+        return yield* client.readAll(decodeThreadId(thread));
+      }),
+      namespace,
+    ),
   );
 
 /** The supplier-store honesty claims of one eviction row (durability §10). */
