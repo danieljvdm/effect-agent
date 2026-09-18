@@ -7,7 +7,9 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/Alarm.ts",
       "src/CloudflareBindings.ts",
+      "src/CloudflareBrowser.ts",
       "src/CloudflareThreadClient.ts",
       "src/ThreadObject.ts",
       "src/MemoryObject.ts",
