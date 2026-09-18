@@ -4,7 +4,11 @@ import * as Agent from "effect-agent/agent";
 import { AgentPolicyError, ContextBudgetError, ModelProtocolError } from "effect-agent/agent-error";
 import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
-import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
+import {
+  CompactionError,
+  CompactionEvaluator,
+  ContextCompactor,
+} from "effect-agent/context-compactor";
 import {
   ContextRolloverRequest,
   ContextRolloverTool,
@@ -248,6 +252,10 @@ const driveRun = Effect.fn("context-rollover.test.driveRun")(function* (setup: R
 const testLayer = Layer.mergeAll(
   identifiers,
   ContextCompactor.layer,
+  Layer.succeed(CompactionEvaluator(), {
+    available: false,
+    evaluate: () => Effect.die("This direct harness does not admit auxiliary inference"),
+  }),
   ThreadHistory.layer,
   RunContextPreparationPassthrough,
 );

@@ -264,6 +264,7 @@ import {
   CompactionDecision,
   CompactionError,
   ContextCompactor,
+  CompactionEvaluator,
   type CompactionModelLayer,
   type CompactionEvaluation,
   type ContextMessageTokenEstimator,
@@ -4251,7 +4252,11 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
             message: "Compaction evaluation is already reserved",
           });
         }
-        if (allowance.evaluationCalls++ > 0 || !modelCallAllowed) {
+        if (
+          allowance.evaluationCalls++ > 0 ||
+          !modelCallAllowed ||
+          allowance.applied.has("clear-tool-results")
+        ) {
           return yield* CompactionError.make({
             message: "Compaction exceeded its evaluation-call allowance",
           });
@@ -4340,13 +4345,25 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
           : { estimateMessageTokens: messageTokenEstimator }),
         ...(resolvedRequest === undefined ? {} : { requested: resolvedRequest }),
         summarize,
-        ...(allowance.evaluationCalls === 0 &&
-        !applied.has("clear-tool-results") &&
-        !auxiliaryAccounting?.reservedTurns.has(turn)
-          ? { evaluate }
-          : {}),
       })
       .pipe(
+        Stream.provideService(
+          CompactionEvaluator<
+            Effect.Error<ReturnType<typeof summarize>>,
+            Effect.Services<ReturnType<typeof summarize>>
+          >(),
+          {
+            get available() {
+              return (
+                modelCallAllowed &&
+                allowance.evaluationCalls === 0 &&
+                !applied.has("clear-tool-results") &&
+                !auxiliaryAccounting?.reservedTurns.has(turn)
+              );
+            },
+            evaluate,
+          },
+        ),
         Stream.runForEach((candidate) =>
           Effect.gen(function* () {
             const decision = yield* Schema.decodeEffect(CompactionDecision)(candidate).pipe(

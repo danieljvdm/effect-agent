@@ -17,7 +17,11 @@ import {
 import { Agent, AgentRuntime, InMemory, SelectiveCompactor } from "effect-agent";
 import { CompactionPolicy } from "effect-agent/agent-policy";
 import { CLEARED_TOOL_RESULT, estimatePromptTokens } from "effect-agent/compaction";
-import { ContextCompactor, type CompactionRequest } from "effect-agent/context-compactor";
+import {
+  CompactionEvaluator,
+  ContextCompactor,
+  type CompactionRequest,
+} from "effect-agent/context-compactor";
 import { RunId, ThreadId } from "effect-agent/identifiers";
 import { ModelCallUsage } from "effect-agent/usage";
 import { AiError, LanguageModel, Model, Prompt, Toolkit } from "effect/unstable/ai";
@@ -235,7 +239,6 @@ export const scoreCase = Effect.fn("SelectiveEval.scoreCase")(function* (
       lastViewLength: -1,
     },
     summarize: () => Effect.die("Scoring must not summarize"),
-    evaluate: (operation) => operation.pipe(Effect.map((value) => value.value)),
   };
 
   const start = yield* Clock.currentTimeMillis;
@@ -245,6 +248,10 @@ export const scoreCase = Effect.fn("SelectiveEval.scoreCase")(function* (
 
     yield* compactor.compact(request).pipe(Stream.runDrain);
   }).pipe(
+    Effect.provideService(CompactionEvaluator(), {
+      available: true,
+      evaluate: (operation) => operation.pipe(Effect.map((value) => value.value)),
+    }),
     Effect.provide(
       SelectiveCompactor.layer({ dropBelow: 0, pinnedTools: scenario.pinnedTools }).pipe(
         Layer.provide(ContextCompactor.layer),

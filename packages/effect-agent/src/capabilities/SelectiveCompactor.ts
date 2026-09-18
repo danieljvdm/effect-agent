@@ -10,6 +10,7 @@ import { Prompt } from "effect/unstable/ai";
 import { CLEARED_TOOL_RESULT, estimatePromptTokens } from "../engine/Compaction.ts";
 import {
   CompactionError,
+  CompactionEvaluator,
   ContextCompactor,
   type CompactionDecision,
   type CompactionRequest,
@@ -221,7 +222,7 @@ export const layer = (
         estimate: fallback.estimate,
         compact: <E, R>(
           request: CompactionRequest<E, R>,
-        ): Stream.Stream<CompactionDecision, E | CompactionError, R> =>
+        ): Stream.Stream<CompactionDecision, E | CompactionError, R | CompactionEvaluator<E, R>> =>
           Stream.unwrap(
             Effect.gen(function* () {
               if (request.requested !== undefined || request.trigger !== "pressure") {
@@ -236,7 +237,9 @@ export const layer = (
                       policy: { ...request.policy, mode: "summarize" },
                     });
 
-              if (!request.modelCallAllowed || request.evaluate === undefined) return replace();
+              const evaluator = yield* CompactionEvaluator<E, R>();
+
+              if (!request.modelCallAllowed || !evaluator.available) return replace();
               let state = yield* selectionInput(request, pinnedTools);
 
               if (state.results.length === 0) return replace();
@@ -277,7 +280,7 @@ export const layer = (
                 encoded = JSON.stringify(input);
               }
 
-              const answers = yield* request.evaluate(
+              const answers = yield* evaluator.evaluate(
                 model.evaluate(input).pipe(
                   Effect.timeoutOrElse({
                     duration: "5 seconds",

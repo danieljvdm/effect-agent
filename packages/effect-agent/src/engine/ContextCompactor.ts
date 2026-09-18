@@ -72,6 +72,30 @@ export class CompactionError extends Schema.TaggedError<CompactionError>()("Comp
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
 
+/**
+ * Interpreter-owned auxiliary inference for one compaction pass. The engine supplies admission,
+ * Run budgets and independently committed durable usage. Strategies acquire this service inside
+ * compact, using the request's E/R parameters so interpreter failures and requirements stay visible.
+ * Direct harnesses explicitly provide their own evaluator; provider dependencies belong to the
+ * strategy's construction Layer.
+ */
+export interface CompactionEvaluator<E = never, R = never> {
+  /** False after this Turn has evaluated or pruned, including after recovery. Use a fallback. */
+  readonly available: boolean;
+  /**
+   * Admit at most one bounded auxiliary call per Turn. A lost decision is not replayed, and an
+   * unresolved durable reservation stops further model work with unknown accounting.
+   */
+  readonly evaluate: <A>(
+    operation: Effect.Effect<CompactionEvaluation<A>, CompactionError>,
+    inputTokensEstimate: number,
+  ) => Effect.Effect<A, E | CompactionError, R>;
+}
+
+/** The same service identity for each request's typed interpreter E/R. */
+export const CompactionEvaluator = <E = never, R = never>() =>
+  Context.Service<CompactionEvaluator<E, R>>("@effect-agent/engine/CompactionEvaluator");
+
 /** Upstream Model.captureRequirements returns this closed Layer. */
 export type CompactionModelLayer = Layer.Layer<
   LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName
@@ -84,8 +108,8 @@ export type ContextMessageTokenEstimator = (message: Prompt.Message) => number |
  * One bounded pass over an immutable source snapshot. A harness owns state, metering, and
  * application of decisions. The interpreter permits at most one prune followed by one replacement
  * (summary or rollover), and one call to summarize per Turn, shared across every trigger.
- * Model work must use summarize or evaluate so it is metered. At most one auxiliary evaluation
- * is admitted per Turn; it must bound its own provider request and response.
+ * Model work must use summarize or CompactionEvaluator so it is metered. At most one auxiliary
+ * evaluation is admitted per Turn; it must bound its own provider request and response.
  * Callback failures and requirements pass through unchanged; strategy dependencies belong to
  * its construction Layer. Protected messages cannot be removed and Tool pairs cannot be split by a decision.
  */
@@ -108,16 +132,6 @@ export interface CompactionRequest<E, R> {
     prompt: Prompt.Prompt,
     model?: CompactionModelLayer,
   ) => Effect.Effect<string, E, R>;
-  /**
-   * Auxiliary inference with independently committed durable accounting. Absent once this Turn
-   * has evaluated or pruned, including after recovery; use a replacement fallback. A lost decision
-   * is not replayed. An unresolved reserved invocation fails the Run with unknown accounting.
-   * Standalone harnesses may omit this callback.
-   */
-  readonly evaluate?: <A>(
-    operation: Effect.Effect<CompactionEvaluation<A>, CompactionError>,
-    inputTokensEstimate: number,
-  ) => Effect.Effect<A, E | CompactionError, R>;
 }
 
 export interface ContextCompaction {
@@ -126,7 +140,7 @@ export interface ContextCompaction {
   /** Emit decisions sequentially; the consumer commits each before pulling the next. */
   readonly compact: <E, R>(
     request: CompactionRequest<E, R>,
-  ) => Stream.Stream<CompactionDecision, E | CompactionError, R>;
+  ) => Stream.Stream<CompactionDecision, E | CompactionError, R | CompactionEvaluator<E, R>>;
 }
 
 const evaluateEstimates = <A>(

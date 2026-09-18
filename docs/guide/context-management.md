@@ -1076,8 +1076,12 @@ and the newest Tool batch, rejects duplicate or invalid selections, and requires
 Durable hosts persist exact settlement record IDs, so reused Tool Call IDs cannot clear another
 occurrence. Without `results`, pruning retains its existing whole-prefix behavior.
 
-Experimental `request.evaluate(operation, inputTokensEstimate)` admits one auxiliary model call
-per turn and charges its returned provider, model, and native usage before applying a decision.
+Inside `compact<E, R>`, acquire `yield* CompactionEvaluator<E, R>()` from
+`effect-agent/context-compactor`. The engine supplies this service for each pass; its requirement
+stays in the strategy stream's `R` channel. Direct harnesses provide their own implementation.
+When `evaluator.available` is false, use a replacement fallback. Otherwise,
+`evaluator.evaluate(operation, inputTokensEstimate)` admits one auxiliary model call per turn and
+charges its returned provider, model, and native usage before applying a decision.
 The operation supplies `{ value, provider, model, usage }` and bounds its own request and response.
 Durable runs reserve the evaluation slot before dispatch and commit usage independently of the
 decision, including when the strategy keeps every result or returns an invalid selection. Recovery

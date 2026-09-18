@@ -24,6 +24,7 @@ import { AgentPolicy, CompactionPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import {
   CompactionError,
+  CompactionEvaluator,
   ContextCompactor,
   type CompactionDecision,
   type CompactionRequest,
@@ -289,7 +290,14 @@ const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup
 /** Drive one scripted run and capture requests, events, and the exit. */
 const driveRun = (setup: RunSetup) => driveRunWith(answerOutput, setup);
 
-const compactionTestLayer = Layer.merge(identifiers, ContextCompactor.layer);
+const compactionTestLayer = Layer.mergeAll(
+  identifiers,
+  ContextCompactor.layer,
+  Layer.succeed(CompactionEvaluator(), {
+    available: false,
+    evaluate: () => Effect.die("This direct harness does not admit auxiliary inference"),
+  }),
+);
 
 const testLayer = Layer.mergeAll(
   compactionTestLayer,
@@ -423,12 +431,12 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
         }).pipe(
           Effect.provideService(ContextCompactor, {
             estimate: estimatePromptTokens,
-            compact: (request) =>
+            compact: <E, R>(request: CompactionRequest<E, R>) =>
               Stream.fromEffect(
                 Effect.gen(function* () {
-                  if (request.evaluate === undefined)
-                    return yield* CompactionError.make({ message: "Missing evaluation" });
-                  yield* request.evaluate(
+                  const evaluator = yield* CompactionEvaluator<E, R>();
+
+                  yield* evaluator.evaluate(
                     Effect.sync(() => {
                       evaluations++;
 
@@ -480,6 +488,79 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
           });
         }
       }),
+    );
+  }
+
+  for (const consumedBy of ["evaluation", "prune"] as const) {
+    it.effect(
+      `rejects evaluator reuse after ${consumedBy} even if the strategy ignores availability`,
+      () =>
+        Effect.gen(function* () {
+          let evaluations = 0;
+
+          const result = yield* driveRun(selectiveSetup).pipe(
+            Effect.provideService(ContextCompactor, {
+              estimate: estimatePromptTokens,
+              compact: <E, R>(request: CompactionRequest<E, R>) =>
+                Stream.unwrap(
+                  Effect.gen(function* () {
+                    const evaluator = yield* CompactionEvaluator<E, R>();
+
+                    const operation = Effect.sync(() => {
+                      evaluations++;
+
+                      return {
+                        provider: "selector",
+                        model: "jev-test",
+                        value: undefined,
+                        usage: usageOf(70, 2),
+                      };
+                    });
+
+                    expect(evaluator.available).toBe(true);
+                    if (consumedBy === "evaluation") {
+                      yield* evaluator.evaluate(operation, 100);
+                      expect(evaluator.available).toBe(false);
+                    }
+
+                    const messageIndex = request.source.content.findIndex(
+                      (message) =>
+                        message.role === "tool" &&
+                        message.content.some(
+                          (part) => part.type === "tool-result" && part.id === "noise",
+                        ),
+                    );
+
+                    const decision = {
+                      kind: "clear-tool-results",
+                      through: messageIndex + 1,
+                      results: [{ messageIndex, toolCallId: "noise" }],
+                    } satisfies CompactionDecision;
+
+                    return Stream.succeed(decision).pipe(
+                      Stream.concat(
+                        Stream.fromEffect(
+                          Effect.gen(function* () {
+                            expect(evaluator.available).toBe(false);
+                            yield* evaluator.evaluate(operation, 100);
+
+                            return decision;
+                          }),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+            }),
+          );
+
+          expect(failureFrom(result.exit)).toMatchObject({
+            _tag: "CompactionError",
+            message: "Compaction exceeded its evaluation-call allowance",
+          });
+          expect(evaluations).toBe(consumedBy === "evaluation" ? 1 : 0);
+          expect(result.requests).toHaveLength(3);
+        }),
     );
   }
 
@@ -1004,7 +1085,13 @@ layer(testLayer)("engine compaction and overflow recovery", (it) => {
             modelCallAllowed: true,
             summarize,
           })
-          .pipe(Stream.runCollect);
+          .pipe(
+            Stream.provideService(CompactionEvaluator<SummaryFailure, SummaryConfig>(), {
+              available: false,
+              evaluate: () => Effect.die("This direct harness does not admit auxiliary inference"),
+            }),
+            Stream.runCollect,
+          );
 
         const errorProof: SummaryFailure extends Effect.Error<typeof program> ? true : false = true;
 

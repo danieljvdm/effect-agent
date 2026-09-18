@@ -4,6 +4,7 @@ import { SelectiveCompactor } from "effect-agent";
 import { CompactionPolicy } from "effect-agent/agent-policy";
 import {
   CompactionError,
+  CompactionEvaluator,
   ContextCompactor,
   type CompactionDecision,
   type CompactionRequest,
@@ -57,8 +58,12 @@ const request: CompactionRequest<never, never> = {
     lastViewLength: -1,
   },
   summarize: () => Effect.die("Unexpected summary"),
-  evaluate: (operation) => operation.pipe(Effect.map((result) => result.value)),
 };
+
+const unmeteredEvaluator = CompactionEvaluator().of({
+  available: true,
+  evaluate: (operation) => operation.pipe(Effect.map((result) => result.value)),
+});
 
 it("pins application-selected tools and supplies bounded result evidence to the classifier", async () => {
   let calls = 0;
@@ -99,7 +104,10 @@ it("pins application-selected tools and supplies bounded result evidence to the 
       const compactor = yield* ContextCompactor;
 
       return yield* compactor.compact(request).pipe(Stream.runCollect);
-    }).pipe(Effect.provide(selected)),
+    }).pipe(
+      Effect.provideService(CompactionEvaluator(), unmeteredEvaluator),
+      Effect.provide(selected),
+    ),
   );
 
   expect(calls).toBe(1);
@@ -207,6 +215,7 @@ it("includes tool inputs, excluded activity and the latest task when older conve
 
       yield* compactor.compact({ ...request, source }).pipe(Stream.runDrain);
     }).pipe(
+      Effect.provideService(CompactionEvaluator(), unmeteredEvaluator),
       Effect.provide(
         SelectiveCompactor.layer().pipe(
           Layer.provide(ContextCompactor.layer),
@@ -283,6 +292,7 @@ it("fits the complete Unicode request and leaves candidates beyond the bound uns
         .compact({ ...request, source: Prompt.fromMessages(messages) })
         .pipe(Stream.runCollect);
     }).pipe(
+      Effect.provideService(CompactionEvaluator(), unmeteredEvaluator),
       Effect.provide(
         SelectiveCompactor.layer().pipe(
           Layer.provide(ContextCompactor.layer),
@@ -356,7 +366,11 @@ for (const mode of ["invalid", "failure", "defect", "timeout", "interruption"] a
               }),
             ),
           );
-        }).pipe(Effect.provide(selected), Effect.forkChild);
+        }).pipe(
+          Effect.provideService(CompactionEvaluator(), unmeteredEvaluator),
+          Effect.provide(selected),
+          Effect.forkChild,
+        );
 
         yield* Deferred.await(started);
         if (mode === "timeout") yield* TestClock.adjust("6 seconds");
@@ -413,17 +427,20 @@ it("uses replacement after the engine consumes this Turn's selection allowance",
   const decisions = await Effect.runPromise(
     Effect.gen(function* () {
       const compactor = yield* ContextCompactor;
-      const withoutEvaluation = { ...request };
-
-      delete withoutEvaluation.evaluate;
 
       return yield* compactor
         .compact({
-          ...withoutEvaluation,
+          ...request,
           policy: CompactionPolicy.make({ mode: "prune-then-summarize" }),
         })
         .pipe(Stream.runCollect);
-    }).pipe(Effect.provide(selected)),
+    }).pipe(
+      Effect.provideService(CompactionEvaluator(), {
+        available: false,
+        evaluate: () => Effect.die("Unexpected unavailable evaluation"),
+      }),
+      Effect.provide(selected),
+    ),
   );
 
   expect(evaluations).toBe(0);

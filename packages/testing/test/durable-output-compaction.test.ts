@@ -9,7 +9,12 @@ import {
   CONTEXT_ROLLOVER_PREFIX,
   estimatePromptTokens,
 } from "effect-agent/compaction";
-import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
+import {
+  CompactionError,
+  CompactionEvaluator,
+  ContextCompactor,
+  type CompactionRequest,
+} from "effect-agent/context-compactor";
 import { ContextRolloverRequest, ContextRolloverTool } from "effect-agent/context-window";
 import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
 import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
@@ -226,11 +231,13 @@ layer(
   makeTestLayer(
     Layer.succeed(ContextCompactor, {
       estimate: estimatePromptTokens,
-      compact: (request) =>
+      compact: <E, R>(request: CompactionRequest<E, R>) =>
         Stream.unwrap(
           Effect.gen(function* () {
-            if (request.evaluate !== undefined) {
-              yield* request.evaluate(
+            const evaluator = yield* CompactionEvaluator<E, R>();
+
+            if (evaluator.available) {
+              yield* evaluator.evaluate(
                 Effect.acquireUseRelease(
                   Effect.void,
                   () =>

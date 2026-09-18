@@ -8,7 +8,7 @@ import {
   type AgentRuntimeRequirements,
   type AgentCompletionProjectionRequirements,
 } from "effect-agent/agent-runtime";
-import { type CompactionError, type CompactionRequest } from "effect-agent/context-compactor";
+import { CompactionEvaluator, type CompactionError } from "effect-agent/context-compactor";
 import { ModelCallContext } from "effect-agent/context-window";
 import {
   AgentUpdateAcceptance,
@@ -666,10 +666,38 @@ it("preserves visibility Layer dependencies and construction failures", () => {
   >();
 });
 
-it("preserves auxiliary compaction callback and accounting service requirements", () => {
-  type Evaluation = ReturnType<NonNullable<CompactionRequest<TurnHostError, TurnHost>["evaluate"]>>;
-  expectTypeOf<Effect.Error<Evaluation>>().toEqualTypeOf<TurnHostError | CompactionError>();
-  expectTypeOf<Effect.Services<Evaluation>>().toEqualTypeOf<TurnHost>();
+it("preserves auxiliary compaction evaluator and accounting service requirements", () => {
+  const evaluation = Effect.gen(function* () {
+    const evaluator = yield* CompactionEvaluator<TurnHostError, TurnHost>();
+
+    return yield* evaluator.evaluate(
+      Effect.succeed({
+        value: 1,
+        provider: "test",
+        model: "test",
+        usage: {
+          inputTokens: { total: 1 },
+          outputTokens: { total: 1 },
+        },
+      }),
+      1,
+    );
+  });
+
+  expectTypeOf<Effect.Error<typeof evaluation>>().toEqualTypeOf<TurnHostError | CompactionError>();
+  expectTypeOf<Effect.Services<typeof evaluation>>().toEqualTypeOf<
+    TurnHost | CompactionEvaluator<TurnHostError, TurnHost>
+  >();
+
+  const supplied = evaluation.pipe(
+    Effect.provideService(CompactionEvaluator<TurnHostError, TurnHost>(), {
+      available: true,
+      evaluate: (operation) => operation.pipe(Effect.map((result) => result.value)),
+    }),
+  );
+
+  expectTypeOf<Effect.Error<typeof supplied>>().toEqualTypeOf<TurnHostError | CompactionError>();
+  expectTypeOf<Effect.Services<typeof supplied>>().toEqualTypeOf<TurnHost>();
 
   const reserve = Effect.gen(function* () {
     const accounting = yield* ModelUsageAccounting;
