@@ -1693,13 +1693,14 @@ esac
       const prReviewDependencies = manifestDependencies(prReviewAction);
 
       expect(demo.name).toBe("@effect-agent/example-travel-planner");
-      expect(demo.dependencies?.["@effect-agent/platform-cloudflare"]).toBe("workspace:*");
       expect(demo.dependencies?.["@effect-agent/platform-alchemy-cloudflare"]).toBe("workspace:*");
       expect(demo.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(demo.dependencies?.["@effect/atom-react"]).toBe("catalog:");
       expect(demo.dependencies?.effect).toBe("catalog:");
       expect(root.catalog?.["@effect/ai-openai"]).toBe(root.catalog?.effect);
       expect(root.catalog?.["@effect/ai-anthropic"]).toBe(root.catalog?.effect);
+      expect(demoDependencies).not.toContain("@effect-agent/platform-cloudflare");
+      expect(demoDependencies).not.toContain("effect-cf");
       expect(demoDependencies).not.toContain("@effect-agent/platform-node");
       expect(demoDependencies).not.toContain("@effect-agent/sandbox-local");
       // The GitHub channel owns the concrete provider and platform edges;
