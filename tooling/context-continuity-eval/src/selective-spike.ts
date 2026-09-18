@@ -178,8 +178,7 @@ export const runProbe = Effect.fn("SelectiveSpike.runProbe")(function* (
         }),
     },
   }).pipe(
-    Effect.provide(compactor),
-    Effect.provide(InMemory.layer),
+    Effect.provide(Layer.merge(compactor, InMemory.layer)),
     // Admission can fail after a paid evaluation. Keep its evidence visible without retrying.
     Effect.tapError((error) =>
       Console.error(

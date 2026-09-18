@@ -394,7 +394,7 @@ export const runCase = Effect.fn("SelectiveEval.runCase")(function* (
           if (delta.modelUsage !== undefined) usage.push(delta.modelUsage);
         }),
     },
-  }).pipe(Effect.provide(compactor), Effect.provide(InMemory.layer), Effect.result);
+  }).pipe(Effect.provide(Layer.merge(compactor, InMemory.layer)), Effect.result);
 
   const facts = Result.isSuccess(result) ? result.success.output.facts : [];
   const outgoing = capture?.prompt ?? Prompt.empty;
@@ -586,7 +586,7 @@ export const command = Command.make(
     resume: Flag.String("resume").pipe(Flag.optional),
   },
   Effect.fn("SelectiveEval.command")(function* (options) {
-    yield* Schema.decodeUnknownEffect(Schema.Array(CompactionCase))(cases);
+    yield* Schema.decodeEffect(Schema.Array(CompactionCase))(cases);
     if (options.phase === "validate") {
       yield* validateCases();
       yield* Console.log(
@@ -739,9 +739,9 @@ export const command = Command.make(
     if (prior !== undefined && initialUsage !== undefined) {
       const source = yield* fs.readFileString(`${prior}/requests.jsonl`);
 
-      const audit = yield* Schema.decodeUnknownEffect(
-        Schema.Array(Schema.fromJsonString(RequestAudit)),
-      )(source.split("\n").filter((line) => line !== ""));
+      const audit = yield* Schema.decodeEffect(Schema.Array(Schema.fromJsonString(RequestAudit)))(
+        source.split("\n").filter((line) => line !== ""),
+      );
 
       yield* validateComparisonResume(initialUsage, audit);
       // Carry the complete request history so another resume can check the same invariant.
@@ -842,10 +842,12 @@ export const command = Command.make(
     });
 
     yield* compare.pipe(
-      Effect.provide(RequestAuditSink.file(`${output}/requests.jsonl`)),
       Effect.provide(
-        OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") }).pipe(
-          Layer.provide(FetchHttpClient.layer),
+        Layer.merge(
+          RequestAuditSink.file(`${output}/requests.jsonl`),
+          OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") }).pipe(
+            Layer.provide(FetchHttpClient.layer),
+          ),
         ),
       ),
     );
