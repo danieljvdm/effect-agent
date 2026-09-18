@@ -6,6 +6,7 @@ import type { AnyDefinition } from "../../core/Agent.ts";
 import * as FailureDiagnostic from "../../core/FailureDiagnostic.ts";
 import { RunId, SettlementId, ThreadId } from "../../core/Identifiers.ts";
 import { utf8ByteLength } from "../../core/internal/utf8.ts";
+import { MessageRef, MessageStatus } from "../../core/Messaging.ts";
 import { IdempotencyKey, JoinedToHost, Receipt } from "../../core/Receipt.ts";
 import {
   BackgroundSpawnTool,
@@ -28,7 +29,6 @@ import {
   BackgroundReporting,
   WorkerReportPreparationFailure,
   type WorkerReporting,
-  type WorkerObservation as HostObservation,
 } from "../../engine/SubagentHost.ts";
 import type { SubagentDefineOptions, SubagentPrepareContext } from "../Subagent.ts";
 import {
@@ -193,6 +193,20 @@ const operations = <
       ),
     );
 
+  const validateDelivery = Effect.fn("Subagent.validateWorkerDelivery")(function* (
+    worker: WorkerRef,
+    delivery: MessageStatus,
+    operation: WorkerError["operation"],
+  ) {
+    const validated = yield* Schema.decodeEffect(MessageStatus)(delivery).pipe(
+      Effect.mapError((cause) => WorkerError.make({ operation, reason: "corrupt", cause })),
+    );
+
+    if (validated.receipt !== null) yield* validateReceipt(worker, validated.receipt, operation);
+
+    return validated;
+  });
+
   const context: Effect.Effect<WorkerContext, WorkerError, SubagentHost> = host.pipe(
     Effect.flatMap((service) => service.context),
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.toType(WorkerContext))),
@@ -322,7 +336,13 @@ const operations = <
       ),
     );
 
-    return { worker: yield* validateWorker(validated.worker, "start"), receipt: validated.receipt };
+    if (validated.delivery.message.ownerThreadId !== caller.source.threadId)
+      return yield* WorkerError.make({ operation: "start", reason: "message-mismatch" });
+
+    return {
+      worker: yield* validateWorker(validated.worker, "start"),
+      delivery: validated.delivery,
+    };
   });
 
   const followUp = Effect.fn("Subagent.followUp")(function* (
@@ -336,7 +356,7 @@ const operations = <
     const key = yield* validateKey(options.idempotencyKey, "followUp");
     const prepared = yield* prepare(parameters, caller);
 
-    return yield* validateReceipt(
+    const delivery = yield* validateDelivery(
       validated,
       yield* service.followUp({
         ...prepared,
@@ -346,6 +366,40 @@ const operations = <
       }),
       "followUp",
     );
+
+    if (delivery.message.ownerThreadId !== caller.source.threadId)
+      return yield* WorkerError.make({ operation: "followUp", reason: "message-mismatch" });
+
+    return delivery;
+  });
+
+  const inspectMessage = Effect.fn("Subagent.inspectWorkerMessage")(function* (
+    worker: Worker<Name>,
+    message: MessageRef,
+  ) {
+    const service = yield* host;
+    const validated = yield* validateWorker(worker, "inspect");
+
+    const requested = yield* Schema.decodeEffect(MessageRef)(message).pipe(
+      Effect.mapError((cause) =>
+        WorkerError.make({ operation: "inspect", reason: "message-mismatch", cause }),
+      ),
+    );
+
+    const observed = yield* service.inspect({
+      worker: validated,
+      target: declaration.target,
+      message: requested,
+    });
+
+    if (!("message" in observed))
+      return yield* WorkerError.make({ operation: "inspect", reason: "corrupt" });
+    const delivery = yield* validateDelivery(validated, observed, "inspect");
+
+    if (!Schema.toEquivalence(MessageRef)(delivery.message, requested))
+      return yield* WorkerError.make({ operation: "inspect", reason: "message-mismatch" });
+
+    return delivery;
   });
 
   const observe = Effect.fn("Subagent.observeWorker")(function* (
@@ -365,11 +419,13 @@ const operations = <
     const validated = yield* validateWorker(worker, operation);
     const requested = yield* validateReceipt(validated, receipt, operation);
 
-    const observed: HostObservation = yield* service[operation]({
+    const observed = yield* service[operation]({
       worker: validated,
       target: declaration.target,
       receipt: requested,
     });
+
+    if (!("_tag" in observed)) return yield* WorkerError.make({ operation, reason: "corrupt" });
 
     const returned = yield* validateReceipt(validated, observed.receipt, operation);
 
@@ -516,10 +572,10 @@ const operations = <
     yield* service.cancel({ worker: validated, target: declaration.target, receipt: requested });
   });
 
-  return { start, followUp, observe, list, cancel };
+  return { start, followUp, inspectMessage, observe, list, cancel };
 };
 
-/** Start a host-managed worker. Retrying the same explicit key reuses the accepted input. */
+/** Retain a first worker input. The same explicit key reuses its durable delivery identity. */
 export const start = <
   const Name extends string,
   Input extends Schema.Top,
@@ -535,7 +591,7 @@ export const start = <
   options: { readonly idempotencyKey: IdempotencyKey; readonly budgetScope?: WorkerBudgetScope },
 ) => operations(declaration).start(parameters, options);
 
-/** Admit typed follow-up parameters to the same worker Thread. */
+/** Retain typed follow-up parameters for the same worker Thread; inspect its MessageRef for delivery. */
 export const followUp = <
   const Name extends string,
   Input extends Schema.Top,
@@ -581,7 +637,7 @@ export const summary = <const Name extends string>(
     return { ...value, worker: validated };
   });
 
-/** Inspect the worker, or pass a Receipt to observe that exact accepted input. */
+/** Inspect a worker summary, retained MessageRef, or the result of one exact accepted Receipt. */
 export function inspect<
   const Name extends string,
   Input extends Schema.Top,
@@ -627,11 +683,28 @@ export function inspect<
 >(
   declaration: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
   worker: Worker<Name>,
-  receipt?: Receipt,
+  message: MessageRef,
+): Effect.Effect<MessageStatus, WorkerError, SubagentHost>;
+
+export function inspect<
+  const Name extends string,
+  Input extends Schema.Top,
+  Output extends Schema.Top,
+  Parameters extends Schema.Top,
+  Success extends Schema.Top,
+  Failure extends Schema.Top,
+  Prepare,
+  Project,
+>(
+  declaration: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
+  worker: Worker<Name>,
+  reference?: Receipt | MessageRef,
 ) {
-  return receipt === undefined
+  return reference === undefined
     ? summary(declaration, worker)
-    : operations(declaration).observe("inspect", worker, receipt);
+    : "messageId" in reference
+      ? operations(declaration).inspectMessage(worker, reference)
+      : operations(declaration).observe("inspect", worker, reference);
 }
 
 /** Read an authorized finite history snapshot; pass the last emitted sequence to resume. */
@@ -739,6 +812,21 @@ type Suffix = {
 const ReceiptParameters = <Name extends string>(declaration: WorkerDeclaration<Name>) =>
   Schema.Struct({ worker: Worker(declaration), receipt: Receipt });
 
+const InspectParameters = <Name extends string>(declaration: WorkerDeclaration<Name>) =>
+  Schema.Struct({
+    worker: Worker(declaration),
+    message: Schema.optionalKey(MessageRef),
+    receipt: Schema.optionalKey(Receipt),
+  }).check(
+    Schema.makeFilter(
+      ({ message, receipt }) => (message === undefined) !== (receipt === undefined),
+      { message: "Provide exactly one retained message reference or accepted receipt" },
+    ),
+  );
+
+const Inspection = <Success extends Schema.Top>(success: Success) =>
+  Schema.Union([MessageStatus, toolObservation(success)]);
+
 const WorkerParameters = <Name extends string>(declaration: WorkerDeclaration<Name>) =>
   Schema.Struct({ worker: Worker(declaration) });
 
@@ -762,8 +850,11 @@ const ListParameters = Schema.Struct({
 });
 
 const Started = <Name extends string>(declaration: WorkerDeclaration<Name>) =>
-  Schema.Struct({ worker: Worker(declaration), receipt: Receipt }).check(
-    Schema.makeFilter((value) => value.worker.threadId === value.receipt.threadId),
+  Schema.Struct({ worker: Worker(declaration), delivery: MessageStatus }).check(
+    Schema.makeFilter(
+      ({ worker, delivery }) =>
+        delivery.receipt === null || worker.threadId === delivery.receipt.threadId,
+    ),
   );
 
 const Page = <Name extends string>(declaration: WorkerDeclaration<Name>) =>
@@ -799,12 +890,12 @@ type ToolSchemas<
   };
   followUp: {
     parameters: ReturnType<typeof FollowUpParameters<Name, Parameters>>;
-    success: typeof Receipt;
+    success: typeof MessageStatus;
     failure: ReturnType<typeof preparationFailure<Failure>>;
   };
   inspect: {
-    parameters: ReturnType<typeof ReceiptParameters<Name>>;
-    success: ReturnType<typeof toolObservation<Success>>;
+    parameters: ReturnType<typeof InspectParameters<Name>>;
+    success: ReturnType<typeof Inspection<Success>>;
     failure: ReturnType<typeof preparationFailure<Failure>>;
   };
   summary: {
@@ -961,7 +1052,7 @@ export const background = <
   const receiptParameters = ReceiptParameters(declaration);
 
   const startTool = Tool.make(`${declaration.name}_start` as const, {
-    description: `Start ${declaration.name} in the background and return its worker identity and Receipt.`,
+    description: `Retain input for a background ${declaration.name} worker and return its delivery state. Pending confirms retention only; inspect the same message instead of starting another worker.`,
     parameters: declaration.parameters,
     success: Started(declaration),
     failure: startFailure(declaration.failure),
@@ -972,9 +1063,9 @@ export const background = <
     .addDependency(Crypto.Crypto);
 
   const followUpTool = Tool.make(`${declaration.name}_follow_up` as const, {
-    description: `Send typed follow-up input to an existing ${declaration.name} worker.`,
+    description: `Retain typed follow-up input for an existing ${declaration.name} worker. Pending is retained, not executed: inspect the same message instead of sending the command again.`,
     parameters: FollowUpParameters(declaration, declaration.parameters),
-    success: Receipt,
+    success: MessageStatus,
     failure,
   })
     .annotate(WorkerOperationTool, true)
@@ -982,9 +1073,9 @@ export const background = <
     .addDependency(Crypto.Crypto);
 
   const inspectTool = Tool.make(`${declaration.name}_inspect` as const, {
-    description: `Inspect one exact ${declaration.name} Receipt without waiting.`,
-    parameters: receiptParameters,
-    success: toolObservation(declaration.success),
+    description: `Inspect one ${declaration.name} delivery by message reference, or its execution result by accepted receipt. Provide exactly one reference; inspection never resends input.`,
+    parameters: InspectParameters(declaration),
+    success: Inspection(declaration.success),
     failure,
   })
     .annotate(WorkerOperationTool, true)
@@ -1078,10 +1169,16 @@ export const background = <
         }),
       [inspectTool.name]: (parameters: {
         readonly worker: Worker<Name>;
-        readonly receipt: Receipt;
+        readonly message?: MessageRef;
+        readonly receipt?: Receipt;
       }) =>
         Effect.gen(function* () {
           const service = yield* host;
+
+          if (parameters.message !== undefined)
+            return yield* ops.inspectMessage(parameters.worker, parameters.message);
+          if (parameters.receipt === undefined)
+            return yield* WorkerError.make({ operation: "inspect", reason: "message-mismatch" });
 
           return yield* ops.observe("inspect", parameters.worker, parameters.receipt).pipe(
             Effect.map((observed) => {

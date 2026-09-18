@@ -49,7 +49,7 @@ export class BrowserRunProtectedCheckpoint extends Schema.Class<BrowserRunProtec
 export interface BrowserRunProtectedSession {
   readonly handle: ProtectedBrowserHandle;
   readonly sessionId: Redacted.Redacted<string>;
-  /** Quiesce before publishing a durable human-control request. Persist before detaching. */
+  /** Quiesce for a durable workflow pause or human-control request. Persist before detaching. */
   readonly suspend: Effect.Effect<BrowserRunProtectedCheckpoint, ProtectedBrowserError>;
   /** Fences agent tools before dispatch. Persist the returned receipt before detaching. */
   readonly handoff: (
@@ -62,9 +62,9 @@ export interface BrowserRunProtectedSession {
   readonly getHandoffState: Effect.Effect<BrowserRunHandoffState, ProtectedBrowserError>;
   /** Read only the exact page’s current origin after its recorded handoff completes; tools remain paused. */
   readonly getReturnOrigin: Effect.Effect<typeof CredentialOrigin.Type, ProtectedBrowserError>;
-  /** Requires provider completion and a renewed observation grant. Tools must observe before acting. */
+  /** Resume a committed pause; human handoffs also require provider completion. Observe before acting. */
   readonly returnControl: Effect.Effect<void, ProtectedBrowserError>;
-  /** Releases this attachment without terminating the remote browser. Only a committed handoff may detach. */
+  /** Release this attachment only after committing its suspended checkpoint; preserve the remote browser. */
   readonly detach: Effect.Effect<void, ProtectedBrowserError>;
   readonly close: Effect.Effect<typeof ProtectedCleanup.Type>;
 }
@@ -340,7 +340,9 @@ export const browserRunProtectedHostLayer = () =>
           ),
           returnControl: control(
             Effect.gen(function* () {
-              if ((yield* getHandoffState).active) return yield* failure("busy");
+              yield* fits(0);
+              if (handoff?.handoffId !== undefined && (yield* getHandoffState).active)
+                return yield* failure("busy");
               yield* state.returnControl;
               handoff = undefined;
             }),

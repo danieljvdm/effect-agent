@@ -252,7 +252,16 @@ describe("DurableAgentRuntime recovery history", () => {
           firstMessageId,
           createdAtMillis: 1,
           expiresAtMillis: 1_000_000,
-          reporting: { mode: "standard", sourceDigests: DEFINITIONS },
+          reporting: {
+            mode: "standard",
+            sourceDigests: DEFINITIONS,
+            returnAddress: {
+              input: { work: "source assignment" },
+              principal: PRINCIPAL,
+              policy: AgentPolicy.resolve(),
+              depth: 0,
+            },
+          },
         });
 
         yield* seedHistory(origin);

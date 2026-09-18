@@ -4,7 +4,6 @@ import type { InboxPage } from "../../capabilities/Messaging.ts";
 import {
   MessageAdmission,
   MessageRef,
-  MessageStatus,
   MessagingError,
   PeerName,
 } from "../../capabilities/Messaging.ts";
@@ -60,6 +59,7 @@ import {
   resolveDefinitionBinding,
   type ResolvedBinding,
 } from "./agent-registration.ts";
+import { messageStatus } from "./message-status.ts";
 
 export interface MessagingRuntimeOptions {
   readonly bindings: ReadonlyArray<ResolvedBinding>;
@@ -192,17 +192,8 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
     if (principal !== saved.envelope.deliveryPrincipal) return yield* failure(operation, "denied");
   });
 
-  const status = (row: MessageDeliveryRecord): MessageStatus =>
-    MessageStatus.make({
-      message: row.key,
-      status: row.status,
-      receipt: row.receipt,
-      settlement:
-        row.settlement === null
-          ? null
-          : { settlementId: row.settlement.settlementId, outcome: row.settlement.outcome },
-      reason: row.refusal ?? row.parkReason,
-    });
+  const status = (row: MessageDeliveryRecord, operation: MessagingError["operation"]) =>
+    messageStatus(row).pipe(Effect.mapError(() => failure(operation, "corrupt")));
 
   const deliveries = (operation: MessagingError["operation"]) =>
     Option.isSome(deps.deliveries)
@@ -494,7 +485,10 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
           Effect.mapError(mapStore(operation)),
         );
 
-        return status(yield* store.insert(prepared).pipe(Effect.mapError(mapStore(operation))));
+        return yield* status(
+          yield* store.insert(prepared).pipe(Effect.mapError(mapStore(operation))),
+          operation,
+        );
       }
 
       return yield* failure(operation, "capacity");
@@ -537,14 +531,15 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
       ),
       send: (request) => send(request, "send"),
       reply: (request) => send(request, "reply"),
-      inspect: (request) => lookup(request, "inspect").pipe(Effect.map(({ row }) => status(row))),
+      inspect: (request) =>
+        lookup(request, "inspect").pipe(Effect.flatMap(({ row }) => status(row, "inspect"))),
       retry: Effect.fn("MessagingHost.retry")(function* (request) {
         const { row, store } = yield* lookup(request, "retry");
 
         yield* authorizeEnvelope(yield* proof(row.key), "send");
         const nowMillis = yield* Clock.currentTimeMillis;
 
-        return status(
+        return yield* status(
           yield* store
             .change(row.key, {
               _tag: "Recover",
@@ -553,6 +548,7 @@ export const makeMessagingRuntime = Effect.fn("MessagingHost.make")(function* (
               deadlineAtMillis: nowMillis + (yield* lifetime),
             })
             .pipe(Effect.mapError(mapStore("retry"))),
+          "retry",
         );
       }),
       inbox: Effect.fn("MessagingHost.inbox")(function* (request) {

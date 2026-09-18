@@ -6,9 +6,11 @@ import { Emitter, UpdateError } from "../AgentUpdates.ts";
 /** Definition-owned native Tool. Runtime supplies its handler under the same identity. */
 export const updateTool = <S extends Schema.Top>(schema: S) =>
   Tool.make("emit_update", {
-    description: "Emit a structured intermediate update. This does not complete the task.",
+    description:
+      "Emit a structured intermediate update. Success acknowledges acceptance by this Run; " +
+      "parent delivery and processing are separate. This does not complete the task.",
     parameters: Schema.Struct({ value: schema }),
-    success: Schema.Void,
+    success: Schema.Struct({ emitted: Schema.Literal(true) }),
     failure: UpdateError,
     failureMode: "return",
   }).addDependency(Emitter);

@@ -4,6 +4,7 @@ import { AgentPolicy } from "./AgentPolicy.ts";
 import { Update } from "./AgentUpdates.ts";
 import * as FailureDiagnostic from "./FailureDiagnostic.ts";
 import { AgentId, DelegationId, RunId, SettlementId, ThreadId, ToolCallId } from "./Identifiers.ts";
+import { MessageStatus } from "./internal/message-status.ts";
 import { Receipt } from "./Receipt.ts";
 import { SubagentExecutionFailure, SubagentGrant } from "./SubagentContract.ts";
 
@@ -17,11 +18,16 @@ export const WorkerRef = Schema.Struct({
 
 export type WorkerRef = typeof WorkerRef.Type;
 
-/** A worker identity and the Receipt for one accepted input, never an execution handle. */
+/** A continuing worker identity and retained first delivery, never an execution handle. */
 export const WorkerStarted = Schema.Struct({
   worker: WorkerRef,
-  receipt: Receipt,
-}).check(Schema.makeFilter((value) => value.worker.threadId === value.receipt.threadId));
+  delivery: MessageStatus,
+}).check(
+  Schema.makeFilter(
+    ({ worker, delivery }) =>
+      delivery.receipt === null || worker.threadId === delivery.receipt.threadId,
+  ),
+);
 
 export type WorkerStarted = typeof WorkerStarted.Type;
 
@@ -84,13 +90,13 @@ export type WorkerHistoryEntry = typeof WorkerHistoryEntry.Type;
 
 /**
  * Closed host-boundary failures. Original causes stay private and survive diagnostic transport.
- * `delivery-pending` confirms retained input, not destination acceptance or execution.
- * Keep the same idempotency key and parameters when reconciling; never launch a replacement.
+ * Retained delivery states are successful MessageStatus values, including pending and refused.
+ * After a storage failure, keep the same idempotency key and parameters when reconciling.
  */
 export class WorkerError extends Schema.TaggedError<WorkerError>()("WorkerError", {
   cause: Schema.optionalKey(FailureDiagnostic.Value),
   stack: Schema.optionalKey(Schema.String),
-  /** Pending input or concurrency pressure may clear without changing the request. */
+  /** Concurrency pressure may clear without changing the request. */
   retryable: Schema.optionalKey(Schema.Literal(true)),
   operation: Schema.Literals([
     "context",
@@ -107,9 +113,11 @@ export class WorkerError extends Schema.TaggedError<WorkerError>()("WorkerError"
     "declaration-unavailable",
     "worker-mismatch",
     "receipt-mismatch",
+    "message-mismatch",
     "idempotency-conflict",
     "capacity",
     "not-found",
+    // Decode earlier failures without emitting them for retained deliveries.
     "delivery-pending",
     "storage",
     "corrupt",

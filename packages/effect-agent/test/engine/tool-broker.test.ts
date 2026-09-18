@@ -528,6 +528,31 @@ layer(testLayer)("RUN-016 programmatic Tool broker", (it) => {
     }),
   );
 
+  it.effect("returns JSON null for a programmatic Tool with default Void success", () =>
+    Effect.gen(function* () {
+      const innerToolkit = Toolkit.make(Tool.make("notify", { parameters: Schema.Struct({}) }));
+
+      const result = yield* runOrchestrated({
+        innerToolkit,
+        innerHandlers: innerToolkit.toLayer({ notify: () => Effect.void }),
+        program: (pass) =>
+          Effect.gen(function* () {
+            const outcome = yield* pass.invoke({ toolName: "notify", encodedArguments: {} });
+
+            expect(outcome).toEqual({
+              _tag: "ProgrammaticCallSuccess",
+              index: 0,
+              encodedResult: null,
+            });
+
+            return outcome;
+          }),
+      });
+
+      expect(result.output).toEqual({ answer: "done" });
+    }),
+  );
+
   it.effect(
     "RUN-016 direct and programmatic invocation of the same Tool are observably equivalent",
     () =>

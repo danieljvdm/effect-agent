@@ -1,8 +1,10 @@
 import { Schema } from "effect";
 
-import { AgentId, SettlementId, ThreadId } from "./Identifiers.ts";
-import { IdempotencyKey, Receipt } from "./Receipt.ts";
+import { AgentId, ThreadId } from "./Identifiers.ts";
+import { MessageRef } from "./internal/message-status.ts";
 import { FrameworkMessage } from "./Worker.ts";
+
+export { MessageRef, MessageStatus } from "./internal/message-status.ts";
 
 /** Application-chosen fixed route name; it never authorizes a destination by itself. */
 export const PeerName = Schema.NonEmptyString.check(
@@ -11,10 +13,6 @@ export const PeerName = Schema.NonEmptyString.check(
 );
 
 export type PeerName = typeof PeerName.Type;
-
-/** A retained outbound delivery identity, not a destination Receipt or access grant. */
-export const MessageRef = Schema.Struct({ ownerThreadId: ThreadId, messageId: IdempotencyKey });
-export type MessageRef = typeof MessageRef.Type;
 
 export const MessageAddress = Schema.Struct({ threadId: ThreadId, agentId: AgentId });
 export type MessageAddress = typeof MessageAddress.Type;
@@ -37,22 +35,6 @@ export const MessageAdmission = Schema.Struct({
 );
 
 export type MessageAdmission = typeof MessageAdmission.Type;
-
-/** Bounded public projection of delivery state; the frozen envelope remains host-private. */
-export const MessageStatus = Schema.Struct({
-  message: MessageRef,
-  status: Schema.Literals(["pending", "accepted", "processed", "refused", "parked"]),
-  receipt: Schema.NullOr(Receipt),
-  settlement: Schema.NullOr(
-    Schema.Struct({
-      settlementId: SettlementId,
-      outcome: Schema.Literals(["completed", "failed", "aborted"]),
-    }),
-  ),
-  reason: Schema.NullOr(Schema.String.check(Schema.isMaxLength(256))),
-});
-
-export type MessageStatus = typeof MessageStatus.Type;
 
 export const InboxEntry = Schema.Struct({
   sequence: Schema.Natural.check(Schema.isGreaterThan(0)),

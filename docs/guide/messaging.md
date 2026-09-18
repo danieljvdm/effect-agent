@@ -41,7 +41,9 @@ only. Models cannot choose arbitrary destination Threads, principals, or return 
 
 `Messaging.send` and `reply` return a retained message status. `pending` means outbound work is
 stored; `accepted` includes the destination Receipt; `processed` includes its Settlement. Use
-`Messaging.inspect` to read status. Automatic delivery retries preserve the exact destination,
+`Messaging.inspect` with the same message reference to read status. Retention and acceptance do
+not prove execution. The bounded `reason` identifies the latest retry failure, definite refusal,
+or parking reason; private diagnostics remain in storage. Automatic retries preserve the exact destination,
 input, principal, code version, and admission identity, including after a lost admission reply.
 `Messaging.retry` renews a parked delivery's finite retry budget after control authorization;
 conclusively refused and processed deliveries cannot be rewound.

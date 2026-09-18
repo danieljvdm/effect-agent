@@ -30,6 +30,10 @@ The tool declaration owns parameter, success, and failure schemas, approval, dep
 failure mode, and preliminary results. The runtime decodes every model-generated tool call through
 that declaration.
 
+Tool successes with a `Schema.Void` encoding, including the default, appear as JSON `null` in model
+history and programmatic broker results. Handler return types stay unchanged. A custom encoding to
+another JSON value takes precedence.
+
 ## Compose decisions into state transitions {#decision-transitions}
 
 `@effect-agent/ai-decision` evaluates typed questions about application state. A `DecisionSet`
@@ -457,6 +461,8 @@ Use `FailureDiagnostic.captureContext` for bounded diagnostic correlation copies
 end in `[truncated]`, and the original identities remain in their owning records.
 Worker admission and message-delivery failures retain the same causal data: `WorkerError.cause`
 preserves live errors, and the delivery's `lastFailureDiagnostic` survives retries and recovery.
+Retained worker inputs return `MessageStatus` with bounded delivery evidence, including pending
+retry and definite refusal, without exposing these diagnostics to the model.
 The delivery's receipt and refusal/retry classification remain the authority for safe retry decisions.
 For tools using `failureMode: "return"`, project these errors into a separate safe failure schema.
 

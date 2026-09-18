@@ -206,6 +206,12 @@ const harness = Effect.fn("workerHostHarness")(function* (
   let denied: "read" | "send" | "control" | undefined;
   let joined: SubmissionId | undefined;
   let admissionFailure = false;
+  let isolatedThread: ThreadId | undefined;
+
+  const checkThread = (threadId: ThreadId | undefined) => {
+    if (isolatedThread !== undefined) expect(threadId).toBe(isolatedThread);
+  };
+
   let sequence = 0;
   const auth: Array<string> = [];
 
@@ -299,6 +305,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
     Effect.provideService(WorkerHostAuthorizer, {
       authorize: (request) =>
         Effect.suspend(() => {
+          checkThread(request.sourceThreadId);
           auth.push(request.access);
 
           return request.access === denied ||
@@ -321,6 +328,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
     Effect.provideService(ThreadStore, {
       read: (request) =>
         Stream.suspend(() => {
+          checkThread(request.threadId);
           const all = logs.get(request.threadId) ?? [];
           const selection = "selection" in request ? request.selection : undefined;
           let records = all;
@@ -360,6 +368,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
         }),
       export: ({ threadId }) =>
         Effect.suspend(() => {
+          checkThread(threadId);
           const records = logs.get(threadId);
 
           reads.exported += records?.length ?? 0;
@@ -378,6 +387,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
         }),
       inspectTail: ({ threadId }) =>
         Effect.suspend(() => {
+          checkThread(threadId);
           const records = logs.get(threadId);
 
           return records === undefined
@@ -393,6 +403,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
         }),
       append: (request) =>
         Effect.gen(function* () {
+          checkThread(request.threadId);
           yield* Effect.yieldNow;
           const records = logs.get(request.threadId) ?? [];
 
@@ -455,8 +466,14 @@ const harness = Effect.fn("workerHostHarness")(function* (
     }),
     Effect.provideService(SubmissionLedger, {
       lookup: (request) =>
-        Effect.sync(() =>
-          request._tag === "SubmissionLookupById"
+        Effect.sync(() => {
+          checkThread(
+            request._tag === "SubmissionLookupById"
+              ? submissions.get(request.submissionId)?.threadId
+              : request.threadId,
+          );
+
+          return request._tag === "SubmissionLookupById"
             ? lookup(request.submissionId)
             : Option.fromNullishOr(
                 [...submissions.values()].find(
@@ -465,8 +482,8 @@ const harness = Effect.fn("workerHostHarness")(function* (
                     row.principal === request.principal &&
                     row.idempotencyKey === request.idempotencyKey,
                 ),
-              ),
-        ),
+              );
+        }),
 
       capabilities: Effect.die("Worker fixture only implements ledger lookup"),
       scanNonterminal: Stream.die("Worker fixture only implements ledger lookup"),
@@ -661,6 +678,9 @@ const harness = Effect.fn("workerHostHarness")(function* (
     auth,
     settle,
     push,
+    isolate: (value: ThreadId | undefined) => {
+      isolatedThread = value;
+    },
     deny: (value: typeof denied) => {
       denied = value;
     },
@@ -758,7 +778,7 @@ layer(NodeCrypto.layer)((it) => {
           encodedParameters: {},
         });
 
-        expect(followUp.threadId).toBe(started.worker.threadId);
+        expect(followUp.receipt!.threadId).toBe(started.worker.threadId);
         expect(yield* h.host.start(initial)).toEqual(started);
         expect(h.reads.exported).toBe(0);
         expect(h.reads.paged).toBeLessThan(32);
@@ -774,7 +794,7 @@ layer(NodeCrypto.layer)((it) => {
 
       const initial = request("uncertain-worker");
       const first = yield* h.host.start(initial);
-      const runId = Schema.decodeSync(RunId)(`run:${first.receipt.submissionId}`);
+      const runId = Schema.decodeSync(RunId)(`run:${first.delivery.receipt!.submissionId}`);
       const toolCallId = Schema.decodeSync(ToolCallId)("external-action");
 
       h.push(
@@ -801,10 +821,10 @@ layer(NodeCrypto.layer)((it) => {
         }),
         "unknown-action",
       );
-      yield* h.settle(first.receipt, "reported result");
+      yield* h.settle(first.delivery.receipt!, "reported result");
       expect(
         h.logs
-          .get(sourceId)!
+          .get(first.worker.threadId)!
           .filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
       ).toEqual([]);
       expect(yield* h.host.start(initial)).toEqual(first);
@@ -821,7 +841,10 @@ layer(NodeCrypto.layer)((it) => {
       const h = yield* harness({ limits: { maxInputsPerWorker: 1, maxActiveWorkersPerSource: 1 } });
       const first = yield* h.host.start(request("capacity-first"));
 
-      yield* h.host.start(request("capacity-second")).pipe(Effect.flip);
+      expect((yield* h.host.start(request("capacity-second"))).delivery).toMatchObject({
+        status: "refused",
+        reason: "worker-capacity",
+      });
 
       const pending = [...h.deliveries.values()].find(
         (row) =>
@@ -848,19 +871,16 @@ layer(NodeCrypto.layer)((it) => {
           .pipe(Effect.flip),
       ).toMatchObject({ reason: "capacity", retryable: true });
 
-      const permanent = yield* h.host
-        .followUp({
-          worker: first.worker,
-          target,
-          idempotencyKey: Schema.decodeSync(IdempotencyKey)("exhausted"),
-          encodedInput: { text: "extra" },
-          encodedParameters: { note: "extra" },
-        })
-        .pipe(Effect.flip);
+      const permanent = yield* h.host.followUp({
+        worker: first.worker,
+        target,
+        idempotencyKey: Schema.decodeSync(IdempotencyKey)("exhausted"),
+        encodedInput: { text: "extra" },
+        encodedParameters: { note: "extra" },
+      });
 
-      expect(permanent.reason).toBe("capacity");
-      expect(permanent.retryable).toBeUndefined();
-      yield* h.settle(first.receipt);
+      expect(permanent).toMatchObject({ status: "refused", reason: "worker-capacity" });
+      yield* h.settle(first.delivery.receipt!);
       expect((yield* h.host.start(request("capacity-third"))).worker.threadId).not.toBe(
         first.worker.threadId,
       );
@@ -873,6 +893,7 @@ layer(NodeCrypto.layer)((it) => {
     "update:before-delivery-insert",
     "update:after-delivery-insert",
     "stored-byte-capacity",
+    "source-unavailable",
   ] as const) {
     it.effect(`repairs an accepted parent update after ${point} without re-emission`, () =>
       Effect.gen(function* () {
@@ -932,7 +953,7 @@ layer(NodeCrypto.layer)((it) => {
         });
 
         const started = yield* host.start(request("report-updates"));
-        const submission = h.submissions.get(started.receipt.submissionId)!;
+        const submission = h.submissions.get(started.delivery.receipt!.submissionId)!;
         const runId = Schema.decodeSync(RunId)(`run:${submission.submissionId}`);
 
         h.push(
@@ -959,6 +980,73 @@ layer(NodeCrypto.layer)((it) => {
               .get(started.worker.threadId)
               ?.filter(({ record }) => record.payload._tag === "AgentUpdateEmitted"),
           ).toHaveLength(0);
+
+          return;
+        }
+        if (point === "source-unavailable") {
+          const sourceLength = h.logs.get(sourceId)!.length;
+
+          h.isolate(started.worker.threadId);
+          h.deny("send");
+          yield* h.updates.emit(emission);
+          yield* h.settle(started.delivery.receipt!);
+          h.isolate(undefined);
+          expect(h.logs.get(sourceId)).toHaveLength(sourceLength);
+
+          const published = [...h.deliveries.values()].filter(
+            (row) => row.key.ownerThreadId === started.worker.threadId,
+          );
+
+          expect(published).toHaveLength(2);
+          for (const row of published) {
+            const message = row.envelope.messageAdmission;
+
+            if (!Schema.is(WorkerUpdate)(message) && !Schema.is(WorkerCompletion)(message))
+              throw new Error("Expected a framework report");
+
+            const options = {
+              threadId: row.envelope.threadId,
+              principal: row.envelope.deliveryPrincipal,
+              idempotencyKey: row.envelope.admissionKey,
+              definitions: row.envelope.definitions,
+            };
+
+            // The destination's live permission check is independent of publication.
+            expect(
+              yield* h.runtime
+                .validateCompletion(
+                  message,
+                  options,
+                  row.envelope.agentId,
+                  row.envelope.inputDigest,
+                )
+                .pipe(Effect.flip),
+            ).toMatchObject({ reason: "denied" });
+            h.deny(undefined);
+            expect(
+              yield* h.runtime.validateCompletion(
+                message,
+                options,
+                row.envelope.agentId,
+                row.envelope.inputDigest,
+              ),
+            ).toEqual(message);
+            h.deny("send");
+          }
+          h.deny(undefined);
+
+          const steered = yield* host.followUp({
+            worker: started.worker,
+            target,
+            idempotencyKey: Schema.decodeSync(IdempotencyKey)("steering-after-report"),
+            encodedInput: { text: "new information" },
+            encodedParameters: { note: "steering" },
+          });
+
+          expect(h.submissions.get(steered.receipt!.submissionId)?.inputPayload).toEqual({
+            text: "new information",
+          });
+          yield* host.cancel({ worker: started.worker, target, receipt: steered.receipt! });
 
           return;
         }
@@ -1022,7 +1110,7 @@ layer(NodeCrypto.layer)((it) => {
             .pipe(Effect.flip),
         ).toMatchObject({ reason: "denied" });
         h.deny(undefined);
-        yield* h.settle(started.receipt);
+        yield* h.settle(started.delivery.receipt!);
 
         const completion = [...h.deliveries.values()].find((entry) =>
           Schema.is(WorkerCompletion)(entry.envelope.messageAdmission),
@@ -1041,7 +1129,7 @@ layer(NodeCrypto.layer)((it) => {
       Effect.gen(function* () {
         const h = yield* harness();
         const started = yield* h.host.start(request("updating"));
-        const submission = h.submissions.get(started.receipt.submissionId)!;
+        const submission = h.submissions.get(started.delivery.receipt!.submissionId)!;
         const runId = Schema.decodeSync(RunId)(`run:${submission.submissionId}`);
 
         h.push(
@@ -1088,7 +1176,7 @@ layer(NodeCrypto.layer)((it) => {
             })
             .pipe(Effect.flip),
         ).toMatchObject({ reason: "capacity" });
-        yield* h.settle(started.receipt);
+        yield* h.settle(started.delivery.receipt!);
         expect(
           yield* h.updates
             .emit({ ...input, updateId: Schema.decodeSync(IdempotencyKey)("late") })
@@ -1102,7 +1190,7 @@ layer(NodeCrypto.layer)((it) => {
     Effect.gen(function* () {
       const h = yield* harness();
       const started = yield* h.host.start(request("parallel-updates"));
-      const submission = h.submissions.get(started.receipt.submissionId)!;
+      const submission = h.submissions.get(started.delivery.receipt!.submissionId)!;
       const runId = Schema.decodeSync(RunId)(`run:${submission.submissionId}`);
 
       h.push(
@@ -1183,7 +1271,7 @@ layer(NodeCrypto.layer)((it) => {
 
       const legacy = yield* h.host.start(request("legacy-worker"));
 
-      yield* h.settle(legacy.receipt);
+      yield* h.settle(legacy.delivery.receipt!);
       h.submissions.set(ownerId, owner);
 
       const host = yield* h.runtime.acquire({
@@ -1191,6 +1279,10 @@ layer(NodeCrypto.layer)((it) => {
         principal,
         sourceSubmissionId: ownerId,
       });
+
+      expect(
+        yield* host.inspect({ worker: legacy.worker, target, message: legacy.delivery.message }),
+      ).toEqual(legacy.delivery);
 
       const followUp = yield* host.followUp({
         worker: legacy.worker,
@@ -1200,16 +1292,16 @@ layer(NodeCrypto.layer)((it) => {
         encodedParameters: { note: "continue existing work" },
       });
 
-      expect(h.submissions.get(followUp.submissionId)?.workerAdmission?.origin).toEqual(
-        h.submissions.get(legacy.receipt.submissionId)?.workerAdmission?.origin,
+      expect(h.submissions.get(followUp.receipt!.submissionId)?.workerAdmission?.origin).toEqual(
+        h.submissions.get(legacy.delivery.receipt!.submissionId)?.workerAdmission?.origin,
       );
-      yield* h.settle(followUp);
+      yield* h.settle(followUp.receipt!);
       const started = yield* host.start(request("upgraded-scout"));
-      const child = h.submissions.get(started.receipt.submissionId)!;
+      const child = h.submissions.get(started.delivery.receipt!.submissionId)!;
 
       expect(child.workerAdmission?.origin.source.agentId).toBe(upgraded.id);
       expect(child.workerAdmission?.origin.reporting?.sourceDigests).toEqual(upgradedDigests);
-      yield* h.settle(started.receipt);
+      yield* h.settle(started.delivery.receipt!);
       expect(
         [...h.deliveries.values()]
           .filter((row) => row.envelope.threadId === sourceId)
@@ -1282,16 +1374,15 @@ layer(NodeCrypto.layer)((it) => {
 
         const raced = yield* Effect.forEach(
           [start("slot-a"), start("slot-b")],
-          (effect) =>
-            effect.pipe(
-              Effect.map(Option.some),
-              Effect.catchTag("WorkerError", () => Effect.succeed(Option.none())),
-            ),
+          (effect) => effect,
           { concurrency: "unbounded" },
         );
 
-        expect(raced.filter(Option.isSome)).toHaveLength(1);
-        const first = Option.getOrThrow(raced.find(Option.isSome)!);
+        expect(raced.map((result) => result.delivery.status).sort()).toEqual([
+          "accepted",
+          "refused",
+        ]);
+        const first = raced.find((result) => result.delivery.status === "accepted")!;
 
         limit = 0;
 
@@ -1307,24 +1398,36 @@ layer(NodeCrypto.layer)((it) => {
         const steering = yield* follow("active-steering");
 
         expect(yield* follow("active-steering")).toEqual(steering);
-        expect((yield* start("blocked-zero").pipe(Effect.flip)).reason).toBe("capacity");
-        yield* h.settle(first.receipt);
+        expect((yield* start("blocked-zero")).delivery).toMatchObject({
+          status: "refused",
+          reason: "worker-capacity",
+        });
+        yield* h.settle(first.delivery.receipt!);
         // A queued/steering input still owns the slot after the first receipt settles.
-        expect((yield* start("blocked-pending").pipe(Effect.flip)).reason).toBe("capacity");
-        yield* h.settle(steering, "steered", { host: first.receipt });
-        expect((yield* follow("idle-blocked").pipe(Effect.flip)).reason).toBe("capacity");
+        expect((yield* start("blocked-pending")).delivery).toMatchObject({
+          status: "refused",
+          reason: "worker-capacity",
+        });
+        yield* h.settle(steering.receipt!, "steered", { host: first.delivery.receipt! });
+        expect(yield* follow("idle-blocked")).toMatchObject({
+          status: "refused",
+          reason: "worker-capacity",
+        });
         limit = 1;
         const later = yield* follow("idle-later");
 
-        expect(later.threadId).toEqual(first.worker.threadId);
-        expect(h.submissions.get(later.submissionId)?.workerAdmission?.origin).toEqual(
-          h.submissions.get(first.receipt.submissionId)?.workerAdmission?.origin,
+        expect(later.receipt!.threadId).toEqual(first.worker.threadId);
+        expect(h.submissions.get(later.receipt!.submissionId)?.workerAdmission?.origin).toEqual(
+          h.submissions.get(first.delivery.receipt!.submissionId)?.workerAdmission?.origin,
         );
-        yield* h.settle(later);
+        yield* h.settle(later.receipt!);
         limit = 1_000;
         yield* start("host-one");
         yield* start("host-two");
-        expect((yield* start("host-three").pipe(Effect.flip)).reason).toBe("capacity");
+        expect((yield* start("host-three")).delivery).toMatchObject({
+          status: "refused",
+          reason: "worker-capacity",
+        });
       }),
   );
   // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
@@ -1390,31 +1493,36 @@ layer(NodeCrypto.layer)((it) => {
 
         const start = () => host.start({ ...request("retry-capacity"), budgetScope: "worker-run" });
 
-        // The public host reports the retryable delivery as storage; admission keeps its typed code.
-        const failure = yield* start().pipe(Effect.flip);
+        // Retention survives admission failure; its diagnostic stays private in the delivery row.
+        const pending = yield* start();
 
-        expect(failure).toMatchObject({
+        expect(pending.delivery).toMatchObject({
+          status: "pending",
+          receipt: null,
           reason: "storage",
+        });
+        expect(pending.delivery).not.toHaveProperty("cause");
+        const diagnostic = [...h.deliveries.values()][0]?.lastFailureDiagnostic;
+
+        expect(diagnostic).toMatchObject({
+          _tag: "Error",
+          errorTag: "ScheduledInputRetryable",
           cause: {
-            _tag: "Error",
-            errorTag: "ScheduledInputRetryable",
+            errorTag: "AdmissionPolicyError",
+            code: "worker-unavailable",
             cause: {
-              errorTag: "AdmissionPolicyError",
-              code: "worker-unavailable",
+              errorTag: "WorkerError",
+              reason: { _tag: "Value", value: "unavailable" },
               cause: {
-                errorTag: "WorkerError",
-                reason: { _tag: "Value", value: "unavailable" },
-                cause: {
-                  errorTag: "CapacityStorageError",
-                  message: "Capacity store unavailable",
-                  code: "CONNECTION_RESET",
-                  stack: dependency.stack,
-                },
+                errorTag: "CapacityStorageError",
+                message: "Capacity store unavailable",
+                code: "CONNECTION_RESET",
+                stack: dependency.stack,
               },
             },
           },
         });
-        expect(JSON.stringify(failure.cause)).not.toContain("private capacity data");
+        expect(JSON.stringify(diagnostic)).not.toContain("private capacity data");
         expect(calls).toBe(1);
         expect([...h.deliveries.values()][0]?.status).toBe("pending");
         const envelope = [...h.deliveries.values()][0]!.envelope;
@@ -1443,7 +1551,7 @@ layer(NodeCrypto.layer)((it) => {
         unavailable = false;
         yield* TestClock.adjust("1 second");
         h.fail("worker:after-source-append");
-        expect((yield* start().pipe(Effect.flip)).reason).toBe("storage");
+        expect((yield* start()).delivery).toMatchObject({ status: "pending", reason: "storage" });
         h.fail(undefined);
         unavailable = true;
         const attempts = calls;
@@ -1507,8 +1615,8 @@ layer(NodeCrypto.layer)((it) => {
       expect((yield* legacyFacet.context).policy).toEqual(revised.policy);
       const started = yield* legacyFacet.start(request("legacy-owner"));
 
-      expect(started.receipt.threadId).toBe(started.worker.threadId);
-      yield* legacy.settle(started.receipt);
+      expect(started.delivery.receipt!.threadId).toBe(started.worker.threadId);
+      yield* legacy.settle(started.delivery.receipt!);
       expect(
         [...legacy.deliveries.values()]
           .filter((row) => row.envelope.threadId === sourceId)
@@ -1547,7 +1655,9 @@ layer(NodeCrypto.layer)((it) => {
       });
 
       expect((yield* currentOwner.context).policy).toEqual(revised.policy);
-      expect((yield* currentOwner.start(request("current-owner"))).receipt.threadId).toBeDefined();
+      expect(
+        (yield* currentOwner.start(request("current-owner"))).delivery.receipt!.threadId,
+      ).toBeDefined();
       expect(recreated.logs.get(sourceId)?.[0]).toEqual(original);
 
       const laterOwnerId = Schema.decodeSync(SubmissionId)("later-source-owner");
@@ -1636,10 +1746,12 @@ layer(NodeCrypto.layer)((it) => {
 
       expect((yield* selected.context).policy).toEqual(revised.policy);
       const worker = yield* selected.start(request("owner-B-worker"));
-      const origin = opted.submissions.get(worker.receipt.submissionId)!.workerAdmission!.origin;
+
+      const origin = opted.submissions.get(worker.delivery.receipt!.submissionId)!.workerAdmission!
+        .origin;
 
       expect(origin.reporting?.sourceDigests).toEqual(laterDigests);
-      yield* opted.settle(worker.receipt);
+      yield* opted.settle(worker.delivery.receipt!);
       opted.submissions.set(
         laterOwnerId,
         SubmissionSnapshot.make({
@@ -1664,8 +1776,10 @@ layer(NodeCrypto.layer)((it) => {
         encodedParameters: { note: "next" },
       });
 
-      yield* opted.settle(next);
-      expect(opted.submissions.get(next.submissionId)!.workerAdmission!.origin).toEqual(origin);
+      yield* opted.settle(next.receipt!);
+      expect(opted.submissions.get(next.receipt!.submissionId)!.workerAdmission!.origin).toEqual(
+        origin,
+      );
       expect(reportsC).toBe(2);
       expect(reportOwners).toEqual([ownerId, laterOwnerId, ownerId]);
       expect(
@@ -1738,7 +1852,10 @@ layer(NodeCrypto.layer)((it) => {
         };
 
         h.fail("worker:after-source-append");
-        yield* h.host.start(start).pipe(Effect.flip);
+        expect((yield* h.host.start(start)).delivery).toMatchObject({
+          status: "pending",
+          reason: "storage",
+        });
         h.fail(undefined);
         const delivery = [...h.deliveries.values()][0]!;
         const metadata = delivery.envelope.workerAdmission!;
@@ -1768,7 +1885,9 @@ layer(NodeCrypto.layer)((it) => {
         const started = yield* h.host.start(start);
 
         expect(initialCalls).toBeGreaterThanOrEqual(4);
-        const origin = h.submissions.get(started.receipt.submissionId)!.workerAdmission!.origin;
+
+        const origin = h.submissions.get(started.delivery.receipt!.submissionId)!.workerAdmission!
+          .origin;
 
         expect(origin.policy).toEqual(captured);
         expect(
@@ -1776,7 +1895,7 @@ layer(NodeCrypto.layer)((it) => {
             .get(sourceId)!
             .filter(({ record }) => record.payload._tag === "WorkerInputRequested"),
         ).toHaveLength(1);
-        yield* h.settle(started.receipt);
+        yield* h.settle(started.delivery.receipt!);
 
         const followup = {
           worker: started.worker,
@@ -1792,7 +1911,9 @@ layer(NodeCrypto.layer)((it) => {
         replaceRetained = false;
         const next = yield* h.host.followUp(followup);
 
-        expect(h.submissions.get(next.submissionId)!.workerAdmission!.origin).toEqual(origin);
+        expect(h.submissions.get(next.receipt!.submissionId)!.workerAdmission!.origin).toEqual(
+          origin,
+        );
       }),
   );
 
@@ -1825,9 +1946,11 @@ layer(NodeCrypto.layer)((it) => {
         const started = yield* h.host.start(independent);
 
         expect(yield* h.host.start(independent)).toEqual(started);
-        const original = h.submissions.get(started.receipt.submissionId)?.workerAdmission?.origin;
 
-        yield* h.settle(started.receipt);
+        const original = h.submissions.get(started.delivery.receipt!.submissionId)?.workerAdmission
+          ?.origin;
+
+        yield* h.settle(started.delivery.receipt!);
         for (const name of ["second", "third"]) {
           const next = yield* h.host.followUp({
             worker: started.worker,
@@ -1837,8 +1960,10 @@ layer(NodeCrypto.layer)((it) => {
             encodedParameters: { note: name },
           });
 
-          expect(h.submissions.get(next.submissionId)?.workerAdmission?.origin).toEqual(original);
-          yield* h.settle(next);
+          expect(h.submissions.get(next.receipt!.submissionId)?.workerAdmission?.origin).toEqual(
+            original,
+          );
+          yield* h.settle(next.receipt!);
         }
         expect(original).toMatchObject({ budgetScope: "worker-run", depth: 1 });
         expect(
@@ -1847,16 +1972,14 @@ layer(NodeCrypto.layer)((it) => {
             ?.filter(({ record }) => record.payload._tag === "SubtreeBudgetReserved"),
         ).toHaveLength(0);
         expect(
-          (yield* h.host
-            .followUp({
-              worker: started.worker,
-              target,
-              idempotencyKey: Schema.decodeSync(IdempotencyKey)("fourth"),
-              encodedInput: { text: "fourth" },
-              encodedParameters: {},
-            })
-            .pipe(Effect.flip)).reason,
-        ).toBe("capacity");
+          (yield* h.host.followUp({
+            worker: started.worker,
+            target,
+            idempotencyKey: Schema.decodeSync(IdempotencyKey)("fourth"),
+            encodedInput: { text: "fourth" },
+            encodedParameters: {},
+          })).reason,
+        ).toBe("worker-capacity");
       }),
   );
   it.effect("concurrent launches cannot oversubscribe one canonical source slot", () =>
@@ -1865,11 +1988,14 @@ layer(NodeCrypto.layer)((it) => {
 
       const outcomes = yield* Effect.forEach(
         ["left", "right"],
-        (key) => h.host.start(request(key)).pipe(Effect.exit),
+        (key) => h.host.start(request(key)),
         { concurrency: 2 },
       );
 
-      expect(outcomes.filter((exit) => exit._tag === "Success")).toHaveLength(1);
+      expect(outcomes.map((result) => result.delivery.status).sort()).toEqual([
+        "accepted",
+        "refused",
+      ]);
       expect(
         h.logs
           .get(sourceId)
@@ -1911,7 +2037,10 @@ layer(NodeCrypto.layer)((it) => {
           });
 
         yield* send("second");
-        expect((yield* send("third").pipe(Effect.exit))._tag).toBe("Failure");
+        expect(yield* send("third")).toMatchObject({
+          status: "refused",
+          reason: "worker-capacity",
+        });
         yield* TestClock.adjust("61 seconds");
         expect((yield* send("late").pipe(Effect.flip)).reason).toBe("capacity");
       }),
@@ -1925,15 +2054,15 @@ layer(NodeCrypto.layer)((it) => {
         const first = yield* h.host.start(request("waiting"));
 
         const waiting = yield* h.host
-          .await({ worker: first.worker, target, receipt: first.receipt })
+          .await({ worker: first.worker, target, receipt: first.delivery.receipt! })
           .pipe(Effect.forkChild);
 
         yield* Effect.yieldNow;
         yield* Fiber.interrupt(waiting);
         expect(h.auth).not.toContain("control");
         expect(
-          (yield* h.host.inspect({ worker: first.worker, target, receipt: first.receipt }))._tag,
-        ).toBe("Pending");
+          yield* h.host.inspect({ worker: first.worker, target, receipt: first.delivery.receipt! }),
+        ).toMatchObject({ _tag: "Pending" });
       }),
   );
   it.effect(
@@ -1954,33 +2083,34 @@ layer(NodeCrypto.layer)((it) => {
           encodedParameters: { note: "second" },
         });
 
-        expect(next.threadId).toBe(first.worker.threadId);
-        expect(next.submissionId).not.toBe(first.receipt.submissionId);
-        expect(h.submissions.get(next.submissionId)?.workerAdmission?.origin).toEqual(
-          h.submissions.get(first.receipt.submissionId)?.workerAdmission?.origin,
+        expect(next.receipt!.threadId).toBe(first.worker.threadId);
+        expect(next.receipt!.submissionId).not.toBe(first.delivery.receipt!.submissionId);
+        expect(h.submissions.get(next.receipt!.submissionId)?.workerAdmission?.origin).toEqual(
+          h.submissions.get(first.delivery.receipt!.submissionId)?.workerAdmission?.origin,
         );
-        expect(h.submissions.get(next.submissionId)?.parentLinkage).toBeUndefined();
+        expect(h.submissions.get(next.receipt!.submissionId)?.parentLinkage).toBeUndefined();
         expect(
-          yield* h.host.inspect({ worker: first.worker, target, receipt: first.receipt }),
-        ).toEqual({ _tag: "Pending", receipt: first.receipt });
-        h.join(next.submissionId);
+          yield* h.host.inspect({ worker: first.worker, target, receipt: first.delivery.receipt! }),
+        ).toEqual({ _tag: "Pending", receipt: first.delivery.receipt! });
+        h.join(next.receipt!.submissionId);
         expect(
-          (yield* h.host.cancel({ worker: first.worker, target, receipt: next }).pipe(Effect.flip))
-            ._tag,
+          (yield* h.host
+            .cancel({ worker: first.worker, target, receipt: next.receipt! })
+            .pipe(Effect.flip))._tag,
         ).toBe("JoinedToHost");
-        yield* h.settle(first.receipt);
+        yield* h.settle(first.delivery.receipt!);
 
         const status = yield* h.host.inspect({
           worker: first.worker,
           target,
-          receipt: first.receipt,
+          receipt: first.delivery.receipt!,
         });
 
-        expect(status._tag === "Settled" && status.encodedParameters).toEqual({ note: "first" });
+        expect(status).toMatchObject({ _tag: "Settled", encodedParameters: { note: "first" } });
         expect(
           (yield* h.host.list({ delegationId: first.worker.delegationId, target, limit: 10 }))
             .items[0]?.latestReceipt,
-        ).toEqual(next);
+        ).toEqual(next.receipt);
       }),
   );
 
@@ -1997,23 +2127,23 @@ layer(NodeCrypto.layer)((it) => {
         encodedParameters: { note: "queued" },
       });
 
-      yield* h.host.cancel({ worker: first.worker, target, receipt: latest });
-      yield* h.settle(latest, "unused", { abortedBeforeRun: true });
+      yield* h.host.cancel({ worker: first.worker, target, receipt: latest.receipt! });
+      yield* h.settle(latest.receipt!, "unused", { abortedBeforeRun: true });
       expect(
-        (yield* h.host.inspect({ worker: first.worker, target, receipt: first.receipt }))._tag,
-      ).toBe("Pending");
+        yield* h.host.inspect({ worker: first.worker, target, receipt: first.delivery.receipt! }),
+      ).toMatchObject({ _tag: "Pending" });
       expect(
-        yield* h.host.inspect({ worker: first.worker, target, receipt: latest }),
-      ).toMatchObject({ _tag: "Settled", receipt: latest, outcome: "aborted" });
+        yield* h.host.inspect({ worker: first.worker, target, receipt: latest.receipt! }),
+      ).toMatchObject({ _tag: "Settled", receipt: latest.receipt, outcome: "aborted" });
 
-      const active = { worker: first.worker, latestReceipt: latest, state: "active" };
+      const active = { worker: first.worker, latestReceipt: latest.receipt, state: "active" };
 
       expect(yield* h.host.summary({ worker: first.worker, target })).toEqual(active);
       expect(
         (yield* h.host.list({ delegationId: first.worker.delegationId, target, limit: 10 })).items,
       ).toEqual([active]);
 
-      yield* h.settle(first.receipt);
+      yield* h.settle(first.delivery.receipt!);
       const idle = { ...active, state: "idle" };
 
       expect(yield* h.host.summary({ worker: first.worker, target })).toEqual(idle);
@@ -2030,7 +2160,7 @@ layer(NodeCrypto.layer)((it) => {
         const h = yield* harness();
         const first = yield* h.host.start(request("initial"));
 
-        yield* h.settle(first.receipt);
+        yield* h.settle(first.delivery.receipt!);
 
         const followUp = (key: string) =>
           h.host.followUp({
@@ -2042,11 +2172,14 @@ layer(NodeCrypto.layer)((it) => {
           });
 
         h.fail("worker:after-source-append");
-        expect((yield* followUp("earlier-intent").pipe(Effect.flip)).reason).toBe("storage");
+        expect(yield* followUp("earlier-intent")).toMatchObject({
+          status: "pending",
+          reason: "storage",
+        });
         h.fail(undefined);
         expect(yield* h.host.summary({ worker: first.worker, target })).toEqual({
           worker: first.worker,
-          latestReceipt: first.receipt,
+          latestReceipt: first.delivery.receipt!,
           state: "starting",
         });
         const earlierReceipt = yield* followUp("later-intent");
@@ -2055,7 +2188,9 @@ layer(NodeCrypto.layer)((it) => {
         yield* TestClock.adjust("31 seconds");
         const latestReceipt = yield* followUp("earlier-intent");
 
-        expect(latestReceipt.queueSequence).toBeGreaterThan(earlierReceipt.queueSequence);
+        expect(latestReceipt.receipt!.queueSequence).toBeGreaterThan(
+          earlierReceipt.receipt!.queueSequence,
+        );
         expect(
           h.logs
             .get(sourceId)!
@@ -2065,15 +2200,20 @@ layer(NodeCrypto.layer)((it) => {
                 : [],
             ),
         ).toEqual([{ note: "initial" }, { note: "earlier-intent" }, { note: "later-intent" }]);
-        const active = { worker: first.worker, latestReceipt, state: "active" };
+
+        const active = {
+          worker: first.worker,
+          latestReceipt: latestReceipt.receipt,
+          state: "active",
+        };
 
         expect(yield* h.host.summary({ worker: first.worker, target })).toEqual(active);
         expect(
           (yield* h.host.list({ delegationId: first.worker.delegationId, target, limit: 10 }))
             .items,
         ).toEqual([active]);
-        yield* h.settle(earlierReceipt);
-        yield* h.settle(latestReceipt);
+        yield* h.settle(earlierReceipt.receipt!);
+        yield* h.settle(latestReceipt.receipt!);
         expect(yield* h.host.summary({ worker: first.worker, target })).toEqual({
           ...active,
           state: "idle",
@@ -2085,11 +2225,11 @@ layer(NodeCrypto.layer)((it) => {
     Effect.gen(function* () {
       const h = yield* harness();
       const first = yield* h.host.start(request("first"));
-      const other = yield* h.host.start(request("other")).pipe(Effect.exit);
+      const other = yield* h.host.start(request("other"));
 
-      expect(other._tag).toBe("Failure");
-      yield* h.settle(first.receipt);
-      expect((yield* h.host.start(request("other")).pipe(Effect.flip)).reason).toBe("capacity");
+      expect(other.delivery).toMatchObject({ status: "refused", reason: "worker-capacity" });
+      yield* h.settle(first.delivery.receipt!);
+      expect(yield* h.host.start(request("other"))).toEqual(other);
       expect(
         [...h.deliveries.values()].filter((record) => record.status === "refused"),
       ).toHaveLength(1);
@@ -2098,14 +2238,14 @@ layer(NodeCrypto.layer)((it) => {
       expect(second.worker.threadId).not.toBe(first.worker.threadId);
 
       const completed = h.logs
-        .get(sourceId)
+        .get(first.worker.threadId)
         ?.filter(({ record }) => record.payload._tag === "WorkerInputCompleted");
 
       expect(completed).toHaveLength(1);
-      yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
+      yield* h.runtime.completeInput(h.submissions.get(first.delivery.receipt!.submissionId)!);
       expect(
         h.logs
-          .get(sourceId)
+          .get(first.worker.threadId)
           ?.filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
       ).toHaveLength(1);
     }),
@@ -2172,7 +2312,7 @@ layer(NodeCrypto.layer)((it) => {
           reservationId: Schema.decodeSync(SubtreeBudgetReserved.fields.reservationId)(
             "attached-scout",
           ),
-          sourceSubmissionId: builder.receipt.submissionId,
+          sourceSubmissionId: builder.delivery.receipt!.submissionId,
           childThreadId: Schema.decodeSync(ThreadId)("attached-scout"),
           lifetime: "attached",
           depth: 2,
@@ -2231,14 +2371,15 @@ layer(NodeCrypto.layer)((it) => {
           encodedGrant: childGrant,
         };
 
-        const scout = yield* modelHost(builder.receipt).start(nested);
+        const scout = yield* modelHost(builder.delivery.receipt!).start(nested);
 
-        expect(h.submissions.get(scout.receipt.submissionId)?.workerAdmission?.origin.depth).toBe(
-          2,
-        );
         expect(
-          h.submissions.get(scout.receipt.submissionId)?.workerAdmission?.sourceSubmissionId,
-        ).toBe(builder.receipt.submissionId);
+          h.submissions.get(scout.delivery.receipt!.submissionId)?.workerAdmission?.origin.depth,
+        ).toBe(2);
+        expect(
+          h.submissions.get(scout.delivery.receipt!.submissionId)?.workerAdmission
+            ?.sourceSubmissionId,
+        ).toBe(builder.delivery.receipt!.submissionId);
         expect(
           (yield* h.runtime
             .reserveSubtree(
@@ -2269,14 +2410,15 @@ layer(NodeCrypto.layer)((it) => {
           encodedParameters: { note: "next" },
         });
 
-        const next = yield* modelHost(nextInput).start({
+        const next = yield* modelHost(nextInput.receipt!).start({
           ...nested,
           idempotencyKey: Schema.decodeSync(IdempotencyKey)("second-input-scout"),
         });
 
         expect(
-          h.submissions.get(next.receipt.submissionId)?.workerAdmission?.sourceSubmissionId,
-        ).toBe(nextInput.submissionId);
+          h.submissions.get(next.delivery.receipt!.submissionId)?.workerAdmission
+            ?.sourceSubmissionId,
+        ).toBe(nextInput.receipt!.submissionId);
       }),
   );
 
@@ -2309,7 +2451,7 @@ layer(NodeCrypto.layer)((it) => {
 
         const reservation = SubtreeBudgetReserved.make({
           reservationId: Schema.decodeSync(SubtreeBudgetReserved.fields.reservationId)("scout"),
-          sourceSubmissionId: builder.receipt.submissionId,
+          sourceSubmissionId: builder.delivery.receipt!.submissionId,
           childThreadId: Schema.decodeSync(ThreadId)("scout"),
           lifetime: "attached",
           depth: 2,
@@ -2383,26 +2525,26 @@ layer(NodeCrypto.layer)((it) => {
           .await({
             worker: first.worker,
             target,
-            receipt: member,
+            receipt: member.receipt!,
           })
           .pipe(Effect.forkChild);
 
         yield* Effect.yieldNow;
-        yield* h.settle(first.receipt, "shared-result");
-        yield* h.settle(member, "unused", { host: first.receipt });
+        yield* h.settle(first.delivery.receipt!, "shared-result");
+        yield* h.settle(member.receipt!, "unused", { host: first.delivery.receipt! });
         yield* TestClock.adjust("5 millis");
         const observed = yield* Fiber.join(waiting);
 
         expect(observed).toMatchObject({
           _tag: "Settled",
-          receipt: member,
-          runId: `run:${first.receipt.submissionId}`,
+          receipt: member.receipt,
+          runId: `run:${first.delivery.receipt!.submissionId}`,
           encodedParameters: { note: "member-parameters" },
           encodedResult: "shared-result",
         });
-        expect(yield* h.host.inspect({ worker: first.worker, target, receipt: member })).toEqual(
-          observed,
-        );
+        expect(
+          yield* h.host.inspect({ worker: first.worker, target, receipt: member.receipt! }),
+        ).toEqual(observed);
       }),
   );
 
@@ -2411,8 +2553,13 @@ layer(NodeCrypto.layer)((it) => {
       const h = yield* harness();
       const first = yield* h.host.start(request("never-ran"));
 
-      yield* h.settle(first.receipt, "unused", { abortedBeforeRun: true });
-      const observed = yield* h.host.inspect({ ...first, target });
+      yield* h.settle(first.delivery.receipt!, "unused", { abortedBeforeRun: true });
+
+      const observed = yield* h.host.inspect({
+        worker: first.worker,
+        receipt: first.delivery.receipt!,
+        target,
+      });
 
       expect(observed).toMatchObject({ _tag: "Settled", outcome: "aborted", encodedResult: null });
       expect(observed).not.toHaveProperty("runId");
@@ -2460,13 +2607,13 @@ layer(NodeCrypto.layer)((it) => {
         h.deny("control");
         expect(
           (yield* h.host
-            .cancel({ worker: first.worker, target, receipt: first.receipt })
+            .cancel({ worker: first.worker, target, receipt: first.delivery.receipt! })
             .pipe(Effect.flip))._tag,
         ).toBe("WorkerError");
         h.deny(undefined);
 
         const wrong = Receipt.make({
-          ...first.receipt,
+          ...first.delivery.receipt!,
           receiptId: Schema.decodeSync(ReceiptId)("wrong"),
         });
 
@@ -2499,7 +2646,7 @@ layer(NodeCrypto.layer)((it) => {
 
         expect(
           (yield* sender
-            .inspect({ worker: accepted.worker, target, receipt: accepted.receipt })
+            .inspect({ worker: accepted.worker, target, receipt: accepted.delivery.receipt! })
             .pipe(Effect.flip)).reason,
         ).toBe("denied");
       }),
@@ -2530,14 +2677,14 @@ layer(NodeCrypto.layer)((it) => {
         const first = yield* h.host.start(request("report-crash"));
 
         expect(
-          h.submissions.get(first.receipt.submissionId)?.workerAdmission?.origin.reporting
+          h.submissions.get(first.delivery.receipt!.submissionId)?.workerAdmission?.origin.reporting
             ?.sourceDigests,
         ).toEqual(definitions);
         h.fail(point);
-        expect((yield* h.settle(first.receipt).pipe(Effect.exit))._tag).toBe("Failure");
+        expect((yield* h.settle(first.delivery.receipt!).pipe(Effect.exit))._tag).toBe("Failure");
         h.fail(undefined);
-        yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
-        yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
+        yield* h.runtime.completeInput(h.submissions.get(first.delivery.receipt!.submissionId)!);
+        yield* h.runtime.completeInput(h.submissions.get(first.delivery.receipt!.submissionId)!);
 
         const decisions = h.logs
           .get(first.worker.threadId)!
@@ -2601,7 +2748,7 @@ layer(NodeCrypto.layer)((it) => {
         const h = yield* harness({ sourceReports: binding.reporting });
         const first = yield* h.host.start(request("captured"));
 
-        yield* h.settle(first.receipt);
+        yield* h.settle(first.delivery.receipt!);
         expect(released).toBe(1);
         expect(
           [...h.deliveries.values()].find((row) => row.key.ownerThreadId === first.worker.threadId)
@@ -2617,7 +2764,7 @@ layer(NodeCrypto.layer)((it) => {
         });
 
         fail = true;
-        yield* h.settle(second);
+        yield* h.settle(second.receipt!);
         expect(released).toBe(2);
         expect(
           h.logs
@@ -2654,13 +2801,13 @@ layer(NodeCrypto.layer)((it) => {
         encodedParameters: { note: "member" },
       });
 
-      yield* h.settle(first.receipt, "actual");
-      yield* h.settle(second, "ignored", { host: first.receipt });
+      yield* h.settle(first.delivery.receipt!, "actual");
+      yield* h.settle(second.receipt!, "ignored", { host: first.delivery.receipt! });
       expect(observations).toHaveLength(1);
       expect(observations[0]).toMatchObject({
         encodedParameters: { note: "host-input" },
         encodedResult: "actual",
-        receipt: first.receipt,
+        receipt: first.delivery.receipt!,
       });
       expect(
         [...h.deliveries.values()].filter((row) => row.key.ownerThreadId === first.worker.threadId),
@@ -2691,8 +2838,8 @@ layer(NodeCrypto.layer)((it) => {
 
         const first = yield* h.host.start(request("refused"));
 
-        yield* h.settle(first.receipt);
-        yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
+        yield* h.settle(first.delivery.receipt!);
+        yield* h.runtime.completeInput(h.submissions.get(first.delivery.receipt!.submissionId)!);
 
         const decisions = h.logs
           .get(first.worker.threadId)!
@@ -2729,7 +2876,7 @@ layer(NodeCrypto.layer)((it) => {
       });
 
       const first = yield* h.host.start(request("timeout"));
-      const fiber = yield* h.settle(first.receipt).pipe(Effect.forkChild);
+      const fiber = yield* h.settle(first.delivery.receipt!).pipe(Effect.forkChild);
 
       yield* TestClock.adjust("5 seconds");
       yield* Fiber.join(fiber);
@@ -2762,12 +2909,12 @@ layer(NodeCrypto.layer)((it) => {
       });
 
       const first = yield* h.host.start(request("interrupted"));
-      const fiber = yield* h.settle(first.receipt).pipe(Effect.forkChild);
+      const fiber = yield* h.settle(first.delivery.receipt!).pipe(Effect.forkChild);
 
       yield* Effect.yieldNow;
       yield* Fiber.interrupt(fiber);
       block = false;
-      yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
+      yield* h.runtime.completeInput(h.submissions.get(first.delivery.receipt!.submissionId)!);
       expect(finalized).toBe(2);
       expect(
         h.logs
@@ -2788,7 +2935,7 @@ layer(NodeCrypto.layer)((it) => {
       const h = yield* harness({ sourceReports: reports });
       const first = yield* h.host.start(request("runless"));
 
-      yield* h.settle(first.receipt, "", { abortedBeforeRun: true });
+      yield* h.settle(first.delivery.receipt!, "", { abortedBeforeRun: true });
       expect(
         h.logs
           .get(first.worker.threadId)!
@@ -2804,7 +2951,7 @@ layer(NodeCrypto.layer)((it) => {
       });
 
       reports.splice(0);
-      yield* h.settle(second);
+      yield* h.settle(second.receipt!);
       expect(
         h.logs
           .get(first.worker.threadId)!
@@ -2951,7 +3098,7 @@ layer(NodeCrypto.layer)((it) => {
             grant,
           },
           principal,
-          builder.receipt.submissionId,
+          builder.delivery.receipt!.submissionId,
         );
 
         const scout = yield* nested.start({
@@ -2981,7 +3128,7 @@ layer(NodeCrypto.layer)((it) => {
         });
 
         if (mode === "standard") {
-          const submission = h.submissions.get(scout.receipt.submissionId)!;
+          const submission = h.submissions.get(scout.delivery.receipt!.submissionId)!;
           const runId = Schema.decodeSync(RunId)(`run:${submission.submissionId}`);
 
           h.push(
@@ -3035,7 +3182,7 @@ layer(NodeCrypto.layer)((it) => {
           );
         }
 
-        yield* h.settle(scout.receipt);
+        yield* h.settle(scout.delivery.receipt!);
 
         const report = [...h.deliveries.values()].find(
           (row) =>
@@ -3048,7 +3195,7 @@ layer(NodeCrypto.layer)((it) => {
           note: mode === "custom" ? "explicit-report-parameters" : "report-builder",
         });
         expect(report.envelope.workerAdmission?.origin).toEqual(
-          h.submissions.get(builder.receipt.submissionId)?.workerAdmission?.origin,
+          h.submissions.get(builder.delivery.receipt!.submissionId)?.workerAdmission?.origin,
         );
         expect(report.envelope.workerAdmission?.sourceSubmissionId).toBeUndefined();
         if (mode === "standard") {
@@ -3144,16 +3291,14 @@ layer(NodeCrypto.layer)((it) => {
         expect(subtree).toHaveLength(mode === "standard" ? 3 : 2);
         // The initial input and report occupy the same worker slot but exhaust its pending-input cap.
         expect(
-          (yield* h.host
-            .followUp({
-              worker: builder.worker,
-              target,
-              idempotencyKey: Schema.decodeSync(IdempotencyKey)("beyond-report"),
-              encodedInput: { text: "extra" },
-              encodedParameters: { note: "extra" },
-            })
-            .pipe(Effect.flip)).reason,
-        ).toBe("capacity");
+          (yield* h.host.followUp({
+            worker: builder.worker,
+            target,
+            idempotencyKey: Schema.decodeSync(IdempotencyKey)("beyond-report"),
+            encodedInput: { text: "extra" },
+            encodedParameters: { note: "extra" },
+          })).reason,
+        ).toBe("worker-capacity");
       }),
   );
 
@@ -3170,12 +3315,20 @@ layer(NodeCrypto.layer)((it) => {
         const h = yield* harness();
 
         h.fail(point);
-        expect((yield* h.host.start(request("failpoint")).pipe(Effect.exit))._tag).toBe("Failure");
+        const interrupted = yield* h.host.start(request("failpoint")).pipe(Effect.exit);
+
+        if (point === "worker:before-origin-append" || point === "worker:after-origin-append")
+          expect(interrupted._tag).toBe("Failure");
+        else
+          expect(interrupted).toMatchObject({
+            _tag: "Success",
+            value: { delivery: { status: "pending", receipt: null, reason: "storage" } },
+          });
         h.fail(undefined);
         yield* TestClock.adjust("31 seconds");
         const started = yield* h.host.start(request("failpoint"));
 
-        expect(started.receipt.threadId).toBe(started.worker.threadId);
+        expect(started.delivery.receipt!.threadId).toBe(started.worker.threadId);
         expect(
           h.logs
             .get(sourceId)
@@ -3199,13 +3352,13 @@ layer(NodeCrypto.layer)((it) => {
         const first = yield* h.host.start(request("completion"));
 
         h.fail(point);
-        expect((yield* h.settle(first.receipt).pipe(Effect.exit))._tag).toBe("Failure");
+        expect((yield* h.settle(first.delivery.receipt!).pipe(Effect.exit))._tag).toBe("Failure");
         h.fail(undefined);
-        yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
-        yield* h.runtime.completeInput(h.submissions.get(first.receipt.submissionId)!);
+        yield* h.runtime.completeInput(h.submissions.get(first.delivery.receipt!.submissionId)!);
+        yield* h.runtime.completeInput(h.submissions.get(first.delivery.receipt!.submissionId)!);
         expect(
           h.logs
-            .get(sourceId)
+            .get(first.worker.threadId)
             ?.filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
         ).toHaveLength(1);
       }),

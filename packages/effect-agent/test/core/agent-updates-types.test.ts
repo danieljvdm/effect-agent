@@ -74,12 +74,24 @@ const proofs: [
       { readonly value: typeof updates.Type }
     >
   >,
+  Assert<
+    Equal<Tool.Success<typeof researcher.toolkit.tools.emit_update>, { readonly emitted: true }>
+  >,
+  Assert<
+    Equal<
+      Tool.SuccessEncoded<typeof researcher.toolkit.tools.emit_update>,
+      { readonly emitted: true }
+    >
+  >,
+  Assert<
+    Equal<Tool.Failure<typeof researcher.toolkit.tools.emit_update>, AgentUpdates.UpdateError>
+  >,
   Assert<Equal<Agent.DefinitionRequirements<typeof researcher>, Encoder | Decoder>>,
   Assert<Equal<Effect.Services<typeof emitted>, AgentUpdates.Emitter | Encoder>>,
   Assert<Equal<Effect.Error<typeof emitted>, AgentUpdates.UpdateError>>,
   Assert<Equal<Effect.Success<ReturnType<typeof decode>>, typeof updates.Type>>,
   Assert<Equal<Effect.Services<ReturnType<typeof decode>>, Decoder>>,
-] = [true, true, true, true, true, true, true, true, true, true, true];
+] = [true, true, true, true, true, true, true, true, true, true, true, true, true, true];
 
 const wrongValue = () => {
   // @ts-expect-error The update has its own schema, independent of final output.

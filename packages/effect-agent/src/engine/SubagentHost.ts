@@ -5,6 +5,7 @@ import type * as Agent from "../core/Agent.ts";
 import type { AgentPolicy } from "../core/AgentPolicy.ts";
 import type * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import type { DelegationId, RunId, SettlementId, ThreadId } from "../core/Identifiers.ts";
+import type { MessageRef, MessageStatus } from "../core/Messaging.ts";
 import { type IdempotencyKey, type JoinedToHost, type Receipt } from "../core/Receipt.ts";
 import type { SubagentBudgetReservation } from "../core/SubagentContract.ts";
 import {
@@ -47,6 +48,12 @@ export interface WorkerReceiptRequest {
   readonly worker: WorkerRef;
   readonly target: Agent.AnyDefinition;
   readonly receipt: Receipt;
+}
+
+export interface WorkerMessageRequest {
+  readonly worker: WorkerRef;
+  readonly target: Agent.AnyDefinition;
+  readonly message: MessageRef;
 }
 
 /**
@@ -131,10 +138,12 @@ export class SubagentHost extends Context.Service<
       readonly encodedInput: unknown;
     }) => Effect.Effect<Option.Option<AgentPolicy>, WorkerError>;
     readonly start: (request: StartWorkerRequest) => Effect.Effect<WorkerStarted, WorkerError>;
-    readonly followUp: (request: FollowUpWorkerRequest) => Effect.Effect<Receipt, WorkerError>;
+    readonly followUp: (
+      request: FollowUpWorkerRequest,
+    ) => Effect.Effect<MessageStatus, WorkerError>;
     readonly inspect: (
-      request: WorkerReceiptRequest,
-    ) => Effect.Effect<WorkerObservation, WorkerError>;
+      request: WorkerReceiptRequest | WorkerMessageRequest,
+    ) => Effect.Effect<WorkerObservation | MessageStatus, WorkerError>;
     /** Inspect the continuing worker using the same summary contract as discovery. */
     readonly summary: (request: {
       readonly worker: WorkerRef;

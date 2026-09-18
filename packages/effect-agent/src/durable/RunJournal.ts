@@ -16,7 +16,11 @@ import {
 } from "../engine/Compaction.ts";
 import { digestJson, type DigestError } from "./Digest.ts";
 import { type JournalCheckpointSeed } from "./internal/journal-checkpoint.ts";
-import { makeJournalMetadata, type JournalMetadata } from "./internal/journal-metadata.ts";
+import {
+  makeJournalMetadata,
+  toolExecutionKey,
+  type JournalMetadata,
+} from "./internal/journal-metadata.ts";
 import {
   BatchId,
   CanonicalBatch,
@@ -640,6 +644,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     lastResponseSequenceByRun,
     terminalSequenceByRun,
     settledSpans,
+    toolExecutionEvidence,
     settledToolCallRecordIds,
     settledById,
     compactions,
@@ -1225,17 +1230,49 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         );
 
         if (calls.length > 0) {
-          const parts = calls.map((call) =>
-            Prompt.makePart("tool-result", {
-              id: call.id,
-              name: call.name,
-              result: {
-                _tag: "ToolOutcomeUnknown",
-                message:
-                  "This earlier operation has no recorded outcome. It may have executed. Do not assume success or retry it; its original operation remains unresolved.",
-              },
-              isFailure: true,
-              providerExecuted: false,
+          const parts = yield* Effect.forEach(calls, (call) =>
+            Effect.gen(function* () {
+              const callId = yield* Schema.decodeEffect(ToolCallId)(call.id).pipe(
+                Effect.mapError((cause) => journalError("Invalid historical Tool Call ID", cause)),
+              );
+
+              const operation = payload.toolOperations?.find(
+                (operation) => operation.toolCallId === callId && operation.toolName === call.name,
+              );
+
+              // Only the recorded execution contract can prove that dispatch required a
+              // preparation. Ordinary readonly calls may execute without one.
+              const notExecuted =
+                operation !== undefined &&
+                (operation.executionClass !== "readonly" ||
+                  operation.executionKind !== "ordinary") &&
+                !toolExecutionEvidence.has(
+                  toolExecutionKey({
+                    runId: payload.runId,
+                    turn: payload.turn,
+                    toolCallId: callId,
+                  }),
+                );
+
+              return Prompt.makePart("tool-result", {
+                id: call.id,
+                name: call.name,
+                result: notExecuted
+                  ? {
+                      _tag: "ToolUnavailable",
+                      toolName: call.name,
+                      execution: "not-executed",
+                      message:
+                        "This earlier call never reached durable preparation and was not executed.",
+                    }
+                  : {
+                      _tag: "ToolOutcomeUnknown",
+                      message:
+                        "This earlier operation has no recorded outcome. It may have executed. Do not assume success or retry it; its original operation remains unresolved.",
+                    },
+                isFailure: true,
+                providerExecuted: false,
+              });
             }),
           );
 

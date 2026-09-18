@@ -18,7 +18,9 @@ const background = Subagent.background(Researcher, {
 });
 ```
 
-A start returns the worker reference and input receipt. The parent keeps responding, and a
+A start returns `{ worker, delivery }`. The delivery's message reference identifies the retained
+input; its receipt appears after destination acceptance. A `pending` delivery is queued for
+delivery and says nothing about child execution. The parent keeps responding, and a
 `WorkerCompletion` message arrives when the child run ends. It contains the projected result
 or a bounded failure, the worker and run identities, and a budget-exhaustion flag. Finishing
 or aborting the parent run leaves the worker and pending report running.
@@ -102,9 +104,12 @@ Keep the host running so research and report delivery can progress. The
 
 ## Follow up and cancel {#steer-inspect-and-cancel}
 
-A follow-up joins an active worker run at a safe input boundary or starts a later run.
-Opt in to `inspect`, `list`, or `cancel` tools when needed; inspection reads a saved result. Cancellation targets one input's receipt;
-it does not close the worker. Several inputs joining one run produce one logical report.
+A follow-up returns its retained delivery state and joins an active worker run at a safe input
+boundary or starts a later run. Keep the returned message reference: inspect that delivery or wait
+for a report instead of sending the command again. Opt in to `inspect`, `list`, or `cancel` tools
+when needed. Inspection accepts a message reference for delivery state or a receipt for a saved
+result. Cancellation targets one input's receipt; it does not close the worker.
+Several inputs joining one run produce one logical report.
 An input cancelled before it starts a run produces no completion message.
 
 Workers share a bounded allocation from their source by default. Host lifetime and concurrency

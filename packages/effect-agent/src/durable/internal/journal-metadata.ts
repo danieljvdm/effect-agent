@@ -2,6 +2,7 @@ import { type RunId } from "../../core/Identifiers.ts";
 import {
   type CanonicalRecordEnvelope,
   type CompactionCreated,
+  type ToolCallPrepared,
   type ToolCallSettled,
 } from "../Records.ts";
 import { type JournalCheckpointSeed } from "./journal-checkpoint.ts";
@@ -14,6 +15,7 @@ export interface JournalMetadata {
   readonly lastResponseSequenceByRun: ReadonlyMap<string, number>;
   readonly terminalSequenceByRun: ReadonlyMap<string, number>;
   readonly settledSpans: ReadonlyArray<{ readonly from: number; readonly to: number }>;
+  readonly toolExecutionEvidence: ReadonlySet<string>;
   readonly settledToolCallRecordIds: ReadonlySet<string>;
   readonly settledById: ReadonlyMap<
     string,
@@ -24,6 +26,10 @@ export interface JournalMetadata {
     readonly sequence: number;
   }>;
 }
+
+export const toolExecutionKey = (
+  call: Pick<ToolCallPrepared, "runId" | "turn" | "toolCallId">,
+): string => JSON.stringify([call.runId, call.turn, call.toolCallId]);
 
 /**
  * Attempt-local metadata collector. Feed every validated record exactly once, in canonical order,
@@ -40,6 +46,7 @@ export const makeJournalMetadata = (
   const lastResponseSequenceByRun = new Map<string, number>();
   const terminalSequenceByRun = new Map<string, number>();
   const settledSpans: Array<{ readonly from: number; readonly to: number }> = [];
+  const toolExecutionEvidence = new Set<string>();
   const settledToolCallRecordIds = new Set<string>();
 
   const settledById = new Map<
@@ -74,6 +81,8 @@ export const makeJournalMetadata = (
         firstSequenceByRun.set(payload.runId, envelope.sequence);
       if (payload._tag === "ModelResponseRecorded") {
         lastResponseSequenceByRun.set(payload.runId, envelope.sequence);
+      } else if (payload._tag === "ToolCallPrepared" || payload._tag === "ToolCallUnknown") {
+        toolExecutionEvidence.add(toolExecutionKey(payload));
       } else if (payload._tag === "ToolCallSettled") {
         settledToolCallRecordIds.add(envelope.record.recordId);
         if (payload.runId === ownerRunId)
@@ -99,6 +108,7 @@ export const makeJournalMetadata = (
       lastResponseSequenceByRun: new Map(lastResponseSequenceByRun),
       terminalSequenceByRun: new Map(terminalSequenceByRun),
       settledSpans: [...settledSpans],
+      toolExecutionEvidence: new Set(toolExecutionEvidence),
       settledToolCallRecordIds: new Set(settledToolCallRecordIds),
       settledById: new Map(settledById),
       compactions: [...compactions],

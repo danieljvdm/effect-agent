@@ -24,6 +24,7 @@ import {
   ThreadId,
   ToolCallId,
 } from "effect-agent/identifiers";
+import { MessageRef, MessageStatus } from "effect-agent/messaging";
 import { IdempotencyKey, JoinedToHost, Receipt } from "effect-agent/receipt";
 import * as Subagent from "effect-agent/subagent";
 import {
@@ -98,6 +99,26 @@ const nextReceipt = Schema.decodeSync(Receipt)({
   queueSequence: 2,
 });
 
+const delivery = MessageStatus.make({
+  message: MessageRef.make({
+    ownerThreadId: caller.source.threadId,
+    messageId: Schema.decodeSync(IdempotencyKey)("first-delivery"),
+  }),
+  status: "accepted",
+  receipt,
+  settlement: null,
+  reason: null,
+});
+
+const nextDelivery = MessageStatus.make({
+  ...delivery,
+  message: { ...delivery.message, messageId: Schema.decodeSync(IdempotencyKey)("next-delivery") },
+  status: "accepted",
+  receipt: nextReceipt,
+  settlement: null,
+  reason: null,
+});
+
 const started = Schema.decodeSync(WorkerStarted)({
   worker: {
     schemaVersion: 1,
@@ -105,7 +126,7 @@ const started = Schema.decodeSync(WorkerStarted)({
     targetAgentId: target.id,
     threadId: receipt.threadId,
   },
-  receipt,
+  delivery,
 });
 
 const worker = Schema.decodeSync(Subagent.Worker(delegation))(started.worker);
@@ -127,7 +148,7 @@ const host = (overrides: Partial<SubagentHost["Service"]> = {}): SubagentHost["S
   context: Effect.succeed(caller),
   resolveTargetPolicy: () => Effect.succeed(Option.none()),
   start: () => Effect.succeed(started),
-  followUp: () => Effect.succeed(nextReceipt),
+  followUp: () => Effect.succeed(nextDelivery),
   inspect: () => Effect.succeed(settled),
   await: () => Effect.succeed(settled),
   list: () =>
@@ -158,6 +179,13 @@ describe("Subagent background authoring", () => {
 
       const requests: Array<StartWorkerRequest | FollowUpWorkerRequest> = [];
 
+      const pending = MessageStatus.make({
+        ...nextDelivery,
+        status: "pending",
+        receipt: null,
+        settlement: null,
+      });
+
       const service = host({
         context: Effect.succeed({
           ...caller,
@@ -178,8 +206,9 @@ describe("Subagent background authoring", () => {
           Effect.sync(() => {
             requests.push(request);
 
-            return nextReceipt;
+            return pending;
           }),
+        inspect: (request) => Effect.succeed("message" in request ? pending : settled),
       });
 
       const toolkit = yield* background.toolkit.pipe(Effect.provide(background.layer));
@@ -189,12 +218,26 @@ describe("Subagent background authoring", () => {
         .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(SubagentHost, service));
 
       expect((yield* invoke)[0]?.result).toEqual(directStarted);
-      yield* toolkit
+
+      const followedUp = yield* toolkit
         .handle("worker-target_follow_up", {
           worker: directStarted.worker,
           parameters: { amount: "9" },
         })
         .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(SubagentHost, service));
+
+      expect(followedUp[0]).toMatchObject({ result: pending, isFailure: false });
+      expect(followedUp[0]?.encodedResult).toEqual(pending);
+
+      const retained = yield* toolkit
+        .handle("worker-target_inspect", {
+          worker: directStarted.worker,
+          message: pending.message,
+        })
+        .pipe(Effect.flatMap(Stream.runCollect), Effect.provideService(SubagentHost, service));
+
+      expect(retained[0]).toMatchObject({ result: pending, isFailure: false });
+      expect(retained[0]?.encodedResult).toEqual(pending);
 
       const observed = yield* toolkit
         .handle("worker-target_inspect", {
@@ -450,7 +493,7 @@ describe("Subagent background authoring", () => {
           start: (request) =>
             Ref.update(requests, (all) => [...all, request]).pipe(Effect.as(started)),
           followUp: (request) =>
-            Ref.update(requests, (all) => [...all, request]).pipe(Effect.as(nextReceipt)),
+            Ref.update(requests, (all) => [...all, request]).pipe(Effect.as(nextDelivery)),
         });
 
         const first = yield* Subagent.start(declared, { amount: 7 }, { idempotencyKey: key }).pipe(
@@ -464,11 +507,13 @@ describe("Subagent background authoring", () => {
           { idempotencyKey: Schema.decodeSync(IdempotencyKey)("follow-up") },
         ).pipe(Effect.provideService(SubagentHost, service));
 
-        const observed = yield* Subagent.inspect(declared, first.worker, first.receipt).pipe(
-          Effect.provideService(SubagentHost, service),
-        );
+        const observed = yield* Subagent.inspect(
+          declared,
+          first.worker,
+          first.delivery.receipt!,
+        ).pipe(Effect.provideService(SubagentHost, service));
 
-        expect(second).toEqual(nextReceipt);
+        expect(second).toEqual(nextDelivery);
         expect(observed).toEqual({
           _tag: "Settled",
           receipt,
@@ -504,7 +549,7 @@ describe("Subagent background authoring", () => {
       }),
   );
 
-  it.effect("preserves exact pending receipts and lists validated worker identities", () =>
+  it.effect("validates delivery evidence, exact receipt identity and worker listings", () =>
     Effect.gen(function* () {
       const service = host({ inspect: () => Effect.succeed({ _tag: "Pending", receipt }) });
 
@@ -532,6 +577,26 @@ describe("Subagent background authoring", () => {
         operation: "inspect",
         reason: "receipt-mismatch",
       });
+
+      const wrongMessage = yield* Subagent.inspect(delegation, worker, delivery.message).pipe(
+        Effect.provideService(SubagentHost, host({ inspect: () => Effect.succeed(nextDelivery) })),
+        Effect.flip,
+      );
+
+      expect(wrongMessage).toMatchObject({
+        _tag: "WorkerError",
+        operation: "inspect",
+        reason: "message-mismatch",
+      });
+
+      for (const invalid of [
+        { ...delivery, status: "pending" },
+        { ...delivery, receipt: null },
+        { ...delivery, status: "processed" },
+        { ...delivery, status: "refused", reason: "denied" },
+        { ...delivery, status: "parked", reason: null },
+      ])
+        expect(Schema.is(MessageStatus)(invalid)).toBe(false);
     }),
   );
 
@@ -799,7 +864,7 @@ describe("Subagent background authoring", () => {
             Ref.update(keys, (all) => [...all, request.idempotencyKey]).pipe(Effect.as(started)),
           followUp: (request) =>
             Ref.update(keys, (all) => [...all, request.idempotencyKey]).pipe(
-              Effect.as(nextReceipt),
+              Effect.as(nextDelivery),
             ),
         });
 
@@ -953,7 +1018,7 @@ describe("Subagent background authoring", () => {
         ),
       );
 
-      expect(result.receipt).toEqual(receipt);
+      expect(result.delivery.receipt).toEqual(receipt);
       expect((yield* Ref.get(captured))?.encodedGrant).toEqual({
         allowedToolNames: [],
         maxDepth: 2,
