@@ -59,7 +59,7 @@ import {
 export const workerEntry = fileURLToPath(new URL("./worker-entry.ts", import.meta.url));
 export const packageRoot = fileURLToPath(new URL("../..", import.meta.url));
 
-/** Lease the child claims with in kill scenarios; expired by `waitOutChildLease` after death. */
+/** Lease the child claims with in kill scenarios; expired by `waitAfterChildExit` after death. */
 export const CHILD_LEASE_MS = 250;
 const LEASE_WAIT_MS = 1_000;
 const POLL_INTERVAL_MS = 25;
@@ -250,7 +250,10 @@ export const expectKilled = (result: WorkerResult): void => {
   ).toBe(true);
 };
 
-/** The dead child's short lease must lapse before a restarted owner can claim its lane. */
+/** After confirmed process exit, no renewal can extend the child's last short lease. */
+export const waitAfterChildExit = Effect.sleep(Duration.millis(CHILD_LEASE_MS + POLL_INTERVAL_MS));
+
+/** Live stale-owner scenarios retain a wider wait while the blocked child still exists. */
 export const waitOutChildLease = Effect.sleep(Duration.millis(LEASE_WAIT_MS));
 
 export const runtimeOptions = (

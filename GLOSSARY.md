@@ -274,8 +274,9 @@ policy fixes an explicit network mode, action count, elapsed time, and per-resul
 connection-time public-network boundary and fails unsupported where an adapter cannot enforce it.
 `Unrestricted` explicitly opts out of URL/host and private-network containment while retaining
 the same session limits and lifecycle.
-Handles are ephemeral and uncertain: they are never persisted, replayed, reconnected for execution,
-or exposed as model Tools.
+Handles are ephemeral and never persisted or exposed as model Tools. A trusted host can retain a
+private checkpoint and reattach its exact provider page under exclusive ownership without replay.
+Unfinished input remains fenced until its SDK work settles or provider termination is confirmed.
 Screenshots and scrolling operate on that same page, and explicit closure ends the pass early.
 Provider session identity and operator controls remain private host capabilities.
 

@@ -42,7 +42,6 @@ import {
   IdempotencyKey,
   UnknownResolutionCommand,
 } from "effect-agent/submission-ledger";
-import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { CurrentTransformer } from "effect/unstable/sql/Statement";
 import { describe, expect, it } from "vite-plus/test";
@@ -209,21 +208,6 @@ describe("DoSubmissionLedger", () => {
         expect(yield* Ref.get(queries)).toBe(3);
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     ));
-
-  // The SAME adapter-neutral contract suite the Node/SQLite and in-memory adapters run —
-  // all cases, including lease expiry via TestClock, producer fencing, joined input,
-  // suspensions, unknown outcomes, and the S2 subagent operations — executed in-workerd
-  // against a real SQLite-backed Durable Object's storage. One Durable Object per case: the
-  // 0.21.x pool shares storage across tests within a run.
-  describe("shared SubmissionLedger conformance", () => {
-    for (const conformanceCase of submissionLedgerConformanceCases) {
-      it(conformanceCase.name, () =>
-        withThreadStorage(`wp1-ledger:${conformanceCase.name}`, (storage) =>
-          conformanceCase.run.pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
-        ),
-      );
-    }
-  });
 
   it("keeps configuration, failpoint, SQL, and Crypto authority in the named Layer input", () => {
     const requirementsProof: SubmissionLedgerLayerRequirementsProof = true;

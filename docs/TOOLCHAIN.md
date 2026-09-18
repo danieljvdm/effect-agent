@@ -204,8 +204,9 @@ The project is in prerelease mode. Leaving it requires an explicit release decis
 `vp run changeset pre exit`.
 
 Use `vp run changeset` to describe a consumer-visible change.
-After successful ordinary `main` CI, `.github/workflows/release.yml` maintains the version PR.
-After that PR merges, the workflow publishes through npm trusted publishing with provenance.
+On each `main` push, `.github/workflows/release.yml` maintains the version PR without waiting for CI.
+After that PR merges and its exact main revision passes CI, the workflow publishes through npm
+trusted publishing with provenance. PR updates and publication use separate queues.
 
 Publication first runs `release:checked-publish`, which checks npm for unpublished public versions.
 If all versions already exist, it skips publication and the paid evaluation. Registry failures
@@ -515,9 +516,10 @@ dependencies run from that base, with read-only contents, Actions and pull-reque
 Candidate files are read as Git objects; the proof does not execute candidate code.
 
 ```text
-ordinary source CI -> version PR: proof + build + package checks
-                  -> version merge: proof + restore PR build + package checks
-                  -> publication: restore main build + package checks + live gate -> npm
+main push -> ordinary source CI
+          -> version PR: proof or ordinary CI + build + package checks
+successful source + PR CI -> version merge: proof + restore PR build + package checks
+successful main CI -> publication: restore main build + package checks + live gate -> npm
 ```
 
 The supported delta is deliberately narrow: every public package in the single fixed group
@@ -547,10 +549,12 @@ for the actual version and every exported JavaScript and declaration file. Sourc
 prerelease state are restored. A failed retained check fails `ready`. This path neither publishes
 nor calls paid models; the separate paid continuity gate in `release:checked-publish` remains intact.
 
-Release generation uses `workflow_run: completed` after successful main CI, so the usual timing
-race consumes no waiting runner. Because Changesets uses `github.sha` internally, generation
-requires that SHA to equal the completed run's head; a newer main revision waits for its own CI.
-An already stale PR or changed merge tree falls back to ordinary CI. Evidence applies only to the
+Release PR generation runs on `push` alongside main CI and skips superseded main revisions.
+If ordinary source CI is still running when the PR proof checks it, the PR runs ordinary CI.
+Publication alone uses `workflow_run: completed` after successful main CI and skips commits with
+pending changesets. Because Changesets uses `github.sha` internally, publication requires that
+SHA to equal the completed run's head; a newer main revision waits for its own CI.
+An already stale PR or changed merge tree also falls back to ordinary CI. Evidence applies only to the
 recorded merge checkout, just as ordinary PR checks do; it does not validate later base movement
 or replace branch protection's up-to-date requirements.
 

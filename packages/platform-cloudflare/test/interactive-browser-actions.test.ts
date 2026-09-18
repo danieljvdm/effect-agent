@@ -383,28 +383,31 @@ describe("Browser Run observed mutations", () => {
     }).pipe(Effect.scoped, Effect.provide(f.layer));
   });
 
+  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
   it.effect(
-    "cleans up a failed mutation and refuses subsequent mutations on the uncertain handle",
+    "retains unknown input evidence but allows fresh input after SDK rejection settles",
     () => {
+      let attempts = 0;
+
       const f = fixture({
         action: async () => {
-          throw new Error("private provider exception");
+          if (attempts++ === 0) throw new Error("private provider exception");
         },
-        dispose: () => new Promise(() => {}),
       });
 
       return Effect.gen(function* () {
         const handle = yield* open;
-        const fiber = yield* handle.click(click).pipe(Effect.flip, Effect.forkChild);
+        const error = yield* handle.click(click).pipe(Effect.flip);
 
-        yield* Effect.promise(() => f.started);
-        yield* advance(250);
-        expect(isBrowserRunUndispatchedActionError(yield* Fiber.join(fiber))).toBe(false);
-        expect(yield* handle.click(click).pipe(Effect.flip)).toMatchObject({
-          _tag: "InteractiveBrowserExpiredError",
+        expect(error).toMatchObject({
+          evidence: { stage: "input", dispatch: "unknown", session: "attached" },
         });
-        expect(f.events.filter((e) => e === "dispatch")).toHaveLength(1);
-        expect(f.observerCount()).toBe(0);
+        expect(error).not.toHaveProperty("cause");
+        const next = yield* handle.click(click).pipe(Effect.forkChild);
+
+        yield* advance(200);
+        yield* Fiber.join(next);
+        expect(f.events.filter((e) => e === "dispatch")).toHaveLength(2);
       }).pipe(Effect.scoped, Effect.provide(f.layer));
     },
   );
@@ -431,7 +434,7 @@ describe("Browser Run observed mutations", () => {
         });
         expect(f.events).not.toContain("close");
         expect(yield* handle.click(click).pipe(Effect.flip)).toMatchObject({
-          _tag: "InteractiveBrowserExpiredError",
+          _tag: "InteractiveBrowserBusyError",
         });
         yield* handle.close;
         expect(f.events.indexOf("log")).toBeLessThan(f.events.indexOf("close"));

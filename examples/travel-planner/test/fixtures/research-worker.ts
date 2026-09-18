@@ -600,6 +600,7 @@ const withReadBudget = Effect.fnUntraced(function* <A, E, R>(
 export class TravelPlannerThread extends makeTravelPlannerThread(
   sites,
   plannerApplication(model, "research-v1", "Research fixture", researchBrowser),
+  { ownershipLeaseDuration: 3_000, leaseRenewalInterval: 500 },
 ) {
   plannerWorker(request: string): Promise<string> {
     return this[DurableObject.RunSymbol](

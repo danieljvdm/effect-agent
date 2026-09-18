@@ -51,6 +51,7 @@
     "bounded-selector-scrape",
     "bright-agents-trace",
     "bright-rivers-own",
+    "browser-input-recovery",
     "browser-run-page-capture",
     "browser-run-rest-capture",
     "budget-extension",

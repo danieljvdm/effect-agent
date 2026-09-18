@@ -1,4 +1,3 @@
-import { describe, expect, it } from "@effect/vitest";
 import {
   type Crypto,
   type Stream,
@@ -130,7 +129,7 @@ const definition = Agent.make("durable-input-projection-types", {
   },
 });
 
-const proveWorkerRequirements = (
+export const proveWorkerRequirements = (
   runtime: DurableAgentRuntime["Service"],
   model: Layer.Layer<
     LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
@@ -207,7 +206,7 @@ const proveWorkerRequirements = (
   return proofs;
 };
 
-const proveRegistrationRequirements = (
+export const proveRegistrationRequirements = (
   firstModel: Layer.Layer<
     LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
     never,
@@ -415,13 +414,3 @@ const proveRegistrationRequirements = (
 
   return proofs;
 };
-
-describe("durable input projection types", () => {
-  it("retains projection and provider requirements when registering a native model Layer", () => {
-    expect(proveWorkerRequirements).toBeInstanceOf(Function);
-  });
-
-  it("retains every heterogeneous registration requirement", () => {
-    expect(proveRegistrationRequirements).toBeInstanceOf(Function);
-  });
-});
