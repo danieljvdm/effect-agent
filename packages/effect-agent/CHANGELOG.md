@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.107
+
+### Patch Changes
+
+- [#540](https://github.com/danieljvdm/effect-agent/pull/540) [`cfb6e1e`](https://github.com/danieljvdm/effect-agent/commit/cfb6e1e04b9e80d276f918f29c369cddec5b917c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add bounded byte-backed file selection to interactive browsers, including Cloudflare Browser Run file inputs and dynamic choosers. Distinguish confirmed selection from website upload or submission receipts.
+
 ## 0.1.0-beta.106
 
 ### Patch Changes

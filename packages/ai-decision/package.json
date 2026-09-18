@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/ai-decision",
-  "version": "0.1.0-beta.106",
+  "version": "0.1.0-beta.107",
   "description": "Provider-neutral choice, score, and probability evaluations with Effect.",
   "license": "MIT",
   "repository": {
