@@ -73,22 +73,17 @@ Configure reasoning effort and other provider settings on that Layer. Descriptio
 capability, cost, and when a profile is appropriate; there is no built-in model catalog.
 
 ```ts twoslash
-import { ThreadModels } from "./auto-model.ts";
+import { Assistant, ThreadModels } from "./auto-model.ts";
 import { Effect } from "effect";
+import { Agent, AgentRuntime, Identifiers } from "effect-agent";
 // ---cut---
-const createSelection = ThreadModels.select({
-  threadId: "research-thread",
-  state: {
-    task: "Investigate why invoice totals differ from the ledger",
-    tools: ["read_document", "calculate"],
-    constraints: ["Explain each discrepancy"],
-  },
-});
+const firstRun = Effect.gen(function* () {
+  const threadId = Identifiers.ThreadId.make("research-thread");
+  const task = "Investigate why invoice totals differ from the ledger";
+  const selected = yield* ThreadModels.select({ threadId, state: { task } });
 
-const reuseSelection = Effect.gen(function* () {
-  const selected = yield* createSelection;
   // Save selected.record in the host's thread metadata before starting work.
-  return yield* ThreadModels.restore("research-thread", selected.record);
+  return yield* AgentRuntime.run(Agent.withModel(Assistant, selected.model), task, { threadId });
 });
 ```
 
@@ -107,6 +102,8 @@ before commitment can require another selector call; this API makes no exactly-o
 Select separately for each subagent thread using its delegated task and available tools. Follow-ups
 to that child restore its original selection. Keep selection at the host's thread-creation boundary;
 selecting while constructing a shared `Subagent.layer` would give all its children the same choice.
+`Subagent.layer` currently accepts a fixed model binding; this catalog does not add a per-spawn
+selection callback to it.
 For durable hosts, retain the record in application-owned admission/thread data and restore the
 model through the existing [resolved model context](../guide/context-management#resolve-routing-and-capacity-together).
 Keep context limits and pricing aligned with that same profile.

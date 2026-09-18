@@ -23,22 +23,11 @@ export const ThreadModels = AutoModel.make({
 });
 // #endregion catalog
 
-const Assistant = Agent.make("assistant", {
+export const Assistant = Agent.make("assistant", {
   input: Schema.String,
   output: Schema.Struct({ answer: Schema.String }),
   instructions: (task) => task,
   toolkit: Toolkit.empty,
-});
-
-// The host loads the record saved at thread creation. Restoration performs no selection.
-export const continueThread = Effect.fn("continueThread")(function* (
-  threadId: Identifiers.ThreadId,
-  storedSelection: unknown,
-  task: string,
-) {
-  const selected = yield* ThreadModels.restore(threadId, storedSelection);
-
-  return yield* AgentRuntime.run(Agent.withModel(Assistant, selected.model), task, { threadId });
 });
 
 const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
@@ -58,7 +47,15 @@ export const program = Effect.gen(function* () {
   const task = "Summarize the tradeoffs of taking a train or bus from Lisbon to Porto.";
   const selected = yield* ThreadModels.select({ threadId, state: { task, tools: [] } });
 
-  yield* continueThread(threadId, selected.record, task);
+  // Select immediately before the new thread's first run.
+  yield* AgentRuntime.run(Agent.withModel(Assistant, selected.model), task, { threadId });
 
-  return yield* continueThread(threadId, selected.record, "Which would you choose for comfort?");
+  // On a later user turn, restore the record saved with this thread.
+  const restored = yield* ThreadModels.restore(threadId, selected.record);
+
+  return yield* AgentRuntime.run(
+    Agent.withModel(Assistant, restored.model),
+    "Which would you choose for comfort?",
+    { threadId },
+  );
 }).pipe(Effect.provide(Layer.mergeAll(DecisionLive, OpenAiLive, InMemory.layer)));
