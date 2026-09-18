@@ -1,6 +1,8 @@
 import {
   BrowserRunInteractiveBinding,
   BrowserRunInteractiveHost,
+  BrowserRunInteractiveCheckpoint,
+  BrowserRunPageIdentity,
   BrowserRunLiveViewRequest,
   BrowserRunHandoffRequest,
   BrowserRunViewport,
@@ -92,6 +94,9 @@ interface FixtureControls {
 
 interface FixtureOptions {
   readonly initialUrl?: unknown;
+  readonly missingTarget?: boolean;
+  readonly checkpointError?: unknown;
+  readonly detachError?: unknown;
   readonly connected?: boolean;
   readonly launchError?: unknown;
   readonly createContextError?: unknown;
@@ -239,6 +244,11 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
   };
 
   const page: BrowserRunInteractivePage = {
+    identity: async () => {
+      if (options.checkpointError !== undefined) throw options.checkpointError;
+
+      return BrowserRunPageIdentity.make({ contextId: "context-id", targetId: "target-id" });
+    },
     close: async () => {
       close("page");
       await options.remoteClose?.("page");
@@ -281,17 +291,19 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
         ? { _tag: "Text", text: "Example Domain" }
         : await options.readText(selector, maximumBytes);
     },
-    fill: async (selector, value, _signal, onDispatch) => {
+    fill: async (selector, value, _signal, onDispatch, onComplete) => {
       calls.push(`page.fill:${selector}:${value}`);
       onDispatch();
       await options.fill?.(selector, value);
+      onComplete?.();
 
       return observation;
     },
-    click: async (selector, _signal, onDispatch) => {
+    click: async (selector, _signal, onDispatch, onComplete) => {
       calls.push(`page.click:${selector}`);
       onDispatch();
       await options.click?.(selector);
+      onComplete?.();
 
       return observation;
     },
@@ -356,6 +368,15 @@ const makeFixture = (options: FixtureOptions = {}): Fixture => {
   };
 
   const browser: BrowserRunInteractiveBrowser = {
+    detach: async () => {
+      calls.push("browser.detach");
+      if (options.detachError !== undefined) throw options.detachError;
+    },
+    reattach: async (identity) => {
+      calls.push(`browser.reattach:${identity.contextId}:${identity.targetId}`);
+
+      return options.missingTarget === true ? undefined : { context, page };
+    },
     createContext: async () => {
       calls.push("browser.createContext");
       if (options.createContextError !== undefined) throw options.createContextError;
@@ -724,7 +745,7 @@ describe("Browser Run interactive browser adapter", () => {
                 _tag: "InteractiveBrowserExpiredError",
               });
             } else {
-              expect(error).toHaveProperty("cause", cause);
+              expect(error).not.toHaveProperty("cause");
               expect(error.message).not.toContain("private-provider-error");
               yield* session.handle.navigate(navigate());
             }
@@ -767,21 +788,32 @@ describe("Browser Run interactive browser adapter", () => {
             } else {
               yield* session.close;
             }
-            gate.resolve(undefined);
-            if (ending === "close") {
-              expect(yield* Fiber.join(pending).pipe(Effect.flip)).toMatchObject({
-                _tag: "InteractiveBrowserExpiredError",
+            if (ending === "interruption") {
+              expect(yield* resize.pipe(Effect.flip)).toMatchObject({
+                _tag: "InteractiveBrowserBusyError",
+              });
+              yield* session.handle.readText(readText());
+              gate.resolve(undefined);
+              yield* session.drainInput;
+              yield* resize;
+            } else {
+              gate.resolve(undefined);
+              if (ending === "close")
+                expect(yield* Fiber.join(pending).pipe(Effect.flip)).toMatchObject({
+                  _tag: "InteractiveBrowserExpiredError",
+                });
+              expect(yield* session.handle.readText(readText()).pipe(Effect.flip)).toMatchObject({
+                _tag:
+                  ending === "close"
+                    ? "InteractiveBrowserExpiredError"
+                    : "InteractiveBrowserLimitError",
               });
             }
-            expect(yield* resize.pipe(Effect.flip)).toMatchObject({
-              _tag: "InteractiveBrowserExpiredError",
-            });
-            expect(yield* session.handle.readText(readText()).pipe(Effect.flip)).toMatchObject({
-              _tag: "InteractiveBrowserExpiredError",
-            });
           }),
         );
-        expect(fixture.calls.filter((call) => call === "page.setViewport")).toHaveLength(1);
+        expect(fixture.calls.filter((call) => call === "page.setViewport")).toHaveLength(
+          ending === "interruption" ? 2 : 1,
+        );
         expectResourcesClosedOnce(fixture);
       }),
   );
@@ -1140,7 +1172,10 @@ describe("Browser Run interactive browser adapter", () => {
               gate.resolve(undefined);
               const expired = yield* handle.readText(readText()).pipe(Effect.flip);
 
-              expect(expired).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
+              expect(expired).toMatchObject({
+                _tag: "InteractiveBrowserLimitError",
+                limit: "elapsed",
+              });
             }),
           policy({ network, maxElapsedMillis: 100 }),
         );
@@ -1426,7 +1461,10 @@ describe("Browser Run interactive browser adapter", () => {
         }),
       );
 
-      expect(expired.first).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
+      expect(expired.first).toMatchObject({
+        _tag: "InteractiveBrowserActionError",
+        evidence: { dispatch: "unknown", session: "disconnected" },
+      });
       expect(expired.second).toMatchObject({ _tag: "InteractiveBrowserExpiredError" });
       expect(closed.calls.filter((call) => call.startsWith("page.goto:")).length).toBe(1);
 
@@ -2096,5 +2134,336 @@ describe("Browser Run interactive browser adapter", () => {
       );
       expect(fixture.calls.filter((call) => call === "late-cdp.detach")).toHaveLength(1);
     }),
+  );
+  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  it.effect(
+    "retains completed input evidence after observation fails and permits fresh reads",
+    () => {
+      const fixture = makeFixture();
+
+      return withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy());
+
+          fixture.controls.setUrl("invalid private provider URL");
+          const error = yield* session.handle.click(click()).pipe(Effect.flip);
+
+          expect(error).toMatchObject({
+            _tag: "InteractiveBrowserProtocolError",
+            evidence: { stage: "observation", dispatch: "completed", session: "attached" },
+          });
+          expect(error).not.toHaveProperty("cause");
+          fixture.controls.setUrl("https://example.com/");
+          expect((yield* session.handle.readText(readText())).text).toBe("Example Domain");
+          yield* session.handle.click(click());
+          expect(fixture.calls.filter((call) => call.startsWith("page.click:"))).toHaveLength(2);
+        }),
+      );
+    },
+  );
+
+  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  it.effect(
+    "keeps failed reads usable and reports a foreign failure once without its contents",
+    () => {
+      let reads = 0;
+
+      const fixture = makeFixture({
+        readText: async () => {
+          if (reads++ === 0) throw new Error("private provider URL and payload");
+
+          return { _tag: "Text", text: "recovered" };
+        },
+      });
+
+      const reports: Array<unknown> = [];
+
+      return withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy());
+          const error = yield* session.handle.readText(readText()).pipe(Effect.flip);
+
+          expect(error).toMatchObject({
+            evidence: { stage: "observation", dispatch: "not-dispatched" },
+          });
+          expect(error).not.toHaveProperty("cause");
+          expect((yield* session.handle.readText(readText())).text).toBe("recovered");
+          expect(reports).toHaveLength(1);
+          expect(JSON.stringify(reports)).not.toContain("private provider");
+        }),
+      ).pipe(
+        Effect.provide(
+          ErrorReporter.layer([
+            ErrorReporter.make(({ cause }) => {
+              reports.push(cause);
+            }),
+          ]),
+        ),
+      );
+    },
+  );
+
+  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  it.effect.each([false, true])(
+    "resumes the same checkpoint without replay and preserves the input fence (%s)",
+    (pendingInput) => {
+      const fixture = makeFixture();
+      let staleClose: Effect.Effect<void, InteractiveBrowserError> = Effect.void;
+      let staleHandleClose: Effect.Effect<void, InteractiveBrowserError> = Effect.void;
+
+      return Effect.gen(function* () {
+        const checkpoint = yield* withHost(fixture, (host) =>
+          Effect.gen(function* () {
+            const session = yield* host.open(policy({ maxActions: 4 }));
+
+            yield* session.handle.navigate(navigate());
+            const checkpoint = yield* session.checkpoint;
+
+            staleClose = session.close;
+            staleHandleClose = session.handle.close;
+
+            yield* session.detach;
+            expect(yield* session.handle.click(click()).pipe(Effect.flip)).toMatchObject({
+              _tag: "InteractiveBrowserExpiredError",
+            });
+
+            return checkpoint;
+          }),
+        );
+
+        expect(fixture.calls.some((call) => call.startsWith("binding.terminate:"))).toBe(false);
+        expect(checkpoint.consumedActions).toBe(1);
+        yield* withHost(fixture, (host) =>
+          Effect.gen(function* () {
+            const persisted = yield* Schema.encodeEffect(BrowserRunInteractiveCheckpoint)(
+              checkpoint,
+            );
+
+            const restored = yield* Schema.decodeEffect(BrowserRunInteractiveCheckpoint)(persisted);
+            const session = yield* host.resume(restored, { pendingInput });
+
+            yield* staleClose;
+            yield* staleHandleClose;
+            expect(fixture.calls.some((call) => call.startsWith("binding.terminate:"))).toBe(false);
+
+            expect((yield* session.checkpoint).startedAt).toBe(checkpoint.startedAt);
+            yield* session.handle.readText(readText());
+            if (pendingInput) {
+              expect(yield* session.drainInput).toBe("unknown");
+              expect(yield* session.handle.click(click()).pipe(Effect.flip)).toMatchObject({
+                _tag: "InteractiveBrowserBusyError",
+              });
+              expect(
+                yield* session
+                  .handoff(
+                    BrowserRunHandoffRequest.make({ instructions: "Continue", timeout: 1_000 }),
+                  )
+                  .pipe(Effect.flip),
+              ).toMatchObject({ _tag: "InteractiveBrowserBusyError" });
+              yield* session.handle.screenshot(BrowserScreenshotRequest.make({ fullPage: false }));
+            } else {
+              yield* session.handle.click(click());
+              yield* session.handle.readText(readText());
+              expect(yield* session.handle.click(click()).pipe(Effect.flip)).toMatchObject({
+                _tag: "InteractiveBrowserLimitError",
+                limit: "actions",
+              });
+            }
+          }),
+        );
+        expect(fixture.calls.filter((call) => call === "binding.acquire")).toHaveLength(1);
+        expect(fixture.calls.filter((call) => call === "context.newPage")).toHaveLength(1);
+        expect(fixture.calls.filter((call) => call.startsWith("page.goto:"))).toHaveLength(1);
+        expect(
+          fixture.calls.filter((call) => call === "browser.reattach:context-id:target-id"),
+        ).toHaveLength(1);
+      });
+    },
+  );
+
+  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  it.effect(
+    "does not create or terminate a provider session when the exact checkpoint target is absent",
+    () => {
+      const fixture = makeFixture({ missingTarget: true });
+
+      return Effect.gen(function* () {
+        const checkpoint = yield* withHost(fixture, (host) =>
+          Effect.gen(function* () {
+            const session = yield* host.open(policy());
+            const checkpoint = yield* session.checkpoint;
+
+            yield* session.detach;
+
+            return checkpoint;
+          }),
+        );
+
+        const error = yield* withHost(fixture, (host) =>
+          host.resume(checkpoint, { pendingInput: false }),
+        ).pipe(Effect.flip);
+
+        expect(error).toMatchObject({
+          _tag: "InteractiveBrowserExpiredError",
+          evidence: { session: "lost" },
+        });
+        expect(fixture.calls.filter((call) => call === "context.newPage")).toHaveLength(1);
+        expect(fixture.calls.some((call) => call.startsWith("binding.terminate:"))).toBe(false);
+      });
+    },
+  );
+  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  it.effect(
+    "fences unfinished SDK input after interruption while allowing reads, then drains without replay",
+    () => {
+      const gate = makeGate<void>();
+
+      const fixture = makeFixture({
+        click: async () => {
+          gate.markStarted();
+          await gate.promise;
+        },
+      });
+
+      return withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy());
+          const checkpoint = yield* session.checkpoint;
+
+          expect(
+            yield* host.resume(checkpoint, { pendingInput: false }).pipe(Effect.flip),
+          ).toMatchObject({ _tag: "InteractiveBrowserBusyError" });
+          const action = yield* session.handle.click(click()).pipe(Effect.forkChild);
+
+          yield* awaitPromise(gate.started);
+          yield* Fiber.interrupt(action);
+          expect(yield* session.inputState).toBe("running");
+          yield* session.handle.readText(readText());
+          expect(yield* session.handle.click(click()).pipe(Effect.flip)).toMatchObject({
+            _tag: "InteractiveBrowserBusyError",
+          });
+          expect(
+            yield* session.resizeViewport({ width: 800, height: 600 }).pipe(Effect.flip),
+          ).toMatchObject({ _tag: "InteractiveBrowserBusyError" });
+          gate.resolve(undefined);
+          expect(yield* session.drainInput).toBe("idle");
+          yield* session.handle.scroll(BrowserScrollRequest.make({ deltaX: 0, deltaY: 10 }));
+          expect(fixture.calls.filter((call) => call.startsWith("page.click:"))).toHaveLength(1);
+        }),
+      );
+    },
+  );
+  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  it.effect("keeps transport-timeout input fenced even after the local promise rejects", () => {
+    const fixture = makeFixture({
+      click: async () => {
+        const timeout = new Error("private timeout details");
+
+        timeout.name = "TimeoutError";
+        throw timeout;
+      },
+    });
+
+    return withHost(fixture, (host) =>
+      Effect.gen(function* () {
+        const session = yield* host.open(policy());
+        const error = yield* session.handle.click(click()).pipe(Effect.flip);
+
+        expect(error).toMatchObject({ evidence: { dispatch: "unknown", session: "attached" } });
+        expect(yield* session.drainInput).toBe("unknown");
+        yield* session.handle.readText(readText());
+        expect(yield* session.handle.click(click()).pipe(Effect.flip)).toMatchObject({
+          _tag: "InteractiveBrowserBusyError",
+        });
+      }),
+    );
+  });
+  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  it.effect.each(["checkpoint", "detach"])(
+    "reports %s failure once without returning foreign details",
+    (boundary) => {
+      const cause = new Error("private provider checkpoint and URL");
+
+      const fixture = makeFixture(
+        boundary === "checkpoint" ? { checkpointError: cause } : { detachError: cause },
+      );
+
+      const reports: Array<unknown> = [];
+
+      return withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy());
+          const operation = boundary === "checkpoint" ? session.checkpoint : session.detach;
+
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const error = yield* operation.pipe(Effect.flip);
+
+            expect(error).not.toHaveProperty("cause");
+            expect(error.message).not.toContain("private provider");
+          }
+          expect(reports).toHaveLength(1);
+          expect(JSON.stringify(reports)).not.toContain("private provider");
+        }),
+      ).pipe(
+        Effect.provide(
+          ErrorReporter.layer([
+            ErrorReporter.make(({ cause }) => {
+              reports.push(cause);
+            }),
+          ]),
+        ),
+      );
+    },
+  );
+
+  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+  it.effect.each(["resize", "live-view", "handoff"])(
+    "reports interrupted %s input's late failure once",
+    (operation) => {
+      const gate = makeGate<void>();
+
+      const pending = async () => {
+        gate.markStarted();
+        await gate.promise;
+        throw new Error("private late provider reply");
+      };
+
+      const fixture = makeFixture({ setViewport: pending, cdpSend: pending });
+      const reports: Array<unknown> = [];
+
+      return withHost(fixture, (host) =>
+        Effect.gen(function* () {
+          const session = yield* host.open(policy({ maxElapsedMillis: 120_000 }));
+
+          const action =
+            operation === "resize"
+              ? session.resizeViewport({ width: 800, height: 600 })
+              : operation === "live-view"
+                ? session.getLiveView(
+                    BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 }),
+                  )
+                : session.handoff(
+                    BrowserRunHandoffRequest.make({ instructions: "Continue", timeout: 1_000 }),
+                  );
+
+          const fiber = yield* action.pipe(Effect.forkChild);
+
+          yield* awaitPromise(gate.started);
+          yield* Fiber.interrupt(fiber);
+          gate.resolve(undefined);
+          yield* session.drainInput;
+          expect(reports).toHaveLength(1);
+          expect(JSON.stringify(reports)).not.toContain("private late provider");
+        }),
+      ).pipe(
+        Effect.provide(
+          ErrorReporter.layer([
+            ErrorReporter.make(({ cause }) => {
+              reports.push(cause);
+            }),
+          ]),
+        ),
+      );
+    },
   );
 });

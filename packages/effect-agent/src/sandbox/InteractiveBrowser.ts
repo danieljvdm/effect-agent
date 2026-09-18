@@ -99,13 +99,40 @@ export class BrowserReadTextRequest extends Schema.Class<BrowserReadTextRequest>
   "BrowserReadTextRequest",
 )({ selector: Schema.optionalKey(Selector) }) {}
 
+/** Observed control state, without an input value. Absence is part of the snapshot. */
+export const BrowserExpectedTargetState = Schema.Struct({
+  kind: Schema.String.check(Schema.isMaxLength(128)),
+  inputType: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
+  label: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200))),
+  checked: Schema.optionalKey(Schema.Boolean),
+  selected: Schema.optionalKey(Schema.Boolean),
+  disabled: Schema.optionalKey(Schema.Boolean),
+  required: Schema.optionalKey(Schema.Boolean),
+  valid: Schema.optionalKey(Schema.Boolean),
+  formValid: Schema.optionalKey(Schema.Boolean),
+});
+
+export type BrowserExpectedTargetState = typeof BrowserExpectedTargetState.Type;
+
+/** Exact observed document/node identity. A replacement node is refused before input dispatch. */
+export const BrowserExpectedTarget = Schema.Struct({
+  documentId: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
+  nodeId: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
+  state: Schema.optionalKey(BrowserExpectedTargetState),
+  scopeSelector: Schema.optionalKey(Selector),
+});
+
+export type BrowserExpectedTarget = typeof BrowserExpectedTarget.Type;
+
 export class BrowserFillRequest extends Schema.Class<BrowserFillRequest>("BrowserFillRequest")({
   selector: Selector,
   value: FieldValue,
+  expectedTarget: Schema.optionalKey(BrowserExpectedTarget),
 }) {}
 
 export class BrowserClickRequest extends Schema.Class<BrowserClickRequest>("BrowserClickRequest")({
   selector: Selector,
+  expectedTarget: Schema.optionalKey(BrowserExpectedTarget),
 }) {}
 
 /** Caller-owned bytes; no host filesystem paths or model-supplied script crosses this port. */
@@ -162,9 +189,24 @@ export class BrowserActionResult extends Schema.Class<BrowserActionResult>("Brow
   url: InteractiveBrowserTargetUrl,
 }) {}
 
+/** Safe execution evidence, independent of provider messages and application receipts.
+ * completed proves SDK input completion, never website acceptance or durable settlement.
+ */
+export const InteractiveBrowserFailureEvidence = Schema.Struct({
+  stage: Schema.Literals(["preparation", "input", "observation"]),
+  dispatch: Schema.Literals(["not-dispatched", "completed", "unknown", "running"]),
+  session: Schema.Literals(["attached", "disconnected", "lost"]),
+});
+
+export type InteractiveBrowserFailureEvidence = typeof InteractiveBrowserFailureEvidence.Type;
+
 export class InteractiveBrowserPolicyDeniedError extends Schema.TaggedError<InteractiveBrowserPolicyDeniedError>()(
   "InteractiveBrowserPolicyDeniedError",
-  { implementation: SandboxImplementation, message: BoundedMessage },
+  {
+    implementation: SandboxImplementation,
+    message: BoundedMessage,
+    evidence: Schema.optionalKey(InteractiveBrowserFailureEvidence),
+  },
 ) {}
 
 export class InteractiveBrowserBusyError extends Schema.TaggedError<InteractiveBrowserBusyError>()(
@@ -179,7 +221,11 @@ export class InteractiveBrowserCapacityError extends Schema.TaggedError<Interact
 
 export class InteractiveBrowserExpiredError extends Schema.TaggedError<InteractiveBrowserExpiredError>()(
   "InteractiveBrowserExpiredError",
-  { implementation: SandboxImplementation, message: BoundedMessage },
+  {
+    implementation: SandboxImplementation,
+    message: BoundedMessage,
+    evidence: Schema.optionalKey(InteractiveBrowserFailureEvidence),
+  },
 ) {}
 
 export class InteractiveBrowserActionError extends Schema.TaggedError<InteractiveBrowserActionError>()(
@@ -197,6 +243,7 @@ export class InteractiveBrowserActionError extends Schema.TaggedError<Interactiv
       "close",
     ]),
     message: BoundedMessage,
+    evidence: Schema.optionalKey(InteractiveBrowserFailureEvidence),
     cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
@@ -206,6 +253,7 @@ export class InteractiveBrowserProtocolError extends Schema.TaggedError<Interact
   {
     implementation: SandboxImplementation,
     message: BoundedMessage,
+    evidence: Schema.optionalKey(InteractiveBrowserFailureEvidence),
     cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
@@ -214,6 +262,7 @@ export class InteractiveBrowserLimitError extends Schema.TaggedError<Interactive
   "InteractiveBrowserLimitError",
   {
     implementation: SandboxImplementation,
+    evidence: Schema.optionalKey(InteractiveBrowserFailureEvidence),
     limit: Schema.Literals(["actions", "elapsed", "returned-bytes"]),
     maximum: PositiveInt,
     observed: Schema.Natural,

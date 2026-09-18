@@ -199,7 +199,7 @@ describe("Browser Run native field filling", () => {
       expect(error).toMatchObject({
         _tag: "InteractiveBrowserActionError",
         operation: "fill",
-        cause: new Error("The selector did not resolve to a fillable field"),
+        evidence: { stage: "input", dispatch: "unknown", session: "attached" },
       });
     }).pipe(Effect.scoped, Effect.provide(nativeLayer(element))),
   );

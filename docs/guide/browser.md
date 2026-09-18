@@ -374,9 +374,29 @@ cleanup for every interactive pass; browser actions themselves use the Worker bi
 View a short expiry and a handoff a finite timeout. Your application owns authentication, operator
 authorization, and what happens after a handoff.
 
-An interactive session is ephemeral. The framework neither stores a session nor reconnects it after
-a restart, eviction, ownership loss, or durable recovery. A live browser action is uncertain at
-that boundary, so do not automatically replay it.
+A live handle remains ephemeral. A trusted host can persist `session.checkpoint`, then call
+`session.detach` to retain the provider page when its Scope closes. With exclusive ownership,
+`host.resume(checkpoint, { pendingInput })` attaches only the recorded session, context, and page;
+it preserves the original deadline and action budget, never creates a replacement page, and never
+replays navigation or input. Store this private checkpoint separately from model-visible records.
+
+Write a durable input receipt before dispatch. Include any unfinished receipt in `pendingInput`,
+even when it was written after the checkpoint. Reconnection cannot prove old input stopped:
+restart-unknown input permits reads and screenshots but blocks mutations, Live View, and handoff.
+`session.drainInput` can clear a local running-input fence after the SDK settles; it cannot clear
+restart or transport uncertainty. Human abandonment of a receipt does not stop SDK input. Only
+confirmed exact-session closure ends an unprovable input fence.
+
+Failures carry content-free execution evidence. `dispatch: "completed"` means SDK input completed
+before observation failed; it does not prove website acceptance. Recoverable failures leave reads
+usable. Keep durable unknown receipts independent of handle health and never replay uncertain input.
+`BrowserRunPageObservation` decodes the existing JSON text observation. Its document and node IDs
+can be passed as `expectedTarget` to click or fill; a replacement node is refused before dispatch.
+Include its control `state` snapshot to also refuse changed checked, disabled, input-type, label, or
+validity state on the same node. An optional `scopeSelector` must still resolve to one root
+containing that node. Guarded click and fill validate and dispatch on the node in one page task;
+guarded click uses native DOM click semantics rather than pointer coordinates.
+Human handoff receipts remain host-owned; `getHandoffState` queries the reattached provider page.
 
 ## Protected login and card filling
 

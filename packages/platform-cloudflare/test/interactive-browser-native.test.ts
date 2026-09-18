@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import nativePuppeteer from "@cloudflare/puppeteer/internal/puppeteer-core.js";
 import {
   BrowserRunInteractiveBinding,
+  BrowserRunPageObservation,
   browserRunInteractiveLayer,
   isBrowserRunUndispatchedActionError,
 } from "@effect-agent/platform-cloudflare/interactive-browser";
@@ -24,7 +25,7 @@ import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-life
 const sdk = vi.hoisted(() => ({ connect: vi.fn<() => Promise<object>>() }));
 
 vi.mock("@cloudflare/puppeteer", () => ({
-  default: { ...sdk, acquire: async () => ({ sessionId: "native-probe" }) },
+  default: { ...sdk, acquire: async () => ({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }) },
 }));
 
 class NativeProbeError extends Schema.TaggedError<NativeProbeError>()("NativeProbeError", {
@@ -33,25 +34,6 @@ class NativeProbeError extends Schema.TaggedError<NativeProbeError>()("NativePro
 
 const sdkCall = <A>(run: () => Promise<A>) =>
   Effect.tryPromise({ try: run, catch: (cause) => new NativeProbeError({ cause }) });
-
-const Observation = Schema.fromJsonString(
-  Schema.Struct({
-    pageText: Schema.String,
-    controlsTruncated: Schema.Boolean,
-    controls: Schema.Array(
-      Schema.Struct({
-        selector: Schema.String,
-        kind: Schema.String,
-        label: Schema.optionalKey(Schema.String),
-        checked: Schema.optionalKey(Schema.Boolean),
-        selected: Schema.optionalKey(Schema.Boolean),
-        required: Schema.optionalKey(Schema.Boolean),
-        valid: Schema.optionalKey(Schema.Boolean),
-        formValid: Schema.optionalKey(Schema.Boolean),
-      }),
-    ),
-  }),
-);
 
 // Opt-in local transport proof. No Cloudflare credentials or deployment. The
 // Puppeteer version and every adapter callback are the production ones.
@@ -149,7 +131,7 @@ it.live(
 
       sdk.connect.mockResolvedValue({
         createBrowserContext: async () => ({ newPage: async () => page, close: async () => {} }),
-        sessionId: () => "native-probe",
+        sessionId: () => "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
         isConnected: () => browser.isConnected(),
         on: () => {},
         off: () => {},
@@ -165,7 +147,11 @@ it.live(
       const layer = browserRunInteractiveLayer().pipe(
         Layer.provide(
           BrowserRunInteractiveBinding.layer({
-            browser: { fetch: unused, quickAction: unused },
+            browser: {
+              fetch: async () =>
+                Response.json({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }),
+              quickAction: unused,
+            },
           }).pipe(
             Layer.provide(Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void })),
           ),
@@ -185,7 +171,7 @@ it.live(
         yield* handle.navigate(BrowserNavigateRequest.make({ url }));
         const read = handle.readText(BrowserReadTextRequest.make({}));
         const initial = yield* read;
-        const observed = yield* Schema.decodeEffect(Observation)(initial.text);
+        const observed = yield* Schema.decodeEffect(BrowserRunPageObservation)(initial.text);
 
         expect(observed.controlsTruncated).toBe(true);
         expect(observed.controls).toHaveLength(64);
@@ -229,13 +215,159 @@ it.live(
         ).toBe(true);
         if (size === undefined || cart === undefined)
           return yield* Effect.die("Missing product controls");
-        yield* handle.click(BrowserClickRequest.make({ selector: cart.selector }));
+
+        // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
+        const sameDocument = yield* Schema.decodeEffect(BrowserRunPageObservation)(
+          (yield* read).text,
+        );
+
+        expect(sameDocument.documentId).toBe(observed.documentId);
+        expect(
+          sameDocument.controls.find((control) => control.selector === cart.selector)?.nodeId,
+        ).toBe(cart.nodeId);
+        expect(observed.controls.some((control) => control.inputType === "password")).toBe(true);
+        for (const update of [
+          { property: "checked", value: true, restore: false },
+          { property: "type", value: "password", restore: "radio" },
+        ]) {
+          yield* sdkCall(() =>
+            page.$eval(
+              "#small",
+              (element, update) => Reflect.set(element, update.property, update.value),
+              update,
+            ),
+          );
+          expect(
+            isBrowserRunUndispatchedActionError(
+              yield* handle
+                .click(
+                  BrowserClickRequest.make({
+                    selector: size.selector,
+                    expectedTarget: {
+                      documentId: observed.documentId,
+                      nodeId: size.nodeId,
+                      state: size,
+                    },
+                  }),
+                )
+                .pipe(Effect.flip),
+            ),
+          ).toBe(true);
+          yield* sdkCall(() =>
+            page.$eval(
+              "#small",
+              (element, update) => Reflect.set(element, update.property, update.restore),
+              update,
+            ),
+          );
+        }
+        yield* sdkCall(() =>
+          page.$eval(cart.selector, (element) => {
+            element.replaceWith(element.cloneNode(true));
+          }),
+        );
+        const expectedTarget = { documentId: observed.documentId, nodeId: cart.nodeId };
+
+        expect(
+          isBrowserRunUndispatchedActionError(
+            yield* handle
+              .click(BrowserClickRequest.make({ selector: cart.selector, expectedTarget }))
+              .pipe(Effect.flip),
+          ),
+        ).toBe(true);
+        expect(
+          isBrowserRunUndispatchedActionError(
+            yield* handle
+              .fill(
+                BrowserFillRequest.make({
+                  selector: cart.selector,
+                  value: "refused",
+                  expectedTarget,
+                }),
+              )
+              .pipe(Effect.flip),
+          ),
+        ).toBe(true);
+        const refreshed = yield* Schema.decodeEffect(BrowserRunPageObservation)((yield* read).text);
+        const freshCart = refreshed.controls.find((control) => control.selector === cart.selector);
+
+        if (freshCart === undefined) return yield* Effect.die("Missing replacement control");
+        expect(freshCart.nodeId).not.toBe(cart.nodeId);
+        // Replace from a synchronous DOM callback at the final validation/dispatch boundary.
+        yield* sdkCall(() =>
+          page.$eval(freshCart.selector, (element) => {
+            const original = Reflect.get(element, "getClientRects");
+
+            Reflect.set(element, "getClientRects", () => {
+              const rects = Reflect.apply(original, element, []);
+
+              element.replaceWith(element.cloneNode(true));
+
+              return rects;
+            });
+          }),
+        );
+        expect(
+          isBrowserRunUndispatchedActionError(
+            yield* handle
+              .click(
+                BrowserClickRequest.make({
+                  selector: freshCart.selector,
+                  expectedTarget: {
+                    documentId: refreshed.documentId,
+                    nodeId: freshCart.nodeId,
+                    state: freshCart,
+                    scopeSelector: "#cart",
+                  },
+                }),
+              )
+              .pipe(Effect.flip),
+          ),
+        ).toBe(true);
+
+        const finalObservation = yield* Schema.decodeEffect(BrowserRunPageObservation)(
+          (yield* read).text,
+        );
+
+        const finalCart = finalObservation.controls.find(
+          (control) => control.selector === cart.selector,
+        );
+
+        if (finalCart === undefined) return yield* Effect.die("Missing final control");
+        expect(
+          isBrowserRunUndispatchedActionError(
+            yield* handle
+              .click(
+                BrowserClickRequest.make({
+                  selector: finalCart.selector,
+                  expectedTarget: {
+                    documentId: finalObservation.documentId,
+                    nodeId: finalCart.nodeId,
+                    state: finalCart,
+                    scopeSelector: "nav",
+                  },
+                }),
+              )
+              .pipe(Effect.flip),
+          ),
+        ).toBe(true);
+        yield* handle.click(
+          BrowserClickRequest.make({
+            selector: finalCart.selector,
+            expectedTarget: {
+              documentId: finalObservation.documentId,
+              nodeId: finalCart.nodeId,
+              state: finalCart,
+              scopeSelector: "#cart",
+            },
+          }),
+        );
         expect(cartRequests).toBe(0);
         yield* handle.click(BrowserClickRequest.make({ selector: size.selector }));
         yield* handle.fill(
           BrowserFillRequest.make({ selector: "#roast", value: "private-roast-value" }),
         );
-        const selected = yield* Schema.decodeEffect(Observation)((yield* read).text);
+        const selected = yield* Schema.decodeEffect(BrowserRunPageObservation)((yield* read).text);
 
         expect(selected.controls.find((c) => c.label === "12oz")).toMatchObject({
           checked: true,
