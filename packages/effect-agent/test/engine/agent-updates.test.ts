@@ -3,7 +3,14 @@ import { Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effec
 import * as Agent from "effect-agent/agent";
 import * as AgentUpdates from "effect-agent/agent-updates";
 import { IdempotencyKey } from "effect-agent/receipt";
-import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import {
+  LanguageModel,
+  Model,
+  type Prompt,
+  type Response,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
 
 import * as AgentRuntime from "../../src/engine/AgentRuntime.ts";
 import { AgentUpdateAcceptance, ModelUsageAccounting } from "../../src/engine/RunOptions.ts";
@@ -11,7 +18,7 @@ import { ThreadHistory } from "../../src/engine/ThreadHistory.ts";
 
 const usage = { inputTokens: {}, outputTokens: {} };
 
-const model = (name: string, params: unknown) =>
+const model = (name: string, params: unknown, prompts: Array<Prompt.Prompt> = []) =>
   Model.make(
     "test",
     "updates",
@@ -22,11 +29,13 @@ const model = (name: string, params: unknown) =>
 
         return yield* LanguageModel.make({
           generateText: () => Effect.succeed([]),
-          streamText: () =>
+          streamText: ({ prompt }) =>
             Stream.unwrap(
               Ref.getAndUpdate(turns, (n) => n + 1).pipe(
-                Effect.map((turn) =>
-                  Stream.fromIterable<Response.StreamPartEncoded>(
+                Effect.map((turn) => {
+                  prompts.push(prompt);
+
+                  return Stream.fromIterable<Response.StreamPartEncoded>(
                     turn === 0
                       ? [
                           {
@@ -44,8 +53,8 @@ const model = (name: string, params: unknown) =>
                           { type: "text-end", id: "answer" },
                           { type: "finish", reason: "stop", usage },
                         ],
-                  ),
-                ),
+                  );
+                }),
               ),
             ),
         });
@@ -68,8 +77,13 @@ layer(base)("Agent updates", (it) => {
     "encodes native updates once and decodes observed values without completing the run",
     () =>
       Effect.gen(function* () {
+        const prompts: Array<Prompt.Prompt> = [];
+
         const events = yield* AgentRuntime.stream(
-          Agent.withModel(definition, model("emit_update", { value: { candidateCount: "2" } })),
+          Agent.withModel(
+            definition,
+            model("emit_update", { value: { candidateCount: "2" } }, prompts),
+          ),
           "go",
         ).pipe(Stream.runCollect);
 
@@ -80,14 +94,27 @@ layer(base)("Agent updates", (it) => {
         expect(yield* AgentUpdates.decode(definition, updates[0]!.update)).toEqual({
           candidateCount: 2,
         });
+        expect(events.filter((event) => event._tag === "ToolCallSucceeded")).toMatchObject([
+          { toolName: "emit_update", result: { emitted: true } },
+        ]);
+        expect(
+          prompts[1]?.content.flatMap((message) =>
+            message.role === "tool" ? message.content : [],
+          ),
+        ).toMatchObject([{ name: "emit_update", result: { emitted: true }, isFailure: false }]);
         expect(events.at(-1)?._tag).toBe("RunCompleted");
       }),
   );
 
   it.effect("publishes only acknowledged durable updates", () =>
     Effect.gen(function* () {
+      const prompts: Array<Prompt.Prompt> = [];
+
       const events = yield* AgentRuntime.streamWithUsageAccountingUnknown(
-        Agent.withModel(definition, model("emit_update", { value: { candidateCount: "2" } })),
+        Agent.withModel(
+          definition,
+          model("emit_update", { value: { candidateCount: "2" } }, prompts),
+        ),
         "go",
       ).pipe(
         Stream.runCollect,
@@ -98,6 +125,18 @@ layer(base)("Agent updates", (it) => {
       );
 
       expect(events.some((event) => event._tag === "AgentUpdateEmitted")).toBe(false);
+      expect(events.filter((event) => event._tag === "ToolCallFailed")).toMatchObject([
+        { toolName: "emit_update", errorTag: "AgentUpdateError" },
+      ]);
+      expect(
+        prompts[1]?.content.flatMap((message) => (message.role === "tool" ? message.content : [])),
+      ).toMatchObject([
+        {
+          name: "emit_update",
+          result: { _tag: "AgentUpdateError", reason: "storage" },
+          isFailure: true,
+        },
+      ]);
       expect(events.at(-1)?._tag).toBe("RunCompleted");
     }),
   );
@@ -129,12 +168,16 @@ layer(base)("Agent updates", (it) => {
 
       yield* Deferred.await(entered);
       expect(yield* Ref.get(observed)).not.toContain("AgentUpdateEmitted");
+      expect(yield* Ref.get(observed)).not.toContain("ToolCallSucceeded");
       yield* Deferred.succeed(accepted, undefined);
       const events = yield* Fiber.join(fiber);
       const updates = events.filter((event) => event._tag === "AgentUpdateEmitted");
 
       expect(updates).toHaveLength(1);
       expect(updates[0]!.update.sequence).toBe(42);
+      expect(events.filter((event) => event._tag === "ToolCallSucceeded")).toMatchObject([
+        { toolName: "emit_update", result: { emitted: true } },
+      ]);
       expect(events.at(-1)?._tag).toBe("RunCompleted");
     }),
   );
@@ -147,13 +190,28 @@ layer(base)("Agent updates", (it) => {
           { value: { candidateCount: "invalid" } },
           { value: { candidateCount: "2" } },
         ]) {
+          const prompts: Array<Prompt.Prompt> = [];
+
           const events = yield* AgentRuntime.stream(
-            Agent.withModel(definition, model("emit_update", params)),
+            Agent.withModel(definition, model("emit_update", params, prompts)),
             "go",
             { updates: { maxBytes: 1 } },
           ).pipe(Stream.runCollect);
 
           expect(events.some((event) => event._tag === "AgentUpdateEmitted")).toBe(false);
+          expect(
+            prompts[1]?.content.flatMap((message) =>
+              message.role === "tool" ? message.content : [],
+            ),
+          ).toMatchObject([
+            {
+              name: "emit_update",
+              isFailure: true,
+              ...(params.value.candidateCount === "2"
+                ? { result: { _tag: "AgentUpdateError", reason: "capacity" } }
+                : {}),
+            },
+          ]);
           expect(events.at(-1)?._tag).toBe("RunCompleted");
         }
       }),

@@ -1,6 +1,17 @@
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { expect, layer } from "@effect/vitest";
-import { Cause, DateTime, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  DateTime,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  SchemaGetter,
+  Stream,
+} from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicyError, ContextBudgetError, ModelProtocolError } from "effect-agent/agent-error";
 import { AgentPolicy } from "effect-agent/agent-policy";
@@ -2490,6 +2501,86 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
     }),
   );
 
+  it.effect(
+    "represents declared Void successes as JSON null and preserves explicit encodings",
+    () =>
+      Effect.gen(function* () {
+        const tools = Toolkit.make(
+          Tool.make("defaultVoid", { parameters: Schema.Struct({}) }),
+          Tool.make("explicitVoid", { parameters: Schema.Struct({}), success: Schema.Void }),
+          Tool.make("encodedVoid", {
+            parameters: Schema.Struct({}),
+            success: Schema.String.pipe(
+              Schema.encodeTo(Schema.Void, {
+                decode: SchemaGetter.transform(() => "done"),
+                encode: SchemaGetter.transform(() => undefined),
+              }),
+            ),
+          }),
+          Tool.make("customVoid", {
+            parameters: Schema.Struct({}),
+            success: Schema.Void.pipe(
+              Schema.encodeTo(Schema.Literal("acknowledged"), {
+                decode: SchemaGetter.transform(() => undefined),
+                encode: SchemaGetter.transform((): "acknowledged" => "acknowledged"),
+              }),
+            ),
+          }),
+        );
+
+        const definition = Agent.make("void-results", {
+          input: Schema.String,
+          output: answerOutput,
+          instructions: "Use the tools, then answer.",
+          toolkit: tools,
+        });
+
+        const { model, requests } = scriptedModel([
+          [
+            ...Object.keys(tools.tools).map((name) => ({
+              type: "tool-call" as const,
+              id: name,
+              name,
+              params: {},
+              providerExecuted: false,
+            })),
+            { type: "finish", reason: "tool-calls", usage: emptyUsage },
+          ],
+          finalParts('{"answer":"done"}'),
+        ]);
+
+        const events = yield* AgentRuntime.stream(Agent.withModel(definition, model), "go").pipe(
+          Stream.runCollect,
+          Effect.provide(
+            tools.toLayer({
+              defaultVoid: () => Effect.void,
+              explicitVoid: (_, context) => context.preliminary(undefined),
+              encodedVoid: () => Effect.succeed("done"),
+              customVoid: () => Effect.void,
+            }),
+          ),
+        );
+
+        expect(events.at(-1)?._tag).toBe("RunCompleted");
+        expect(
+          Object.fromEntries(
+            events.flatMap((event) =>
+              event._tag === "ToolCallSucceeded" ? [[event.toolName, event.result]] : [],
+            ),
+          ),
+        ).toEqual({
+          defaultVoid: null,
+          explicitVoid: null,
+          encodedVoid: null,
+          customVoid: "acknowledged",
+        });
+        expect(events.filter((event) => event._tag === "ToolProgress")).toMatchObject([
+          { toolName: "explicitVoid", result: null },
+        ]);
+        expect(toolResultValues(requests[1]!.prompt)).toEqual([null, null, null, "acknowledged"]);
+      }),
+  );
+
   it.effect("RUN-022: an unserializable Tool result becomes the fail-closed sentinel", () =>
     Effect.gen(function* () {
       const UnknownTool = Tool.make("emitUnknown", {
@@ -2512,34 +2603,39 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
         }),
       });
 
-      const { model, requests } = scriptedModel([
-        toolCallParts("u-1", "emitUnknown", {}),
-        finalParts('{"answer":"done"}'),
-      ]);
-
-      const toolLayer = unknownToolkit.toLayer({
-        emitUnknown: () =>
-          Effect.succeed({
+      for (const { value, reason } of [
+        { value: undefined, reason: "the encoded result is not a JSON value" },
+        {
+          value: {
             toJSON: () => {
               throw new Error("cyclic tool payload");
             },
-          }),
-      });
+          },
+          reason: "cyclic tool payload",
+        },
+      ]) {
+        const { model, requests } = scriptedModel([
+          toolCallParts("u-1", "emitUnknown", {}),
+          finalParts('{"answer":"done"}'),
+        ]);
 
-      const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
-        question: "u",
-      }).pipe(Effect.provide(toolLayer));
+        const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+          question: "u",
+        }).pipe(
+          Effect.provide(unknownToolkit.toLayer({ emitUnknown: () => Effect.succeed(value) })),
+        );
 
-      expect(result.output).toEqual({ answer: "done" });
-      const second = requests[1];
+        expect(result.output).toEqual({ answer: "done" });
+        const second = requests[1];
 
-      if (second === undefined) throw new Error("expected a second model request");
-      const values = toolResultValues(second.prompt);
+        if (second === undefined) throw new Error("expected a second model request");
+        const values = toolResultValues(second.prompt);
 
-      expect(values).toHaveLength(1);
-      const sentinel = Schema.decodeUnknownSync(UnserializableToolResult)(values[0]);
+        expect(values).toHaveLength(1);
+        const sentinel = Schema.decodeUnknownSync(UnserializableToolResult)(values[0]);
 
-      expect(sentinel.reason).toContain("cyclic tool payload");
+        expect(sentinel.reason).toContain(reason);
+      }
     }),
   );
 

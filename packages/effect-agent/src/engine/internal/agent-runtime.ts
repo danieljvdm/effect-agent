@@ -17,6 +17,7 @@ import {
   Queue,
   Result,
   Schema,
+  SchemaAST,
   SchemaGetter,
   Scope,
   Semaphore,
@@ -2171,9 +2172,10 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
           });
         }
         const toolCallId = yield* decodeToolCallId(call.id);
+        const encodedResult = toolResultForJson(prepared.tool, result);
 
         if (result.preliminary) {
-          const owned = yield* ownApplicationToolProgress(context, result.encodedResult);
+          const owned = yield* ownApplicationToolProgress(context, encodedResult);
 
           const event: RunEvent = ToolProgress.make({
             ...(yield* eventBase(context)),
@@ -2190,7 +2192,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
         terminal = true;
         terminalOutcome = result.isFailure ? "failure" : "success";
         terminalResult = {
-          encodedResult: result.encodedResult,
+          encodedResult,
           isFailure: result.isFailure,
           result: result.result,
         };
@@ -3128,6 +3130,23 @@ const appendInputs = <HookError, HookRequirements>(
 
     return history;
   });
+
+/**
+ * Toolkit uses the declared codec's raw encoding. A Void encoding needs Effect's
+ * JSON representation before entering history or the broker; explicit encodings
+ * and failure results remain authoritative.
+ */
+const toolResultForJson = (tool: Tool.Any, result: Tool.HandlerResult<Tool.Any>): unknown => {
+  if (
+    !result.isFailure &&
+    result.encodedResult === undefined &&
+    SchemaAST.isVoid(SchemaAST.toEncoded(tool.successSchema.ast))
+  ) {
+    return Schema.encodeSync(Schema.toCodecJson(Schema.Void))(undefined);
+  }
+
+  return result.encodedResult;
+};
 
 /**
  * RUN-022: bound one application Tool result at the settle seam. The bounded
@@ -8400,6 +8419,8 @@ function streamWithCompletion<
                       const emitter = yield* Emitter;
 
                       yield* emitter.emit({ target: agent.definition, updateId, value });
+
+                      return { emitted: true };
                     }),
                 });
 
@@ -9538,7 +9559,7 @@ const makeToolBrokerService = Effect.fnUntraced(function* <HookError, HookRequir
                       }
                       if (!result.preliminary) {
                         terminal = {
-                          encodedResult: result.encodedResult,
+                          encodedResult: toolResultForJson(tool, result),
                           isFailure: result.isFailure,
                           tag:
                             observer === undefined || !result.isFailure

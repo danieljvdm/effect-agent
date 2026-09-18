@@ -16,6 +16,7 @@ import {
 import * as Agent from "effect-agent/agent";
 import * as AgentUpdates from "effect-agent/agent-updates";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
 import { ThreadId } from "effect-agent/identifiers";
 import { MessageDeliveryStore } from "effect-agent/message-delivery";
 import { DefinitionDigestInput } from "effect-agent/records";
@@ -25,7 +26,7 @@ import { AbortCommand, IdempotencyKey, Principal } from "effect-agent/submission
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerError, WorkerUpdate } from "effect-agent/worker";
 import { WorkerHostAuthorizer } from "effect-agent/worker-host";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effect/unstable/ai";
 
 const input = Schema.Struct({ question: Schema.String });
 const output = Schema.Struct({ answer: Schema.String });
@@ -391,6 +392,114 @@ it.live(
           launched.map((worker) => worker.threadId).sort(),
         );
         expect(completions.every((message) => message.report.outcome === "completed")).toBe(true);
+      }),
+    ).pipe(Effect.provide(NodeFileSystem.layer)),
+  15_000,
+);
+
+it.live(
+  "replays a retained emission acknowledgement after a Node restart without duplicating the update",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "update-ack-replay-" });
+        const replayThreadId = Schema.decodeSync(ThreadId)("update-ack-replay");
+        const prompts: Array<Prompt.Prompt> = [];
+        const accepted: Array<AgentUpdates.Update> = [];
+        let modelCalls = 0;
+
+        const agent = Agent.withModel(
+          Agent.make("update-ack-replay", {
+            input,
+            output,
+            updates: areaConcern,
+            instructions: "Report the finding, then finish.",
+            toolkit: Toolkit.empty,
+            policy: { maxTurns: 2, maxToolCalls: 1, maxDuration: "30 seconds" },
+          }),
+          model("update-ack-replay", ({ prompt }) => {
+            prompts.push(prompt);
+            modelCalls++;
+
+            return Stream.fromIterable(
+              modelCalls === 1
+                ? calls({ name: "emit_update", params: { value: concern } })
+                : finish("done"),
+            );
+          }),
+        );
+
+        for (const incarnation of [1, 2]) {
+          const live = NodeHost.NodeDurableHost.layerRegistered(
+            [
+              {
+                agent,
+                definitions: DefinitionDigestInput.make({ agent: "v1", model: "v1", tools: "v1" }),
+              },
+            ],
+            {
+              filename: `${directory}/runtime.sqlite`,
+              deploymentId: "update-ack-replay",
+              producerId: "node",
+              runtimeFailpoint: (location) =>
+                incarnation === 1 && location === "turn:after-results-append"
+                  ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
+                  : Effect.void,
+            },
+          );
+
+          yield* Effect.gen(function* () {
+            const runtime = yield* DurableAgentRuntime;
+            const store = yield* ThreadStore;
+
+            if (incarnation === 1) {
+              yield* runtime.submitRegistered(
+                agent,
+                { question: "Check the area" },
+                { threadId: replayThreadId, principal, idempotencyKey: key("finding") },
+              );
+              expect(
+                yield* runtime.processThreadResolved(replayThreadId).pipe(Effect.result),
+              ).toMatchObject({
+                _tag: "Failure",
+                failure: {
+                  _tag: "DurableRuntimeFailpointError",
+                  location: "turn:after-results-append",
+                },
+              });
+              expect(modelCalls).toBe(1);
+            } else {
+              expect(yield* runtime.processThreadResolved(replayThreadId)).toMatchObject([
+                { outcome: "completed" },
+              ]);
+            }
+
+            const log = yield* store.export(ThreadExportRequest.make({ threadId: replayThreadId }));
+
+            const updates = log.records.flatMap(({ record }) =>
+              record.payload._tag === "AgentUpdateEmitted" ? [record.payload.update] : [],
+            );
+
+            expect(updates).toHaveLength(1);
+            if (incarnation === 1) accepted.push(...updates);
+            else expect(updates).toEqual(accepted);
+            expect(
+              log.records.flatMap(({ record }) =>
+                record.payload._tag === "ToolCallSettled" ? [record.payload] : [],
+              ),
+            ).toMatchObject([
+              { toolName: "emit_update", result: { emitted: true }, isFailure: false },
+            ]);
+          }).pipe(Effect.provide(live));
+        }
+
+        expect(modelCalls).toBe(2);
+        expect(
+          prompts[1]?.content.flatMap((message) =>
+            message.role === "tool" ? message.content : [],
+          ),
+        ).toMatchObject([{ name: "emit_update", result: { emitted: true }, isFailure: false }]);
       }),
     ).pipe(Effect.provide(NodeFileSystem.layer)),
   15_000,

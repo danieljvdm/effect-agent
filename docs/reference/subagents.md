@@ -466,7 +466,9 @@ records expose pending, accepted, processed, parked, and refused states through 
 
 `Agent.make(name, { updates: schema, ... })` declares intentional intermediate output independently of
 final output. Objects and tagged unions work, including transformed Schemas. The framework adds
-one native `emit_update` Tool with `{ value: schema }` parameters. Its expected refusal is returned
+one native `emit_update` Tool with `{ value: schema }` parameters. Success returns `{ emitted: true }`
+after the Run accepts the update. Durable acceptance retains the canonical update and any prepared
+delivery; destination admission and parent processing are separate. Expected refusal is returned
 as a typed tool result, so the Agent can continue toward completion. The name is reserved when
 updates are declared; inherited tool grants still apply.
 

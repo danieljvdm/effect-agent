@@ -30,6 +30,10 @@ The tool declaration owns parameter, success, and failure schemas, approval, dep
 failure mode, and preliminary results. The runtime decodes every model-generated tool call through
 that declaration.
 
+Tool successes with a `Schema.Void` encoding, including the default, appear as JSON `null` in model
+history and programmatic broker results. Handler return types stay unchanged. A custom encoding to
+another JSON value takes precedence.
+
 ## Compose decisions into state transitions {#decision-transitions}
 
 `@effect-agent/ai-decision` evaluates typed questions about application state. A `DecisionSet`
