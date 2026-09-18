@@ -419,7 +419,10 @@ interface NativeRecovery {
   readonly loaded: Set<ThreadId>;
   readonly reports: Map<SubmissionId, RecoveryReport>;
   readonly faults: Map<ThreadId, ThreadRecoveryFault>;
-  generation?: bigint;
+  observation?: {
+    readonly generation: bigint;
+    readonly activeAtStart: number;
+  };
   started: boolean;
   needsCheckpoint: boolean;
   recovered: number;
@@ -1035,7 +1038,13 @@ export class ThreadMaintenance extends Context.Service<
         // Select from control state before reading execution history. A recovering or faulted
         // Thread cannot enter dispatch; old cleanup has its own scoped opportunity below.
         observed.nativeOnly = true;
-        recovery.generation ??= started.generation;
+
+        // Every checkpoint keeps the producer overlap that belongs to this recovery wave.
+        const observation = (recovery.observation ??= {
+          generation: started.generation,
+          activeAtStart: started.activeAtStart,
+        });
+
         const current = yield* Stream.runCollect(ledger.scanNonterminal);
         const selectionTime = yield* Clock.currentTimeMillis;
 
@@ -1309,11 +1318,14 @@ export class ThreadMaintenance extends Context.Service<
               const { state } = await readMaintenanceState(transaction);
 
               const processed =
-                autonomous || started.activeAtStart > 0 || active > 0
+                autonomous ||
+                observation.activeAtStart > 0 ||
+                started.activeAtStart > 0 ||
+                active > 0
                   ? state.processed
-                  : state.processed > (recovery.generation ?? started.generation)
+                  : state.processed > observation.generation
                     ? state.processed
-                    : (recovery.generation ?? started.generation);
+                    : observation.generation;
 
               const next = ThreadMaintenanceState.make({
                 ...Struct.omit(state, ["retry"]),
