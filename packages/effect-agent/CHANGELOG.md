@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.108
+
+### Minor Changes
+
+- [#539](https://github.com/danieljvdm/effect-agent/pull/539) [`92bd9e2`](https://github.com/danieljvdm/effect-agent/commit/92bd9e26c181c07f84371a372d8885cd4db4667a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Provide AutoModel as a native Effect model Layer to select through DecisionModel automatically on each parent or subagent thread's first turn. Retain selections across follow-ups through a shared SelectionStore, with an in-memory Layer and schema-backed records for host-owned persistence.
+
 ## 0.1.0-beta.107
 
 ### Patch Changes

@@ -1,7 +1,18 @@
 import { browserRunProtectedBindingLayer } from "@effect-agent/platform-cloudflare/protected-browser";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { expect, expectTypeOf, it } from "@effect/vitest";
-import { type Crypto, Deferred, Effect, Fiber, Layer, Redacted, Schema, type Scope } from "effect";
+import {
+  Cause,
+  type Crypto,
+  Deferred,
+  Effect,
+  ErrorReporter,
+  Fiber,
+  Layer,
+  Redacted,
+  Schema,
+  type Scope,
+} from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import {
   BrowserCredentialAccess,
@@ -14,6 +25,7 @@ import {
   LoginCredential,
   ProtectedBrowser,
   ProtectedBrowserClick,
+  ProtectedBrowserError,
   ProtectedBrowserControl,
   ProtectedBrowserFill,
   ProtectedBrowserNavigate,
@@ -345,6 +357,122 @@ it("keeps session, crypto, scope, and dispatch authority in the requirement chan
     Effect.Success<ReturnType<ProtectedBrowserTransport["target"]>>
   >().toEqualTypeOf<ProtectedBrowserControl>();
 });
+
+// Incident: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-45
+it.effect("retains acquisition status once without exporting provider content", () =>
+  Effect.gen(function* () {
+    const reports: Array<unknown> = [];
+
+    const error = yield* Effect.gen(function* () {
+      return yield* (yield* BrowserRunProtectedTransport).open(policy);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide([
+        browserRunProtectedBindingLayer({
+          browser: {
+            fetch: async () => new Response("sentinel-provider-payload", { status: 503 }),
+          },
+        }).pipe(
+          Layer.provide(BrowserCrypto.layer),
+          Layer.provide(
+            Layer.succeed(BrowserRunSessionLifecycle, {
+              close: () => Effect.die("must not close an unidentified session"),
+            }),
+          ),
+        ),
+        ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))]),
+      ]),
+      Effect.flip,
+    );
+
+    expect(error).toMatchObject({
+      reason: "provider",
+      dispatch: "not-dispatched",
+      cleanup: "unconfirmed",
+    });
+    expect(reports).toHaveLength(1);
+    expect(ErrorReporter.isIgnored(error)).toBe(true);
+    expect(Schema.encodeSync(ProtectedBrowserError)(error)).not.toHaveProperty(
+      ErrorReporter.ignore,
+    );
+    expect(JSON.stringify(reports)).toContain('"operation":"protected.acquire"');
+    expect(JSON.stringify(reports)).toContain('"status":503');
+    expect(JSON.stringify({ reports, error })).not.toContain("sentinel-provider-payload");
+
+    const started = yield* Deferred.make<void>();
+    const response = yield* Deferred.make<Response>();
+    const reported = yield* Deferred.make<void>();
+
+    const opening = yield* Effect.gen(function* () {
+      return yield* (yield* BrowserRunProtectedTransport).open(policy);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide([
+        browserRunProtectedBindingLayer({
+          browser: {
+            fetch: () =>
+              Effect.runPromise(
+                Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(response))),
+              ),
+          },
+        }).pipe(
+          Layer.provide(BrowserCrypto.layer),
+          Layer.provide(
+            Layer.succeed(BrowserRunSessionLifecycle, {
+              close: () => Effect.die("No identified session"),
+            }),
+          ),
+        ),
+        ErrorReporter.layer([
+          ErrorReporter.make(({ cause }) => {
+            reports.push(cause);
+            Effect.runSync(Deferred.succeed(reported, undefined));
+          }),
+        ]),
+      ]),
+      Effect.forkChild,
+    );
+
+    yield* Deferred.await(started);
+    yield* Fiber.interrupt(opening);
+    yield* Deferred.succeed(
+      response,
+      new Response("private-late-provider-payload", { status: 503 }),
+    );
+    yield* Deferred.await(reported);
+    expect(reports).toHaveLength(2);
+    expect(JSON.stringify(reports[1])).toContain('"status":503');
+    expect(JSON.stringify(reports)).not.toContain("private-late-provider-payload");
+
+    const f = fixture();
+
+    f.setAuthorizeAction(() =>
+      Effect.failCause(
+        Cause.fromReasons([
+          Cause.makeFailReason(new CredentialAccessError({ reason: "denied" })),
+          Cause.makeDieReason(new TypeError("sentinel-private-defect")),
+        ]),
+      ),
+    );
+
+    const mixed = yield* Effect.gen(function* () {
+      const handle = yield* f.open;
+
+      return yield* handle.navigate(ProtectedBrowserNavigate.make({ url: "https://shop.test/" }));
+    }).pipe(
+      Effect.provide(f.layer),
+      Effect.scoped,
+      Effect.provide(ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))])),
+      Effect.flip,
+    );
+
+    expect(mixed.reason).toBe("provider");
+    expect(reports).toHaveLength(3);
+    expect(JSON.stringify(reports)).toContain('"_tag":"Die"');
+    expect(JSON.stringify(reports)).not.toContain("sentinel-private-defect");
+    expect(f.stats().closed).toBe(1);
+  }),
+);
 
 it.effect(
   "explicitly disables recording on acquisition and closes that exact session when attachment fails",

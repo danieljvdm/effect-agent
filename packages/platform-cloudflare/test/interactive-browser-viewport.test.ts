@@ -16,14 +16,17 @@ import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-life
 const sdk = vi.hoisted(() => ({ connect: vi.fn<(...args: Array<unknown>) => Promise<object>>() }));
 
 vi.mock("@cloudflare/puppeteer", () => ({
-  default: { ...sdk, acquire: async () => ({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }) },
+  default: sdk,
 }));
 
 const unusedRpc = async (): Promise<Response> => {
   throw new Error("The mocked SDK must not call Browser Run");
 };
 
-const browser = { fetch: unusedRpc, quickAction: unusedRpc };
+const browser = {
+  fetch: async () => Response.json({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }),
+  quickAction: unusedRpc,
+};
 
 const open = Effect.gen(function* () {
   const host = yield* BrowserRunInteractiveHost;
@@ -195,7 +198,7 @@ describe("Browser Run viewport boundary", () => {
           "DELETE /client/v4/accounts/1234567890abcdef1234567890abcdef/browser-rendering/devtools/browser/c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
         ]);
         expect(sdk.connect).toHaveBeenCalledExactlyOnceWith(
-          browser,
+          { fetch: expect.any(Function) },
           "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
         );
         expect(setViewport.mock.calls).toEqual([
@@ -212,6 +215,7 @@ describe("Browser Run viewport boundary", () => {
 // Transport substitute deliberately exposes no goto/reload or emulation methods.
 const mockBrowser = (setViewport: (viewport: unknown) => Promise<void>) => {
   const page = {
+    browser: () => ({ isConnected: () => true }),
     setViewport,
     url: () => "https://example.com/",
     close: async () => {},
@@ -222,7 +226,11 @@ const mockBrowser = (setViewport: (viewport: unknown) => Promise<void>) => {
   };
 
   sdk.connect.mockResolvedValue({
-    createBrowserContext: async () => ({ newPage: async () => page, close: async () => {} }),
+    createBrowserContext: async () => ({
+      browser: () => ({ isConnected: () => true }),
+      newPage: async () => page,
+      close: async () => {},
+    }),
     sessionId: () => "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
     isConnected: () => true,
     on: () => {},

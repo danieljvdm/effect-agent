@@ -45,3 +45,18 @@ application's policy, not authorization to act.
 Read the [guide](https://effect-agent.com/guide/tools#decision-transitions) for the mental model
 and the [reference](https://effect-agent.com/reference/decision-models) for query options,
 results, errors, and provider behavior.
+
+## Choose a thread's model
+
+`AutoModel.make({ version, models })` builds a native model Layer from `{ model, description }`
+profiles. Use `AgentRuntime.run(assistant, input).pipe(Effect.provide(ThreadModels))` to satisfy
+the model requirement. `Subagent.layer(delegation).pipe(Layer.provide(ThreadModels))` uses the same
+catalog while selecting independently for each new child. Selection happens on each thread's
+first turn. Supply `DecisionModel`, native provider clients, and a shared `AutoModel.layerMemory()`
+to retain choices across follow-ups.
+
+Durable hosts provide `AutoModel.SelectionStore` to atomically retain selection records across
+restarts. Missing profiles, catalog version mismatches, and wrong-thread records fail without
+reselecting. Explicit `select` and `restore` remain available for host-owned admission.
+See [AutoModel](https://effect-agent.com/reference/decision-models#automodel) for configuration
+and a complete Jev example.

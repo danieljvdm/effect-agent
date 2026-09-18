@@ -20,6 +20,7 @@ import {
   Clock,
   Duration,
   Effect,
+  ErrorReporter,
   Exit,
   Fiber,
   Layer,
@@ -42,6 +43,8 @@ import {
   type InteractiveBrowserNetworkPolicy,
 } from "effect-agent/interactive-browser";
 import { TestClock } from "effect/testing";
+
+import { BrowserRunFailure } from "../src/internal/browser-failure.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -1145,48 +1148,98 @@ describe("Browser Run interactive browser adapter", () => {
       }),
   );
 
-  it.effect("retains the pass clock when browser acquisition finishes after interruption", () =>
-    Effect.gen(function* () {
-      yield* TestClock.setTime(123_456);
+  // Incident: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-45
+  it.effect(
+    "retains the pass clock and reporter when browser acquisition finishes after interruption",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(123_456);
 
-      const browserGate = makeGate<BrowserRunInteractiveBrowser>();
-      const cleanupGate = makeGate<void>();
-      const cleanupTimes: Array<number> = [];
+        const browserGate = makeGate<BrowserRunInteractiveBrowser>();
+        const cleanupGate = makeGate<void>();
+        const cleanupTimes: Array<number> = [];
+        const reports: Array<unknown> = [];
 
-      const base = makeFixture({
-        launch: async () => {
-          browserGate.markStarted();
+        const base = makeFixture({
+          launch: async () => {
+            browserGate.markStarted();
 
-          return browserGate.promise;
-        },
-      });
+            return browserGate.promise;
+          },
+        });
 
-      const fixture: Fixture = {
-        ...base,
-        binding: {
-          ...base.binding,
-          closeSession: (sessionId) =>
-            Effect.gen(function* () {
-              cleanupTimes.push(yield* Clock.currentTimeMillis);
-              yield* base.binding.closeSession(sessionId);
-              cleanupGate.resolve(undefined);
-            }),
-        },
-      };
+        const fixture: Fixture = {
+          ...base,
+          binding: {
+            ...base.binding,
+            closeSession: (sessionId) =>
+              Effect.gen(function* () {
+                cleanupTimes.push(yield* Clock.currentTimeMillis);
+                yield* base.binding.closeSession(sessionId);
 
-      const opening = yield* withBrowser(fixture, () => Effect.void).pipe(Effect.forkChild);
+                return yield* Effect.die(new TypeError("private-cleanup-failure"));
+              }),
+          },
+        };
 
-      yield* awaitPromise(browserGate.started);
-      yield* Fiber.interrupt(opening);
-      browserGate.resolve(fixture.browser);
-      yield* awaitPromise(cleanupGate.promise);
+        const opening = yield* withBrowser(fixture, () => Effect.void).pipe(
+          Effect.provide(
+            ErrorReporter.layer([
+              ErrorReporter.make(({ cause }) => {
+                reports.push(cause);
+                cleanupGate.resolve(undefined);
+              }),
+            ]),
+          ),
+          Effect.forkChild,
+        );
 
-      expect(cleanupTimes).toEqual([123_456]);
-      expect(fixture.calls.filter((call) => call === "binding.terminate:session-id")).toHaveLength(
-        1,
-      );
-      expect(closedResources(fixture)).toEqual([]);
-    }),
+        yield* awaitPromise(browserGate.started);
+        yield* Fiber.interrupt(opening);
+        browserGate.resolve(fixture.browser);
+        yield* awaitPromise(cleanupGate.promise);
+
+        expect(cleanupTimes).toEqual([123_456]);
+        expect(reports).toHaveLength(1);
+        expect(JSON.stringify(reports)).toContain("interactive.lateCleanup");
+        expect(JSON.stringify(reports)).not.toContain("private-cleanup-failure");
+        expect(
+          fixture.calls.filter((call) => call === "binding.terminate:session-id"),
+        ).toHaveLength(1);
+        expect(closedResources(fixture)).toEqual([]);
+
+        const rejectedStarted = makeGate<void>();
+        const reject = makeGate<void>();
+        const rejectedReported = makeGate<void>();
+
+        const rejecting = makeFixture({
+          launch: async () => {
+            rejectedStarted.resolve(undefined);
+            await reject.promise;
+            throw new TypeError("private-late-sdk-rejection");
+          },
+        });
+
+        const pending = yield* withBrowser(rejecting, () => Effect.void).pipe(
+          Effect.provide(
+            ErrorReporter.layer([
+              ErrorReporter.make(({ cause }) => {
+                reports.push(cause);
+                rejectedReported.resolve(undefined);
+              }),
+            ]),
+          ),
+          Effect.forkChild,
+        );
+
+        yield* Effect.promise(() => rejectedStarted.promise);
+        yield* Fiber.interrupt(pending);
+        reject.resolve(undefined);
+        yield* Effect.promise(() => rejectedReported.promise);
+        expect(reports).toHaveLength(2);
+        expect(JSON.stringify(reports[1])).toContain("interactive.acquire");
+        expect(JSON.stringify(reports)).not.toContain("private-late-sdk-rejection");
+      }),
   );
 
   it.effect("closes every remote resource that arrives after acquisition has timed out", () =>
@@ -1320,7 +1373,14 @@ describe("Browser Run interactive browser adapter", () => {
 
   it.effect("classifies capacity, launch protocol, and disconnected sessions distinctly", () =>
     Effect.gen(function* () {
-      const capacity = makeFixture({ launchError: new Error("429 browser time limit") });
+      const capacity = makeFixture({
+        launchError: new BrowserRunFailure({
+          operation: "interactive.acquire",
+          reason: "provider",
+          status: 429,
+        }),
+      });
+
       const capacityError = yield* withBrowser(capacity, () => Effect.void).pipe(Effect.flip);
 
       expect(capacityError).toMatchObject({ _tag: "InteractiveBrowserCapacityError" });

@@ -18,7 +18,7 @@ import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-life
 const sdk = vi.hoisted(() => ({ connect: vi.fn<() => Promise<object>>() }));
 
 vi.mock("@cloudflare/puppeteer", () => ({
-  default: { ...sdk, acquire: async () => ({ sessionId: "actions-test" }) },
+  default: sdk,
 }));
 
 // Node's virtual timers cover the SDK boundary's quiet/deadline windows without
@@ -76,6 +76,7 @@ const fixture = (
   };
 
   const page = {
+    browser: () => ({ isConnected: () => true }),
     evaluate: options.state ?? (async () => emptyState),
     $$: async () =>
       Array.from({ length: options.matches ?? 1 }, () => ({
@@ -104,8 +105,12 @@ const fixture = (
   };
 
   sdk.connect.mockResolvedValue({
-    createBrowserContext: async () => ({ newPage: async () => page, close: async () => {} }),
-    sessionId: () => "actions-test",
+    createBrowserContext: async () => ({
+      browser: () => ({ isConnected: () => true }),
+      newPage: async () => page,
+      close: async () => {},
+    }),
+    sessionId: () => "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
     isConnected: () => true,
     on: () => {},
     off: () => {},
@@ -118,7 +123,12 @@ const fixture = (
 
   const layer = browserRunInteractiveLayer().pipe(
     Layer.provide(
-      BrowserRunInteractiveBinding.layer({ browser: { fetch: unused, quickAction: unused } }).pipe(
+      BrowserRunInteractiveBinding.layer({
+        browser: {
+          fetch: async () => Response.json({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }),
+          quickAction: unused,
+        },
+      }).pipe(
         Layer.provide(Layer.succeed(BrowserRunSessionLifecycle)({ close: () => Effect.void })),
       ),
     ),

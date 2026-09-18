@@ -60,6 +60,89 @@ Raw questions use `criteria` for choice options and score levels. Use
 `satisfies DecisionSchema.Questions` to retain literals when defining raw questions separately.
 With dynamic question or option maps, check for missing entries and narrow mixed answers by `type`.
 
+## AutoModel
+
+AutoModel is a native model Layer: provide it to satisfy an agent's model requirement.
+The runtime selects before each thread's first model call and keeps that choice for later turns
+and follow-up runs. Each new subagent selects independently from its delegated task.
+
+<<< @/snippets/travel-planner/auto-model.ts#catalog{ts twoslash}
+
+Each profile pairs a native Effect model Layer with a description. Configure reasoning effort
+and provider options on that Layer; describe capability, cost, and appropriate tasks in the
+catalog. Supply Jev through [`TypeSafeDecisionModel`](#typesafe-client), or use another
+`DecisionModel` implementation.
+
+```ts twoslash
+import { Assistant, Research, ThreadModels } from "./auto-model.ts";
+import { Effect, Layer } from "effect";
+import { AgentRuntime, Subagent } from "effect-agent";
+// ---cut---
+const program = AgentRuntime.run(Assistant, "Compare train and bus travel.").pipe(
+  Effect.provide(ThreadModels),
+);
+const ResearchLive = Subagent.layer(Research).pipe(Layer.provide(ThreadModels));
+```
+
+Provide one `AutoModel.layerMemory()` alongside `InMemory.layer`, outside the parent program
+and child handler Layers. The shared store keys choices by thread ID, so siblings use the same
+catalog without sharing a selection. The selected native model retains its provider identity,
+client requirements, streaming, tools, and structured output. Building the AutoModel Layer
+captures dependencies without selecting or acquiring any candidate. It requires an agent thread;
+for direct `LanguageModel` calls, explicitly `resolve` a thread and provide the returned model.
+
+<<< @/snippets/travel-planner/auto-model.ts#runs{ts}
+
+The [complete example](https://github.com/danieljvdm/effect-agent/blob/main/docs/snippets/travel-planner/auto-model.ts)
+includes Jev, provider clients, and shared Layer assembly.
+
+### Thread ownership
+
+The runtime supplies the rendered prompt and eligible tool descriptions to the resolver after
+input validation and `inputPrompt` projection, before context preparation. Raw input fields
+excluded by that projection are excluded from selection too. Selection is inside the run's
+deadline and interruption scope. Context hooks may prepare prompts but cannot replace the
+selected model through `modelCall`; doing so fails with `AiError.InvalidRequestError`.
+
+`AutoModel.SelectionStore.getOrCreate(threadId, select)` owns atomic creation and retention.
+It returns the committed winning `SelectionRecord` before generation starts. Concurrent
+resolutions of the same thread share that choice; independent threads can select concurrently.
+Failed or interrupted selections may retry. A crash before commitment can repeat a selector
+request. Generative failure after commitment does not change the chosen model.
+
+`layerMemory({ capacity? })` retains choices for one Layer lifetime. Capacity defaults to 10,000
+distinct attempted thread IDs; entries never expire or evict. New threads fail at capacity while
+existing choices remain available. Rebuilding the Layer loses selections. Durable hosts must
+provide a `SelectionStore` backed by application-owned thread storage, preserving records across
+restarts. Keep model capacity and pricing configuration aligned with the selected profiles.
+
+Stable model settings avoid implicit changes that can reduce prompt-cache reuse; cache hits
+still depend on provider behavior and prompt prefixes.
+
+### Configuration and records
+
+| API or field                               | Behavior                                                                                     |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `make({ models, version, instructions? })` | Native Model Layer over approved profiles; construction performs no selection                |
+| `version`                                  | Required nonempty version; change when model, effort, or settings change                     |
+| `instructions`                             | Optional Choice policy; defaults to the least expensive capable profile for the whole task   |
+| `resolve({ threadId, state })`             | Explicit resolution using `SelectionStore`, `DecisionModel`, and native client services      |
+| `layerMemory({ capacity? })`               | Bounded shared selection storage for ephemeral hosts                                         |
+| `SelectionStore`                           | Host storage port; durable implementations must atomically retain the winning record         |
+| `select({ threadId, state })`              | Explicit one-shot Choice evaluation for hosts that own admission; re-execution selects again |
+| `restore(threadId, record)`                | Validates stored data and returns the native model without decision-provider I/O             |
+| `SelectionRecord`                          | Schema for format version, thread ID, catalog version, profile ID, and decision evidence     |
+
+Use `Schema.encodeEffect(AutoModel.SelectionRecord)` at storage boundaries; never serialize
+model Layers. Retain previous catalogs for active threads. Wrong-thread, malformed, missing-profile,
+or catalog-version mismatches fail with `AiError.InvalidRequestError` rather than reselecting.
+Jev's reported probability precision is retained in the record.
+
+The host must restrict candidates to compatible, authorized profiles and send only task context
+the decision provider may receive. Selection has no implicit retries, fallbacks, or confidence
+thresholds. Selector usage and metadata live in `record.decision`, separately from generative run
+accounting. `AutoModel.select` tracing records the profile ID without adding task-body logging.
+
 ## Results and evidence
 
 | Field                                     | Meaning                                                        |

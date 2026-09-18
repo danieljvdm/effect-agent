@@ -101,29 +101,52 @@ semantics.
 
 ## Provide native model services
 
-`run`, `stream`, and `start` require `LanguageModel.LanguageModel`, `Model.ProviderName`, and
-`Model.ModelName`. Upstream model layers provide all three.
+Models are execution requirements: use `Effect.provide` for a Run, `Stream.provide` for a
+stream, and `Layer.provide` for subagent handlers.
 
-```ts
-const program = AgentRuntime.run(definition, input).pipe(
-  Effect.provide(ClaudeModel),
-  Effect.provide(AppLive),
+```ts twoslash
+import { Effect, Layer, Stream } from "effect";
+import { AgentRuntime, Subagent } from "effect-agent";
+import { ModelLive, planner } from "./node-agent.ts";
+import { Research } from "./delegation.ts";
+// ---cut---
+const program = AgentRuntime.run(planner, "Plan a weekend in Lisbon.").pipe(
+  Effect.provide(ModelLive),
 );
 
-const captured = Effect.gen(function* () {
-  const modelLayer = yield* ClaudeModel.captureRequirements;
-  return yield* AgentRuntime.run(definition, input).pipe(Effect.provide(modelLayer));
-});
+const events = AgentRuntime.stream(planner, "Plan a weekend in Lisbon.").pipe(
+  Stream.provide(ModelLive),
+);
+
+const ResearchLive = Subagent.layer(Research).pipe(Layer.provide(ModelLive));
 ```
 
-Use `Stream.provide` with `stream`. Keep the model layer around both `start` and the detached
-run's lifetime.
+`run`, `stream`, and `start` require `LanguageModel.LanguageModel`, `Model.ProviderName`, and
+`Model.ModelName`. Native Effect model Layers provide all three; their client requirements
+remain visible until the application supplies them. Supply tool handlers and history alongside
+those clients. Keep the model Layer around both `start` and the detached run's lifetime.
 
-Pass a model Layer directly to `Subagent.layer(delegation, model)`. Durable registration
-accepts `{ agent: definition, model, definitions: versions }`. `Agent.withModel` remains available
-when an application wants a reusable binding. The model Layer must provide all three model
-services and have no construction error. Put
-fallible setup in the enclosing layer or Effect.
+`Subagent.layer` captures the supplied model when its handler Layer is built. Use
+`Layer.provideMerge(ModelLive)` when an assembled Layer should expose that model to the parent
+too; the [attached-subagent walkthrough](./subagents/in-memory-attached) shows the complete setup.
+[AutoModel](../reference/decision-models#automodel) satisfies the same requirement and selects
+once on each thread's first turn, including each new child.
+
+The model Layer must have no construction error. Put fallible setup in the enclosing Layer or
+Effect. When constructing a service that needs to reuse a model, capture its client dependencies:
+
+```ts twoslash
+import { Effect } from "effect";
+import { AgentRuntime } from "effect-agent";
+import { ModelLive, planner } from "./node-agent.ts";
+// ---cut---
+const captured = Effect.gen(function* () {
+  const modelLayer = yield* ModelLive.captureRequirements;
+  return yield* AgentRuntime.run(planner, "Plan a weekend in Lisbon.").pipe(
+    Effect.provide(modelLayer),
+  );
+});
+```
 
 ```ts
 type BeforeModel = Agent.DefinitionRequirements<typeof definition>;
@@ -131,8 +154,9 @@ type ExecutionRequirements = Agent.Requirements<typeof definition>;
 type Failure = Agent.Failure<typeof definition>;
 ```
 
-Selecting between several definitions or bindings produces the union of their errors and
-requirements. Provide every branch or narrow the selection before execution.
+Selecting between several definitions produces the union of their errors and requirements.
+Provide every branch or narrow the selection before execution. Optional explicit bindings are
+covered in the [API reference](../reference/packages#model-requirements).
 
 ## Resume across deployments
 

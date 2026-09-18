@@ -368,7 +368,9 @@ it.effect("falls back on errors, defects and bounded timeout and finalizes inter
   }),
 );
 
-it.effect("checks packed identity and every JavaScript and type export", () =>
+// Regression: https://github.com/danieljvdm/effect-agent/commit/bd161066d6b805461f173c7c537014ae816d5177
+// Publication uses npm 12's package-name map; ordinary CI can use npm 11's array.
+it.effect("checks packed identity and every export for both supported npm output formats", () =>
   Effect.gen(function* () {
     const manifest = {
       name: "effect-agent",
@@ -383,6 +385,7 @@ it.effect("checks packed identity and every JavaScript and type export", () =>
     };
 
     yield* verifyPackedFiles(manifest, [pack]);
+    yield* verifyPackedFiles(manifest, { "effect-agent": pack });
     for (const altered of [
       { ...pack, name: "wrong" },
       { ...pack, version: "0.1.0-beta.99" },
@@ -390,8 +393,24 @@ it.effect("checks packed identity and every JavaScript and type export", () =>
         ...pack,
         files: pack.files.filter((entry) => entry !== file),
       })),
-    ])
+    ]) {
       expect(Exit.isFailure(yield* Effect.exit(verifyPackedFiles(manifest, [altered])))).toBe(true);
+      expect(
+        Exit.isFailure(
+          yield* Effect.exit(verifyPackedFiles(manifest, { "effect-agent": altered })),
+        ),
+      ).toBe(true);
+    }
+
+    const invalidPacks: ReadonlyArray<Parameters<typeof verifyPackedFiles>[1]> = [
+      [],
+      {},
+      [pack, pack],
+      { first: pack, second: pack },
+    ];
+
+    for (const extra of invalidPacks)
+      expect(Exit.isFailure(yield* Effect.exit(verifyPackedFiles(manifest, extra)))).toBe(true);
   }),
 );
 

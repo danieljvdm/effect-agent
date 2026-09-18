@@ -67,6 +67,17 @@ Operations are available directly on their module namespace: `Subagent.layer`,
 `ThreadHistory.layer`, and `IdGenerator.layer`. Service keys remain inside those modules,
 for example `IdGenerator.IdGenerator` when supplying a custom generator.
 
+### Model requirements
+
+Provide a native Effect model with `Effect.provide(model)` around an agent Run, or
+`Layer.provide(model)` around `Subagent.layer(delegation)`. The [agent guide](../guide/agents#provide-native-model-services)
+shows this default composition. [AutoModel](./decision-models#automodel) uses the same API.
+
+For an explicit reusable pairing, `Agent.withModel(definition, model)` returns an optional Agent
+Binding. `Subagent.layer(delegation, model)` also accepts an explicit model override.
+Durable registration uses `{ agent: definition, model, definitions: versions }` so the host owns
+each agent's model and version declarations; an existing Binding is also accepted.
+
 ### In-memory defaults
 
 Import `InMemory` from `effect-agent`, or use `import * as InMemory from "effect-agent/in-memory"`.
@@ -192,6 +203,8 @@ in your host.
 Provider-neutral questions (`DecisionQuery`), reusable assessments (`DecisionSet`), and the
 evaluation service (`DecisionModel`). `DecisionSchema` defines their shared values. The package
 depends only on Effect; application code owns routing, transitions, and side effects.
+[`AutoModel`](./decision-models#automodel) selects a native model from described profiles on each thread's
+first turn, including new subagents. A shared selection store retains choices across follow-ups.
 
 Start with the [decision guide](../guide/tools#decision-transitions), then use the
 [API reference](./decision-models) for options and results.

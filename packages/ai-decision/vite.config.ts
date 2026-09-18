@@ -4,6 +4,7 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/AutoModel.ts",
       "src/DecisionModel.ts",
       "src/DecisionQuery.ts",
       "src/DecisionSchema.ts",

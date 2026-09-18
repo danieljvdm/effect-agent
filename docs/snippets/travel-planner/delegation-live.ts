@@ -13,9 +13,10 @@ const ProviderLive = OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_
   Layer.provide(FetchHttpClient.layer),
 );
 
-const ResearchLive = Subagent.layer(Research, ModelLive).pipe(Layer.provide(TravelToolsLive));
+const ResearchLive = Subagent.layer(Research).pipe(Layer.provide(TravelToolsLive));
 
-const AppLive = Layer.merge(ModelLive, ResearchLive).pipe(
+const AppLive = ResearchLive.pipe(
+  Layer.provideMerge(ModelLive),
   Layer.provideMerge(InMemory.layer),
   Layer.provide(ProviderLive),
 );
