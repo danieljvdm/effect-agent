@@ -1,6 +1,6 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
+import type { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { Effect, Layer, Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 
 import {
   ConversationId,
@@ -11,6 +11,7 @@ import {
   Trip,
   TripId,
 } from "../domain.ts";
+import { plannerEnvironment } from "./alchemy.ts";
 import { ownerOfThread } from "./tenancy.ts";
 import { TripRepository, TripRepositoryLive } from "./trips.ts";
 
@@ -102,7 +103,7 @@ export const OwnerTripRepositoryLive: Layer.Layer<
     const storageOwner = ownerOfThread(identity.threadId);
 
     if (identity.threadId === storageOwner) return TripRepositoryLive;
-    const env = yield* WorkerEnvironment;
+    const env = yield* plannerEnvironment;
 
     return Layer.succeed(TripRepository, tripRepositoryForOwner(env, storageOwner));
   }),

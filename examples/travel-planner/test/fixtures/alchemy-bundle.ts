@@ -9,6 +9,11 @@ export const alchemyRuntimeBundle = {
     {
       name: "alchemy-workerd-runtime",
       setup(builder) {
+        builder.onResolve({ filter: /^effect-cf(?:\/|$)/ }, (args) => ({
+          errors: [
+            { text: `The travel planner uses Alchemy; unexpected runtime import: ${args.path}` },
+          ],
+        }));
         builder.onResolve({ filter: /^[^./]/ }, (args) =>
           builtinModules.includes(args.path)
             ? { path: `node:${args.path}`, external: true }

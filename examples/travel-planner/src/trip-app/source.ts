@@ -25,7 +25,9 @@ export class AppSourceStore extends Context.Service<
   }
 >()("travel-planner/trip-app/AppSourceStore") {}
 
-const TEMPLATE = "trip-app-template-v1";
+const TEMPLATE = "trip-app-template-alchemy-v1";
+// Template seeds stay immutable when the default runtime changes.
+const isTemplate = (name: string) => name === TEMPLATE || name === "trip-app-template-v1";
 const MAX_SOURCE = 2 * 1024 * 1024;
 const MAX_TRANSFER = 8 * 1024 * 1024;
 const encoder = new TextEncoder();
@@ -457,7 +459,7 @@ export const appSourceLayer = (
       Effect.mapError(invalid),
     );
 
-    if (repoName === TEMPLATE) return yield* invalid();
+    if (isTemplate(repoName)) return yield* invalid();
     const files = yield* normalize(input.files);
 
     yield* Schema.decodeEffect(base)(remoteBase).pipe(Effect.mapError(invalid));
@@ -557,7 +559,7 @@ export const appSourceLayer = (
       Effect.mapError(invalid),
     );
 
-    if (repoName === TEMPLATE) return yield* invalid();
+    if (isTemplate(repoName)) return yield* invalid();
 
     const parent = yield* Schema.decodeEffect(AppCommit)(input.parentCommit).pipe(
       Effect.mapError(invalid),

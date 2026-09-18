@@ -1,20 +1,20 @@
-import * as ThreadObject from "@effect-agent/platform-alchemy-cloudflare/thread-object";
-import { ThreadMaintenance } from "@effect-agent/platform-cloudflare/alarm";
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadMaintenance } from "@effect-agent/platform-alchemy-cloudflare/alarm";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
 import {
   CloudflareBrowser,
   type CloudflareBrowserOptions,
-} from "@effect-agent/platform-cloudflare/cloudflare-browser";
+} from "@effect-agent/platform-alchemy-cloudflare/cloudflare-browser";
+import * as ThreadObject from "@effect-agent/platform-alchemy-cloudflare/thread-object";
 import { makeDurableObjectBridge } from "alchemy/Cloudflare/Bridge";
 import { DurableObject as AlchemyDurableObject } from "alchemy/Cloudflare/Workers/DurableObject";
 import { Worker } from "alchemy/Cloudflare/Workers/Worker";
+import type { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Option, Schema } from "effect";
 import type { Agent } from "effect-agent";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { DefinitionDigestInput } from "effect-agent/records";
 import { SubmissionLedger, SubmissionLookupById } from "effect-agent/submission-ledger";
-import { WorkerEnvironment } from "effect-cf";
 import type { Tool } from "effect/unstable/ai";
 import { FetchHttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
@@ -135,7 +135,7 @@ const safeRpc = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   );
 
 const CredentialSourceLive: Layer.Layer<CredentialSource, never, WorkerEnvironment> = Layer.unwrap(
-  Effect.map(WorkerEnvironment, credentialSourceLayer),
+  Effect.map(plannerEnvironment, credentialSourceLayer),
 );
 
 const effectiveConnection = Effect.gen(function* () {
@@ -206,7 +206,7 @@ export const plannerHandlers = PlannerRpcs.toLayer({
       Effect.gen(function* () {
         const identity = yield* ThreadObjectIdentity;
         const privateId = yield* privateConversation(identity.threadId, conversationId);
-        const env = yield* WorkerEnvironment;
+        const env = yield* plannerEnvironment;
 
         const request = yield* Schema.encodeEffect(Schema.fromJsonString(WorkerLocator))(
           locator,
@@ -242,7 +242,7 @@ export const plannerHandlers = PlannerRpcs.toLayer({
         if (conversationId === null)
           return publicSnapshot(identity.threadId, yield* plannerSnapshot(null));
         const privateId = yield* privateConversation(identity.threadId, conversationId);
-        const env = yield* WorkerEnvironment;
+        const env = yield* plannerEnvironment;
 
         const reply = yield* Effect.tryPromise({
           try: () => env.ACCOUNT_THREADS.getByName(privateId).plannerState(),
@@ -672,7 +672,7 @@ export const plannerApplication = <E, R>(
     PlannerSettingsStoreLive,
     Layer.unwrap(
       Effect.gen(function* () {
-        const env = yield* WorkerEnvironment;
+        const env = yield* plannerEnvironment;
         const identity = yield* ThreadObjectIdentity;
 
         return credentialStoreLayer(env, identity.threadId);
@@ -695,7 +695,7 @@ export const plannerApplication = <E, R>(
 
 const PlannerLive = Layer.unwrap(
   Effect.gen(function* () {
-    const env = yield* WorkerEnvironment;
+    const env = yield* plannerEnvironment;
 
     if (env.BROWSER === undefined)
       return yield* new PlannerError({
@@ -801,7 +801,7 @@ export const makeTravelPlannerThread = <
 
   const live = AccountThreads.make(
     ThreadObject.make(
-      application.pipe(Layer.provideMerge(sites), Layer.provideMerge(plannerEnvironment)),
+      application.pipe(Layer.provideMerge(sites)),
       {
         ...ownership,
         namespaceBinding: "ACCOUNT_THREADS",

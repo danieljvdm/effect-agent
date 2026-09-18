@@ -1,12 +1,14 @@
 import type { Sandbox } from "@cloudflare/sandbox";
 import start from "@tanstack/react-start/server-entry";
-import { makeWorkerBridge } from "alchemy/Cloudflare/Bridge";
+import { makeWorkerBridge, makeWorkflowBridge } from "alchemy/Cloudflare/Bridge";
 import { Request as WorkerRequest } from "alchemy/Cloudflare/Workers/Request";
 import { Worker } from "alchemy/Cloudflare/Workers/Worker";
-import { WorkerExecutionContext } from "alchemy/Cloudflare/Workers/WorkerRuntime";
-import { WorkerEntrypoint } from "cloudflare:workers";
+import {
+  WorkerExecutionContext,
+  WorkerEnvironment,
+} from "alchemy/Cloudflare/Workers/WorkerRuntime";
+import { WorkerEntrypoint, WorkflowEntrypoint } from "cloudflare:workers";
 import { Effect, Layer, Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 import { HttpServerResponse } from "effect/unstable/http";
 
 import { artifactsLayer } from "./artifacts";
@@ -22,16 +24,31 @@ import { plannerOwner } from "./server/tenancy";
 import { serveVoice } from "./server/voice-http";
 import { appNameFromHost } from "./trip-app/addresses.ts";
 import { AppBuildBucketLive } from "./trip-app/bindings.ts";
+import { siteBuild } from "./trip-app/build.ts";
 import { serveTripApp } from "./trip-app/gateway.ts";
 
 export { PlannerAuth } from "./auth/worker";
 export { Sandbox } from "@cloudflare/sandbox";
-export { SiteBuild } from "./trip-app/build.ts";
 export { TripData } from "./trip-app/gateway.ts";
+
+const workflowEntrypoint = Worker(
+  "PlannerWorkflows",
+  { main: import.meta.url },
+  Effect.gen(function* () {
+    yield* (yield* Worker).export("SiteBuild", siteBuild);
+
+    return { fetch: Effect.succeed(HttpServerResponse.empty({ status: 404 })) };
+  }),
+);
+
+export class SiteBuild extends makeWorkflowBridge(WorkflowEntrypoint, {
+  entrypoint: workflowEntrypoint,
+  stack: runtimeStack,
+})("SiteBuild") {}
 
 export class AccountPlannerThread extends makeTravelPlannerThread(
   Layer.unwrap(
-    Effect.map(WorkerEnvironment, (env) => artifactsLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE)),
+    Effect.map(plannerEnvironment, (env) => artifactsLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE)),
   ),
 ) {}
 
@@ -310,12 +327,12 @@ export const makeWorker = (verify = authenticate) => {
     Effect.succeed({
       fetch: Effect.gen(function* () {
         const request = yield* WorkerRequest;
-        const env = yield* WorkerEnvironment;
+        const env = yield* plannerEnvironment;
         const ctx = yield* WorkerExecutionContext;
         const response = yield* handleRequest(verify)(request, env, ctx.raw as ExecutionContext);
 
         return HttpServerResponse.fromWeb(response);
-      }).pipe(Effect.provide(plannerEnvironment), Effect.orDie),
+      }).pipe(Effect.orDie),
     }),
   );
 

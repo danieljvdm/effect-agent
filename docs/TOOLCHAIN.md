@@ -51,8 +51,11 @@ do not add a global Vite override.
 Alchemy and its Cloudflare runtime advance together. Beta.79 and Distilled rc.12 include the
 Effect API compatibility fixes previously carried here. The remaining Bun patch for
 `alchemy@2.0.0-beta.79` supplies scoped Durable Object construction, native RPC dispatch,
-transactional scheduled events, and runtime entry points needed by the experimental Alchemy host. Failed or interrupted
-alarm work remains recoverable, and successful handlers acknowledge only the event they handled.
+transactional scheduled events, and runtime entry points needed by the experimental Alchemy host.
+The travel planner also uses its typed Workflow failures and native R2 client. Its runtime and
+newly generated trip apps use Alchemy; the original `platform-cloudflare` remains the `effect-cf` option.
+Failed or interrupted alarm work remains recoverable, and successful handlers acknowledge only
+the event they handled.
 The patch includes published JavaScript and declarations; a compatible peer version alone is
 insufficient. Keep it until an upstream release includes these runtime contracts, then verify
 with a frozen install, `vp run check:deploy`, and the Alchemy host's workerd and restart tests.

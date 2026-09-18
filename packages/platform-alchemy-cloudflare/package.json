@@ -22,8 +22,10 @@
     "./subscriptions": "./src/Subscriptions.ts",
     "./rpc": "./src/Rpc.ts",
     "./alarms": "./src/Alarms.ts",
+    "./alarm": "./src/Alarm.ts",
     "./cloudflare-thread-client": "./src/CloudflareThreadClient.ts",
-    "./cloudflare-bindings": "./src/CloudflareBindings.ts"
+    "./cloudflare-bindings": "./src/CloudflareBindings.ts",
+    "./cloudflare-browser": "./src/CloudflareBrowser.ts"
   },
   "publishConfig": {
     "access": "public"

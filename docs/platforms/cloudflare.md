@@ -222,6 +222,10 @@ additional access rules. RPCs retain Schema-validated framework payloads and typ
 domain failures. Native initialization or alarm defects reject the invocation for host recovery.
 Use this package's `CloudflareThreadClient`; scope Worker client operations with `Rpc.withScope`
 to share RPC targets only within that event.
+The `/alarm`, `/cloudflare-bindings`, and `/cloudflare-browser` exports provide shared maintenance,
+identity, and Browser Run services without loading `effect-cf`. The
+[travel planner](https://github.com/danieljvdm/effect-agent/tree/main/examples/travel-planner)
+uses this host with Alchemy Worker, auth, Workflow, and R2 runtimes.
 
 Both packages reuse the Cloudflare host modules and storage adapters. The shared
 `platform-cloudflare/*-host`, `/cloudflare-alarms`, `/cloudflare-rpc`, and

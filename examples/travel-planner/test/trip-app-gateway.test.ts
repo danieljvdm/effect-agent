@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
+import type { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { type Effect, Schema } from "effect";
-import type { WorkerEnvironment } from "effect-cf";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
@@ -10,6 +10,7 @@ import { type PlannerError, type TripApp, TripAppData } from "../src/domain.ts";
 import type { publishTripAppAddress, readTripAppAddress } from "../src/trip-app/addresses.ts";
 import type { AppBuildBucket } from "../src/trip-app/bucket.ts";
 import type { callAppRepository } from "../src/trip-app/remote.ts";
+import { TRIP_APP_TEMPLATE_FILES } from "../src/trip-app/template.ts";
 import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 const app: TripApp = {
@@ -53,6 +54,47 @@ const generated = `export default {async fetch(request,env){
 let runtime: Miniflare;
 
 beforeAll(async () => {
+  const templateBundle = await build({
+    ...alchemyRuntimeBundle,
+    stdin: {
+      resolveDir: import.meta.dirname,
+      loader: "ts",
+      contents: TRIP_APP_TEMPLATE_FILES["packages/server/src/index.ts"]!,
+    },
+    plugins: [
+      ...alchemyRuntimeBundle.plugins,
+      {
+        name: "trip-template-contracts",
+        setup(builder) {
+          builder.onResolve({ filter: /^@trip\/contracts$/ }, () => ({
+            path: "contracts",
+            namespace: "trip-template",
+          }));
+          builder.onLoad({ filter: /.*/, namespace: "trip-template" }, () => ({
+            contents: TRIP_APP_TEMPLATE_FILES["packages/contracts/src/index.ts"]!,
+            resolveDir: import.meta.dirname,
+            loader: "ts",
+          }));
+        },
+      },
+    ],
+    bundle: true,
+    write: false,
+    format: "esm",
+    target: "es2022",
+    platform: "browser",
+    conditions: ["workerd", "worker", "browser"],
+    external: ["cloudflare:*", "node:*"],
+    banner: {
+      js: 'import { createRequire } from "node:module"; const require = createRequire("/template.mjs");',
+    },
+    logLevel: "silent",
+  });
+
+  const templateOutput = templateBundle.outputFiles[0];
+
+  if (!templateOutput) throw new Error("Missing generated trip app fixture");
+
   const bundle = await build({
     ...alchemyRuntimeBundle,
     stdin: {
@@ -61,7 +103,7 @@ beforeAll(async () => {
       contents: `
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { AppBuildBucketLive } from "../src/trip-app/bindings.ts";
 import { handleRequest } from "../src/worker.ts";
 import { publishTripAppAddress, appAddressKey, tripAppHostname, appNameFromHost } from "../src/trip-app/addresses.ts";
@@ -87,7 +129,7 @@ export default {async fetch(request,env,ctx){
    if(input.register!==false)await Effect.runPromise(publishTripAppAddress(input.owner,input.app,"effect-agent.com").pipe(Effect.provide(AppBuildBucketLive),Effect.provideService(WorkerEnvironment,env)));
    if(input.app.activeCommit!==null){
      const prefix=buildPrefix(input.app.id,input.app.activeCommit);
-     const files=[{path:"web/index.html",body:"<main>Built trip</main>",contentType:"text/html; charset=utf-8"},{path:"web/assets/style.css",body:"body{color:green}",contentType:"text/css; charset=utf-8"},{path:"server/index.js",body:${JSON.stringify(generated)},contentType:"application/javascript"}];
+     const files=[{path:"web/index.html",body:"<main>Built trip</main>",contentType:"text/html; charset=utf-8"},{path:"web/assets/style.css",body:"body{color:green}",contentType:"text/css; charset=utf-8"},{path:"server/index.js",body:input.template?${JSON.stringify(templateOutput.text)}:${JSON.stringify(generated)},contentType:"application/javascript"}];
      const manifest={version:1,appId:input.app.id,commitId:input.app.activeCommit,files:[]};
      for(const file of files){const bytes=new TextEncoder().encode(file.body);const sha256=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),byte=>byte.toString(16).padStart(2,"0")).join("");await env.APP_BUILDS.put(prefix+file.path,file.body,{customMetadata:{sha256},httpMetadata:{contentType:file.contentType}});manifest.files.push({path:file.path,bytes:bytes.byteLength,sha256,contentType:file.contentType});}
      await env.APP_BUILDS.put(prefix+"manifest.json",Schema.encodeSync(Schema.fromJsonString(BuildManifest))(manifest));
@@ -158,10 +200,10 @@ afterAll(async () => {
 const storageOwner = "account-00000000-0000-0000-0000-000000000001";
 const memberOwner = "account-00000000-0000-0000-0000-000000000002";
 
-const seed = async (owner: string, value: TripApp = app, register = true) => {
+const seed = async (owner: string, value: TripApp = app, register = true, template = false) => {
   const response = await runtime.dispatchFetch("https://app.example/__seed", {
     method: "POST",
-    body: JSON.stringify({ owner, app: value, data, register }),
+    body: JSON.stringify({ owner, app: value, data, register, template }),
   });
 
   expect(response.status).toBe(200);
@@ -324,6 +366,32 @@ it("keeps a previous built version available while a new build runs or fails", a
 
     expect(trip.status).toBe(200);
     expect(await trip.json()).toEqual(data);
+  }
+});
+
+it("runs the generated Alchemy Worker with only its authorized trip binding", async () => {
+  const templateApp = {
+    ...app,
+    id: "3".repeat(32),
+    url: `https://alchemy-template-${"3".repeat(12)}-trip.effect-agent.com`,
+  };
+
+  await seed(storageOwner, templateApp, true, true);
+
+  const response = await fetchApp("/api/trip", templateApp, {
+    cookie: "session=PRIVATE_COOKIE",
+    "x-trip-owner": memberOwner,
+  });
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual(data);
+  expect(response.headers.get("cache-control")).toBe("private, no-store");
+
+  for (const path of ["/api/trip?tripId=other", "/api/other"]) {
+    const denied = await fetchApp(path, templateApp);
+
+    expect(denied.status).toBe(404);
+    await denied.text();
   }
 });
 

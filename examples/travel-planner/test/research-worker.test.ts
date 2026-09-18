@@ -795,12 +795,38 @@ it("does not treat the retained request on a worker update or completion as fres
   expect(active.queuedMessages).toEqual([]);
   await fixture("gate", { name: "Report denial" }, "POST");
 
+  // The child's idle state precedes delivery and processing of its completion.
+  // Fence the parent assertion on that report's own canonical settlement.
+  const parent = await until(
+    async () => Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread })),
+    (journal) => {
+      const completion = journal.records
+        .flatMap(({ record }) => {
+          const input = record.payload;
+
+          return input._tag === "UserInputRecorded" &&
+            Schema.is(WorkerCompletion)(input.messageAdmission) &&
+            input.messageAdmission.report.worker.threadId === active.scouts?.[0]?.id
+            ? [input.submissionId]
+            : [];
+        })
+        .at(-1);
+
+      return (
+        completion !== undefined &&
+        journal.records.some(
+          ({ record }) =>
+            record.payload._tag === "SubmissionSettled" &&
+            record.payload.submissionId === completion,
+        )
+      );
+    },
+  );
+
   const completed = await until(
     () => snapshot(email),
     (state) => state.pending === 0 && state.scouts?.[0]?.state === "idle",
   );
-
-  const parent = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
 
   const denied = parent.records.filter(
     ({ record }) =>

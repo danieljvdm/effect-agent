@@ -1,7 +1,13 @@
+import { makeDurableObjectBridge } from "alchemy/Cloudflare/Bridge";
+import { DurableObject as AlchemyDurableObject } from "alchemy/Cloudflare/Workers/DurableObject";
+import { DurableObjectState as AlchemyState } from "alchemy/Cloudflare/Workers/DurableObjectState";
+import { Request as WorkerRequest } from "alchemy/Cloudflare/Workers/Request";
+import { Worker } from "alchemy/Cloudflare/Workers/Worker";
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Schema } from "effect";
-import { CloudflareTracer, WorkerEnvironment } from "effect-cf";
+import { HttpServerResponse } from "effect/unstable/http";
 
+import { plannerEnvironment, runtimeStack } from "../server/alchemy.ts";
 import { AccountError, AccountSession, AccountId } from "./account";
 import { emailDeliveryLayer } from "./email-delivery";
 import { makeFundingStore } from "./funding";
@@ -9,47 +15,70 @@ import { serveAuth } from "./host";
 import { AuthConfiguration } from "./server";
 import { initializeAuthStorage } from "./storage";
 
-/** Only the planner Worker can reach this object; it has no public service route. */
-export class PlannerAuth extends DurableObject<Cloudflare.Env> {
-  fetch(request: Request): Promise<Response> {
-    return Effect.runPromise(
-      Effect.gen({ self: this }, function* () {
-        const url = new URL(request.url);
+const fetch = Effect.gen(function* () {
+  const { raw } = yield* AlchemyState;
+  const request = yield* WorkerRequest;
+  const env = yield* plannerEnvironment;
+  const url = new URL(request.url);
 
-        if (url.pathname.startsWith("/_internal/funding/")) {
-          const id = yield* Schema.decodeEffect(AccountId)(
-            url.pathname.slice("/_internal/funding/".length),
-          );
-
-          yield* initializeAuthStorage(this.ctx.storage);
-          const store = yield* makeFundingStore(this.ctx.storage);
-
-          return Response.json(yield* store.status(id));
-        }
-        const config = yield* Schema.decodeEffect(AuthConfiguration)(this.env);
-
-        return yield* serveAuth(
-          request,
-          this.ctx.storage,
-          config,
-          emailDeliveryLayer(this.env.AUTH_EMAIL, config.AUTH_EMAIL_FROM).pipe(Layer.orDie),
-          undefined,
-          Boolean(this.env.SERVER_OPENAI_KEY),
-        );
-      }).pipe(
-        Effect.provide(CloudflareTracer.layer),
-        Effect.catch(() =>
-          Effect.succeed(
-            new Response("Authentication is temporarily unavailable.", {
-              status: 503,
-              headers: { "cache-control": "no-store" },
-            }),
-          ),
-        ),
-      ),
+  if (url.pathname.startsWith("/_internal/funding/")) {
+    const id = yield* Schema.decodeEffect(AccountId)(
+      url.pathname.slice("/_internal/funding/".length),
     );
+
+    yield* initializeAuthStorage(raw.storage);
+    const store = yield* makeFundingStore(raw.storage);
+
+    return Response.json(yield* store.status(id));
   }
-}
+  const config = yield* Schema.decodeEffect(AuthConfiguration)(env);
+
+  return yield* serveAuth(
+    request,
+    raw.storage,
+    config,
+    emailDeliveryLayer(env.AUTH_EMAIL, config.AUTH_EMAIL_FROM).pipe(Layer.orDie),
+    undefined,
+    Boolean(env.SERVER_OPENAI_KEY),
+  );
+}).pipe(
+  Effect.catch(() =>
+    Effect.succeed(
+      new Response("Authentication is temporarily unavailable.", {
+        status: 503,
+        headers: { "cache-control": "no-store" },
+      }),
+    ),
+  ),
+  Effect.map(HttpServerResponse.fromWeb),
+);
+
+class AuthObject extends AlchemyDurableObject<AuthObject, { readonly fetch: typeof fetch }>()(
+  "AUTH",
+) {}
+
+const AuthLive = AuthObject.make(Effect.succeed(Effect.succeed({ fetch })));
+
+const entrypoint = Worker(
+  "PlannerAuthRuntime",
+  { main: import.meta.url },
+  Effect.gen(function* () {
+    yield* AuthObject;
+
+    return { fetch: Effect.succeed(HttpServerResponse.empty({ status: 404 })) };
+  }).pipe(Effect.provide(AuthLive)),
+);
+
+const NativeAuth: new (
+  ctx: DurableObjectState,
+  env: Cloudflare.Env,
+) => DurableObject<Cloudflare.Env> = makeDurableObjectBridge(DurableObject, {
+  entrypoint,
+  stack: runtimeStack,
+})("AUTH");
+
+/** Only the planner Worker can reach this object; Alchemy owns its event runtime and scopes. */
+export class PlannerAuth extends NativeAuth {}
 
 export const authenticate = Effect.fn("Planner.requireSession")(function* (request: Request) {
   if (!request.headers.get("cookie"))
@@ -66,7 +95,7 @@ export const authenticate = Effect.fn("Planner.requireSession")(function* (reque
   url.pathname = "/_internal/session";
   url.search = "";
 
-  const env = yield* WorkerEnvironment;
+  const env = yield* plannerEnvironment;
 
   const response = yield* Effect.tryPromise({
     try: () =>

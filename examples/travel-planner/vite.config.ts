@@ -16,6 +16,14 @@ export default defineConfig({
               compatibilityDate: "2026-07-01",
               compatibilityFlags: ["nodejs_compat"],
             }),
+        {
+          name: "travel-planner-alchemy-runtime",
+          enforce: "pre",
+          resolveId(source) {
+            if (source === "effect-cf" || source.startsWith("effect-cf/"))
+              this.error(`The travel planner uses Alchemy; unexpected runtime import: ${source}`);
+          },
+        },
         tanstackStart(),
         tailwindcss(),
         react(),
@@ -28,8 +36,7 @@ export default defineConfig({
       optimizer: {
         ssr: {
           enabled: true,
-          // Bundle this entry so unused effect-cf native exports are removed in Node tests.
-          include: ["@effect-agent/platform-cloudflare/cloudflare-bindings"],
+          include: ["@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings"],
           exclude: ["effect", "effect-agent"],
           rolldownOptions: { external: [/^cloudflare:/] },
         },

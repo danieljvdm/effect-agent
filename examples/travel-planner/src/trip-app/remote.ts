@@ -1,8 +1,9 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { Effect, Layer, Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 
 import { AppId, PlannerError, TripApp, TripAppData, TripId } from "../domain.ts";
+import { plannerEnvironment } from "../server/alchemy.ts";
 import { ownerOfThread } from "../server/tenancy.ts";
 import { TripRepository } from "../server/trips.ts";
 import { AppRepository, AppRepositoryLive } from "./repository.ts";
@@ -87,7 +88,7 @@ export const callAppRepository = <A, I>(
   request: typeof AppCommand.Type,
 ): Effect.Effect<A, PlannerError, WorkerEnvironment> =>
   Effect.gen(function* () {
-    const env = yield* WorkerEnvironment;
+    const env = yield* plannerEnvironment;
     const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(AppCommand))(request);
 
     const response = yield* Effect.tryPromise({
@@ -120,7 +121,7 @@ export const OwnerAppRepositoryLive = Layer.unwrap(
     const owner = ownerOfThread(identity.threadId);
 
     if (owner === identity.threadId) return AppRepositoryLive;
-    const env = yield* WorkerEnvironment;
+    const env = yield* plannerEnvironment;
 
     return Layer.succeed(AppRepository, appRepositoryForOwner(env, owner));
   }),

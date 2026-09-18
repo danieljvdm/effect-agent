@@ -1,6 +1,7 @@
+import { getSandbox, type Sandbox, type SandboxCommand } from "@cloudflare/sandbox";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
+import { task, type WorkflowExport } from "alchemy/Cloudflare/Workflows";
 import { Context, DateTime, Duration, Effect, Layer, Option, Schedule, Schema } from "effect";
-import { CloudflareTracer, WorkerEnvironment, Workflow } from "effect-cf";
-import * as Sandbox from "effect-cf/sandbox";
 
 import {
   AppBuildRequest,
@@ -12,9 +13,10 @@ import {
   TripApp,
   TripAppBuildEvent,
 } from "../domain.ts";
+import { plannerEnvironment } from "../server/alchemy.ts";
 import { TripFailpoint } from "../server/trips.ts";
 import { publishTripAppAddress } from "./addresses.ts";
-import { AppBuildBucketLive, AppBuildSandbox, SiteBuildBinding } from "./bindings.ts";
+import { AppBuildBucketLive, AppBuildSandbox, AppBuildSandboxLive } from "./bindings.ts";
 import { AppBuildBucket } from "./bucket.ts";
 import { appRepositoryForOwner, callAppRepository } from "./remote.ts";
 import { AppRepository } from "./repository.ts";
@@ -25,17 +27,14 @@ const MAX_BUILD = 24 * 1024 * 1024;
 const failed = (message: string) => new PlannerError({ code: "unavailable", message });
 const badManifest = () => failed("Invalid app build manifest.");
 
-// The Sandbox SDK currently exposes container capacity through its wrapped cause,
-// rather than a typed retryable reason. Match the platform diagnostic narrowly.
-const builderAtCapacity = (error: Sandbox.SandboxOperationError) =>
-  error.message.includes("Maximum number of running container instances exceeded");
+class BuilderCapacity extends Schema.TaggedError<BuilderCapacity>()("BuilderCapacity", {}) {}
 
-const sandboxFailure = (error: Sandbox.SandboxOperationError) =>
-  failed(
-    builderAtCapacity(error)
-      ? "All app builders are busy. Retry the build in a moment."
-      : `The app builder's ${error.operation} operation failed. Retry the build.`,
-  );
+const operationFailure = (operation: string) =>
+  failed(`The app builder's ${operation} operation failed. Retry the build.`);
+
+// The SDK owns RPC subscriptions and propagates cancellation through its AbortSignal.
+const sandboxOperation = <A>(operation: string, run: (signal: AbortSignal) => Promise<A>) =>
+  Effect.tryPromise({ try: run, catch: () => operationFailure(operation) });
 
 const outputPath = AppFilePath.check(
   Schema.makeFilter(
@@ -161,22 +160,30 @@ export const AppBuilderLive = Layer.effect(
         const name = `${prefix.slice(0, 24)}-${crypto.randomUUID().replaceAll("-", "")}`;
 
         return yield* Effect.acquireUseRelease(
-          namespace.get(name, { sleepAfter: "5m" }),
+          Effect.try({
+            try: () => getSandbox(namespace, name, { sleepAfter: "5m" }),
+            catch: () => operationFailure("get"),
+          }),
           (box) =>
             Effect.gen(function* () {
               const root = "/workspace/app";
 
               const execute = Effect.fn("AppBuilder.execute")(function* (
-                command: Sandbox.SandboxCommand,
+                command: SandboxCommand,
                 label: string,
               ) {
-                const process = yield* box.exec(command, { cwd: root, timeout: 240_000 });
-                const exit = yield* process.waitForExit({ timeout: 240_000 });
+                const process = yield* sandboxOperation("exec", () =>
+                  box.exec(command, { cwd: root, timeout: 240_000 }),
+                );
+
+                const exit = yield* sandboxOperation("waitForExit", (signal) =>
+                  process.waitForExit({ timeout: 240_000, signal }),
+                );
 
                 if (exit.code !== 0 || exit.timedOut) {
-                  const output = yield* process
-                    .outputText({ maxBytes: 3000, timeout: 2000 })
-                    .pipe(Effect.option);
+                  const output = yield* sandboxOperation("output", (signal) =>
+                    process.output({ encoding: "utf8", maxBytes: 3000, timeout: 2000, signal }),
+                  ).pipe(Effect.option);
 
                   const details = Option.isSome(output)
                     ? `\n${output.value.stdout}\n${output.value.stderr}`.slice(-3000)
@@ -190,9 +197,16 @@ export const AppBuilderLive = Layer.effect(
 
               // Only the initial, idempotent directory creation can be retried here.
               // Commands and source writes must never be replayed on ambiguous errors.
-              const directory = yield* box.mkdir(root, { recursive: true }).pipe(
+              const directory = yield* Effect.tryPromise({
+                try: () => box.mkdir(root, { recursive: true }),
+                catch: (cause) =>
+                  cause instanceof Error &&
+                  cause.message.includes("Maximum number of running container instances exceeded")
+                    ? new BuilderCapacity({})
+                    : operationFailure("mkdir"),
+              }).pipe(
                 Effect.tapError((error) =>
-                  builderAtCapacity(error)
+                  error._tag === "BuilderCapacity"
                     ? recordBuildProgress(request, {
                         phase: "queued",
                         message: "Waiting for an available app builder",
@@ -200,8 +214,7 @@ export const AppBuilderLive = Layer.effect(
                     : Effect.void,
                 ),
                 Effect.retry({
-                  while: (error) =>
-                    error._tag === "SandboxOperationError" && builderAtCapacity(error),
+                  while: (error) => error._tag === "BuilderCapacity",
                   times: 10,
                   schedule: Schedule.exponential("1 second").pipe(
                     Schedule.modifyDelay(({ duration }) =>
@@ -214,15 +227,19 @@ export const AppBuilderLive = Layer.effect(
               if (!directory.success) return yield* failed("Could not prepare the app builder.");
               for (const file of files) {
                 if (file.path.includes("/")) {
-                  const created = yield* box.mkdir(
-                    `${root}/${file.path.slice(0, file.path.lastIndexOf("/"))}`,
-                    { recursive: true },
+                  const created = yield* sandboxOperation("mkdir", () =>
+                    box.mkdir(`${root}/${file.path.slice(0, file.path.lastIndexOf("/"))}`, {
+                      recursive: true,
+                    }),
                   );
 
                   if (!created.success)
                     return yield* failed("Could not prepare app source directories.");
                 }
-                const written = yield* box.writeFile(`${root}/${file.path}`, file.content);
+
+                const written = yield* sandboxOperation("writeFile", () =>
+                  box.writeFile(`${root}/${file.path}`, file.content),
+                );
 
                 if (!written.success) return yield* failed("Could not write app source.");
               }
@@ -242,10 +259,12 @@ export const AppBuilderLive = Layer.effect(
               });
               yield* execute(["vp", "run", "build"], "App compilation");
 
-              const listed = yield* box.listFiles(`${root}/dist`, {
-                recursive: true,
-                includeHidden: true,
-              });
+              const listed = yield* sandboxOperation("listFiles", () =>
+                box.listFiles(`${root}/dist`, {
+                  recursive: true,
+                  includeHidden: true,
+                }),
+              );
 
               if (!listed.success) return yield* failed("Could not read the app build.");
               const built = listed.files.filter((file) => file.type !== "directory");
@@ -271,7 +290,10 @@ export const AppBuilderLive = Layer.effect(
 
                 if (!file.absolutePath.startsWith(`${root}/dist/`) || !Schema.is(outputPath)(path))
                   return yield* failed("Unexpected app build path.");
-                const read = yield* box.readFile(file.absolutePath, { encoding: "base64" });
+
+                const read = yield* sandboxOperation("readFile", () =>
+                  box.readFile(file.absolutePath, { encoding: "base64" }),
+                );
 
                 if (!read.success || read.content.length > Math.ceil(MAX_FILE / 3) * 4)
                   return yield* failed("Invalid app build file.");
@@ -296,13 +318,17 @@ export const AppBuilderLive = Layer.effect(
               );
             }),
           (box) =>
-            box.destroy.pipe(
+            sandboxOperation("destroy", () => box.destroy()).pipe(
               Effect.timeoutOrElse({
                 duration: "20 seconds",
                 orElse: () => Effect.fail(failed("App builder cleanup timed out.")),
               }),
             ),
-        ).pipe(Effect.catchTag("SandboxOperationError", sandboxFailure));
+        ).pipe(
+          Effect.catchTag("BuilderCapacity", () =>
+            failed("All app builders are busy. Retry the build in a moment."),
+          ),
+        );
       },
       Effect.scoped,
       Effect.timeoutOrElse({
@@ -315,13 +341,9 @@ export const AppBuilderLive = Layer.effect(
   }),
 );
 
-/** Convenience host adapter; the implementation still uses effect-cf's Sandbox client. */
-export const sandboxBuilder = (namespace: Sandbox.SandboxNamespaceResource) =>
-  AppBuilderLive.pipe(
-    Layer.provide(
-      Layer.succeed(AppBuildSandbox, Sandbox.makeClient({ binding: "APP_SANDBOX" })(namespace)),
-    ),
-  );
+/** A build attempt owns its SDK sandbox and destroys it on every exit. */
+export const sandboxBuilder = (namespace: DurableObjectNamespace<Sandbox>) =>
+  AppBuilderLive.pipe(Layer.provide(Layer.succeed(AppBuildSandbox, namespace)));
 
 /** Manifest bodies are consumed or cancelled in Scope. */
 export const readBuild = Effect.fn("readAppBuildManifest")(
@@ -333,18 +355,19 @@ export const readBuild = Effect.fn("readAppBuildManifest")(
     );
     const found = yield* bucket.get(`${buildPrefix(appId, commitId)}manifest.json`);
 
-    if (Option.isNone(found)) return null;
-    const object = found.value;
+    if (found === null) return null;
+    const object = found;
 
     yield* Effect.addFinalizer(() =>
       object.bodyUsed
         ? Effect.void
-        : Effect.tryPromise({ try: () => object.body.cancel(), catch: () => undefined }).pipe(
-            Effect.ignore,
-          ),
+        : Effect.tryPromise({
+            try: () => object.readable?.cancel() ?? Promise.resolve(),
+            catch: () => undefined,
+          }).pipe(Effect.ignore),
     );
     if (object.size > 64 * 1024) return yield* badManifest();
-    const text = yield* object.text;
+    const text = yield* object.text();
 
     const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(BuildManifest))(text).pipe(
       Effect.mapError(badManifest),
@@ -355,7 +378,7 @@ export const readBuild = Effect.fn("readAppBuildManifest")(
     return manifest;
   },
   Effect.scoped,
-  Effect.catchTag("R2OperationError", () => failed("App build storage is unavailable.")),
+  Effect.catchTag("R2Error", () => failed("App build storage is unavailable.")),
 );
 
 const sha256 = (body: Uint8Array) =>
@@ -378,9 +401,9 @@ const verifyAssets = Effect.fn("verifyAppBuildAssets")(function* (manifest: Buil
         .head(`${buildPrefix(manifest.appId, manifest.commitId)}${file.path}`)
         .pipe(
           Effect.flatMap((stored) =>
-            Option.isSome(stored) &&
-            stored.value.size === file.bytes &&
-            stored.value.customMetadata?.sha256 === file.sha256
+            stored !== null &&
+            stored.size === file.bytes &&
+            stored.customMetadata?.sha256 === file.sha256
               ? Effect.void
               : Effect.fail(failed("App build assets are incomplete or invalid.")),
           ),
@@ -515,7 +538,7 @@ export const buildTripApp = Effect.fn("buildTripApp")(
     } else yield* verifyAssets(cached);
     yield* settleBuild(request, null);
   },
-  Effect.catchTag("R2OperationError", () => failed("Could not save the app build.")),
+  Effect.catchTag("R2Error", () => failed("Could not save the app build.")),
   Effect.timeoutOrElse({
     duration: "11 minutes",
     orElse: () => Effect.fail(failed("The app build timed out.")),
@@ -589,24 +612,20 @@ export const settleBuild = Effect.fn("settleTripAppBuild")(function* (
 
 const BuildHostLive = Layer.mergeAll(
   AppBuildBucketLive,
-  AppBuilderLive.pipe(Layer.provide(AppBuildSandbox.layer({ binding: "APP_SANDBOX" }))),
+  AppBuilderLive.pipe(Layer.provide(AppBuildSandboxLive)),
 );
 
 export const runSiteBuild = Effect.fn("runSiteBuild")(function* (request: AppBuildRequest) {
-  yield* Workflow.step("Build and activate app", buildTripApp(request), {
+  yield* task("Build and activate app", buildTripApp(request), {
     retries: { limit: 2, delay: "15 seconds", backoff: "exponential" },
     timeout: "12 minutes",
   }).pipe(
     Effect.catchTag("WorkflowStepError", (error) =>
       Effect.gen(function* () {
-        yield* Workflow.step(
-          "Record build failure",
-          settleBuild(request, error.message.slice(-3800)),
-          {
-            retries: { limit: 2, delay: "5 seconds", backoff: "exponential" },
-            timeout: "1 minute",
-          },
-        );
+        yield* task("Record build failure", settleBuild(request, error.message.slice(-3800)), {
+          retries: { limit: 2, delay: "5 seconds", backoff: "exponential" },
+          timeout: "1 minute",
+        });
 
         return yield* error;
       }),
@@ -616,27 +635,38 @@ export const runSiteBuild = Effect.fn("runSiteBuild")(function* (request: AppBui
   return { commitId: request.commitId };
 });
 
-export class SiteBuild extends SiteBuildBinding.make(BuildHostLive, {
-  run: (request) =>
-    Effect.gen(function* () {
-      const env = yield* WorkerEnvironment;
+/** The existing SiteBuild export is hosted by Alchemy's native Workflow bridge. */
+export const siteBuild: WorkflowExport = {
+  kind: "workflow",
+  make: (environment) =>
+    Effect.succeed((input: unknown) =>
+      Effect.gen(function* () {
+        const request = yield* Schema.decodeUnknownEffect(AppBuildRequest)(input).pipe(
+          Effect.mapError(() => failed("Invalid app build request.")),
+        );
 
-      if (!env.APP_BUILDS || !env.APP_DOMAIN)
-        return yield* failed("The app address storage isn't configured.");
+        const env = yield* plannerEnvironment;
 
-      const app = yield* callAppRepository(request.owner, Schema.NullOr(TripApp), {
-        _tag: "GetById",
-        appId: request.appId,
-      });
+        if (!env.APP_BUILDS || !env.APP_DOMAIN)
+          return yield* failed("The app address storage isn't configured.");
 
-      if (app === null || app.tripId !== request.tripId || app.repoName !== request.repoName)
-        return yield* failed("The app build scope is unavailable.");
-      yield* publishTripAppAddress(request.owner, app, env.APP_DOMAIN);
+        const app = yield* callAppRepository(request.owner, Schema.NullOr(TripApp), {
+          _tag: "GetById",
+          appId: request.appId,
+        });
 
-      const apps = Layer.succeed(AppRepository, appRepositoryForOwner(env, request.owner));
+        if (app === null || app.tripId !== request.tripId || app.repoName !== request.repoName)
+          return yield* failed("The app build scope is unavailable.");
+        yield* publishTripAppAddress(request.owner, app, env.APP_DOMAIN);
+        const apps = Layer.succeed(AppRepository, appRepositoryForOwner(env, request.owner));
 
-      return yield* runSiteBuild(request).pipe(
-        Effect.provide(Layer.merge(apps, appSourceLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE))),
-      );
-    }).pipe(Effect.provide(CloudflareTracer.layer)),
-}) {}
+        return yield* runSiteBuild(request).pipe(
+          Effect.provide(Layer.merge(apps, appSourceLayer(env.ARTIFACTS, env.ARTIFACTS_GIT_BASE))),
+        );
+      }).pipe(
+        Effect.provide(BuildHostLive),
+        Effect.provideService(WorkerEnvironment, environment as Cloudflare.Env),
+        Effect.orDie,
+      ),
+    ),
+};

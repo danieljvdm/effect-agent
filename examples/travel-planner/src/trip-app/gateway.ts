@@ -1,7 +1,13 @@
-import { Effect, Layer, Schema } from "effect";
-import { CloudflareTracer, Worker, WorkerEnvironment } from "effect-cf";
+import { makeWorkerBridge } from "alchemy/Cloudflare/Bridge";
+import { Request as WorkerRequest } from "alchemy/Cloudflare/Workers/Request";
+import { Worker } from "alchemy/Cloudflare/Workers/Worker";
+import { WorkerExecutionContext } from "alchemy/Cloudflare/Workers/WorkerRuntime";
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { Effect, Schema } from "effect";
+import { HttpServerResponse } from "effect/unstable/http";
 
 import { PlannerError, TripApp, TripAppData, TripId } from "../domain.ts";
+import { plannerEnvironment, runtimeStack } from "../server/alchemy.ts";
 import { appNameFromHost, readTripAppAddress } from "./addresses.ts";
 import { buildPrefix, readBuild } from "./build.ts";
 import { callAppRepository } from "./remote.ts";
@@ -11,35 +17,54 @@ const TripScope = Schema.Struct({ owner: Schema.String, tripId: TripId });
 const unavailable = () =>
   new PlannerError({ code: "unavailable", message: "The trip app is temporarily unavailable." });
 
+const tripData = Worker(
+  "TripData",
+  { main: import.meta.url },
+  Effect.succeed({
+    fetch: Effect.gen(function* () {
+      const request = yield* WorkerRequest;
+      const context = yield* WorkerExecutionContext;
+
+      if (
+        request.method !== "GET" ||
+        new URL(request.url).pathname !== "/api/trip" ||
+        new URL(request.url).search !== ""
+      )
+        return new Response("Not found", { status: 404 });
+      const scope = yield* Schema.decodeUnknownEffect(TripScope)(context.raw.props);
+
+      const data = yield* callAppRepository(scope.owner, TripAppData, {
+        _tag: "Data",
+        tripId: scope.tripId,
+      });
+
+      const body = yield* Schema.encodeEffect(Schema.fromJsonString(TripAppData))(data);
+
+      return new Response(body, {
+        headers: { "content-type": "application/json", "cache-control": "no-store" },
+      });
+    }).pipe(
+      Effect.catch(() =>
+        Effect.succeed(new Response("Trip data is unavailable.", { status: 503 })),
+      ),
+      Effect.map(HttpServerResponse.fromWeb),
+    ),
+  }),
+);
+
+// Alchemy supplies the runtime handlers; keep the native binding's brand and fetch type visible.
+const TripDataRuntime = makeWorkerBridge(WorkerEntrypoint, {
+  entrypoint: tripData,
+  stack: runtimeStack,
+}) as unknown as new (
+  ctx: ExecutionContext,
+  env: Cloudflare.Env,
+) => WorkerEntrypoint<Cloudflare.Env> & {
+  fetch(request: Request): Promise<Response>;
+};
+
 /** Generated Workers get this fixed service binding, never the owner's namespace. */
-export class TripData extends Worker.make(Layer.empty, {
-  eventLayer: CloudflareTracer.layer,
-  fetch: Effect.gen(function* () {
-    const request = yield* Worker.NativeRequest;
-    const context = yield* Worker.ExecutionContext;
-
-    if (
-      request.method !== "GET" ||
-      new URL(request.url).pathname !== "/api/trip" ||
-      new URL(request.url).search !== ""
-    )
-      return new Response("Not found", { status: 404 });
-    const scope = yield* Schema.decodeUnknownEffect(TripScope)(context.props);
-
-    const data = yield* callAppRepository(scope.owner, TripAppData, {
-      _tag: "Data",
-      tripId: scope.tripId,
-    });
-
-    const body = yield* Schema.encodeEffect(Schema.fromJsonString(TripAppData))(data);
-
-    return new Response(body, {
-      headers: { "content-type": "application/json", "cache-control": "no-store" },
-    });
-  }).pipe(
-    Effect.catch(() => Effect.succeed(new Response("Trip data is unavailable.", { status: 503 }))),
-  ),
-}) {}
+export class TripData extends TripDataRuntime {}
 
 const secureHeaders = (headers: Headers) => {
   headers.set("cache-control", "private, no-store");
@@ -58,7 +83,7 @@ export const serveTripApp = Effect.fn("serveTripApp")(function* (
   request: Request,
   ctx: ExecutionContext,
 ) {
-  const env = yield* WorkerEnvironment;
+  const env = yield* plannerEnvironment;
 
   if (!env.APP_BUILDS || !env.APP_LOADER) return yield* unavailable();
   if (request.method !== "GET" && request.method !== "HEAD")

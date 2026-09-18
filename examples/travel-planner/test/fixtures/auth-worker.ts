@@ -1,10 +1,11 @@
 import { EmailProofDelivery } from "@yielded/auth/Proofs";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Logger, Redacted, Schema } from "effect";
-import { WorkerEnvironment } from "effect-cf";
 
 import { handleRequest } from "../../src/worker";
 export { TravelPlannerThread } from "./worker";
+export { PlannerAuth } from "../../src/auth/worker";
 import { serveAuth } from "../../src/auth/host";
 import { GithubRejectionReason } from "../../src/auth/oauth-diagnostics";
 import {
@@ -133,10 +134,21 @@ export class AuthStorageFixture extends DurableObject {
 export default {
   fetch: (
     request: Request,
-    env: Cloudflare.Env & { STORAGE: DurableObjectNamespace },
+    env: Cloudflare.Env & {
+      STORAGE: DurableObjectNamespace;
+      AUTH_NATIVE: DurableObjectNamespace;
+    },
     ctx: ExecutionContext,
-  ) =>
-    new URL(request.url).pathname === "/_fixture/storage"
+  ) => {
+    const url = new URL(request.url);
+
+    if (url.pathname.startsWith("/_fixture/native/")) {
+      url.pathname = url.pathname.slice("/_fixture/native".length);
+
+      return env.AUTH_NATIVE.getByName("auth-v1").fetch(new Request(url, request));
+    }
+
+    return url.pathname === "/_fixture/storage"
       ? env.STORAGE.getByName(new URL(request.url).searchParams.get("id") ?? "schema").fetch(
           request,
         )
@@ -144,5 +156,6 @@ export default {
         ? env.AUTH.getByName("auth-v1").fetch(request)
         : Effect.runPromise(
             handleRequest()(request, env, ctx).pipe(Effect.provideService(WorkerEnvironment, env)),
-          ),
+          );
+  },
 };

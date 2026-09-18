@@ -1,4 +1,5 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
@@ -6,7 +7,6 @@ import { IdempotencyKey, Principal } from "effect-agent/receipt";
 import { SubmissionLedger } from "effect-agent/submission-ledger";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
-import { WorkerEnvironment } from "effect-cf";
 import {
   LanguageModel,
   Model,

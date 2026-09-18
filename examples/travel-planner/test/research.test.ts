@@ -1,4 +1,4 @@
-import { CloudflareBrowser } from "@effect-agent/platform-cloudflare/cloudflare-browser";
+import { CloudflareBrowser } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-browser";
 import { it } from "@effect/vitest";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Schema, Stream } from "effect";
 import { ToolExecutionClass } from "effect-agent/durable-step";

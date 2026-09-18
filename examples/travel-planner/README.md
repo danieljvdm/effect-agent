@@ -13,11 +13,12 @@ It uses Cloudflare:
   **Dynamic Workers** to serve them.
 - **Email Sending** for email sign-in, alongside GitHub OAuth.
 
-The app uses the experimental Alchemy Worker and Thread Object runtime and Effect Atom
+The app uses the experimental Alchemy Cloudflare runtime and Effect Atom
 for client state. This draft exercises the unreleased host through a coherent set of workspace
 packages; restore exact published dependencies before release deployment. Alchemy beta.79
-also requires the repository's runtime patch. Auth, Workflow, Sandbox, and R2 adapters
-continue to use `effect-cf` with an explicit environment bridge.
+also requires the repository's runtime patch. Worker, Durable Object, Workflow, and R2
+services use Alchemy; container operations use the Cloudflare Sandbox SDK. Generated trip
+apps use Alchemy too. The production build rejects `effect-cf` runtime imports.
 [alchemy.run.ts](alchemy.run.ts) defines the Cloudflare resources and required configuration.
 
 Authentication uses matching versions of `@yielded/auth` and `@yielded/auth-persistence`.

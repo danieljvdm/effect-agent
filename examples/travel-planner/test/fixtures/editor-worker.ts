@@ -1,9 +1,9 @@
-import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
+import { ThreadObjectIdentity } from "@effect-agent/platform-alchemy-cloudflare/cloudflare-bindings";
+import { WorkerEnvironment } from "alchemy/Cloudflare/Workers/WorkerRuntime";
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { ThreadId } from "effect-agent/identifiers";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { WorkerEnvironment } from "effect-cf";
 import {
   AiError,
   LanguageModel,
@@ -20,6 +20,7 @@ import {
   TripApp,
   TripSiteStore,
 } from "../../src/domain.ts";
+import { plannerEnvironment } from "../../src/server/alchemy.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
 import { PlannerAttempt } from "../../src/server/progress.ts";
 import { ownerOfThread } from "../../src/server/tenancy.ts";
@@ -50,7 +51,7 @@ const hash = (value: string) =>
 const FixtureSource = Layer.effect(
   AppSourceStore,
   Effect.gen(function* () {
-    const env = yield* WorkerEnvironment;
+    const env = yield* plannerEnvironment;
     const bucket = env.APP_BUILDS;
 
     if (!bucket) return yield* Effect.die("Fixture needs APP_BUILDS");

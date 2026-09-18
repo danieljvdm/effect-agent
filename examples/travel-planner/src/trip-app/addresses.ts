@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 import { AppSiteName, AppSiteRegistration, PlannerError, type TripApp } from "../domain.ts";
 import { TripFailpoint } from "../server/trips.ts";
@@ -35,22 +35,22 @@ export const tripAppHostname = (title: string, appId: string, domain: string) =>
 export const readTripAppAddress = Effect.fn("readTripAppAddress")(
   function* (hostname: string) {
     const bucket = yield* AppBuildBucket;
-    const found = yield* bucket.get(appAddressKey(hostname));
+    const object = yield* bucket.get(appAddressKey(hostname));
 
-    if (Option.isNone(found)) return null;
-    const object = found.value;
+    if (object === null) return null;
 
     yield* Effect.addFinalizer(() =>
       object.bodyUsed
         ? Effect.void
-        : Effect.tryPromise({ try: () => object.body.cancel(), catch: () => undefined }).pipe(
-            Effect.ignore,
-          ),
+        : Effect.tryPromise({
+            try: () => object.readable?.cancel() ?? Promise.resolve(),
+            catch: () => undefined,
+          }).pipe(Effect.ignore),
     );
     if (object.size > 4096) return yield* unavailable();
 
     const entry = yield* Schema.decodeEffect(Schema.fromJsonString(AppSiteRegistration))(
-      yield* object.text,
+      yield* object.text(),
     ).pipe(Effect.mapError(unavailable));
 
     if (entry.hostname !== hostname) return yield* unavailable();
@@ -58,7 +58,7 @@ export const readTripAppAddress = Effect.fn("readTripAppAddress")(
     return entry;
   },
   Effect.scoped,
-  Effect.catchTag("R2OperationError", unavailable),
+  Effect.catchTag("R2Error", unavailable),
 );
 
 /**
@@ -124,5 +124,5 @@ export const publishTripAppAddress = Effect.fn("publishTripAppAddress")(
         });
     }
   },
-  Effect.catchTag("R2OperationError", unavailable),
+  Effect.catchTag("R2Error", unavailable),
 );
