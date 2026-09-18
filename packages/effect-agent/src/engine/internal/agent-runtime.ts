@@ -2276,7 +2276,9 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
           isFailure: result.isFailure,
         };
         terminalResultCommitted = true;
-        if (observer !== undefined && event._tag === "ToolCallFailed") {
+        // Parameter rejection started no Handler; its failed result and warning
+        // remain native recovery evidence, not an application failure observation.
+        if (observer !== undefined && event._tag === "ToolCallFailed" && rejection === undefined) {
           failureObservation = {
             _tag: "ModelToolFailure",
             kind: "declared-failure",

@@ -1,5 +1,7 @@
 # @effect-agent/ai-decision
 
+## 0.1.0-beta.109
+
 ## 0.1.0-beta.108
 
 ### Minor Changes

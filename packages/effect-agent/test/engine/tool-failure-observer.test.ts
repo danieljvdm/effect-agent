@@ -45,7 +45,7 @@ import {
   type ToolBrokerService,
 } from "effect-agent/tool-broker";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { AiError, LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
 
 import { deliverToolFailure } from "../../src/engine/internal/tool-derivative.ts";
@@ -235,6 +235,98 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("RUN-036 trusted Tool failure observation", (it) => {
+  // https://github.com/danieljvdm/effect-agent/commit/373d18828
+  it.effect(
+    "keeps model parameter rejections quiet while observing the same AiError from a handler",
+    () =>
+      Effect.gen(function* () {
+        const observations: Array<ToolFailureObservation> = [];
+        const handled: Array<number> = [];
+        const warnings: Array<unknown> = [];
+
+        const toolkit = Toolkit.make(
+          Tool.make("returned_ai", {
+            parameters: Schema.Struct({ value: Schema.Int }),
+            success: Schema.String,
+            failure: AiError.AiError,
+            failureMode: "return",
+          }),
+        );
+
+        const logger = Logger.make(({ logLevel, fiber }) => {
+          if (logLevel === "Warn")
+            warnings.push(fiber.getRef(References.CurrentLogAnnotations).toolCallId);
+        });
+
+        const events = yield* AgentRuntime.stream(
+          binding(toolkit, [
+            call("returned_ai", "invalid-parameters", { value: "invalid" }),
+            call("returned_ai", "handler-failure", { value: 1 }),
+            call("returned_ai", "corrected", { value: 2 }),
+          ]),
+          "go",
+        ).pipe(
+          Stream.runCollect,
+          Effect.provide([
+            toolkit.toLayer({
+              returned_ai: ({ value }) => {
+                handled.push(value);
+
+                return value === 1
+                  ? Effect.fail(
+                      AiError.make({
+                        module: "Test",
+                        method: "returned_ai",
+                        reason: new AiError.ToolParameterValidationError({
+                          toolName: "returned_ai",
+                          description: "HANDLER_PRIVATE_DETAIL",
+                        }),
+                      }),
+                    )
+                  : Effect.succeed("corrected");
+              },
+            }),
+            toolFailureObserverLayer(collect(observations)),
+            Logger.layer([logger]),
+          ]),
+        );
+
+        expect(handled).toEqual([1, 2]);
+        expect(
+          events
+            .filter((event) => event._tag === "ToolCallStarted")
+            .map((event) => event.toolCallId),
+        ).toEqual(["handler-failure", "corrected"]);
+        expect(
+          events
+            .filter((event) => event._tag === "ToolCallFailed")
+            .map((event) => ({
+              id: event.toolCallId,
+              tag: event.errorTag,
+              handling: event.failureHandling,
+            })),
+        ).toEqual([
+          { id: "invalid-parameters", tag: "AiError", handling: "returned-to-model" },
+          { id: "handler-failure", tag: "AiError", handling: "returned-to-model" },
+        ]);
+        expect(warnings).toEqual(["invalid-parameters", "handler-failure"]);
+        expect(
+          events
+            .filter((event) => event._tag === "ToolCallSucceeded")
+            .map((event) => event.toolCallId),
+        ).toEqual(["corrected"]);
+        expect(events.at(-1)?._tag).toBe("RunCompleted");
+        expect(
+          observations.map((observation) => ({
+            tag: observation.tag,
+            toolCallId:
+              observation._tag === "ModelToolFailure" ? observation.toolCallId : undefined,
+          })),
+        ).toEqual([{ tag: "AiError", toolCallId: "handler-failure" }]);
+        expect(JSON.stringify(observations)).not.toContain("HANDLER_PRIVATE_DETAIL");
+      }),
+  );
+
   it.effect(
     "observes a direct declared failure once on continuation and early close, without its payload",
     () =>

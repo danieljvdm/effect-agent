@@ -191,6 +191,7 @@
     "quiet-browsers-explain",
     "quiet-browsers-read",
     "quiet-hosted-completion",
+    "quiet-model-parameter-rejections",
     "quiet-model-threads",
     "quiet-retained-prompts",
     "quiet-runs-own-scope",
