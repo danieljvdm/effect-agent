@@ -765,6 +765,16 @@ describe("DC alarm semantics", () => {
       await drainAlarmsUntil(thread, anyInState(thread, "unknown"));
       const follower = await submitTo(plannerDefinition, thread, `${thread}-follower`);
 
+      // Runtime failpoints target the Thread, so finish the follower before arming an
+      // eviction intended for the head's abort. Otherwise it can evict before abort commits.
+      await drainAlarmsUntil(thread, async () =>
+        (await laneRows(thread)).some(
+          (row) => row.submission_id === follower.submissionId && row.state === "settled",
+        ),
+      );
+      expect(
+        (await laneRows(thread)).find((row) => row.submission_id === receipt.submissionId)?.state,
+      ).toBe("unknown");
       expect(supplierCountsFor(thread)).toEqual({ book: 1 });
 
       const unknownBefore = (await readCanonical(thread)).filter(
