@@ -54,7 +54,7 @@ it.live(
       <input id="large" type="radio" name="size" value="private-large-value" required style="display:none"><label for="large">2lb</label>
       <select id="roast" required><option value="">Choose roast</option><option value="private-roast-value">Light</option><option value="private-dark-value">Dark</option></select>
       <input type="password" value="private-credential"><textarea>private-textarea-default</textarea>
-      <button>Add to Cart</button>
+      <div id="cart-target"><button>Add to Cart</button></div>
     </form>
     <input id="file" type="file"><button id="choose" type="button">Choose file</button>
     <script>
@@ -215,6 +215,39 @@ it.live(
         ).toBe(true);
         if (size === undefined || cart === undefined)
           return yield* Effect.die("Missing product controls");
+
+        // https://github.com/danieljvdm/effect-agent/commit/a20fb79eb86f5b279460cfbc23021c765b6fa2c5
+        yield* sdkCall(() =>
+          page.$eval("#cart-target", (element) => {
+            element.setAttribute("data-guard-clicks", "0");
+            Reflect.apply(Reflect.get(element, "addEventListener"), element, [
+              "click",
+              () => element.setAttribute("data-guard-clicks", "1"),
+            ]);
+          }),
+        );
+        expect(
+          isBrowserRunUndispatchedActionError(
+            yield* handle
+              .click(
+                BrowserClickRequest.make({
+                  selector: "#cart-target",
+                  expectedTarget: {
+                    documentId: observed.documentId,
+                    nodeId: cart.nodeId,
+                    state: cart,
+                    scopeSelector: "#cart",
+                  },
+                }),
+              )
+              .pipe(Effect.flip),
+          ),
+        ).toBe(true);
+        expect(
+          yield* sdkCall(() =>
+            page.$eval("#cart-target", (element) => element.getAttribute("data-guard-clicks")),
+          ),
+        ).toBe("0");
 
         // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
         const sameDocument = yield* Schema.decodeEffect(BrowserRunPageObservation)(

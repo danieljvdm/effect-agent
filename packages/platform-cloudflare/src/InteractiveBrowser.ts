@@ -1057,6 +1057,7 @@ const observePage = (
     if (
       target === undefined ||
       identity.documentId !== expected.documentId ||
+      identity.nodes.get(target) !== expected.nodeId ||
       control === undefined ||
       (expected.state !== undefined &&
         fields.some((field) => control[field] !== expected.state?.[field])) ||
@@ -1660,18 +1661,20 @@ const trackPendingInput = <A>(state: HandleState, pending: Promise<A>): Promise<
   return pending;
 };
 
-const observeHostInput = <A>(
-  state: HandleState,
-  pending: Promise<A>,
-  signal: AbortSignal,
-  report: (cause: unknown) => Promise<void>,
-): Promise<A> => {
-  void pending.then(undefined, (cause) => {
-    if (signal.aborted) return report(cause);
-  });
+const makeHostInputObserver = Effect.fnUntraced(function* (state: HandleState, operation: string) {
+  const reporterContext = yield* Effect.context<never>();
 
-  return trackPendingInput(state, pending);
-};
+  return <A>(pending: Promise<A>, signal: AbortSignal): Promise<A> => {
+    void pending.then(undefined, (cause) => {
+      if (signal.aborted)
+        return Effect.runPromiseWith(reporterContext)(
+          reportBrowserCause(operation, Cause.fail(cause)),
+        );
+    });
+
+    return trackPendingInput(state, pending);
+  };
+});
 
 const stateFailure = (state: HandleState): BrowserFailure | undefined => {
   if (state.violation.value !== undefined) return state.violation.value;
@@ -2381,6 +2384,7 @@ const cdpCommand = <A>(
   Effect.scoped(
     Effect.gen(function* () {
       const cleanupContext = yield* Effect.context<never>();
+      const observeInput = yield* makeHostInputObserver(state, "interactive.control.late");
 
       const cdp = yield* Effect.acquireRelease(
         Effect.tryPromise({
@@ -2422,13 +2426,7 @@ const cdpCommand = <A>(
         try: (signal) => {
           const pending = cdp.send(command, parameters);
 
-          return command === "Cloudflare.getHandoffState"
-            ? pending
-            : observeHostInput(state, pending, signal, (cause) =>
-                Effect.runPromiseWith(cleanupContext)(
-                  reportBrowserCause("interactive.control.late", Cause.fail(cause)),
-                ),
-              );
+          return command === "Cloudflare.getHandoffState" ? pending : observeInput(pending, signal);
         },
         catch: (cause) =>
           state.disconnected.value || isRemoteClosure(cause)
@@ -3014,6 +3012,8 @@ const makeHostService = (
           ),
         );
 
+        const observeResize = yield* makeHostInputObserver(state, "interactive.resize.late");
+
         return {
           handle: runtime.handle,
           checkpoint: withinDeadline(
@@ -3045,12 +3045,7 @@ const makeHostService = (
               Effect.flatMap((decoded) =>
                 runtime.run(
                   Effect.tryPromise({
-                    try: (signal) =>
-                      observeHostInput(state, page.setViewport(decoded), signal, (cause) =>
-                        runCleanup(
-                          reportBrowserCause("interactive.resize.late", Cause.fail(cause)),
-                        ),
-                      ),
+                    try: (signal) => observeResize(page.setViewport(decoded), signal),
                     catch: (cause) => {
                       if (state.disconnected.value || isRemoteClosure(cause)) {
                         state.disconnected.value = true;
