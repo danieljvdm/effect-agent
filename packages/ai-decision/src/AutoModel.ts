@@ -4,8 +4,8 @@
  *
  * @since 0.1.0
  */
-import { Context, Effect, Layer, Schema, Semaphore } from "effect";
-import { AiError, type LanguageModel, type Model } from "effect/unstable/ai";
+import { Context, Effect, Layer, Schema, Semaphore, Stream } from "effect";
+import { AiError, LanguageModel, Model } from "effect/unstable/ai";
 
 import { DecisionModel } from "./DecisionModel.ts";
 import * as DecisionQuery from "./DecisionQuery.ts";
@@ -90,16 +90,21 @@ export interface Selection<Requirements> {
 }
 
 /**
- * A reusable catalog. Neither construction nor restoration builds model Layers.
- * The thread owner chooses once, commits the record, and restores it on follow-ups.
+ * A native Model Layer that satisfies the runtime's model requirement. Building
+ * it captures dependencies without selecting or acquiring a candidate. The runtime
+ * resolves it from each Thread's first task and restores that choice on follow-ups.
  *
  * @category models
  * @since 0.1.0
  */
-export interface AutoModel<Requirements> {
+export interface AutoModel<Requirements> extends Model.Model<
+  "auto",
+  LanguageModel.LanguageModel,
+  DecisionModel | SelectionStore | Requirements
+> {
   /**
-   * Automatic Agent.withModel / Subagent.layer integration. Resolve at the first
-   * Turn of a Run; the shared SelectionStore retains the Thread's original choice.
+   * Resolve explicitly for hosts that own thread admission. The shared
+   * SelectionStore retains the Thread's original choice.
    */
   readonly resolve: (options: {
     readonly threadId: string;
@@ -217,10 +222,11 @@ export const layerMemory = (options?: { readonly capacity?: number }) =>
  * only include information the decision provider may receive. The application
  * must filter candidates for authorization and required capabilities first.
  *
- * Pass the catalog directly to Agent.withModel or Subagent.layer for automatic
- * selection on each Thread's first Turn. Supply DecisionModel, native provider
- * clients, and a shared SelectionStore. Explicit select/restore remain available
- * for hosts that own selection at admission instead.
+ * Provide this Model with Effect.provide (or Layer.provide for subagent handlers).
+ * The runtime resolves it on each Thread's first Turn. Supply DecisionModel, native
+ * provider clients, and a shared SelectionStore. Direct LanguageModel calls lack
+ * thread context and fail with InvalidRequestError; select/restore/resolve remain
+ * available for hosts that own selection at admission instead.
  *
  * Persist record before generation and reuse selection.model for all turns and later runs.
  * Restore rejects a different thread, catalog version, or missing profile; it
@@ -358,5 +364,33 @@ export const make = <const Requirements extends Readonly<Record<string, unknown>
     );
   });
 
-  return Object.freeze({ select, restore, resolve });
+  const layer = Layer.effect(
+    LanguageModel.LanguageModel,
+    Effect.gen(function* () {
+      const services = yield* Effect.context<DecisionModel | SelectionStore | Services>();
+
+      const unresolved = invalidRequest(
+        "generate",
+        "AutoModel requires an agent thread; resolve a thread before direct LanguageModel calls",
+      );
+
+      const languageModel = yield* LanguageModel.make({
+        generateText: () => Effect.fail(unresolved),
+        streamText: () => Stream.fail(unresolved),
+      });
+
+      // Structural ModelResolver capability: the runtime installs the selected
+      // native Layer (including its identity) around the entire Run. Keeping the
+      // port on the provided service preserves normal Effect requirement capture
+      // without a dependency from this package to the agent runtime.
+      return Object.assign(languageModel, {
+        resolve: (request: Parameters<typeof resolve>[0]) =>
+          resolve(request).pipe(Effect.provide(services)),
+      });
+    }),
+  );
+
+  return Object.freeze(
+    Object.assign(Model.make("auto", version, layer), { select, restore, resolve }),
+  );
 };

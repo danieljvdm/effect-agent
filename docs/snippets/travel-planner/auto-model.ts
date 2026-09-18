@@ -40,10 +40,8 @@ export const Assistant = Agent.make("assistant", {
   toolkit: Toolkit.make(Research.tool),
 });
 
-export const BoundAssistant = Agent.withModel(Assistant, ThreadModels);
-
 // Each spawn selects from its own delegated task on its first turn.
-export const ResearchLive = Subagent.layer(Research, ThreadModels);
+export const ResearchLive = Subagent.layer(Research);
 
 const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
   Layer.provide(TypeSafeClient.layer),
@@ -58,6 +56,7 @@ const OpenAiLive = OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_AP
 // Provide one selection store around the parent and its subagent handlers.
 // Durable hosts supply a SelectionStore that commits records across restarts.
 const Live = ResearchLive.pipe(
+  Layer.provideMerge(ThreadModels),
   Layer.provideMerge(
     Layer.mergeAll(DecisionLive, OpenAiLive, InMemory.layer, AutoModel.layerMemory()),
   ),
@@ -68,12 +67,12 @@ export const program = Effect.gen(function* () {
   const threadId = Identifiers.ThreadId.make("auto-example");
 
   // AutoModel selects before this thread's first model call.
-  yield* AgentRuntime.run(BoundAssistant, "Compare taking a train or bus from Lisbon to Porto.", {
+  yield* AgentRuntime.run(Assistant, "Compare taking a train or bus from Lisbon to Porto.", {
     threadId,
   });
 
   // The same thread keeps its original model on follow-ups.
-  return yield* AgentRuntime.run(BoundAssistant, "Which would you choose for comfort?", {
+  return yield* AgentRuntime.run(Assistant, "Which would you choose for comfort?", {
     threadId,
   });
 }).pipe(Effect.provide(Live));

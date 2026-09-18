@@ -34,30 +34,32 @@ export type InputPromptSource<Input, E = never, R = never> = (
 export type ModelServices = LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName;
 
 /**
- * A thread-aware choice of a native model. The runtime supplies only model-visible
- * task context and eligible Tool descriptions, after validating the Agent input.
+ * An optional capability on a provided LanguageModel service. The runtime supplies
+ * only model-visible task context and eligible Tool descriptions after validating input.
  * The resolver owns retaining one choice per Thread, including across Runs and
  * recovery; it captures client requirements and returns a closed native Layer
  * that the interpreter acquires for the Run. Context hooks may prepare prompts
  * but cannot replace this model through a per-Turn modelCall.
  * Selection failures remain AiError values and all selector/client services stay in R.
  */
-export interface ModelResolver<Requirements> {
+export interface ModelResolver extends LanguageModel.LanguageModel {
   readonly resolve: (request: {
     readonly threadId: string;
     readonly state: Schema.JsonObject;
-  }) => Effect.Effect<Layer.Layer<ModelServices>, AiError.AiError, Requirements>;
+  }) => Effect.Effect<Layer.Layer<ModelServices>, AiError.AiError>;
 }
 
-/** Accepts native model Layers or resolvers that retain one native model per Thread. */
+/** Detect the deferred resolver capability on a trusted, host-provided model service. */
+export const isModelResolver = (model: LanguageModel.LanguageModel): model is ModelResolver =>
+  "resolve" in model && typeof model.resolve === "function";
+
+/** Accepts native model Layers that provide generation and model identity. */
 export type NativeModel<ModelValue> =
-  ModelValue extends ModelResolver<infer _Requirements>
-    ? ModelValue
-    : ModelValue extends Layer.Layer<infer Provides, never, infer _Requires>
-      ? ModelServices extends Provides
-        ? ModelValue
-        : never
-      : never;
+  ModelValue extends Layer.Layer<infer Provides, never, infer _Requires>
+    ? ModelServices extends Provides
+      ? ModelValue
+      : never
+    : never;
 
 /** Definition-owned boundary for selecting and validating an application run disposition. */
 export interface RunDispositionDeclaration<Output, DispositionSchema extends Schema.Top> {
@@ -222,11 +224,7 @@ type EffectServices<Value> =
   Value extends Effect.Effect<infer _Success, infer _Error, infer Services> ? Services : never;
 
 type ModelRequirements<Value> =
-  Value extends ModelResolver<infer Services>
-    ? Services
-    : Value extends Layer.Layer<infer _Provides, infer _Error, infer Services>
-      ? Services
-      : never;
+  Value extends Layer.Layer<infer _Provides, infer _Error, infer Services> ? Services : never;
 
 /** Constructors and type projections for definitions and runnable model bindings. */
 

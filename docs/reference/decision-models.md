@@ -62,9 +62,9 @@ With dynamic question or option maps, check for missing entries and narrow mixed
 
 ## AutoModel
 
-Pass an AutoModel catalog to `Agent.withModel` or `Subagent.layer`. The runtime selects before
-each thread's first model call and keeps that choice for later turns and follow-up runs. Each
-new subagent selects independently from its delegated task.
+AutoModel is a native model Layer: provide it to satisfy an agent's model requirement.
+The runtime selects before each thread's first model call and keeps that choice for later turns
+and follow-up runs. Each new subagent selects independently from its delegated task.
 
 <<< @/snippets/travel-planner/auto-model.ts#catalog{ts twoslash}
 
@@ -75,16 +75,21 @@ catalog. Supply Jev through [`TypeSafeDecisionModel`](#typesafe-client), or use 
 
 ```ts twoslash
 import { Assistant, Research, ThreadModels } from "./auto-model.ts";
-import { Agent, Subagent } from "effect-agent";
+import { Effect, Layer } from "effect";
+import { AgentRuntime, Subagent } from "effect-agent";
 // ---cut---
-const BoundAssistant = Agent.withModel(Assistant, ThreadModels);
-const ResearchLive = Subagent.layer(Research, ThreadModels);
+const program = AgentRuntime.run(Assistant, "Compare train and bus travel.").pipe(
+  Effect.provide(ThreadModels),
+);
+const ResearchLive = Subagent.layer(Research).pipe(Layer.provide(ThreadModels));
 ```
 
 Provide one `AutoModel.layerMemory()` alongside `InMemory.layer`, outside the parent program
 and child handler Layers. The shared store keys choices by thread ID, so siblings use the same
 catalog without sharing a selection. The selected native model retains its provider identity,
-client requirements, streaming, tools, and structured output.
+client requirements, streaming, tools, and structured output. Building the AutoModel Layer
+captures dependencies without selecting or acquiring any candidate. It requires an agent thread;
+for direct `LanguageModel` calls, explicitly `resolve` a thread and provide the returned model.
 
 <<< @/snippets/travel-planner/auto-model.ts#runs{ts}
 
@@ -96,8 +101,8 @@ includes Jev, provider clients, and shared Layer assembly.
 The runtime supplies the rendered prompt and eligible tool descriptions to the resolver after
 input validation and `inputPrompt` projection, before context preparation. Raw input fields
 excluded by that projection are excluded from selection too. Selection is inside the run's
-deadline and interruption scope. Context hooks may prepare prompts but cannot replace an
-AutoModel binding through `modelCall`; doing so fails with `AiError.InvalidRequestError`.
+deadline and interruption scope. Context hooks may prepare prompts but cannot replace the
+selected model through `modelCall`; doing so fails with `AiError.InvalidRequestError`.
 
 `AutoModel.SelectionStore.getOrCreate(threadId, select)` owns atomic creation and retention.
 It returns the committed winning `SelectionRecord` before generation starts. Concurrent
@@ -118,10 +123,10 @@ still depend on provider behavior and prompt prefixes.
 
 | API or field                               | Behavior                                                                                     |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `make({ models, version, instructions? })` | Snapshots approved model profiles; construction performs no I/O                              |
+| `make({ models, version, instructions? })` | Native Model Layer over approved profiles; construction performs no selection                |
 | `version`                                  | Required nonempty version; change when model, effort, or settings change                     |
 | `instructions`                             | Optional Choice policy; defaults to the least expensive capable profile for the whole task   |
-| `resolve({ threadId, state })`             | Runtime integration; uses `SelectionStore`, `DecisionModel`, and native client services      |
+| `resolve({ threadId, state })`             | Explicit resolution using `SelectionStore`, `DecisionModel`, and native client services      |
 | `layerMemory({ capacity? })`               | Bounded shared selection storage for ephemeral hosts                                         |
 | `SelectionStore`                           | Host storage port; durable implementations must atomically retain the winning record         |
 | `select({ threadId, state })`              | Explicit one-shot Choice evaluation for hosts that own admission; re-execution selects again |

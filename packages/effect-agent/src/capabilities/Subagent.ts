@@ -1,11 +1,11 @@
-import type { Layer } from "effect";
-import { Cause, Clock, Duration, Effect, Exit, Option, Ref, Schema, Scope } from "effect";
+import { Cause, Clock, Duration, Effect, Exit, Layer, Option, Ref, Schema, Scope } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import {
   type Definition,
   type InputPromptSource,
   type InstructionSource,
+  type ModelServices,
   type RunDispositionDeclaration,
 } from "../core/Agent.ts";
 import type { AgentPolicy } from "../core/AgentPolicy.ts";
@@ -1190,10 +1190,11 @@ type SubagentHandler<
 >;
 
 /**
- * Build the Toolkit handler Layer from a native model, a thread ModelResolver,
- * or an explicit child Agent Binding. A resolver runs inside each new child's
- * first Run, using that child's Thread ID and projected task. Provide its shared
- * selection store outside this Layer to retain choices across child follow-ups.
+ * Build the Toolkit handler Layer using the provided model requirement, or pass
+ * a native model / explicit child Binding as an override. Without an override,
+ * provide the model with Layer.provide; the handler captures it at construction.
+ * AutoModel resolves each new child's own Thread ID and projected first task.
+ * Share its selection store across parent Runs and child handler Layers.
  *
  * Construction requirements carry the child Binding's full runtime needs and
  * both projections; they are captured once via `Effect.context` so the
@@ -1215,7 +1216,94 @@ type SubagentHandler<
  *   conservative accounting summary. Failed children join as the bounded
  *   `SubagentExecutionFailure`; no in-process child fiber ever starts.
  */
-export const layer = <
+export function layer<
+  Name extends string,
+  TargetInput extends Schema.Top,
+  TargetOutput extends Schema.Top,
+  TargetInstructions,
+  TargetTools extends Record<string, Tool.Any>,
+  Parameters extends Schema.Top,
+  Success extends Schema.Top,
+  Failure extends Schema.Top,
+  PrepareRequirements,
+  ProjectRequirements,
+  HookRequirements = never,
+  Mode extends SubagentFailureMode = "error",
+  InstructionError = InstructionErrorOf<TargetInstructions, TargetInput["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<TargetInstructions, TargetInput["Type"]>,
+  InputPromptValue extends InputPromptSource<TargetInput["Type"], unknown, unknown> | undefined =
+    undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<TargetOutput["Type"], Schema.Top>
+    | undefined = undefined,
+>(
+  delegation: SubagentDelegation<
+    Name,
+    TargetInput,
+    TargetOutput,
+    TargetInstructions,
+    TargetTools,
+    Parameters,
+    Success,
+    Failure,
+    PrepareRequirements,
+    ProjectRequirements,
+    Mode
+  > & {
+    readonly target: {
+      readonly instructions: InstructionSource<
+        TargetInput["Type"],
+        NoInfer<InstructionError>,
+        NoInfer<InstructionRequirements>
+      >;
+      readonly inputPrompt?: InputPromptValue | undefined;
+      readonly updates?: UpdatesSchema | undefined;
+      readonly runDisposition?: RunDispositionValue | undefined;
+    };
+  },
+  modelOrBinding?: undefined,
+  options?: SubagentRuntimeOptions<
+    Failure,
+    SubagentChildRunFailure<
+      TargetInput,
+      TargetOutput,
+      TargetInstructions,
+      TargetTools,
+      never,
+      never,
+      ModelServices,
+      InstructionError,
+      InstructionRequirements,
+      InputPromptValue,
+      UpdatesSchema,
+      RunDispositionValue
+    >,
+    HookRequirements
+  >,
+): Layer.Layer<
+  Tool.HandlersFor<SubagentTools<Name, Parameters, Success, Failure, Mode>>,
+  never,
+  SubagentLayerRequirements<
+    TargetInput,
+    TargetOutput,
+    TargetInstructions,
+    TargetTools,
+    never,
+    never,
+    ModelServices,
+    PrepareRequirements,
+    ProjectRequirements,
+    HookRequirements,
+    InstructionError,
+    InstructionRequirements,
+    InputPromptValue,
+    UpdatesSchema,
+    RunDispositionValue
+  >
+>;
+
+export function layer<
   Name extends string,
   TargetInput extends Schema.Top,
   TargetOutput extends Schema.Top,
@@ -1293,6 +1381,124 @@ export const layer = <
         InputPromptValue,
         UpdatesSchema
       >["model"],
+  options?: SubagentRuntimeOptions<
+    Failure,
+    SubagentChildRunFailure<
+      TargetInput,
+      TargetOutput,
+      TargetInstructions,
+      TargetTools,
+      Provider,
+      ModelProvides,
+      ModelRequires,
+      InstructionError,
+      InstructionRequirements,
+      InputPromptValue,
+      UpdatesSchema,
+      RunDispositionValue
+    >,
+    HookRequirements
+  >,
+): Layer.Layer<
+  Tool.HandlersFor<SubagentTools<Name, Parameters, Success, Failure, Mode>>,
+  never,
+  SubagentLayerRequirements<
+    TargetInput,
+    TargetOutput,
+    TargetInstructions,
+    TargetTools,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    PrepareRequirements,
+    ProjectRequirements,
+    HookRequirements,
+    InstructionError,
+    InstructionRequirements,
+    InputPromptValue,
+    UpdatesSchema,
+    RunDispositionValue
+  >
+>;
+
+export function layer<
+  Name extends string,
+  TargetInput extends Schema.Top,
+  TargetOutput extends Schema.Top,
+  TargetInstructions,
+  TargetTools extends Record<string, Tool.Any>,
+  Parameters extends Schema.Top,
+  Success extends Schema.Top,
+  Failure extends Schema.Top,
+  PrepareRequirements,
+  ProjectRequirements,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  HookRequirements = never,
+  Mode extends SubagentFailureMode = "error",
+  InstructionError = InstructionErrorOf<TargetInstructions, TargetInput["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<TargetInstructions, TargetInput["Type"]>,
+  InputPromptValue extends InputPromptSource<TargetInput["Type"], unknown, unknown> | undefined =
+    undefined,
+  UpdatesSchema extends Schema.Top | undefined = undefined,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<TargetOutput["Type"], Schema.Top>
+    | undefined = undefined,
+>(
+  delegation: SubagentDelegation<
+    Name,
+    TargetInput,
+    TargetOutput,
+    TargetInstructions,
+    TargetTools,
+    Parameters,
+    Success,
+    Failure,
+    PrepareRequirements,
+    ProjectRequirements,
+    Mode
+  > & {
+    readonly target: {
+      readonly instructions: InstructionSource<
+        TargetInput["Type"],
+        NoInfer<InstructionError>,
+        NoInfer<InstructionRequirements>
+      >;
+      readonly inputPrompt?: InputPromptValue | undefined;
+      readonly updates?: UpdatesSchema | undefined;
+      readonly runDisposition?: RunDispositionValue | undefined;
+    };
+  },
+  modelOrBinding?:
+    | RuntimeBinding<
+        TargetInput,
+        TargetOutput,
+        TargetInstructions,
+        TargetTools,
+        Provider,
+        ModelProvides,
+        ModelRequires,
+        InstructionError,
+        InstructionRequirements,
+        RunDispositionValue,
+        InputPromptValue,
+        UpdatesSchema
+      >
+    | RuntimeBinding<
+        TargetInput,
+        TargetOutput,
+        TargetInstructions,
+        TargetTools,
+        Provider,
+        ModelProvides,
+        ModelRequires,
+        InstructionError,
+        InstructionRequirements,
+        RunDispositionValue,
+        InputPromptValue,
+        UpdatesSchema
+      >["model"],
   options: SubagentRuntimeOptions<
     Failure,
     SubagentChildRunFailure<
@@ -1321,7 +1527,7 @@ export const layer = <
     TargetTools,
     Provider,
     ModelProvides,
-    ModelRequires,
+    ModelRequires | ModelServices,
     PrepareRequirements,
     ProjectRequirements,
     HookRequirements,
@@ -1331,11 +1537,14 @@ export const layer = <
     UpdatesSchema,
     RunDispositionValue
   >
-> => {
+> {
   const childBinding =
-    "definition" in modelOrBinding
+    modelOrBinding !== undefined && "definition" in modelOrBinding
       ? modelOrBinding
-      : { definition: delegation.target, model: modelOrBinding };
+      : {
+          definition: delegation.target,
+          model: modelOrBinding ?? Layer.effectContext(Effect.context<ModelServices>()),
+        };
 
   if (childBinding.definition !== delegation.target) {
     throw new Error("Subagent.layer requires the delegation's exact target Definition");
@@ -1430,8 +1639,8 @@ export const layer = <
           TargetInstructions,
           TargetTools,
           Provider,
-          ModelProvides,
-          ModelRequires,
+          never,
+          ModelRequires | ModelServices,
           PrepareRequirements,
           ProjectRequirements,
           HookRequirements,
@@ -1615,8 +1824,8 @@ export const layer = <
           TargetInstructions,
           TargetTools,
           Provider,
-          ModelProvides,
-          ModelRequires,
+          never,
+          ModelRequires | ModelServices,
           never,
           HookRequirements,
           InstructionError,
@@ -2163,7 +2372,7 @@ export const layer = <
   });
 
   return toolkit.toLayer(build);
-};
+}
 
 export { reporting, reportingToWorker, WorkerReport } from "./internal/subagent-reporting.ts";
 

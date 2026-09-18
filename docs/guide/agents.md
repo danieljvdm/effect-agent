@@ -119,7 +119,9 @@ const captured = Effect.gen(function* () {
 Use `Stream.provide` with `stream`. Keep the model layer around both `start` and the detached
 run's lifetime.
 
-Pass a model Layer directly to `Subagent.layer(delegation, model)`. Durable registration
+`Subagent.layer(delegation)` captures the model supplied with `Layer.provide(model)`; an explicit
+`Subagent.layer(delegation, model)` can override it. [AutoModel](../reference/decision-models#automodel)
+satisfies the same requirement and selects once on each thread's first turn. Durable registration
 accepts `{ agent: definition, model, definitions: versions }`. `Agent.withModel` remains available
 when an application wants a reusable binding. The model Layer must provide all three model
 services and have no construction error. Put

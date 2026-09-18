@@ -146,7 +146,7 @@ type ExecutableDefinition = Agent.AnyDefinition & {
 /** Executable model Binding accepted by durable registration descriptors. */
 export type ExecutableAgentBinding = {
   readonly definition: ExecutableDefinition;
-  readonly model: Layer.Layer<ModelServices, never, unknown> | Agent.ModelResolver<unknown>;
+  readonly model: Layer.Layer<ModelServices, never, unknown>;
 };
 
 /**

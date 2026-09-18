@@ -175,8 +175,6 @@ it.effect(
         nativeModel("large", generate("large"), lifecycle),
       );
 
-      const bound = Agent.withModel(parent, models);
-
       const live = decisionLayer((request) =>
         Effect.sync(() => {
           requests.push(request);
@@ -188,12 +186,28 @@ it.effect(
       );
 
       const threadId = Identifiers.ThreadId.make("parent");
+      const identities: Array<readonly [string, string]> = [];
+
+      const options = {
+        threadId,
+        context: {
+          prepare: ({ source }: { readonly source: Prompt.Prompt }) =>
+            Effect.gen(function* () {
+              identities.push([yield* Model.ProviderName, yield* Model.ModelName]);
+
+              return { prompt: source };
+            }),
+        },
+      };
 
       yield* Effect.gen(function* () {
+        expect(requests).toEqual([]);
+        expect(lifecycle).toEqual([]);
+
         const first = yield* AgentRuntime.run(
-          bound,
+          parent,
           { task: "Compare options", privateKey: "HOST-ONLY-SENTINEL" },
-          { threadId },
+          options,
         );
 
         expect(first.output).toBe("large");
@@ -202,9 +216,9 @@ it.effect(
         expect(lifecycle.filter((event) => event.startsWith("close:"))).toHaveLength(3);
 
         const later = yield* AgentRuntime.run(
-          bound,
+          parent,
           { task: "A routine follow-up", privateKey: "HOST-ONLY-SENTINEL" },
-          { threadId },
+          options,
         );
 
         expect(later.output).toBe("large");
@@ -214,11 +228,17 @@ it.effect(
         expect(lifecycle.filter((event) => event.startsWith("close:"))).toHaveLength(4);
       }).pipe(
         Effect.provide(
-          Subagent.layer(child, models).pipe(
+          Subagent.layer(child).pipe(
+            Layer.provideMerge(models),
             Layer.provideMerge(Layer.mergeAll(live, AutoModel.layerMemory(), InMemory.layer)),
           ),
         ),
       );
+      expect(identities).toEqual([
+        ["fixture", "large"],
+        ["fixture", "large"],
+        ["fixture", "large"],
+      ]);
       expect(JSON.stringify(requests)).not.toContain("HOST-ONLY-SENTINEL");
       expect(requests[0]?.state).toMatchObject({
         tools: [{ name: "research", description: "Research a question" }],
@@ -266,14 +286,11 @@ it.effect.each(["failure", "defect", "timeout", "interruption"] as const)(
         }),
       );
 
-      const bound = Agent.withModel(
-        definition,
-        catalog(nativeModel("small", undefined, lifecycle)),
-      );
+      const models = catalog(nativeModel("small", undefined, lifecycle));
 
       yield* Effect.gen(function* () {
         const options = { threadId: Identifiers.ThreadId.make(`retry-${mode}`) };
-        const fiber = yield* AgentRuntime.run(bound, "task", options).pipe(Effect.forkChild);
+        const fiber = yield* AgentRuntime.run(definition, "task", options).pipe(Effect.forkChild);
 
         yield* Deferred.await(entered);
         if (mode === "timeout") yield* TestClock.adjust("5 seconds");
@@ -293,18 +310,23 @@ it.effect.each(["failure", "defect", "timeout", "interruption"] as const)(
         expect(finalized).toBe(true);
         expect(lifecycle).toEqual([]);
         retry = true;
-        expect((yield* AgentRuntime.run(bound, "retry", options)).output).toBe("small");
+        expect((yield* AgentRuntime.run(definition, "retry", options)).output).toBe("small");
         expect(lifecycle).toEqual(["open:small", "close:small"]);
-      }).pipe(Effect.provide(Layer.mergeAll(live, AutoModel.layerMemory(), InMemory.layer)));
+      }).pipe(
+        Effect.provide(
+          models.pipe(
+            Layer.provideMerge(Layer.mergeAll(live, AutoModel.layerMemory(), InMemory.layer)),
+          ),
+        ),
+      );
     }),
 );
 
 it.effect("rejects a context hook that replaces the selected model", () =>
   Effect.gen(function* () {
     const lifecycle: Array<string> = [];
-    const bound = Agent.withModel(definition, catalog());
 
-    const error = yield* AgentRuntime.run(bound, "task", {
+    const error = yield* AgentRuntime.run(definition, "task", {
       context: {
         prepare: ({ source }) =>
           Effect.succeed({
@@ -321,10 +343,14 @@ it.effect("rejects a context hook that replaces the selected model", () =>
       },
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(
-          decisionLayer(() => Effect.succeed(answer())),
-          AutoModel.layerMemory(),
-          InMemory.layer,
+        catalog().pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              decisionLayer(() => Effect.succeed(answer())),
+              AutoModel.layerMemory(),
+              InMemory.layer,
+            ),
+          ),
         ),
       ),
       Effect.flip,
@@ -357,8 +383,10 @@ it("preserves native client, decision, and store requirements in Agent and Subag
     },
   });
 
-  const bound = Agent.withModel(definition, models);
-  const operation = AgentRuntime.run(bound, "task").pipe(Effect.provide(InMemory.layer));
+  const required = AgentRuntime.run(definition, "task").pipe(Effect.provide(InMemory.layer));
+
+  expectTypeOf<Effect.Services<typeof required>>().toEqualTypeOf<Agent.ModelServices>();
+  const operation = required.pipe(Effect.provide(models));
 
   expectTypeOf<Effect.Services<typeof operation>>().toEqualTypeOf<
     SmallClient | LargeClient | DecisionModel.DecisionModel | AutoModel.SelectionStore
@@ -367,7 +395,10 @@ it("preserves native client, decision, and store requirements in Agent and Subag
     Effect.Error<ReturnType<typeof AgentRuntime.run<typeof definition>>>
   >();
   const child = Subagent.make("typed_child", { target: definition });
-  const handlers = Subagent.layer(child, models).pipe(Layer.provide(InMemory.layer));
+  const requiredHandlers = Subagent.layer(child).pipe(Layer.provide(InMemory.layer));
+
+  expectTypeOf<Layer.Services<typeof requiredHandlers>>().toEqualTypeOf<Agent.ModelServices>();
+  const handlers = requiredHandlers.pipe(Layer.provide(models));
 
   expectTypeOf<Layer.Services<typeof handlers>>().toEqualTypeOf<
     SmallClient | LargeClient | DecisionModel.DecisionModel | AutoModel.SelectionStore
@@ -407,26 +438,32 @@ it.effect(
         ),
       );
 
-      const bound = Agent.withModel(definition, catalog(small));
+      const models = catalog(small);
       const options = { threadId: Identifiers.ThreadId.make("generation-retry") };
 
       yield* Effect.gen(function* () {
-        expect(yield* AgentRuntime.run(bound, "initial task", options).pipe(Effect.flip)).toBe(
+        expect(yield* AgentRuntime.run(definition, "initial task", options).pipe(Effect.flip)).toBe(
           failure,
         );
-        expect((yield* AgentRuntime.run(bound, "different task", options)).output).toBe("small");
+        expect((yield* AgentRuntime.run(definition, "different task", options)).output).toBe(
+          "small",
+        );
         expect(selections).toBe(1);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(
-            InMemory.layer,
-            AutoModel.layerMemory(),
-            decisionLayer(() =>
-              Effect.sync(() => {
-                selections++;
+          models.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                InMemory.layer,
+                AutoModel.layerMemory(),
+                decisionLayer(() =>
+                  Effect.sync(() => {
+                    selections++;
 
-                return answer(selections === 1 ? "routine" : "difficult");
-              }),
+                    return answer(selections === 1 ? "routine" : "difficult");
+                  }),
+                ),
+              ),
             ),
           ),
         ),

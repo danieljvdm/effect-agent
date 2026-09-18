@@ -25,7 +25,7 @@ import {
 } from "effect";
 import { Tool, AiError, LanguageModel, Model, Prompt, Response, Toolkit } from "effect/unstable/ai";
 
-import type * as Agent from "../../core/Agent.ts";
+import * as Agent from "../../core/Agent.ts";
 import {
   type CompletionToolDeclaration,
   type CompletionFromToolDeclaration,
@@ -215,13 +215,11 @@ export type RuntimeBinding<
   InputPromptValue,
   UpdatesSchema
 > & {
-  readonly model:
-    | Layer.Layer<
-        LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName | ModelProvides,
-        never,
-        ModelRequires
-      >
-    | Agent.ModelResolver<ModelRequires>;
+  readonly model: Layer.Layer<
+    LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName | ModelProvides,
+    never,
+    ModelRequires
+  >;
 };
 
 type InstructionResultOf<Instructions, Input> = Instructions extends (input: Input) => infer Result
@@ -7984,8 +7982,11 @@ function streamWithCompletion<
                     Effect.mapError(() => new UpdateError({ reason: "validation" })),
                   );
 
+          const languageModel = yield* LanguageModel.LanguageModel;
+          const resolver = Agent.isModelResolver(languageModel) ? languageModel : undefined;
+
           const context: RunContext = {
-            resolvedModel: model !== undefined && "resolve" in model,
+            resolvedModel: resolver !== undefined,
             validateUpdate,
             updates: new Map(),
             updateBytes: 0,
@@ -8315,7 +8316,7 @@ function streamWithCompletion<
                 ),
               );
 
-              if (model === undefined || !("resolve" in model)) return turns;
+              if (resolver === undefined) return turns;
 
               const catalog = yield* eligibleCatalog(
                 agent.definition,
@@ -8339,7 +8340,7 @@ function streamWithCompletion<
                 ),
               );
 
-              const selected = yield* model.resolve({
+              const selected = yield* resolver.resolve({
                 threadId,
                 state: {
                   prompt: selectionPrompt,
@@ -8521,9 +8522,7 @@ function streamWithCompletion<
         | ModelRequires
         | ModelUsageAccounting
         | AgentUpdateAcceptance
-      > = model === undefined || "resolve" in model
-        ? finalized
-        : finalized.pipe(Stream.provide(model, { local: true }));
+      > = model === undefined ? finalized : finalized.pipe(Stream.provide(model, { local: true }));
 
       const events = modeled.pipe(
         // The engine composition boundary owns span-lifecycle isolation while preserving the host's
@@ -8799,13 +8798,11 @@ type ExecutableAgent =
   | ExecutableDefinition
   | {
       readonly definition: ExecutableDefinition;
-      readonly model:
-        | Layer.Layer<
-            LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
-            never,
-            unknown
-          >
-        | Agent.ModelResolver<unknown>;
+      readonly model: Layer.Layer<
+        LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
+        never,
+        unknown
+      >;
     };
 
 /** Decode external input before instructions or model execution. */

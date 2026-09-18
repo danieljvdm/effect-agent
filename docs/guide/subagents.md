@@ -13,8 +13,9 @@ The parent calls `summarize` like any other tool. The child gets that call's inp
 own instructions and conversation, and returns `{ output, budgetExhausted }`. Its intermediate
 history stays out of the parent's context. Each agent can use its own model and toolkit.
 
-Pass an [AutoModel](../reference/decision-models#automodel) catalog to `Subagent.layer` to select
-from each new child's delegated task automatically. A shared selection store retains the child's
+`Subagent.layer(delegation)` requires a model: supply it with `Layer.provide(model)` or provide
+it around the parent program. An [AutoModel](../reference/decision-models#automodel) selects from
+each new child's delegated task automatically. A shared selection store retains the child's
 choice for follow-ups; sibling threads select independently.
 
 This defines the agents. Choose how to run them below.

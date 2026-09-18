@@ -115,6 +115,52 @@ it.effect(
     }),
 );
 
+it.effect("requires thread context for direct model calls without selecting per prompt", () =>
+  Effect.gen(function* () {
+    let selections = 0;
+    const auto = AutoModel.make({ models, version: "v1" });
+
+    yield* Effect.gen(function* () {
+      const captured = yield* auto.captureRequirements;
+
+      const errors = yield* Effect.all([
+        LanguageModel.generateText({ prompt: "first task" }).pipe(
+          Effect.provide(captured),
+          Effect.flip,
+        ),
+        LanguageModel.streamText({ prompt: "another task" }).pipe(
+          Stream.provide(captured),
+          Stream.runDrain,
+          Effect.flip,
+        ),
+      ]);
+
+      expect(errors).toEqual([
+        expect.objectContaining({
+          reason: expect.objectContaining({ _tag: "InvalidRequestError" }),
+        }),
+        expect.objectContaining({
+          reason: expect.objectContaining({ _tag: "InvalidRequestError" }),
+        }),
+      ]);
+      expect(selections).toBe(0);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          decisionLayer(() =>
+            Effect.sync(() => {
+              selections++;
+
+              return answer();
+            }),
+          ),
+          AutoModel.layerMemory(),
+        ),
+      ),
+    );
+  }),
+);
+
 it.effect("snapshots profile bindings and descriptions when constructing the catalog", () =>
   Effect.gen(function* () {
     const mutable = { routine: { ...models.routine }, difficult: { ...models.difficult } };
@@ -321,6 +367,17 @@ it("preserves client requirements and selector errors when composing different p
   const generate = Effect.flatMap(selected, ({ model }) =>
     LanguageModel.generateText({ prompt: "task" }).pipe(Effect.provide(model)),
   );
+
+  expectTypeOf<Layer.Services<typeof auto>>().toEqualTypeOf<
+    ClientA | ClientB | DecisionModel.DecisionModel | AutoModel.SelectionStore
+  >();
+  expectTypeOf<Effect.Services<typeof auto.captureRequirements>>().toEqualTypeOf<
+    Layer.Services<typeof auto>
+  >();
+  expectTypeOf<
+    Layer.Services<Effect.Success<typeof auto.captureRequirements>>
+  >().toEqualTypeOf<never>();
+  expectTypeOf<Layer.Error<typeof auto>>().toEqualTypeOf<never>();
 
   type Selected = Effect.Success<typeof selected>["model"];
   expectTypeOf<Layer.Services<Selected>>().toEqualTypeOf<ClientA | ClientB>();
