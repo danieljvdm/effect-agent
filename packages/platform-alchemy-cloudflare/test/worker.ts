@@ -25,29 +25,6 @@ import {
   planner,
 } from "./fixtures.ts";
 
-class Threads extends AlchemyDurableObject<Threads, ThreadObject.Rpc>()("THREADS") {}
-
-const ThreadsLive = Threads.make(
-  ThreadObject.make(ThreadObject.layer([{ agent: planner, model, definitions }]), {
-    namespaceBinding: "THREADS",
-    deploymentId: "alchemy-test",
-    producerPrefix: "alchemy-test",
-    eventLayer: Layer.effectDiscard(
-      Effect.gen(function* () {
-        const { id } = yield* AlchemyState;
-
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            eventFinalizers.push(`${id.name}:thread-event`);
-          }),
-        );
-        if (id.name?.startsWith("fail-event"))
-          return yield* Effect.fail("event acquisition failed");
-      }),
-    ),
-  }),
-);
-
 class Instance extends Context.Service<
   Instance,
   { readonly name: string; readonly scope: Scope.Scope; readonly label: string }
@@ -70,6 +47,65 @@ const InstanceLive = Layer.effect(Instance)(
 
     return { name, scope, label };
   }),
+);
+
+class Invocation extends Context.Service<Invocation, { readonly name: string }>()(
+  "alchemy-test/Invocation",
+) {}
+
+const customHandlers = {
+  customInspect: (prefix: string, suffix: number) =>
+    Effect.gen(function* () {
+      const instance = yield* Instance;
+      const event = yield* Invocation;
+      const scope = yield* Effect.scope;
+
+      return {
+        label: `${prefix}:${instance.name}:${suffix}`,
+        event: event.name,
+        acquisitions: constructorCounts.get(instance.name) ?? 0,
+        differentScope: instance.scope !== scope,
+      };
+    }),
+  customFail: (mode: "typed" | "throw") => {
+    if (mode === "throw") throw new Error("custom synchronous defect");
+
+    return Effect.fail("custom expected failure");
+  },
+};
+
+class Threads extends AlchemyDurableObject<Threads, ThreadObject.Rpc<typeof customHandlers>>()(
+  "THREADS",
+) {}
+
+const ThreadsLive = Threads.make(
+  ThreadObject.make(
+    ThreadObject.layer([{ agent: planner, model, definitions }]).pipe(
+      Layer.provideMerge(InstanceLive),
+    ),
+    {
+      namespaceBinding: "THREADS",
+      deploymentId: "alchemy-test",
+      producerPrefix: "alchemy-test",
+      eventLayer: Layer.effect(Invocation)(
+        Effect.gen(function* () {
+          const { id } = yield* AlchemyState;
+          const instance = yield* Instance;
+
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              eventFinalizers.push(`${id.name}:thread-event`);
+            }),
+          );
+          if (id.name?.startsWith("fail-event"))
+            return yield* Effect.fail("event acquisition failed");
+
+          return { name: `event:${instance.name}` };
+        }),
+      ),
+    },
+    customHandlers,
+  ),
 );
 
 interface ProbeRpc {

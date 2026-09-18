@@ -1698,9 +1698,8 @@ esac
       const prReviewDependencies = manifestDependencies(prReviewAction);
 
       expect(demo.name).toBe("@effect-agent/example-travel-planner");
-      expect(demo.dependencies?.["@effect-agent/platform-cloudflare"]).toMatch(
-        /^\d+\.\d+\.\d+-beta\.\d+$/,
-      );
+      expect(demo.dependencies?.["@effect-agent/platform-cloudflare"]).toBe("workspace:*");
+      expect(demo.dependencies?.["@effect-agent/platform-alchemy-cloudflare"]).toBe("workspace:*");
       expect(demo.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(demo.dependencies?.["@effect/atom-react"]).toBe("catalog:");
       expect(demo.dependencies?.effect).toBe("catalog:");
@@ -1750,7 +1749,7 @@ esac
     }),
   );
 
-  it.effect("resolves the demo and its transitive framework dependencies from npm", () =>
+  it.effect("resolves the Alchemy demo preview to one coherent workspace framework", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const pending = [`${repositoryRoot}/examples/travel-planner/package.json`];
@@ -1765,17 +1764,19 @@ esac
         const resolve = createRequire(manifestPath).resolve;
 
         for (const [name, version] of Object.entries(manifest.dependencies ?? {})) {
-          if (!name.startsWith("@effect-agent/")) continue;
-          expect(version).toMatch(/^\d+\.\d+\.\d+-beta\.\d+$/);
+          if (name !== "effect-agent" && !name.startsWith("@effect-agent/")) continue;
+          // The unreleased Alchemy host and its application must share service identities
+          // and storage contracts. Restore the published-consumer check when it is released.
+          expect(version).toBe("workspace:*");
           const entry = resolve(name);
+          const directory = name.replace(/^@effect-agent\//, "");
+          const packageRoot = path.join(repositoryRoot, "packages", directory);
 
-          expect(entry).toContain("/node_modules/");
-          expect(entry).toMatch(/\/dist\/index\.mjs$/);
-          const dependencyPath = path.resolve(path.dirname(entry), "../package.json");
+          expect(entry).toBe(path.join(packageRoot, "src", "index.ts"));
+          const dependencyPath = path.join(packageRoot, "package.json");
           const dependency = yield* readManifest(dependencyPath);
 
           expect(dependency.name).toBe(name);
-          expect(dependency.version).toBe(version);
           pending.push(dependencyPath);
         }
       }

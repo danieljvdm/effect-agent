@@ -12,6 +12,7 @@ import { OpenAiConnection } from "../src/credential-domain.ts";
 import type { PlannerError } from "../src/domain.ts";
 import { PlannerSnapshot } from "../src/domain.ts";
 import type { CredentialStore } from "../src/server/credentials.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 import { ownerEmail } from "./fixtures/identity.ts";
 
 const token = "preference-test-token";
@@ -65,6 +66,7 @@ const makeRuntime = () =>
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/credentials-worker.ts")],
     bundle: true,
     write: false,

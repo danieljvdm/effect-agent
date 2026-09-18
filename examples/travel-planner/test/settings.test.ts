@@ -11,6 +11,7 @@ import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
 import type { PlannerError } from "../src/domain.ts";
 import { PlannerSettings, PlannerSnapshot, defaultPlannerSettings } from "../src/domain.ts";
 import type { PlannerSettingsStore } from "../src/server/settings.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 import { ownerEmail } from "./fixtures/identity.ts";
 
 const token = "preference-test-token";
@@ -46,6 +47,7 @@ const makeRuntime = () =>
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/settings-worker.ts")],
     bundle: true,
     write: false,

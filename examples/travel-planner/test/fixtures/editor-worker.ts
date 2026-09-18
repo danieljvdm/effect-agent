@@ -3,7 +3,7 @@ import { WorkflowEntrypoint } from "cloudflare:workers";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { ThreadId } from "effect-agent/identifiers";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { DurableObject, WorkerEnvironment } from "effect-cf";
+import { WorkerEnvironment } from "effect-cf";
 import {
   AiError,
   LanguageModel,
@@ -344,9 +344,8 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
     FixtureSource,
   ),
   { ownershipLeaseDuration: 3_000, leaseRenewalInterval: 500 },
-) {
-  fetch(_request: Request): Promise<Response> {
-    return this[DurableObject.RunSymbol](
+  {
+    fixtureRequest: (_request: Request) =>
       Effect.gen(function* () {
         const identity = yield* ThreadObjectIdentity;
         const store = yield* ThreadStore;
@@ -359,9 +358,8 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
           { headers: { "content-type": "application/json" } },
         );
       }),
-    );
-  }
-}
+  },
+) {}
 
 /** Builds have their own suite; this fixture only acknowledges Workflow admission. */
 export class FixtureBuild extends WorkflowEntrypoint {
@@ -371,7 +369,14 @@ export class FixtureBuild extends WorkflowEntrypoint {
 }
 
 export default {
-  async fetch(request: Request, env: Cloudflare.Env & { readonly PLANNER_TOKEN?: string }) {
+  async fetch(
+    request: Request,
+    env: Omit<Cloudflare.Env, "ACCOUNT_THREADS"> & {
+      readonly PLANNER_TOKEN?: string;
+      readonly ACCOUNT_THREADS: DurableObjectNamespace<TravelPlannerThread>;
+    },
+    ctx: ExecutionContext,
+  ) {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/__editor/")) {
@@ -391,9 +396,9 @@ export default {
         return Response.json({ entered: (await bucket.head(`${key}/entered`)) !== null });
       }
       if (url.pathname === "/__editor/journal") {
-        const response = await env.ACCOUNT_THREADS.getByName(
+        using response = await env.ACCOUNT_THREADS.getByName(
           url.searchParams.get("thread") ?? "",
-        ).fetch(request);
+        ).fixtureRequest(request);
 
         return new Response(await response.arrayBuffer(), response);
       }
@@ -406,6 +411,6 @@ export default {
       }
     }
 
-    return fixtureWorker.fetch(request, env);
+    return fixtureWorker.fetch(request, env, ctx);
   },
 };

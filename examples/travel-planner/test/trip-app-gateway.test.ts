@@ -10,6 +10,7 @@ import { type PlannerError, type TripApp, TripAppData } from "../src/domain.ts";
 import type { publishTripAppAddress, readTripAppAddress } from "../src/trip-app/addresses.ts";
 import type { AppBuildBucket } from "../src/trip-app/bucket.ts";
 import type { callAppRepository } from "../src/trip-app/remote.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 const app: TripApp = {
   id: "a".repeat(32),
@@ -53,6 +54,7 @@ let runtime: Miniflare;
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     stdin: {
       resolveDir: import.meta.dirname,
       loader: "ts",

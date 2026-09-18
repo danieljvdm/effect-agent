@@ -1,18 +1,22 @@
+import * as ThreadObject from "@effect-agent/platform-alchemy-cloudflare/thread-object";
 import { ThreadMaintenance } from "@effect-agent/platform-cloudflare/alarm";
 import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import {
   CloudflareBrowser,
   type CloudflareBrowserOptions,
 } from "@effect-agent/platform-cloudflare/cloudflare-browser";
-import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import { makeDurableObjectBridge } from "alchemy/Cloudflare/Bridge";
+import { DurableObject as AlchemyDurableObject } from "alchemy/Cloudflare/Workers/DurableObject";
+import { Worker } from "alchemy/Cloudflare/Workers/Worker";
+import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Option, Schema } from "effect";
 import type { Agent } from "effect-agent";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { DefinitionDigestInput } from "effect-agent/records";
 import { SubmissionLedger, SubmissionLookupById } from "effect-agent/submission-ledger";
-import { CloudflareTracer, DurableObject, WorkerEnvironment } from "effect-cf";
+import { WorkerEnvironment } from "effect-cf";
 import type { Tool } from "effect/unstable/ai";
-import { FetchHttpClient, HttpRouter } from "effect/unstable/http";
+import { FetchHttpClient, HttpRouter, HttpServerResponse } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { TripToolsLive } from "../agent.ts";
@@ -68,6 +72,7 @@ import {
   retryTripAppBuild,
 } from "../trip-app/service.ts";
 import { AppToolsLive } from "../trip-app/tools-live.ts";
+import { plannerEnvironment, runtimeStack } from "./alchemy.ts";
 import { PlannerModel, plannerSnapshot, sendMessage, voiceWork } from "./application.ts";
 import {
   CredentialSource,
@@ -711,118 +716,122 @@ const PlannerLive = Layer.unwrap(
   }),
 );
 
-/** Real durable engine with alarm recovery. Fixtures can supply shorter ownership timings. */
-export const makeTravelPlannerThread = <E>(
+/** Private namespace RPCs; authenticated ingress and source authorization own access. */
+export const plannerRpc = {
+  modelCredential: () =>
+    Effect.flatMap(CredentialStore, (store) => store.sealed).pipe(
+      Effect.flatMap(encodeStoredCredential),
+    ),
+  plannerProgress: () =>
+    Effect.flatMap(ProgressStore, (progress) => progress.read).pipe(
+      Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerProgress))),
+    ),
+  plannerDiagnostics: () =>
+    readDiagnostics.pipe(
+      Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(RecordedDiagnostics))),
+    ),
+  tripRepository: (request: string) => serveTripRepository(request),
+  tripApp: (request: string) => serveAppRepository(request),
+  plannerWorker: (request: string) =>
+    Schema.decodeEffect(Schema.fromJsonString(WorkerLocator))(request).pipe(
+      Effect.flatMap(plannerWorker),
+      Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
+    ),
+  plannerWorkerStatus: (request: string) =>
+    Schema.decodeEffect(Schema.fromJsonString(WorkerStatusRequest))(request).pipe(
+      Effect.flatMap(workerStatus),
+      Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
+    ),
+  plannerState: () =>
+    Effect.gen(function* () {
+      const identity = yield* ThreadObjectIdentity;
+      const snapshot = yield* plannerSnapshot(identity.threadId);
+
+      return yield* Schema.encodeEffect(Schema.fromJsonString(PlannerSnapshot))(snapshot);
+    }),
+  plannerFetch: (request: Request) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const context =
+          yield* Effect.context<Exclude<Layer.Services<typeof RpcHttp>, HttpRouter.HttpRouter>>();
+
+        const web = yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            HttpRouter.toWebHandler(RpcHttp.pipe(Layer.provide(Layer.succeedContext(context))), {
+              disableLogger: true,
+            }),
+          ),
+          (handler) => Effect.promise(() => handler.dispose()),
+        );
+
+        const response = yield* Effect.promise(() => web.handler(request));
+        // Finite RPC responses are consumed before their request-owned runtime is finalized.
+        const body = yield* Effect.promise(() => response.arrayBuffer());
+
+        return new Response(body, { status: response.status, headers: response.headers });
+      }),
+    ),
+};
+
+type ApplicationServices = Layer.Success<typeof PlannerLive> | TripSiteStore | WorkerEnvironment;
+
+type NativeRpc<Handlers> = {
+  [Key in keyof Handlers]: Handlers[Key] extends (
+    ...args: infer Args
+  ) => Effect.Effect<infer Value, infer _Error, infer _Requirements>
+    ? (...args: Args) => Promise<Value>
+    : never;
+};
+
+/** The application RPCs and framework handlers share one Alchemy-owned Object runtime. */
+export const makeTravelPlannerThread = <
+  E,
+  Handlers extends ThreadObject.Handlers<ApplicationServices> = {},
+>(
   sites: Layer.Layer<TripSiteStore, E, WorkerEnvironment>,
   application = PlannerLive,
   ownership: Pick<ThreadObject.Options, "ownershipLeaseDuration" | "leaseRenewalInterval"> = {},
+  handlers?: Handlers,
 ) => {
-  return class extends ThreadObject.make(application.pipe(Layer.provideMerge(sites)), {
-    ...ownership,
-    eventLayer: CloudflareTracer.layer,
-    namespaceBinding: "ACCOUNT_THREADS",
-    deploymentId: "travel-planner-v1",
-    producerPrefix: "travel-planner",
-    wakeScanInterval: 250,
-    settlementPollInterval: 100,
-    maxQueueDepthPerLane: 8,
-    maxInputBytes: 16 * 1024,
-  }) {
-    /** Host-only lookup; no HTTP route exposes ciphertext or decrypted model credentials. */
-    modelCredential(): Promise<string> {
-      return this[DurableObject.RunSymbol](
-        Effect.flatMap(CredentialStore, (store) => store.sealed).pipe(
-          Effect.flatMap(encodeStoredCredential),
-        ),
-      );
-    }
+  const rpc = { ...plannerRpc, ...handlers };
 
-    /** Finite native RPC; UI observation never owns or interrupts durable execution. */
-    plannerProgress(): Promise<string> {
-      return this[DurableObject.RunSymbol](
-        Effect.flatMap(ProgressStore, (progress) => progress.read).pipe(
-          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerProgress))),
-        ),
-      );
-    }
+  class AccountThreads extends AlchemyDurableObject<AccountThreads, ThreadObject.Rpc<typeof rpc>>()(
+    "ACCOUNT_THREADS",
+  ) {}
 
-    /** Private namespace RPC; callers verify worker lineage before reading its diagnostics. */
-    plannerDiagnostics(): Promise<string> {
-      return this[DurableObject.RunSymbol](
-        readDiagnostics.pipe(
-          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(RecordedDiagnostics))),
-        ),
-      );
-    }
+  const live = AccountThreads.make(
+    ThreadObject.make(
+      application.pipe(Layer.provideMerge(sites), Layer.provideMerge(plannerEnvironment)),
+      {
+        ...ownership,
+        namespaceBinding: "ACCOUNT_THREADS",
+        deploymentId: "travel-planner-v1",
+        producerPrefix: "travel-planner",
+        wakeScanInterval: 250,
+        settlementPollInterval: 100,
+        maxQueueDepthPerLane: 8,
+        maxInputBytes: 16 * 1024,
+      },
+      rpc,
+    ),
+  );
 
-    /** Private namespace RPC; callers cannot access it through the public HTTP API. */
-    tripRepository(request: string): Promise<string> {
-      return this[DurableObject.RunSymbol](serveTripRepository(request));
-    }
+  const entrypoint = Worker(
+    "PlannerObjects",
+    { main: import.meta.url },
+    Effect.gen(function* () {
+      yield* AccountThreads;
 
-    tripApp(request: string): Promise<string> {
-      return this[DurableObject.RunSymbol](serveAppRepository(request));
-    }
+      return { fetch: Effect.succeed(HttpServerResponse.empty({ status: 404 })) };
+    }).pipe(Effect.provide(live)),
+  );
 
-    /** Source authorization happens inside this conversation object, before calling any child. */
-    plannerWorker(request: string): Promise<string> {
-      return this[DurableObject.RunSymbol](
-        Schema.decodeEffect(Schema.fromJsonString(WorkerLocator))(request).pipe(
-          Effect.flatMap(plannerWorker),
-          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
-        ),
-      );
-    }
+  // Alchemy's public bridge emits a native class; retain the inferred RPC surface here.
+  const Native: new (
+    ctx: DurableObjectState,
+    env: Cloudflare.Env,
+  ) => DurableObject<Cloudflare.Env> & NativeRpc<ThreadObject.Rpc<typeof plannerRpc & Handlers>> =
+    makeDurableObjectBridge(DurableObject, { entrypoint, stack: runtimeStack })("ACCOUNT_THREADS");
 
-    /** Private namespace only; returns a compact view with a bounded local history read. */
-    plannerWorkerStatus(request: string): Promise<string> {
-      return this[DurableObject.RunSymbol](
-        Schema.decodeEffect(Schema.fromJsonString(WorkerStatusRequest))(request).pipe(
-          Effect.flatMap(workerStatus),
-          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
-        ),
-      );
-    }
-
-    plannerState(): Promise<string> {
-      return this[DurableObject.RunSymbol](
-        Effect.gen(function* () {
-          const identity = yield* ThreadObjectIdentity;
-          const snapshot = yield* plannerSnapshot(identity.threadId);
-
-          return yield* Schema.encodeEffect(Schema.fromJsonString(PlannerSnapshot))(snapshot);
-        }),
-      );
-    }
-
-    /** Native RPC is private to the authenticated Worker ingress. */
-    plannerFetch(request: Request): Promise<Response> {
-      return this[DurableObject.RunSymbol](
-        Effect.scoped(
-          Effect.gen(function* () {
-            const context =
-              yield* Effect.context<
-                Exclude<Layer.Services<typeof RpcHttp>, HttpRouter.HttpRouter>
-              >();
-
-            const web = yield* Effect.acquireRelease(
-              Effect.sync(() =>
-                HttpRouter.toWebHandler(
-                  RpcHttp.pipe(Layer.provide(Layer.succeedContext(context))),
-                  { disableLogger: true },
-                ),
-              ),
-              (handler) => Effect.promise(() => handler.dispose()),
-            );
-
-            const response = yield* Effect.promise(() => web.handler(request));
-            // Finite RPC responses are consumed before their request-owned runtime is finalized.
-            const body = yield* Effect.promise(() => response.arrayBuffer());
-
-            return new Response(body, { status: response.status, headers: response.headers });
-          }),
-        ),
-      );
-    }
-  };
+  return Native;
 };

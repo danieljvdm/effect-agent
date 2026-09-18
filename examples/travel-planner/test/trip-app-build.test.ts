@@ -20,6 +20,7 @@ import type {
 } from "../src/trip-app/build.ts";
 import type { AppRepository } from "../src/trip-app/repository.ts";
 import type { AppSourceStore } from "../src/trip-app/source.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 const request: AppBuildRequest = {
   owner: "test-owner",
@@ -49,6 +50,7 @@ let runtime: Miniflare;
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     stdin: {
       resolveDir: import.meta.dirname,
       loader: "ts",

@@ -16,6 +16,7 @@ import type { AppBuildBucket } from "../src/trip-app/bucket.ts";
 import type { AppRepository } from "../src/trip-app/repository.ts";
 import type { createTripApp } from "../src/trip-app/service.ts";
 import type { AppSourceStore } from "../src/trip-app/source.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 let runtime: Miniflare;
 let directory: string;
@@ -39,6 +40,7 @@ beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "trip-app-service-"));
 
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     stdin: {
       resolveDir: import.meta.dirname,
       loader: "ts",

@@ -5,6 +5,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
+  define: { "globalThis.__ALCHEMY_RUNTIME__": "true" },
   plugins: process.env.VITEST
     ? [react()]
     : [

@@ -15,6 +15,7 @@ import { GithubRejectionReason } from "../src/auth/oauth-diagnostics";
 import type { authenticate } from "../src/auth/worker";
 import type { PlannerSettings } from "../src/domain";
 import { defaultPlannerSettings } from "../src/domain";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 
 let mf: Miniflare;
 let directory: string;
@@ -26,6 +27,7 @@ const githubIssuer = "https://github.com/login/oauth";
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/auth-worker.ts")],
     bundle: true,
     write: false,

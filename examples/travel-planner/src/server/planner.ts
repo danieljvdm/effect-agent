@@ -364,6 +364,19 @@ export const planner = Agent.make(researchCoordinatorId, {
         Effect.map(
           (instructions) =>
             instructions
+              .replace(
+                "Start tools return durable acceptance, not findings.",
+                "Start and follow-up tools return a durable delivery status, not findings. Pending means retained for retry, with no destination admission yet; accepted includes a destination receipt, and processed includes its settlement. Refused is a definite rejection; parked requires explicit recovery. Describe pending work as queued, never running. Keep the returned message reference and do not resend the same request to overcome capacity.",
+              )
+              .replace(
+                "Once all requested work is accepted",
+                "Once all requested work is durably retained",
+              )
+              .replace(
+                "Do not promise work that you have not actually started; report a failed admission as a real blocker.",
+                "Report the returned delivery state honestly; refused or parked work is a real blocker. If its status is needed later, inspect the existing delivery by its message reference.",
+              )
+              .replace("finish after acceptance", "finish after durable retention")
               .replace("ResearchScoutProgress is", "WorkerUpdate is")
               .replace(
                 "ResearchScoutReport is a completed pass.",

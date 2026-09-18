@@ -1,13 +1,20 @@
 import type { Sandbox } from "@cloudflare/sandbox";
 import start from "@tanstack/react-start/server-entry";
+import { makeWorkerBridge } from "alchemy/Cloudflare/Bridge";
+import { Request as WorkerRequest } from "alchemy/Cloudflare/Workers/Request";
+import { Worker } from "alchemy/Cloudflare/Workers/Worker";
+import { WorkerExecutionContext } from "alchemy/Cloudflare/Workers/WorkerRuntime";
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { Effect, Layer, Schema } from "effect";
-import { CloudflareTracer, Worker, WorkerEnvironment } from "effect-cf";
+import { WorkerEnvironment } from "effect-cf";
+import { HttpServerResponse } from "effect/unstable/http";
 
 import { artifactsLayer } from "./artifacts";
 import { captureCallbackScript } from "./auth/callback";
 import type { AuthConfiguration } from "./auth/server";
 import { authenticate, type PlannerAuth } from "./auth/worker";
 import { Trip, TripId, TripSiteStore, type AppBuildRequest } from "./domain";
+import { plannerEnvironment, runtimeStack } from "./server/alchemy.ts";
 import { makeTravelPlannerThread } from "./server/cloudflare";
 import { credentialSourceLayer, type CredentialEnvironment } from "./server/credentials";
 import { serveProgress } from "./server/progress-http";
@@ -296,20 +303,27 @@ export const handleRequest = (verify = authenticate) =>
   });
 
 // Test fixtures may substitute session verification; production always uses authenticate.
-export const makeWorker = (verify = authenticate) => ({
-  fetch: (request: Request, env: Cloudflare.Env, ctx?: ExecutionContext) =>
-    Effect.runPromise(
-      handleRequest(verify)(request, env, ctx).pipe(Effect.provideService(WorkerEnvironment, env)),
-    ),
-});
+export const makeWorker = (verify = authenticate) => {
+  const entrypoint = Worker(
+    "PlannerIngress",
+    { main: import.meta.url },
+    Effect.succeed({
+      fetch: Effect.gen(function* () {
+        const request = yield* WorkerRequest;
+        const env = yield* WorkerEnvironment;
+        const ctx = yield* WorkerExecutionContext;
+        const response = yield* handleRequest(verify)(request, env, ctx.raw as ExecutionContext);
 
-export default Worker.make(Layer.empty, {
-  eventLayer: CloudflareTracer.layer,
-  fetch: Effect.gen(function* () {
-    const request = yield* Worker.NativeRequest;
-    const env = yield* WorkerEnvironment;
-    const ctx = yield* Worker.ExecutionContext;
+        return HttpServerResponse.fromWeb(response);
+      }).pipe(Effect.provide(plannerEnvironment), Effect.orDie),
+    }),
+  );
 
-    return yield* handleRequest()(request, env, ctx);
-  }),
-});
+  // The public bridge creates fetch dynamically; keep that native boundary explicit.
+  return makeWorkerBridge(WorkerEntrypoint, { entrypoint, stack: runtimeStack }) as unknown as new (
+    ctx: ExecutionContext,
+    env: Cloudflare.Env,
+  ) => { fetch(request: Request): Promise<Response> };
+};
+
+export default makeWorker();

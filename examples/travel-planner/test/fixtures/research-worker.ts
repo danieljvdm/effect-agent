@@ -6,7 +6,7 @@ import { IdempotencyKey, Principal } from "effect-agent/receipt";
 import { SubmissionLedger } from "effect-agent/submission-ledger";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
-import { DurableObject, WorkerEnvironment } from "effect-cf";
+import { WorkerEnvironment } from "effect-cf";
 import {
   LanguageModel,
   Model,
@@ -191,7 +191,14 @@ const model = Model.make(
                 ["Live progress", "Report denial"].includes(scout.input.title) &&
                 tools.some((tool) => tool.name === updateTool) &&
                 !results(prompt, scout.index).some((result) => result.name === updateTool)
-              )
+              ) {
+                if (scout.input.title === "Report denial")
+                  while (
+                    (yield* Effect.promise(() => bucket.head("gate/Report denial update/open"))) ===
+                    null
+                  )
+                    yield* Effect.sleep("25 millis");
+
                 return Stream.fromIterable(
                   call(
                     updateTool,
@@ -199,6 +206,7 @@ const model = Model.make(
                     `milestone-${scout.index}`,
                   ),
                 );
+              }
 
               yield* Effect.promise(() => bucket.put(`${key}/entered`, "yes"));
               while ((yield* Effect.promise(() => bucket.head(`${key}/open`))) === null)
@@ -441,13 +449,31 @@ const model = Model.make(
 
               return Stream.fromIterable(finish("Six scouts and the editor are working."));
             }
-            if (parent.input.message === "overflow expanded research")
+            if (parent.input.message === "overflow expanded research") {
+              const started = current.find((result) => result.name === "research_scout_start");
+
+              if (started) {
+                const retained = yield* Schema.decodeUnknownEffect(
+                  UpdatingResearchScoutActions.tools.research_scout_start.successSchema,
+                )(started.result).pipe(Effect.orDie);
+
+                if (
+                  retained.delivery.status !== "refused" ||
+                  retained.delivery.reason !== "worker-capacity" ||
+                  retained.delivery.receipt !== null
+                )
+                  return yield* Effect.die("Overflow must be refused for worker capacity");
+
+                return Stream.fromIterable(finish("Research capacity is full."));
+              }
+
               return Stream.fromIterable(
                 call("research_scout_start", {
                   title: "Overflow",
                   message: "Must exceed capacity",
                 }),
               );
+            }
 
             if (parent.input.message === "start research") {
               const started = current.filter(
@@ -601,9 +627,8 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
   sites,
   plannerApplication(model, "research-v1", "Research fixture", researchBrowser),
   { ownershipLeaseDuration: 3_000, leaseRenewalInterval: 500 },
-) {
-  plannerWorker(request: string): Promise<string> {
-    return this[DurableObject.RunSymbol](
+  {
+    plannerWorker: (request: string) =>
       withReadBudget(
         Schema.decodeEffect(Schema.fromJsonString(WorkerLocator))(request).pipe(
           Effect.flatMap(plannerWorker),
@@ -611,10 +636,7 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
         ),
         1,
       ),
-    );
-  }
-  plannerWorkerStatus(request: string): Promise<string> {
-    return this[DurableObject.RunSymbol](
+    plannerWorkerStatus: (request: string) =>
       withReadBudget(
         Schema.decodeEffect(Schema.fromJsonString(WorkerStatusRequest))(request).pipe(
           Effect.flatMap(workerStatus),
@@ -622,10 +644,7 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
         ),
         100,
       ),
-    );
-  }
-  fetch(request: Request): Promise<Response> {
-    return this[DurableObject.RunSymbol](
+    fixtureRequest: (request: Request) =>
       Effect.gen(function* () {
         const identity = yield* ThreadObjectIdentity;
         const store = yield* ThreadStore;
@@ -696,12 +715,18 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
           ),
         );
       }),
-    );
-  }
-}
+  },
+) {}
 
 export default {
-  async fetch(request: Request, env: Cloudflare.Env & { readonly PLANNER_TOKEN?: string }) {
+  async fetch(
+    request: Request,
+    env: Omit<Cloudflare.Env, "ACCOUNT_THREADS"> & {
+      readonly PLANNER_TOKEN?: string;
+      readonly ACCOUNT_THREADS: DurableObjectNamespace<TravelPlannerThread>;
+    },
+    ctx: ExecutionContext,
+  ) {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/__research/")) {
@@ -714,16 +739,21 @@ export default {
         url.pathname === "/__research/seed" ||
         url.pathname === "/__research/seed-research" ||
         url.pathname === "/__research/seed-progress"
-      )
-        return env.ACCOUNT_THREADS.getByName(
+      ) {
+        using response = await env.ACCOUNT_THREADS.getByName(
           ownerOfThread(url.searchParams.get("thread") ?? ""),
-        ).fetch(request);
+        ).fixtureRequest(request);
+
+        return new Response(await response.arrayBuffer(), response);
+      }
       if (url.pathname === "/__research/journal") {
         const threadId = url.searchParams.get("thread") ?? "";
 
-        return env.ACCOUNT_THREADS.getByName(
+        using response = await env.ACCOUNT_THREADS.getByName(
           threadId.startsWith("worker:") ? threadId : ownerOfThread(threadId),
-        ).fetch(request);
+        ).fixtureRequest(request);
+
+        return new Response(await response.arrayBuffer(), response);
       }
       const bucket = env.APP_BUILDS;
 
@@ -743,6 +773,6 @@ export default {
       );
     }
 
-    return fixtureWorker.fetch(request, env);
+    return fixtureWorker.fetch(request, env, ctx);
   },
 };

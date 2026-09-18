@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import { SettlementFailureDiagnostic } from "effect-agent/records";
 import { ThreadExport } from "effect-agent/thread-store";
-import { WorkerUpdate, WorkerCompletion } from "effect-agent/worker";
+import { WorkerUpdate, WorkerCompletion, WorkerStarted } from "effect-agent/worker";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vite-plus/test";
@@ -26,6 +26,7 @@ import {
   ScoutProgressInput,
   ScoutProgress,
 } from "../src/research/contracts.ts";
+import { alchemyRuntimeBundle } from "./fixtures/alchemy-bundle.ts";
 import { fixtureOwner } from "./fixtures/identity.ts";
 
 const token = "research-worker-fixture";
@@ -61,6 +62,7 @@ const makeRuntime = () =>
 
 beforeAll(async () => {
   const bundle = await build({
+    ...alchemyRuntimeBundle,
     entryPoints: [join(import.meta.dirname, "fixtures/research-worker.ts")],
     bundle: true,
     write: false,
@@ -151,13 +153,18 @@ const snapshot = async (email?: string) => {
   };
 };
 
-const fixture = async (path: string, parameters: Record<string, string>, method = "GET") =>
-  (
-    await runtime.dispatchFetch(
-      `http://planner/__research/${path}?${new URLSearchParams(parameters)}`,
-      { method, headers: { authorization: `Bearer ${token}` } },
-    )
-  ).json();
+const fixture = async (path: string, parameters: Record<string, string>, method = "GET") => {
+  const response = await runtime.dispatchFetch(
+    `http://planner/__research/${path}?${new URLSearchParams(parameters)}`,
+    { method, headers: { authorization: `Bearer ${token}` } },
+  );
+
+  const body = await response.text();
+
+  if (!response.ok) throw new Error(body);
+
+  return JSON.parse(body);
+};
 
 const send = (message: string, email?: string) =>
   rpc(
@@ -621,25 +628,51 @@ it("runs six scouts and an editor beyond the old budgets, preserves them across 
     (state) => state.pending === 0,
   );
 
-  const rejected = Schema.decodeUnknownSync(ThreadExport)(
+  const retained = Schema.decodeUnknownSync(ThreadExport)(
     await fixture("journal", { thread: expandedThread }),
   );
 
-  const failure = rejected.records
+  const result = retained.records
     .flatMap(({ record }) =>
-      record.payload._tag === "SubmissionSettled" && record.payload.outcome === "failed"
-        ? [record.payload.result]
+      record.payload._tag === "ToolCallSettled" &&
+      record.payload.toolName === "research_scout_start" &&
+      !record.payload.isFailure
+        ? [record]
         : [],
     )
     .at(-1);
 
-  expect(failure).toMatchObject({ errorTag: "WorkerError" });
+  if (result?.payload._tag !== "ToolCallSettled") throw new Error("Missing overflow result");
+  const overflow = Schema.decodeUnknownSync(WorkerStarted)(result.payload.result);
+
+  expect(overflow.delivery).toMatchObject({
+    status: "refused",
+    reason: "worker-capacity",
+    receipt: null,
+  });
+  expect((await snapshot(email)).messages.at(-1)?.text).toBe("Research capacity is full.");
+
+  const retainedResult = async () => {
+    const journal = Schema.decodeUnknownSync(ThreadExport)(
+      await fixture("journal", { thread: expandedThread }),
+    );
+
+    const settled = journal.records.find(({ record }) => record.recordId === result.recordId)
+      ?.record.payload;
+
+    if (settled?._tag !== "ToolCallSettled") throw new Error("Lost overflow result");
+
+    return Schema.decodeUnknownSync(WorkerStarted)(settled.result);
+  };
+
+  expect(await fixture("gate", { name: "Overflow" })).toEqual({ entered: false });
   expect((await snapshot(email)).scouts?.filter((scout) => scout.state === "active")).toHaveLength(
     6,
   );
 
   await runtime.dispose();
   runtime = makeRuntime();
+  expect(await retainedResult()).toEqual(overflow);
   for (const name of [
     "Expanded 1",
     "Expanded 2",
@@ -704,6 +737,8 @@ it("runs six scouts and an editor beyond the old budgets, preserves them across 
 
   expect(completions.map(({ workerId }) => workerId).sort()).toEqual([...workers].sort());
   expect(completions.every(({ outcome }) => outcome === "completed")).toBe(true);
+  expect(await retainedResult()).toEqual(overflow);
+  expect(await fixture("gate", { name: "Overflow" })).toEqual({ entered: false });
   for (const id of workers) {
     const journal = Schema.decodeUnknownSync(ThreadExport)(
       await fixture("journal", { thread: id }),
@@ -739,6 +774,13 @@ it("does not treat the retained request on a worker update or completion as fres
   const thread = `${fixtureOwner(email)}--research`;
 
   await send("start report denial", email);
+  // Keep this scenario about later report Runs. The authorization matrix separately
+  // proves that a report joined into the original user Run also loses authority.
+  await until(
+    () => snapshot(email),
+    (state) => state.pending === 0 && state.messages.at(-1)?.text === "Research started.",
+  );
+  await fixture("gate", { name: "Report denial update" }, "POST");
 
   const active = await until(
     () => snapshot(email),

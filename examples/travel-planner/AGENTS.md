@@ -14,6 +14,11 @@ API that could be safer, simpler, or harder to misuse.
   links, source aliases, or local library patches to make the demo pass. If a
   required fix is unreleased, identify the library PR and wait for its release
   before upgrading or deploying the demo. Keep application policy here.
+- The current Alchemy runtime preview is a deliberate draft-only exception:
+  consume the coupled Effect Agent packages together through `workspace:*`
+  while the new host is unreleased, to exercise the real runtime locally.
+  Restore exact published pins before release deployment. This exception does
+  not apply to unrelated fixes or authorize deployment.
 - Flag usability issues even when existing configuration fixes the app. Do not
   change public library semantics just to accommodate this example without
   considering other consumers.

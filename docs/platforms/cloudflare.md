@@ -206,6 +206,14 @@ inside Alchemy's constructor gate and Scope. Each RPC and alarm uses its own eve
 Put resources needing timely cleanup and observability in `options.eventLayer`; eviction still cannot guarantee
 incarnation finalizers. See the [complete Alchemy setup](https://github.com/danieljvdm/effect-agent/blob/main/examples/alchemy-cloudflare/alchemy.run.ts).
 
+Pass custom Effect RPC handlers as the third argument of
+`ThreadObject.make(RuntimeLive, options, handlers)`, and use
+`ThreadObject.Rpc<typeof handlers>` in the Durable Object declaration. These methods share
+the initialized application services and each call's event Scope and event Layer. They cannot
+replace framework operations or native lifecycle methods. Encode expected failures in the
+application's Schema-defined response when callers need a stable error protocol; uncaught
+handler failures reject the native RPC.
+
 The package also exports `MemoryObject.make`, `Scheduling.make`, and `Subscriptions.make`
 for Alchemy declarations. Supply the same explicit memory, schedule, and subscription
 authorizers as the existing hosts. The application authenticates callers and keeps bindings
