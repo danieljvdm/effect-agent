@@ -1,0 +1,1296 @@
+diff --git a/package.json b/package.json
+--- a/package.json
++++ b/package.json
+@@ -187,6 +187,12 @@
+       "bun": "./src/Cloudflare/*/index.ts",
+       "worker": "./src/Cloudflare/*/index.ts",
+       "import": "./lib/Cloudflare/*/index.js"
++    },
++    "./Cloudflare/Workers/*": {
++      "types": "./lib/Cloudflare/Workers/*.d.ts",
++      "bun": "./src/Cloudflare/Workers/*.ts",
++      "worker": "./src/Cloudflare/Workers/*.ts",
++      "import": "./lib/Cloudflare/Workers/*.js"
+     },
+     "./Drizzle": {
+       "types": "./lib/Drizzle/index.d.ts",
+@@ -615,4 +621,4 @@
+     "test": "alchemy-test --exclude test/Railway",
+     "nuke": "cd ../../ && bun nuke"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/src/Cloudflare/Workers/DurableObjectBridge.ts b/src/Cloudflare/Workers/DurableObjectBridge.ts
+--- a/src/Cloudflare/Workers/DurableObjectBridge.ts
++++ b/src/Cloudflare/Workers/DurableObjectBridge.ts
+@@ -1,23 +1,16 @@
+ import type * as cf from "@cloudflare/workers-types";
+ import type { DurableObject as DurableObjectClass } from "cloudflare:workers";
+-
+ import * as Cause from "effect/Cause";
++import * as Context from "effect/Context";
+ import * as Effect from "effect/Effect";
+ import * as Exit from "effect/Exit";
+ import * as Layer from "effect/Layer";
+ import * as Scope from "effect/Scope";
+-import * as Stream from "effect/Stream";
+-
+ import { HttpServerResponse } from "effect/unstable/http";
++
+ import { buildEventTelemetry } from "../../TelemetryRuntime.ts";
+-import type {
+-  DurableObjectExport,
+-  DurableObjectShape,
+-} from "./DurableObject.ts";
+-import {
+-  DurableObjectState,
+-  fromDurableObjectState,
+-} from "./DurableObjectState.ts";
++import type { DurableObjectExport, DurableObjectShape } from "./DurableObject.ts";
++import { DurableObjectState, fromDurableObjectState } from "./DurableObjectState.ts";
+ import { isScopeEjected, makeRequestEffect } from "./HttpServer.ts";
+ import { fromWebSocket } from "./WebSocket.ts";
+ import { getWorkerExport, handleRpcExit } from "./WorkerBridge.ts";
+@@ -30,13 +23,13 @@
+  * implementation lives in real TypeScript instead of a generated string template.
+  */
+ export const makeDurableObjectBridge =
+-  (
++  <Requirements>(
+     DurableObject: typeof DurableObjectClass,
+     {
+       entrypoint,
+       stack,
+     }: {
+-      entrypoint: Effect.Effect<Record<string, any>>;
++      entrypoint: Effect.Effect<Record<string, any>, never, Requirements>;
+       stack: {
+         name: string;
+         stage: string;
+@@ -61,93 +54,97 @@
+         super(state as any, env);
+         this.#state = state;
+ 
++        // Constructors own instance services, not the shared isolate's scope
++        // or memo map. There is no workerd eviction finalizer: disposable
++        // resources still belong in the per-call scope below.
++        const instanceScope = Scope.makeUnsafe();
++        const instanceMemoMap = Layer.makeMemoMapUnsafe();
++
+         this.#instance = state.blockConcurrencyWhile(() =>
+-          build((promise) => void (state as any).waitUntil?.(promise)).then(
+-            ({ context, export: exported, telemetry }) => {
++          build((promise) => void (state as any).waitUntil?.(promise))
++            .then(({ context, export: exported, telemetry }) => {
+               const { constructor, services } = exported;
+-              const doContext = Layer.succeed(
+-                DurableObjectState,
+-                fromDurableObjectState(this.#state),
+-              ).pipe(
+-                Layer.provideMerge(Layer.succeedContext(services)),
+-                Layer.provideMerge(Layer.succeedContext(context)),
++              const doContext = Context.merge(context, services).pipe(
++                Context.add(DurableObjectState, fromDurableObjectState(this.#state)),
++                Context.add(Scope.Scope, instanceScope),
++                Context.add(Layer.CurrentMemoMap, instanceMemoMap),
+               );
+               return constructor.pipe(
+                 Effect.provide(doContext),
+-                Effect.flatMap((instance) =>
+-                  instance.pipe(Effect.provide(doContext)),
++                Effect.flatMap((instance) => instance.pipe(Effect.provide(doContext))),
++                Effect.map((instance) => {
++                  // Native RPC dispatch only exposes prototype methods. Install
++                  // dispatchers while the initialization gate is still closed;
++                  // resolve each call against its own incarnation, never the
++                  // first instance that introduced the method.
++                  for (const name of Object.keys(instance)) {
++                    if (name in this) continue;
++                    Object.defineProperty(DurableObjectBridge.prototype, name, {
++                      configurable: true,
++                      value: function (this: DurableObjectBridge, ...args: unknown[]) {
++                        return this.#callRpc(name, args);
++                      },
++                    });
++                  }
++                  return { instance, services, context, telemetry };
++                }),
++                Effect.onExit((exit) =>
++                  Exit.isFailure(exit) ? Scope.close(instanceScope, exit) : Effect.void,
+                 ),
+-                Effect.map((instance) => ({
+-                  instance,
+-                  services,
+-                  context,
+-                  telemetry,
+-                })),
+                 Effect.runPromise,
+               );
+-            },
+-          ),
++            })
++            .catch(async (error) => {
++              await Effect.runPromise(Scope.close(instanceScope, Exit.die(error)));
++              throw error;
++            }),
+         );
+ 
+         return new Proxy(this, {
+           get: (target, prop) => {
+-            const bind = (f: any) =>
+-              typeof f === "function" ? f.bind(target) : f;
++            const bind = (f: any) => (typeof f === "function" ? f.bind(target) : f);
+             if (typeof prop !== "string") return bind((target as any)[prop]);
+             if (prop in target) return bind((target as any)[prop]);
+-            return async (...args: any[]) =>
+-              this.#execute((instance) => {
+-                const method = instance[prop as keyof DurableObjectShape];
+-                if (typeof method === "function") {
+-                  const result = (method as any)(...args);
+-                  // Effects (including nested-RPC values built by
+-                  // `asEffectOrStream`, which are Effects *branded* as Streams)
+-                  // must be run as effects — their resolved value may itself be
+-                  // a `Stream`, which `handleRpcExit` then encodes. Only a
+-                  // *genuine* `Stream` (not an Effect) is lifted into the
+-                  // success channel so `handleRpcExit` encodes it directly.
+-                  return Effect.isEffect(result)
+-                    ? result
+-                    : Stream.isStream(result)
+-                      ? Effect.succeed(result)
+-                      : result;
+-                } else if (Effect.isEffect(method)) {
+-                  return method;
+-                } else {
+-                  return Effect.succeed(method);
+-                }
+-              }, handleRpcExit);
++            return (...args: unknown[]) => this.#callRpc(prop, args);
+           },
+         });
+       }
+ 
++      #callRpc(name: string, args: unknown[]) {
++        return this.#execute((instance) => {
++          // Prototype keys are shared across incarnations; an optional method
++          // introduced by another object must not expose a missing/inherited member.
++          if (!Object.hasOwn(instance, name)) {
++            return Effect.die(new Error(`Method "${name}" not found on Durable Object`));
++          }
++          const member = instance[name as keyof DurableObjectShape];
++          const result = typeof member === "function"
++            ? (member as (...args: unknown[]) => unknown)(...args)
++            : member;
++          // Effect RPC proxies may also be branded as Streams: prefer Effect.
++          return Effect.isEffect(result) ? result : Effect.succeed(result);
++        }, handleRpcExit);
++      }
++
+       async #execute(
+         fn: (instance: DurableObjectShape) => Effect.Effect<any, any, any>,
+-        onExit?: (
+-          exit: Exit.Exit<any, any>,
+-          scope: Scope.Closeable,
+-        ) => Promise<any>,
++        onExit?: (exit: Exit.Exit<any, any>, scope: Scope.Closeable) => Promise<any>,
+       ) {
+         const scope = Scope.makeUnsafe();
+ 
+         const { instance, services, context, telemetry } = await this.#instance;
+ 
+-        return fn(instance)
++        return Effect.suspend(() => fn(instance))
+           .pipe(
+             Effect.provide(
+               Layer.mergeAll(
+-                Layer.succeed(
+-                  DurableObjectState,
+-                  fromDurableObjectState(this.#state),
+-                ),
++                Layer.succeed(DurableObjectState, fromDurableObjectState(this.#state)),
+                 Layer.succeed(Scope.Scope, scope),
+                 // The configured telemetry exporters, attached to the *call*
+                 // scope by `buildEventTelemetry` so buffered telemetry
+                 // flushes when the scope closes into `waitUntil` below (the
+                 // isolate scope never finalizes on workerd).
+-                Layer.effectContext(
+-                  buildEventTelemetry(context, scope, telemetry()),
+-                ),
++                Layer.effectContext(buildEventTelemetry(context, scope, telemetry())),
+               ).pipe(
+                 Layer.provideMerge(Layer.succeedContext(services)),
+                 Layer.provideMerge(Layer.succeedContext(context)),
+@@ -195,33 +192,21 @@
+       async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+         return this.#execute(
+           (instance) =>
+-            instance.webSocketMessage?.(fromWebSocket(ws as any), message) ??
+-            Effect.void,
+-        );
+-      }
+-
+-      async webSocketClose(
+-        ws: WebSocket,
+-        code: number,
+-        reason: string,
+-        wasClean: boolean,
+-      ) {
++            instance.webSocketMessage?.(fromWebSocket(ws as any), message) ?? Effect.void,
++        );
++      }
++
++      async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
+         return this.#execute(
+           (instance) =>
+-            instance.webSocketClose?.(
+-              fromWebSocket(ws as any),
+-              code,
+-              reason,
+-              wasClean,
+-            ) ?? Effect.void,
++            instance.webSocketClose?.(fromWebSocket(ws as any), code, reason, wasClean) ??
++            Effect.void,
+         );
+       }
+ 
+       async webSocketError(ws: WebSocket, error: unknown) {
+         return this.#execute(
+-          (instance) =>
+-            instance.webSocketError?.(fromWebSocket(ws as any), error) ??
+-            Effect.void,
++          (instance) => instance.webSocketError?.(fromWebSocket(ws as any), error) ?? Effect.void,
+         );
+       }
+     } as any;
+diff --git a/lib/Cloudflare/Workers/DurableObjectBridge.js b/lib/Cloudflare/Workers/DurableObjectBridge.js
+--- a/lib/Cloudflare/Workers/DurableObjectBridge.js
++++ b/lib/Cloudflare/Workers/DurableObjectBridge.js
+@@ -1,12 +1,12 @@
+ import * as Cause from "effect/Cause";
++import * as Context from "effect/Context";
+ import * as Effect from "effect/Effect";
+ import * as Exit from "effect/Exit";
+ import * as Layer from "effect/Layer";
+ import * as Scope from "effect/Scope";
+-import * as Stream from "effect/Stream";
+ import { HttpServerResponse } from "effect/unstable/http";
+ import { buildEventTelemetry } from "../../TelemetryRuntime.js";
+-import { DurableObjectState, fromDurableObjectState, } from "./DurableObjectState.js";
++import { DurableObjectState, fromDurableObjectState } from "./DurableObjectState.js";
+ import { isScopeEjected, makeRequestEffect } from "./HttpServer.js";
+ import { fromWebSocket } from "./WebSocket.js";
+ import { getWorkerExport, handleRpcExit } from "./WorkerBridge.js";
+@@ -33,53 +33,67 @@
+         constructor(state, env) {
+             super(state, env);
+             this.#state = state;
+-            this.#instance = state.blockConcurrencyWhile(() => build((promise) => void state.waitUntil?.(promise)).then(({ context, export: exported, telemetry }) => {
++            // Constructors own instance services, not the shared isolate's scope
++            // or memo map. There is no workerd eviction finalizer: disposable
++            // resources still belong in the per-call scope below.
++            const instanceScope = Scope.makeUnsafe();
++            const instanceMemoMap = Layer.makeMemoMapUnsafe();
++            this.#instance = state.blockConcurrencyWhile(() => build((promise) => void state.waitUntil?.(promise))
++                .then(({ context, export: exported, telemetry }) => {
+                 const { constructor, services } = exported;
+-                const doContext = Layer.succeed(DurableObjectState, fromDurableObjectState(this.#state)).pipe(Layer.provideMerge(Layer.succeedContext(services)), Layer.provideMerge(Layer.succeedContext(context)));
+-                return constructor.pipe(Effect.provide(doContext), Effect.flatMap((instance) => instance.pipe(Effect.provide(doContext))), Effect.map((instance) => ({
+-                    instance,
+-                    services,
+-                    context,
+-                    telemetry,
+-                })), Effect.runPromise);
++                const doContext = Context.merge(context, services).pipe(Context.add(DurableObjectState, fromDurableObjectState(this.#state)), Context.add(Scope.Scope, instanceScope), Context.add(Layer.CurrentMemoMap, instanceMemoMap));
++                return constructor.pipe(Effect.provide(doContext), Effect.flatMap((instance) => instance.pipe(Effect.provide(doContext))), Effect.map((instance) => {
++                    // Native RPC dispatch only exposes prototype methods. Install
++                    // dispatchers while the initialization gate is still closed;
++                    // resolve each call against its own incarnation, never the
++                    // first instance that introduced the method.
++                    for (const name of Object.keys(instance)) {
++                        if (name in this)
++                            continue;
++                        Object.defineProperty(DurableObjectBridge.prototype, name, {
++                            configurable: true,
++                            value: function (...args) {
++                                return this.#callRpc(name, args);
++                            },
++                        });
++                    }
++                    return { instance, services, context, telemetry };
++                }), Effect.onExit((exit) => Exit.isFailure(exit) ? Scope.close(instanceScope, exit) : Effect.void), Effect.runPromise);
++            })
++                .catch(async (error) => {
++                await Effect.runPromise(Scope.close(instanceScope, Exit.die(error)));
++                throw error;
+             }));
+             return new Proxy(this, {
+                 get: (target, prop) => {
+-                    const bind = (f) => typeof f === "function" ? f.bind(target) : f;
++                    const bind = (f) => (typeof f === "function" ? f.bind(target) : f);
+                     if (typeof prop !== "string")
+                         return bind(target[prop]);
+                     if (prop in target)
+                         return bind(target[prop]);
+-                    return async (...args) => this.#execute((instance) => {
+-                        const method = instance[prop];
+-                        if (typeof method === "function") {
+-                            const result = method(...args);
+-                            // Effects (including nested-RPC values built by
+-                            // `asEffectOrStream`, which are Effects *branded* as Streams)
+-                            // must be run as effects — their resolved value may itself be
+-                            // a `Stream`, which `handleRpcExit` then encodes. Only a
+-                            // *genuine* `Stream` (not an Effect) is lifted into the
+-                            // success channel so `handleRpcExit` encodes it directly.
+-                            return Effect.isEffect(result)
+-                                ? result
+-                                : Stream.isStream(result)
+-                                    ? Effect.succeed(result)
+-                                    : result;
+-                        }
+-                        else if (Effect.isEffect(method)) {
+-                            return method;
+-                        }
+-                        else {
+-                            return Effect.succeed(method);
+-                        }
+-                    }, handleRpcExit);
++                    return (...args) => this.#callRpc(prop, args);
+                 },
+             });
++        }
++        #callRpc(name, args) {
++            return this.#execute((instance) => {
++                // Prototype keys are shared across incarnations; an optional method
++                // introduced by another object must not expose a missing/inherited member.
++                if (!Object.hasOwn(instance, name)) {
++                    return Effect.die(new Error(`Method "${name}" not found on Durable Object`));
++                }
++                const member = instance[name];
++                const result = typeof member === "function"
++                    ? member(...args)
++                    : member;
++                // Effect RPC proxies may also be branded as Streams: prefer Effect.
++                return Effect.isEffect(result) ? result : Effect.succeed(result);
++            }, handleRpcExit);
+         }
+         async #execute(fn, onExit) {
+             const scope = Scope.makeUnsafe();
+             const { instance, services, context, telemetry } = await this.#instance;
+-            return fn(instance)
++            return Effect.suspend(() => fn(instance))
+                 .pipe(Effect.provide(Layer.mergeAll(Layer.succeed(DurableObjectState, fromDurableObjectState(this.#state)), Layer.succeed(Scope.Scope, scope), 
+             // The configured telemetry exporters, attached to the *call*
+             // scope by `buildEventTelemetry` so buffered telemetry
+@@ -110,15 +124,14 @@
+             return this.#execute((instance) => instance.alarm(alarmInfo));
+         }
+         async webSocketMessage(ws, message) {
+-            return this.#execute((instance) => instance.webSocketMessage?.(fromWebSocket(ws), message) ??
++            return this.#execute((instance) => instance.webSocketMessage?.(fromWebSocket(ws), message) ?? Effect.void);
++        }
++        async webSocketClose(ws, code, reason, wasClean) {
++            return this.#execute((instance) => instance.webSocketClose?.(fromWebSocket(ws), code, reason, wasClean) ??
+                 Effect.void);
+         }
+-        async webSocketClose(ws, code, reason, wasClean) {
+-            return this.#execute((instance) => instance.webSocketClose?.(fromWebSocket(ws), code, reason, wasClean) ?? Effect.void);
+-        }
+         async webSocketError(ws, error) {
+-            return this.#execute((instance) => instance.webSocketError?.(fromWebSocket(ws), error) ??
+-                Effect.void);
++            return this.#execute((instance) => instance.webSocketError?.(fromWebSocket(ws), error) ?? Effect.void);
+         }
+     };
+ };
+diff --git a/lib/Cloudflare/Workers/DurableObjectBridge.js.map b/lib/Cloudflare/Workers/DurableObjectBridge.js.map
+--- a/lib/Cloudflare/Workers/DurableObjectBridge.js.map
++++ b/lib/Cloudflare/Workers/DurableObjectBridge.js.map
+@@ -1 +1 @@
+-{"version":3,"file":"DurableObjectBridge.js","sourceRoot":"","sources":["../../../src/Cloudflare/Workers/DurableObjectBridge.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
++{"version":3,"file":"DurableObjectBridge.js","sourceRoot":"","sources":["../../../src/Cloudflare/Workers/DurableObjectBridge.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
+diff --git a/lib/Cloudflare/Workers/DurableObjectBridge.d.ts b/lib/Cloudflare/Workers/DurableObjectBridge.d.ts
+--- a/lib/Cloudflare/Workers/DurableObjectBridge.d.ts
++++ b/lib/Cloudflare/Workers/DurableObjectBridge.d.ts
+@@ -7,8 +7,8 @@
+  * Accepts the `DurableObject` base class and a `getExport` resolver so the
+  * implementation lives in real TypeScript instead of a generated string template.
+  */
+-export declare const makeDurableObjectBridge: (DurableObject: typeof DurableObjectClass, { entrypoint, stack, }: {
+-    entrypoint: Effect.Effect<Record<string, any>>;
++export declare const makeDurableObjectBridge: <Requirements>(DurableObject: typeof DurableObjectClass, { entrypoint, stack, }: {
++    entrypoint: Effect.Effect<Record<string, any>, never, Requirements>;
+     stack: {
+         name: string;
+         stage: string;
+diff --git a/lib/Cloudflare/Workers/DurableObjectBridge.d.ts.map b/lib/Cloudflare/Workers/DurableObjectBridge.d.ts.map
+--- a/lib/Cloudflare/Workers/DurableObjectBridge.d.ts.map
++++ b/lib/Cloudflare/Workers/DurableObjectBridge.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"DurableObjectBridge.d.ts","sourceRoot":"","sources":["../../../src/Cloudflare/Workers/DurableObjectBridge.ts"],"names":[],"mappings":"AACA,OAAO,KAAK,EAAE,aAAa,IAAI,kBAAkB,EAAE,MAAM,oBAAoB,CAAC;AAG9E,OAAO,KAAK,MAAM,MAAM,eAAe,CAAC;AAoBxC;;;;;;GAMG;AACH,eAAO,MAAM,uBAAuB,kBAEjB,OAAO,kBAAkB,0BAIrC;IACD,UAAU,EAAE,MAAM,CAAC,MAAM,CAAC,MAAM,CAAC,MAAM,EAAE,GAAG,CAAC,CAAC,CAAC;IAC/C,KAAK,EAAE;QACL,IAAI,EAAE,MAAM,CAAC;QACb,KAAK,EAAE,MAAM,CAAC;KACf,CAAC;CACH,iBAES,MAAM,KAqLX,GACN,CAAC"}
+\ No newline at end of file
++{"version":3,"file":"DurableObjectBridge.d.ts","sourceRoot":"","sources":["../../../src/Cloudflare/Workers/DurableObjectBridge.ts"],"names":[],"mappings":"AACA,OAAO,KAAK,EAAE,aAAa,IAAI,kBAAkB,EAAE,MAAM,oBAAoB,CAAC;AAG9E,OAAO,KAAK,MAAM,MAAM,eAAe,CAAC;AAaxC;;;;;;GAMG;AACH,eAAO,MAAM,uBAAuB,GACjC,YAAY,EACX,eAAe,OAAO,kBAAkB,EACxC,wBAGG;IACD,UAAU,EAAE,MAAM,CAAC,MAAM,CAAC,MAAM,CAAC,MAAM,EAAE,GAAG,CAAC,EAAE,KAAK,EAAE,YAAY,CAAC,CAAC;IACpE,KAAK,EAAE;QACL,IAAI,EAAE,MAAM,CAAC;QACb,KAAK,EAAE,MAAM,CAAC;KACf,CAAC;CACH,MAEF,WAAW,MAAM,KA6KX,GACN,CAAC"}
+\ No newline at end of file
+diff --git a/src/Cloudflare/Workers/ScheduledEvents.ts b/src/Cloudflare/Workers/ScheduledEvents.ts
+--- a/src/Cloudflare/Workers/ScheduledEvents.ts
++++ b/src/Cloudflare/Workers/ScheduledEvents.ts
+@@ -1,6 +1,13 @@
++import type * as cf from "@cloudflare/workers-types";
++import * as Clock from "effect/Clock";
++import * as Context from "effect/Context";
+ import * as Effect from "effect/Effect";
++import * as Exit from "effect/Exit";
+ import * as Option from "effect/Option";
++import * as Schema from "effect/Schema";
++import * as Semaphore from "effect/Semaphore";
+ import * as Stream from "effect/Stream";
++
+ import type { RuntimeContext } from "../../RuntimeContext.ts";
+ import { DurableObjectState } from "./DurableObjectState.ts";
+ import type { SqlStorageValue } from "./DurableObjectStorage.ts";
+@@ -86,10 +93,7 @@
+   yield* ensureTable;
+   const ctx = yield* DurableObjectState;
+ 
+-  yield* ctx.storage.sql.exec(
+-    `DELETE FROM alchemy_scheduled_events WHERE id = ?`,
+-    id,
+-  );
++  yield* ctx.storage.sql.exec(`DELETE FROM alchemy_scheduled_events WHERE id = ?`, id);
+ 
+   yield* reconcileAlarm;
+ });
+@@ -152,10 +156,7 @@
+             now + row.repeat_ms,
+             row.id,
+           )
+-        : ctx.storage.sql.exec(
+-            `DELETE FROM alchemy_scheduled_events WHERE id = ?`,
+-            row.id,
+-          )
++        : ctx.storage.sql.exec(`DELETE FROM alchemy_scheduled_events WHERE id = ?`, row.id)
+       ).pipe(Effect.as(toScheduledEvent(row))),
+     ),
+     Stream.runCollect,
+@@ -168,22 +169,427 @@
+ /**
+  * Set the DO alarm to the earliest pending event, or clear it if none remain.
+  */
+-const reconcileAlarm: Effect.Effect<
+-  void,
+-  never,
+-  DurableObjectState | RuntimeContext
+-> = Effect.gen(function* () {
+-  const ctx = yield* DurableObjectState;
+-
+-  const next = yield* (yield* ctx.storage.sql.exec<{
+-    run_at: number;
+-  }>(
+-    `SELECT run_at FROM alchemy_scheduled_events ORDER BY run_at ASC LIMIT 1`,
+-  )).pipe(Stream.take(1), Stream.runHead);
+-
+-  if (Option.isSome(next)) {
+-    yield* ctx.storage.setAlarm(next.value.run_at);
+-  } else {
+-    yield* ctx.storage.deleteAlarm();
++const reconcileAlarm: Effect.Effect<void, never, DurableObjectState | RuntimeContext> = Effect.gen(
++  function* () {
++    const ctx = yield* DurableObjectState;
++
++    const next = yield* (yield* ctx.storage.sql.exec<{
++      run_at: number;
++    }>(`SELECT run_at FROM alchemy_scheduled_events ORDER BY run_at ASC LIMIT 1`)).pipe(
++      Stream.take(1),
++      Stream.runHead,
++    );
++
++    if (Option.isSome(next)) {
++      yield* ctx.storage.setAlarm(next.value.run_at);
++    } else {
++      yield* ctx.storage.deleteAlarm();
++    }
++  },
++);
++
++const TimeMillis = Schema.Int.check(
++  Schema.isBetween({ minimum: 0, maximum: 8_640_000_000_000_000 }),
++);
++
++/** A validated event used by the transactional and handler-based APIs. */
++export const ScheduledEventEntry = Schema.Struct({
++  id: Schema.String.check(Schema.isMinLength(1)),
++  runAt: TimeMillis,
++  repeatMs: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
++  payload: Schema.Json,
++});
++
++export type ScheduledEventEntry = typeof ScheduledEventEntry.Type;
++
++/** Storage, persisted-data, or transaction-ownership failure. */
++export class ScheduledEventError extends Schema.TaggedError<ScheduledEventError>()(
++  "ScheduledEventError",
++  {
++    reason: Schema.Literals(["storage", "invalid-event", "invalid-transaction"]),
++    operation: Schema.String,
++    message: Schema.String,
++    cause: Schema.optional(Schema.Defect()),
++  },
++) {}
++
++/** Methods may only execute in the callback fiber, before its transaction settles. */
++export interface ScheduledEventTransaction {
++  readonly upsert: (event: ScheduledEventEntry) => Effect.Effect<void, ScheduledEventError>;
++  readonly delete: (id: string) => Effect.Effect<void, ScheduledEventError>;
++  readonly get: (
++    id: string,
++  ) => Effect.Effect<Option.Option<ScheduledEventEntry>, ScheduledEventError>;
++  readonly list: () => Effect.Effect<ReadonlyArray<ScheduledEventEntry>, ScheduledEventError>;
++}
++
++const StoredEvent = Schema.Struct({
++  id: Schema.String.check(Schema.isMinLength(1)),
++  run_at: TimeMillis,
++  repeat_ms: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
++  payload: Schema.String,
++});
++
++type StoredEvent = typeof StoredEvent.Type;
++interface PendingEvent {
++  readonly row: StoredEvent;
++  readonly event: ScheduledEventEntry;
++}
++
++class ActiveScheduledTransaction extends Context.Service<
++  ActiveScheduledTransaction,
++  cf.DurableObjectStorage
++>()("Cloudflare.Workers.ActiveScheduledTransaction") {}
++
++class ActiveScheduledProcessing extends Context.Service<
++  ActiveScheduledProcessing,
++  cf.DurableObjectStorage
++>()("Cloudflare.Workers.ActiveScheduledProcessing") {}
++
++const transactionLocks = new WeakMap<cf.DurableObjectStorage, Semaphore.Semaphore>();
++const processingLocks = new WeakMap<cf.DurableObjectStorage, Semaphore.Semaphore>();
++const lockFor = (
++  locks: WeakMap<cf.DurableObjectStorage, Semaphore.Semaphore>,
++  storage: cf.DurableObjectStorage,
++) => {
++  let lock = locks.get(storage);
++  if (lock === undefined) {
++    lock = Semaphore.makeUnsafe(1);
++    locks.set(storage, lock);
+   }
+-});
++  return lock;
++};
++
++const storageError = (operation: string, cause: unknown) =>
++  new ScheduledEventError({
++    reason: "storage",
++    operation,
++    message: `Scheduled event storage failed during ${operation}`,
++    cause,
++  });
++
++const invalidEvent = (operation: string, cause: unknown) =>
++  new ScheduledEventError({
++    reason: "invalid-event",
++    operation,
++    message: `Invalid scheduled event during ${operation}`,
++    cause,
++  });
++
++const readRows = (
++  storage: cf.DurableObjectStorage,
++  query: string,
++  ...params: cf.SqlStorageValue[]
++) =>
++  Effect.try({
++    try: () => storage.sql.exec(query, ...params).toArray(),
++    catch: (cause) => storageError("read", cause),
++  }).pipe(
++    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(StoredEvent))),
++    Effect.mapError((cause) =>
++      cause instanceof ScheduledEventError ? cause : invalidEvent("read", cause),
++    ),
++    Effect.flatMap((rows) =>
++      Effect.forEach(rows, (row) =>
++        Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(row.payload).pipe(
++          Effect.mapError((cause) => invalidEvent("payload", cause)),
++          Effect.map((payload): PendingEvent => ({
++            row,
++            event: {
++              id: row.id,
++              runAt: row.run_at,
++              ...(row.repeat_ms === null ? {} : { repeatMs: row.repeat_ms }),
++              payload,
++            },
++          })),
++        ),
++      ),
++    ),
++  );
++
++interface Transaction extends ScheduledEventTransaction {
++  readonly due: (
++    now: number,
++    limit: number,
++  ) => Effect.Effect<ReadonlyArray<PendingEvent>, ScheduledEventError>;
++  readonly matches: (row: StoredEvent) => Effect.Effect<boolean, ScheduledEventError>;
++  readonly acknowledge: (
++    row: StoredEvent,
++    next: number | undefined,
++  ) => Effect.Effect<boolean, ScheduledEventError>;
++}
++
++const rowMatch = "id = ? AND run_at = ? AND repeat_ms IS ? AND payload = ?";
++const rowParams = (row: StoredEvent): cf.SqlStorageValue[] => [
++  row.id,
++  row.run_at,
++  row.repeat_ms,
++  row.payload,
++];
++
++const transaction = <A, E, R>(
++  callback: (tx: Transaction) => Effect.Effect<A, E, R>,
++): Effect.Effect<A, E | ScheduledEventError, R | DurableObjectState> =>
++  Effect.gen(function* () {
++    const storage = (yield* DurableObjectState).raw.storage;
++    const active = yield* Effect.serviceOption(ActiveScheduledTransaction);
++    if (Option.isSome(active) && active.value === storage) {
++      return yield* new ScheduledEventError({
++        reason: "invalid-transaction",
++        operation: "begin",
++        message: "Nested scheduled event transactions are not supported",
++      });
++    }
++    const context = yield* Effect.context<R>();
++    return yield* lockFor(transactionLocks, storage).withPermit(
++      Effect.callback<A, E | ScheduledEventError>((resume, signal) => {
++        let failure: Exit.Failure<A, E | ScheduledEventError> | undefined;
++        const rollback = new Error("Scheduled event transaction rolled back");
++        const pending = Promise.resolve().then(() =>
++          storage.transaction(async (native) => {
++            failure = undefined;
++            let open = true;
++            let owner = -1;
++            const guard = Effect.flatMap(Effect.fiberId, (fiberId) =>
++              open && fiberId === owner
++                ? Effect.void
++                : Effect.fail(
++                    new ScheduledEventError({
++                      reason: "invalid-transaction",
++                      operation: "use",
++                      message:
++                        "A scheduled event transaction may only be used by its active callback fiber",
++                    }),
++                  ),
++            );
++            const exec = (operation: string, query: string, ...params: cf.SqlStorageValue[]) =>
++              guard.pipe(
++                Effect.andThen(
++                  Effect.try({
++                    try: () => storage.sql.exec(query, ...params).rowsWritten,
++                    catch: (cause) => storageError(operation, cause),
++                  }),
++                ),
++              );
++            const read = (query: string, ...params: cf.SqlStorageValue[]) =>
++              guard.pipe(Effect.andThen(readRows(storage, query, ...params)));
++            const tx: Transaction = {
++              upsert: (event) =>
++                guard.pipe(
++                  Effect.andThen(Schema.decodeUnknownEffect(ScheduledEventEntry)(event)),
++                  Effect.mapError((cause) =>
++                    cause instanceof ScheduledEventError ? cause : invalidEvent("upsert", cause),
++                  ),
++                  Effect.flatMap((value) =>
++                    exec(
++                      "upsert",
++                      "INSERT OR REPLACE INTO alchemy_scheduled_events (id, run_at, repeat_ms, payload) VALUES (?, ?, ?, ?)",
++                      value.id,
++                      value.runAt,
++                      value.repeatMs ?? null,
++                      JSON.stringify(value.payload),
++                    ),
++                  ),
++                  Effect.asVoid,
++                ),
++              delete: (id) =>
++                exec("delete", "DELETE FROM alchemy_scheduled_events WHERE id = ?", id).pipe(
++                  Effect.asVoid,
++                ),
++              get: (id) =>
++                read(
++                  "SELECT id, run_at, repeat_ms, payload FROM alchemy_scheduled_events WHERE id = ?",
++                  id,
++                ).pipe(Effect.map((rows) => Option.fromUndefinedOr(rows[0]?.event))),
++              list: () =>
++                read(
++                  "SELECT id, run_at, repeat_ms, payload FROM alchemy_scheduled_events ORDER BY run_at, id",
++                ).pipe(Effect.map((rows) => rows.map(({ event }) => event))),
++              due: (now, limit) =>
++                read(
++                  "SELECT id, run_at, repeat_ms, payload FROM alchemy_scheduled_events WHERE run_at <= ? ORDER BY run_at, id LIMIT ?",
++                  now,
++                  limit,
++                ),
++              matches: (row) =>
++                read(
++                  `SELECT id, run_at, repeat_ms, payload FROM alchemy_scheduled_events WHERE ${rowMatch}`,
++                  ...rowParams(row),
++                ).pipe(Effect.map((rows) => rows.length > 0)),
++              acknowledge: (row, next) =>
++                (next === undefined
++                  ? exec(
++                      "acknowledge",
++                      `DELETE FROM alchemy_scheduled_events WHERE ${rowMatch}`,
++                      ...rowParams(row),
++                    )
++                  : Schema.decodeUnknownEffect(TimeMillis)(next).pipe(
++                      Effect.mapError((cause) => invalidEvent("reschedule", cause)),
++                      Effect.flatMap((runAt) =>
++                        exec(
++                          "reschedule",
++                          `UPDATE alchemy_scheduled_events SET run_at = ? WHERE ${rowMatch}`,
++                          runAt,
++                          ...rowParams(row),
++                        ),
++                      ),
++                    )
++                ).pipe(Effect.map((written) => written > 0)),
++            };
++            const body = Effect.gen(function* () {
++              owner = yield* Effect.fiberId;
++              yield* exec("initialize", INIT_TABLE_SQL);
++              const value = yield* Effect.scoped(Effect.suspend(() => callback(tx)));
++              const next = yield* read(
++                "SELECT id, run_at, repeat_ms, payload FROM alchemy_scheduled_events ORDER BY run_at, id LIMIT 1",
++              );
++              yield* Effect.tryPromise({
++                try: () =>
++                  next.length === 0 ? native.deleteAlarm() : native.setAlarm(next[0]!.row.run_at),
++                catch: (cause) => storageError("alarm", cause),
++              });
++              return value;
++            }).pipe(
++              Effect.provideContext(context),
++              Effect.provideService(ActiveScheduledTransaction, storage),
++              Effect.ensuring(
++                Effect.sync(() => {
++                  open = false;
++                }),
++              ),
++            );
++            const exit = await Effect.runPromiseExit(body, { signal });
++            if (Exit.isFailure(exit)) {
++              failure = exit;
++              throw rollback;
++            }
++            return exit.value;
++          }),
++        );
++        pending.then(
++          (value) => resume(Effect.succeed(value)),
++          (cause) =>
++            resume(
++              failure === undefined
++                ? Effect.fail(storageError("transaction", cause))
++                : Effect.failCause(failure.cause),
++            ),
++        );
++        // Interruption aborts the callback runner through `signal`, then waits
++        // for native rollback before releasing the transaction permit.
++        return Effect.promise(() =>
++          pending.then(
++            () => {},
++            () => {},
++          ),
++        );
++      }),
++    );
++  });
++
++/**
++ * Atomically modify events and other SQL rows in this Durable Object. The native
++ * alarm is reconciled inside the same storage transaction. Typed failures,
++ * defects and interruption roll back; interrupted callers wait for rollback.
++ *
++ * Only the callback fiber may use `tx`; handles cannot escape or be used by
++ * forked effects. Do not perform external side effects in the callback: native
++ * storage transactions may retry it. The legacy event APIs remain unchanged.
++ */
++export const scheduledEventsTransaction = <A, E, R>(
++  callback: (tx: ScheduledEventTransaction) => Effect.Effect<A, E, R>,
++): Effect.Effect<A, E | ScheduledEventError, R | DurableObjectState> => transaction(callback);
++
++export interface HandleScheduledEventsOptions<E, E2 = never, R2 = never, E3 = never, R3 = never> {
++  /** Ordered stops on the first failure; isolated reschedules typed failures. */
++  readonly mode?: "ordered" | "isolated";
++  /** Maximum due events selected per invocation. Default 100; maximum 1000. */
++  readonly limit?: number;
++  /** Delay for isolated failures. Default 1000 milliseconds. */
++  readonly retryMillis?: number;
++  readonly onFailure?: (event: ScheduledEventEntry, error: E) => Effect.Effect<void, E2, R2>;
++  /** Validate the entire bounded snapshot before committing its read or dispatching handlers. */
++  readonly validate?: (event: ScheduledEventEntry) => Effect.Effect<void, E3, R3>;
++}
++
++/**
++ * Handle a bounded snapshot in (runAt, id) order. Acknowledge only after success
++ * and only if the persisted row still matches, preserving handler replacements.
++ * Repeats run again relative to the successful completion time. Defects and
++ * interruption always propagate without acknowledging the event. Isolated mode
++ * reschedules typed failures before invoking `onFailure` and continues; ordered
++ * mode retains the failed row and propagates the handler error.
++ * Validation failures always stop processing without changing rows or alarms.
++ * Calling this operation recursively or from a transaction callback is rejected.
++ *
++ * External effects are at-least-once: a crash after the handler succeeds but
++ * before acknowledgement can deliver it again.
++ */
++export const handleScheduledEvents = <E, R, E2 = never, R2 = never, E3 = never, R3 = never>(
++  handler: (event: ScheduledEventEntry) => Effect.Effect<void, E, R>,
++  options: HandleScheduledEventsOptions<E, E2, R2, E3, R3> = {},
++): Effect.Effect<number, E | E2 | E3 | ScheduledEventError, R | R2 | R3 | DurableObjectState> =>
++  Effect.gen(function* () {
++    const config = yield* Schema.decodeUnknownEffect(
++      Schema.Struct({
++        mode: Schema.Literals(["ordered", "isolated"]),
++        limit: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1000)),
++        retryMillis: Schema.Int.check(Schema.isGreaterThan(0)),
++      }),
++    )({
++      mode: options.mode ?? "ordered",
++      limit: options.limit ?? 100,
++      retryMillis: options.retryMillis ?? 1000,
++    }).pipe(Effect.mapError((cause) => invalidEvent("options", cause)));
++    const storage = (yield* DurableObjectState).raw.storage;
++    const activeTransaction = yield* Effect.serviceOption(ActiveScheduledTransaction);
++    const activeProcessing = yield* Effect.serviceOption(ActiveScheduledProcessing);
++    if (
++      (Option.isSome(activeTransaction) && activeTransaction.value === storage) ||
++      (Option.isSome(activeProcessing) && activeProcessing.value === storage)
++    ) {
++      return yield* new ScheduledEventError({
++        reason: "invalid-transaction",
++        operation: "process",
++        message:
++          "Scheduled event processing cannot be entered from its handler or a transaction callback",
++      });
++    }
++    return yield* lockFor(processingLocks, storage).withPermit(
++      Effect.gen(function* () {
++        const now = yield* Clock.currentTimeMillis;
++        const due = yield* transaction((tx) =>
++          Effect.gen(function* () {
++            const rows = yield* tx.due(now, config.limit);
++            if (options.validate !== undefined) {
++              for (const { event } of rows) yield* options.validate(event);
++            }
++            return rows;
++          }),
++        );
++        let acknowledged = 0;
++        for (const { row, event } of due) {
++          if (!(yield* transaction((tx) => tx.matches(row)))) continue;
++          const result = yield* Effect.result(Effect.suspend(() => handler(event)));
++          if (result._tag === "Failure") {
++            if (config.mode === "isolated") {
++              const retryAt = (yield* Clock.currentTimeMillis) + config.retryMillis;
++              yield* transaction((tx) => tx.acknowledge(row, retryAt));
++            }
++            if (options.onFailure !== undefined) yield* options.onFailure(event, result.failure);
++            if (config.mode === "ordered") return yield* Effect.fail(result.failure);
++            continue;
++          }
++          const completedAt = yield* Clock.currentTimeMillis;
++          if (
++            yield* transaction((tx) =>
++              tx.acknowledge(row, row.repeat_ms === null ? undefined : completedAt + row.repeat_ms),
++            )
++          ) {
++            acknowledged++;
++          }
++        }
++        return acknowledged;
++      }).pipe(Effect.provideService(ActiveScheduledProcessing, storage)),
++    );
++  });
+diff --git a/lib/Cloudflare/Workers/ScheduledEvents.js b/lib/Cloudflare/Workers/ScheduledEvents.js
+--- a/lib/Cloudflare/Workers/ScheduledEvents.js
++++ b/lib/Cloudflare/Workers/ScheduledEvents.js
+@@ -1,5 +1,10 @@
++import * as Clock from "effect/Clock";
++import * as Context from "effect/Context";
+ import * as Effect from "effect/Effect";
++import * as Exit from "effect/Exit";
+ import * as Option from "effect/Option";
++import * as Schema from "effect/Schema";
++import * as Semaphore from "effect/Semaphore";
+ import * as Stream from "effect/Stream";
+ import { DurableObjectState } from "./DurableObjectState.js";
+ // ---------------------------------------------------------------------------
+@@ -104,4 +109,218 @@
+         yield* ctx.storage.deleteAlarm();
+     }
+ });
++const TimeMillis = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 8_640_000_000_000_000 }));
++/** A validated event used by the transactional and handler-based APIs. */
++export const ScheduledEventEntry = Schema.Struct({
++    id: Schema.String.check(Schema.isMinLength(1)),
++    runAt: TimeMillis,
++    repeatMs: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
++    payload: Schema.Json,
++});
++/** Storage, persisted-data, or transaction-ownership failure. */
++export class ScheduledEventError extends Schema.TaggedError()("ScheduledEventError", {
++    reason: Schema.Literals(["storage", "invalid-event", "invalid-transaction"]),
++    operation: Schema.String,
++    message: Schema.String,
++    cause: Schema.optional(Schema.Defect()),
++}) {
++}
++const StoredEvent = Schema.Struct({
++    id: Schema.String.check(Schema.isMinLength(1)),
++    run_at: TimeMillis,
++    repeat_ms: Schema.NullOr(Schema.Int.check(Schema.isGreaterThan(0))),
++    payload: Schema.String,
++});
++class ActiveScheduledTransaction extends Context.Service()("Cloudflare.Workers.ActiveScheduledTransaction") {
++}
++class ActiveScheduledProcessing extends Context.Service()("Cloudflare.Workers.ActiveScheduledProcessing") {
++}
++const transactionLocks = new WeakMap();
++const processingLocks = new WeakMap();
++const lockFor = (locks, storage) => {
++    let lock = locks.get(storage);
++    if (lock === undefined) {
++        lock = Semaphore.makeUnsafe(1);
++        locks.set(storage, lock);
++    }
++    return lock;
++};
++const storageError = (operation, cause) => new ScheduledEventError({
++    reason: "storage",
++    operation,
++    message: `Scheduled event storage failed during ${operation}`,
++    cause,
++});
++const invalidEvent = (operation, cause) => new ScheduledEventError({
++    reason: "invalid-event",
++    operation,
++    message: `Invalid scheduled event during ${operation}`,
++    cause,
++});
++const readRows = (storage, query, ...params) => Effect.try({
++    try: () => storage.sql.exec(query, ...params).toArray(),
++    catch: (cause) => storageError("read", cause),
++}).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(StoredEvent))), Effect.mapError((cause) => cause instanceof ScheduledEventError ? cause : invalidEvent("read", cause)), Effect.flatMap((rows) => Effect.forEach(rows, (row) => Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(row.payload).pipe(Effect.mapError((cause) => invalidEvent("payload", cause)), Effect.map((payload) => ({
++    row,
++    event: {
++        id: row.id,
++        runAt: row.run_at,
++        ...(row.repeat_ms === null ? {} : { repeatMs: row.repeat_ms }),
++        payload,
++    },
++}))))));
++const rowMatch = "id = ? AND run_at = ? AND repeat_ms IS ? AND payload = ?";
++const rowParams = (row) => [
++    row.id,
++    row.run_at,
++    row.repeat_ms,
++    row.payload,
++];
++const transaction = (callback) => Effect.gen(function* () {
++    const storage = (yield* DurableObjectState).raw.storage;
++    const active = yield* Effect.serviceOption(ActiveScheduledTransaction);
++    if (Option.isSome(active) && active.value === storage) {
++        return yield* new ScheduledEventError({
++            reason: "invalid-transaction",
++            operation: "begin",
++            message: "Nested scheduled event transactions are not supported",
++        });
++    }
++    const context = yield* Effect.context();
++    return yield* lockFor(transactionLocks, storage).withPermit(Effect.callback((resume, signal) => {
++        let failure;
++        const rollback = new Error("Scheduled event transaction rolled back");
++        const pending = Promise.resolve().then(() => storage.transaction(async (native) => {
++            failure = undefined;
++            let open = true;
++            let owner = -1;
++            const guard = Effect.flatMap(Effect.fiberId, (fiberId) => open && fiberId === owner
++                ? Effect.void
++                : Effect.fail(new ScheduledEventError({
++                    reason: "invalid-transaction",
++                    operation: "use",
++                    message: "A scheduled event transaction may only be used by its active callback fiber",
++                })));
++            const exec = (operation, query, ...params) => guard.pipe(Effect.andThen(Effect.try({
++                try: () => storage.sql.exec(query, ...params).rowsWritten,
++                catch: (cause) => storageError(operation, cause),
++            })));
++            const read = (query, ...params) => guard.pipe(Effect.andThen(readRows(storage, query, ...params)));
++            const tx = {
++                upsert: (event) => guard.pipe(Effect.andThen(Schema.decodeUnknownEffect(ScheduledEventEntry)(event)), Effect.mapError((cause) => cause instanceof ScheduledEventError ? cause : invalidEvent("upsert", cause)), Effect.flatMap((value) => exec("upsert", "INSERT OR REPLACE INTO alchemy_scheduled_events (id, run_at, repeat_ms, payload) VALUES (?, ?, ?, ?)", value.id, value.runAt, value.repeatMs ?? null, JSON.stringify(value.payload))), Effect.asVoid),
++                delete: (id) => exec("delete", "DELETE FROM alchemy_scheduled_events WHERE id = ?", id).pipe(Effect.asVoid),
++                get: (id) => read("SELECT id, run_at, repeat_ms, payload FROM alchemy_scheduled_events WHERE id = ?", id).pipe(Effect.map((rows) => Option.fromUndefinedOr(rows[0]?.event))),
++                list: () => read("SELECT id, run_at, repeat_ms, payload FROM alchemy_scheduled_events ORDER BY run_at, id").pipe(Effect.map((rows) => rows.map(({ event }) => event))),
++                due: (now, limit) => read("SELECT id, run_at, repeat_ms, payload FROM alchemy_scheduled_events WHERE run_at <= ? ORDER BY run_at, id LIMIT ?", now, limit),
++                matches: (row) => read(`SELECT id, run_at, repeat_ms, payload FROM alchemy_scheduled_events WHERE ${rowMatch}`, ...rowParams(row)).pipe(Effect.map((rows) => rows.length > 0)),
++                acknowledge: (row, next) => (next === undefined
++                    ? exec("acknowledge", `DELETE FROM alchemy_scheduled_events WHERE ${rowMatch}`, ...rowParams(row))
++                    : Schema.decodeUnknownEffect(TimeMillis)(next).pipe(Effect.mapError((cause) => invalidEvent("reschedule", cause)), Effect.flatMap((runAt) => exec("reschedule", `UPDATE alchemy_scheduled_events SET run_at = ? WHERE ${rowMatch}`, runAt, ...rowParams(row))))).pipe(Effect.map((written) => written > 0)),
++            };
++            const body = Effect.gen(function* () {
++                owner = yield* Effect.fiberId;
++                yield* exec("initialize", INIT_TABLE_SQL);
++                const value = yield* Effect.scoped(Effect.suspend(() => callback(tx)));
++                const next = yield* read("SELECT id, run_at, repeat_ms, payload FROM alchemy_scheduled_events ORDER BY run_at, id LIMIT 1");
++                yield* Effect.tryPromise({
++                    try: () => next.length === 0 ? native.deleteAlarm() : native.setAlarm(next[0].row.run_at),
++                    catch: (cause) => storageError("alarm", cause),
++                });
++                return value;
++            }).pipe(Effect.provideContext(context), Effect.provideService(ActiveScheduledTransaction, storage), Effect.ensuring(Effect.sync(() => {
++                open = false;
++            })));
++            const exit = await Effect.runPromiseExit(body, { signal });
++            if (Exit.isFailure(exit)) {
++                failure = exit;
++                throw rollback;
++            }
++            return exit.value;
++        }));
++        pending.then((value) => resume(Effect.succeed(value)), (cause) => resume(failure === undefined
++            ? Effect.fail(storageError("transaction", cause))
++            : Effect.failCause(failure.cause)));
++        // Interruption aborts the callback runner through `signal`, then waits
++        // for native rollback before releasing the transaction permit.
++        return Effect.promise(() => pending.then(() => { }, () => { }));
++    }));
++});
++/**
++ * Atomically modify events and other SQL rows in this Durable Object. The native
++ * alarm is reconciled inside the same storage transaction. Typed failures,
++ * defects and interruption roll back; interrupted callers wait for rollback.
++ *
++ * Only the callback fiber may use `tx`; handles cannot escape or be used by
++ * forked effects. Do not perform external side effects in the callback: native
++ * storage transactions may retry it. The legacy event APIs remain unchanged.
++ */
++export const scheduledEventsTransaction = (callback) => transaction(callback);
++/**
++ * Handle a bounded snapshot in (runAt, id) order. Acknowledge only after success
++ * and only if the persisted row still matches, preserving handler replacements.
++ * Repeats run again relative to the successful completion time. Defects and
++ * interruption always propagate without acknowledging the event. Isolated mode
++ * reschedules typed failures before invoking `onFailure` and continues; ordered
++ * mode retains the failed row and propagates the handler error.
++ * Validation failures always stop processing without changing rows or alarms.
++ * Calling this operation recursively or from a transaction callback is rejected.
++ *
++ * External effects are at-least-once: a crash after the handler succeeds but
++ * before acknowledgement can deliver it again.
++ */
++export const handleScheduledEvents = (handler, options = {}) => Effect.gen(function* () {
++    const config = yield* Schema.decodeUnknownEffect(Schema.Struct({
++        mode: Schema.Literals(["ordered", "isolated"]),
++        limit: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1000)),
++        retryMillis: Schema.Int.check(Schema.isGreaterThan(0)),
++    }))({
++        mode: options.mode ?? "ordered",
++        limit: options.limit ?? 100,
++        retryMillis: options.retryMillis ?? 1000,
++    }).pipe(Effect.mapError((cause) => invalidEvent("options", cause)));
++    const storage = (yield* DurableObjectState).raw.storage;
++    const activeTransaction = yield* Effect.serviceOption(ActiveScheduledTransaction);
++    const activeProcessing = yield* Effect.serviceOption(ActiveScheduledProcessing);
++    if ((Option.isSome(activeTransaction) && activeTransaction.value === storage) ||
++        (Option.isSome(activeProcessing) && activeProcessing.value === storage)) {
++        return yield* new ScheduledEventError({
++            reason: "invalid-transaction",
++            operation: "process",
++            message: "Scheduled event processing cannot be entered from its handler or a transaction callback",
++        });
++    }
++    return yield* lockFor(processingLocks, storage).withPermit(Effect.gen(function* () {
++        const now = yield* Clock.currentTimeMillis;
++        const due = yield* transaction((tx) => Effect.gen(function* () {
++            const rows = yield* tx.due(now, config.limit);
++            if (options.validate !== undefined) {
++                for (const { event } of rows)
++                    yield* options.validate(event);
++            }
++            return rows;
++        }));
++        let acknowledged = 0;
++        for (const { row, event } of due) {
++            if (!(yield* transaction((tx) => tx.matches(row))))
++                continue;
++            const result = yield* Effect.result(Effect.suspend(() => handler(event)));
++            if (result._tag === "Failure") {
++                if (config.mode === "isolated") {
++                    const retryAt = (yield* Clock.currentTimeMillis) + config.retryMillis;
++                    yield* transaction((tx) => tx.acknowledge(row, retryAt));
++                }
++                if (options.onFailure !== undefined)
++                    yield* options.onFailure(event, result.failure);
++                if (config.mode === "ordered")
++                    return yield* Effect.fail(result.failure);
++                continue;
++            }
++            const completedAt = yield* Clock.currentTimeMillis;
++            if (yield* transaction((tx) => tx.acknowledge(row, row.repeat_ms === null ? undefined : completedAt + row.repeat_ms))) {
++                acknowledged++;
++            }
++        }
++        return acknowledged;
++    }).pipe(Effect.provideService(ActiveScheduledProcessing, storage)));
++});
+ //# sourceMappingURL=ScheduledEvents.js.map
+\ No newline at end of file
+diff --git a/lib/Cloudflare/Workers/ScheduledEvents.js.map b/lib/Cloudflare/Workers/ScheduledEvents.js.map
+--- a/lib/Cloudflare/Workers/ScheduledEvents.js.map
++++ b/lib/Cloudflare/Workers/ScheduledEvents.js.map
+@@ -1 +1 @@
+-{"version":3,"file":"ScheduledEvents.js","sourceRoot":"","sources":["../../../src/Cloudflare/Workers/ScheduledEvents.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
++{"version":3,"file":"ScheduledEvents.js","sourceRoot":"","sources":["../../../src/Cloudflare/Workers/ScheduledEvents.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
+diff --git a/lib/Cloudflare/Workers/ScheduledEvents.d.ts b/lib/Cloudflare/Workers/ScheduledEvents.d.ts
+--- a/lib/Cloudflare/Workers/ScheduledEvents.d.ts
++++ b/lib/Cloudflare/Workers/ScheduledEvents.d.ts
+@@ -1,4 +1,6 @@
+ import * as Effect from "effect/Effect";
++import * as Option from "effect/Option";
++import * as Schema from "effect/Schema";
+ import type { RuntimeContext } from "../../RuntimeContext.ts";
+ import { DurableObjectState } from "./DurableObjectState.ts";
+ export interface ScheduledEvent {
+@@ -19,11 +21,11 @@
+  * @param payload Arbitrary JSON-serialisable data delivered to the alarm handler.
+  * @param repeatMs If set, the event re-schedules itself this many ms after each fire.
+  */
+-export declare const scheduleEvent: (id: string, runAt: Date, payload: unknown, repeatMs?: number | undefined) => Effect.Effect<void, never, DurableObjectState | RuntimeContext>;
++export declare const scheduleEvent: (id: string, runAt: Date, payload: unknown, repeatMs?: number | undefined) => Effect.Effect<void, never, RuntimeContext | DurableObjectState>;
+ /**
+  * Cancel a previously scheduled event by id. No-op if the event does not exist.
+  */
+-export declare const cancelEvent: (id: string) => Effect.Effect<void, never, DurableObjectState | RuntimeContext>;
++export declare const cancelEvent: (id: string) => Effect.Effect<void, never, RuntimeContext | DurableObjectState>;
+ /**
+  * List all currently scheduled events, ordered by `runAt` ascending.
+  */
+@@ -47,4 +49,64 @@
+  * ```
+  */
+ export declare const processScheduledEvents: Effect.Effect<ScheduledEvent[], never, DurableObjectState | RuntimeContext>;
++/** A validated event used by the transactional and handler-based APIs. */
++export declare const ScheduledEventEntry: Schema.Struct<{
++    readonly id: Schema.String;
++    readonly runAt: Schema.Int;
++    readonly repeatMs: Schema.optional<Schema.Int>;
++    readonly payload: Schema.Codec<Schema.Json, Schema.Json, never, never>;
++}>;
++export type ScheduledEventEntry = typeof ScheduledEventEntry.Type;
++declare const ScheduledEventError_base: Schema.Class<ScheduledEventError, Schema.TaggedStruct<"ScheduledEventError", {
++    readonly reason: Schema.Literals<readonly ["storage", "invalid-event", "invalid-transaction"]>;
++    readonly operation: Schema.String;
++    readonly message: Schema.String;
++    readonly cause: Schema.optional<Schema.Defect>;
++}>, import("effect/Cause").YieldableError>;
++/** Storage, persisted-data, or transaction-ownership failure. */
++export declare class ScheduledEventError extends ScheduledEventError_base {
++}
++/** Methods may only execute in the callback fiber, before its transaction settles. */
++export interface ScheduledEventTransaction {
++    readonly upsert: (event: ScheduledEventEntry) => Effect.Effect<void, ScheduledEventError>;
++    readonly delete: (id: string) => Effect.Effect<void, ScheduledEventError>;
++    readonly get: (id: string) => Effect.Effect<Option.Option<ScheduledEventEntry>, ScheduledEventError>;
++    readonly list: () => Effect.Effect<ReadonlyArray<ScheduledEventEntry>, ScheduledEventError>;
++}
++/**
++ * Atomically modify events and other SQL rows in this Durable Object. The native
++ * alarm is reconciled inside the same storage transaction. Typed failures,
++ * defects and interruption roll back; interrupted callers wait for rollback.
++ *
++ * Only the callback fiber may use `tx`; handles cannot escape or be used by
++ * forked effects. Do not perform external side effects in the callback: native
++ * storage transactions may retry it. The legacy event APIs remain unchanged.
++ */
++export declare const scheduledEventsTransaction: <A, E, R>(callback: (tx: ScheduledEventTransaction) => Effect.Effect<A, E, R>) => Effect.Effect<A, E | ScheduledEventError, R | DurableObjectState>;
++export interface HandleScheduledEventsOptions<E, E2 = never, R2 = never, E3 = never, R3 = never> {
++    /** Ordered stops on the first failure; isolated reschedules typed failures. */
++    readonly mode?: "ordered" | "isolated";
++    /** Maximum due events selected per invocation. Default 100; maximum 1000. */
++    readonly limit?: number;
++    /** Delay for isolated failures. Default 1000 milliseconds. */
++    readonly retryMillis?: number;
++    readonly onFailure?: (event: ScheduledEventEntry, error: E) => Effect.Effect<void, E2, R2>;
++    /** Validate the entire bounded snapshot before committing its read or dispatching handlers. */
++    readonly validate?: (event: ScheduledEventEntry) => Effect.Effect<void, E3, R3>;
++}
++/**
++ * Handle a bounded snapshot in (runAt, id) order. Acknowledge only after success
++ * and only if the persisted row still matches, preserving handler replacements.
++ * Repeats run again relative to the successful completion time. Defects and
++ * interruption always propagate without acknowledging the event. Isolated mode
++ * reschedules typed failures before invoking `onFailure` and continues; ordered
++ * mode retains the failed row and propagates the handler error.
++ * Validation failures always stop processing without changing rows or alarms.
++ * Calling this operation recursively or from a transaction callback is rejected.
++ *
++ * External effects are at-least-once: a crash after the handler succeeds but
++ * before acknowledgement can deliver it again.
++ */
++export declare const handleScheduledEvents: <E, R, E2 = never, R2 = never, E3 = never, R3 = never>(handler: (event: ScheduledEventEntry) => Effect.Effect<void, E, R>, options?: HandleScheduledEventsOptions<E, E2, R2, E3, R3>) => Effect.Effect<number, E | E2 | E3 | ScheduledEventError, R | R2 | R3 | DurableObjectState>;
++export {};
+ //# sourceMappingURL=ScheduledEvents.d.ts.map
+\ No newline at end of file
+diff --git a/lib/Cloudflare/Workers/ScheduledEvents.d.ts.map b/lib/Cloudflare/Workers/ScheduledEvents.d.ts.map
+--- a/lib/Cloudflare/Workers/ScheduledEvents.d.ts.map
++++ b/lib/Cloudflare/Workers/ScheduledEvents.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"ScheduledEvents.d.ts","sourceRoot":"","sources":["../../../src/Cloudflare/Workers/ScheduledEvents.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,MAAM,MAAM,eAAe,CAAC;AAGxC,OAAO,KAAK,EAAE,cAAc,EAAE,MAAM,yBAAyB,CAAC;AAC9D,OAAO,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAuB7D,MAAM,WAAW,cAAc;IAC7B,EAAE,EAAE,MAAM,CAAC;IACX,KAAK,EAAE,IAAI,CAAC;IACZ,QAAQ,CAAC,EAAE,MAAM,CAAC;IAClB,OAAO,EAAE,OAAO,CAAC;CAClB;AAgBD;;;;;;;;;;;GAWG;AACH,eAAO,MAAM,aAAa,+IAmBxB,CAAC;AAEH;;GAEG;AACH,eAAO,MAAM,WAAW,iFAUtB,CAAC;AAEH;;GAEG;AACH,eAAO,MAAM,UAAU,EAAE,MAAM,CAAC,MAAM,CACpC,cAAc,EAAE,EAChB,KAAK,EACL,kBAAkB,GAAG,cAAc,CAUnC,CAAC;AAEH;;;;;;;;;;;;;;;;;GAiBG;AACH,eAAO,MAAM,sBAAsB,EAAE,MAAM,CAAC,MAAM,CAChD,cAAc,EAAE,EAChB,KAAK,EACL,kBAAkB,GAAG,cAAc,CA8BnC,CAAC"}
+\ No newline at end of file
++{"version":3,"file":"ScheduledEvents.d.ts","sourceRoot":"","sources":["../../../src/Cloudflare/Workers/ScheduledEvents.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
+diff --git a/src/Cloudflare/Workers/DurableObject.ts b/src/Cloudflare/Workers/DurableObject.ts
+--- a/src/Cloudflare/Workers/DurableObject.ts
++++ b/src/Cloudflare/Workers/DurableObject.ts
+@@ -32,9 +32,9 @@
+ export interface DurableObjectExport {
+   readonly kind: "durableObject";
+   readonly constructor: Effect.Effect<
+-    Effect.Effect<DurableObjectShape, never, RuntimeContext>,
++    Effect.Effect<DurableObjectShape, never, RuntimeContext | Scope>,
+     never,
+-    DurableObjectState
++    DurableObjectState | Scope
+   >;
+   readonly services: Context.Context<never>;
+ }
+diff --git a/lib/Cloudflare/Workers/DurableObject.d.ts b/lib/Cloudflare/Workers/DurableObject.d.ts
+--- a/lib/Cloudflare/Workers/DurableObject.d.ts
++++ b/lib/Cloudflare/Workers/DurableObject.d.ts
+@@ -19,7 +19,7 @@
+ import { Worker, WorkerEnvironment, type WorkerServices } from "./Worker.ts";
+ export interface DurableObjectExport {
+     readonly kind: "durableObject";
+-    readonly constructor: Effect.Effect<Effect.Effect<DurableObjectShape, never, RuntimeContext>, never, DurableObjectState>;
++    readonly constructor: Effect.Effect<Effect.Effect<DurableObjectShape, never, RuntimeContext | Scope>, never, DurableObjectState | Scope>;
+     readonly services: Context.Context<never>;
+ }
+ export declare const isDurableObjectExport: (value: unknown) => value is DurableObjectExport;
+diff --git a/lib/Cloudflare/Workers/DurableObject.d.ts.map b/lib/Cloudflare/Workers/DurableObject.d.ts.map
+--- a/lib/Cloudflare/Workers/DurableObject.d.ts.map
++++ b/lib/Cloudflare/Workers/DurableObject.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"DurableObject.d.ts","sourceRoot":"","sources":["../../../src/Cloudflare/Workers/DurableObject.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file
++{"version":3,"file":"DurableObject.d.ts","sourceRoot":"","sources":["../../../src/Cloudflare/Workers/DurableObject.ts"],"names":[],"mappings":"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"}
+\ No newline at end of file

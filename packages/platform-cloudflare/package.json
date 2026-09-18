@@ -31,7 +31,15 @@
     "./protected-browser": "./src/ProtectedBrowser.ts",
     "./thread-object": "./src/ThreadObject.ts",
     "./wake-scheduler": "./src/WakeScheduler.ts",
-    "./cloudflare-ai-gateway": "./src/CloudflareAiGateway.ts"
+    "./cloudflare-ai-gateway": "./src/CloudflareAiGateway.ts",
+    "./cloudflare-alarms": "./src/CloudflareAlarms.ts",
+    "./cloudflare-rpc": "./src/CloudflareRpc.ts",
+    "./cloudflare-host-bindings": "./src/CloudflareHostBindings.ts",
+    "./cloudflare-thread-client-host": "./src/CloudflareThreadClientHost.ts",
+    "./thread-object-host": "./src/ThreadObjectHost.ts",
+    "./memory-object-host": "./src/MemoryObjectHost.ts",
+    "./schedule-owner-host": "./src/ScheduleOwnerHost.ts",
+    "./subscription-partition-host": "./src/SubscriptionPartitionHost.ts"
   },
   "publishConfig": {
     "access": "public"
@@ -69,6 +77,9 @@
   },
   "peerDependenciesMeta": {
     "@cloudflare/puppeteer": {
+      "optional": true
+    },
+    "effect-cf": {
       "optional": true
     }
   }

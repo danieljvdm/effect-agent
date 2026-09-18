@@ -19,7 +19,7 @@ import {
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 
 import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "../Alarm.ts";
-import { ThreadObjectPlacement } from "../CloudflareBindings.ts";
+import { ThreadObjectPlacement } from "../CloudflareHostBindings.ts";
 
 /** Every write prearms its owner; the delivery due index owns its recovery deadline. */
 export const guardedMessageDeliveryStoreLayer = Layer.effect(

@@ -100,6 +100,7 @@ const packageNames = [
   "ai-decision",
   "ai-typesafe",
   "effect-agent",
+  "platform-alchemy-cloudflare",
   "platform-cloudflare",
   "platform-node",
   "pr-review",
@@ -116,7 +117,7 @@ const privatePackageNames = ["pr-review-action"] as const;
 /** Provider bindings belong to leaf applications, never framework packages. */
 const providerConsumingPackages = new Set<string>();
 
-const exampleNames = ["travel-planner"];
+const exampleNames = ["alchemy-cloudflare", "travel-planner"];
 
 const toolingNames = [
   "context-continuity-eval",
@@ -131,6 +132,7 @@ const effectTestPackageNames = [
   "ai-decision",
   "ai-typesafe",
   "effect-agent",
+  "platform-alchemy-cloudflare",
   "platform-cloudflare",
   "platform-node",
   "pr-review",
@@ -146,6 +148,7 @@ const productionPackageNames = [
   "ai-decision",
   "ai-typesafe",
   "effect-agent",
+  "platform-alchemy-cloudflare",
   "platform-cloudflare",
   "platform-node",
   "pr-review",
@@ -156,11 +159,15 @@ const productionPackageNames = [
   "workflow",
 ] as const;
 
-// Only these two packages may carry Cloudflare dependencies. The shared
+// Only these packages may carry Cloudflare dependencies. The shared
 // allowance is types plus the in-workerd test harness; provider SDKs are
 // admitted separately to the outward adapter that owns them. Wrangler and
 // application scaffolds stay banned everywhere.
-const cloudflarePackageNames: ReadonlyArray<string> = ["platform-cloudflare", "storage-cloudflare"];
+const cloudflarePackageNames: ReadonlyArray<string> = [
+  "platform-alchemy-cloudflare",
+  "platform-cloudflare",
+  "storage-cloudflare",
+];
 
 const allowedCloudflareToolchainDependencies = new Set([
   "@cloudflare/vitest-pool-workers",
@@ -170,7 +177,7 @@ const allowedCloudflareToolchainDependencies = new Set([
 const platformCloudflareProviderDependencies = new Set(["@cloudflare/puppeteer"]);
 
 // Phase 6 exit gate "Agent/core/engine packages import no Cloudflare platform
-// types", audited at the manifest layer: only the two Cloudflare packages may
+// types", audited at the manifest layer: only the Cloudflare packages may
 // depend on @cloudflare/* or the Durable Object SqlClient, in ANY dependency
 // section. Everything inward of them must stay platform-clean so the semantic
 // coordinator never gains a conditional platform branch (deployment spec §3.1).
@@ -215,6 +222,12 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
   "ai-decision": [],
   "ai-typesafe": ["ai-decision"],
   "effect-agent": [],
+  "platform-alchemy-cloudflare": [
+    "effect-agent",
+    "platform-cloudflare",
+    "storage-cloudflare",
+    "testing",
+  ],
   "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
   "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
   "pr-review": ["effect-agent"],
@@ -1596,9 +1609,9 @@ esac
         ).toEqual([]);
       }
 
-      // The confinement side: every workspace consumer of the Durable Object
-      // SqlClient is one of the two Cloudflare packages, catalog-pinned.
-      for (const packageName of cloudflarePackageNames) {
+      // The native storage owners depend directly on the catalog-pinned SqlClient;
+      // the Alchemy host reuses their stores through the shared host modules.
+      for (const packageName of ["platform-cloudflare", "storage-cloudflare"]) {
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
@@ -1831,15 +1844,10 @@ esac
 
           // No production package ever SHIPS depending on the testing package.
           expect(Object.keys(manifest.dependencies ?? {})).not.toContain("@effect-agent/testing");
-          // Exactly two packages may consume it as a devDependency: platform-cloudflare's
-          // DC Travel Planner equivalence suite must assemble the SAME fixtures the DN
-          // suite runs (P6 plan §6), and storage-cloudflare's in-workerd certification
-          // runner executes `certifyDurableAdapters` against the real Durable Object
-          // adapters (P7 WP2; the memory/SQLite runners live inside packages/testing
-          // because vp's task graph rejects the storage-* → testing dev-edge cycle).
-          // Both edges are dev-only and test-only; every other production package stays
-          // clean in every dependency section.
-          if (packageName !== "platform-cloudflare" && packageName !== "storage-cloudflare") {
+          // Cloudflare hosts and stores reuse the shared deterministic fixtures and
+          // adapter certification runner inside workerd. These edges remain dev-only;
+          // every other production package stays clean in every dependency section.
+          if (!cloudflarePackageNames.includes(packageName)) {
             expect(manifestDependencies(manifest)).not.toContain("@effect-agent/testing");
           }
         }

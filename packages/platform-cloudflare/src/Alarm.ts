@@ -33,8 +33,8 @@ import {
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
-import { DurableObjectContext } from "./CloudflareBindings.ts";
 import { AuxiliaryDispatchMillis, CloudflareDurableRuntimeConfig } from "./CloudflareConfig.ts";
+import { DurableObjectContext } from "./CloudflareHostBindings.ts";
 import { safeCauseMessage } from "./internal/boundary.ts";
 
 /**

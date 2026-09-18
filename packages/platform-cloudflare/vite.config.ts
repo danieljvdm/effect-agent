@@ -38,6 +38,15 @@ export default defineConfig({
   pack: {
     entry: [
       "src/index.ts",
+      "src/CloudflareAlarms.ts",
+      "src/CloudflareRpc.ts",
+      "src/CloudflareHostBindings.ts",
+      "src/CloudflareThreadClientHost.ts",
+      "src/ThreadObjectHost.ts",
+      "src/MemoryObjectHost.ts",
+      "src/ScheduleOwnerHost.ts",
+      "src/SubscriptionPartitionHost.ts",
+
       "src/Alarm.ts",
       "src/BrowserRestCapture.ts",
       "src/BrowserRestCrawl.ts",

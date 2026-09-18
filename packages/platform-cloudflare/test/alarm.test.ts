@@ -788,7 +788,16 @@ describe("DC alarm semantics", () => {
         }),
       );
 
-      expect(accepted.ok).toBe(eviction !== "abort:after-intent");
+      // The committed abort wakes an alarm before its RPC reply is delivered. A concurrent
+      // terminalization eviction may therefore lose that reply too; canonical recovery below
+      // must prove the abort took effect without another mutation or a replayed tool call.
+      if (eviction === undefined) expect(accepted.ok).toBe(true);
+      if (eviction === "abort:after-intent") expect(accepted.ok).toBe(false);
+      if (!accepted.ok) {
+        expect(
+          Cause.isCause(accepted.error) ? Cause.findErrorOption(accepted.error) : accepted.error,
+        ).toMatchObject({ _tag: "Some", value: { _tag: "ThreadClientError", retryable: true } });
+      }
       await drainAlarmsUntil(thread, allSettled(thread));
       await assertConvergence(thread, {
         supplier: { ref: thread, counts: { book: 1 } },

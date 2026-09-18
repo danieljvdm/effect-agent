@@ -5,6 +5,7 @@ import {
 } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
+import * as ThreadObjectHost from "@effect-agent/platform-cloudflare/thread-object-host";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runInDurableObject } from "cloudflare:test";
@@ -166,6 +167,19 @@ describe("Cloudflare Agent registrations", () => {
       BindingSetupError | ThreadObject.InitializationError
     >();
     expectTypeOf<Layer.Services<typeof runtime>>().toEqualTypeOf<
+      | ApplicationConfig
+      | WorkerEnvironment
+      | DurableObjectState.DurableObjectState
+      | DurableObjectContext
+      | ThreadObjectNamespace
+    >();
+
+    const sharedRuntime = ThreadObjectHost.makeRuntime(registrations, options);
+
+    expectTypeOf<Layer.Error<typeof sharedRuntime>>().toEqualTypeOf<
+      BindingSetupError | ThreadObject.InitializationError
+    >();
+    expectTypeOf<Layer.Services<typeof sharedRuntime>>().toEqualTypeOf<
       | ApplicationConfig
       | WorkerEnvironment
       | DurableObjectState.DurableObjectState
