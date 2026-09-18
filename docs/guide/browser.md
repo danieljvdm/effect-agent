@@ -101,6 +101,17 @@ trusted host controls for Live View and handoff. Both variants assemble the brow
 confirmed-session cleanup; the API token must be redacted. The lower-level binding, lifecycle,
 and adapter Layers remain available for custom composition.
 
+For isolated testing of the controlled page, set `originOverride: { productionUrl, stagingOrigin }` on the binding or
+Cloudflare Layer options. The browser keeps the production origin while the host serves finite
+HTTP responses from staging; omit the option for ordinary traffic. The production entry path
+maps to staging `/`, and other paths keep their pathname. No public DNS or headers change.
+Only use fresh test storage and credentials. The host sends browser-admitted cookies and
+Authorization to staging. Mapped redirects remain on the production origin; off-origin redirects
+fail closed. Absolute URLs in page content are not rewritten. Mapped sessions cannot detach or
+use human handoff, and do not support streaming, WebSockets or binary/multipart uploads.
+Service-worker/background requests and new popup targets are not intercepted; use a test
+application that does not create them. Only the existing page's HTTP requests are mapped.
+
 The policy is immutable when the pass opens:
 
 - `ExactHosts` permits only a fixed set of HTTPS host authorities for page requests. It is a URL

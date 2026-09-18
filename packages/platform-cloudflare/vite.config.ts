@@ -107,6 +107,7 @@ export default defineConfig({
             "test/code-mode/**",
             "test/interactive-browser-actions.test.ts",
             "test/interactive-browser-native.test.ts",
+            "test/interactive-browser-origin.test.ts",
             "test/protected-browser-native.test.ts",
             "test/travel-planner-dc.test.ts",
           ],
@@ -118,6 +119,7 @@ export default defineConfig({
           include: [
             "test/interactive-browser-actions.test.ts",
             "test/interactive-browser-native.test.ts",
+            "test/interactive-browser-origin.test.ts",
             "test/protected-browser-native.test.ts",
           ],
         },
