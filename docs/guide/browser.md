@@ -30,7 +30,7 @@ In your application, install the browser adapters:
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Requires `effect@^4.0.0-rc.115`. For the examples below, also install `effect-agent@beta`.
+Requires `effect@^4.0.0-rc.116`. For the examples below, also install `effect-agent@beta`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 The REST examples need no Puppeteer dependency.
 
@@ -94,7 +94,7 @@ need to inspect an active page, follow a known flow, or perform host-approved UI
 a general browsing session and cannot become an agent Tool.
 
 Install `@cloudflare/puppeteer@^1.1.0` alongside
-`@effect-agent/platform-cloudflare@beta`, `effect@^4.0.0-rc.115`, and `effect-cf@^0.44.1`. Then provide
+`@effect-agent/platform-cloudflare@beta`, `effect@^4.0.0-rc.116`, and `effect-cf@^0.44.1`. Then provide
 `CloudflareInteractiveBrowser.layer({ browser: env.BROWSER, accountId, apiToken })` with
 `FetchHttpClient.layer` for browser actions. `CloudflareInteractiveBrowser.hostLayer` opts into
 trusted host controls for Live View and handoff. Both variants assemble the browser binding and

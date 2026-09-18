@@ -1,7 +1,7 @@
 // #region catalog
 import { AutoModel } from "@effect-agent/ai-decision";
-import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Config, Effect, Layer, Schema } from "effect";
 import { Agent, AgentRuntime, Identifiers, InMemory, Subagent } from "effect-agent";
 import { Toolkit } from "effect/unstable/ai";
@@ -44,8 +44,7 @@ export const Assistant = Agent.make("assistant", {
 export const ResearchLive = Subagent.layer(Research);
 
 const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
-  Layer.provide(TypeSafeClient.layer),
-  Layer.provide(TypeSafeClient.Config.layer),
+  Layer.provide(TypeSafeClient.layerConfig()),
   Layer.provide(FetchHttpClient.layer),
 );
 

@@ -64,7 +64,7 @@
   },
   "peerDependencies": {
     "@cloudflare/puppeteer": "^1.1.0",
-    "effect": "^4.0.0-rc.115",
+    "effect": "^4.0.0-rc.116",
     "effect-cf": "^0.44.1 || ^0.45.0"
   },
   "peerDependenciesMeta": {

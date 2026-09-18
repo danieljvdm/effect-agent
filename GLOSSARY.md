@@ -291,17 +291,17 @@ Effect AI's `LanguageModel` service. It accepts Effect AI Prompts and produces t
 Response streams.
 
 **Decision Model**
-A provider-neutral Effect service evaluating choice, score, and probability questions against
-explicit state. It returns typed evidence and usage. Application code owns confidence thresholds,
+Effect AI's `DecisionModel` service evaluating classification, rating, and probability decisions
+against schema-encoded input. It returns typed evidence and usage. Application code owns confidence thresholds,
 state transitions, and side effects; a Decision Model does not provide a Language Model.
 
-**Decision Query**
-One semantic question: choose a named option, score an ordered rubric, or estimate the
-probability a proposition is true. Its answer preserves the corresponding probability evidence.
+**Decision**
+One native Effect decision: classify into a named label, rate an ordered scale, or estimate
+the probability a proposition is true. Its answer preserves the corresponding probability evidence.
 
-**Decision Set**
-A reusable collection of independent Decision Queries with an input Schema. Its encoded input
-is the shared model-visible state. A Set selects no provider and owns no routing policy or
+**Decision Definition**
+A reusable collection of independent Decisions with an input Schema, created by `Decision.make`. Its encoded input
+is the shared model-visible state. A Definition selects no provider and owns no routing policy or
 execution state; the Decision Model evaluates it.
 
 **Model**  

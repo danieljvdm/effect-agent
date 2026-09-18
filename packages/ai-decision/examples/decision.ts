@@ -1,6 +1,6 @@
-import { DecisionModel, DecisionQuery, DecisionSet } from "@effect-agent/ai-decision";
-import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
+import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { Effect, Layer, Schema } from "effect";
+import { Decision, DecisionModel } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
 class Received extends Schema.TaggedClass<Received>()("Received", { message: Schema.String }) {}
@@ -11,46 +11,45 @@ class Routed extends Schema.TaggedClass<Routed>()("Routed", {
 }) {}
 export const TicketState = Schema.Union([Received, Review, Routed]);
 
-export const TicketAssessment = DecisionSet.make({
+export const TicketAssessment = Decision.make({
   input: Schema.Struct({ message: Schema.String }),
-  questions: {
-    department: DecisionQuery.choice({
+  decisions: {
+    department: Decision.classify({
       instructions: "Which team should handle this ticket?",
-      options: { billing: "Payments and refunds", technical: "Bugs and outages" },
+      criteria: { billing: "Payments and refunds", technical: "Bugs and outages" },
     }),
-    severity: DecisionQuery.score({
+    severity: Decision.rate({
       instructions: "How much work is blocked?",
-      levels: ["None", "Some work", "All work"],
+      criteria: ["None", "Some work", "All work"],
     }),
-    urgent: DecisionQuery.probability({ instructions: "Does this need immediate attention?" }),
+    urgent: Decision.probability({
+      instructions: "Does this need immediate attention?",
+      criteria: { false: "Can wait", true: "Needs action now" },
+    }),
   },
 });
 
 // The model supplies evidence. Application code owns the state transition.
 export const advance = Effect.fn("ticket.advance")(function* (state: typeof TicketState.Type) {
   if (state._tag !== "Received") return state;
-  const model = yield* DecisionModel.DecisionModel;
 
-  const { answers } = yield* model.evaluate(TicketAssessment, { message: state.message });
+  const { answers } = yield* DecisionModel.decide(TicketAssessment, {
+    input: { message: state.message },
+  });
 
   // Illustrative application thresholds; evaluate them against your own cases.
-  if (answers.department.probabilities[answers.department.choice] < 0.8)
+  if (answers.department.probabilities[answers.department.label] < 0.8)
     return new Review({ message: state.message });
 
   return new Routed({
-    department: answers.department.choice,
+    department: answers.department.label,
     priority:
-      answers.severity.score >= 1.5 || answers.urgent.probability >= 0.8 ? "high" : "normal",
+      answers.severity.rating >= 1.5 || answers.urgent.probability >= 0.8 ? "high" : "normal",
   });
 });
 
 export const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
-  Layer.provide(
-    TypeSafeClient.layer.pipe(
-      Layer.provide(TypeSafeClient.Config.layer),
-      Layer.provide(FetchHttpClient.layer),
-    ),
-  ),
+  Layer.provide(TypeSafeClient.layerConfig().pipe(Layer.provide(FetchHttpClient.layer))),
 );
 
 export const program = advance(

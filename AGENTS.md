@@ -95,7 +95,7 @@ concepts succinctly: what a feature does, how it fits, and how to use it.
 ## Package dependency direction
 
 ```text
-ai-decision <- ai-typesafe
+effect <- ai-decision (thread model selection)
 effect-agent <- storage adapters
 effect-agent <- workflow
 effect-agent + selected adapters <- platform packages

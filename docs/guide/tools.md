@@ -36,50 +36,49 @@ another JSON value takes precedence.
 
 ## Compose decisions into state transitions {#decision-transitions}
 
-`@effect-agent/ai-decision` evaluates typed questions about application state. A `DecisionSet`
-owns the input Schema and questions. A `DecisionModel` supplies the evaluator through a provider
+`Decision` from `effect/unstable/ai` defines typed assessments with an input Schema and named
+decisions. A `DecisionModel` supplies the evaluator through a provider
 Layer, such as Jev. Application code owns the next state, routing policy, and side effects.
 
 ```text
-input + DecisionSet → DecisionModel → typed answers → application action
+input + Decision → DecisionModel → typed answers → application action
                            ↑
                      provider Layer
 ```
 
 | Query         | Use it to                                                      |
 | ------------- | -------------------------------------------------------------- |
-| `choice`      | Select a named option and inspect its probability distribution |
-| `score`       | Rate input along ordered levels, allowing fractional scores    |
+| `classify`    | Select a named option and inspect its probability distribution |
+| `rate`        | Rate input along ordered levels, allowing fractional scores    |
 | `probability` | Estimate whether a proposition is true, from 0 to 1            |
 
 ```ts twoslash
-import { DecisionModel, DecisionQuery, DecisionSet } from "@effect-agent/ai-decision";
+import { Decision, DecisionModel } from "effect/unstable/ai";
 import { Effect, Schema } from "effect";
 
-const TicketAssessment = DecisionSet.make({
+const TicketAssessment = Decision.make({
   input: Schema.Struct({ message: Schema.String }),
-  questions: {
-    department: DecisionQuery.choice({
+  decisions: {
+    department: Decision.classify({
       instructions: "Which team should handle this ticket?",
-      options: { billing: "Payments and refunds", technical: "Bugs and outages" },
+      criteria: { billing: "Payments and refunds", technical: "Bugs and outages" },
     }),
   },
 });
 
 const assess = Effect.gen(function* () {
-  const model = yield* DecisionModel.DecisionModel;
-  const { answers } = yield* model.evaluate(TicketAssessment, {
-    message: "Please refund my duplicate charge.",
+  const { answers } = yield* DecisionModel.decide(TicketAssessment, {
+    input: { message: "Please refund my duplicate charge." },
   });
-  return answers.department.choice; // "billing" | "technical"
+  return answers.department.label; // "billing" | "technical"
 });
 ```
 
 Provide `TypeSafeDecisionModel.model("jev-latest")` with its client Layer to run `assess`.
-The [complete decision example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-typesafe/examples/decision.ts)
+The [complete decision example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-decision/examples/decision.ts)
 shows provider setup, all three queries, and an application state transition.
 
-The set's Schema encodes the input sent to the provider, so include only data it should receive.
+The input Schema encodes the data sent to the provider, so include only data it should receive.
 Questions in one evaluation are independent; a question that depends on another answer needs
 a subsequent evaluation. Probabilities inform application thresholds and do not grant permission
 to act. Choose retry and timeout policies explicitly. See the
@@ -90,10 +89,10 @@ to act. Choose retry and timeout policies explicitly. See the
 A native Effect AI tool can run a fixed Jev assessment inside its handler. The language model
 chooses when to call the tool; Jev answers the questions defined by the handler.
 
-The [tool example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-typesafe/examples/tool.ts)
+The [tool example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-decision/examples/tool.ts)
 declares the input and result schemas, exposes `AiError` failures, and uses `Toolkit.toLayer`
-to call `TypeSafeClient`. Supply `TicketToolsLive` with your other handlers and a
-[configured client Layer](../reference/decision-models#typesafe-client) when executing the tool.
+to call the native `DecisionModel`. Supply `TicketToolsLive` with your other handlers and a
+[configured decision model Layer](../reference/decision-models#typesafe-client) when executing the tool.
 
 ## Discover tools progressively {#progressive-discovery}
 

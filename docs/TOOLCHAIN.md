@@ -18,20 +18,20 @@ Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 | Bun                                                     | `1.4.2`                                             |
 | Vite+                                                   | `0.3.2`                                             |
 | Alchemy and its Cloudflare runtime                      | `2.0.0-beta.77` with upstream compatibility patches |
-| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.115`                                      |
+| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.116`                                      |
 | `effect-cf`                                             | `0.44.1`                                            |
 | TypeScript                                              | `7.0.2`                                             |
 | `@effect/tsgo`                                          | `0.45.0`                                            |
 | Node.js                                                 | `22.18+` or `24.11+`                                |
 
-Public packages require `effect@^4.0.0-rc.115` as a peer. The exact catalog pin supplies the
+Public packages require `effect@^4.0.0-rc.116` as a peer. The exact catalog pin supplies the
 development version. Raise the peer minimum when code needs a newer API.
 Private examples declare Effect as a regular dependency. Adapters depend on the platform and
 SQL implementations they use.
 
-`platform-cloudflare` requires `effect-cf@^0.44.1` and `effect@^4.0.0-rc.115` as host peers
+`platform-cloudflare` requires `effect-cf@^0.44.1` and `effect@^4.0.0-rc.116` as host peers
 and uses the exact catalog versions for development. Supply Effect SQL packages compatible with
-rc.115 for `effect-cf`. Consumers provide the shared runtime.
+rc.116 for `effect-cf`. Consumers provide the shared runtime.
 
 Root overrides keep Effect, its Node/browser platforms, shared SQL adapters, and test packages
 on the catalog versions, including dependencies of published consumers.
@@ -69,12 +69,10 @@ See the [package map](reference/packages.md) for public packages and capabilitie
 | `action/`                          | PR-review Action contract and ignored build output      |
 
 Framework code stays in `packages/*`. The canonical app and operational harnesses are leaf workspaces.
-Provider integrations come from upstream Effect AI Layers. The locally incubated
-`@effect-agent/ai-typesafe` package is the narrow exception: it depends on Effect and the inward `@effect-agent/ai-decision` contract
-at runtime and follows upstream provider module conventions for later extraction.
+Provider integrations come from upstream Effect AI Layers, including `@effect/ai-typesafe`.
+`ai-decision` owns thread model selection and consumes Effect's native `Decision` and `DecisionModel`.
 
 ```text
-ai-decision <- ai-typesafe
 effect-agent <- storage adapters
 effect-agent <- workflow
 effect-agent + selected adapters <- platform packages
@@ -190,7 +188,7 @@ retain a cached preview after a deployment.
 
 ## Releasing to npm
 
-All twelve public packages share one Changesets fixed group and publish to `beta`
+All eleven public packages share one Changesets fixed group and publish to `beta`
 as `X.Y.Z-beta.N`. Keep the group in `.changeset/config.json` aligned with public workspaces.
 The travel planner is a private application with no package version. It does not receive
 changesets, version bumps, changelogs, package tags, or npm releases. Private-package versioning

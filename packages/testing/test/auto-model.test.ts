@@ -1,4 +1,4 @@
-import { AutoModel, DecisionModel, type DecisionSchema } from "@effect-agent/ai-decision";
+import { AutoModel } from "@effect-agent/ai-decision";
 import { expect, it } from "@effect/vitest";
 import type { Scope } from "effect";
 import {
@@ -17,6 +17,7 @@ import { Agent, AgentRuntime, Identifiers, InMemory, Subagent } from "effect-age
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { TestClock } from "effect/testing";
 import {
+  DecisionModel,
   AiError,
   LanguageModel,
   Model,
@@ -77,14 +78,12 @@ const nativeModel = (
     ),
   );
 
-const answer = (choice = "routine") => ({
-  provider: "fixture",
-  model: "selector",
+const answer = (choice = "routine"): DecisionModel.ProviderResponse => ({
   usage: { inputTokens: 20, outputTokens: 2 },
   answers: {
     model: {
-      type: "choice",
-      choice,
+      _tag: "Classify",
+      label: choice,
       probabilities: {
         routine: choice === "routine" ? 1 : 0,
         difficult: choice === "difficult" ? 1 : 0,
@@ -95,9 +94,13 @@ const answer = (choice = "routine") => ({
 
 const decisionLayer = (
   evaluate: (
-    request: DecisionSchema.EvaluateRequest,
-  ) => Effect.Effect<unknown, AiError.AiError, Scope.Scope>,
-) => Layer.effect(DecisionModel.DecisionModel, DecisionModel.make({ evaluate }));
+    request: DecisionModel.ProviderOptions,
+  ) => Effect.Effect<DecisionModel.ProviderResponse, AiError.AiError, Scope.Scope>,
+) =>
+  Layer.effect(
+    DecisionModel.DecisionModel,
+    DecisionModel.make({ decide: (request) => evaluate(request).pipe(Effect.scoped) }),
+  );
 
 const catalog = (small = nativeModel("small"), large = nativeModel("large")) =>
   AutoModel.make({
@@ -112,7 +115,7 @@ it.effect(
   "selects on the first turn of a parent and each spawn, retaining choices across tool turns and follow-ups",
   () =>
     Effect.gen(function* () {
-      const requests: Array<DecisionSchema.EvaluateRequest> = [];
+      const requests: Array<DecisionModel.ProviderOptions> = [];
       const lifecycle: Array<string> = [];
       const generations: Array<string> = [];
 

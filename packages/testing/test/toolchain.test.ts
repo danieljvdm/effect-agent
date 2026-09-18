@@ -98,7 +98,6 @@ const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).repla
 
 const packageNames = [
   "ai-decision",
-  "ai-typesafe",
   "effect-agent",
   "platform-cloudflare",
   "platform-node",
@@ -129,7 +128,6 @@ const toolingNames = [
 
 const effectTestPackageNames = [
   "ai-decision",
-  "ai-typesafe",
   "effect-agent",
   "platform-cloudflare",
   "platform-node",
@@ -144,7 +142,6 @@ const effectTestPackageNames = [
 
 const productionPackageNames = [
   "ai-decision",
-  "ai-typesafe",
   "effect-agent",
   "platform-cloudflare",
   "platform-node",
@@ -176,7 +173,6 @@ const platformCloudflareProviderDependencies = new Set(["@cloudflare/puppeteer"]
 // coordinator never gains a conditional platform branch (deployment spec §3.1).
 const inwardPackageNames = [
   "ai-decision",
-  "ai-typesafe",
   "effect-agent",
   "sandbox-local",
   "storage-memory",
@@ -213,7 +209,6 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
  */
 const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
   "ai-decision": [],
-  "ai-typesafe": ["ai-decision"],
   "effect-agent": [],
   "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
   "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
@@ -1802,7 +1797,7 @@ esac
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
 
-          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.115");
+          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.116");
           expect(manifest.devDependencies?.effect).toBe("catalog:");
           expect(manifest.dependencies?.effect).toBeUndefined();
           expect(manifest.optionalDependencies?.effect).toBeUndefined();

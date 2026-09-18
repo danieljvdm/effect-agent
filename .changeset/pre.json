@@ -24,7 +24,6 @@
     "@effect-agent/example-durable-orchestration": "0.0.0",
     "@effect-agent/example-context-continuity-eval": "0.0.0",
     "@effect-agent/example-runtime-benchmark": "0.0.0",
-    "@effect-agent/ai-typesafe": "0.1.0-beta.99",
     "@effect-agent/ai-decision": "0.1.0-beta.102"
   },
   "changesets": [

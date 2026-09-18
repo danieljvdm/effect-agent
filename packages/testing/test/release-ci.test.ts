@@ -22,7 +22,7 @@ import {
 } from "../../../scripts/release-ci.ts";
 
 const repository = "danieljvdm/effect-agent";
-const packages = ["effect-agent", "@effect-agent/ai-typesafe"];
+const packages = ["effect-agent", "@effect-agent/ai-decision"];
 const base = "a".repeat(40);
 const head = "b".repeat(40);
 const checkout = "c".repeat(40);
@@ -37,7 +37,7 @@ const pre = {
 
 const nextPre = {
   ...pre,
-  initialVersions: { ...pre.initialVersions, "@effect-agent/ai-typesafe": "0.1.0-beta.99" },
+  initialVersions: { ...pre.initialVersions, "@effect-agent/ai-decision": "0.1.0-beta.99" },
   changesets: ["previous-change", "new-change"],
 };
 
@@ -62,8 +62,8 @@ const lock = (version: string) => `{
       "name": "effect-agent",
       "version": "${version}",
     },
-    "packages/ai-typesafe": {
-      "name": "@effect-agent/ai-typesafe",
+    "packages/ai-decision": {
+      "name": "@effect-agent/ai-decision",
       "version": "${version}",
     },
   },
@@ -106,7 +106,7 @@ const fixture = (): Array<MetadataChange> => [
         after:
           name === "effect-agent"
             ? "# effect-agent\n\n## 0.1.0-beta.100\n\n## 0.1.0-beta.99\n\nPrevious release.\n"
-            : "# @effect-agent/ai-typesafe\n\n## 0.1.0-beta.100\n\n### Minor Changes\n\n- New provider.\n",
+            : "# @effect-agent/ai-decision\n\n## 0.1.0-beta.100\n\n### Minor Changes\n\n- New provider.\n",
         oldMode: name === "effect-agent" ? "100644" : null,
         newMode: "100644",
       },
@@ -217,7 +217,7 @@ it.effect("rejects changed resolutions, rewritten history and unsupported prerel
       ].map((value) =>
         replace(".changeset/pre.json", (change) => ({ ...change, after: JSON.stringify(value) })),
       ),
-      fixture().filter((change) => !change.path.endsWith("ai-typesafe/package.json")),
+      fixture().filter((change) => !change.path.endsWith("ai-decision/package.json")),
     ])
       expect(yield* decideMetadata(changes)).toEqual({ fast: false });
   }),

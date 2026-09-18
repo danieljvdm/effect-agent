@@ -15,8 +15,8 @@ In a TypeScript project with [Bun](https://bun.sh):
 bun add effect-agent@beta
 ```
 
-Requires `effect@^4.0.0-rc.115` and an Effect AI provider.
-For the example below, also install `@effect/ai-openai@4.0.0-rc.115` and `@effect/platform-bun@4.0.0-rc.115`.
+Requires `effect@^4.0.0-rc.116` and an Effect AI provider.
+For the example below, also install `@effect/ai-openai@4.0.0-rc.116` and `@effect/platform-bun@4.0.0-rc.116`.
 
 ## Create an agent
 

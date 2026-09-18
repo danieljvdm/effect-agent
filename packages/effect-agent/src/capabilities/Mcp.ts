@@ -59,7 +59,7 @@ export class McpConnectionRequest extends Schema.Class<McpConnectionRequest>(
  */
 export class McpToolOutputSchema extends Context.Service<
   McpToolOutputSchema,
-  Option.Option<McpSchema.ToolJsonSchema>
+  Option.Option<McpSchema.ToolOutputJson>
 >()("@effect-agent/capabilities/McpToolOutputSchema") {}
 
 /** Typed remote connection failure; no remote execution is claimed exactly-once. */
@@ -137,12 +137,11 @@ export class McpConnector extends Context.Service<
 
 /**
  * `Tool.getJsonSchema`/`Tool.getJsonSchemaFromSchema` hoist a named, refined
- * type into `$defs` with a top-level `$ref`, but a real MCP server can only
- * ever advertise a flat `{ type: "object", ... }` `inputSchema`/`outputSchema`
- * (`McpSchema.ToolJsonSchema` has no `$ref` case). Comparing an unresolved
- * `$ref` derivation against a real discovered schema would report every tool
- * with a named parameter or success type as permanently drifted, so this
- * inlines a single top-level `$ref` before either side is digested.
+ * type into `$defs` with a top-level `$ref`. MCP inputs require an object root,
+ * and connectors may advertise named object outputs in that flattened form too.
+ * Inline a single top-level `$ref` in locally derived schemas so those contracts
+ * compare consistently with discovery. Explicit output annotations retain the
+ * advertised schema unchanged, including non-object roots.
  */
 const flattenTopLevelRef = (schema: JsonSchema.JsonSchema): JsonSchema.JsonSchema => {
   const ref = schema["$ref"];

@@ -8,9 +8,9 @@ description: Choose packages, adapters, and providers for your application.
 Start with `effect-agent@beta` for agent definitions, conversations, execution, and durability.
 Install storage, platform, sandbox execution, and testing packages as needed.
 
-Keep all framework packages at the same exact release. They require `effect@^4.0.0-rc.115`;
-this repository tests Effect and its OpenAI/Anthropic providers at `4.0.0-rc.115`.
-The Cloudflare platform requires `effect@^4.0.0-rc.115` and `effect-cf@^0.44.1`.
+Keep all framework packages at the same exact release. They require `effect@^4.0.0-rc.116`;
+this repository tests Effect and its OpenAI/Anthropic providers at `4.0.0-rc.116`.
+The Cloudflare platform requires `effect@^4.0.0-rc.116` and `effect-cf@^0.44.1`.
 Before 1.0, APIs and stored data may change without a migration path.
 
 ## Public imports
@@ -194,20 +194,20 @@ in your host.
 
 ### `@effect-agent/ai-decision` {#decision-models}
 
-Provider-neutral questions (`DecisionQuery`), reusable assessments (`DecisionSet`), and the
-evaluation service (`DecisionModel`). `DecisionSchema` defines their shared values. The package
-depends only on Effect; application code owns routing, transitions, and side effects.
+Thread-owned automatic model selection, using the native Effect `DecisionModel` service.
+The package depends only on Effect and exports `AutoModel`. Import ordinary assessments
+from `effect/unstable/ai` using `Decision` and `DecisionModel`.
 [`AutoModel`](./decision-models#automodel) selects a native model from described profiles on each thread's
 first turn, including new subagents. A shared selection store retains choices across follow-ups.
 
 Start with the [decision guide](../guide/tools#decision-transitions), then use the
 [API reference](./decision-models) for options and results.
 
-### `@effect-agent/ai-typesafe` {#typesafe-ai}
+### `@effect/ai-typesafe` (upstream) {#typesafe-ai}
 
 The Jev adapter: `TypeSafeDecisionModel` supplies the shared decision service, while
 `TypeSafeClient` and `TypeSafeSchema` expose the native choice, score, and noul API.
-The package depends on Effect and `@effect-agent/ai-decision` and uses an Effect HttpClient.
+This upstream Effect provider replaces `@effect-agent/ai-typesafe` and uses an Effect HttpClient.
 
 See [client configuration](./decision-models#typesafe-client) or wrap an assessment in a
 [native Effect AI tool](../guide/tools#typesafe-evaluations).

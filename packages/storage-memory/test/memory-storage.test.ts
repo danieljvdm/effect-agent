@@ -259,17 +259,8 @@ describe("MemoryThreadStore", () => {
           },
         };
 
-        const appendBoundary: unknown = store.append;
-
-        if (typeof appendBoundary !== "function") {
-          return yield* Effect.die(new Error("Expected an append function"));
-        }
-        const unvalidatedResult: unknown = appendBoundary(invalid);
-
-        if (!Effect.isEffect(unvalidatedResult)) {
-          return yield* Effect.die(new Error("Expected append to return an Effect"));
-        }
-        const failure = yield* unvalidatedResult.pipe(Effect.flip);
+        // @ts-expect-error Deliberately bypass the typed request to exercise runtime validation.
+        const failure = yield* store.append(invalid).pipe(Effect.flip);
 
         if (!isThreadStoreError(failure)) {
           return yield* Effect.die(new Error("Expected a ThreadStoreError"));
@@ -326,17 +317,8 @@ describe("MemoryThreadStore", () => {
           },
         };
 
-        const appendBoundary: unknown = store.append;
-
-        if (typeof appendBoundary !== "function") {
-          return yield* Effect.die(new Error("Expected an append function"));
-        }
-        const unvalidatedResult: unknown = appendBoundary(invalid);
-
-        if (!Effect.isEffect(unvalidatedResult)) {
-          return yield* Effect.die(new Error("Expected append to return an Effect"));
-        }
-        const failure = yield* unvalidatedResult.pipe(Effect.flip);
+        // @ts-expect-error Deliberately bypass the typed request to exercise runtime validation.
+        const failure = yield* store.append(invalid).pipe(Effect.flip);
 
         if (!isThreadStoreError(failure)) {
           return yield* Effect.die(new Error("Expected a ThreadStoreError"));
@@ -378,17 +360,8 @@ describe("MemoryThreadStore", () => {
           },
         };
 
-        const saveBoundary: unknown = store.checkpoints!.save;
-
-        if (typeof saveBoundary !== "function") {
-          return yield* Effect.die(new Error("Expected a saveCheckpoint function"));
-        }
-        const unvalidatedResult: unknown = saveBoundary(invalid);
-
-        if (!Effect.isEffect(unvalidatedResult)) {
-          return yield* Effect.die(new Error("Expected saveCheckpoint to return an Effect"));
-        }
-        const failure = yield* unvalidatedResult.pipe(Effect.flip);
+        // @ts-expect-error Deliberately bypass the typed request to exercise runtime validation.
+        const failure = yield* store.checkpoints!.save(invalid).pipe(Effect.flip);
         const checkpointFailure = yield* Schema.decodeUnknownEffect(CheckpointRejected)(failure);
 
         expect(checkpointFailure).toMatchObject({
