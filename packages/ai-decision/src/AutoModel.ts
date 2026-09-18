@@ -179,7 +179,7 @@ export const make = <const Requirements extends Readonly<Record<string, unknown>
     readonly threadId: string;
     readonly state: DecisionSchema.Content;
   }): Effect.fn.Return<Selection<Services>, AiError.AiError, DecisionModel> {
-    yield* Schema.decodeUnknownEffect(
+    yield* Schema.decodeEffect(
       Schema.Struct({
         threadId: Schema.NonEmptyString,
         version: Schema.NonEmptyString,

@@ -42,7 +42,7 @@ it.effect("uses Jev Choice directly and retains rounded evidence when restoring 
               expect(request.url).toBe("https://api.typesafe.ai/v1/systemone");
               if (request.body._tag !== "Uint8Array") throw new Error("Expected a JSON body");
 
-              const body = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown))(
+              const body = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(
                 new TextDecoder().decode(request.body.body),
               );
 
