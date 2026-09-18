@@ -56,6 +56,7 @@ export const ScoreSample = Schema.Struct({
   error: Schema.NullOr(Schema.String),
   state: Schema.NullOr(SelectiveCompactor.SelectionState),
   response: Schema.NullOr(DecisionSchema.EvaluateResponse),
+  request: Schema.optionalKey(DecisionSchema.EvaluateRequest),
 });
 
 export type ScoreSample = typeof ScoreSample.Type;
@@ -194,16 +195,19 @@ const invalidState = () =>
 export const scoreCase = Effect.fn("SelectiveEval.scoreCase")(function* (
   scenario: CompactionCase,
   repeat: number,
+  options: SelectiveCompactor.Options = {},
 ) {
   const native = yield* DecisionModel.DecisionModel;
   let state: typeof SelectiveCompactor.SelectionState.Type | null = null;
   let response: DecisionSchema.EvaluateResponse | null = null;
+  let observedRequest: DecisionSchema.EvaluateRequest | undefined;
 
   const observer = Layer.effect(
     DecisionModel.DecisionModel,
     DecisionModel.make({
       evaluate: (request) =>
         Effect.gen(function* () {
+          observedRequest = request;
           state = yield* Schema.decodeUnknownEffect(SelectiveCompactor.SelectionState)(
             request.state,
           ).pipe(Effect.mapError(invalidState));
@@ -253,10 +257,11 @@ export const scoreCase = Effect.fn("SelectiveEval.scoreCase")(function* (
       evaluate: (operation) => operation.pipe(Effect.map((value) => value.value)),
     }),
     Effect.provide(
-      SelectiveCompactor.layer({ dropBelow: 0, pinnedTools: scenario.pinnedTools }).pipe(
-        Layer.provide(ContextCompactor.layer),
-        Layer.provide(observer),
-      ),
+      SelectiveCompactor.layer({
+        ...options,
+        dropBelow: 0,
+        pinnedTools: scenario.pinnedTools,
+      }).pipe(Layer.provide(ContextCompactor.layer), Layer.provide(observer)),
     ),
     Effect.result,
   );
@@ -269,6 +274,7 @@ export const scoreCase = Effect.fn("SelectiveEval.scoreCase")(function* (
     error: Result.isFailure(result) ? result.failure.message : null,
     state,
     response,
+    ...(observedRequest === undefined ? {} : { request: observedRequest }),
   });
 });
 
@@ -346,7 +352,11 @@ export const runCase = Effect.fn("SelectiveEval.runCase")(function* (
   sample: ScoreSample,
   threshold: number,
   capture?: { prompt: Prompt.Prompt },
-  benchmark?: { readonly model: "gpt-5.6-luna" | "gpt-5.6-sol"; readonly maxResultBytes: number },
+  benchmark?: {
+    readonly model: "gpt-5.6-luna" | "gpt-5.6-sol";
+    readonly maxResultBytes: number;
+    readonly selection?: SelectiveCompactor.Options;
+  },
 ) {
   const model = yield* LanguageModel.LanguageModel;
   let history = Prompt.empty;
@@ -381,10 +391,11 @@ export const runCase = Effect.fn("SelectiveEval.runCase")(function* (
   );
 
   const compactor = strategy.startsWith("selective")
-    ? SelectiveCompactor.layer({ dropBelow: threshold, pinnedTools: scenario.pinnedTools }).pipe(
-        Layer.provide(ContextCompactor.layer),
-        Layer.provide(replayLayer(sample)),
-      )
+    ? SelectiveCompactor.layer({
+        ...benchmark?.selection,
+        dropBelow: threshold,
+        pinnedTools: scenario.pinnedTools,
+      }).pipe(Layer.provide(ContextCompactor.layer), Layer.provide(replayLayer(sample)))
     : ContextCompactor.layer;
 
   const started = yield* Clock.currentTimeMillis;

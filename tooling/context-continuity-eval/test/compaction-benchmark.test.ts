@@ -3,12 +3,16 @@ import { Effect, Exit, Layer, Redacted, Ref, Stream } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { expect, it } from "vite-plus/test";
 
-import { benchmarkCases } from "../src/compaction-benchmark-cases.ts";
+import {
+  benchmarkCases,
+  pressureBenchmarkCases,
+  transferBenchmarkCases,
+} from "../src/compaction-benchmark-cases.ts";
 import { makeLiveClient } from "../src/live-model.ts";
 import { RequestAuditSink } from "../src/request-audit.ts";
 
 it("keeps hidden evidence and oracle answers separate while respecting each declared result bound", () => {
-  for (const fixture of benchmarkCases) {
+  for (const fixture of [...benchmarkCases, ...transferBenchmarkCases, ...pressureBenchmarkCases]) {
     const instructions = `${fixture.scenario.task}\n${fixture.scenario.question}`;
 
     for (const answer of fixture.expected) expect(instructions).not.toContain(answer);

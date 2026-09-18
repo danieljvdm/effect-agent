@@ -1174,7 +1174,13 @@ Missing credentials fail during Layer acquisition.
 
 `dropBelow: 0.1` prunes a result only when the model estimates less than a 10% probability that
 its contents still matter for the ongoing task. Higher values prune more aggressively. These
-estimates are fallible, and bounded excerpts can miss relevant evidence. The
+estimates are fallible, and bounded excerpts can miss relevant evidence. The 800-character
+result excerpts include the beginning, end, and passages matching words in the
+current task. Those matches only help the model find evidence; they never authorize pruning.
+Relevant facts expressed with different words can still be missed. Calibrate `dropBelow` against
+your continuation tasks; the conservative default may retain every result.
+
+The
 [evaluation harness](https://github.com/danieljvdm/effect-agent/tree/main/tooling/context-continuity-eval#selective-pruning-evaluation)
 compares retention and continuation with the same public Layer. Auxiliary evaluations are charged
 even when nothing is removed; these Runs currently recover through full canonical replay.

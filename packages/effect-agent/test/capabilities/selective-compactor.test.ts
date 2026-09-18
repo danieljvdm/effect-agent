@@ -414,6 +414,93 @@ it("fits the complete Unicode request and leaves candidates beyond the bound uns
   }
 });
 
+it("surfaces task evidence at varied interior positions while keeping bounded excerpts and original bodies", async () => {
+  const task = "Reconcile the warehouse ledger locator and remaining units.";
+
+  const evidence = [
+    "ledger locator=parcel-482",
+    "ledger locator=parcel-715",
+    "ledger locator=parcel-936",
+  ];
+
+  const bodies = evidence.map(
+    (fact, index) =>
+      "Completed unrelated diagnostic inventory.\n" +
+      "ordinary diagnostic row\n".repeat(50 + index * 131) +
+      fact +
+      "\n" +
+      "ordinary diagnostic row\n".repeat(400 - index * 131) +
+      "End of archived observations.",
+  );
+
+  const source = Prompt.fromMessages([
+    Prompt.userMessage({ content: [Prompt.textPart({ text: task })] }),
+    ...bodies.flatMap((body, index) => round(`buried-${index}`, "read_inventory", body)),
+    ...round("newest", "status", "Current allocation remains pending."),
+  ]);
+
+  const original = JSON.stringify(source);
+  let observed = false;
+
+  const provider = Layer.effect(
+    DecisionModel.DecisionModel,
+    DecisionModel.make({
+      evaluate: (input) =>
+        Effect.gen(function* () {
+          const state = yield* Schema.decodeUnknownEffect(SelectiveCompactor.SelectionState)(
+            input.state,
+          ).pipe(Effect.orDie);
+
+          expect(state.results).toHaveLength(3);
+          for (const [index, fact] of evidence.entries()) {
+            const candidate = state.results.find(
+              (result) => result.toolCallId === `buried-${index}`,
+            );
+
+            expect(candidate?.excerpt).toContain(fact);
+            expect(candidate?.excerpt).toContain("Completed unrelated diagnostic inventory.");
+            expect(candidate?.excerpt).toContain("End of archived observations.");
+            expect(candidate?.excerpt.length).toBeLessThanOrEqual(800);
+            expect(candidate?.truncated).toBe(true);
+          }
+          observed = true;
+
+          return {
+            provider: "test",
+            model: "task-evidence",
+            usage: { inputTokens: 1, outputTokens: 1 },
+            answers: Object.fromEntries(
+              Object.keys(input.questions).map((id) => [
+                id,
+                { type: "probability", probability: 1 },
+              ]),
+            ),
+          };
+        }),
+    }),
+  );
+
+  const decisions = await Effect.runPromise(
+    Effect.gen(function* () {
+      const compactor = yield* ContextCompactor;
+
+      return yield* compactor.compact({ ...request, source }).pipe(Stream.runCollect);
+    }).pipe(
+      Effect.provideService(CompactionEvaluator(), unmeteredEvaluator),
+      Effect.provide(
+        SelectiveCompactor.layer().pipe(
+          Layer.provide(ContextCompactor.layer),
+          Layer.provide(provider),
+        ),
+      ),
+    ),
+  );
+
+  expect(observed).toBe(true);
+  expect(decisions).toEqual([]);
+  expect(JSON.stringify(source)).toBe(original);
+});
+
 for (const mode of ["invalid", "failure", "defect", "timeout", "interruption"] as const) {
   it(`preserves the view and finalizes classifier resources on ${mode}`, async () => {
     await Effect.runPromise(

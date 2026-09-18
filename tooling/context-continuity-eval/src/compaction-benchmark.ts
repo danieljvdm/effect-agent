@@ -1,7 +1,9 @@
+import { DecisionQuery } from "@effect-agent/ai-decision";
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Console, DateTime, Effect, FileSystem, Layer, Option, Ref, Schema } from "effect";
 import { CLEARED_TOOL_RESULT } from "effect-agent/compaction";
+import type * as SelectiveCompactor from "effect-agent/selective-compactor";
 import { Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient, HttpBody, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -10,6 +12,8 @@ import {
   BenchmarkCase,
   benchmarkCases,
   labeledBenchmarkCases,
+  pressureBenchmarkCases,
+  transferBenchmarkCases,
 } from "./compaction-benchmark-cases.ts";
 import { makeLiveClient, MAX_OUTPUT_TOKENS } from "./live-model.ts";
 import type { RequestAudit } from "./request-audit.ts";
@@ -24,6 +28,7 @@ import {
 } from "./selective-eval.ts";
 
 const Scores = Schema.Struct({
+  question: Schema.optionalKey(Schema.Literals(["default", "necessity"])),
   revision: Schema.String,
   node: Schema.String,
   dirty: Schema.Boolean,
@@ -33,12 +38,30 @@ const Scores = Schema.Struct({
   threshold: Schema.NullOr(Schema.Finite),
 });
 
+const selectionOptions = (question: "default" | "necessity"): SelectiveCompactor.Options =>
+  question === "default"
+    ? {}
+    : {
+        question: ({ result }) =>
+          Effect.succeed(
+            DecisionQuery.probability({
+              instructions: `Does the full result ${result.id} (${result.tool}) contain information needed to complete the current task that is not already available elsewhere in the retained conversation?`,
+              criteria: {
+                true: "Contains needed identifiers, operands, constraints, unresolved evidence, or an irreplaceable action receipt. Keep if relevant evidence may be hidden by truncation.",
+                false:
+                  "Only completed, superseded, redundant or unrelated diagnostics; the current task can be completed without this result body.",
+              },
+            }),
+          ),
+      };
+
 const Counts = Schema.Struct({
   caseId: Schema.String,
   before: Schema.Natural,
   framingAndConversation: Schema.Natural,
   variants: Schema.Array(
     Schema.Struct({
+      name: Schema.optionalKey(Schema.String),
       threshold: Schema.Finite,
       afterJev: Schema.Natural,
       dropped: Schema.Array(Schema.String),
@@ -143,6 +166,7 @@ const countProjection = Effect.fn("CompactionBenchmark.countProjection")(functio
   sample: ScoreSample,
   payload: typeof CountPayload.Type,
   selected: number,
+  baseline?: typeof Scores.Type,
 ) {
   const input = payload.input;
 
@@ -157,8 +181,20 @@ const countProjection = Effect.fn("CompactionBenchmark.countProjection")(functio
   const framingAndConversation = yield* count({ ...payload, input: blank });
   const variants: Array<(typeof Counts.Type.variants)[number]> = [];
 
-  for (const threshold of [...new Set([0.1, selected])]) {
-    const dropped = droppedIds(sample, threshold);
+  const previous = baseline?.samples.find(
+    (s) => s.caseId === fixture.scenario.id && s.repeat === 0,
+  );
+
+  const projections = [
+    { name: "jev-default", threshold: 0.1, sample },
+    { name: "jev-calibrated", threshold: selected, sample },
+    ...(previous === undefined || baseline?.threshold === null || baseline?.threshold === undefined
+      ? []
+      : [{ name: "jev-before", threshold: baseline.threshold, sample: previous }]),
+  ];
+
+  for (const projection of projections) {
+    const dropped = droppedIds(projection.sample, projection.threshold);
 
     const projected = input.map((item) =>
       item.type === "function_call_output" &&
@@ -169,7 +205,8 @@ const countProjection = Effect.fn("CompactionBenchmark.countProjection")(functio
     );
 
     variants.push({
-      threshold,
+      name: projection.name,
+      threshold: projection.threshold,
       afterJev: yield* count({ ...payload, input: projected }),
       dropped,
       missingEvidence: missingEvidence(fixture, dropped),
@@ -182,7 +219,10 @@ const countProjection = Effect.fn("CompactionBenchmark.countProjection")(functio
 export const command = Command.make(
   "compaction-benchmark",
   {
-    corpus: Flag.Literals("corpus", ["stress", "labeled"]).pipe(Flag.withDefault("stress")),
+    corpus: Flag.Literals("corpus", ["stress", "labeled", "transfer", "pressure"]).pipe(
+      Flag.withDefault("stress"),
+    ),
+    question: Flag.Literals("question", ["default", "necessity"]).pipe(Flag.withDefault("default")),
     phase: Flag.Literals("phase", ["validate", "score", "compare"]).pipe(
       Flag.withDefault("validate"),
     ),
@@ -190,13 +230,26 @@ export const command = Command.make(
       Flag.withDefault(".context-continuity-eval/compaction-benchmark"),
     ),
     scores: Flag.String("scores").pipe(Flag.optional),
+    baselineScores: Flag.String("baseline-scores").pipe(Flag.optional),
+    variants: Flag.Literals("variants", ["all", "paired"]).pipe(Flag.withDefault("all")),
+    maxCostUsd: Flag.Int("max-cost-usd").pipe(
+      Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 199 }))),
+      Flag.withDefault(20),
+    ),
     model: Flag.Literals("model", ["gpt-5.6-luna", "gpt-5.6-sol"]).pipe(
       Flag.withDefault("gpt-5.6-luna"),
     ),
     subset: Flag.Literals("subset", ["all", "large", "small"]).pipe(Flag.withDefault("all")),
   },
   Effect.fn("CompactionBenchmark.command")(function* (options) {
-    const corpus = options.corpus === "labeled" ? labeledBenchmarkCases : benchmarkCases;
+    const corpus =
+      options.corpus === "labeled"
+        ? labeledBenchmarkCases
+        : options.corpus === "transfer"
+          ? transferBenchmarkCases
+          : options.corpus === "pressure"
+            ? pressureBenchmarkCases
+            : benchmarkCases;
 
     const selectorRequests = corpus.reduce(
       (n, c) => n + (c.scenario.split === "calibration" ? 1 : 3),
@@ -221,7 +274,7 @@ export const command = Command.make(
           cases: corpus.length,
           selectorRequests,
           thresholds,
-          maxOpenAiUsd: { "gpt-5.6-luna": 60, "gpt-5.6-sol": 120 },
+          maxOpenAiUsd: options.maxCostUsd,
           jevAllowanceUsd: 1,
           maxInputTokens: 922000,
           corpus: corpus.map((c) => ({
@@ -267,6 +320,10 @@ export const command = Command.make(
     ]) {
       yield* fs.copyFile(`src/${name}`, `${options.output}/source/${name}`);
     }
+    yield* fs.copyFile(
+      "../../packages/effect-agent/src/capabilities/SelectiveCompactor.ts",
+      `${options.output}/source/SelectiveCompactor.ts`,
+    );
     if (options.phase === "score") {
       const samples: Array<ScoreSample> = [];
       let threshold: number | null = null;
@@ -278,6 +335,7 @@ export const command = Command.make(
           node,
           dirty,
           startedAt,
+          question: options.question,
           cases: corpus,
           samples,
           threshold,
@@ -287,9 +345,11 @@ export const command = Command.make(
       for (const split of ["calibration", "holdout"] as const) {
         for (const fixture of corpus.filter((value) => value.scenario.split === split)) {
           for (let repeat = 0; repeat < (split === "calibration" ? 1 : 3); repeat++) {
-            const sample = yield* scoreCase(fixture.scenario, repeat).pipe(
-              Effect.provide(decisionLayer),
-            );
+            const sample = yield* scoreCase(
+              fixture.scenario,
+              repeat,
+              selectionOptions(options.question),
+            ).pipe(Effect.provide(decisionLayer));
 
             samples.push(sample);
             yield* save();
@@ -343,6 +403,22 @@ export const command = Command.make(
         message: "Require complete frozen scores and unchanged corpus",
       });
     const selected = scores.threshold;
+
+    const baseline = Option.isSome(options.baselineScores)
+      ? yield* fs
+          .readFileString(options.baselineScores.value)
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Scores))))
+      : undefined;
+
+    if (
+      baseline !== undefined &&
+      (baseline.threshold === null ||
+        baseline.samples.length !== selectorRequests ||
+        !Schema.toEquivalence(Schema.Array(BenchmarkCase))(baseline.cases, corpus))
+    )
+      return yield* new SelectiveEvalError({
+        message: "Baseline requires complete frozen scores and the same corpus",
+      });
     const outcomes: Array<typeof ResultRow.Type> = [];
     const counts: Array<typeof Counts.Type> = [];
     const events: Array<RequestAudit> = [];
@@ -352,9 +428,7 @@ export const command = Command.make(
 
       const client = yield* makeLiveClient({
         model: options.model,
-        maxCostMicrousd:
-          (options.corpus === "labeled" ? 10 : options.model === "gpt-5.6-luna" ? 60 : 120) *
-          1_000_000,
+        maxCostMicrousd: options.maxCostUsd * 1_000_000,
         profile: "large-compaction",
         phase,
         maxInputTokens: 922_000,
@@ -385,6 +459,10 @@ export const command = Command.make(
         if (sample === undefined)
           return yield* new SelectiveEvalError({ message: "Missing frozen sample" });
 
+        const previous = baseline?.samples.find(
+          (s) => s.caseId === fixture.scenario.id && s.repeat === 0,
+        );
+
         // Fixed paired order: original first supplies exact pre/post accounting. Cached tokens are billed separately; this is not a cold-cache latency comparison.
         const variants = [
           { name: "original", strategy: "uncompacted", threshold: 0.1 },
@@ -394,7 +472,21 @@ export const command = Command.make(
           { name: "jev-calibrated", strategy: "selective-summary", threshold: selected },
         ] as const;
 
-        for (const variant of variants) {
+        const paired = [
+          variants[0],
+          ...(previous === undefined
+            ? []
+            : [
+                {
+                  name: "jev-before",
+                  strategy: "selective-summary",
+                  threshold: baseline?.threshold ?? 0.1,
+                } as const,
+              ]),
+          variants[4],
+        ];
+
+        for (const variant of options.variants === "paired" ? paired : variants) {
           const eventStart = events.length;
           const usageBefore = yield* client.snapshot;
 
@@ -403,10 +495,16 @@ export const command = Command.make(
           const outcome = yield* runCase(
             fixture.scenario,
             variant.strategy,
-            sample,
+            variant.name === "jev-before" && previous !== undefined ? previous : sample,
             variant.threshold,
             undefined,
-            { model: options.model, maxResultBytes: fixture.maxResultBytes },
+            {
+              model: options.model,
+              maxResultBytes: fixture.maxResultBytes,
+              selection: selectionOptions(
+                (variant.name === "jev-before" ? baseline?.question : scores.question) ?? "default",
+              ),
+            },
           ).pipe(Effect.provide(layer));
 
           const usage = yield* client.snapshot;
@@ -455,7 +553,7 @@ export const command = Command.make(
               requests[0].json,
             );
 
-            counts.push(yield* countProjection(fixture, sample, payload, selected));
+            counts.push(yield* countProjection(fixture, sample, payload, selected, baseline));
             yield* writeJson(`${options.output}/counts.json`, Schema.Array(Counts), counts);
           }
           events.length = 0;

@@ -140,9 +140,13 @@ intact. See the [consumer setup](../../docs/guide/context-management.md#selectiv
 For larger, paired experiments, `compaction:benchmark` generates reproducible synthetic release
 and coordination histories with three sizes and three result profiles. `large-results` explicitly
 raises the per-result bound to 256 KiB; the other profiles retain the default 50 KiB bound. The
-`stress` corpus buries necessary evidence beyond the selector excerpt. The `labeled` corpus adds
+`stress` corpus buries necessary evidence beyond the beginning and end of each result. The `labeled` corpus adds
 matched large-history controls whose result headers describe that evidence. These are induced
 workloads, not production traffic or a replay of the upstream plugin.
+The `transfer` corpus uses fulfillment and migration tasks, varied evidence positions, synonyms,
+untrusted distractions, and semantic-only records without matching task words.
+The `pressure` corpus reuses the large buried-evidence histories with a modest reduction target
+(90% of their full native history token estimate), including the default 50 KiB result profiles.
 
 ```sh
 vp run -F @effect-agent/example-context-continuity-eval compaction:benchmark --phase validate
@@ -157,6 +161,10 @@ vp run -F @effect-agent/example-context-continuity-eval compaction:benchmark --p
 
 # Repeat score/compare with --corpus labeled for matched controls.
 # Add --model gpt-5.6-sol --subset large for a stronger-model stress cross-check.
+# Set --max-cost-usd explicitly when allocating a larger budget for Sol.
+# Use --corpus transfer for transfer cases. --variants paired compares original and calibrated
+# selective continuation; --baseline-scores adds a previous selector's scores for the same corpus.
+# --question necessity runs a question-only ablation during scoring.
 ```
 
 Each attempt requires a fresh directory and retains its corpus, source snapshot, scores, exact
@@ -175,9 +183,9 @@ reuse frozen scores, so their timing excludes live Jev. Calls use fixed paired o
 cached usage; they do not establish cold-cache continuation speedups.
 
 Only this explicit manual profile admits up to 922k input tokens, with long-context pricing and
-separate per-attempt ceilings: $60 for Luna stress, $120 for Sol stress, $10 for either labeled
-control run. These ceilings are not a shared cross-process budget; the operator must allocate a
-total across attempts. The selector has at most 60 requests per stress run or 24 per labeled run,
+an explicit per-attempt ceiling (`--max-cost-usd`, default $20, maximum $199). These ceilings are
+not a shared cross-process budget; the operator must allocate a total across attempts.
+The selector has 60 requests per stress run, 24 per labeled or pressure run, or 54 per transfer run,
 each with the native 48 KB request bound. Automatic continuity jobs retain their $10/32k limits.
 Prices are conservative list-price estimates, not invoices; there are no inference retries.
 
