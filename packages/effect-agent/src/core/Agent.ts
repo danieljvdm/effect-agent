@@ -33,13 +33,31 @@ export type InputPromptSource<Input, E = never, R = never> = (
 /** Native services needed to execute and identify model calls. */
 export type ModelServices = LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName;
 
-/** Accepts Layers providing the native model and both identity services. */
+/**
+ * A thread-aware choice of a native model. The runtime supplies only model-visible
+ * task context and eligible Tool descriptions, after validating the Agent input.
+ * The resolver owns retaining one choice per Thread, including across Runs and
+ * recovery; it captures client requirements and returns a closed native Layer
+ * that the interpreter acquires for the Run. Context hooks may prepare prompts
+ * but cannot replace this model through a per-Turn modelCall.
+ * Selection failures remain AiError values and all selector/client services stay in R.
+ */
+export interface ModelResolver<Requirements> {
+  readonly resolve: (request: {
+    readonly threadId: string;
+    readonly state: Schema.JsonObject;
+  }) => Effect.Effect<Layer.Layer<ModelServices>, AiError.AiError, Requirements>;
+}
+
+/** Accepts native model Layers or resolvers that retain one native model per Thread. */
 export type NativeModel<ModelValue> =
-  ModelValue extends Layer.Layer<infer Provides, never, infer _Requires>
-    ? ModelServices extends Provides
-      ? ModelValue
-      : never
-    : never;
+  ModelValue extends ModelResolver<infer _Requirements>
+    ? ModelValue
+    : ModelValue extends Layer.Layer<infer Provides, never, infer _Requires>
+      ? ModelServices extends Provides
+        ? ModelValue
+        : never
+      : never;
 
 /** Definition-owned boundary for selecting and validating an application run disposition. */
 export interface RunDispositionDeclaration<Output, DispositionSchema extends Schema.Top> {
@@ -183,7 +201,7 @@ type AnyDefinitionShape = Definition<
   Schema.Top | undefined
 >;
 
-/** Immutable pairing of an agent definition with its native model Layer. */
+/** Immutable pairing of an agent definition with a native model Layer or thread resolver. */
 export interface Binding<DefinitionValue extends AnyDefinitionShape, ModelValue> {
   readonly definition: DefinitionValue;
   readonly model: NativeModel<ModelValue>;
@@ -204,7 +222,11 @@ type EffectServices<Value> =
   Value extends Effect.Effect<infer _Success, infer _Error, infer Services> ? Services : never;
 
 type ModelRequirements<Value> =
-  Value extends Layer.Layer<infer _Provides, infer _Error, infer Services> ? Services : never;
+  Value extends ModelResolver<infer Services>
+    ? Services
+    : Value extends Layer.Layer<infer _Provides, infer _Error, infer Services>
+      ? Services
+      : never;
 
 /** Constructors and type projections for definitions and runnable model bindings. */
 
@@ -564,7 +586,7 @@ export function make(
   });
 }
 
-/** Fix a model Layer for registration or delegation without acquiring or hiding its requirements. */
+/** Bind a native model or thread resolver without acquiring or hiding its requirements. */
 export const withModel = <DefinitionValue extends AnyDefinition, ModelValue>(
   definition: DefinitionValue,
   model: NativeModel<ModelValue>,

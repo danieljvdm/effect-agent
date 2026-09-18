@@ -215,11 +215,13 @@ export type RuntimeBinding<
   InputPromptValue,
   UpdatesSchema
 > & {
-  readonly model: Layer.Layer<
-    LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName | ModelProvides,
-    never,
-    ModelRequires
-  >;
+  readonly model:
+    | Layer.Layer<
+        LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName | ModelProvides,
+        never,
+        ModelRequires
+      >
+    | Agent.ModelResolver<ModelRequires>;
 };
 
 type InstructionResultOf<Instructions, Input> = Instructions extends (input: Input) => infer Result
@@ -515,6 +517,8 @@ type InterpreterRequirements<
   | InstructionRequirements;
 
 interface RunContext {
+  /** A thread resolver owns model identity; context hooks must not replace it. */
+  readonly resolvedModel: boolean;
   readonly updates: Map<string, Update>;
   readonly validateUpdate: (value: Schema.Json) => Effect.Effect<void, UpdateError>;
   updateBytes: number;
@@ -5399,6 +5403,16 @@ const makeTurn = <
       const modelContext: PreparedRunContext =
         options.context === undefined ? { prompt } : yield* options.context.prepare(contextRequest);
 
+      if (context.resolvedModel && modelContext.modelCall !== undefined) {
+        return yield* new AiError.AiError({
+          module: "AgentRuntime",
+          method: "resolveModel",
+          reason: new AiError.InvalidRequestError({
+            description: "Context preparation cannot replace a thread-resolved model",
+          }),
+        });
+      }
+
       const callContext =
         modelContext.modelCall === undefined
           ? undefined
@@ -7971,6 +7985,7 @@ function streamWithCompletion<
                   );
 
           const context: RunContext = {
+            resolvedModel: model !== undefined && "resolve" in model,
             validateUpdate,
             updates: new Map(),
             updateBytes: 0,
@@ -8259,7 +8274,7 @@ function streamWithCompletion<
               // flatMap releases its child pull and Scope before taking that
               // request, so prior traces and prepared prompts do not remain
               // reachable through recursively nested Stream.concat descriptions.
-              return Stream.fromEffectRepeat(
+              const turns = Stream.fromEffectRepeat(
                 Effect.suspend(() => {
                   const current = pending;
 
@@ -8299,6 +8314,43 @@ function streamWithCompletion<
                   }),
                 ),
               );
+
+              if (model === undefined || !("resolve" in model)) return turns;
+
+              const catalog = yield* eligibleCatalog(
+                agent.definition,
+                { threadId, runId, turn: pending.turn, input: context.input },
+                options.subagentGrant,
+                options.delegationDepth ?? options.parentLink?.depth ?? 0,
+              );
+
+              const selectionPrompt = yield* Schema.encodeEffect(
+                Schema.fromJsonString(Prompt.Prompt),
+              )(pending.prompt).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AiError.AiError({
+                      module: "AgentRuntime",
+                      method: "resolveModel",
+                      reason: new AiError.InvalidRequestError({
+                        description: `Cannot encode model selection context: ${cause.message}`,
+                      }),
+                    }),
+                ),
+              );
+
+              const selected = yield* model.resolve({
+                threadId,
+                state: {
+                  prompt: selectionPrompt,
+                  tools: catalog.map(({ tool }) => ({
+                    name: tool.name,
+                    description: tool.description ?? "",
+                  })),
+                },
+              });
+
+              return turns.pipe(Stream.provide(selected, { local: true }));
             }),
           );
 
@@ -8469,7 +8521,9 @@ function streamWithCompletion<
         | ModelRequires
         | ModelUsageAccounting
         | AgentUpdateAcceptance
-      > = model === undefined ? finalized : finalized.pipe(Stream.provide(model, { local: true }));
+      > = model === undefined || "resolve" in model
+        ? finalized
+        : finalized.pipe(Stream.provide(model, { local: true }));
 
       const events = modeled.pipe(
         // The engine composition boundary owns span-lifecycle isolation while preserving the host's
@@ -8745,11 +8799,13 @@ type ExecutableAgent =
   | ExecutableDefinition
   | {
       readonly definition: ExecutableDefinition;
-      readonly model: Layer.Layer<
-        LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
-        never,
-        unknown
-      >;
+      readonly model:
+        | Layer.Layer<
+            LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
+            never,
+            unknown
+          >
+        | Agent.ModelResolver<unknown>;
     };
 
 /** Decode external input before instructions or model execution. */

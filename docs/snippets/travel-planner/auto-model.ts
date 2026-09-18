@@ -3,7 +3,7 @@ import { AutoModel } from "@effect-agent/ai-decision";
 import { TypeSafeClient, TypeSafeDecisionModel } from "@effect-agent/ai-typesafe";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Effect, Layer, Schema } from "effect";
-import { Agent, AgentRuntime, Identifiers, InMemory } from "effect-agent";
+import { Agent, AgentRuntime, Identifiers, InMemory, Subagent } from "effect-agent";
 import { Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -23,12 +23,27 @@ export const ThreadModels = AutoModel.make({
 });
 // #endregion catalog
 
+export const Research = Subagent.make("research", {
+  description: "Research a specific question before answering.",
+  target: Agent.make("researcher", {
+    input: Schema.Struct({ question: Schema.String }),
+    output: Schema.String,
+    instructions: "Research the question and explain the tradeoffs.",
+    toolkit: Toolkit.empty,
+  }),
+});
+
 export const Assistant = Agent.make("assistant", {
   input: Schema.String,
   output: Schema.Struct({ answer: Schema.String }),
-  instructions: (task) => task,
-  toolkit: Toolkit.empty,
+  instructions: "Delegate questions to research when useful, then answer the user.",
+  toolkit: Toolkit.make(Research.tool),
 });
+
+export const BoundAssistant = Agent.withModel(Assistant, ThreadModels);
+
+// Each spawn selects from its own delegated task on its first turn.
+export const ResearchLive = Subagent.layer(Research, ThreadModels);
 
 const DecisionLive = TypeSafeDecisionModel.model("jev-latest").pipe(
   Layer.provide(TypeSafeClient.layer),
@@ -40,22 +55,26 @@ const OpenAiLive = OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_AP
   Layer.provide(FetchHttpClient.layer),
 );
 
-// This example retains the selection and conversation in memory. A durable host
-// atomically saves selected.record with its thread metadata before starting work.
+// Provide one selection store around the parent and its subagent handlers.
+// Durable hosts supply a SelectionStore that commits records across restarts.
+const Live = ResearchLive.pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(DecisionLive, OpenAiLive, InMemory.layer, AutoModel.layerMemory()),
+  ),
+);
+
+// #region runs
 export const program = Effect.gen(function* () {
   const threadId = Identifiers.ThreadId.make("auto-example");
-  const task = "Summarize the tradeoffs of taking a train or bus from Lisbon to Porto.";
-  const selected = yield* ThreadModels.select({ threadId, state: { task, tools: [] } });
 
-  // Select immediately before the new thread's first run.
-  yield* AgentRuntime.run(Agent.withModel(Assistant, selected.model), task, { threadId });
+  // AutoModel selects before this thread's first model call.
+  yield* AgentRuntime.run(BoundAssistant, "Compare taking a train or bus from Lisbon to Porto.", {
+    threadId,
+  });
 
-  // On a later user turn, restore the record saved with this thread.
-  const restored = yield* ThreadModels.restore(threadId, selected.record);
-
-  return yield* AgentRuntime.run(
-    Agent.withModel(Assistant, restored.model),
-    "Which would you choose for comfort?",
-    { threadId },
-  );
-}).pipe(Effect.provide(Layer.mergeAll(DecisionLive, OpenAiLive, InMemory.layer)));
+  // The same thread keeps its original model on follow-ups.
+  return yield* AgentRuntime.run(BoundAssistant, "Which would you choose for comfort?", {
+    threadId,
+  });
+}).pipe(Effect.provide(Live));
+// #endregion runs

@@ -13,9 +13,9 @@ The parent calls `summarize` like any other tool. The child gets that call's inp
 own instructions and conversation, and returns `{ output, budgetExhausted }`. Its intermediate
 history stays out of the parent's context. Each agent can use its own model and toolkit.
 
-To choose a model from the delegated task, use [AutoModel](../reference/decision-models#automodel)
-at the host's child-thread creation boundary. Save the selection with that child thread and
-restore it for follow-ups, keeping its model stable across runs.
+Pass an [AutoModel](../reference/decision-models#automodel) catalog to `Subagent.layer` to select
+from each new child's delegated task automatically. A shared selection store retains the child's
+choice for follow-ups; sibling threads select independently.
 
 This defines the agents. Choose how to run them below.
 

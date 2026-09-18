@@ -1190,8 +1190,10 @@ type SubagentHandler<
 >;
 
 /**
- * Build the Toolkit handler Layer for one delegation Tool from a model Layer or
- * an explicit child Agent Binding.
+ * Build the Toolkit handler Layer from a native model, a thread ModelResolver,
+ * or an explicit child Agent Binding. A resolver runs inside each new child's
+ * first Run, using that child's Thread ID and projected task. Provide its shared
+ * selection store outside this Layer to retain choices across child follow-ups.
  *
  * Construction requirements carry the child Binding's full runtime needs and
  * both projections; they are captured once via `Effect.context` so the

@@ -223,7 +223,7 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
   "storage-memory": ["effect-agent"],
   "storage-sqlite": ["effect-agent"],
   workflow: ["effect-agent", "storage-memory"],
-  testing: ["effect-agent", "platform-node", "storage-memory", "storage-sqlite"],
+  testing: ["ai-decision", "effect-agent", "platform-node", "storage-memory", "storage-sqlite"],
 };
 
 const readManifest = (path: string) =>
@@ -1504,6 +1504,13 @@ esac
           // reappear in dependencies, peerDependencies, or optionalDependencies,
           // where they would ship or leak into consumer resolution.
           if (section !== "devDependencies") {
+            if (packageName === "testing") {
+              expect(
+                edges,
+                "AutoModel integration fixtures are a dev-only dependency",
+              ).not.toContain("ai-decision");
+            }
+
             expect(
               edges,
               `${packageName} may consume @effect-agent/testing only as a devDependency`,

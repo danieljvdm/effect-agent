@@ -90,6 +90,7 @@ packages. Keep core and sandbox contracts platform-neutral. The export check enf
 internal boundaries as well as package imports.
 
 Arrows point toward dependencies. An inward package must not import an outward one.
+The testing package consumes `ai-decision` as a devDependency for model integration fixtures.
 Shared compiler settings live in `tsconfig.base.json`.
 
 ## Commands

@@ -4,7 +4,7 @@
  *
  * @since 0.1.0
  */
-import { Effect, type Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema, Semaphore } from "effect";
 import { AiError, type LanguageModel, type Model } from "effect/unstable/ai";
 
 import { DecisionModel } from "./DecisionModel.ts";
@@ -58,6 +58,25 @@ export const SelectionRecord = Schema.Struct({
 export type SelectionRecord = typeof SelectionRecord.Type;
 
 /**
+ * Thread-owned selection storage. Return the committed winning record before
+ * generation can start. Implementations must serialize creation for a Thread;
+ * a durable implementation must retain records across host restarts. A crash
+ * before commitment can repeat the decision request.
+ *
+ * @category services
+ * @since 0.1.0
+ */
+export class SelectionStore extends Context.Service<
+  SelectionStore,
+  {
+    readonly getOrCreate: <Requirements>(
+      threadId: string,
+      select: Effect.Effect<SelectionRecord, AiError.AiError, Requirements>,
+    ) => Effect.Effect<unknown, AiError.AiError, Requirements>;
+  }
+>()("@effect-agent/ai-decision/AutoModel/SelectionStore") {}
+
+/**
  * The native model retains its provider identity and Layer requirements.
  * Persist only record, not the live model Layer. Selector usage is retained in
  * record.decision and is separate from the thread's generative model usage.
@@ -78,6 +97,18 @@ export interface Selection<Requirements> {
  * @since 0.1.0
  */
 export interface AutoModel<Requirements> {
+  /**
+   * Automatic Agent.withModel / Subagent.layer integration. Resolve at the first
+   * Turn of a Run; the shared SelectionStore retains the Thread's original choice.
+   */
+  readonly resolve: (options: {
+    readonly threadId: string;
+    readonly state: DecisionSchema.Content;
+  }) => Effect.Effect<
+    Candidate["model"],
+    AiError.AiError,
+    DecisionModel | SelectionStore | Requirements
+  >;
   /** One Choice evaluation for a new thread; re-executing selects again. */
   readonly select: (options: {
     readonly threadId: string;
@@ -98,6 +129,85 @@ const invalidRequest = (method: string, description: string) =>
   });
 
 /**
+ * Retain choices for one application Scope. Provide this Layer once around all
+ * parent Runs and child handler Layers, alongside InMemory.layer. Independent
+ * threads may select concurrently; overlapping requests for the same Thread
+ * share its committed choice. Failed or interrupted selections can be retried.
+ *
+ * Capacity counts distinct attempted Thread IDs (default 10,000). Entries never
+ * expire or evict: reaching capacity fails instead of silently changing a live
+ * Thread's model. Scope closure releases this state. Durable hosts must supply
+ * their own SelectionStore; this Layer provides no restart recovery.
+ *
+ * @category layers
+ * @since 0.1.0
+ */
+export const layerMemory = (options?: { readonly capacity?: number }) =>
+  Layer.effect(
+    SelectionStore,
+    Effect.gen(function* () {
+      const capacity = yield* Schema.decodeEffect(Schema.Int.check(Schema.isGreaterThan(0)))(
+        options?.capacity ?? 10_000,
+      ).pipe(
+        Effect.mapError(() => invalidRequest("layerMemory", "Capacity must be a positive integer")),
+      );
+
+      const entries = new Map<
+        string,
+        {
+          readonly semaphore: Semaphore.Semaphore;
+          record?: SelectionRecord;
+        }
+      >();
+
+      return SelectionStore.of({
+        getOrCreate: <Requirements>(
+          threadId: string,
+          select: Effect.Effect<SelectionRecord, AiError.AiError, Requirements>,
+        ) =>
+          Effect.gen(function* () {
+            yield* Schema.decodeEffect(Schema.NonEmptyString)(threadId).pipe(
+              Effect.mapError(() => invalidRequest("resolve", "Thread ID must be nonempty")),
+            );
+            let entry = entries.get(threadId);
+
+            if (entry === undefined) {
+              if (entries.size >= capacity) {
+                return yield* invalidRequest("resolve", "Model selection store capacity exceeded");
+              }
+              entry = { semaphore: Semaphore.makeUnsafe(1) };
+              entries.set(threadId, entry);
+            }
+            const current = entry;
+
+            return yield* current.semaphore.withPermit(
+              Effect.gen(function* () {
+                if (current.record !== undefined) return current.record;
+                const selected = yield* select;
+
+                const record = yield* Schema.decodeEffect(SelectionRecord)(selected).pipe(
+                  Effect.mapError(() =>
+                    invalidRequest("resolve", "Invalid model selection record"),
+                  ),
+                );
+
+                if (record.threadId !== threadId) {
+                  return yield* invalidRequest(
+                    "resolve",
+                    "Model selection belongs to another thread",
+                  );
+                }
+                current.record = record;
+
+                return record;
+              }),
+            );
+          }),
+      });
+    }),
+  );
+
+/**
  * Describe approved native models and evaluate them through DecisionModel.
  * Supply Jev with TypeSafeDecisionModel.model("jev-latest") from ai-typesafe.
  * Increment version whenever a profile's model, effort, or other settings change;
@@ -107,14 +217,18 @@ const invalidRequest = (method: string, description: string) =>
  * only include information the decision provider may receive. The application
  * must filter candidates for authorization and required capabilities first.
  *
- * Select once per thread (including each child thread), persist record atomically
- * with thread creation, and reuse selection.model for all turns and later runs.
+ * Pass the catalog directly to Agent.withModel or Subagent.layer for automatic
+ * selection on each Thread's first Turn. Supply DecisionModel, native provider
+ * clients, and a shared SelectionStore. Explicit select/restore remain available
+ * for hosts that own selection at admission instead.
+ *
+ * Persist record before generation and reuse selection.model for all turns and later runs.
  * Restore rejects a different thread, catalog version, or missing profile; it
  * never silently reselects. Store ownership, authorization, atomic creation, and
- * recovery belong to the host. This module performs no storage mutations.
+ * recovery belong to the host's SelectionStore.
  *
  * There are no implicit retries, deadlines, fallbacks, confidence thresholds,
- * caches, or mid-thread switches. Defects and interruption propagate. The
+ * or mid-thread switches. Defects and interruption propagate. The
  * AutoModel.select span records only the selected profile ID, not task content.
  *
  * @category constructors
@@ -226,5 +340,23 @@ export const make = <const Requirements extends Readonly<Record<string, unknown>
     return { model: selected, record };
   });
 
-  return Object.freeze({ select, restore });
+  const resolve = Effect.fnUntraced(function* (request: {
+    readonly threadId: string;
+    readonly state: DecisionSchema.Content;
+  }) {
+    const store = yield* SelectionStore;
+
+    const record = yield* store.getOrCreate(
+      request.threadId,
+      select(request).pipe(Effect.map((selection) => selection.record)),
+    );
+
+    const services = yield* Effect.context<Services>();
+
+    return (yield* restore(request.threadId, record)).model.pipe(
+      Layer.provide(Layer.succeedContext(services)),
+    );
+  });
+
+  return Object.freeze({ select, restore, resolve });
 };

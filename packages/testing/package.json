@@ -36,6 +36,7 @@
     "effect-agent": "workspace:*"
   },
   "devDependencies": {
+    "@effect-agent/ai-decision": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/storage-memory": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
