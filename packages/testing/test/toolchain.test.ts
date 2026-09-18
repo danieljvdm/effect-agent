@@ -214,7 +214,7 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
 const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
   "ai-decision": [],
   "ai-typesafe": ["ai-decision"],
-  "effect-agent": [],
+  "effect-agent": ["ai-decision"],
   "platform-cloudflare": ["effect-agent", "storage-cloudflare", "testing"],
   "platform-node": ["effect-agent", "storage-sqlite", "workflow"],
   "pr-review": ["effect-agent"],
