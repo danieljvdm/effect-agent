@@ -1,6 +1,8 @@
 import { Context, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
+import { browserFailure } from "./browser-failure.ts";
+
 export class BrowserRunCleanupError extends Schema.TaggedError<BrowserRunCleanupError>()(
   "BrowserRunCleanupError",
   {
@@ -14,6 +16,7 @@ export class BrowserRunCleanupError extends Schema.TaggedError<BrowserRunCleanup
       "pending",
     ]),
     status: Schema.optionalKey(Schema.Int),
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
 
@@ -65,7 +68,13 @@ export class BrowserRunSessionLifecycle extends Context.Service<
             .pipe(
               // workerd supports manual/follow, not error. Reject every redirect below.
               Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
-              Effect.mapError(() => new BrowserRunCleanupError({ reason: "provider" })),
+              Effect.mapError(
+                (cause) =>
+                  new BrowserRunCleanupError({
+                    reason: "provider",
+                    cause: browserFailure("browser.close.request", cause),
+                  }),
+              ),
             );
 
           if (response.status === 401 || response.status === 403)
@@ -99,11 +108,23 @@ export class BrowserRunSessionLifecycle extends Context.Service<
 
               return Effect.succeed(combined);
             },
-          ).pipe(Effect.mapError(() => new BrowserRunCleanupError({ reason: "malformed" })));
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new BrowserRunCleanupError({
+                  reason: "malformed",
+                  cause: browserFailure("browser.close.response", cause),
+                }),
+            ),
+          );
 
           const body = yield* Effect.try({
             try: () => new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes),
-            catch: () => new BrowserRunCleanupError({ reason: "malformed" }),
+            catch: (cause) =>
+              new BrowserRunCleanupError({
+                reason: "malformed",
+                cause: browserFailure("browser.close.decode", cause),
+              }),
           });
 
           if (response.status === 404) {
@@ -117,14 +138,26 @@ export class BrowserRunSessionLifecycle extends Context.Service<
           }
           if (method === "DELETE") {
             const result = yield* Schema.decodeEffect(Schema.fromJsonString(Closed))(body).pipe(
-              Effect.mapError(() => new BrowserRunCleanupError({ reason: "malformed" })),
+              Effect.mapError(
+                (cause) =>
+                  new BrowserRunCleanupError({
+                    reason: "malformed",
+                    cause: browserFailure("browser.close.response", cause),
+                  }),
+              ),
             );
 
             return result.status === "closed";
           }
 
           const result = yield* Schema.decodeEffect(Schema.fromJsonString(Metadata))(body).pipe(
-            Effect.mapError(() => new BrowserRunCleanupError({ reason: "malformed" })),
+            Effect.mapError(
+              (cause) =>
+                new BrowserRunCleanupError({
+                  reason: "malformed",
+                  cause: browserFailure("browser.close.response", cause),
+                }),
+            ),
           );
 
           if (result.sessionId !== sessionId)

@@ -1,4 +1,5 @@
 import {
+  Cause,
   Clock,
   Context,
   Crypto,
@@ -40,6 +41,13 @@ import {
   type ProtectedCleanup,
   type ProtectedObservationState,
 } from "effect-agent/protected-browser";
+
+import {
+  BrowserRunFailure,
+  inheritBrowserReport,
+  reportBrowserCause,
+  reportedBrowserError,
+} from "../internal/browser-failure.ts";
 
 export class ProtectedTransportError extends Schema.TaggedError<ProtectedTransportError>()(
   "ProtectedTransportError",
@@ -230,9 +238,14 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
           Effect.interruptible,
           Effect.timeoutOrElse({
             duration: "10 seconds",
-            orElse: () => Effect.succeed("unconfirmed" as const),
+            orElse: () =>
+              Effect.fail(
+                new BrowserRunFailure({ operation: "protected.close", reason: "timeout" }),
+              ),
           }),
-          Effect.catchCause(() => Effect.succeed("unconfirmed" as const)),
+          Effect.catchCause((cause) =>
+            reportBrowserCause("protected.close", cause).pipe(Effect.as("unconfirmed" as const)),
+          ),
         );
 
         return cleanup;
@@ -240,26 +253,30 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
     ),
   );
 
-  yield* Effect.addFinalizer(() =>
-    detached
-      ? Effect.void
-      : close.pipe(
-          Effect.flatMap((result) =>
-            result === "unconfirmed"
-              ? Effect.logWarning("Protected browser exact-session closure unconfirmed")
-              : Effect.void,
-          ),
-        ),
-  );
+  yield* Effect.addFinalizer(() => (detached ? Effect.void : close));
 
-  const remote = <A, R>(effect: Effect.Effect<A, ProtectedTransportError, R>) =>
-    effect.pipe(Effect.mapError((error) => fail(error.reason)));
+  const publicFailure = <A, E extends { readonly reason: ProtectedBrowserError["reason"] }, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    effect.pipe(
+      Effect.catchCause((cause) =>
+        Effect.failCause(
+          Cause.map(cause, (error) => inheritBrowserReport(error, fail(error.reason))),
+        ),
+      ),
+    );
 
   const decode = <A>(schema: Schema.Codec<A>, value: unknown) =>
-    Schema.decodeUnknownEffect(schema)(value).pipe(Effect.mapError(() => fail("provider")));
+    Schema.decodeUnknownEffect(schema)(value).pipe(
+      Effect.catch((error) =>
+        reportBrowserCause("protected.policy.decode", Cause.fail(error)).pipe(
+          Effect.andThen(Effect.fail(reportedBrowserError(fail("provider")))),
+        ),
+      ),
+    );
 
-  const caller = access.caller.pipe(Effect.mapError((error) => fail(error.reason)));
-  const pageContext = remote(driver.context);
+  const caller = access.caller.pipe(publicFailure);
+  const pageContext = publicFailure(driver.context);
 
   const permitObservation = Effect.gen(function* () {
     const context = yield* pageContext;
@@ -277,7 +294,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
           humanExposure,
           humanOrigins,
         })
-        .pipe(Effect.mapError((error) => fail(error.reason)));
+        .pipe(publicFailure);
 
       if (Redacted.value(yield* caller) !== Redacted.value(principal)) return yield* fail("denied");
 
@@ -292,7 +309,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
       }
       observation = "approved-after-exposure";
     }
-    yield* remote(driver.restrictObservation(origins));
+    yield* publicFailure(driver.restrictObservation(origins));
 
     return {
       ...context,
@@ -302,7 +319,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
     };
   });
 
-  const target = (ref: string) => remote(driver.target(ref));
+  const target = (ref: string) => publicFailure(driver.target(ref));
 
   const authorizeAction = Effect.fn("ProtectedBrowser.authorizeAction")(function* (
     action: ProtectedBrowserAction,
@@ -316,7 +333,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
 
     yield* access
       .authorizeAction({ caller: principal, action, exposures: [...exposures] })
-      .pipe(Effect.mapError((error) => fail(error.reason)));
+      .pipe(publicFailure);
     if (Redacted.value(yield* caller) !== Redacted.value(principal)) return yield* fail("denied");
     if (action._tag !== "Navigate") {
       const current = yield* target(action.ref);
@@ -362,14 +379,25 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
             }),
             Effect.catchCause((cause) =>
               Effect.gen(function* () {
-                // No foreign exception or defect is retained. Interrupted operations still finalize.
+                // Expected rejections cannot hide a concurrent defect. Preserve safe diagnostics first.
+                const unexpected = cause.reasons.filter(
+                  (reason) =>
+                    reason._tag === "Die" ||
+                    (reason._tag === "Fail" && !Schema.is(ProtectedBrowserError)(reason.error)),
+                );
+
+                if (unexpected.length > 0)
+                  yield* reportBrowserCause("protected.operation", Cause.fromReasons(unexpected));
+
                 const error = cause.reasons.find(
                   (reason) =>
                     reason._tag === "Fail" && Schema.is(ProtectedBrowserError)(reason.error),
                 );
 
                 const reason =
-                  error?._tag === "Fail" && Schema.is(ProtectedBrowserError)(error.error)
+                  unexpected.length === 0 &&
+                  error?._tag === "Fail" &&
+                  Schema.is(ProtectedBrowserError)(error.error)
                     ? error.error.reason
                     : "provider";
 
@@ -384,11 +412,15 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
                   yield* close;
                 if (interrupt) return yield* Effect.interrupt;
 
-                return yield* fail(
+                const outcome = fail(
                   dispatch === "possibly-dispatched" && reason === "provider"
                     ? "outcome-unknown"
                     : reason,
                 );
+
+                return yield* unexpected.length > 0
+                  ? reportedBrowserError(outcome)
+                  : inheritBrowserReport(error?._tag === "Fail" ? error.error : undefined, outcome);
               }),
             ),
             Effect.onInterrupt(() => close),
@@ -439,7 +471,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
           yield* authorizeAction({ _tag: "Navigate", url: decoded.url });
           offers.clear();
           dispatch = "possibly-dispatched";
-          yield* remote(driver.navigate(decoded.url));
+          yield* publicFailure(driver.navigate(decoded.url));
           dispatch = "dispatched";
           yield* permitObservation;
         }),
@@ -447,7 +479,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
     observe: run(
       Effect.gen(function* () {
         const before = yield* permitObservation;
-        const result = yield* remote(driver.discover);
+        const result = yield* publicFailure(driver.discover);
         const after = yield* permitObservation;
 
         if (
@@ -514,7 +546,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
           }
           yield* authorizeAction(action);
           dispatch = "possibly-dispatched";
-          yield* remote(driver.click(decoded.ref)).pipe(
+          yield* publicFailure(driver.click(decoded.ref)).pipe(
             Effect.catch((error) => {
               if (error.reason === "needs-attention") dispatch = "not-dispatched";
 
@@ -544,7 +576,9 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
             target: control.target,
             role: control.role,
           });
-          yield* remote(driver.fill(decoded.ref, control.role, Redacted.make(decoded.value))).pipe(
+          yield* publicFailure(
+            driver.fill(decoded.ref, control.role, Redacted.make(decoded.value)),
+          ).pipe(
             Effect.provideService(ProtectedBrowserDispatch, {
               mark: Effect.sync(() => {
                 dispatch = "possibly-dispatched";
@@ -571,7 +605,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
 
           const candidates = yield* access
             .list({ caller: principal, kind: decoded.kind, target: control.target })
-            .pipe(Effect.mapError((error) => fail(error.reason)));
+            .pipe(publicFailure);
 
           const now = yield* Clock.currentTimeMillis;
 
@@ -587,7 +621,13 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
           for (const candidate of candidates) {
             const metadata = yield* decode(CredentialOfferMetadata, candidate.metadata);
 
-            const ref = yield* crypto.randomUUIDv4.pipe(Effect.mapError(() => fail("provider")));
+            const ref = yield* crypto.randomUUIDv4.pipe(
+              Effect.catch((error) =>
+                reportBrowserCause("protected.identity", Cause.fail(error)).pipe(
+                  Effect.andThen(Effect.fail(reportedBrowserError(fail("provider")))),
+                ),
+              ),
+            );
 
             pending.set(ref, {
               caller: principal,
@@ -661,9 +701,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
           const authorize = Effect.gen(function* () {
             if (Redacted.value(yield* caller) !== Redacted.value(principal))
               return yield* fail("denied");
-            yield* access
-              .authorize(authorization)
-              .pipe(Effect.mapError((error) => fail(error.reason)));
+            yield* access.authorize(authorization).pipe(publicFailure);
             if (Redacted.value(yield* caller) !== Redacted.value(principal))
               return yield* fail("denied");
           });
@@ -671,9 +709,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
           yield* authorize;
           yield* validate;
 
-          const raw = yield* access
-            .resolve(authorization)
-            .pipe(Effect.mapError((error) => fail(error.reason)));
+          const raw = yield* access.resolve(authorization).pipe(publicFailure);
 
           const material = yield* Schema.decodeEffect(
             offer.kind === "login" ? LoginCredential : CardCredential,
@@ -690,7 +726,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
 
             if (value === undefined) return yield* fail("missing-credential");
             observation = "protected";
-            yield* remote(driver.fill(field.ref, field.role, value)).pipe(
+            yield* publicFailure(driver.fill(field.ref, field.role, value)).pipe(
               Effect.provideService(ProtectedBrowserDispatch, {
                 mark: Effect.sync(() => {
                   dispatch = "possibly-dispatched";
@@ -709,7 +745,7 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
             const ref = decoded.submit;
 
             dispatch = "possibly-dispatched";
-            yield* remote(driver.click(ref)).pipe(
+            yield* publicFailure(driver.click(ref)).pipe(
               Effect.catch((error) => {
                 if (error.reason === "needs-attention") dispatch = "dispatched";
 

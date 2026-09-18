@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 import type { Browser, Frame, JSHandle, Page } from "@cloudflare/puppeteer";
-import { Clock, Context, Crypto, Effect, Redacted, Schema, type Scope } from "effect";
+import { Cause, Clock, Context, Crypto, Effect, Redacted, Schema, type Scope } from "effect";
 import { type InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import {
   CredentialOrigin,
@@ -8,6 +8,11 @@ import {
   ProtectedBrowserControl,
 } from "effect-agent/protected-browser";
 
+import {
+  browserFailure,
+  reportBrowserCause,
+  reportedBrowserError,
+} from "../internal/browser-failure.ts";
 import { inspectFrame, maxAttributeLength } from "./inspect-frame.ts";
 import {
   ProtectedBrowserDispatch,
@@ -65,22 +70,33 @@ const transportError = (reason: ProtectedTransportError["reason"]) =>
   new ProtectedTransportError({ reason });
 
 const decode = <A>(schema: Schema.Codec<A>, value: unknown) =>
-  Schema.decodeUnknownEffect(schema)(value).pipe(Effect.mapError(() => transportError("provider")));
+  Schema.decodeUnknownEffect(schema)(value).pipe(
+    Effect.catch((error) =>
+      reportBrowserCause("protected.decode", Cause.fail(error)).pipe(
+        Effect.andThen(Effect.fail(reportedBrowserError(transportError("provider")))),
+      ),
+    ),
+  );
 
 // Attach rejection handling inside the SDK callback before workerd can report foreign diagnostics.
-const remote = <A>(run: (signal: AbortSignal) => Promise<A>) =>
+const remote = <A>(operation: string, run: (signal: AbortSignal) => Promise<A>) =>
   Effect.tryPromise({
     try: async (signal) => {
       try {
         return { ok: true as const, value: await run(signal) };
-      } catch {
-        return { ok: false as const };
+      } catch (cause) {
+        return { ok: false as const, failure: browserFailure(operation, cause) };
       }
     },
-    catch: () => transportError("provider"),
+    catch: (cause) => browserFailure(operation, cause),
   }).pipe(
     Effect.flatMap((result) =>
-      result.ok ? Effect.succeed(result.value) : Effect.fail(transportError("provider")),
+      result.ok ? Effect.succeed(result.value) : Effect.fail(result.failure),
+    ),
+    Effect.catch((failure) =>
+      reportBrowserCause(operation, Cause.fail(failure)).pipe(
+        Effect.andThen(Effect.fail(reportedBrowserError(transportError("provider")))),
+      ),
     ),
   );
 
@@ -96,7 +112,15 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
   const { browser, page } = session;
   const crypto = yield* Crypto.Crypto;
   const clock = yield* Clock.Clock;
-  const uuid = crypto.randomUUIDv4.pipe(Effect.mapError(() => transportError("provider")));
+
+  const uuid = crypto.randomUUIDv4.pipe(
+    Effect.catch((error) =>
+      reportBrowserCause("protected.identity", Cause.fail(error)).pipe(
+        Effect.andThen(Effect.fail(reportedBrowserError(transportError("provider")))),
+      ),
+    ),
+  );
+
   let closed = false;
   let violation = false;
   let documentRef: string | undefined;
@@ -181,7 +205,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
   const isCurrent = Effect.fn("ProtectedNativeTransport.isCurrent")(function* (state: FrameState) {
     if (state.frame.detached) return false;
 
-    return yield* remote(() =>
+    return yield* remote("protected.validate-document", () =>
       state.handle.evaluate((held) => {
         if (typeof held !== "object" || held === null) return false;
 
@@ -203,7 +227,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
     )
       return yield* transportError("stale-reference");
 
-    const current = yield* remote(() =>
+    const current = yield* remote("protected.validate-control", () =>
       state.frame.handle.evaluate((held, index) => {
         if (typeof held !== "object" || held === null) return null;
 
@@ -292,7 +316,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
       yield* check;
       yield* origin(url);
       clear();
-      yield* remote(() => page.goto(url, { waitUntil: "load" }));
+      yield* remote("protected.navigate", () => page.goto(url, { waitUntil: "load" }));
       yield* context;
     }),
     target: (ref) => get(ref).pipe(Effect.map((state) => state.control)),
@@ -300,7 +324,8 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
       const before = yield* context;
 
       controls.clear();
-      for (const state of frames.values()) yield* remote(() => state.handle.dispose());
+      for (const state of frames.values())
+        yield* remote("protected.dispose", () => state.handle.dispose());
       frames.clear();
       const discovered: Array<ProtectedBrowserControl> = [];
       let text = "";
@@ -313,7 +338,10 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
         if (observationOrigins !== undefined && !observationOrigins.has(frameOrigin)) continue;
         frameOrigins.add(frameOrigin);
         if (typeof frame.isolatedRealm !== "function") return yield* transportError("unsupported");
-        const handle = yield* remote(() => frame.isolatedRealm().evaluateHandle(inspectFrame));
+
+        const handle = yield* remote("protected.discover", () =>
+          frame.isolatedRealm().evaluateHandle(inspectFrame),
+        );
 
         const state: FrameState = {
           frame,
@@ -325,7 +353,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
 
         frames.set(frame, state);
 
-        const raw = yield* remote(() =>
+        const raw = yield* remote("protected.describe-controls", () =>
           handle.evaluate((held) => {
             if (typeof held !== "object" || held === null) return null;
 
@@ -379,7 +407,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
           discovered.push(control);
         }
 
-        const rawText = yield* remote(() =>
+        const rawText = yield* remote("protected.read-text", () =>
           handle.evaluate((held) => {
             if (typeof held !== "object" || held === null) return null;
 
@@ -411,7 +439,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
       // CDP dispatch may mutate before its reply is lost, so uncertainty starts here.
       yield* dispatch.mark;
 
-      const filled = yield* remote(() =>
+      const filled = yield* remote("protected.fill", () =>
         state.frame.handle.evaluate(
           (held, index, expectedRole, secret) => {
             if (typeof held !== "object" || held === null) return false;
@@ -430,7 +458,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
     click: Effect.fn("ProtectedNativeTransport.click")(function* (ref) {
       const state = yield* get(ref);
 
-      const clicked = yield* remote(() =>
+      const clicked = yield* remote("protected.click", () =>
         state.frame.handle.evaluate((held, index) => {
           if (typeof held !== "object" || held === null) return false;
 

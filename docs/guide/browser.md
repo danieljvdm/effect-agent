@@ -641,6 +641,13 @@ if connection or page setup fails; connection is attempted at most once. `host.o
 combines these steps for callers that do not need a persistence boundary. Acquisition failures
 without an identity remain indeterminate unless the provider conclusively refused allocation.
 
+Install an Effect `ErrorReporter` in the invocation runtime to capture recovered protected-browser
+and cleanup failures. Adapters report only source-authored stages, failure categories, and HTTP
+statuses, including work that settles after interruption. Public errors retain dispatch and cleanup
+evidence without provider text or session capabilities. In-process public projections carry
+`ErrorReporter.ignore`; custom recovery/reporting hooks must honor it to avoid duplicate captures.
+Do not serialize that marker as a cross-process diagnostic receipt.
+
 Session closure waits up to ten seconds to confirm whole-browser termination or exact-session
 absence. A pending close or transport/authentication failure is not proof of cleanup.
 `BrowserRunCleanupError` reports a sanitized reason. Correct authorization or configuration

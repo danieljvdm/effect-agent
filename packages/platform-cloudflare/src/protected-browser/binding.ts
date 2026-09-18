@@ -1,9 +1,16 @@
 /// <reference types="@cloudflare/workers-types" />
-import puppeteer, { type Browser, type Page, type CDPSession } from "@cloudflare/puppeteer";
-import { Clock, Context, Crypto, Effect, Layer, Redacted, Schema, type Scope } from "effect";
+import { type Browser, type Page, type CDPSession } from "@cloudflare/puppeteer";
+import { Cause, Context, Crypto, Effect, Layer, Redacted, Schema, type Scope } from "effect";
 import { type InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { ProtectedBrowserError } from "effect-agent/protected-browser";
 
+import { acquireBrowserSession, connectBrowserSession } from "../internal/browser-binding.ts";
+import {
+  browserFailure,
+  BrowserRunFailure,
+  reportBrowserCause,
+  reportedBrowserError,
+} from "../internal/browser-failure.ts";
 import { BrowserRunSessionLifecycle } from "../internal/browser-session-lifecycle.ts";
 import { makeProtectedNativeTransport, ProtectedNativeSession } from "./native.ts";
 import {
@@ -73,8 +80,8 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
         let driver: ProtectedBrowserTransport | undefined;
         let invalid = false;
         // SDK acquisition may finish after interruption. Its late-reply callback must await cleanup,
-        // using this pass's clock rather than starting an Effect runtime with default services.
-        const runCleanup = Effect.runPromiseWith(Context.make(Clock.Clock, yield* Clock.Clock));
+        // retaining this pass's clock and private reporting scope.
+        const runCleanup = Effect.runPromiseWith(yield* Effect.context<never>());
 
         const terminate = Effect.gen(function* () {
           invalid = true;
@@ -83,11 +90,19 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
 
           const cleanup = yield* lifecycle.close(sessionId).pipe(
             Effect.as("confirmed" as const),
-            Effect.catchCause(() => Effect.succeed("unconfirmed" as const)),
+            Effect.catchCause((cause) =>
+              reportBrowserCause("protected.close", cause).pipe(Effect.as("unconfirmed" as const)),
+            ),
             Effect.interruptible,
             Effect.timeoutOrElse({
               duration: "10 seconds",
-              orElse: () => Effect.succeed("unconfirmed" as const),
+              orElse: () =>
+                reportBrowserCause(
+                  "protected.close",
+                  Cause.fail(
+                    new BrowserRunFailure({ operation: "protected.close", reason: "timeout" }),
+                  ),
+                ).pipe(Effect.as("unconfirmed" as const)),
             }),
           );
 
@@ -96,9 +111,21 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
 
           if (connected !== undefined)
             yield* Effect.promise(() => connected.disconnect()).pipe(
-              Effect.catchCause(() => Effect.void),
+              Effect.catchCause((cause) => reportBrowserCause("protected.disconnect", cause)),
               Effect.interruptible,
-              Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.void }),
+              Effect.timeoutOrElse({
+                duration: "1 second",
+                orElse: () =>
+                  reportBrowserCause(
+                    "protected.disconnect",
+                    Cause.fail(
+                      new BrowserRunFailure({
+                        operation: "protected.disconnect",
+                        reason: "timeout",
+                      }),
+                    ),
+                  ),
+              }),
             );
 
           return cleanup;
@@ -106,56 +133,32 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
 
         const close = yield* Effect.cached(terminate);
 
-        yield* Effect.addFinalizer(() =>
-          detached
-            ? Effect.void
-            : close.pipe(
-                Effect.flatMap((state) =>
-                  state === "confirmed"
-                    ? Effect.void
-                    : Effect.logWarning("Protected browser exact-session closure unconfirmed"),
-                ),
-              ),
-        );
+        yield* Effect.addFinalizer(() => (detached ? Effect.void : close));
+        let stage = identity === undefined ? "protected.acquire" : "protected.connect";
 
         const acquired = yield* Effect.tryPromise({
           try: async (signal) => {
-            let recordingDisabled = false;
-
-            const binding = {
-              fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-                const request = new Request(input, init);
-                const url = new URL(request.url);
-
-                if (url.pathname === "/v1/devtools/browser" && request.method === "POST") {
-                  url.searchParams.set("recording", "false");
-                  recordingDisabled = url.searchParams.get("recording") === "false";
-
-                  return options.browser.fetch(new Request(url, request));
-                }
-
-                return options.browser.fetch(request);
-              },
-            };
-
-            const acquired =
+            sessionId =
               identity === undefined
-                ? await puppeteer.acquire(binding, {
-                    recording: false,
-                    // Provider inactivity timeout, independent of the finite total pass deadline.
-                    keep_alive: Math.min(600_000, Math.max(10_000, policy.maxElapsedMillis)),
-                  })
-                : { sessionId: Redacted.value(identity.sessionId) };
-
-            sessionId = Redacted.make(
-              Schema.decodeSync(Schema.String.check(Schema.isUUID()))(acquired.sessionId),
-            );
-            if ((identity === undefined && !recordingDisabled) || signal.aborted || invalid) {
+                ? Redacted.make(
+                    await acquireBrowserSession(
+                      options.browser,
+                      Math.min(600_000, Math.max(10_000, policy.maxElapsedMillis)),
+                      "protected.acquire",
+                    ),
+                  )
+                : identity.sessionId;
+            if (signal.aborted || invalid) {
               await runCleanup(terminate);
               throw new ProtectedTransportError({ reason: "stale-reference" });
             }
             // Resume only a host-persisted exact page. Never open a replacement page or context.
-            browser = await puppeteer.connect(options.browser, acquired.sessionId);
+            stage = "protected.connect";
+            browser = await connectBrowserSession(
+              options.browser,
+              Redacted.value(sessionId),
+              stage,
+            );
             if (signal.aborted || invalid) {
               await runCleanup(terminate);
               throw new ProtectedTransportError({ reason: "stale-reference" });
@@ -163,10 +166,14 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
             let page: Page;
 
             if (identity === undefined) {
+              stage = "protected.context";
               const context = await browser.createBrowserContext();
 
+              stage = "protected.page";
               page = await context.newPage();
             } else {
+              stage = "protected.resume";
+
               const context = browser
                 .browserContexts()
                 .find((candidate) => candidate.id === Redacted.value(identity.contextId));
@@ -188,15 +195,18 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
                 throw new ProtectedTransportError({ reason: "stale-reference" });
               page = found;
             }
+            stage = "protected.control";
             control = await page.createCDPSession();
             const info = await control.send("Target.getTargetInfo");
 
+            stage = "protected.identity";
             providerIdentity = Schema.decodeSync(ProtectedProviderIdentity)({
               sessionId,
               contextId: Redacted.make(page.browserContext().id ?? ""),
               targetId: Redacted.make(info.targetInfo.targetId),
             });
 
+            stage = "protected.interception";
             await page.setBypassServiceWorker(true);
             await page.setRequestInterception(true);
             page.on("request", (request) => {
@@ -216,9 +226,10 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
               }
               void (
                 allowed && !invalid ? request.continue() : request.abort("blockedbyclient")
-              ).catch(() => {
+              ).catch(async (cause) => {
                 invalid = true;
                 driver?.invalidate();
+                await runCleanup(reportBrowserCause("protected.interception", Cause.fail(cause)));
               });
             });
             if (signal.aborted || invalid) {
@@ -233,17 +244,26 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
               release: Effect.suspend(() => (detached ? Effect.void : close.pipe(Effect.asVoid))),
             });
           },
-          catch: failure,
+          catch: (cause) => browserFailure(stage, cause),
         }).pipe(
           Effect.timeoutOrElse({
             duration: Math.min(policy.maxElapsedMillis, 30_000),
             orElse: () =>
-              Effect.fail(new ProtectedBrowserError({ ...failure(), reason: "timeout" })),
+              Effect.fail(new BrowserRunFailure({ operation: stage, reason: "timeout" })),
           }),
           Effect.catch((error) =>
-            close.pipe(
+            reportBrowserCause(stage, Cause.fail(error)).pipe(
+              Effect.andThen(close),
               Effect.flatMap((cleanup) =>
-                Effect.fail(new ProtectedBrowserError({ ...error, cleanup })),
+                Effect.fail(
+                  reportedBrowserError(
+                    new ProtectedBrowserError({
+                      ...failure(),
+                      reason: error.reason === "timeout" ? "timeout" : "provider",
+                      cleanup,
+                    }),
+                  ),
+                ),
               ),
             ),
           ),
@@ -271,12 +291,20 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
 
                 return await Reflect.apply(send, control, [method, parameters]);
               },
-              catch: failure,
+              catch: (cause) => browserFailure("protected.command", cause),
             }).pipe(
               Effect.timeoutOrElse({
                 duration: "10 seconds",
-                orElse: () => Effect.fail(failure()),
+                orElse: () =>
+                  Effect.fail(
+                    new BrowserRunFailure({ operation: "protected.command", reason: "timeout" }),
+                  ),
               }),
+              Effect.catch((error) =>
+                reportBrowserCause("protected.command", Cause.fail(error)).pipe(
+                  Effect.andThen(Effect.fail(reportedBrowserError(failure()))),
+                ),
+              ),
             ),
           detach: Effect.tryPromise({
             try: async () => {
@@ -286,9 +314,20 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
               detached = true;
               driver?.invalidate();
             },
-            catch: failure,
+            catch: (cause) => browserFailure("protected.detach", cause),
           }).pipe(
-            Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.fail(failure()) }),
+            Effect.timeoutOrElse({
+              duration: "10 seconds",
+              orElse: () =>
+                Effect.fail(
+                  new BrowserRunFailure({ operation: "protected.detach", reason: "timeout" }),
+                ),
+            }),
+            Effect.catch((error) =>
+              reportBrowserCause("protected.detach", Cause.fail(error)).pipe(
+                Effect.andThen(Effect.fail(reportedBrowserError(failure()))),
+              ),
+            ),
           ),
         };
       }, Effect.withTracerEnabled(false));

@@ -1,4 +1,5 @@
 import {
+  Cause,
   Clock,
   Context,
   Crypto,
@@ -25,6 +26,11 @@ import {
   BrowserRunLiveViewRequest,
   BrowserRunLiveViewResult,
 } from "../InteractiveBrowser.ts";
+import {
+  inheritBrowserReport,
+  reportBrowserCause,
+  reportedBrowserError,
+} from "../internal/browser-failure.ts";
 import { BrowserRunSessionLifecycle } from "../internal/browser-session-lifecycle.ts";
 import { BrowserRunProtectedBinding, ProtectedProviderIdentity } from "./binding.ts";
 import { BrowserRunProtectedTransport, makeProtectedBrowserPolicy } from "./policy.ts";
@@ -184,7 +190,11 @@ export const browserRunProtectedHostLayer = () =>
           const raw = yield* provider.command("Cloudflare.getHandoffState", {});
 
           const result = yield* Schema.decodeUnknownEffect(HandoffState)(raw).pipe(
-            Effect.mapError(() => failure("provider")),
+            Effect.catch((error) =>
+              reportBrowserCause("protected.host.decode", Cause.fail(error)).pipe(
+                Effect.andThen(Effect.fail(reportedBrowserError(failure("provider")))),
+              ),
+            ),
           );
 
           if (
@@ -243,17 +253,20 @@ export const browserRunProtectedHostLayer = () =>
                   })
                   .pipe(
                     Effect.flatMap(Schema.decodeUnknownEffect(Handoff)),
-                    Effect.catch(() =>
-                      state.handle.close.pipe(
+                    Effect.catchCause((cause) =>
+                      reportBrowserCause("protected.handoff", cause).pipe(
+                        Effect.andThen(state.handle.close),
                         Effect.flatMap((cleanup) =>
                           Effect.fail(
-                            new ProtectedBrowserError({
-                              reason: "outcome-unknown",
-                              dispatch: "possibly-dispatched",
-                              milestone: suspended.milestone,
-                              observation: "closed",
-                              cleanup,
-                            }),
+                            reportedBrowserError(
+                              new ProtectedBrowserError({
+                                reason: "outcome-unknown",
+                                dispatch: "possibly-dispatched",
+                                milestone: suspended.milestone,
+                                observation: "closed",
+                                cleanup,
+                              }),
+                            ),
                           ),
                         ),
                       ),
@@ -287,12 +300,22 @@ export const browserRunProtectedHostLayer = () =>
                 });
 
                 const result = yield* Schema.decodeUnknownEffect(LiveView)(raw).pipe(
-                  Effect.mapError(() => failure("provider")),
+                  Effect.catch((error) =>
+                    reportBrowserCause("protected.host.decode", Cause.fail(error)).pipe(
+                      Effect.andThen(Effect.fail(reportedBrowserError(failure("provider")))),
+                    ),
+                  ),
                 );
 
                 return yield* Schema.decodeEffect(BrowserRunLiveViewResult)({
                   devtoolsFrontendUrl: Redacted.make(result.devtoolsFrontendUrl),
-                }).pipe(Effect.mapError(() => failure("provider")));
+                }).pipe(
+                  Effect.catch((error) =>
+                    reportBrowserCause("protected.host.decode", Cause.fail(error)).pipe(
+                      Effect.andThen(Effect.fail(reportedBrowserError(failure("provider")))),
+                    ),
+                  ),
+                );
               }),
             ),
           getHandoffState: control(getHandoffState),
@@ -301,11 +324,15 @@ export const browserRunProtectedHostLayer = () =>
               if ((yield* getHandoffState).active) return yield* failure("busy");
 
               const context = yield* provider.driver.context.pipe(
-                Effect.mapError((error) => failure(error.reason)),
+                Effect.mapError((error) => inheritBrowserReport(error, failure(error.reason))),
               );
 
               return yield* Schema.decodeEffect(CredentialOrigin)(context.topOrigin).pipe(
-                Effect.mapError(() => failure("provider")),
+                Effect.catch((error) =>
+                  reportBrowserCause("protected.host.decode", Cause.fail(error)).pipe(
+                    Effect.andThen(Effect.fail(reportedBrowserError(failure("provider")))),
+                  ),
+                ),
               );
             }),
           ),
@@ -337,7 +364,11 @@ export const browserRunProtectedHostLayer = () =>
         closeSession: (id: Redacted.Redacted<string>) =>
           lifecycle.close(id).pipe(
             Effect.as("confirmed" as const),
-            Effect.catchCause(() => Effect.succeed("unconfirmed" as const)),
+            Effect.catchCause((cause) =>
+              reportBrowserCause("protected.closeSession", cause).pipe(
+                Effect.as("unconfirmed" as const),
+              ),
+            ),
           ),
       };
     }),
