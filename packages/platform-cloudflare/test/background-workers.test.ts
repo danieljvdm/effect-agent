@@ -4,8 +4,7 @@ import { AgentPolicy } from "effect-agent/agent-policy";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import type { SubmissionId } from "effect-agent/identifiers";
 import { MessageDeliveryStore } from "effect-agent/message-delivery";
-import { MessageAdmission } from "effect-agent/messaging";
-import type { Receipt } from "effect-agent/receipt";
+import { MessageAdmission, type MessageStatus } from "effect-agent/messaging";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentHost } from "effect-agent/subagent-host";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
@@ -192,7 +191,7 @@ it("delivers an accepted worker update before completion after eviction with onl
       .toBe(1);
     // The native update call lost its acknowledgement; ordinary tool recovery must not replay it.
     await withOwner(source, (host) =>
-      Subagent.cancel(backgroundUpdateWorkers, started.worker, started.receipt).pipe(
+      Subagent.cancel(backgroundUpdateWorkers, started.worker, started.delivery.receipt!).pipe(
         Effect.provideService(SubagentHost, host),
       ),
     );
@@ -322,7 +321,10 @@ it("admits exact captured policies with one registered target and retains them t
     });
 
   try {
-    await expect(launch(firstPolicy, 4)).rejects.toThrow();
+    expect((await launch(firstPolicy, 4)).delivery).toMatchObject({
+      status: "refused",
+      reason: "worker-capacity",
+    });
     capturedConcurrency.set(source, { owner: ownerReceipt.submissionId, limit: 0 });
     expect(await launch(firstPolicy, 1)).toEqual(first);
     const alarm = runDurableObjectAlarm(stubFor(first.worker.threadId)).catch(() => false);
@@ -415,14 +417,17 @@ it("admits exact captured policies with one registered target and retains them t
     );
 
     expect(settlements).toHaveLength(3);
-    const initial = settlements.find((row) => row.submissionId === first.receipt.submissionId);
 
-    expect(settlements.find((row) => row.submissionId === joined.submissionId)?.runId).toBe(
-      initial?.runId,
+    const initial = settlements.find(
+      (row) => row.submissionId === first.delivery.receipt!.submissionId,
     );
-    expect(settlements.find((row) => row.submissionId === later.submissionId)?.runId).not.toBe(
-      initial?.runId,
-    );
+
+    expect(
+      settlements.find((row) => row.submissionId === joined.receipt!.submissionId)?.runId,
+    ).toBe(initial?.runId);
+    expect(
+      settlements.find((row) => row.submissionId === later.receipt!.submissionId)?.runId,
+    ).not.toBe(initial?.runId);
     expect(settlements.every((row) => row.outcome === "completed")).toBe(true);
   } finally {
     for (const task of [1, 2, 3]) independentBudgetGates.delete(`${source}:task:${task}`);
@@ -449,49 +454,26 @@ it("drains private worker progress through rebuilt runtime maintenance into an i
   );
   await drainAlarmsUntil(source, allSettled(source));
 
-  const direct = await withOwner(source, (host) =>
+  const started = await withOwner(source, (host) =>
     Subagent.start(
       backgroundWorkers,
       { question: "private task" },
       { idempotencyKey: decodeIdempotencyKey("child") },
-    ).pipe(
-      Effect.provideService(SubagentHost, host),
-      Effect.catchTag("WorkerError", (error) =>
-        error.operation === "start" && error.reason === "delivery-pending"
-          ? Effect.succeed(undefined)
-          : Effect.fail(error),
-      ),
-    ),
+    ).pipe(Effect.provideService(SubagentHost, host)),
   );
 
-  // The source alarm may win admission. Observe the original delivery without starting again.
-  const delivery = async () => {
-    const rows = await runInDurableObject(stubFor(source), (instance) =>
-      instance[DurableObject.RunSymbol](
-        Effect.flatMap(MessageDeliveryStore, (store) =>
-          store.list({ ownerThreadId: decodeThreadId(source), limit: 100 }),
-        ),
-      ),
-    );
-
-    expect(rows.next).toBeNull();
-    expect(rows.items).toHaveLength(1);
-    expect(rows.items[0]?.envelope.workerAdmission?.parameters).toEqual({
-      question: "private task",
-    });
-
-    return rows.items[0]!;
-  };
-
-  await drainAlarmsUntil(source, async () => (await delivery()).receipt !== null);
-  const accepted = await delivery();
-
-  const started = {
-    worker: accepted.envelope.workerAdmission!.origin.worker,
-    receipt: accepted.receipt!,
-  };
-
-  if (direct !== undefined) expect(direct).toEqual(started);
+  // The source alarm may win admission. Inspect the same retained operation without resending.
+  await drainAlarmsUntil(
+    source,
+    async () =>
+      (
+        await withOwner(source, (host) =>
+          Subagent.inspect(backgroundWorkers, started.worker, started.delivery.message).pipe(
+            Effect.provideService(SubagentHost, host),
+          ),
+        )
+      ).receipt !== null,
+  );
   await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
   customRuntimeThreads.add(started.worker.threadId);
   privateProgressRoutes.set(started.worker.threadId, decodeThreadId(source));
@@ -603,7 +585,7 @@ it("reopens a background worker and admits follow-up input across Objects after 
     await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
     await drainAlarmsUntil(source, async () => {
       const result = await withOwner(source, (host) =>
-        Subagent.inspect(backgroundWorkers, started.worker, started.receipt).pipe(
+        Subagent.inspect(backgroundWorkers, started.worker, started.delivery.receipt!).pipe(
           Effect.provideService(SubagentHost, host),
         ),
       );
@@ -622,12 +604,12 @@ it("reopens a background worker and admits follow-up input across Objects after 
       ).pipe(Effect.provideService(SubagentHost, host)),
     );
 
-    expect(next.threadId).toBe(started.worker.threadId);
-    expect(next.submissionId).not.toBe(started.receipt.submissionId);
+    expect(next.receipt!.threadId).toBe(started.worker.threadId);
+    expect(next.receipt!.submissionId).not.toBe(started.delivery.receipt!.submissionId);
     await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
 
     const outcome = await withOwner(source, (host) =>
-      Subagent.inspect(backgroundWorkers, started.worker, next).pipe(
+      Subagent.inspect(backgroundWorkers, started.worker, next.receipt!).pipe(
         Effect.provideService(SubagentHost, host),
       ),
     );
@@ -720,29 +702,22 @@ for (const mode of ["custom", "standard"] as const)
         { idempotencyKey: decodeIdempotencyKey("joined") },
       );
 
-      await withOwner(source, (host) =>
-        followUp.pipe(
-          Effect.provideService(SubagentHost, host),
-          Effect.catchTag("WorkerError", (error) =>
-            error.reason === "delivery-pending" ? Effect.void : Effect.fail(error),
-          ),
-        ),
+      const joined = await withOwner(source, (host) =>
+        followUp.pipe(Effect.provideService(SubagentHost, host)),
       );
-      // The alarm pump may claim the retained follow-up before the direct caller. Reconcile
-      // that same request only after alarm-owned delivery records its destination receipt.
-      await drainAlarmsUntil(source, () =>
-        runInDurableObject(stubFor(source), (instance) =>
-          instance[DurableObject.RunSymbol](
-            Effect.gen(function* () {
-              const store = yield* MessageDeliveryStore;
-              const rows = yield* store.list({ ownerThreadId: decodeThreadId(source), limit: 100 });
 
-              return rows.items.length === 2 && rows.items.every((row) => row.receipt !== null);
-            }),
-          ),
-        ),
+      // The alarm pump can own acceptance; inspect its stable identity without another command.
+      await drainAlarmsUntil(
+        source,
+        async () =>
+          (
+            await withOwner(source, (host) =>
+              Subagent.inspect(backgroundReportingWorkers, started.worker, joined.message).pipe(
+                Effect.provideService(SubagentHost, host),
+              ),
+            )
+          ).receipt !== null,
       );
-      await withOwner(source, (host) => followUp.pipe(Effect.provideService(SubagentHost, host)));
       armRuntimeEviction(started.worker.threadId, "worker:after-report-append");
       backgroundReportGates.add(source);
       await evict(source);
@@ -967,15 +942,16 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
         ),
       )
       .toBe(true);
-    await expect(
-      withOwner(source, (host) =>
-        Subagent.start(
-          independentBudgetWorkers,
-          { question: `${source}:task:5` },
-          { idempotencyKey: decodeIdempotencyKey("third-active"), budgetScope: "worker-run" },
-        ).pipe(Effect.provideService(SubagentHost, host)),
-      ),
-    ).rejects.toThrow();
+
+    const refused = await withOwner(source, (host) =>
+      Subagent.start(
+        independentBudgetWorkers,
+        { question: `${source}:task:5` },
+        { idempotencyKey: decodeIdempotencyKey("third-active"), budgetScope: "worker-run" },
+      ).pipe(Effect.provideService(SubagentHost, host)),
+    );
+
+    expect(refused.delivery).toMatchObject({ status: "refused", reason: "worker-capacity" });
     // The root has toolConcurrency=1, but two persona Runs are live and root work remains runnable.
     await runClient(
       Effect.flatMap(CloudflareThreadClient, (client) =>
@@ -1025,14 +1001,7 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
 
           return yield* Subagent.followUp(independentBudgetWorkers, started.worker, parameters, {
             idempotencyKey: decodeIdempotencyKey(key),
-          }).pipe(
-            Effect.provideService(SubagentHost, host),
-            Effect.catchTag("WorkerError", (error) =>
-              error.operation === "followUp" && error.reason === "delivery-pending"
-                ? Effect.succeed(undefined)
-                : Effect.fail(error),
-            ),
-          );
+          }).pipe(Effect.provideService(SubagentHost, host));
         }),
       );
 
@@ -1057,25 +1026,21 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
       return row;
     };
 
-    const acceptFollowUp = async (
-      receipt: Receipt | undefined,
-      parameters: { question: string },
-    ) => {
+    const acceptFollowUp = async (delivery: MessageStatus) => {
       signal.throwIfAborted();
-      if (receipt !== undefined) return receipt;
-      // delivery-pending promises retention; the existing alarm owns acceptance of this input.
-      const retained = await retainedInput(parameters);
+      if (delivery.receipt !== null) return delivery.receipt;
 
-      await drainAlarmsUntil(source, async () => {
-        const current = await retainedInput(parameters);
+      const inspect = () =>
+        withOwner(source, (host) =>
+          Subagent.inspect(independentBudgetWorkers, started.worker, delivery.message).pipe(
+            Effect.provideService(SubagentHost, host),
+          ),
+        );
 
-        expect(current.key).toEqual(retained.key);
+      await drainAlarmsUntil(source, async () => (await inspect()).receipt !== null);
+      const accepted = await inspect();
 
-        return current.receipt !== null;
-      });
-      const accepted = await retainedInput(parameters);
-
-      expect(accepted.key).toEqual(retained.key);
+      expect(accepted.message).toEqual(delivery.message);
       expect(accepted.receipt?.threadId).toBe(started.worker.threadId);
 
       return accepted.receipt!;
@@ -1112,12 +1077,18 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
     );
     const original = await originalFollowUp;
 
-    expect(original).toBeUndefined();
+    expect(original).toEqual({
+      message: retained.key,
+      status: "pending",
+      receipt: null,
+      settlement: null,
+      reason: null,
+    });
     await runInDurableObject(stubFor(source), () => {
       workerInputContentions.get(source)?.releaseAdmission();
     });
     await sourceAlarm;
-    const accepted = acceptFollowUp(original, parameters);
+    const accepted = acceptFollowUp(original);
 
     joining = accepted;
     const joined = await accepted;
@@ -1170,15 +1141,13 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
       signal.throwIfAborted();
       const parameters = { question: `${source}:task:${round}` };
 
-      const nextInput = invokeFollowUp(parameters, `later-${round}`).then((receipt) =>
-        acceptFollowUp(receipt, parameters),
-      );
+      const nextInput = invokeFollowUp(parameters, `later-${round}`).then(acceptFollowUp);
 
       joining = nextInput;
       const next = await nextInput;
 
       expect(next.threadId).toBe(started.worker.threadId);
-      expect(next.submissionId).not.toBe(started.receipt.submissionId);
+      expect(next.submissionId).not.toBe(started.delivery.receipt!.submissionId);
       await finish();
     }
     independentBudgetGates.add(`${source}:task:4`);
@@ -1293,42 +1262,31 @@ it("retries unavailable worker funding admission with the same durable input ide
       ).pipe(Effect.provideService(SubagentHost, host)),
     );
 
-  const deliveries = () =>
-    runInDurableObject(stubFor(source), (instance) =>
-      instance[DurableObject.RunSymbol](
-        Effect.flatMap(MessageDeliveryStore, (store) =>
-          store.list({ ownerThreadId: decodeThreadId(source), limit: 100 }),
-        ),
-      ),
-    );
-
   try {
-    await expect(launch()).rejects.toThrow();
-    const pending = await deliveries();
+    const started = await launch();
 
-    expect(pending.items).toHaveLength(1);
-    const retained = pending.items[0];
+    expect(started.delivery).toMatchObject({ status: "pending", receipt: null, reason: "storage" });
 
-    if (retained === undefined) throw new Error("Expected retained worker input");
-    expect(retained.status).toBe("pending");
-    expect(retained.receipt).toBeNull();
+    const inspect = () =>
+      withOwner(source, (host) =>
+        Subagent.inspect(backgroundWorkers, started.worker, started.delivery.message).pipe(
+          Effect.provideService(SubagentHost, host),
+        ),
+      );
+
+    expect(await inspect()).toEqual(started.delivery);
     independentBudgetAdmissionOutages.delete(source);
-    await drainAlarmsUntil(source, async () => {
-      const receipt = (await deliveries()).items[0]?.receipt;
+    await drainAlarmsUntil(source, async () => (await inspect()).receipt !== null);
+    const recovered = await inspect();
 
-      return receipt !== undefined && receipt !== null;
+    expect(recovered.message).toEqual(started.delivery.message);
+    expect(recovered.receipt?.threadId).toBe(started.worker.threadId);
+    expect(await launch()).toMatchObject({
+      worker: started.worker,
+      delivery: { message: recovered.message, receipt: recovered.receipt },
     });
-    const recovered = await launch();
-
-    expect(recovered.worker).toEqual(retained.envelope.workerAdmission?.origin.worker);
-    const accepted = await deliveries();
-
-    expect(accepted.items).toHaveLength(1);
-    expect(accepted.items[0]?.key).toEqual(retained.key);
-    expect(accepted.items[0]?.receipt).toEqual(recovered.receipt);
-    expect(await launch()).toEqual(recovered);
-    await drainAlarmsUntil(recovered.worker.threadId, allSettled(recovered.worker.threadId));
-    const log = await readCanonical(recovered.worker.threadId);
+    await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
+    const log = await readCanonical(started.worker.threadId);
 
     expect(log.filter(({ record }) => record.payload._tag === "RunStarted")).toHaveLength(1);
     const sourceLog = await readCanonical(source);

@@ -457,6 +457,8 @@ Use `FailureDiagnostic.captureContext` for bounded diagnostic correlation copies
 end in `[truncated]`, and the original identities remain in their owning records.
 Worker admission and message-delivery failures retain the same causal data: `WorkerError.cause`
 preserves live errors, and the delivery's `lastFailureDiagnostic` survives retries and recovery.
+Retained worker inputs return `MessageStatus` with bounded delivery evidence, including pending
+retry and definite refusal, without exposing these diagnostics to the model.
 The delivery's receipt and refusal/retry classification remain the authority for safe retry decisions.
 For tools using `failureMode: "return"`, project these errors into a separate safe failure schema.
 

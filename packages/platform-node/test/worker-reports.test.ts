@@ -375,8 +375,8 @@ for (const mode of ["custom", "mapped", "standard"] as const)
               yield* Effect.sleep("10 millis");
             }
           }).pipe(Effect.timeout("10 seconds"));
-          const firstResult = yield* reopened.awaitSettlement(started.receipt);
-          const joinedResult = yield* reopened.awaitSettlement(joined);
+          const firstResult = yield* reopened.awaitSettlement(started.delivery.receipt!);
+          const joinedResult = yield* reopened.awaitSettlement(joined.receipt!);
 
           expect(firstResult.outcome).toBe("completed");
           expect(joinedResult.outcome).toBe("completed");
@@ -416,7 +416,7 @@ for (const mode of ["custom", "mapped", "standard"] as const)
               budgetExhausted: false,
               report: {
                 worker: started.worker,
-                receipt: started.receipt,
+                receipt: started.delivery.receipt!,
                 runId: reports[0]?.runId,
                 outcome: "completed",
                 result: { answer: "done" },

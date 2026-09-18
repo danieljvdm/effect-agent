@@ -217,7 +217,8 @@ Tool Call settles.
 
 **Background Worker**
 A continuing durable child Thread established through a Subagent capability. Its worker reference
-identifies the Thread; a separate Receipt identifies each accepted input. Ownership, grants,
+identifies the Thread. Each retained input has a MessageRef; destination acceptance supplies its
+Receipt, and canonical settlement records its outcome. Ownership, grants,
 reservations, and reporting persist independently of the launching Run.
 
 **Agent Update**

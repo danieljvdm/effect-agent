@@ -15,6 +15,7 @@ import type * as Agent from "../../core/Agent.ts";
 import { AgentPolicy } from "../../core/AgentPolicy.ts";
 import { Update, UpdateError } from "../../core/AgentUpdates.ts";
 import { ThreadId, type AgentId, type SubmissionId } from "../../core/Identifiers.ts";
+import { MessageRef } from "../../core/Messaging.ts";
 import { IdempotencyKey, Receipt } from "../../core/Receipt.ts";
 import { SubagentDelegationCaps, SubagentGrant } from "../../core/SubagentContract.ts";
 import {
@@ -47,6 +48,7 @@ import {
   MessageDeliveryDriver,
   MessageDeliveryStore,
   prepareMessageDelivery,
+  type MessageDeliveryRecord,
 } from "../MessageDelivery.ts";
 import { PreparedInputAdmission } from "../PreparedInputAdmission.ts";
 import {
@@ -121,6 +123,7 @@ import {
   type ResolvedBinding,
 } from "./agent-registration.ts";
 import { lastWorkerReportMessageId } from "./agent-updates.ts";
+import { messageStatus } from "./message-status.ts";
 
 const failure = (
   operation: WorkerError["operation"],
@@ -1817,6 +1820,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         Effect.mapError((cause) => failure(operation, "declaration-unavailable", cause)),
       );
 
+    const deliveryStatus = (row: MessageDeliveryRecord, operation: WorkerError["operation"]) =>
+      messageStatus(row).pipe(Effect.mapError((cause) => failure(operation, "corrupt", cause)));
+
     const preparedTarget = Effect.fn("WorkerHost.preparedTarget")(function* (
       target: Agent.AnyDefinition,
       encodedInput: unknown,
@@ -1992,7 +1998,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           !sameJson(saved.envelope.input, input)
         )
           return yield* failure(operation, "idempotency-conflict");
-        if (saved.receipt !== null) return saved.receipt;
+        if (saved.receipt !== null) return yield* deliveryStatus(saved, operation);
       } else {
         const now = yield* Clock.currentTimeMillis;
 
@@ -2074,34 +2080,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         Effect.mapError(storageFailure(operation)),
       );
 
-      if (processed.receipt !== null) return processed.receipt;
-      if (processed.status === "refused") {
-        const reason = Schema.decodeUnknownOption(WorkerError.fields.reason)(
-          processed.refusal?.startsWith("worker-")
-            ? processed.refusal.slice("worker-".length)
-            : processed.refusal === "AdmissionConflict"
-              ? "idempotency-conflict"
-              : processed.refusal === "AgentInputError"
-                ? "corrupt"
-                : undefined,
-        );
-
-        return yield* failure(
-          operation,
-          Option.getOrElse(reason, () => "denied"),
-          processed.lastFailureDiagnostic,
-        );
-      }
-
-      // A live claim or a future delivery deadline is not a storage failure. Keep the
-      // receipt-only success contract: retention alone does not mean the child started.
-      return yield* failure(
-        operation,
-        processed.status === "pending" && processed.retry.lastFailure === null
-          ? "delivery-pending"
-          : "storage",
-        processed.lastFailureDiagnostic,
-      );
+      return yield* deliveryStatus(processed, operation);
     });
 
     const messageIdFor = (parts: ReadonlyArray<string>) =>
@@ -2277,7 +2256,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         )
           return yield* failure("start", "capacity");
 
-        const receipt = yield* send(
+        const delivery = yield* send(
           origin,
           messageId,
           request.encodedInput,
@@ -2286,7 +2265,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           "start",
         );
 
-        return { worker: origin.worker, receipt };
+        return { worker: origin.worker, delivery };
       }),
       followUp: Effect.fn("WorkerHost.followUp")(function* (request) {
         const principal = yield* authorize("followUp", "send", request.worker);
@@ -2322,6 +2301,43 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       }),
       inspect: Effect.fn("WorkerHost.inspect")(function* (request) {
         yield* authorize("inspect", "read", request.worker);
+
+        if ("message" in request) {
+          const message = yield* Schema.decodeEffect(MessageRef)(request.message).pipe(
+            Effect.mapError((cause) => failure("inspect", "message-mismatch", cause)),
+          );
+
+          if (message.ownerThreadId !== context.source.threadId)
+            return yield* failure("inspect", "denied");
+          yield* binding(request.target, "inspect");
+          if (request.worker.targetAgentId !== request.target.id)
+            return yield* failure("inspect", "worker-mismatch");
+          if (Option.isNone(deps.deliveries)) return yield* failure("inspect", "unavailable");
+
+          const row = yield* deps.deliveries.value
+            .get(message)
+            .pipe(Effect.mapError(storageFailure("inspect")));
+
+          if (row === null) return yield* failure("inspect", "not-found");
+          const admission = row.envelope.workerAdmission;
+
+          if (
+            admission === undefined ||
+            !Schema.toEquivalence(MessageRef)(row.key, message) ||
+            admission.messageId !== message.messageId ||
+            admission.origin.source.threadId !== context.source.threadId ||
+            !Schema.toEquivalence(WorkerRef)(admission.origin.worker, request.worker) ||
+            row.envelope.threadId !== request.worker.threadId ||
+            row.envelope.agentId !== request.target.id ||
+            row.envelope.admissionKey !== message.messageId
+          )
+            return yield* failure("inspect", "message-mismatch");
+
+          // Retention precedes source reservation and child materialization. Read its own
+          // evidence without requiring either execution journal or attempting delivery again.
+          return yield* deliveryStatus(row, "inspect");
+        }
+
         const admission = yield* receiptInput(request, "inspect");
 
         const status = yield* deps

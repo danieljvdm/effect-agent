@@ -322,11 +322,13 @@ it.live(
           {
             idempotencyKey: key("excess-subtree"),
           },
-        ).pipe(Effect.provideService(SubagentHost, owner), Effect.result);
+        ).pipe(Effect.provideService(SubagentHost, owner));
 
-        expect(yield* excessSubtree).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "WorkerError", reason: "capacity" },
+        const refused = yield* excessSubtree;
+
+        expect(refused.delivery).toMatchObject({
+          status: "refused",
+          reason: "worker-capacity",
         });
 
         const rootLog = yield* readLog(rootThreadId);
@@ -431,10 +433,7 @@ it.live(
           ),
         ).toHaveLength(1);
         // Settlement releases active capacity, but the already-reserved subtree is never refunded.
-        expect(yield* excessSubtree).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "WorkerError", reason: "capacity" },
-        });
+        expect(yield* excessSubtree).toEqual(refused);
       }),
     ).pipe(Effect.provide(NodeFileSystem.layer)),
   15_000,

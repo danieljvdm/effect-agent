@@ -11,11 +11,9 @@ import {
   FileSystem,
   Layer,
   Option,
-  Result,
   Schema,
   Scope,
   Stream,
-  Tracer,
 } from "effect";
 import * as Agent from "effect-agent/agent";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
@@ -120,7 +118,7 @@ const untilSettled = (
 // Regression: https://github.com/danieljvdm/effect-agent/blob/4c417d98e8cc790c42ab4200a54a0548fe32e6e3/packages/effect-agent/src/durable/internal/worker-host.ts#L1645-L1691
 for (const completion of ["released", "interrupted"] as const) {
   it.effect(
-    `reports retained worker delivery while another admission owns its ${completion} claim`,
+    `tracks one retained delivery through acceptance and completion after its ${completion} claim`,
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -128,21 +126,12 @@ for (const completion of ["released", "interrupted"] as const) {
           const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-admission-" });
           const claimed = yield* Deferred.make<void>();
           const release = yield* Deferred.make<void>();
+          const accepted = yield* Deferred.make<void>();
+          const processed = yield* Deferred.make<void>();
           let claims = 0;
           let admissions = 0;
           let modelCalls = 0;
           let finalized = 0;
-          let starts = 0;
-          let driverPasses = 0;
-
-          const tracer = Tracer.make({
-            span: (options) => {
-              if (options.name === "WorkerHost.start") starts++;
-              if (options.name === "MessageDelivery.process") driverPasses++;
-
-              return new Tracer.NativeSpan(options);
-            },
-          });
 
           const child = agent(
             "admission-target",
@@ -166,6 +155,7 @@ for (const completion of ["released", "interrupted"] as const) {
                 filename: `${directory}/runtime.sqlite`,
                 deploymentId: "admission-v1",
                 producerId: "admission-node",
+                workerConcurrency: 1,
                 runtimeFailpoint: (location) =>
                   Effect.sync(() => {
                     if (location === "submit:after-admit") admissions++;
@@ -177,6 +167,10 @@ for (const completion of ["released", "interrupted"] as const) {
                 Layer.succeed(MessageDeliveryFailpoint, {
                   hit: (point) =>
                     Effect.gen(function* () {
+                      if (point === "message-delivery:accept:after")
+                        yield* Deferred.succeed(accepted, undefined);
+                      if (point === "message-delivery:process:after")
+                        yield* Deferred.succeed(processed, undefined);
                       if (point !== "message-delivery:claim:after") return;
                       claims++;
                       if (claims !== 1) return;
@@ -195,17 +189,14 @@ for (const completion of ["released", "interrupted"] as const) {
           );
 
           const runtime = Context.get(context, DurableAgentRuntime);
+          const host = Context.get(context, NodeHost.NodeDurableHost);
           const store = Context.get(context, MessageDeliveryStore);
           const history = Context.get(context, ThreadStore);
 
           const sourceReceipt = yield* runtime.submitRegistered(
             source,
             { question: "prepare" },
-            {
-              threadId: sourceThreadId,
-              principal,
-              idempotencyKey: key("source"),
-            },
+            { threadId: sourceThreadId, principal, idempotencyKey: key("source") },
           );
 
           yield* runtime.processThreadResolved(sourceThreadId);
@@ -215,63 +206,113 @@ for (const completion of ["released", "interrupted"] as const) {
 
           const start = withFacet(
             facet,
-            Subagent.start(
-              research,
-              { question: "once" },
-              {
-                idempotencyKey: key("held-claim"),
-              },
-            ),
-          ).pipe(Effect.withTracer(tracer), Effect.withTracerEnabled(true));
+            Subagent.start(research, { question: "once" }, { idempotencyKey: key("held-claim") }),
+          );
 
           const first = yield* start.pipe(Effect.forkChild);
 
           yield* Deferred.await(claimed);
-          const retained = (yield* store.list({ ownerThreadId: sourceThreadId, limit: 10 })).items;
-
-          expect(retained).toHaveLength(1);
-          expect(retained[0]).toMatchObject({ status: "pending", receipt: null });
-          expect(retained[0]!.leaseUntilMillis).toBeGreaterThan(yield* Clock.currentTimeMillis);
           const clockStart = yield* Clock.currentTimeMillis;
-          const wallStart = performance.now();
+          const competing = yield* Effect.all([start, start, start], { concurrency: 3 });
+          const retained = competing[0]!;
 
-          const competing = yield* Effect.forEach([start, start, start], Effect.result, {
-            concurrency: 3,
+          expect(competing).toEqual([retained, retained, retained]);
+          expect(retained.delivery).toEqual({
+            message: { ownerThreadId: sourceThreadId, messageId: expect.any(String) },
+            status: "pending",
+            receipt: null,
+            settlement: null,
+            reason: null,
           });
 
-          const wallMillis = performance.now() - wallStart;
-          const clockMillis = (yield* Clock.currentTimeMillis) - clockStart;
+          const inspect = withFacet(
+            facet,
+            Subagent.inspect(research, retained.worker, retained.delivery.message),
+          );
 
+          expect(yield* inspect).toEqual(retained.delivery);
+          expect(yield* Clock.currentTimeMillis).toBe(clockStart);
           expect(claims).toBe(1);
           expect(admissions).toBe(0);
           expect(modelCalls).toBe(0);
-          expect(clockMillis).toBe(0);
+          expect(
+            (yield* store.list({ ownerThreadId: sourceThreadId, limit: 10 })).items,
+          ).toHaveLength(1);
+          expect(
+            yield* withFacet(
+              facet,
+              Subagent.inspect(research, retained.worker, {
+                ...retained.delivery.message,
+                ownerThreadId: Schema.decodeSync(ThreadId)("another-source"),
+              }),
+            ).pipe(Effect.flip),
+          ).toMatchObject({ reason: "denied" });
+          expect(
+            yield* withFacet(
+              facet,
+              Subagent.inspect(
+                research,
+                Schema.decodeSync(Subagent.Worker(research))({
+                  ...retained.worker,
+                  threadId: "another-worker",
+                }),
+                retained.delivery.message,
+              ),
+            ).pipe(Effect.flip),
+          ).toMatchObject({ reason: "message-mismatch" });
+
           if (completion === "interrupted") {
             yield* Fiber.interrupt(first);
             expect(Exit.hasInterrupts(yield* Fiber.await(first))).toBe(true);
             yield* TestClock.adjust("31 seconds");
           } else {
             yield* Deferred.succeed(release, undefined);
+            expect((yield* Fiber.join(first)).delivery.status).toBe("accepted");
           }
-          const started = yield* completion === "interrupted" ? start : Fiber.join(first);
-          const replay = yield* start;
 
-          expect(replay).toEqual(started);
+          // The normal host pump recovers the retained operation; no business command is resent.
+          const pump = yield* host.runWorkers(Effect.never).pipe(Effect.forkChild);
+
+          yield* Deferred.await(accepted);
+          const admitted = yield* inspect;
+
+          expect(admitted).toMatchObject({
+            message: retained.delivery.message,
+            status: "accepted",
+            settlement: null,
+          });
+          if (admitted.status !== "accepted") return yield* Effect.die("Expected acceptance");
+          expect((yield* start).delivery).toEqual(admitted);
           expect(admissions).toBe(1);
-          expect(claims).toBe(completion === "interrupted" ? 2 : 1);
-          expect(starts).toBe(completion === "interrupted" ? 6 : 5);
-          expect(driverPasses).toBe(completion === "interrupted" ? 5 : 4);
+          expect(modelCalls).toBe(0);
           expect(finalized).toBe(1);
-          yield* runtime.processThreadResolved(started.worker.threadId);
-          expect((yield* runtime.awaitSettlement(started.receipt)).outcome).toBe("completed");
+          yield* runtime.processThreadResolved(retained.worker.threadId);
+
+          const settled = yield* withFacet(
+            facet,
+            Subagent.await(research, retained.worker, admitted.receipt),
+          );
+
+          expect(settled).toMatchObject({ _tag: "Settled", outcome: "completed" });
+          if (settled._tag !== "Settled") return yield* Effect.die("Expected settlement");
+          yield* TestClock.adjust("5 seconds");
+          yield* Deferred.await(processed);
+          expect(yield* inspect).toEqual({
+            message: retained.delivery.message,
+            status: "processed",
+            receipt: admitted.receipt,
+            settlement: { settlementId: settled.settlementId, outcome: "completed" },
+            reason: null,
+          });
           expect(modelCalls).toBe(1);
+          yield* Fiber.interrupt(pump);
 
           const sourceLog = yield* history.export(
             ThreadExportRequest.make({ threadId: sourceThreadId }),
           );
 
           const childLog = yield* history.export(
-            ThreadExportRequest.make({ threadId: started.worker.threadId }),
+            ThreadExportRequest.make({ threadId: retained.worker.threadId }),
           );
 
           expect(
@@ -282,31 +323,6 @@ for (const completion of ["released", "interrupted"] as const) {
           expect(
             childLog.records.filter(({ record }) => record.payload._tag === "UserInputRecorded"),
           ).toHaveLength(1);
-
-          const outcomes = competing.map((result) =>
-            Result.isFailure(result)
-              ? result.failure._tag === "WorkerError"
-                ? result.failure.reason
-                : result.failure._tag
-              : "started",
-          );
-
-          console.info(
-            "Pending worker delivery admission",
-            JSON.stringify({
-              outcomes,
-              completion,
-              wallMillis,
-              clockMillis,
-              claims,
-              admissions,
-              modelCalls,
-              finalized,
-              starts,
-              driverPasses,
-            }),
-          );
-          expect(outcomes).toEqual(["delivery-pending", "delivery-pending", "delivery-pending"]);
         }),
       ).pipe(Effect.provide(NodeFileSystem.layer)),
     15_000,
@@ -396,14 +412,20 @@ it.effect(
             Subagent.start(declaration, { question: id }, { idempotencyKey: key(id) }),
           );
 
-        expect(yield* start("retry").pipe(Effect.flip)).toMatchObject({
-          _tag: "WorkerError",
+        const pending = yield* start("retry");
+
+        expect(pending.delivery).toMatchObject({
+          status: "pending",
+          receipt: null,
           reason: "storage",
         });
-        expect(yield* start("retry").pipe(Effect.flip)).toMatchObject({
-          _tag: "WorkerError",
-          reason: "storage",
-        });
+        expect(yield* start("retry")).toEqual(pending);
+        expect(
+          yield* withFacet(
+            facet,
+            Subagent.inspect(declaration, pending.worker, pending.delivery.message),
+          ),
+        ).toEqual(pending.delivery);
         expect(claims).toBe(1);
         expect(
           (yield* deliveries.list({ ownerThreadId: sourceThreadId, limit: 10 })).items[0],
@@ -414,14 +436,22 @@ it.effect(
         });
         mode = "refuse";
         yield* TestClock.adjust("1 second");
-        expect(yield* start("retry").pipe(Effect.flip)).toMatchObject({
-          _tag: "WorkerError",
-          reason: "capacity",
+        const refused = yield* start("retry");
+
+        expect(refused.delivery).toEqual({
+          message: pending.delivery.message,
+          status: "refused",
+          receipt: null,
+          settlement: null,
+          reason: "worker-capacity",
         });
-        expect(yield* start("retry").pipe(Effect.flip)).toMatchObject({
-          _tag: "WorkerError",
-          reason: "capacity",
-        });
+        expect(yield* start("retry")).toEqual(refused);
+        expect(
+          yield* withFacet(
+            facet,
+            Subagent.inspect(declaration, pending.worker, pending.delivery.message),
+          ),
+        ).toEqual(refused.delivery);
         expect(claims).toBe(2);
         expect(
           (yield* deliveries.list({ ownerThreadId: sourceThreadId, limit: 10 })).items[0],
@@ -443,8 +473,8 @@ it.effect(
         yield* Deferred.await(timeoutEntered);
         yield* TestClock.adjust("30 seconds");
         expect(yield* Fiber.join(waiting)).toMatchObject({
-          _tag: "Failure",
-          failure: { reason: "storage" },
+          _tag: "Success",
+          success: { delivery: { status: "pending", receipt: null, reason: "timeout" } },
         });
         expect(timeoutsFinalized).toBe(1);
 
@@ -534,18 +564,24 @@ it.effect(
           ).pipe(Effect.result),
         ).toMatchObject({ _tag: "Failure", failure: { reason: "idempotency-conflict" } });
         expect(
-          yield* withFacet(facet, Subagent.inspect(declaration, started.worker, started.receipt)),
-        ).toEqual({ _tag: "Pending", receipt: started.receipt });
+          yield* withFacet(
+            facet,
+            Subagent.inspect(declaration, started.worker, started.delivery.receipt!),
+          ),
+        ).toEqual({ _tag: "Pending", receipt: started.delivery.receipt! });
 
         const waiter = yield* withFacet(
           facet,
-          Subagent.await(declaration, started.worker, started.receipt),
+          Subagent.await(declaration, started.worker, started.delivery.receipt!),
         ).pipe(Effect.forkChild);
 
         yield* Fiber.interrupt(waiter);
         expect(
-          yield* withFacet(facet, Subagent.inspect(declaration, started.worker, started.receipt)),
-        ).toEqual({ _tag: "Pending", receipt: started.receipt });
+          yield* withFacet(
+            facet,
+            Subagent.inspect(declaration, started.worker, started.delivery.receipt!),
+          ),
+        ).toEqual({ _tag: "Pending", receipt: started.delivery.receipt! });
         yield* Scope.close(firstScope, Exit.void);
 
         const second = yield* Layer.build(
@@ -554,7 +590,11 @@ it.effect(
 
         const reopened = Context.get(second, DurableAgentRuntime);
         const owner = yield* reopened.workerHost({ sourceThreadId, principal });
-        const firstResult = yield* untilSettled(owner, started);
+
+        const firstResult = yield* untilSettled(owner, {
+          worker: started.worker,
+          receipt: started.delivery.receipt!,
+        });
 
         expect(firstResult).toMatchObject({ outcome: "completed", result: { answer: "done" } });
 
@@ -568,18 +608,18 @@ it.effect(
           ),
         );
 
-        expect(nextReceipt.threadId).toBe(started.worker.threadId);
-        expect(nextReceipt.submissionId).not.toBe(started.receipt.submissionId);
+        expect(nextReceipt.receipt!.threadId).toBe(started.worker.threadId);
+        expect(nextReceipt.receipt!.submissionId).not.toBe(started.delivery.receipt!.submissionId);
 
         const secondResult = yield* untilSettled(owner, {
           worker: started.worker,
-          receipt: nextReceipt,
+          receipt: nextReceipt.receipt!,
         });
 
         expect(secondResult).toMatchObject({ outcome: "completed", result: { answer: "done" } });
         expect(secondResult.runId).not.toBe(firstResult.runId);
         expect(yield* withFacet(owner, Subagent.list(declaration))).toEqual({
-          items: [{ worker: started.worker, latestReceipt: nextReceipt, state: "idle" }],
+          items: [{ worker: started.worker, latestReceipt: nextReceipt.receipt, state: "idle" }],
           next: null,
         });
 

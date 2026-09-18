@@ -583,12 +583,14 @@ for (const [parentState, failpoint] of [
           ).toHaveLength(1);
           yield* reopened.abort(
             AbortCommand.make({
-              submissionId: started.receipt.submissionId,
+              submissionId: started.delivery.receipt!.submissionId,
               author: principal,
               reason: "resolve interrupted worker",
             }),
           );
-          expect((yield* reopened.awaitSettlement(started.receipt)).outcome).toBe("aborted");
+          expect((yield* reopened.awaitSettlement(started.delivery.receipt!)).outcome).toBe(
+            "aborted",
+          );
           yield* Effect.gen(function* () {
             for (;;) {
               const rows = yield* deliveries.list({

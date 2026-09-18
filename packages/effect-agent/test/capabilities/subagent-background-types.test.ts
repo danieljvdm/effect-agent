@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Context, type Crypto, Effect, type Layer, Schema, SchemaGetter } from "effect";
 import * as Agent from "effect-agent/agent";
 import type { AgentRunDispositionError } from "effect-agent/agent-error";
+import { MessageRef, type MessageStatus } from "effect-agent/messaging";
 import { IdempotencyKey, type JoinedToHost, Receipt } from "effect-agent/receipt";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentGrant } from "effect-agent/subagent-contract";
@@ -144,7 +145,8 @@ const directTypes: [
   Assert<
     Equal<
       Tool.Success<(typeof direct.tools)["typed-background-child_inspect"]>,
-      ModelObservation<Subagent.WorkerObservation<Subagent.SubagentResult<typeof text>>>
+      | MessageStatus
+      | ModelObservation<Subagent.WorkerObservation<Subagent.SubagentResult<typeof text>>>
     >
   >,
   Assert<Equal<Layer.Services<typeof direct.layer>, Encoder | Decoder>>,
@@ -199,6 +201,8 @@ const key = Schema.decodeSync(IdempotencyKey)("start-key");
 const start = Subagent.start(declaration, "input", { idempotencyKey: key });
 const followUp = Subagent.followUp(declaration, worker, "next", { idempotencyKey: key });
 const inspect = Subagent.inspect(declaration, worker, receipt);
+const message = Schema.decodeSync(MessageRef)({ ownerThreadId: "source", messageId: "delivery" });
+const deliveryStatus = Subagent.inspect(declaration, worker, message);
 const workerSummary = Subagent.inspect(declaration, worker);
 const awaitResult = Subagent.await(declaration, worker, receipt);
 const cancel = Subagent.cancel(declaration, worker, receipt);
@@ -329,6 +333,10 @@ const nestedSuccessProof: Assert<
 > = true;
 
 const proofs: [
+  Assert<Equal<Effect.Services<typeof deliveryStatus>, SubagentHost>>,
+  Assert<Equal<Effect.Error<typeof deliveryStatus>, WorkerError>>,
+  Assert<Equal<Effect.Success<typeof deliveryStatus>, MessageStatus>>,
+  Assert<Equal<Effect.Success<typeof start>["delivery"], MessageStatus>>,
   Assert<Equal<Effect.Services<typeof workerSummary>, SubagentHost>>,
   Assert<Equal<Effect.Error<typeof workerSummary>, WorkerError>>,
   Assert<Equal<Layer.Services<typeof onlySummary.layer>, never>>,
@@ -343,7 +351,7 @@ const proofs: [
   Assert<Equal<Effect.Error<typeof inspect>, ProjectionErrors>>,
   Assert<Equal<Effect.Error<typeof cancel>, WorkerError | JoinedToHost>>,
   Assert<Equal<Effect.Success<typeof start>["worker"], Subagent.Worker<"research">>>,
-  Assert<Equal<Effect.Success<typeof followUp>, Receipt>>,
+  Assert<Equal<Effect.Success<typeof followUp>, MessageStatus>>,
   Assert<
     Equal<keyof typeof selected.tools, "research_start" | "research_inspect" | "research_cancel">
   >,
@@ -358,6 +366,10 @@ const proofs: [
   Assert<Equal<Layer.Services<typeof onlyStart.layer>, Prepare | Encoder>>,
   Assert<Equal<Layer.Services<typeof onlyInspect.layer>, Project | Encoder | Decoder>>,
 ] = [
+  true,
+  true,
+  true,
+  true,
   true,
   true,
   true,

@@ -312,12 +312,14 @@ import { Effect, Schema } from "effect";
 import { Research } from "./delegation.ts";
 
 const program = Effect.gen(function* () {
-  const { worker, receipt } = yield* Subagent.start(
+  const { worker, delivery } = yield* Subagent.start(
     Research,
     { city: "Lisbon", focus: "food and walking" },
     { idempotencyKey: Schema.decodeSync(IdempotencyKey)("lisbon-research-1") },
   );
-  return yield* Subagent.inspect(Research, worker, receipt);
+  const current = yield* Subagent.inspect(Research, worker, delivery.message);
+  if (current.receipt === null) return current;
+  return yield* Subagent.await(Research, worker, current.receipt);
 });
 ```
 
@@ -328,18 +330,26 @@ timeout stops only that waiter, leaving the worker running.
 
 ## Background delivery and recovery
 
-`Subagent.start` returns a continuing worker identity and the Receipt for its first accepted
-input. `Subagent.followUp` submits more declared parameters to that same Thread. Both are
-Effects; acceptance does not wait for the child to finish. Programmatic calls require an
-explicit, stable `IdempotencyKey`. A model tool derives its key from its actual invocation.
+`Subagent.start` returns `{ worker, delivery }`; `Subagent.followUp` returns the delivery directly.
+Both use `MessageStatus` from `effect-agent/messaging`, with one stable `message: MessageRef`.
+These Effects retain one intended input. Programmatic calls require an explicit, stable
+`IdempotencyKey`; native tools derive it from their actual invocation.
 
-If another delivery attempt owns the claim, `start` and `followUp` can fail with
-`WorkerError` reason `delivery-pending`. This confirms that the exact input is durably retained;
-it does not confirm destination acceptance or that the child started. The host's existing
-delivery recovery owns progress. Preserve the same parameters and idempotency key when
-reconciling instead of launching replacement work. Conclusive refusal retains its specific
-reason, while a recorded retry failure or a storage exception still reports `storage`.
-These operations add no waiting or polling for a competing claim.
+| Status      | Evidence                                                                                 |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| `pending`   | The exact input is retained. Acceptance and execution are unconfirmed.                   |
+| `accepted`  | `receipt` identifies the destination's accepted input; completion is unconfirmed.        |
+| `processed` | `receipt` and `settlement` identify its canonical completed, failed, or aborted outcome. |
+| `refused`   | The destination rejected this input; `reason` identifies the refusal.                    |
+| `parked`    | Automatic retry stopped; the same identity and any accepted receipt remain available.    |
+
+Inspect `delivery.message` to follow the same operation without resending or driving delivery.
+The host's existing bounded delivery driver owns retries and crash recovery. A recorded admission
+failure remains `pending` with a bounded `reason`, or becomes `parked` when its retry budget ends.
+Detailed diagnostics remain private in the delivery record. A real storage exception still fails
+with `WorkerError`; preserve the same key and parameters when retrying an uncertain response.
+Authorization and input-validation failures remain typed errors. Existing delivery rows keep their
+stored format and identity.
 
 ```ts
 const Research = Subagent.make("research", { target: researcher });
@@ -367,10 +377,12 @@ The interpreter supplies the actual Agent, Thread, Run, and Tool Call identity; 
 refuses a binding from another Run. The reference defaults to an unavailable host and is not
 a `RunOptions` callback.
 
-Keep the two references distinct: a worker identifies its continuing Thread, while a Receipt
-identifies one input. Neither grants access. Encode/decode worker references with
+The worker identifies its continuing Thread; a MessageRef identifies one retained delivery;
+a Receipt identifies its accepted destination input. None grants access. Encode/decode workers with
 `Subagent.Worker(Research)`. `inspect(Research, worker)` returns the same summary as discovery;
-passing a third Receipt argument inspects that exact input. `await` takes the declaration,
+passing a MessageRef reads delivery state, while passing a Receipt projects that exact input's
+result. The native inspect tool takes `{ worker, message }` or `{ worker, receipt }`, exactly one.
+`await` takes the declaration,
 worker, and exact Receipt and can be interrupted without cancelling work. `cancel` targets only that
 Receipt and preserves `JoinedToHost` if it joined another input's Run. Cancellation does not
 close the worker or cancel an entire work tree.

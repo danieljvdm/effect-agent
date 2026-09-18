@@ -465,7 +465,6 @@ describe("run journal batch split (plan §2.1)", () => {
       }),
     );
 
-    // Regression: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-9M
     // Authorization failed before preparation, but later history claimed the action may have run.
     it.effect(
       "distinguishes an undispatched historical call from a prepared unknown operation",
