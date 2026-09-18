@@ -1,5 +1,4 @@
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
+import { NodeCrypto } from "@effect/platform-node";
 import {
   Clock,
   Context,
@@ -21,7 +20,7 @@ import {
   Digest,
   ObservationOffset,
 } from "effect-agent/records";
-import { sqliteLayer } from "effect-agent/sql-dialect";
+import { postgresLayer } from "effect-agent/sql-dialect";
 import { makeSelectedReads } from "effect-agent/sql-thread-native-reads";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 import {
@@ -38,7 +37,6 @@ import {
   ThreadStore,
   type ThreadCheckpoints,
   ThreadStoreError,
-  ThreadStoreDiagnostic,
   ThreadTail,
   ThreadTailRequest,
   FenceRejected,
@@ -49,108 +47,105 @@ import {
   MAX_THREAD_EXPORT_RECORDS,
   type ThreadRecoveryCheckpoints,
 } from "effect-agent/thread-store";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import type * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
-  DEFAULT_MAX_STORED_VALUE_BYTES,
-  DoStorageConfig,
-  DoStorageConfigValue,
-} from "./DoStorageConfig.ts";
-import {
-  type DoStorageCompatibilityError,
-  DoAppendConflict,
-  DoCheckpointConflict,
-  DoFenceRejected,
-  type DoStorageFailpointLocation,
-  DoStorageCorruptionError,
-  DoStorageError,
-} from "./DoStorageError.ts";
-import { DoStorageFailpoint, type DoStorageFailpointHandler } from "./DoStorageFailpoint.ts";
-import {
-  initializeDoJournal,
+  initializePostgresJournal,
   RawAppendRequest,
   RawCheckpoint,
   RawReadRequest,
-  type DoJournal,
-} from "./internal/do-journal.ts";
+  type PostgresJournal,
+} from "./internal/postgres-journal.ts";
+import { storageClientLayer, type PostgresClientOptions } from "./PostgresStorageClient.ts";
+import { PostgresStorageConfig, PostgresStorageConfigValue } from "./PostgresStorageConfig.ts";
+import {
+  type PostgresStorageCompatibilityError,
+  PostgresAppendConflict,
+  PostgresCheckpointConflict,
+  PostgresFenceRejected,
+  type PostgresStorageFailpointLocation,
+  PostgresStorageCorruptionError,
+  PostgresStorageError,
+} from "./PostgresStorageError.ts";
+import {
+  PostgresStorageFailpoint,
+  type PostgresStorageFailpointHandler,
+} from "./PostgresStorageFailpoint.ts";
 
-/**
- * Convenience-layer construction options. `storage` is the Durable Object's own
- * `ctx.storage` handle, injected as a value (DEPLOY-010: platform bindings enter only
- * through Layers; this package never imports `cloudflare:workers`).
- */
-export interface DoStorageOptions {
-  readonly storage: DurableObjectStorage;
+export interface PostgresStorageOptions {
+  /** Connection configuration for the adapter's own client, minus the type registry it owns. */
+  readonly client: PostgresClientOptions;
+  /**
+   * Postgres schema holding the adapter's tables, created if absent. Defaults to `public`.
+   *
+   * Selecting any other schema requires it to be the *connection's* default, because
+   * `search_path` binds per connection and this driver exposes no way to set one for a pool.
+   * Set it with `ALTER ROLE ... SET search_path` or `ALTER DATABASE ... SET search_path`; the
+   * adapter verifies the effective schema at startup and refuses to run if it disagrees.
+   */
+  readonly schema?: string | undefined;
   readonly observationPollInterval?: number | undefined;
+  /**
+   * Bounded wait for a contended row lock inside a write transaction, in milliseconds. A
+   * transaction that exceeds it fails with the retryable `PostgresWriteContention`.
+   */
+  readonly lockTimeout?: number | undefined;
   /**
    * Submission ownership lease duration in milliseconds (D5). Defaults to
    * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `effect-agent/submission-ledger`.
    */
   readonly ownershipLeaseDuration?: number | undefined;
   /**
-   * Maximum bytes for any single stored value; must stay under the platform's 2 MB
-   * per-value limit. Defaults to `DEFAULT_MAX_STORED_VALUE_BYTES`.
-   */
-  readonly maxStoredValueBytes?: number | undefined;
-  /**
    * Re-verify every stored payload and digest chain while opening the store. Defaults to
    * off: per-operation Schema decoding and the digest chain already fail clearly on corrupt
    * rows without scanning the whole database on every open.
    */
   readonly verifyOnOpen?: boolean | undefined;
-  readonly failpoint?: DoStorageFailpointHandler | undefined;
+  readonly failpoint?: PostgresStorageFailpointHandler | undefined;
 }
 
-export type DoStorageInitializationError =
-  | DoStorageCompatibilityError
-  | DoStorageCorruptionError
-  | DoStorageError;
+export type PostgresStorageInitializationError =
+  | PostgresStorageCompatibilityError
+  | PostgresStorageCorruptionError
+  | PostgresStorageError;
 
 const OffsetText = Schema.String.check(Schema.isMaxLength(4 * 1024));
-const DO_OFFSET_PREFIX = "effect-agent-do@1:";
+const POSTGRES_OFFSET_PREFIX = "effect-agent-postgres@1:";
 const ZERO_CANONICAL_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 const isDigest = Schema.is(Digest);
-const isDoFenceRejected = Schema.is(DoFenceRejected);
-const isDoAppendConflict = Schema.is(DoAppendConflict);
-const isDoCheckpointConflict = Schema.is(DoCheckpointConflict);
+const isPostgresFenceRejected = Schema.is(PostgresFenceRejected);
+const isPostgresAppendConflict = Schema.is(PostgresAppendConflict);
+const isPostgresCheckpointConflict = Schema.is(PostgresCheckpointConflict);
 
-const storeError = (
-  operation: string,
-  error: { readonly message: string; readonly diagnostic?: ThreadStoreDiagnostic },
-) =>
+const storeError = (operation: string, error: { readonly message: string }) =>
   ThreadStoreError.make({
     cause: error,
     operation,
     message: error.message,
-    ...(error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic }),
   });
 
-const schemaStoreError = (operation: string, error: Schema.SchemaError) =>
+const schemaStoreError = (operation: string, error: { readonly message: string }) =>
   ThreadStoreError.make({
+    cause: error,
     operation,
-    message: "A Thread storage value does not satisfy its schema",
-    diagnostic: ThreadStoreDiagnostic.make({
-      causeTag: error._tag,
-      operation,
-      issueTag: error.issue._tag,
-    }),
+    message: error.message,
   });
 
-const makeOffset = Effect.fn(function* (
+const makeOffset = Effect.fn("PostgresThreadStore.makeOffset")(function* (
   threadId: ThreadMaterialization["threadId"],
   sequence: number,
 ): Effect.fn.Return<ObservationOffset, ThreadStoreError> {
   return yield* Schema.decodeEffect(CanonicalSequence)(sequence).pipe(
     Effect.flatMap((validatedSequence) =>
       Schema.decodeEffect(ObservationOffset)(
-        `${DO_OFFSET_PREFIX}${encodeURIComponent(threadId)}:${validatedSequence}`,
+        `${POSTGRES_OFFSET_PREFIX}${encodeURIComponent(threadId)}:${validatedSequence}`,
       ),
     ),
     Effect.mapError((error) => schemaStoreError("encode observation offset", error)),
   );
 });
 
-const parseOffset = Effect.fn(function* (
+const parseOffset = Effect.fn("PostgresThreadStore.parseOffset")(function* (
   threadId: ThreadMaterialization["threadId"],
   offset: ObservationOffset | undefined,
 ): Effect.fn.Return<CanonicalSequence, ThreadStoreError> {
@@ -160,7 +155,7 @@ const parseOffset = Effect.fn(function* (
     Effect.mapError((error) => schemaStoreError("decode observation offset", error)),
   );
 
-  const threadPrefix = `${DO_OFFSET_PREFIX}${encodeURIComponent(threadId)}:`;
+  const threadPrefix = `${POSTGRES_OFFSET_PREFIX}${encodeURIComponent(threadId)}:`;
 
   if (!text.startsWith(threadPrefix)) {
     return yield* ThreadStoreError.make({
@@ -182,14 +177,14 @@ const parseOffset = Effect.fn(function* (
   );
 });
 
-const mapFence = (threadId: ThreadMaterialization["threadId"], error: DoFenceRejected) =>
+const mapFence = (threadId: ThreadMaterialization["threadId"], error: PostgresFenceRejected) =>
   FenceRejected.make({
     threadId,
     actualEpoch: error.actualEpoch,
     attemptedEpoch: error.producerEpoch,
   });
 
-const encodeCanonicalRecord = Effect.fn(function* (
+const encodeCanonicalRecord = Effect.fn("PostgresThreadStore.encodeCanonicalRecord")(function* (
   record: CanonicalRecord,
 ): Effect.fn.Return<string, ThreadStoreError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(record).pipe(
@@ -197,7 +192,7 @@ const encodeCanonicalRecord = Effect.fn(function* (
   );
 });
 
-const encodeCanonicalBatch = Effect.fn(function* (
+const encodeCanonicalBatch = Effect.fn("PostgresThreadStore.encodeCanonicalBatch")(function* (
   batch: CanonicalBatch,
 ): Effect.fn.Return<string, ThreadStoreError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalBatch))(batch).pipe(
@@ -205,7 +200,7 @@ const encodeCanonicalBatch = Effect.fn(function* (
   );
 });
 
-const encodeCheckpoint = Effect.fn(function* (
+const encodeCheckpoint = Effect.fn("PostgresThreadStore.encodeCheckpoint")(function* (
   checkpoint: ThreadCheckpoint,
 ): Effect.fn.Return<string, ThreadStoreError> {
   return yield* Schema.encodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpoint).pipe(
@@ -213,7 +208,7 @@ const encodeCheckpoint = Effect.fn(function* (
   );
 });
 
-const decodeEnvelope = Effect.fn(function* (row: {
+const decodeEnvelope = Effect.fn("PostgresThreadStore.decodeEnvelope")(function* (row: {
   readonly batch_id: string;
   readonly thread_id: string;
   readonly record_json: string;
@@ -225,23 +220,7 @@ const decodeEnvelope = Effect.fn(function* (row: {
     Effect.mapError((error) =>
       ThreadStoreError.make({
         operation: "decode canonical record",
-        message: "The canonical record does not satisfy its schema",
-        diagnostic: ThreadStoreDiagnostic.make({
-          causeTag: error._tag,
-          operation: "decode canonical record",
-          decoder: "CanonicalRecord",
-          sequence: row.sequence,
-          issueTag: error.issue._tag,
-        }),
-      }),
-    ),
-    Effect.tapError((error) =>
-      Effect.annotateCurrentSpan({
-        "storage.failure.operation": error.diagnostic?.operation,
-        "storage.failure.cause": error.diagnostic?.causeTag,
-        "storage.failure.decoder": error.diagnostic?.decoder,
-        "storage.failure.sequence": row.sequence,
-        "storage.failure.issue": error.diagnostic?.issueTag,
+        message: error.message,
       }),
     ),
   );
@@ -265,7 +244,7 @@ const decodeEnvelope = Effect.fn(function* (row: {
   });
 });
 
-const decodeCheckpoint = Effect.fn(function* (
+const decodeCheckpoint = Effect.fn("PostgresThreadStore.decodeCheckpoint")(function* (
   checkpointJson: string,
 ): Effect.fn.Return<ThreadCheckpoint, ThreadStoreError> {
   return yield* Schema.decodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpointJson).pipe(
@@ -273,8 +252,8 @@ const decodeCheckpoint = Effect.fn(function* (
   );
 });
 
-const requireThread = Effect.fn("DoThreadStore.requireThread")(function* (
-  journal: DoJournal,
+const requireThread = Effect.fn("PostgresThreadStore.requireThread")(function* (
+  journal: PostgresJournal,
   threadId: ThreadMaterialization["threadId"],
 ) {
   const rows = yield* journal
@@ -288,8 +267,8 @@ const requireThread = Effect.fn("DoThreadStore.requireThread")(function* (
   return rows[0];
 });
 
-const tailDigestAt = Effect.fn("DoThreadStore.tailDigestAt")(function* (
-  journal: DoJournal,
+const tailDigestAt = Effect.fn("PostgresThreadStore.tailDigestAt")(function* (
+  journal: PostgresJournal,
   threadId: ThreadMaterialization["threadId"],
   sequence: CanonicalSequence,
 ) {
@@ -335,8 +314,8 @@ const groupByKey = <A>(
  * projection checkpoints. Disposable recovery checkpoints are validated when loaded. Routine opens
  * skip this scan: per-operation Schema decoding fails clearly on corrupt canonical rows.
  */
-const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(function* (
-  journal: DoJournal,
+const decodeStartupPayloads = Effect.fn("PostgresThreadStore.decodeStartupPayloads")(function* (
+  journal: PostgresJournal,
   crypto: Crypto.Crypto,
 ) {
   const stored = yield* journal.scanStoredPayloads();
@@ -345,7 +324,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
     Schema.decodeEffect(Schema.fromJsonString(CanonicalBatch))(batch.batch_json).pipe(
       Effect.map((decoded) => ({ decoded, row: batch })),
       Effect.mapError((error) =>
-        DoStorageCorruptionError.make({
+        PostgresStorageCorruptionError.make({
           table: "effect_agent_canonical_batches",
           rowKey: `${batch.thread_id}/${batch.batch_id}`,
           message: error.message,
@@ -358,7 +337,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
     Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(record.record_json).pipe(
       Effect.map((decoded) => ({ decoded, row: record })),
       Effect.mapError((error) =>
-        DoStorageCorruptionError.make({
+        PostgresStorageCorruptionError.make({
           table: "effect_agent_canonical_records",
           rowKey: `${record.thread_id}/${record.sequence}`,
           message: error.message,
@@ -371,7 +350,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
     Schema.decodeEffect(Schema.fromJsonString(ThreadCheckpoint))(checkpoint.checkpoint_json).pipe(
       Effect.map((decoded) => ({ decoded, row: checkpoint })),
       Effect.mapError((error) =>
-        DoStorageCorruptionError.make({
+        PostgresStorageCorruptionError.make({
           table: "effect_agent_checkpoints",
           rowKey: `${checkpoint.thread_id}/${checkpoint.through_sequence}`,
           message: error.message,
@@ -402,7 +381,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
         batchRow.first_sequence !== expectedSequence ||
         batchRow.last_sequence !== batchRow.first_sequence + canonicalBatch.records.length - 1
       ) {
-        return yield* DoStorageCorruptionError.make({
+        return yield* PostgresStorageCorruptionError.make({
           table: "effect_agent_canonical_batches",
           rowKey: key,
           message: "Canonical batch identity, sequence, or record count is inconsistent.",
@@ -412,7 +391,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
       const digest = yield* digestCanonicalBatch(previousDigest, canonicalBatch).pipe(
         Effect.provideService(Crypto.Crypto, crypto),
         Effect.mapError((error) =>
-          DoStorageCorruptionError.make({
+          PostgresStorageCorruptionError.make({
             table: "effect_agent_canonical_batches",
             rowKey: key,
             message: error.message,
@@ -421,7 +400,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
       );
 
       if (batchRow.batch_digest !== digest || batchRow.tail_digest !== digest) {
-        return yield* DoStorageCorruptionError.make({
+        return yield* PostgresStorageCorruptionError.make({
           table: "effect_agent_canonical_batches",
           rowKey: key,
           message: "Canonical batch digest does not match its decoded content and prior tail.",
@@ -431,7 +410,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
       const batchRecords = recordsByBatch.get(batchRow.batch_id) ?? [];
 
       if (batchRecords.length !== canonicalBatch.records.length) {
-        return yield* DoStorageCorruptionError.make({
+        return yield* PostgresStorageCorruptionError.make({
           table: "effect_agent_canonical_records",
           rowKey: key,
           message: "Canonical batch and record-table counts differ.",
@@ -445,7 +424,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
           expectedRecord,
         ).pipe(
           Effect.mapError((error) =>
-            DoStorageCorruptionError.make({
+            PostgresStorageCorruptionError.make({
               table: "effect_agent_canonical_batches",
               rowKey: key,
               message: error.message,
@@ -457,7 +436,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
           storedRecord.decoded,
         ).pipe(
           Effect.mapError((error) =>
-            DoStorageCorruptionError.make({
+            PostgresStorageCorruptionError.make({
               table: "effect_agent_canonical_records",
               rowKey: `${key}/${storedRecord.row.sequence}`,
               message: error.message,
@@ -470,7 +449,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
           storedRecord.row.record_id !== expectedRecord.recordId ||
           expectedJson !== storedJson
         ) {
-          return yield* DoStorageCorruptionError.make({
+          return yield* PostgresStorageCorruptionError.make({
             table: "effect_agent_canonical_records",
             rowKey: `${key}/${storedRecord.row.sequence}`,
             message: "Canonical record identity, sequence, or payload differs from its batch.",
@@ -488,7 +467,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
       thread.tail_sequence !== expectedSequence - 1 ||
       thread.tail_digest !== previousDigest
     ) {
-      return yield* DoStorageCorruptionError.make({
+      return yield* PostgresStorageCorruptionError.make({
         table: "effect_agent_threads",
         rowKey: thread.thread_id,
         message: "Thread tail does not match its canonical batch chain.",
@@ -502,7 +481,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
         checkpoint.decoded.tailDigest !== checkpoint.row.tail_digest ||
         tailDigests.get(checkpoint.row.through_sequence) !== checkpoint.row.tail_digest
       ) {
-        return yield* DoStorageCorruptionError.make({
+        return yield* PostgresStorageCorruptionError.make({
           table: "effect_agent_checkpoints",
           rowKey: `${thread.thread_id}/${checkpoint.row.through_sequence}`,
           message: "Checkpoint identity or digest is not bound to a canonical batch tail.",
@@ -516,7 +495,7 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
     records.some(({ row }) => !materializedIds.has(row.thread_id)) ||
     checkpoints.some(({ row }) => !materializedIds.has(row.thread_id))
   ) {
-    return yield* DoStorageCorruptionError.make({
+    return yield* PostgresStorageCorruptionError.make({
       table: "effect_agent_threads",
       rowKey: "startup_scan",
       message: "Canonical rows exist without a materialized Thread.",
@@ -524,12 +503,11 @@ const decodeStartupPayloads = Effect.fn("DoThreadStore.decodeStartupPayloads")(f
   }
 });
 
-const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
-  const config = yield* DoStorageConfig;
-  const failpoint = yield* DoStorageFailpoint;
-  const sql = yield* SqlClientService.SqlClient;
+const makeServices = Effect.fn("PostgresThreadStore.makeServices")(function* () {
+  const config = yield* PostgresStorageConfig;
+  const failpoint = yield* PostgresStorageFailpoint;
   const crypto = yield* Crypto.Crypto;
-  const journal = yield* initializeDoJournal(sql, failpoint.hit, config.maxStoredValueBytes);
+  const journal = yield* initializePostgresJournal();
 
   if (config.verifyOnOpen) {
     yield* decodeStartupPayloads(journal, crypto);
@@ -538,128 +516,124 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
   const provideCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
     Effect.provideService(effect, Crypto.Crypto, crypto);
 
-  const hitFailpoint = Effect.fn(
-    (location: DoStorageFailpointLocation): Effect.Effect<void, ThreadStoreError> =>
+  const hitFailpoint = Effect.fn("PostgresThreadStore.hitFailpoint")(
+    (location: PostgresStorageFailpointLocation): Effect.Effect<void, ThreadStoreError> =>
       failpoint
         .hit(location)
         .pipe(Effect.mapError((error) => storeError(`storage failpoint ${location}`, error))),
   );
 
-  const materialize: ThreadStore["Service"]["materialize"] = Effect.fn("DoThreadStore.materialize")(
-    function* (request: ThreadMaterialization) {
-      const validated = yield* Schema.decodeEffect(Schema.toType(ThreadMaterialization))(
+  const materialize: ThreadStore["Service"]["materialize"] = Effect.fn(
+    "PostgresThreadStore.materialize",
+  )(function* (request: ThreadMaterialization) {
+    const validated = yield* Schema.decodeEffect(Schema.toType(ThreadMaterialization))(
+      request,
+    ).pipe(Effect.mapError((error) => schemaStoreError("validate materialization", error)));
+
+    const now = yield* Clock.currentTimeMillis;
+
+    yield* hitFailpoint("materialize:before");
+    yield* journal
+      .materialize(
+        validated.threadId,
+        new Date(now).toISOString(),
+        EMPTY_TAIL_DIGEST,
+        validated.producerEpoch,
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "PostgresFenceRejected"
+            ? mapFence(validated.threadId, error)
+            : storeError("materialize thread", error),
+        ),
+      );
+    yield* hitFailpoint("materialize:after");
+  });
+
+  const append: ThreadStore["Service"]["append"] = Effect.fn("PostgresThreadStore.append")(
+    function* (request: FencedAppendRequest) {
+      const validated = yield* Schema.decodeEffect(Schema.toType(FencedAppendRequest))(
         request,
-      ).pipe(Effect.mapError((error) => schemaStoreError("validate materialization", error)));
+      ).pipe(Effect.mapError((error) => schemaStoreError("validate canonical append", error)));
 
-      const now = yield* Clock.currentTimeMillis;
+      yield* requireThread(journal, validated.threadId);
 
-      yield* hitFailpoint("materialize:before");
-      yield* journal
-        .materialize(
-          validated.threadId,
-          new Date(now).toISOString(),
-          EMPTY_TAIL_DIGEST,
-          validated.producerEpoch,
-        )
-        .pipe(
-          Effect.mapError((error) =>
-            error._tag === "DoFenceRejected"
-              ? mapFence(validated.threadId, error)
-              : storeError("materialize thread", error),
+      const tailDigest = yield* provideCrypto(
+        digestCanonicalBatch(validated.expectedTailDigest, validated.batch),
+      ).pipe(Effect.mapError((error) => storeError("digest canonical append", error)));
+
+      const batchJson = yield* encodeCanonicalBatch(validated.batch);
+
+      const rawRecords = yield* Effect.forEach(validated.batch.records, (record) =>
+        encodeCanonicalRecord(record).pipe(
+          Effect.map((recordJson) => ({
+            recordId: record.recordId,
+            recordJson,
+          })),
+        ),
+      );
+
+      const rawRequest = yield* Schema.decodeEffect(RawAppendRequest)({
+        threadId: validated.threadId,
+        batchId: validated.batch.batchId,
+        batchDigest: tailDigest,
+        batchJson,
+        expectedTailSequence: validated.expectedTailSequence,
+        expectedTailDigest: validated.expectedTailDigest,
+        producerEpoch: validated.producerEpoch,
+        records: rawRecords,
+        tailDigest,
+      }).pipe(Effect.mapError((error) => schemaStoreError("encode canonical append", error)));
+
+      yield* hitFailpoint("append:before");
+
+      const result = yield* journal.append(rawRequest).pipe(
+        Effect.mapError((error) => {
+          if (isPostgresFenceRejected(error)) {
+            return mapFence(validated.threadId, error);
+          }
+          if (isPostgresAppendConflict(error)) {
+            return error.actualTailSequence !== undefined && isDigest(error.actualTailDigest)
+              ? AppendConflict.make({
+                  threadId: validated.threadId,
+                  batchId: validated.batch.batchId,
+                  reason: error.reason,
+                  actualTailSequence: error.actualTailSequence,
+                  actualTailDigest: error.actualTailDigest,
+                })
+              : AppendConflict.make({
+                  threadId: validated.threadId,
+                  batchId: validated.batch.batchId,
+                  reason: error.reason,
+                });
+          }
+
+          return storeError("append canonical batch", error);
+        }),
+        Effect.flatMap((result) =>
+          Schema.decodeEffect(AppendResult)(result).pipe(
+            Effect.mapError((error) => schemaStoreError("decode append result", error)),
           ),
-        );
-      yield* hitFailpoint("materialize:after");
+        ),
+      );
+
+      yield* hitFailpoint("append:after");
+
+      return result;
     },
   );
 
-  const append: ThreadStore["Service"]["append"] = Effect.fn("DoThreadStore.append")(function* (
-    request: FencedAppendRequest,
+  const loadRecords = Effect.fn("PostgresThreadStore.loadRecords")(function* (
+    request: RawReadRequest,
   ) {
-    const validated = yield* Schema.decodeEffect(Schema.toType(FencedAppendRequest))(request).pipe(
-      Effect.mapError((error) => schemaStoreError("validate canonical append", error)),
-    );
-
-    yield* requireThread(journal, validated.threadId);
-
-    const tailDigest = yield* provideCrypto(
-      digestCanonicalBatch(validated.expectedTailDigest, validated.batch),
-    ).pipe(Effect.mapError((error) => storeError("digest canonical append", error)));
-
-    const batchJson = yield* encodeCanonicalBatch(validated.batch);
-
-    const rawRecords = yield* Effect.forEach(validated.batch.records, (record) =>
-      encodeCanonicalRecord(record).pipe(
-        Effect.map((recordJson) => ({
-          recordId: record.recordId,
-          recordJson,
-        })),
-      ),
-    );
-
-    const rawRequest = yield* Schema.decodeEffect(RawAppendRequest)({
-      threadId: validated.threadId,
-      batchId: validated.batch.batchId,
-      batchDigest: tailDigest,
-      batchJson,
-      expectedTailSequence: validated.expectedTailSequence,
-      expectedTailDigest: validated.expectedTailDigest,
-      producerEpoch: validated.producerEpoch,
-      records: rawRecords,
-      tailDigest,
-    }).pipe(Effect.mapError((error) => schemaStoreError("encode canonical append", error)));
-
-    yield* hitFailpoint("append:before");
-
-    const result = yield* journal.append(rawRequest).pipe(
-      Effect.mapError((error) => {
-        if (isDoFenceRejected(error)) {
-          return mapFence(validated.threadId, error);
-        }
-        if (isDoAppendConflict(error)) {
-          return error.actualTailSequence !== undefined && isDigest(error.actualTailDigest)
-            ? AppendConflict.make({
-                threadId: validated.threadId,
-                batchId: validated.batch.batchId,
-                reason: error.reason,
-                actualTailSequence: error.actualTailSequence,
-                actualTailDigest: error.actualTailDigest,
-              })
-            : AppendConflict.make({
-                threadId: validated.threadId,
-                batchId: validated.batch.batchId,
-                reason: error.reason,
-              });
-        }
-
-        return storeError("append canonical batch", error);
-      }),
-      Effect.flatMap((result) =>
-        Schema.decodeEffect(AppendResult)(result).pipe(
-          Effect.mapError((error) => schemaStoreError("decode append result", error)),
-        ),
-      ),
-    );
-
-    yield* hitFailpoint("append:after");
-
-    return result;
-  });
-
-  const loadRecords = Effect.fnUntraced(function* (request: RawReadRequest) {
-    const result = yield* journal
+    const rows = yield* journal
       .read(request)
       .pipe(Effect.mapError((error) => storeError("read canonical records", error)));
 
-    return {
-      count: result.count,
-      records: result.records.pipe(
-        Stream.mapError((error) => storeError("read canonical records", error)),
-        Stream.mapEffect(decodeEnvelope),
-      ),
-    };
+    return yield* Effect.forEach(rows, decodeEnvelope);
   });
 
-  const readEffect = Effect.fn("DoThreadStore.read")(function* (request: ThreadReadRequest) {
+  const readEffect = Effect.fn("PostgresThreadStore.read")(function* (request: ThreadReadRequest) {
     const validated = yield* Schema.decodeEffect(Schema.toType(ThreadReadRequest))(request).pipe(
       Effect.mapError((error) => schemaStoreError("validate thread read", error)),
     );
@@ -667,7 +641,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
     if ("selection" in validated) return Stream.fromIterable(yield* selectedReads.read(validated));
     yield* requireThread(journal, validated.threadId);
 
-    const result = yield* loadRecords(
+    const records = yield* loadRecords(
       RawReadRequest.make({
         threadId: validated.threadId,
         fromSequenceExclusive: validated.afterSequence ?? ZERO_CANONICAL_SEQUENCE,
@@ -675,12 +649,14 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
       }),
     );
 
-    return result.records;
+    return Stream.fromIterable(records);
   });
 
   const read: ThreadStore["Service"]["read"] = (request) => Stream.unwrap(readEffect(request));
 
-  const observeEffect = Effect.fnUntraced(function* (request: ThreadObservation) {
+  const observeEffect = Effect.fn("PostgresThreadStore.observe")(function* (
+    request: ThreadObservation,
+  ) {
     const validated = yield* Schema.decodeEffect(Schema.toType(ThreadObservation))(request).pipe(
       Effect.mapError((error) => schemaStoreError("validate thread observation", error)),
     );
@@ -688,15 +664,11 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
     yield* requireThread(journal, validated.threadId);
     const initialSequence = yield* parseOffset(validated.threadId, validated.afterOffset);
     const cursor = yield* Ref.make(initialSequence);
-    let polls = 0;
-    let emptyPolls = 0;
-    let deliveredRecords = 0;
 
-    const poll = Effect.fnUntraced(function* () {
-      polls++;
+    const poll = Effect.fn("PostgresThreadStore.observePoll")(function* () {
       const fromSequenceExclusive = yield* Ref.get(cursor);
 
-      const result = yield* loadRecords(
+      const records = yield* loadRecords(
         RawReadRequest.make({
           threadId: validated.threadId,
           fromSequenceExclusive,
@@ -704,40 +676,23 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
         }),
       );
 
-      if (result.count === 0) {
-        emptyPolls++;
+      if (records.length === 0) {
         yield* Effect.sleep(config.observationPollInterval);
 
-        return Stream.empty;
+        return [];
       }
+      yield* Ref.set(cursor, records[records.length - 1].sequence);
 
-      return result.records.pipe(
-        Stream.tap((record) => {
-          deliveredRecords++;
-
-          return Ref.set(cursor, record.sequence);
-        }),
-      );
+      return records;
     });
 
-    return Stream.fromEffectRepeat(poll()).pipe(
-      Stream.flatten,
-      Stream.ensuring(
-        Effect.suspend(() =>
-          Effect.annotateCurrentSpan({
-            "effect_agent.observation.polls": polls,
-            "effect_agent.observation.empty_polls": emptyPolls,
-            "effect_agent.observation.records": deliveredRecords,
-          }),
-        ),
-      ),
-    );
+    return Stream.fromIterableEffectRepeat(poll());
   });
 
   const observe: ThreadStore["Service"]["observe"] = (request) =>
-    Stream.unwrap(observeEffect(request)).pipe(Stream.withSpan("DoThreadStore.observe"));
+    Stream.unwrap(observeEffect(request));
 
-  const exportThread: ThreadStore["Service"]["export"] = Effect.fn("DoThreadStore.export")(
+  const exportThread: ThreadStore["Service"]["export"] = Effect.fn("PostgresThreadStore.export")(
     function* (request: ThreadExportRequest) {
       const validated = yield* Schema.decodeEffect(Schema.toType(ThreadExportRequest))(
         request,
@@ -772,28 +727,28 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
     },
   );
 
-  const inspectTail: ThreadStore["Service"]["inspectTail"] = Effect.fn("DoThreadStore.inspectTail")(
-    function* (request: ThreadTailRequest) {
-      const validated = yield* Schema.decodeEffect(Schema.toType(ThreadTailRequest))(request).pipe(
-        Effect.mapError((error) => schemaStoreError("validate tail inspection", error)),
-      );
+  const inspectTail: ThreadStore["Service"]["inspectTail"] = Effect.fn(
+    "PostgresThreadStore.inspectTail",
+  )(function* (request: ThreadTailRequest) {
+    const validated = yield* Schema.decodeEffect(Schema.toType(ThreadTailRequest))(request).pipe(
+      Effect.mapError((error) => schemaStoreError("validate tail inspection", error)),
+    );
 
-      const thread = yield* requireThread(journal, validated.threadId);
+    const thread = yield* requireThread(journal, validated.threadId);
 
-      const tailDigest = yield* Schema.decodeEffect(Digest)(thread.tail_digest).pipe(
-        Effect.mapError((error) => schemaStoreError("decode tail digest", error)),
-      );
+    const tailDigest = yield* Schema.decodeEffect(Digest)(thread.tail_digest).pipe(
+      Effect.mapError((error) => schemaStoreError("decode tail digest", error)),
+    );
 
-      return ThreadTail.make({
-        threadId: validated.threadId,
-        tailSequence: thread.tail_sequence,
-        tailDigest,
-        producerEpoch: thread.producer_epoch,
-      });
-    },
-  );
+    return ThreadTail.make({
+      threadId: validated.threadId,
+      tailSequence: thread.tail_sequence,
+      tailDigest,
+      producerEpoch: thread.producer_epoch,
+    });
+  });
 
-  const saveCheckpoint: ThreadCheckpoints["save"] = Effect.fn("DoThreadStore.saveCheckpoint")(
+  const saveCheckpoint: ThreadCheckpoints["save"] = Effect.fn("PostgresThreadStore.saveCheckpoint")(
     function* (request: SaveCheckpointRequest) {
       const validated = yield* Schema.decodeEffect(Schema.toType(SaveCheckpointRequest))(
         request,
@@ -832,7 +787,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
       yield* hitFailpoint("save-checkpoint:before");
       yield* journal.saveCheckpoint(raw).pipe(
         Effect.mapError((error) =>
-          isDoCheckpointConflict(error)
+          isPostgresCheckpointConflict(error)
             ? CheckpointRejected.make({
                 threadId: validated.checkpoint.threadId,
                 reason: "digest-mismatch",
@@ -844,7 +799,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
     },
   );
 
-  const loadCheckpoint: ThreadCheckpoints["load"] = Effect.fn("DoThreadStore.loadCheckpoint")(
+  const loadCheckpoint: ThreadCheckpoints["load"] = Effect.fn("PostgresThreadStore.loadCheckpoint")(
     function* (request: LoadCheckpointRequest) {
       const validated = yield* Schema.decodeEffect(Schema.toType(LoadCheckpointRequest))(
         request,
@@ -896,7 +851,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
   );
 
   const saveRecoveryCheckpoint: ThreadRecoveryCheckpoints["save"] = Effect.fn(
-    "DoThreadStore.saveRecoveryCheckpoint",
+    "PostgresThreadStore.saveRecoveryCheckpoint",
   )(function* (request) {
     const validated = yield* Schema.decodeEffect(Schema.toType(SaveRecoveryCheckpointRequest))(
       request,
@@ -918,7 +873,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
   });
 
   const loadRecoveryCheckpoint: ThreadRecoveryCheckpoints["load"] = Effect.fn(
-    "DoThreadStore.loadRecoveryCheckpoint",
+    "PostgresThreadStore.loadRecoveryCheckpoint",
   )(function* (request) {
     const validated = yield* Schema.decodeEffect(Schema.toType(LoadCheckpointRequest))(
       request,
@@ -935,7 +890,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
       .loadRecoveryCheckpoint(validated.threadId)
       .pipe(
         Effect.mapError((error) =>
-          error._tag === "DoStorageCorruptionError"
+          error._tag === "PostgresStorageCorruptionError"
             ? corrupt()
             : storeError("load recovery checkpoint", error),
         ),
@@ -982,7 +937,6 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
   const selectedReads = yield* makeSelectedReads(decodeEnvelope);
 
   const threadStore = ThreadStore.of({
-    readIdentity: selectedReads.readIdentity,
     countPeerMessages: selectedReads.countPeerMessages,
     append,
     export: exportThread,
@@ -998,35 +952,36 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
 });
 
 /**
- * Durable Object Thread Store implementation with configuration, failpoint, SQL, and
- * Crypto authority kept visible in its input channel.
+ * SQLite Thread Store implementation with configuration, failpoint, SQL, and Crypto
+ * authority kept visible in its input channel.
  */
 export const threadStoreLayer: Layer.Layer<
   ThreadStore,
-  DoStorageInitializationError,
-  DoStorageConfig | DoStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
-> = Layer.effectContext(makeServices()).pipe(Layer.provide(sqliteLayer));
+  PostgresStorageInitializationError,
+  PostgresStorageConfig | PostgresStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
+> = Layer.effectContext(makeServices()).pipe(Layer.provide(postgresLayer));
 
 /**
- * Validated Durable Object storage configuration Layer with the documented defaults applied.
- * Shared by the ThreadStore and SubmissionLedger convenience layers so their defaults
- * cannot drift.
+ * Validated SQLite storage configuration Layer with the documented defaults applied. Shared
+ * by the ThreadStore and SubmissionLedger convenience layers so their defaults cannot
+ * drift.
  */
 export const storageConfigLayer = (
-  options: DoStorageOptions,
-): Layer.Layer<DoStorageConfig, DoStorageError> =>
-  Layer.effect(DoStorageConfig)(
-    Schema.decodeEffect(DoStorageConfigValue)({
+  options: PostgresStorageOptions,
+): Layer.Layer<PostgresStorageConfig, PostgresStorageError> =>
+  Layer.effect(PostgresStorageConfig)(
+    Schema.decodeEffect(PostgresStorageConfigValue)({
       observationPollInterval: options.observationPollInterval ?? 25,
+      lockTimeout: options.lockTimeout ?? 5_000,
+      schema: options.schema ?? "public",
       ownershipLeaseDuration:
         options.ownershipLeaseDuration ?? Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION),
-      maxStoredValueBytes: options.maxStoredValueBytes ?? DEFAULT_MAX_STORED_VALUE_BYTES,
       verifyOnOpen: options.verifyOnOpen ?? false,
     }).pipe(
       Effect.mapError((error) =>
-        DoStorageError.make({
+        PostgresStorageError.make({
           cause: error,
-          operation: "configure Durable Object storage",
+          operation: "configure SQLite storage",
           message: error.message,
         }),
       ),
@@ -1035,30 +990,28 @@ export const storageConfigLayer = (
 
 /** The failpoint Layer selected by convenience options: explicit handler or the no-op default. */
 export const storageFailpointLayer = (
-  options: DoStorageOptions,
-): Layer.Layer<DoStorageFailpoint> =>
+  options: PostgresStorageOptions,
+): Layer.Layer<PostgresStorageFailpoint> =>
   options.failpoint === undefined
-    ? DoStorageFailpoint.layer
-    : Layer.succeed(DoStorageFailpoint)({ hit: options.failpoint });
+    ? PostgresStorageFailpoint.layer
+    : Layer.succeed(PostgresStorageFailpoint)({ hit: options.failpoint });
 
 /**
- * A composition-root convenience Layer for canonical Threads inside one Durable Object,
- * built over `ctx.storage`. Durable accepted work is served by the separate SubmissionLedger
- * port; point both at the SAME `ctx.storage` so claims fence the same producer epochs
- * (ADR-0011 D7's "same file" rule, transposed to one object's private database).
+ * A composition-root convenience Layer for canonical Threads. Durable accepted work is
+ * served by the separate SubmissionLedger port.
  */
 export const layer = (
-  options: DoStorageOptions,
-): Layer.Layer<ThreadStore, DoStorageInitializationError> =>
+  options: PostgresStorageOptions,
+): Layer.Layer<ThreadStore, PostgresStorageInitializationError> =>
   Layer.unwrap(
-    Effect.map(DoStorageConfig, (config) =>
+    Effect.map(PostgresStorageConfig, (config) =>
       threadStoreLayer.pipe(
         Layer.provide(
           Layer.mergeAll(
-            Layer.succeed(DoStorageConfig)(config),
+            Layer.succeed(PostgresStorageConfig)(config),
             storageFailpointLayer(options),
-            SqliteClient.layer({ storage: options.storage }),
-            BrowserCrypto.layer,
+            storageClientLayer(options.client),
+            NodeCrypto.layer,
           ),
         ),
       ),

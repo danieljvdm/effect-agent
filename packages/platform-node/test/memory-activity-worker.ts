@@ -12,6 +12,7 @@ import {
   type MemoryMutationPoint,
 } from "effect-agent/memory-store";
 import { type CanonicalRecordEnvelope } from "effect-agent/records";
+import { sqliteLayer } from "effect-agent/sql-dialect";
 import { memoryStoreLayerWithFailpoints } from "effect-agent/sql-memory-store";
 
 import {
@@ -129,6 +130,7 @@ export const memoryActivityWorker = Effect.gen(function* () {
   const adapters = Layer.mergeAll(
     activityProcessorStoreLayer.pipe(Layer.provide(sql)),
     memoryStoreLayerWithFailpoints.pipe(
+      Layer.provide(sqliteLayer),
       Layer.provide(Layer.merge(sql, Layer.succeed(MemoryMutationFailpoint, failpoint))),
     ),
     sqliteThreadStoreLayer({ filename: config.database, busyTimeout: 5_000 }),

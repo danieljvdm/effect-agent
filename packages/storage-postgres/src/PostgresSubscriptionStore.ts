@@ -1,5 +1,5 @@
 import { Effect, Layer, Schema } from "effect";
-import { sqliteLayer } from "effect-agent/sql-dialect";
+import { postgresLayer } from "effect-agent/sql-dialect";
 import {
   makeSqlSubscriptionStore,
   SqlSubscriptionTransaction,
@@ -7,10 +7,10 @@ import {
 import { SourcePartition, SubscriptionError, SubscriptionStore } from "effect-agent/subscription";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
-import { initializeSqliteJournal } from "./internal/sqlite-journal.ts";
-import type { SqliteStorageConfig } from "./SqliteStorageConfig.ts";
-import type { SqliteStorageFailpoint } from "./SqliteStorageFailpoint.ts";
-import type { SqliteStorageInitializationError } from "./SqliteThreadStore.ts";
+import { initializePostgresJournal } from "./internal/postgres-journal.ts";
+import type { PostgresStorageConfig } from "./PostgresStorageConfig.ts";
+import type { PostgresStorageFailpoint } from "./PostgresStorageFailpoint.ts";
+import type { PostgresStorageInitializationError } from "./PostgresThreadStore.ts";
 
 const transactionLayer = Layer.effect(
   SqlSubscriptionTransaction,
@@ -30,14 +30,14 @@ const transactionLayer = Layer.effect(
   }),
 );
 
-const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function* (
+const makeSubscriptionStore = Effect.fn("PostgresSubscriptionStore.make")(function* (
   owned: SourcePartition,
 ) {
   const partition = yield* Schema.decodeEffect(SourcePartition)(owned).pipe(
     Effect.mapError(() => SubscriptionError.make({ reason: "validation", code: "partition" })),
   );
 
-  yield* initializeSqliteJournal();
+  yield* initializePostgresJournal();
 
   return yield* makeSqlSubscriptionStore(partition, {
     maxStoredJsonLength: 16 * 1024 * 1024,
@@ -48,10 +48,10 @@ export const subscriptionStoreLayer = (
   partition: SourcePartition,
 ): Layer.Layer<
   SubscriptionStore,
-  SqliteStorageInitializationError | SubscriptionError,
-  SqliteStorageConfig | SqliteStorageFailpoint | SqlClientService.SqlClient
+  PostgresStorageInitializationError | SubscriptionError,
+  PostgresStorageConfig | PostgresStorageFailpoint | SqlClientService.SqlClient
 > =>
   Layer.effect(SubscriptionStore, makeSubscriptionStore(partition)).pipe(
     Layer.provide(transactionLayer),
-    Layer.provide(sqliteLayer),
+    Layer.provide(postgresLayer),
   );

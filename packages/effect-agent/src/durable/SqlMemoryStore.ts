@@ -16,6 +16,7 @@ import {
   MemoryWrite,
   MemoryWriter,
 } from "../core/MemoryStore.ts";
+import { SqlDialect } from "./SqlDialect.ts";
 
 const STORAGE_VERSION = 2 as const;
 const METADATA_COMPONENT = "memory";
@@ -114,12 +115,6 @@ class MemoryMetadataRow extends Schema.Class<MemoryMetadataRow>(
   "@effect-agent/storage-sqlite/MemoryMetadataRow",
 )({
   version: Schema.Int,
-}) {}
-
-class MemoryTableRow extends Schema.Class<MemoryTableRow>(
-  "@effect-agent/storage-sqlite/MemoryTableRow",
-)({
-  name: Schema.NonEmptyString,
 }) {}
 
 class MemoryDocumentRow extends Schema.Class<MemoryDocumentRow>(
@@ -314,6 +309,7 @@ const readUsage = Effect.fn("SqliteMemoryStore.readUsage")(function* () {
 // a legacy store from damaged established accounting; reopening never rebuilds counters.
 const initializeMemoryUsage = Effect.fn("SqliteMemoryStore.initializeUsage")(function* () {
   const sql = yield* SqlClientService.SqlClient;
+  const dialect = yield* SqlDialect;
   const failpoint = yield* MemoryMutationFailpoint;
   const operation = "initialize memory usage";
 
@@ -321,10 +317,10 @@ const initializeMemoryUsage = Effect.fn("SqliteMemoryStore.initializeUsage")(fun
     SELECT version FROM effect_agent_memory_metadata WHERE component = ${USAGE_COMPONENT}
   `.pipe(Effect.flatMap((rows) => decodeRows(MemoryMetadataRow, rows, operation)));
 
-  const objects = yield* sql<Record<string, unknown>>`
-    SELECT name FROM sqlite_master
-    WHERE name = ${USAGE_TABLE} OR name IN ${sql.in(usageTriggers.map((trigger) => trigger.name))}
-  `.pipe(Effect.flatMap((rows) => decodeRows(MemoryTableRow, rows, operation)));
+  const objects = yield* dialect.existingObjects("any", [
+    USAGE_TABLE,
+    ...usageTriggers.map((trigger) => trigger.name),
+  ]);
 
   if (metadata.length === 0) {
     if (objects.length !== 0) return yield* storageError(operation, "corrupt");
@@ -366,6 +362,7 @@ const initializeMemoryUsage = Effect.fn("SqliteMemoryStore.initializeUsage")(fun
 
 const initializeMemorySchema = Effect.fn("SqliteMemoryStore.initialize")(function* () {
   const sql = yield* SqlClientService.SqlClient;
+  const dialect = yield* SqlDialect;
   const failpoint = yield* MemoryMutationFailpoint;
 
   yield* failpoint.hit("memory:initialize:before");
@@ -399,17 +396,10 @@ const initializeMemorySchema = Effect.fn("SqliteMemoryStore.initialize")(functio
           return yield* storageError("initialize memory schema", "incompatible");
         }
         if (currentVersion === undefined) {
-          const tableRows = yield* sql<Record<string, unknown>>`
-            SELECT name
-            FROM sqlite_master
-            WHERE type = 'table' AND name IN (${DOCUMENT_TABLE}, ${RECEIPT_TABLE})
-          `;
-
-          const existingTables = yield* decodeRows(
-            MemoryTableRow,
-            tableRows,
-            "inspect memory schema",
-          );
+          const existingTables = yield* dialect.existingObjects("table", [
+            DOCUMENT_TABLE,
+            RECEIPT_TABLE,
+          ]);
 
           if (existingTables.length > 0) {
             return yield* storageError("initialize memory schema", "incompatible");
@@ -719,36 +709,33 @@ const makeMemoryServices = Effect.fn("SqliteMemoryStore.make")(function* () {
 export const memoryStoreLayerWithFailpoints: Layer.Layer<
   MemoryReader | MemoryWriter,
   SqliteMemoryInitializationError,
-  SqlClientService.SqlClient | MemoryMutationFailpoint
+  SqlClientService.SqlClient | SqlDialect | MemoryMutationFailpoint
 > = Layer.effectContext(makeMemoryServices());
 
 /** SQLite memory reader and writer with the production no-op mutation failpoint. */
 export const memoryStoreLayer: Layer.Layer<
   MemoryReader | MemoryWriter,
   SqliteMemoryInitializationError,
-  SqlClientService.SqlClient
+  SqlClientService.SqlClient | SqlDialect
 > = memoryStoreLayerWithFailpoints.pipe(Layer.provide(MemoryMutationFailpoint.layer));
 
 /** Reads an existing memory schema without writes, transactions, or mutation failpoints. */
 export const memoryReaderLayer: Layer.Layer<
   MemoryReader,
   MemoryStorageError,
-  SqlClientService.SqlClient
+  SqlClientService.SqlClient | SqlDialect
 > = Layer.effect(
   MemoryReader,
   Effect.gen(function* () {
     const sql = yield* SqlClientService.SqlClient;
+    const dialect = yield* SqlDialect;
     const operation = "open memory reader";
 
-    const tables = yield* query(
-      sql<Record<string, unknown>>`
-        SELECT name FROM sqlite_master
-        WHERE type = 'table' AND name IN (
-          'effect_agent_memory_metadata', ${DOCUMENT_TABLE}, ${RECEIPT_TABLE}
-        )
-      `,
-      operation,
-    ).pipe(Effect.flatMap((rows) => decodeRows(MemoryTableRow, rows, operation)));
+    const tables = yield* dialect.existingObjects("table", [
+      "effect_agent_memory_metadata",
+      DOCUMENT_TABLE,
+      RECEIPT_TABLE,
+    ]);
 
     if (tables.length !== 3) {
       return yield* storageError(operation, tables.length === 0 ? "unavailable" : "incompatible");
