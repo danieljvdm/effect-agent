@@ -259,6 +259,7 @@
     "thread-in-main",
     "tidy-alarm-isolation",
     "tidy-browsers-roam",
+    "tidy-clouds-listen",
     "tidy-memory-accounting",
     "transient-native-rpc-tracing",
     "trusted-tool-failure-observer",

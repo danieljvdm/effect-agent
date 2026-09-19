@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.113
+
+### Patch Changes
+
+- [#561](https://github.com/danieljvdm/effect-agent/pull/561) [`f90854e`](https://github.com/danieljvdm/effect-agent/commit/f90854ee893134df8022043a97544946ca4f1e25) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep native dispatch and host abort/reply waves open together while unrelated alarm work retires. BEHAVIOR CHANGE: yield the event-scoped `ThreadMaintenanceActivity` service in `drainUntil`, acquire `subscribeChanges` before initial setup, register finite waves with `run`, and acknowledge readiness with `ready`; use `ThreadMaintenanceActivity.all` to compose independent pumps.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.113
+  - effect-agent@0.1.0-beta.113
+
 ## 0.1.0-beta.112
 
 ### Patch Changes
