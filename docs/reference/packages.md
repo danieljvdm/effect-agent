@@ -344,19 +344,16 @@ the Thread journal and submission ledger.
 
 ### `@effect-agent/storage-postgres`
 
-Stores thread history and pending work in a Postgres database that several Node processes may
-share. Verified against Postgres 16, 17 and 18; CI runs the ends of that range.
-Rejects incompatible stored versions; no migration path is promised.
-`CurrentPostgresStorageVersion` identifies the supported version.
+Stores thread history and pending work in one Postgres database, which several Node processes may
+share. Rejects incompatible stored versions; no migration path is promised.
+`CurrentPostgresStorageVersion` identifies the supported version. Postgres 16 or newer.
 Test failpoints are in `@effect-agent/storage-postgres/testing/postgres-storage-failpoint-testing`.
 
-Writers serialise on a transaction-scoped advisory lock, the equivalent of SQLite's
-`BEGIN IMMEDIATE`; a blocked writer surfaces as the retryable `PostgresWriteContention`.
-Tables live in the connection's own schema. Selecting another schema means making it the
-connection default (`ALTER ROLE ... SET search_path`), because `search_path` binds per
-connection and cannot be set for the pool; startup verifies this and refuses to run otherwise.
-Build the client with `PostgresStorageClient.layer`: it decodes `BIGINT` to safe integers, which
-the shared row Schemas require. The `effect-agent/sql-memory-store` ports remain SQLite-only.
+Writers serialize on one transaction-scoped advisory lock; a blocked writer fails with the
+retryable `PostgresWriteContention`. Tables live in the connection's own schema, so another
+schema must be the connection default; startup verifies this and refuses to run otherwise.
+`PostgresStorageClient.layer` supplies the client, decoding `BIGINT` to safe integers as the
+stored row schemas require. The `effect-agent/sql-memory-store` ports stay SQLite-only.
 
 ### `@effect-agent/platform-node`
 

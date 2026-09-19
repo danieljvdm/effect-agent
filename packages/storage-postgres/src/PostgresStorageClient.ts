@@ -13,7 +13,7 @@ const MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER);
  * shared row schemas identical across adapters; a value beyond that range is corruption rather
  * than a number to round.
  */
-export const safeIntegerInt8Codec: PgTypes.Codec<number> = {
+const safeIntegerInt8Codec: PgTypes.Codec<number> = {
   encode: (value) => PgTypes.encode(BigInt(value), PgTypes.OID.int8),
   decode: (bytes) => {
     const decoded = PgTypes.decode(bytes, PgTypes.OID.int8, 1);

@@ -1,23 +1,23 @@
 import * as PostgresStorageClient from "@effect-agent/storage-postgres/postgres-storage-client";
-import { layerConfig } from "@effect-agent/storage-postgres/postgres-storage-config";
+import {
+  layerConfig,
+  PostgresStorageConfig,
+  PostgresStorageConfigValue,
+} from "@effect-agent/storage-postgres/postgres-storage-config";
+import { PostgresStorageFailpoint } from "@effect-agent/storage-postgres/postgres-storage-failpoint";
+import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
-import { Effect, Redacted } from "effect";
+import { Effect, Layer, Redacted } from "effect";
+
+import { WRITER_LOCK_KEY } from "../src/internal/postgres-transactions.ts";
 
 /**
  * A live Postgres is required: this adapter's contract is its concurrency behaviour, and no
  * in-process double reproduces it. `EFFECT_AGENT_TEST_POSTGRES_URL` points CI at its own service.
  */
-export const adminUrl =
+const adminUrl =
   process.env.EFFECT_AGENT_TEST_POSTGRES_URL ??
   "postgres://postgres:postgres@localhost:55432/effect_agent";
-
-export const databaseUrl = (database: string): string => {
-  const url = new URL(adminUrl);
-
-  url.pathname = `/${database}`;
-
-  return url.toString();
-};
 
 let databaseCounter = 0;
 
@@ -37,10 +37,9 @@ const admin = <A, E>(effect: Effect.Effect<A, E, PgClient.PgClient>) =>
   );
 
 /**
- * Each case owns a database. A schema would be cheaper, but selecting one needs `search_path`,
- * which binds per connection and so cannot be set for a pool through this driver; the adapter
- * rejects that configuration at startup, and a test that worked around it would not exercise
- * what callers actually run. `WITH (FORCE)` ends any pooled connection the case left open.
+ * Each case owns a database: selecting a schema instead needs `search_path`, which binds per
+ * connection and so cannot be set for a pool through this driver. `WITH (FORCE)` ends any
+ * pooled connection the case left open.
  */
 export const withTemporaryDatabase = <A, E>(
   use: (url: string) => Effect.Effect<A, E>,
@@ -57,7 +56,13 @@ export const withTemporaryDatabase = <A, E>(
         ),
       ),
     ),
-    (database) => use(databaseUrl(database)),
+    (database) => {
+      const url = new URL(adminUrl);
+
+      url.pathname = `/${database}`;
+
+      return use(url.toString());
+    },
     (database) =>
       admin(
         Effect.flatMap(PgClient.PgClient, (sql) =>
@@ -66,10 +71,58 @@ export const withTemporaryDatabase = <A, E>(
       ).pipe(Effect.ignore),
   );
 
-/** The adapter's own client over one temporary database. */
 export const clientLayer = (url: string) =>
   PostgresStorageClient.layer({ url: Redacted.make(url) });
 
-/** The adapter's validated configuration for one temporary database, with fast observation polling. */
 export const configLayer = (url: string) =>
   layerConfig({ client: { url: Redacted.make(url) }, observationPollInterval: 1 });
+
+/**
+ * The services a store Layer needs over exactly one connection. The adapter bounds the
+ * writer-lock wait with a session-level `lock_timeout` on whichever pooled connection ran
+ * startup, so a single connection is what makes that bound hold for the write under test.
+ */
+export const singleConnectionServices = (url: string, lockTimeout: number) =>
+  Layer.mergeAll(
+    Layer.succeed(PostgresStorageConfig)(
+      PostgresStorageConfigValue.make({
+        observationPollInterval: 1,
+        lockTimeout,
+        ownershipLeaseDuration: 30_000,
+        verifyOnOpen: false,
+        schema: "public",
+      }),
+    ),
+    PostgresStorageFailpoint.layer,
+    PgClient.layer({
+      url: Redacted.make(url),
+      maxConnections: 1,
+      types: PostgresStorageClient.makeTypeRegistry(),
+    }),
+    NodeCrypto.layer,
+  );
+
+/**
+ * Holds the adapter's writer lock from an unrelated client for the duration of `use`, as a
+ * transiently coexisting producer would, then rolls the holding transaction back.
+ */
+export const whileHoldingWriterLock = <A, E>(url: string, use: Effect.Effect<A, E>) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const sql = yield* PgClient.PgClient;
+      const connection = yield* sql.reserve;
+
+      yield* connection.executeUnprepared("BEGIN", [], undefined);
+      yield* connection.executeUnprepared(
+        `SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`,
+        [],
+        undefined,
+      );
+
+      const result = yield* use;
+
+      yield* connection.executeUnprepared("ROLLBACK", [], undefined);
+
+      return result;
+    }),
+  ).pipe(Effect.provide(PgClient.layer({ url: Redacted.make(url), maxConnections: 1 })));

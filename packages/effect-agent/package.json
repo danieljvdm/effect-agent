@@ -87,6 +87,7 @@
     "./sql-json": "./src/durable/SqlJson.ts",
     "./sql-memory-store": "./src/durable/SqlMemoryStore.ts",
     "./sql-message-delivery-store": "./src/durable/SqlMessageDeliveryStore.ts",
+    "./sql-storage-schema": "./src/durable/SqlStorageSchema.ts",
     "./sql-storage-v2-upgrade": "./src/durable/SqlStorageV2Upgrade.ts",
     "./sql-subscription-store": "./src/durable/SqlSubscriptionStore.ts",
     "./sql-thread-native-reads": "./src/durable/SqlThreadNativeReads.ts",

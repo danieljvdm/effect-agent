@@ -120,11 +120,10 @@ const makeScheduleStore = Effect.gen(function* () {
   const sql = yield* SqlClientService.SqlClient;
   const { lockTimeout } = yield* PostgresStorageConfig;
   const scheduleFailpoint = yield* ScheduleFailpoint;
+  const withWriteTransaction = withWriterLockTransaction(sql, lockTimeout);
 
   yield* initializePostgresJournal();
 
-  // The capacity predicate reads the authoritative record document, so both call sites
-  // share one fragment rather than restating the dialect's JSON accessors.
   const usesCapacity = sql`(${jsonText(sql, "record_json", ["pending"])} IS NOT NULL OR
     (${jsonText(sql, "record_json", ["state"])} != 'cancelled' AND ${jsonText(sql, "record_json", [
       "nextAtMillis",
@@ -163,10 +162,7 @@ const makeScheduleStore = Effect.gen(function* () {
       const canonical = yield* decodeInput(operation, ScheduleRecord, record);
       const recordJson = yield* encodeRecord(canonical);
 
-      const result = yield* withWriterLockTransaction(
-        sql,
-        lockTimeout,
-      )(
+      const result = yield* withWriteTransaction(
         Effect.gen(function* () {
           const existing = yield* readOne(canonical, operation);
 
@@ -266,10 +262,7 @@ const makeScheduleStore = Effect.gen(function* () {
       const decodedKey = yield* decodeInput(operation, ScheduleKey, key);
       const decodedChange = yield* decodeInput(operation, ScheduleChange, change);
 
-      const result = yield* withWriterLockTransaction(
-        sql,
-        lockTimeout,
-      )(
+      const result = yield* withWriteTransaction(
         Effect.gen(function* () {
           const current = yield* readOne(decodedKey, operation);
 

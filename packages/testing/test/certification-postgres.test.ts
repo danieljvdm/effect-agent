@@ -108,6 +108,8 @@ const certified = Effect.gen(function* () {
 });
 
 describe("adapter certification — storage-postgres", () => {
+  // Verdict combinations belong to certification-verdict.test.ts. Keep one negative full
+  // run as well as the shared successful certificate: bypassing report aggregation must fail.
   it.effect(
     "propagates a failed supplied crash lever into the final certification verdict",
     () =>

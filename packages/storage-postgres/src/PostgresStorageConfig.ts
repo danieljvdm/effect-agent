@@ -1,4 +1,4 @@
-import { Duration, Effect, Layer, Schema, Context } from "effect";
+import { Context, Duration, Effect, Layer, Schema } from "effect";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 
 import type { PostgresClientOptions } from "./PostgresStorageClient.ts";
@@ -81,10 +81,10 @@ export const layerConfig = (
     Schema.decodeEffect(PostgresStorageConfigValue)({
       observationPollInterval: options.observationPollInterval ?? 25,
       lockTimeout: options.lockTimeout ?? 5_000,
-      schema: options.schema ?? "public",
       ownershipLeaseDuration:
         options.ownershipLeaseDuration ?? Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION),
       verifyOnOpen: options.verifyOnOpen ?? false,
+      schema: options.schema ?? "public",
     }).pipe(
       Effect.mapError((error) =>
         PostgresStorageError.make({
