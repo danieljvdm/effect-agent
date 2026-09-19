@@ -1,5 +1,19 @@
 # effect-agent
 
+## 0.1.0-beta.112
+
+### Patch Changes
+
+- [#556](https://github.com/danieljvdm/effect-agent/pull/556) [`ab5030d`](https://github.com/danieljvdm/effect-agent/commit/ab5030d9814a5c47f6facfdf89fe5799bdba6b00) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Isolate Thread recovery faults with history-independent status and bounded retries, let Cloudflare dispatch fresh Threads while old cleanup is pending, and keep Node startup closed on blocked recovery. Preserve content-free storage diagnostics.
+
+  BEHAVIOR CHANGE: Call `runtime.runRecovery()` instead of yielding `runtime.runRecovery`; its result contains ordinary Submission `reports` and one `blocked` fault per failed Thread. Blocked Threads remain ineligible for claims; pass `{ threadId }` to recover only a selected Thread.
+
+  `SubmissionLedger.scanNonterminal` now emits control-only `SubmissionWorkItem` entries. Use `lookup` or `loadRecoverySnapshot` for selected execution payloads.
+
+- [#558](https://github.com/danieljvdm/effect-agent/pull/558) [`6716f8c`](https://github.com/danieljvdm/effect-agent/commit/6716f8c5915fee466c89d9d82159fd8f2b67ece4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Require Effect rc.116 and replace the local decision and TypeSafe APIs with native `Decision`, `DecisionModel`, and `@effect/ai-typesafe`, retaining `AutoModel` for thread selection.
+
+  BEHAVIOR CHANGE: Import decisions from `effect/unstable/ai` and configure TypeSafe with `TypeSafeClient.layerConfig()`; AutoModel requires at least two profiles, writes version 2 selection records, and rejects version 1 records without reselection or mutation. Retain the previous runtime for active version 1 threads or explicitly upgrade their records in your storage adapter; native probability sums must be within `1e-6` of 1.
+
 ## 0.1.0-beta.111
 
 ### Patch Changes
