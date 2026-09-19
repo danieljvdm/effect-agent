@@ -1,5 +1,7 @@
 # effect-agent
 
+## 0.1.0-beta.114
+
 ## 0.1.0-beta.113
 
 ## 0.1.0-beta.112
