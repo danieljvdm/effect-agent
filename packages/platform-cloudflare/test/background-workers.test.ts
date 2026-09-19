@@ -307,6 +307,13 @@ it("admits exact captured policies with one registered target and retains them t
 
   const [first, second] = await Promise.all([launch(firstPolicy, 1), launch(secondPolicy, 3)]);
 
+  const inspect = (started: Awaited<ReturnType<typeof launch>>) =>
+    withOwner(source, (host) =>
+      Subagent.inspect(firstDeclaration, started.worker, started.delivery.message).pipe(
+        Effect.provideService(SubagentHost, host),
+      ),
+    );
+
   const finish = (thread: string) =>
     drainAlarmsUntil(thread, async () => {
       for (const { record } of await readCanonical(thread)) {
@@ -321,12 +328,30 @@ it("admits exact captured policies with one registered target and retains them t
     });
 
   try {
-    expect((await launch(firstPolicy, 4)).delivery).toMatchObject({
-      status: "refused",
-      reason: "worker-capacity",
-    });
+    // A launch can return pending while the source alarm owns admission.
+    for (const started of [first, second]) {
+      await expect
+        .poll(() => inspect(started))
+        .toMatchObject({
+          message: started.delivery.message,
+          status: "accepted",
+          receipt: expect.objectContaining({ threadId: started.worker.threadId }),
+        });
+    }
+    const acceptedFirst = await inspect(first);
+    const third = await launch(firstPolicy, 4);
+
+    await expect
+      .poll(() => inspect(third))
+      .toMatchObject({
+        message: third.delivery.message,
+        status: "refused",
+        reason: "worker-capacity",
+        receipt: null,
+        settlement: null,
+      });
     capturedConcurrency.set(source, { owner: ownerReceipt.submissionId, limit: 0 });
-    expect(await launch(firstPolicy, 1)).toEqual(first);
+    expect(await launch(firstPolicy, 1)).toEqual({ ...first, delivery: acceptedFirst });
     const alarm = runDurableObjectAlarm(stubFor(first.worker.threadId)).catch(() => false);
 
     await expect
@@ -419,7 +444,7 @@ it("admits exact captured policies with one registered target and retains them t
     expect(settlements).toHaveLength(3);
 
     const initial = settlements.find(
-      (row) => row.submissionId === first.delivery.receipt!.submissionId,
+      (row) => row.submissionId === acceptedFirst.receipt!.submissionId,
     );
 
     expect(
