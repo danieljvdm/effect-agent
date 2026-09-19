@@ -1,6 +1,5 @@
 import { BrowserCrypto } from "@effect/platform-browser";
 import { Context, Effect, Layer, Schema } from "effect";
-import { SqlDialect } from "effect-agent/sql-dialect";
 import { upgradeV2Subscriptions } from "effect-agent/sql-storage-v2-upgrade";
 import {
   makeSqlSubscriptionStore,
@@ -327,5 +326,4 @@ export const doSubscriptionStoreLayer = (
   SubscriptionStore | DoSubscriptionAlarmControl,
   SubscriptionError,
   DoSubscriptionTransaction | SqlClientService.SqlClient
-> =>
-  Layer.effectContext(makeSubscriptionStore(partition)).pipe(Layer.provide(SqlDialect.layerSqlite));
+> => Layer.effectContext(makeSubscriptionStore(partition));

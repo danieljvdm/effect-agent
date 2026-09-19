@@ -28,7 +28,6 @@ import {
   MemoryWrite,
   MemoryWriter,
 } from "effect-agent/memory-store";
-import { SqlDialect } from "effect-agent/sql-dialect";
 import {
   SqlMemoryLimits,
   memoryReaderLayer,
@@ -127,20 +126,15 @@ const boundaryPut = (operationId: string, attributionCount: number) =>
   });
 
 const storeLayer = (filename: string) =>
-  memoryStoreLayer.pipe(
-    Layer.provide(SqlDialect.layerSqlite),
-    Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })),
-  );
+  memoryStoreLayer.pipe(Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
 const readerLayer = (filename: string) =>
   memoryReaderLayer.pipe(
-    Layer.provide(SqlDialect.layerSqlite),
     Layer.provide(SqliteClient.layer({ filename, readonly: true, busyTimeout: 5_000 })),
   );
 
 const failpointLayer = (filename: string, handler: MemoryMutationFailpoint["Service"]["hit"]) =>
   memoryStoreLayerWithFailpoints.pipe(
-    Layer.provide(SqlDialect.layerSqlite),
     Layer.provide(
       Layer.mergeAll(
         SqliteClient.layer({ filename, busyTimeout: 5_000 }),
@@ -378,7 +372,6 @@ describe("SQLite memory store", () => {
         const sqlLayer = SqliteClient.layer({ filename });
 
         const ordinary = memoryStoreLayer.pipe(
-          Layer.provide(SqlDialect.layerSqlite),
           Layer.provide(
             Layer.succeed(SqlMemoryLimits, {
               ...defaults,
@@ -389,7 +382,6 @@ describe("SQLite memory store", () => {
         );
 
         const cleanup = memoryStoreLayer.pipe(
-          Layer.provide(SqlDialect.layerSqlite),
           Layer.provide(
             Layer.succeed(SqlMemoryLimits, {
               ...defaults,

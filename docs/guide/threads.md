@@ -190,6 +190,7 @@ preserving one captured snapshot; the returned export still contains the complet
 | ---------------------------------- | --------------------------------------------------- |
 | `@effect-agent/storage-memory`     | Tests and process-local development                 |
 | `@effect-agent/storage-sqlite`     | History that survives a Node process restart        |
+| `@effect-agent/storage-postgres`   | History shared by several Node processes            |
 | `@effect-agent/storage-cloudflare` | Durable Object SQLite history and routed operations |
 
 Persistent adapters upgrade supported predecessor formats atomically while preserving stored

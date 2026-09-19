@@ -174,4 +174,5 @@ export class PostgresStorageFailpointError extends Schema.TaggedError<PostgresSt
 export type PostgresStorageInitializationError =
   | PostgresStorageCompatibilityError
   | PostgresStorageCorruptionError
-  | PostgresStorageError;
+  | PostgresStorageError
+  | PostgresWriteContention;

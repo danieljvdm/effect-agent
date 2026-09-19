@@ -20,6 +20,9 @@
       "path": "./packages/storage-sqlite"
     },
     {
+      "path": "./packages/storage-postgres"
+    },
+    {
       "path": "./packages/storage-cloudflare"
     },
     {

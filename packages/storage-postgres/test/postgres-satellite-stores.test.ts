@@ -1,6 +1,5 @@
 import * as PostgresMessageDeliveryStore from "@effect-agent/storage-postgres/postgres-message-delivery-store";
 import * as PostgresScheduleStore from "@effect-agent/storage-postgres/postgres-schedule-store";
-import * as PostgresStorageClient from "@effect-agent/storage-postgres/postgres-storage-client";
 import {
   PostgresStorageConfig,
   PostgresStorageConfigValue,
@@ -8,9 +7,8 @@ import {
 import { PostgresStorageFailpoint } from "@effect-agent/storage-postgres/postgres-storage-failpoint";
 import * as PostgresSubscriptionStore from "@effect-agent/storage-postgres/postgres-subscription-store";
 import { NodeCrypto } from "@effect/platform-node";
-import { PgClient } from "@effect/sql-pg";
 import { describe, it } from "@effect/vitest";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Layer } from "effect";
 import { messageDeliveryStoreConformanceCases } from "effect-agent/testing/message-delivery-store-conformance";
 import { scheduleStoreConformanceCases } from "effect-agent/testing/schedule-store-conformance";
 import {
@@ -18,39 +16,7 @@ import {
   subscriptionStoreConformanceCases,
 } from "effect-agent/testing/subscription-store-conformance";
 
-const adminUrl =
-  process.env.EFFECT_AGENT_TEST_POSTGRES_URL ??
-  "postgres://postgres:postgres@localhost:55432/effect_agent";
-
-const databaseUrl = (database: string) => {
-  const url = new URL(adminUrl);
-
-  url.pathname = `/${database}`;
-
-  return url.toString();
-};
-
-let databaseCounter = 0;
-
-/** A database per case, for the reason given in the thread store's suite. */
-const withTemporaryDatabase = <A, E>(
-  use: (url: string) => Effect.Effect<A, E>,
-): Effect.Effect<A, E> =>
-  Effect.gen(function* () {
-    databaseCounter = databaseCounter + 1;
-    const database = `effect_agent_sat_${process.pid}_${databaseCounter}`;
-
-    yield* Effect.gen(function* () {
-      const sql = yield* PgClient.PgClient;
-
-      return yield* sql.unsafe(`CREATE DATABASE ${database}`);
-    }).pipe(
-      Effect.provide(PgClient.layer({ url: Redacted.make(adminUrl), maxConnections: 1 })),
-      Effect.orDie,
-    );
-
-    return yield* use(databaseUrl(database));
-  });
+import { clientLayer, withTemporaryDatabase } from "./harness.ts";
 
 const storageServices = (url: string) =>
   Layer.mergeAll(
@@ -64,7 +30,7 @@ const storageServices = (url: string) =>
       }),
     ),
     PostgresStorageFailpoint.layer,
-    PostgresStorageClient.layer({ url: Redacted.make(url) }),
+    clientLayer(url),
   );
 
 describe("PostgresScheduleStore", () => {

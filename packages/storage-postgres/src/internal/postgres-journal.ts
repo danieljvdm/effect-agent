@@ -1,7 +1,6 @@
 import { Effect, Exit, Schema } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
-import { SqlDialect } from "effect-agent/sql-dialect";
 import { indexCanonicalRecord } from "effect-agent/sql-thread-native-reads";
 import {
   MAX_THREAD_EXPORT_RECORDS,
@@ -26,6 +25,7 @@ import {
 } from "../PostgresStorageError.ts";
 import { PostgresStorageFailpoint } from "../PostgresStorageFailpoint.ts";
 import { CurrentPostgresStorageVersion, createPostgresStorageSchema } from "./migrations.ts";
+import { WRITER_LOCK_KEY } from "./postgres-transactions.ts";
 
 const BoundedStoredText = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
 const BoundedIdentifier = Schema.NonEmptyString.check(Schema.isMaxLength(1024));
@@ -40,12 +40,6 @@ const MAX_IDENTIFIER_LENGTH = 1_024;
  */
 const SEARCH_PATH_PROBES = 16;
 
-/**
- * Advisory-lock key serialising this adapter's writers. Advisory locks are database scoped, so
- * this one constant is the whole protocol. The value is arbitrary but must never change: a
- * different key would let an old and a new deployment write concurrently.
- */
-export const WRITER_LOCK_KEY = 7_014_939_142_004_193;
 const VERSION_TABLE = "effect_agent_storage_version";
 
 const REQUIRED_OBJECTS = [
@@ -291,64 +285,99 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
     .unsafe(`SET lock_timeout = ${lockTimeout}`)
     .pipe(Effect.mapError(storageError("configure lock timeout")));
 
-  const existingRows = yield* sql<Record<string, unknown>>`
-    SELECT c.relname AS name
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = ${schema}
-      AND c.relkind IN ('r', 'p')
-      AND starts_with(c.relname, 'effect_agent_')
-    ORDER BY c.relname
-  `.pipe(Effect.mapError(storageError("inspect storage schema")));
+  /**
+   * `@effect/sql-pg` maps the SQLSTATE onto a structured reason, so the codes this adapter treats
+   * as retryable are read from the reason tag rather than the message: 40001 serialization_failure,
+   * 40P01 deadlock_detected, and 55P03 lock_not_available — which is also what the configured
+   * `lock_timeout` raises. Each of those rolls the transaction back whole, so no canonical state
+   * was mutated.
+   */
+  const classifyWriteFailure =
+    (operation: string) =>
+    (error: SqlError): PostgresStorageError | PostgresWriteContention =>
+      error.reason._tag === "SerializationError" ||
+      error.reason._tag === "DeadlockError" ||
+      error.reason._tag === "LockTimeoutError"
+        ? PostgresWriteContention.make({
+            cause: error,
+            operation,
+            message: `Another producer won the Postgres write race; ${operation} is safe to retry.`,
+          })
+        : storageError(operation)(error);
 
-  const existing = yield* decodeRows(
-    Schema.Array(PostgresNameRow),
-    "pg_class",
-    "effect_agent_%",
-    existingRows,
-  );
+  // Two ports over one pooled client can initialize concurrently. Holding the writer lock makes
+  // the second initializer observe the first one's committed schema and take the
+  // current-version branch instead of reaching `CREATE TABLE`.
+  yield* sql
+    .withTransaction(
+      Effect.gen(function* () {
+        yield* sql.unsafe(`SET LOCAL lock_timeout = '${lockTimeout}ms'`);
+        yield* sql`SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`;
 
-  if (existing.every((relation) => relation.name !== VERSION_TABLE)) {
-    if (existing.length > 0) {
-      return yield* PostgresStorageCompatibilityError.make({
-        actualVersion: 0,
-        supportedVersion: CurrentPostgresStorageVersion,
-        message:
-          `Schema ${schema} contains unversioned Effect Agent tables. Refusing to mutate ` +
-          "ambiguous stored data; retain it for inspection with its original writer.",
-      });
-    }
+        const existingRows = yield* sql<Record<string, unknown>>`
+        SELECT c.relname AS name
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = ${schema}
+          AND c.relkind IN ('r', 'p')
+          AND starts_with(c.relname, 'effect_agent_')
+        ORDER BY c.relname
+      `.pipe(Effect.mapError(storageError("inspect storage schema")));
 
-    yield* createPostgresStorageSchema.pipe(
-      Effect.provide(SqlDialect.layerPostgres),
-      Effect.mapError(storageError("initialize current storage")),
+        const existing = yield* decodeRows(
+          Schema.Array(PostgresNameRow),
+          "pg_class",
+          "effect_agent_%",
+          existingRows,
+        );
+
+        if (existing.every((relation) => relation.name !== VERSION_TABLE)) {
+          if (existing.length > 0) {
+            return yield* PostgresStorageCompatibilityError.make({
+              actualVersion: 0,
+              supportedVersion: CurrentPostgresStorageVersion,
+              message:
+                `Schema ${schema} contains unversioned Effect Agent tables. Refusing to mutate ` +
+                "ambiguous stored data; retain it for inspection with its original writer.",
+            });
+          }
+
+          yield* createPostgresStorageSchema.pipe(
+            Effect.mapError(storageError("initialize current storage")),
+          );
+        } else {
+          const versionRows = yield* sql<Record<string, unknown>>`
+          SELECT version
+          FROM effect_agent_storage_version
+          WHERE id
+        `.pipe(Effect.mapError(storageError("read storage version")));
+
+          const version = yield* decodeSingleRow(
+            Schema.Array(PostgresVersionRow),
+            VERSION_TABLE,
+            "singleton",
+            versionRows,
+          );
+
+          // One adapter, one format: there is no predecessor layout to upgrade from.
+          if (version.version !== CurrentPostgresStorageVersion) {
+            return yield* PostgresStorageCompatibilityError.make({
+              actualVersion: version.version,
+              supportedVersion: CurrentPostgresStorageVersion,
+              message:
+                `Schema ${schema} uses storage version ${version.version}; this build supports ` +
+                `exactly version ${CurrentPostgresStorageVersion}. Keep the original database and ` +
+                "use a compatible library version.",
+            });
+          }
+        }
+      }),
+    )
+    .pipe(
+      Effect.catchTag("SqlError", (error) =>
+        Effect.fail(classifyWriteFailure("initialize storage")(error)),
+      ),
     );
-  } else {
-    const versionRows = yield* sql<Record<string, unknown>>`
-      SELECT version
-      FROM effect_agent_storage_version
-      WHERE id
-    `.pipe(Effect.mapError(storageError("read storage version")));
-
-    const version = yield* decodeSingleRow(
-      Schema.Array(PostgresVersionRow),
-      VERSION_TABLE,
-      "singleton",
-      versionRows,
-    );
-
-    // One adapter, one format: there is no predecessor layout to upgrade from.
-    if (version.version !== CurrentPostgresStorageVersion) {
-      return yield* PostgresStorageCompatibilityError.make({
-        actualVersion: version.version,
-        supportedVersion: CurrentPostgresStorageVersion,
-        message:
-          `Schema ${schema} uses storage version ${version.version}; this build supports ` +
-          `exactly version ${CurrentPostgresStorageVersion}. Keep the original database and ` +
-          "use a compatible library version.",
-      });
-    }
-  }
 
   const requiredRows = yield* sql<Record<string, unknown>>`
     SELECT c.relname AS name
@@ -378,35 +407,10 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
   }
 
   /**
-   * `@effect/sql-pg` maps the SQLSTATE onto a structured reason, so the codes this adapter treats
-   * as retryable are read from the reason tag rather than the message: 40001 serialization_failure,
-   * 40P01 deadlock_detected, and 55P03 lock_not_available — which is also what the configured
-   * `lock_timeout` raises. Each of those rolls the transaction back whole, so no canonical state
-   * was mutated.
-   */
-  const classifyWriteFailure =
-    (operation: string) =>
-    (error: SqlError): PostgresStorageError | PostgresWriteContention =>
-      error.reason._tag === "SerializationError" ||
-      error.reason._tag === "DeadlockError" ||
-      error.reason._tag === "LockTimeoutError"
-        ? PostgresWriteContention.make({
-            cause: error,
-            operation,
-            message: `Another producer won the Postgres write race; ${operation} is safe to retry.`,
-          })
-        : storageError(operation)(error);
-
-  /**
-   * Runs one journal write transaction holding the adapter's writer lock. The read-then-write
-   * invariants — tail comparison, batch idempotency, record identity, ledger admission — are
-   * only sound if no concurrent writer interleaves between the read and the write, which the
-   * transaction-scoped advisory lock guarantees; the lock releases with the transaction however
-   * it ends.
-   * `SET LOCAL lock_timeout` bounds the wait on the writer lock to the configured window, so a
-   * blocked producer surfaces the retryable `PostgresWriteContention` rather than holding a
-   * pooled connection indefinitely. A failed `BEGIN` leaves no transaction, so no rollback is
-   * attempted for it.
+   * Runs one journal write transaction holding the adapter's writer lock, which is what makes
+   * the read-then-write invariants — tail comparison, batch idempotency, record identity, ledger
+   * admission — sound without a stricter isolation level. A failed `BEGIN` leaves no transaction
+   * to roll back; anything after it does.
    *
    * Journal write transactions are always top level. Nesting one inside another would
    * deadlock against its own reserved connection, so new journal operations must not wrap
@@ -428,20 +432,33 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
               .executeUnprepared("BEGIN", [], undefined)
               .pipe(Effect.mapError(classifyWriteFailure(operation)));
 
-            // SERIALIZABLE would also be safe, but it converts a lost race into a 40001 abort
-            // at COMMIT, so operations that resolve as a typed conflict or an idempotent replay
-            // would instead fail after doing their work.
-            yield* connection
-              .executeUnprepared(`SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`, [], undefined)
-              .pipe(Effect.mapError(classifyWriteFailure(operation)));
-
-            yield* connection
+            // The timeout must be in place before the lock wait it bounds. SERIALIZABLE would
+            // also be safe, but it converts a lost race into a 40001 abort at COMMIT, so
+            // operations that resolve as a typed conflict or an idempotent replay would instead
+            // fail after doing their work.
+            const prelude = connection
               .executeUnprepared(`SET LOCAL lock_timeout = '${lockTimeout}ms'`, [], undefined)
-              .pipe(Effect.mapError(classifyWriteFailure(operation)));
+              .pipe(
+                Effect.andThen(
+                  connection.executeUnprepared(
+                    `SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`,
+                    [],
+                    undefined,
+                  ),
+                ),
+                Effect.mapError(classifyWriteFailure(operation)),
+              );
 
-            const exit = yield* restore(
-              Effect.provideService(effect, sql.transactionService, [connection, 0] as const),
-            ).pipe(Effect.exit);
+            // A lock wait that times out has already aborted the open transaction; rolling it
+            // back here is what keeps the reserved connection reusable by the pool.
+            const exit = yield* prelude.pipe(
+              Effect.andThen(
+                restore(
+                  Effect.provideService(effect, sql.transactionService, [connection, 0] as const),
+                ),
+              ),
+              Effect.exit,
+            );
 
             if (Exit.isSuccess(exit)) {
               yield* connection
@@ -828,7 +845,6 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
               );
 
               yield* indexCanonicalRecord(request.threadId, canonical).pipe(
-                Effect.provide(SqlDialect.layerPostgres),
                 Effect.provideService(SqlClient.SqlClient, sql),
                 Effect.mapError(storageError("index canonical record")),
               );

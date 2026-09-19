@@ -3,7 +3,7 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { Digest } from "./Records.ts";
-import { SqlDialect } from "./SqlDialect.ts";
+import { jsonIsTrue, jsonIsValid } from "./SqlJson.ts";
 import {
   AcceptedEvent,
   DeliveryChange,
@@ -107,10 +107,9 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 ): Effect.fn.Return<
   SubscriptionStore["Service"],
   SubscriptionError,
-  SqlClientService.SqlClient | SqlDialect | SqlSubscriptionTransaction
+  SqlClientService.SqlClient | SqlSubscriptionTransaction
 > {
   const sql = yield* SqlClientService.SqlClient;
-  const dialect = yield* SqlDialect;
   const failpoint = yield* SubscriptionFailpoint;
   const transactions = yield* SqlSubscriptionTransaction;
   const StoredJson = Schema.String.check(Schema.isMaxLength(options.maxStoredJsonLength));
@@ -966,8 +965,8 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     const rows = yield* query(
       sql<Record<string, unknown>>`
       SELECT owner_id, subscription_id, event_id FROM effect_agent_subscription_deliveries
-      WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN ${dialect.jsonIsValid("record_json")} THEN
-          ((state NOT IN ('delivered','refused') AND NOT ${dialect.jsonIsTrue("record_json", ["retry", "parked"])}) OR (state='delivered' AND ${dialect.jsonIsTrue("record_json", ["observeSettlement"])}))
+      WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN ${jsonIsValid(sql, "record_json")} THEN
+          ((state NOT IN ('delivered','refused') AND NOT ${jsonIsTrue(sql, "record_json", ["retry", "parked"])}) OR (state='delivered' AND ${jsonIsTrue(sql, "record_json", ["observeSettlement"])}))
           ELSE state<>'refused' END
         AND next_attempt_at_millis<=${nowMillis} AND delivery_key>${after} ORDER BY delivery_key LIMIT ${limit}
     `,
@@ -1152,8 +1151,8 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       SELECT next_attempt_at_millis AS deadline FROM effect_agent_subscription_events
         WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND routing_complete=0
       UNION ALL SELECT next_attempt_at_millis FROM effect_agent_subscription_deliveries
-        WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN ${dialect.jsonIsValid("record_json")} THEN
-          ((state NOT IN ('delivered','refused') AND NOT ${dialect.jsonIsTrue("record_json", ["retry", "parked"])}) OR (state='delivered' AND ${dialect.jsonIsTrue("record_json", ["observeSettlement"])}))
+        WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN ${jsonIsValid(sql, "record_json")} THEN
+          ((state NOT IN ('delivered','refused') AND NOT ${jsonIsTrue(sql, "record_json", ["retry", "parked"])}) OR (state='delivered' AND ${jsonIsTrue(sql, "record_json", ["observeSettlement"])}))
           ELSE state<>'refused' END
       UNION ALL SELECT next_maintenance_at_millis FROM effect_agent_event_retention
           WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}

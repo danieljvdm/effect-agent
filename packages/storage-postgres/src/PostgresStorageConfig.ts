@@ -69,6 +69,11 @@ export interface PostgresStorageOptions {
   readonly failpoint?: PostgresStorageFailpointHandler | undefined;
 }
 
+/**
+ * Validated Postgres storage configuration Layer with the documented defaults applied. Shared
+ * by the ThreadStore and SubmissionLedger convenience layers so their defaults cannot
+ * drift.
+ */
 export const layerConfig = (
   options: PostgresStorageOptions,
 ): Layer.Layer<PostgresStorageConfig, PostgresStorageError> =>

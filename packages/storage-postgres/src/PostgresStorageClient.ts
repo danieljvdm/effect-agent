@@ -45,7 +45,7 @@ export const makeTypeRegistry = (): PgTypes.Registry => {
 };
 
 /** Connection configuration for the adapter's client; the type registry is not the caller's. */
-export type PostgresClientOptions = Omit<PgClient.PgClientConfig, "types">;
+export type PostgresClientOptions = Omit<PgClient.PgPoolConfig, "types">;
 
 /**
  * The client this adapter's stores expect. Its row decoding depends on the registry above, so a

@@ -21,7 +21,6 @@ import {
   Digest,
   ObservationOffset,
 } from "effect-agent/records";
-import { SqlDialect } from "effect-agent/sql-dialect";
 import { makeSelectedReads } from "effect-agent/sql-thread-native-reads";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 import {
@@ -1005,7 +1004,7 @@ export const threadStoreLayer: Layer.Layer<
   ThreadStore,
   DoStorageInitializationError,
   DoStorageConfig | DoStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
-> = Layer.effectContext(makeServices()).pipe(Layer.provide(SqlDialect.layerSqlite));
+> = Layer.effectContext(makeServices());
 
 /**
  * Validated Durable Object storage configuration Layer with the documented defaults applied.

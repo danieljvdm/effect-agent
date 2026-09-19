@@ -14,11 +14,11 @@ import {
   PreparedActivity,
 } from "effect-agent/activity-store";
 import { Digest } from "effect-agent/records";
-import { SqlDialect } from "effect-agent/sql-dialect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { withWriterLockTransaction } from "./internal/postgres-transactions.ts";
+import { PostgresStorageConfig } from "./PostgresStorageConfig.ts";
 
 const STORAGE_VERSION = 1 as const;
 const METADATA_COMPONENT = "activity";
@@ -45,6 +45,12 @@ class ActivityStateRow extends Schema.Class<ActivityStateRow>(
   owner: ActivityProgress.fields.owner,
   lease_expires_at: ActivityProgress.fields.leaseExpiresAt,
   progress_json: StoredJson,
+}) {}
+
+class ActivityTableRow extends Schema.Class<ActivityTableRow>(
+  "@effect-agent/storage-postgres/ActivityTableRow",
+)({
+  name: Schema.NonEmptyString,
 }) {}
 
 class ActivityChangeCountRow extends Schema.Class<ActivityChangeCountRow>(
@@ -161,23 +167,26 @@ const ownershipLost = (claim: ActivityClaim) =>
 // racing connection that commits first leaves this transaction's UPDATE matching no row.
 const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
   const sql = yield* SqlClientService.SqlClient;
-  const dialect = yield* SqlDialect;
+  const { lockTimeout } = yield* PostgresStorageConfig;
   const failpoint = yield* ActivityMutationFailpoint;
 
   yield* failpoint.hit("activity:initialize:before");
-  yield* withWriterLockTransaction(sql)(
+  yield* withWriterLockTransaction(
+    sql,
+    lockTimeout,
+  )(
     Effect.gen(function* () {
       yield* sql`
-          CREATE TABLE IF NOT EXISTS effect_agent_activity_metadata (
-            component TEXT PRIMARY KEY NOT NULL,
-            version BIGINT NOT NULL
-          )
-        `;
+        CREATE TABLE IF NOT EXISTS effect_agent_activity_metadata (
+          component TEXT PRIMARY KEY NOT NULL,
+          version BIGINT NOT NULL
+        )
+      `;
 
       const metadataRows = yield* sql<Record<string, unknown>>`
-          SELECT version FROM effect_agent_activity_metadata
-          WHERE component = ${METADATA_COMPONENT}
-        `;
+        SELECT version FROM effect_agent_activity_metadata
+        WHERE component = ${METADATA_COMPONENT}
+      `;
 
       const metadata = yield* decodeRows(
         ActivityMetadataRow,
@@ -194,36 +203,45 @@ const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
         return yield* storeError("initialize activity schema", "incompatible");
       }
       if (currentVersion === undefined) {
-        const existing = yield* dialect.existingObjects("table", [STATE_TABLE]);
+        const tableRows = yield* sql<Record<string, unknown>>`
+          SELECT c.relname AS name
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relkind IN ('r', 'p')
+            AND c.relname = ${STATE_TABLE}
+            AND n.nspname = ANY (current_schemas(FALSE))
+        `;
+
+        const existing = yield* decodeRows(ActivityTableRow, tableRows, "inspect activity schema");
 
         if (existing.length > 0) {
           return yield* storeError("initialize activity schema", "incompatible");
         }
         yield* sql`
-            CREATE TABLE effect_agent_activity_processor_state_v1 (
-              processor_id TEXT NOT NULL,
-              processor_version TEXT NOT NULL,
-              thread_id TEXT NOT NULL,
-              format_version BIGINT NOT NULL,
-              through_sequence BIGINT NOT NULL,
-              epoch BIGINT NOT NULL,
-              owner TEXT,
-              lease_expires_at DOUBLE PRECISION NOT NULL,
-              progress_json TEXT NOT NULL,
-              PRIMARY KEY (processor_id, processor_version, thread_id)
-            )
-          `;
+          CREATE TABLE effect_agent_activity_processor_state_v1 (
+            processor_id TEXT NOT NULL,
+            processor_version TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            format_version BIGINT NOT NULL,
+            through_sequence BIGINT NOT NULL,
+            epoch BIGINT NOT NULL,
+            owner TEXT,
+            lease_expires_at DOUBLE PRECISION NOT NULL,
+            progress_json TEXT NOT NULL,
+            PRIMARY KEY (processor_id, processor_version, thread_id)
+          )
+        `;
         yield* sql`
-            INSERT INTO effect_agent_activity_metadata (component, version)
-            VALUES (${METADATA_COMPONENT}, ${STORAGE_VERSION})
-          `;
+          INSERT INTO effect_agent_activity_metadata (component, version)
+          VALUES (${METADATA_COMPONENT}, ${STORAGE_VERSION})
+        `;
       }
       yield* sql`
-          SELECT processor_id, processor_version, thread_id, format_version,
-            through_sequence, epoch, owner, lease_expires_at, progress_json
-          FROM effect_agent_activity_processor_state_v1
-          LIMIT 0
-        `;
+        SELECT processor_id, processor_version, thread_id, format_version,
+          through_sequence, epoch, owner, lease_expires_at, progress_json
+        FROM effect_agent_activity_processor_state_v1
+        LIMIT 0
+      `;
     }),
   ).pipe(Effect.catchTag("SqlError", () => Effect.fail(storeError("initialize activity schema"))));
   yield* failpoint.hit("activity:initialize:after");
@@ -234,13 +252,13 @@ const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
   ): Effect.fn.Return<ActivityProgress | null, ActivityStoreError> {
     const rawRows = yield* query(
       sql<Record<string, unknown>>`
-        SELECT processor_id, processor_version, thread_id, format_version,
-          through_sequence, epoch, owner, lease_expires_at, progress_json
-        FROM effect_agent_activity_processor_state_v1
-        WHERE processor_id = ${key.processorId}
-          AND processor_version = ${key.processorVersion}
-          AND thread_id = ${key.threadId}
-      `,
+      SELECT processor_id, processor_version, thread_id, format_version,
+        through_sequence, epoch, owner, lease_expires_at, progress_json
+      FROM effect_agent_activity_processor_state_v1
+      WHERE processor_id = ${key.processorId}
+        AND processor_version = ${key.processorVersion}
+        AND thread_id = ${key.threadId}
+    `,
       operation,
     );
 
@@ -292,16 +310,16 @@ const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
     const progressJson = yield* encodeProgress(progress, operation);
 
     const changed = yield* sql<Record<string, unknown>>`
-      INSERT INTO effect_agent_activity_processor_state_v1 (
-        processor_id, processor_version, thread_id, format_version, through_sequence,
-        epoch, owner, lease_expires_at, progress_json
-      ) VALUES (
-        ${progress.key.processorId}, ${progress.key.processorVersion}, ${progress.key.threadId},
-        ${STORAGE_VERSION}, ${progress.throughSequence}, ${progress.epoch}, ${progress.owner},
-        ${progress.leaseExpiresAt}, ${progressJson}
-      )
-      RETURNING 1 AS changed
-    `;
+    INSERT INTO effect_agent_activity_processor_state_v1 (
+      processor_id, processor_version, thread_id, format_version, through_sequence,
+      epoch, owner, lease_expires_at, progress_json
+    ) VALUES (
+      ${progress.key.processorId}, ${progress.key.processorVersion}, ${progress.key.threadId},
+      ${STORAGE_VERSION}, ${progress.throughSequence}, ${progress.epoch}, ${progress.owner},
+      ${progress.leaseExpiresAt}, ${progressJson}
+    )
+    RETURNING 1 AS changed
+  `;
 
     yield* checkChanged(changed, operation);
   });
@@ -314,20 +332,20 @@ const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
     const progressJson = yield* encodeProgress(next, operation);
 
     const changed = yield* sql<Record<string, unknown>>`
-      UPDATE effect_agent_activity_processor_state_v1
-      SET format_version = ${STORAGE_VERSION},
-          through_sequence = ${next.throughSequence},
-          epoch = ${next.epoch},
-          owner = ${next.owner},
-          lease_expires_at = ${next.leaseExpiresAt},
-          progress_json = ${progressJson}
-      WHERE processor_id = ${current.key.processorId}
-        AND processor_version = ${current.key.processorVersion}
-        AND thread_id = ${current.key.threadId}
-        AND through_sequence = ${current.throughSequence}
-        AND epoch = ${current.epoch}
-      RETURNING 1 AS changed
-    `;
+    UPDATE effect_agent_activity_processor_state_v1
+    SET format_version = ${STORAGE_VERSION},
+        through_sequence = ${next.throughSequence},
+        epoch = ${next.epoch},
+        owner = ${next.owner},
+        lease_expires_at = ${next.leaseExpiresAt},
+        progress_json = ${progressJson}
+    WHERE processor_id = ${current.key.processorId}
+      AND processor_version = ${current.key.processorVersion}
+      AND thread_id = ${current.key.threadId}
+      AND through_sequence = ${current.throughSequence}
+      AND epoch = ${current.epoch}
+    RETURNING 1 AS changed
+  `;
 
     yield* checkChanged(changed, operation);
   });
@@ -369,7 +387,10 @@ const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
 
     yield* failpoint.hit("activity:claim:before");
 
-    const claimed = yield* withWriterLockTransaction(sql)(
+    const claimed = yield* withWriterLockTransaction(
+      sql,
+      lockTimeout,
+    )(
       Effect.gen(function* () {
         const current = yield* readProgress(decoded.key, operation);
         const now = yield* Clock.currentTimeMillis;
@@ -417,7 +438,10 @@ const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
 
     yield* failpoint.hit("activity:prepare:before");
 
-    const result = yield* withWriterLockTransaction(sql)(
+    const result = yield* withWriterLockTransaction(
+      sql,
+      lockTimeout,
+    )(
       Effect.gen(function* () {
         const current = yield* requireLive(yield* readProgress(claim.key, operation), claim, true);
 
@@ -454,7 +478,10 @@ const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
 
     yield* failpoint.hit("activity:advance:before");
 
-    const nextClaim = yield* withWriterLockTransaction(sql)(
+    const nextClaim = yield* withWriterLockTransaction(
+      sql,
+      lockTimeout,
+    )(
       Effect.gen(function* () {
         const current = yield* requireLive(yield* readProgress(claim.key, operation), claim, true);
 
@@ -491,7 +518,10 @@ const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
     const decoded = yield* decodeInput(ActivityClaim, claim, operation);
 
     yield* failpoint.hit("activity:release:before");
-    yield* withWriterLockTransaction(sql)(
+    yield* withWriterLockTransaction(
+      sql,
+      lockTimeout,
+    )(
       Effect.gen(function* () {
         const current = yield* readProgress(decoded.key, operation);
 
@@ -518,14 +548,12 @@ const makeActivityStore = Effect.fn("PostgresActivityStore.make")(function* () {
 export const layerWithFailpoints: Layer.Layer<
   ActivityProcessorStore,
   PostgresActivityInitializationError,
-  SqlClientService.SqlClient | ActivityMutationFailpoint
-> = Layer.effect(ActivityProcessorStore, makeActivityStore()).pipe(
-  Layer.provide(SqlDialect.layerPostgres),
-);
+  PostgresStorageConfig | SqlClientService.SqlClient | ActivityMutationFailpoint
+> = Layer.effect(ActivityProcessorStore, makeActivityStore());
 
 /** Postgres activity progress with the production no-op mutation failpoint. */
 export const layer: Layer.Layer<
   ActivityProcessorStore,
   PostgresActivityInitializationError,
-  SqlClientService.SqlClient
+  PostgresStorageConfig | SqlClientService.SqlClient
 > = layerWithFailpoints.pipe(Layer.provide(ActivityMutationFailpoint.layer));

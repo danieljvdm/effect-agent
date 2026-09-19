@@ -139,6 +139,14 @@ module type, and dependency declarations also affect execution.
 Use `vp run -v test` for cache decisions, `vp run --last-details` for the previous run,
 or `vp run --no-cache test` to rerun every suite.
 
+## Postgres tests
+
+`@effect-agent/storage-postgres` and the Postgres certification runner need a reachable server:
+set `EFFECT_AGENT_TEST_POSTGRES_URL`, or run `docker run -d -p 5432:5432 -e
+POSTGRES_PASSWORD=postgres -e POSTGRES_DB=effect_agent postgres:18-alpine`. Each case creates and
+drops its own database. CI runs the adapter against Postgres 16 and 18, and the certification
+suite against 17.
+
 ## Documentation examples
 
 Lead implementation guides with a short, concrete code example after at most one introductory
