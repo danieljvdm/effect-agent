@@ -11,21 +11,27 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { initializePostgresJournal } from "./internal/postgres-journal.ts";
+import { withWriterLockTransaction } from "./internal/postgres-transactions.ts";
+import { PostgresStorageConfig } from "./PostgresStorageConfig.ts";
 
 const transactions = Layer.effect(
   SqlMessageDeliveryTransaction,
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
+    const { lockTimeout } = yield* PostgresStorageConfig;
 
+    // The shared store reads then writes inside one transaction, which SQLite serialises with
+    // `BEGIN IMMEDIATE`; on Postgres only the writer lock does.
     return SqlMessageDeliveryTransaction.of({
       run: (body) =>
-        sql
-          .withTransaction(body)
-          .pipe(
-            Effect.catchTag("SqlError", () =>
-              MessageDeliveryError.make({ reason: "storage", operation: "transaction" }),
-            ),
+        withWriterLockTransaction(
+          sql,
+          lockTimeout,
+        )(body).pipe(
+          Effect.catchTag("SqlError", () =>
+            MessageDeliveryError.make({ reason: "storage", operation: "transaction" }),
           ),
+        ),
     });
   }),
 );

@@ -45,12 +45,10 @@ type LedgerErrorProof = Assert<
   >
 >;
 
-/** A convenience Layer owns its client, so it leaves nothing for the caller to provide. */
 type ConvenienceLayerProof = Assert<
   Equal<Layer.Services<ReturnType<typeof PostgresThreadStore.layer>>, never>
 >;
 
-/** Connection failure is reported in the adapter's vocabulary rather than as a raw `SqlError`. */
 type ClientErrorProof = Assert<
   Equal<Layer.Error<ReturnType<typeof PostgresStorageClient.layer>>, PostgresStorageError>
 >;

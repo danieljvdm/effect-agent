@@ -2,9 +2,9 @@ import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import type * as Statement from "effect/unstable/sql/Statement";
 
 /**
- * JSON access over a text column, which no two dialects spell alike. `SqlClient` already
- * dispatches on the dialect it is connected to, so these need no configuration; SQLite is the
- * fallback because the shipped SQLite adapter's indexes are built on its exact expressions.
+ * JSON access over a text column, which no two dialects spell alike. SQLite is the fallback
+ * rather than one case among others because the shipped SQLite adapter's indexes are built on
+ * these exact expressions.
  */
 export const jsonText = (
   sql: SqlClient.SqlClient,
@@ -16,7 +16,6 @@ export const jsonText = (
     pg: () => sql.literal(`(${column}::jsonb #>> '{${pgPath(path)}}')`),
   });
 
-/** A JSON boolean decodes to a different scalar per dialect, so the comparison belongs here. */
 export const jsonIsTrue = (
   sql: SqlClient.SqlClient,
   column: string,
@@ -28,14 +27,13 @@ export const jsonIsTrue = (
       sql.literal(`COALESCE((${column}::jsonb #> '{${pgPath(path)}}') = 'true'::jsonb, false)`),
   });
 
-/** Whether a text column holds syntactically valid JSON. `IS JSON` needs Postgres 16. */
+/** `IS JSON` is a Postgres 16 predicate. */
 export const jsonIsValid = (sql: SqlClient.SqlClient, column: string): Statement.Fragment =>
   sql.onDialectOrElse({
     orElse: () => sql.literal(`json_valid(${column})`),
     pg: () => sql.literal(`(${column} IS JSON)`),
   });
 
-/** Equality treating two nulls as equal rather than unknown. */
 export const nullSafeEquals = (
   sql: SqlClient.SqlClient,
   left: Statement.Fragment,
@@ -49,10 +47,7 @@ export const nullSafeEquals = (
 const sqliteExtract = (column: string, path: ReadonlyArray<string>): string =>
   `json_extract(${column}, '$.${path.join(".")}')`;
 
-/**
- * A path segment reaches Postgres inside a literal `'{...}'` array, so a segment carrying that
- * array's own syntax is quoted rather than concatenated as-is.
- */
+/** A segment reaches Postgres inside a literal `'{...}'` array, so it is quoted, not concatenated. */
 const pgPath = (path: ReadonlyArray<string>): string =>
   path
     .map((segment) =>

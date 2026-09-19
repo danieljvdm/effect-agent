@@ -7,7 +7,8 @@ import { SourcePartition, SubscriptionError, SubscriptionStore } from "effect-ag
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { initializePostgresJournal } from "./internal/postgres-journal.ts";
-import type { PostgresStorageConfig } from "./PostgresStorageConfig.ts";
+import { withWriterLockTransaction } from "./internal/postgres-transactions.ts";
+import { PostgresStorageConfig } from "./PostgresStorageConfig.ts";
 import type { PostgresStorageInitializationError } from "./PostgresStorageError.ts";
 import type { PostgresStorageFailpoint } from "./PostgresStorageFailpoint.ts";
 
@@ -15,16 +16,20 @@ const transactionLayer = Layer.effect(
   SqlSubscriptionTransaction,
   Effect.gen(function* () {
     const sql = yield* SqlClientService.SqlClient;
+    const { lockTimeout } = yield* PostgresStorageConfig;
 
+    // The shared store reads then writes inside one transaction, which SQLite serialises with
+    // `BEGIN IMMEDIATE`; on Postgres only the writer lock does.
     return SqlSubscriptionTransaction.of({
       run: (body) =>
-        sql
-          .withTransaction(body)
-          .pipe(
-            Effect.catchTag("SqlError", () =>
-              Effect.fail(SubscriptionError.make({ reason: "storage", code: "transaction" })),
-            ),
+        withWriterLockTransaction(
+          sql,
+          lockTimeout,
+        )(body).pipe(
+          Effect.catchTag("SqlError", () =>
+            Effect.fail(SubscriptionError.make({ reason: "storage", code: "transaction" })),
           ),
+        ),
     });
   }),
 );

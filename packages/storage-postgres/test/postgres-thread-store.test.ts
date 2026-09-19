@@ -10,13 +10,9 @@ import type { ThreadStore } from "effect-agent/thread-store";
 import { withTemporaryDatabase } from "./harness.ts";
 
 const withStorage = <A, E>(url: string, effect: Effect.Effect<A, E, ThreadStore>) =>
-  effect.pipe(
-    Effect.provide(
-      PostgresThreadStore.layer({
-        client: { url: Redacted.make(url) },
-        observationPollInterval: 1,
-      }),
-    ),
+  Effect.provide(
+    effect,
+    PostgresThreadStore.layer({ client: { url: Redacted.make(url) }, observationPollInterval: 1 }),
   );
 
 describe("PostgresThreadStore", () => {

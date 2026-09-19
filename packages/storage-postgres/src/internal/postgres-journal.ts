@@ -227,13 +227,10 @@ export const decodeSingleRow = Effect.fn("PostgresJournal.decodeSingleRow")(
 );
 
 /**
- * The adapter cannot select its own schema: `SET search_path` binds to one connection while the
- * client is a pool, and `@effect/sql-pg` exposes no startup parameter or per-connection hook (its
- * config carries no `options` field, and a URL `options=-c search_path=...` is not forwarded).
- *
- * So the configured schema must already be the connection's. Probing several pooled connections
- * turns a mismatch into a startup failure naming the fix, rather than statements silently
- * resolving in `public`.
+ * The configured schema must already be the connection's: `search_path` binds per connection
+ * while the client is a pool, and this driver exposes no startup parameter or per-connection hook
+ * to set one for it. Probing several pooled connections turns a mismatch into a startup failure
+ * rather than statements silently resolving in `public`.
  */
 const verifySearchPath = Effect.fn("PostgresJournal.verifySearchPath")(function* (schema: string) {
   const sql = yield* SqlClient.SqlClient;
@@ -272,9 +269,8 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
   const { hit: failpoint } = yield* PostgresStorageFailpoint;
   const { lockTimeout, schema } = yield* PostgresStorageConfig;
 
-  // `CREATE SCHEMA` and `SET` accept no bound parameters, so the schema name is interpolated.
-  // `PostgresStorageConfigValue` validates it against ^[a-z_][a-z0-9_]*$, which admits no quote,
-  // separator or statement syntax; the value can only ever name one schema.
+  // `CREATE SCHEMA` and `SET` take no bound parameters. `PostgresStorageConfigValue` validates
+  // the name against ^[a-z_][a-z0-9_]*$, so it can only ever name one schema.
   yield* sql
     .unsafe(`CREATE SCHEMA IF NOT EXISTS ${schema}`)
     .pipe(Effect.mapError(storageError("create storage schema")));
@@ -286,11 +282,8 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
     .pipe(Effect.mapError(storageError("configure lock timeout")));
 
   /**
-   * `@effect/sql-pg` maps the SQLSTATE onto a structured reason, so the codes this adapter treats
-   * as retryable are read from the reason tag rather than the message: 40001 serialization_failure,
-   * 40P01 deadlock_detected, and 55P03 lock_not_available — which is also what the configured
-   * `lock_timeout` raises. Each of those rolls the transaction back whole, so no canonical state
-   * was mutated.
+   * Read from the driver's structured reason rather than the message. Each of these rolls the
+   * transaction back whole, so no canonical state was mutated; `lock_timeout` also raises 55P03.
    */
   const classifyWriteFailure =
     (operation: string) =>
@@ -305,9 +298,8 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
           })
         : storageError(operation)(error);
 
-  // Two ports over one pooled client can initialize concurrently. Holding the writer lock makes
-  // the second initializer observe the first one's committed schema and take the
-  // current-version branch instead of reaching `CREATE TABLE`.
+  // Two ports over one pooled client can initialize concurrently; the lock makes the second one
+  // observe the first's committed schema instead of reaching `CREATE TABLE` itself.
   yield* sql
     .withTransaction(
       Effect.gen(function* () {
@@ -432,11 +424,9 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
               .executeUnprepared("BEGIN", [], undefined)
               .pipe(Effect.mapError(classifyWriteFailure(operation)));
 
-            // The timeout must be in place before the lock wait it bounds. SERIALIZABLE would
-            // also be safe, but it converts a lost race into a 40001 abort at COMMIT, so
-            // operations that resolve as a typed conflict or an idempotent replay would instead
-            // fail after doing their work.
-            const prelude = connection
+            // The timeout precedes the wait it bounds, and a wait that times out has already
+            // aborted the transaction, so the lock shares the body's rollback.
+            const exit = yield* connection
               .executeUnprepared(`SET LOCAL lock_timeout = '${lockTimeout}ms'`, [], undefined)
               .pipe(
                 Effect.andThen(
@@ -447,18 +437,13 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
                   ),
                 ),
                 Effect.mapError(classifyWriteFailure(operation)),
-              );
-
-            // A lock wait that times out has already aborted the open transaction; rolling it
-            // back here is what keeps the reserved connection reusable by the pool.
-            const exit = yield* prelude.pipe(
-              Effect.andThen(
-                restore(
-                  Effect.provideService(effect, sql.transactionService, [connection, 0] as const),
+                Effect.andThen(
+                  restore(
+                    Effect.provideService(effect, sql.transactionService, [connection, 0] as const),
+                  ),
                 ),
-              ),
-              Effect.exit,
-            );
+                Effect.exit,
+              );
 
             if (Exit.isSuccess(exit)) {
               yield* connection

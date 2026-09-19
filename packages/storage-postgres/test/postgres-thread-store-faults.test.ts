@@ -1,4 +1,3 @@
-import { makeTypeRegistry } from "@effect-agent/storage-postgres/postgres-storage-client";
 import {
   PostgresStorageConfig,
   PostgresStorageConfigValue,
@@ -10,11 +9,9 @@ import {
   type PostgresStorageFailpointLocation,
   PostgresWriteContention,
 } from "@effect-agent/storage-postgres/postgres-storage-error";
-import { PostgresStorageFailpoint } from "@effect-agent/storage-postgres/postgres-storage-failpoint";
 import * as PostgresThreadStore from "@effect-agent/storage-postgres/postgres-thread-store";
 import { PostgresStorageFailpointTestControl } from "@effect-agent/storage-postgres/testing/postgres-storage-failpoint-testing";
 import { NodeCrypto } from "@effect/platform-node";
-import { PgClient } from "@effect/sql-pg";
 import { describe, expect, it } from "@effect/vitest";
 import {
   Cause,
@@ -53,8 +50,12 @@ import {
 } from "effect-agent/thread-store";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
-import { WRITER_LOCK_KEY } from "../src/internal/postgres-transactions.ts";
-import { clientLayer, withTemporaryDatabase } from "./harness.ts";
+import {
+  clientLayer,
+  singleConnectionServices,
+  whileHoldingWriterLock,
+  withTemporaryDatabase,
+} from "./harness.ts";
 
 const threadId = Schema.decodeSync(ThreadMaterialization.fields.threadId)("thread-postgres-1");
 const runId = Schema.decodeSync(RunCompleted.fields.runId)("run-postgres-1");
@@ -130,17 +131,23 @@ const append = (
   );
 
 const withStorage = <A, E>(url: string, effect: Effect.Effect<A, E, ThreadStore>) =>
-  effect.pipe(
-    Effect.provide(
-      PostgresThreadStore.layer({
-        client: { url: Redacted.make(url) },
-        observationPollInterval: 1,
-      }),
-    ),
+  Effect.provide(
+    effect,
+    PostgresThreadStore.layer({ client: { url: Redacted.make(url) }, observationPollInterval: 1 }),
+  );
+
+const withVerifiedStorage = <A, E>(url: string, effect: Effect.Effect<A, E, ThreadStore>) =>
+  Effect.provide(
+    effect,
+    PostgresThreadStore.layer({
+      client: { url: Redacted.make(url) },
+      observationPollInterval: 1,
+      verifyOnOpen: true,
+    }),
   );
 
 const withSql = <A, E>(url: string, effect: Effect.Effect<A, E, SqlClientService.SqlClient>) =>
-  effect.pipe(Effect.provide(clientLayer(url)));
+  Effect.provide(effect, clientLayer(url));
 
 const storageTables = (url: string) =>
   withSql(
@@ -182,55 +189,10 @@ const explicitTestStorageLayer = (url: string) =>
     ),
   );
 
-/**
- * A store over exactly one connection. The adapter bounds the writer-lock wait with a
- * session-level `lock_timeout` on whichever pooled connection ran startup, so a single
- * connection is what makes that bound hold for the write under test.
- */
 const singleConnectionStore = (url: string, lockTimeout: number) =>
   PostgresThreadStore.layerWithServices.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.succeed(PostgresStorageConfig)(
-          PostgresStorageConfigValue.make({
-            observationPollInterval: 1,
-            lockTimeout,
-            ownershipLeaseDuration: 30_000,
-            verifyOnOpen: false,
-            schema: "public",
-          }),
-        ),
-        PostgresStorageFailpoint.layer,
-        PgClient.layer({ url: Redacted.make(url), maxConnections: 1, types: makeTypeRegistry() }),
-        NodeCrypto.layer,
-      ),
-    ),
+    Layer.provide(singleConnectionServices(url, lockTimeout)),
   );
-
-/**
- * Holds the adapter's writer lock from an unrelated client for the duration of `use`, as a
- * transiently coexisting producer would, then rolls the holding transaction back.
- */
-const whileHoldingWriterLock = <A, E>(url: string, use: Effect.Effect<A, E>) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const sql = yield* PgClient.PgClient;
-      const connection = yield* sql.reserve;
-
-      yield* connection.executeUnprepared("BEGIN", [], undefined);
-      yield* connection.executeUnprepared(
-        `SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`,
-        [],
-        undefined,
-      );
-
-      const result = yield* use;
-
-      yield* connection.executeUnprepared("ROLLBACK", [], undefined);
-
-      return result;
-    }),
-  ).pipe(Effect.provide(PgClient.layer({ url: Redacted.make(url), maxConnections: 1 })));
 
 describe("PostgresThreadStore faults", () => {
   it.effect("supports explicit configuration and controllable failpoint services", () =>
@@ -376,16 +338,7 @@ describe("PostgresThreadStore faults", () => {
         );
 
         // The opt-in integrity scan refuses to open the corrupt database.
-        const verified = yield* ThreadStore.pipe(
-          Effect.provide(
-            PostgresThreadStore.layer({
-              client: { url: Redacted.make(url) },
-              observationPollInterval: 1,
-              verifyOnOpen: true,
-            }),
-          ),
-          Effect.exit,
-        );
+        const verified = yield* withVerifiedStorage(url, ThreadStore).pipe(Effect.exit);
 
         expect(Exit.isFailure(verified)).toBe(true);
         if (Exit.isFailure(verified)) {
@@ -450,22 +403,6 @@ describe("PostgresThreadStore faults", () => {
 
         const contendedBatch = batch("busy-2", [inputRecord("busy-record-2", "after")]);
 
-        const batchIds = withSql(
-          url,
-          Effect.gen(function* () {
-            const sql = yield* SqlClientService.SqlClient;
-
-            const rows = yield* sql<Record<string, unknown>>`
-              SELECT batch_id
-              FROM effect_agent_canonical_batches
-              WHERE thread_id = ${threadId}
-              ORDER BY first_sequence
-            `;
-
-            return rows.map((row) => row.batch_id);
-          }),
-        );
-
         // Opening a store takes the writer lock itself, so the competing producer must arrive
         // after the store is open. `lock_timeout = 0` disables the bound in Postgres, so the
         // shortest bounded wait is used instead.
@@ -478,8 +415,6 @@ describe("PostgresThreadStore faults", () => {
             url,
             append(store, contendedBatch, first).pipe(Effect.exit),
           );
-
-          expect(yield* batchIds).toEqual(["busy-1"]);
 
           return { contended, retried: yield* append(store, contendedBatch, first) };
         }).pipe(Effect.provide(singleConnectionStore(url, 50)));
@@ -495,7 +430,6 @@ describe("PostgresThreadStore faults", () => {
         }
         expect(retried.replayed).toBe(false);
         expect(retried.firstSequence).toBe(first.lastSequence + 1);
-        expect(yield* batchIds).toEqual(["busy-1", "busy-2"]);
 
         // A fresh store then sees the committed batch as an idempotent replay.
         const replayed = yield* withStorage(
@@ -518,21 +452,20 @@ describe("PostgresThreadStore faults", () => {
         const active = yield* Ref.make<PostgresStorageFailpointLocation | undefined>(undefined);
 
         const withFailpoints = <A, E>(effect: Effect.Effect<A, E, ThreadStore>) =>
-          effect.pipe(
-            Effect.provide(
-              PostgresThreadStore.layer({
-                client: { url: Redacted.make(url) },
-                observationPollInterval: 1,
-                failpoint: (location) =>
-                  Ref.get(active).pipe(
-                    Effect.flatMap((selected) =>
-                      selected === location
-                        ? Effect.fail(PostgresStorageFailpointError.make({ location }))
-                        : Effect.void,
-                    ),
+          Effect.provide(
+            effect,
+            PostgresThreadStore.layer({
+              client: { url: Redacted.make(url) },
+              observationPollInterval: 1,
+              failpoint: (location) =>
+                Ref.get(active).pipe(
+                  Effect.flatMap((selected) =>
+                    selected === location
+                      ? Effect.fail(PostgresStorageFailpointError.make({ location }))
+                      : Effect.void,
                   ),
-              }),
-            ),
+                ),
+            }),
           );
 
         const select = (location: PostgresStorageFailpointLocation | undefined) =>

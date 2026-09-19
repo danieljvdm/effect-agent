@@ -143,11 +143,11 @@ or `vp run --no-cache test` to rerun every suite.
 
 ## Postgres tests
 
-`@effect-agent/storage-postgres` and the Postgres certification runner need a reachable server:
-set `EFFECT_AGENT_TEST_POSTGRES_URL`, or run `docker run -d -p 5432:5432 -e
-POSTGRES_PASSWORD=postgres -e POSTGRES_DB=effect_agent postgres:18-alpine`. Each case creates and
-drops its own database. CI runs the adapter against Postgres 16 and 18, and the certification
-suite against 17.
+The Postgres adapter and its certification runner need a reachable server. Set
+`EFFECT_AGENT_TEST_POSTGRES_URL` to select one; it defaults to a local server on port 55432.
+Each case creates and drops its own database, so the server needs no preparation.
+
+CI runs the adapter against Postgres 16 and 18, and the certification suite against 17.
 
 ## Storage certification reports
 
