@@ -9,6 +9,7 @@ import {
   Fiber,
   Layer,
   Option,
+  PubSub,
   Random,
   Ref,
   Result,
@@ -285,6 +286,65 @@ export class ThreadPublication extends Context.Service<
   });
 }
 
+/** Event-local accounting shared by the existing maintenance pumps and native scheduler. */
+export class ThreadMaintenanceActivity extends Context.Service<
+  ThreadMaintenanceActivity,
+  {
+    /**
+     * Account for one finite selection/dispatch, through joined completion or interruption.
+     * Register before reading/claiming work. After dispatch closes the body is not started.
+     * Host waves retain their declared allowance from this call; message Claims keep the driver's
+     * own deadline. Waiting for notifications belongs outside this bracket.
+     */
+    readonly run: <R>(
+      wave: Effect.Effect<void, DurableAlarmError, R>,
+    ) => Effect.Effect<void, DurableAlarmError, R>;
+    /** Acknowledge all initial subscriptions/scans. Composite hosts use `all` below. */
+    readonly ready: Effect.Effect<void>;
+    /**
+     * Acquire an independent scoped subscription before the initial scan and `ready`.
+     * The returned wait observes coalesced native scan hints, including those published before
+     * its first execution. Each hint requests a current local due-work check.
+     */
+    readonly subscribeChanges: Effect.Effect<Effect.Effect<void>, never, Scope.Scope>;
+  }
+>()("@effect-agent/platform-cloudflare/ThreadMaintenanceActivity") {
+  /** Join child pumps; acknowledge the parent only after every child is ready or has exited. */
+  static readonly all = Effect.fnUntraced(function* <A, E, R>(
+    lanes: ReadonlyArray<Effect.Effect<A, E, R>>,
+  ): Effect.fn.Return<ReadonlyArray<A>, E, R | ThreadMaintenanceActivity> {
+    const activity = yield* ThreadMaintenanceActivity;
+    let remaining = lanes.length;
+
+    if (remaining === 0) return yield* activity.ready.pipe(Effect.as([]));
+
+    return yield* Effect.forEach(
+      lanes,
+      (lane) => {
+        let ready = false;
+
+        const child: ThreadMaintenanceActivity["Service"] = {
+          ...activity,
+          ready: Effect.suspend(() => {
+            if (ready) return Effect.void;
+            ready = true;
+
+            return --remaining === 0 ? activity.ready : Effect.void;
+          }).pipe(Effect.uninterruptible),
+        };
+
+        // A failed initial setup is accounted for without swallowing its Cause. Callers
+        // may collect Exits when sibling pumps must keep their independent opportunities.
+        return lane.pipe(
+          Effect.provideService(ThreadMaintenanceActivity, child),
+          Effect.onExit(() => child.ready),
+        );
+      },
+      { concurrency: "unbounded" },
+    );
+  });
+}
+
 /**
  * Host-assembled native message recovery. The driver bounds each actual Claim and persists its
  * timeout/retry before this pump returns. Do not add a second timer starting at batch selection:
@@ -294,7 +354,7 @@ export const ThreadMessageDelivery = Context.Reference<{
   readonly drainUntil: (
     dispatchClosed: Effect.Effect<void>,
     dispatchUntil: DateTime.Utc,
-  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope>;
+  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope | ThreadMaintenanceActivity>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
 }>("@effect-agent/platform-cloudflare/ThreadMessageDelivery", {
   defaultValue: () => ({
@@ -305,14 +365,16 @@ export const ThreadMessageDelivery = Context.Reference<{
 
 /**
  * Application obligations sharing this Object's alarm. Admit one initial external wave even on
- * a caught-up pass, then respond to wakes until dispatchClosed. This closes only admission
- * of NEW external waves; native work can continue while admitted waves finish. Keep local
- * admission/hub subscriptions in the event Scope until maintenance tears it down.
+ * a caught-up pass, then respond to wakes and ThreadMaintenanceActivity.subscribeChanges until
+ * dispatchClosed. Yield the event's ThreadMaintenanceActivity to bracket each finite lane with
+ * run and acknowledge initial setup with ready.
+ * Passive subscriptions do not count as active work. Closure stops both new waves and native
+ * Attempts; local admission/control subscriptions belong to the event Scope until teardown.
  * No deadline sleeps or automatic retry loops. Return after already-admitted waves finish.
  *
  * Declare a finite whole-wave allowance (1..300000ms): maximum for parallel lanes, sum for
  * sequential operations. Admit a wave only if its allowance fits before dispatchUntil. Later
- * arrivals cannot renew the retirement window. Maintenance bounds the join after dispatchClosed,
+ * arrivals cannot renew an admitted wave's allowance. Maintenance bounds each registered wave,
  * interrupts and joins event Scope, then reads local deadlines under the mutation gate.
  *
  * Setup and pendingDeadline are bounded local operations. Persist claims/envelopes before
@@ -326,7 +388,7 @@ export const ThreadHostMaintenance = Context.Reference<{
   readonly drainUntil: (
     dispatchClosed: Effect.Effect<void>,
     dispatchUntil: DateTime.Utc,
-  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope>;
+  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope | ThreadMaintenanceActivity>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
 }>("@effect-agent/platform-cloudflare/ThreadHostMaintenance", {
   defaultValue: () => ({
@@ -622,10 +684,10 @@ export type MaintenancePassFailure =
  *    recovery, ledger scans or canonical-history reads.
  * 2. Reconcile before each head Attempt, then checkpoint only the observed generation. A racing
  *    producer keeps its newer generation dirty. Native retries retain their durable backoff.
- * 3. Keep delivery admission open while old recovery is pending, so fresh native replies can
- *    publish in this event. Close once, at latest at the original ten-minute yield deadline;
- *    native wakes can still advance heads while admitted deliveries retire.
- * 4. Native message delivery retains its driver-owned Claim deadline. Host/backfill joins are
+ * 3. Keep native and delivery admission open together while finite waves remain active, so
+ *    fresh replies and abort controls can progress during unrelated cleanup. Close atomically
+ *    at quiescence, or at the original ten-minute yield deadline, before retiring listeners.
+ * 4. Native message delivery retains its driver-owned Claim deadline. Host/backfill waves are
  *    bounded independently; incoming native work never restarts or cancels their attempts.
  *    Auxiliary failures are reported after the current native opportunity.
  * 5. Close every event resource before the final gated deadline snapshot and alarm decision.
@@ -1392,6 +1454,83 @@ export class ThreadMaintenance extends Context.Service<
           Scope.close(scope, exit),
         );
 
+        const dispatchClosed = yield* Deferred.make<void>();
+        const stopDispatch = Deferred.await(dispatchClosed);
+        // Coalesce local scan hints while a lane is busy; one hint requests a current read.
+        const checks = yield* PubSub.sliding<void>(1);
+
+        yield* Effect.addFinalizer(() => PubSub.shutdown(checks));
+        let dispatchOpen = true;
+        let activityChanged = yield* Deferred.make<void>();
+        const signalActivity = Effect.suspend(() => Deferred.succeed(activityChanged, undefined));
+
+        const closeDispatch = Effect.sync(() => {
+          dispatchOpen = false;
+        }).pipe(Effect.andThen(Deferred.succeed(dispatchClosed, undefined)));
+
+        const makeActivity = Effect.fnUntraced(function* (allowance?: number) {
+          const initialized = yield* Deferred.make<void>();
+          let active = 0;
+          let failed = false;
+
+          const ready = Deferred.succeed(initialized, undefined).pipe(
+            Effect.andThen(signalActivity),
+            Effect.asVoid,
+            Effect.uninterruptible,
+          );
+
+          const activity: ThreadMaintenanceActivity["Service"] = {
+            ready,
+            subscribeChanges: PubSub.subscribe(checks).pipe(Effect.map(PubSub.take)),
+            run: (wave) =>
+              Effect.acquireUseRelease(
+                Effect.sync(() => {
+                  if (!dispatchOpen) return false;
+                  active++;
+
+                  return true;
+                }),
+                (admitted) =>
+                  !admitted
+                    ? Effect.void
+                    : (allowance === undefined
+                        ? wave
+                        : wave.pipe(
+                            Effect.timeoutOrElse({
+                              duration: allowance,
+                              orElse: () =>
+                                DurableAlarmError.make({
+                                  operation: "host dispatch allowance",
+                                  message:
+                                    "The admitted host wave exceeded its allowance; durable work remains pending",
+                                }),
+                            }),
+                          )
+                      ).pipe(
+                        Effect.onExit((exit) =>
+                          Effect.sync(() => {
+                            if (Exit.isFailure(exit)) failed = true;
+                          }),
+                        ),
+                      ),
+                (admitted) =>
+                  Effect.sync(() => {
+                    if (admitted) active--;
+                  }).pipe(Effect.andThen(signalActivity)),
+              ),
+          };
+
+          return {
+            activity,
+            initialized: Deferred.await(initialized),
+            quiet: () => active === 0 && Deferred.isDoneUnsafe(initialized),
+            failed: () => failed,
+          };
+        });
+
+        const messageActivity = yield* makeActivity();
+        const hostActivity = yield* makeActivity(host.dispatchTimeoutMillis);
+
         const recovery: NativeRecovery = {
           queue: yield* Deferred.make<ReadonlyArray<ThreadId>>(),
           pending: new Set(),
@@ -1429,13 +1568,15 @@ export class ThreadMaintenance extends Context.Service<
           auxiliaryScope,
         );
 
-        const dispatchClosed = yield* Deferred.make<void>();
-        const stopDispatch = Deferred.await(dispatchClosed);
-
         // Fork setup too: an ordinary auxiliary setup failure is reported after native work,
         // rather than gating its opportunity. Event interruption still closes every fiber.
         const deliveryFiber = yield* Effect.forkIn(
-          Scope.provide(auxiliaryScope)(messages.drainUntil(stopDispatch, dispatchUntil)),
+          Scope.provide(auxiliaryScope)(
+            messages.drainUntil(stopDispatch, dispatchUntil).pipe(
+              Effect.provideService(ThreadMaintenanceActivity, messageActivity.activity),
+              Effect.onExit(() => messageActivity.activity.ready),
+            ),
+          ),
           auxiliaryScope,
         );
 
@@ -1452,8 +1593,29 @@ export class ThreadMaintenance extends Context.Service<
                   }),
                 ),
               );
-              yield* host.drainUntil(stopDispatch, dispatchUntil);
-            }),
+
+              // Initial setup must also be finite. Once it is accounted for, each actual
+              // wave has its own unchanged allowance; passive listeners have no timer.
+              const initialization = hostActivity.initialized.pipe(
+                Effect.timeoutOrElse({
+                  duration: host.dispatchTimeoutMillis,
+                  orElse: () =>
+                    DurableAlarmError.make({
+                      operation: "host initialization",
+                      message:
+                        "The host did not account for initial maintenance before its allowance; durable work remains pending",
+                    }),
+                }),
+                Effect.andThen(Effect.never),
+              );
+
+              yield* Effect.raceFirst(
+                host
+                  .drainUntil(stopDispatch, dispatchUntil)
+                  .pipe(Effect.provideService(ThreadMaintenanceActivity, hostActivity.activity)),
+                initialization,
+              );
+            }).pipe(Effect.onExit(() => hostActivity.activity.ready)),
           ),
           auxiliaryScope,
         );
@@ -1463,6 +1625,7 @@ export class ThreadMaintenance extends Context.Service<
           drainDue.pipe(
             Effect.provideService(ThreadProjectionMaintenance, projection),
             Effect.timeoutOption(config.projectionDispatchTimeoutMillis),
+            Effect.onExit(() => signalActivity),
           ),
           auxiliaryScope,
         );
@@ -1477,9 +1640,8 @@ export class ThreadMaintenance extends Context.Service<
 
         observed.nativeOnly = false;
 
-        // Old recovery may still admit fresh native dispatch. Keep its replies/deliveries
-        // eligible in this same window. Retirement starts only after that window closes;
-        // waiting for host retirement to close it would create a circular join.
+        // Pump termination and quiescence are distinct: listeners await closure, while their
+        // finite waves report activity. A held sibling never retires another lane's controls.
         const hostJoin = yield* Effect.forkIn(
           Effect.gen(function* () {
             yield* stopDispatch;
@@ -1502,28 +1664,60 @@ export class ThreadMaintenance extends Context.Service<
           Fiber.joinAll([deliveryFiber, hostJoin, backfill, recoveryFiber]),
         );
 
-        const auxiliaryPending = () =>
-          deliveryFiber.pollUnsafe() === undefined ||
-          hostFiber.pollUnsafe() === undefined ||
-          backfill.pollUnsafe() === undefined ||
-          recoveryFiber.pollUnsafe() === undefined;
-
         while (true) {
           const recoveryFinished = recoveryFiber.pollUnsafe() !== undefined;
+          const retiredExit = retired.pollUnsafe();
 
           if (recoveryFinished) {
             if (recovery.needsCheckpoint) {
               yield* Fiber.join(recoveryFiber);
-              // A head released by old recovery gets its native opportunity before the
-              // delivery window closes, never after all reply listeners have retired.
+              // Fold the original recovery observation into its checkpoint before closing.
               result = yield* advance(started, yieldAfter, observed, recovery, settled === 0);
               if (result.phase === "actionable") phase = "actionable";
               settled += result.settled;
               recovery.needsCheckpoint = false;
+              yield* PubSub.publish(checks, undefined);
             }
-            yield* Deferred.succeed(dispatchClosed, undefined);
           }
-          if (retired.pollUnsafe() !== undefined || !auxiliaryPending()) break;
+          if (retiredExit !== undefined && Exit.isFailure(retiredExit)) break;
+
+          if (
+            recoveryFinished &&
+            backfill.pollUnsafe() !== undefined &&
+            messageActivity.quiet() &&
+            hostActivity.quiet()
+          ) {
+            const now = yield* Clock.currentTimeMillis;
+            const messageDeadline = yield* messages.pendingDeadline;
+            const hostDeadline = yield* host.pendingDeadline;
+
+            const messageDue =
+              deliveryFiber.pollUnsafe() === undefined &&
+              !messageActivity.failed() &&
+              Option.isSome(messageDeadline) &&
+              messageDeadline.value <= now;
+
+            const hostDue =
+              hostFiber.pollUnsafe() === undefined &&
+              !hostActivity.failed() &&
+              now + host.dispatchTimeoutMillis <= DateTime.toEpochMillis(dispatchUntil) &&
+              Option.isSome(hostDeadline) &&
+              hostDeadline.value <= now;
+
+            // No asynchronous operation separates the activity recheck from closure. A
+            // racing registration either keeps this window open or cannot start its body.
+            const closed = yield* Effect.sync(() => {
+              if (messageDue || hostDue || !messageActivity.quiet() || !hostActivity.quiet())
+                return false;
+
+              dispatchOpen = false;
+
+              return true;
+            });
+
+            if (closed) break;
+            yield* PubSub.publish(checks, undefined);
+          }
           const now = yield* Clock.currentTimeMillis;
           const until = DateTime.toEpochMillis(yieldAfter);
 
@@ -1537,6 +1731,8 @@ export class ThreadMaintenance extends Context.Service<
 
           // A completion racing this iteration stays armed until the loop handles it.
           const recoveryDone = recoveryFinished ? Effect.never : Fiber.await(recoveryFiber);
+          const retirementDone = retiredExit === undefined ? Fiber.await(retired) : Effect.never;
+          const changed = activityChanged;
 
           const ready = yield* Effect.raceFirst(
             Effect.raceFirst(notified, Effect.sleep(Math.max(0, next - now))).pipe(
@@ -1544,16 +1740,17 @@ export class ThreadMaintenance extends Context.Service<
             ),
             Effect.raceFirst(
               recoveryDone.pipe(Effect.as("recovery" as const)),
-              Fiber.await(retired).pipe(Effect.as("retired" as const)),
+              Effect.raceFirst(
+                retirementDone.pipe(Effect.as("retired" as const)),
+                Deferred.await(changed).pipe(Effect.as("activity" as const)),
+              ),
             ),
           );
 
-          // Recovery completion closes admission before joining host retirement. It must
-          // wake this loop directly: the public wake hint is allowed to be dropped.
-          if (ready === "recovery") continue;
-          if (ready === "retired" || retired.pollUnsafe() !== undefined) break;
-          if (!auxiliaryPending()) continue;
+          if (ready === "recovery" || ready === "retired") continue;
+          if (ready === "activity") activityChanged = yield* Deferred.make<void>();
           if ((yield* Clock.currentTimeMillis) >= until) break;
+          if (ready === "native") yield* PubSub.publish(checks, undefined);
 
           const awakened = yield* beginNative(observed);
 
@@ -1561,10 +1758,11 @@ export class ThreadMaintenance extends Context.Service<
           if (result.phase === "actionable") phase = "actionable";
           settled += result.settled;
           observed.nativeOnly = false;
+          if (result.settled > 0) yield* PubSub.publish(checks, undefined);
         }
         // The original native yield deadline closes all new waves even if old recovery
         // is still pending. No recovery or delivery receives a renewed event budget.
-        yield* Deferred.succeed(dispatchClosed, undefined);
+        yield* closeDispatch;
         // Preserve driver-owned Claim deadlines and failures, then close every
         // listener before the one final alarm decision.
         yield* Fiber.join(retired);

@@ -13,7 +13,11 @@ import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
-import { ThreadHostMaintenance, type DurableAlarmError } from "../src/Alarm.ts";
+import {
+  ThreadHostMaintenance,
+  type DurableAlarmError,
+  type ThreadMaintenanceActivity,
+} from "../src/Alarm.ts";
 import { DurableObjectContext, ThreadObjectIdentity } from "../src/CloudflareBindings.ts";
 import { TEST_DIGESTS, finalParts, plannerDefinition } from "./fixtures.ts";
 
@@ -40,7 +44,11 @@ export const hostMaintenanceControls = new Map<
   Omit<HostMaintenance, "drainUntil"> & {
     readonly drainUntil: (
       ...args: Parameters<HostMaintenance["drainUntil"]>
-    ) => Effect.Effect<void, DurableAlarmError, Scope.Scope | WakeScheduler>;
+    ) => Effect.Effect<
+      void,
+      DurableAlarmError,
+      Scope.Scope | WakeScheduler | ThreadMaintenanceActivity
+    >;
   }
 >();
 

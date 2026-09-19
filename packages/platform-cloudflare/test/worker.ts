@@ -389,8 +389,11 @@ export class TestThreadObject extends ThreadObject.make(
     Effect.map(Effect.all([makeTestBindings, backgroundWorkerBindings]), ([existing, workers]) =>
       Layer.unwrap(
         Effect.map(ThreadObjectIdentity, ({ threadId }) =>
-          threadId.startsWith("recovery-alarm-")
-            ? recoveryTestLayer(existing).pipe(Layer.provideMerge(layerFromBindings([])))
+          threadId.startsWith("recovery-alarm-") || threadId.startsWith("recovery-retirement-")
+            ? recoveryTestLayer(
+                existing,
+                threadId.startsWith("recovery-retirement-") ? hostMaintenanceLayer : undefined,
+              ).pipe(Layer.provideMerge(layerFromBindings([])))
             : unavailableBindingThreads.has(threadId)
               ? layerFromBindings([])
               : upgradedBookBindingThreads.has(threadId)

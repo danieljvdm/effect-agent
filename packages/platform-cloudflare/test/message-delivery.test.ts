@@ -376,7 +376,7 @@ describe("Thread Object message maintenance", () => {
       expect((await read(source, "late"))?.retry.attempts).toBe(1);
     }));
 
-  it("finishes a listener-started wave after native completion without admitting another wave", () =>
+  it("finishes a listener-started wave at the native yield deadline without admitting another wave", () =>
     withThreads(async (source, destination, now, advance) => {
       await submit(source, "initial");
       await drainAlarmsUntil(source, allSettled(source));
@@ -400,12 +400,15 @@ describe("Thread Object message maintenance", () => {
 
       try {
         await nativeEntered.promise;
+        const lateStart = 10 * 60_000 - 1_000;
+
+        await advance(lateStart);
         messageDeliveryHolds.set(source, {
           point: "message-delivery:admission:response",
           entered: entered.resolve,
           release: release.promise,
         });
-        await enqueue(source, destination, now, "late", plannerDefinition.id, 30_000);
+        await enqueue(source, destination, now + lateStart, "late", plannerDefinition.id, 30_000);
         await entered.promise;
         nativeRelease.resolve();
         for (let attempt = 0; attempt < 200 && !(await allSettled(source)()); attempt++)
@@ -413,7 +416,7 @@ describe("Thread Object message maintenance", () => {
         await advance(1_500);
         expect(retired).toBe(false);
         expect((await read(source, "late"))?.retry.attempts).toBe(1);
-        await enqueue(source, destination, now + 1_500, "after-stop");
+        await enqueue(source, destination, now + lateStart + 1_500, "after-stop");
         await submit(source, "next-budget");
       } finally {
         nativeRelease.resolve();

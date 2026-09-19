@@ -12,7 +12,12 @@ import { SubmissionLedger, type SubmissionLookupByKey } from "effect-agent/submi
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 
-import { DurableAlarmError, ThreadHostMaintenance, ThreadMaintenance } from "../src/Alarm.ts";
+import {
+  DurableAlarmError,
+  ThreadHostMaintenance,
+  ThreadMaintenance,
+  ThreadMaintenanceActivity,
+} from "../src/Alarm.ts";
 import {
   DurableObjectContext,
   ThreadObjectIdentity,
@@ -89,7 +94,11 @@ const replyHost = Layer.effectContext(
       pendingDeadline,
       drainUntil: (dispatchClosed, dispatchUntil) =>
         Effect.gen(function* () {
-          const notified = (yield* Stream.toPull(wakes.wakes)).pipe(
+          const activity = yield* ThreadMaintenanceActivity;
+          const hinted = yield* Stream.toPull(wakes.wakes);
+          const checked = yield* activity.subscribeChanges;
+
+          const notified = Effect.raceFirst(hinted, checked).pipe(
             Effect.asVoid,
             Effect.catch(() => Effect.never),
           );
@@ -107,15 +116,10 @@ const replyHost = Layer.effectContext(
               now + dispatchTimeoutMillis > DateTime.toEpochMillis(dispatchUntil)
             )
               return;
-            yield* flush.pipe(
-              Effect.timeoutOrElse({
-                duration: dispatchTimeoutMillis,
-                orElse: () => failure("reply wave timeout"),
-              }),
-            );
+            yield* flush;
           });
 
-          yield* select(true);
+          yield* activity.run(activity.ready.pipe(Effect.andThen(select(true))));
           while (done.pollUnsafe() === undefined) {
             const changed = yield* Effect.raceFirst(
               notified.pipe(Effect.as(true)),
@@ -123,7 +127,7 @@ const replyHost = Layer.effectContext(
             );
 
             if (!changed) return;
-            yield* select();
+            yield* activity.run(select());
           }
         }),
     });
@@ -131,7 +135,7 @@ const replyHost = Layer.effectContext(
 );
 
 /** A multi-Thread physical owner exercised through its real workerd alarm entry point. */
-export const recoveryTestLayer = (bindings: ReadonlyArray<ResolvedBinding>) =>
+export const recoveryTestLayer = (bindings: ReadonlyArray<ResolvedBinding>, host = replyHost) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const { ctx } = yield* DurableObjectContext;
@@ -167,7 +171,7 @@ export const recoveryTestLayer = (bindings: ReadonlyArray<ResolvedBinding>) =>
       );
 
       return Layer.fresh(ThreadMaintenance.layer).pipe(
-        Layer.provide(replyHost),
+        Layer.provide(host),
         Layer.provideMerge(DurableAgentRuntime.layerWithBindings(bindings)),
         Layer.provideMerge(ports),
         Layer.provide(

@@ -18,7 +18,12 @@ import {
 } from "effect-agent/message-delivery";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 
-import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "../Alarm.ts";
+import {
+  DurableAlarmError,
+  ThreadMaintenanceActivity,
+  ThreadMessageDelivery,
+  ThreadMutationGate,
+} from "../Alarm.ts";
 import { ThreadObjectPlacement } from "../CloudflareBindings.ts";
 
 /** Every write prearms its owner; the delivery due index owns its recovery deadline. */
@@ -137,38 +142,43 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
     return Context.make(ThreadMessageDelivery, {
       drainUntil: (dispatchClosed, dispatchUntil) =>
         Effect.gen(function* () {
+          const activity = yield* ThreadMaintenanceActivity;
           // Subscribe before the initial scan. Only admission of new waves stops;
           // the enclosing event owns these resources until its actual teardown.
-          const notified = (yield* Stream.toPull(wakes.wakes)).pipe(
-            Effect.catch(() => Effect.never),
-          );
+          const hinted = yield* Stream.toPull(wakes.wakes);
+          const checked = (yield* activity.subscribeChanges).pipe(Effect.as([undefined]));
+          const notified = Effect.raceFirst(hinted, checked).pipe(Effect.catch(() => Effect.never));
 
           const done = yield* Effect.forkScoped(dispatchClosed);
+          let exhausted = false;
 
-          const select = (initial = false) =>
-            Effect.gen(function* () {
-              const wave = yield* prepare;
-              const now = yield* Clock.currentTimeMillis;
+          const select = Effect.fnUntraced(function* (initial = false) {
+            if (exhausted) return;
+            const wave = yield* prepare;
+            const now = yield* Clock.currentTimeMillis;
 
-              // Recheck after local preparation: a late selection cannot start another wave once
-              // dispatch closes. Always grant the initial opportunity to a caught-up alarm.
-              if (
-                (!initial && done.pollUnsafe() !== undefined) ||
-                now + wave.timeoutMillis > DateTime.toEpochMillis(dispatchUntil)
-              )
-                return;
-              yield* wave.run;
-            });
+            // Recheck after local preparation: a late selection cannot start another wave once
+            // dispatch closes. Always grant the initial opportunity to a caught-up alarm.
+            if (!initial && done.pollUnsafe() !== undefined) return;
+            if (now + wave.timeoutMillis > DateTime.toEpochMillis(dispatchUntil)) {
+              // This pump has used its event opportunity. Keep the durable deadline for the
+              // next alarm without repeatedly selecting a wave that cannot fit this event.
+              exhausted = true;
 
-          yield* select(true);
-          while (done.pollUnsafe() === undefined) {
+              return;
+            }
+            yield* wave.run;
+          });
+
+          yield* activity.run(activity.ready.pipe(Effect.andThen(select(true))));
+          while (!exhausted && done.pollUnsafe() === undefined) {
             const wake = yield* Effect.raceFirst(
               notified.pipe(Effect.map(Option.some)),
               Fiber.join(done).pipe(Effect.as(Option.none())),
             );
 
             if (Option.isNone(wake)) return;
-            yield* Effect.forEach(wake.value, () => select(), { discard: true });
+            yield* Effect.forEach(wake.value, () => activity.run(select()), { discard: true });
           }
           // No deadline sleeps: the driver finishes its one active parallel wave, including
           // timeout/backoff commits; retained retries belong to a future physical alarm.
