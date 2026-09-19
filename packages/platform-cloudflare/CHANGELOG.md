@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.114
+
+### Patch Changes
+
+- [#564](https://github.com/danieljvdm/effect-agent/pull/564) [`93a95e9`](https://github.com/danieljvdm/effect-agent/commit/93a95e945440e8cdbe165c91da0cb7598470336c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep newly ready admissions eligible when maintenance overlaps their mutation, without inheriting another thread's recovery retry deadline.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.114
+  - effect-agent@0.1.0-beta.114
+
 ## 0.1.0-beta.113
 
 ### Patch Changes

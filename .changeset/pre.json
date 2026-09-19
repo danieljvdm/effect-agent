@@ -194,6 +194,7 @@
     "quick-memory-pages",
     "quick-primitive-responses",
     "quiescent-conversation-maintenance",
+    "quiet-admission-retry",
     "quiet-browsers-explain",
     "quiet-browsers-read",
     "quiet-hosted-completion",
