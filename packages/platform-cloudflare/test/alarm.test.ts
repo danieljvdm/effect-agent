@@ -45,7 +45,6 @@ import {
   laneRows,
   readCanonical,
   runClient,
-  runClientExit,
   scheduledAlarm,
   stubFor,
 } from "./harness.ts";
@@ -772,7 +771,23 @@ describe("DC alarm semantics", () => {
       );
 
       expect(unknownBefore).toHaveLength(1);
-      if (eviction !== undefined) armRuntimeEviction(thread, eviction);
+      let heldAfterIntent = false;
+
+      if (
+        eviction === "terminalize:after-reserve" ||
+        eviction === "terminalize:after-canonical-append"
+      ) {
+        // Commit the intent, but keep its RPC pending until the real alarm evicts the Object.
+        // A later terminalization crash can lose this acknowledgement too.
+        alarmAttemptHolds.set(thread, {
+          location: "abort:after-intent",
+          entered: Effect.sync(() => {
+            heldAfterIntent = true;
+            armRuntimeEviction(thread, eviction);
+          }),
+          finished: Effect.void,
+        });
+      } else if (eviction !== undefined) armRuntimeEviction(thread, eviction);
 
       const command = AbortCommand.make({
         submissionId: receipt.submissionId,
@@ -780,15 +795,36 @@ describe("DC alarm semantics", () => {
         reason: "stop this submission; the external outcome is still uncertain",
       });
 
-      const accepted = await runClientExit(
-        Effect.gen(function* () {
-          const client = yield* CloudflareThreadClient;
-
-          return yield* client.abort(decodeThreadId(thread), command);
-        }),
+      const acknowledgement = await runClient(
+        CloudflareThreadClient.use((client) => client.abort(decodeThreadId(thread), command)).pipe(
+          Effect.exit,
+        ),
       );
 
-      expect(accepted.ok).toBe(eviction !== "abort:after-intent");
+      expect(heldAfterIntent).toBe(eviction !== undefined && eviction !== "abort:after-intent");
+
+      const resetFailure = {
+        defect: false,
+        interrupted: false,
+        error: expect.objectContaining({
+          _tag: "Some",
+          value: expect.objectContaining({
+            _tag: "ThreadClientError",
+            retryable: true,
+            cause: expect.objectContaining({ durableObjectReset: true }),
+          }),
+        }),
+      };
+
+      expect(
+        Exit.isFailure(acknowledgement)
+          ? {
+              defect: Cause.hasDies(acknowledgement.cause),
+              interrupted: Cause.hasInterrupts(acknowledgement.cause),
+              error: Cause.findErrorOption(acknowledgement.cause),
+            }
+          : undefined,
+      ).toEqual(eviction === undefined ? undefined : resetFailure);
       await drainAlarmsUntil(thread, allSettled(thread));
       await assertConvergence(thread, {
         supplier: { ref: thread, counts: { book: 1 } },
