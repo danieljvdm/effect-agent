@@ -683,7 +683,8 @@ export type MaintenancePassFailure =
  * 1. Prearm before any work. A caught-up native step uses the O(1) generation record without
  *    recovery, ledger scans or canonical-history reads.
  * 2. Reconcile before each head Attempt, then checkpoint only the observed generation. A racing
- *    producer keeps its newer generation dirty. Native retries retain their durable backoff.
+ *    producer keeps its generation dirty and immediately eligible. Quiescent native retries
+ *    retain their durable backoff.
  * 3. Keep native and delivery admission open together while finite waves remain active, so
  *    fresh replies and abort controls can progress during unrelated cleanup. Close atomically
  *    at quiescence, or at the original ten-minute yield deadline, before retiring listeners.
@@ -1379,15 +1380,19 @@ export class ThreadMaintenance extends Context.Service<
             ctx.storage.transaction(async (transaction) => {
               const { state } = await readMaintenanceState(transaction);
 
+              const mutationOverlap =
+                observation.activeAtStart > 0 || started.activeAtStart > 0 || active > 0;
+
               const processed =
-                autonomous ||
-                observation.activeAtStart > 0 ||
-                started.activeAtStart > 0 ||
-                active > 0
+                autonomous || mutationOverlap
                   ? state.processed
                   : state.processed > observation.generation
                     ? state.processed
                     : observation.generation;
+
+              // Enrollment precedes the mutation body. A retry from an overlapping snapshot
+              // must not defer work that becomes ready later in that same generation.
+              const canBackoff = !mutationOverlap && state.dirty === started.generation;
 
               const next = ThreadMaintenanceState.make({
                 ...Struct.omit(state, ["retry"]),
@@ -1396,7 +1401,7 @@ export class ThreadMaintenance extends Context.Service<
                 bindingRetries: (state.bindingRetries ?? []).filter((retry) =>
                   remaining.some((row) => row.submissionId === retry.submissionId),
                 ),
-                ...(autonomous && !progressed
+                ...(autonomous && !progressed && canBackoff
                   ? {
                       retry: MaintenanceRetry.make({
                         generation: started.generation,
@@ -1410,12 +1415,10 @@ export class ThreadMaintenance extends Context.Service<
 
               await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
               if (autonomous) {
-                return started.activeAtStart > 0 || active > 0 || state.dirty !== started.generation
-                  ? now + minimumAlarmDelay
-                  : now + delay;
+                return now + (canBackoff ? delay : minimumAlarmDelay);
               }
 
-              return started.activeAtStart > 0 || active > 0 || next.dirty > next.processed
+              return mutationOverlap || next.dirty > next.processed
                 ? now + minimumAlarmDelay
                 : undefined;
             }),

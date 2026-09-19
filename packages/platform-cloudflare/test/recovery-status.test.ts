@@ -442,6 +442,116 @@ describe("recovery faults independent of execution history", () => {
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
     ));
 
+  // https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-AA
+  it("does not attach an old recovery deadline to an admission still becoming ready", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const owner = `recovery-admission-${crypto.randomUUID()}`;
+        const old = `${owner}-old`;
+        const fresh = `${owner}-fresh`;
+        const reads: Array<string> = [];
+        const run = localRun(owner, reads);
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(owner, yield* Clock.Clock);
+        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(owner)));
+
+        const book = DurableAgentRuntime.use((runtime) =>
+          runtime.submitRegistered(
+            { definition: bookDefinition },
+            { question: "one simulated action", ref: old },
+            submitOptions(old, "original"),
+          ),
+        );
+
+        const original = yield* run(
+          ThreadMaintenance.use((maintenance) => maintenance.withMutation(book)),
+        );
+
+        lostBookReplies.add(old);
+        yield* run(
+          DurableAgentRuntime.use((runtime) => runtime.processThreadHead(decodeThreadId(old))).pipe(
+            Effect.exit,
+          ),
+        );
+        expect(supplierCountsFor(old)).toEqual({ book: 1 });
+        yield* corruptHistory(owner, old, 2);
+        yield* run(pass);
+        const fault = yield* run(status(old));
+
+        expect(Option.isSome(fault)).toBe(true);
+        if (Option.isNone(fault)) return;
+
+        const originalRow = yield* run(
+          SubmissionLedger.use((ledger) =>
+            ledger.lookup(SubmissionLookupById.make({ submissionId: original.submissionId })),
+          ),
+        );
+
+        reads.length = 0;
+
+        const observed = yield* run(
+          Effect.gen(function* () {
+            const maintenance = yield* ThreadMaintenance;
+            const runtime = yield* DurableAgentRuntime;
+            const enrolled = yield* Deferred.make<void>();
+            const release = yield* Deferred.make<void>();
+
+            const admission = yield* Effect.forkChild(
+              maintenance.withMutation(
+                Deferred.succeed(enrolled, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(
+                    runtime.submitRegistered(
+                      { definition: plannerDefinition },
+                      { question: "accepted input", ref: fresh },
+                      submitOptions(fresh, "fresh"),
+                    ),
+                  ),
+                ),
+              ),
+            );
+
+            yield* Deferred.await(enrolled);
+            // Checkpoint the retained fault after enrollment, before this admission can
+            // become ready. Completing the same mutation does not enroll another generation.
+            expect((yield* maintenance.pass).settled).toBe(0);
+            yield* Deferred.succeed(release, undefined);
+            const receipt = yield* Fiber.join(admission);
+            const report = yield* maintenance.pass;
+            const result = yield* runtime.submissionStatus(receipt);
+
+            return { receipt, report, result };
+          }),
+        );
+
+        expect(yield* Clock.currentTimeMillis).toBeLessThan(fault.value.retryAt);
+        expect(reads).not.toContain(old);
+        expect(yield* run(status(old))).toEqual(fault);
+        // The deadline is a recovery retry for the old Thread, never a prerequisite for
+        // the fresh one. Also observe its expiry to distinguish postponement from lost work.
+        yield* TestClock.adjust(fault.value.retryAt - (yield* Clock.currentTimeMillis));
+        yield* run(pass);
+        expect(
+          yield* run(
+            DurableAgentRuntime.use((runtime) => runtime.submissionStatus(observed.receipt)),
+          ),
+        ).toMatchObject({ _tag: "settled" });
+        expect(yield* run(submit(fresh, "fresh"))).toEqual(observed.receipt);
+        expect(yield* run(book)).toEqual(original);
+        expect(
+          yield* run(
+            SubmissionLedger.use((ledger) =>
+              ledger.lookup(SubmissionLookupById.make({ submissionId: original.submissionId })),
+            ),
+          ),
+        ).toEqual(originalRow);
+        expect(supplierCountsFor(old)).toEqual({ book: 1 });
+        expect(observed.report.settled).toBe(1);
+        expect(observed.result).toMatchObject({ _tag: "settled" });
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
+
   it("a real alarm publishes a fresh Thread reply while old recovery is stalled and cleanup survives eviction", async ({
     signal,
   }) => {
