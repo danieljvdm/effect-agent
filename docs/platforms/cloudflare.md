@@ -368,14 +368,17 @@ the hook's `R` alongside `Scope`. The owner provides it for each pump, and `all`
 context for each lane. Acquire notifications before the initial scan:
 
 ```ts
-const activity = yield * ThreadMaintenanceActivity;
-const changed = yield * activity.subscribeChanges;
-yield * activity.run(activity.ready.pipe(Effect.andThen(selectAndDispatch)));
-// Await changed alongside source notifications and dispatchClosed between finite waves.
+const initialize = Effect.gen(function* () {
+  const activity = yield* ThreadMaintenanceActivity;
+  const changed = yield* activity.subscribeChanges;
+  yield* activity.run(activity.ready.pipe(Effect.andThen(selectAndDispatch)));
+  return changed;
+});
 ```
 
 `subscribeChanges` eagerly acquires an independent scoped subscription and returns an
 `Effect<void>` wait. A native check published before the first wait remains available.
+Race this wait with source notifications and `dispatchClosed` between finite waves.
 Bracket every finite selection/claim/dispatch with `activity.run(wave)`; passive notification
 waits stay outside. Call `activity.ready` once initial subscriptions and selections are accounted
 for, from inside the first registered `run`, before awaiting external work. `all` waits for every
