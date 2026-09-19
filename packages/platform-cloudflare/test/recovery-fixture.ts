@@ -12,7 +12,12 @@ import { SubmissionLedger, type SubmissionLookupByKey } from "effect-agent/submi
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 
-import { DurableAlarmError, ThreadHostMaintenance, ThreadMaintenance } from "../src/Alarm.ts";
+import {
+  DurableAlarmError,
+  ThreadHostMaintenance,
+  ThreadMaintenance,
+  ThreadMaintenanceActivity,
+} from "../src/Alarm.ts";
 import {
   DurableObjectContext,
   ThreadObjectIdentity,
@@ -87,10 +92,11 @@ const replyHost = Layer.effectContext(
     return Context.make(ThreadHostMaintenance, {
       dispatchTimeoutMillis,
       pendingDeadline,
-      drainUntil: (dispatchClosed, dispatchUntil, activity) =>
+      drainUntil: (dispatchClosed, dispatchUntil) =>
         Effect.gen(function* () {
+          const activity = yield* ThreadMaintenanceActivity;
           const hinted = yield* Stream.toPull(wakes.wakes);
-          const checked = yield* Stream.toPull(activity.changes);
+          const checked = yield* activity.subscribeChanges;
 
           const notified = Effect.raceFirst(hinted, checked).pipe(
             Effect.asVoid,

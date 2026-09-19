@@ -13,7 +13,11 @@ import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
-import { ThreadHostMaintenance, type DurableAlarmError } from "../src/Alarm.ts";
+import {
+  ThreadHostMaintenance,
+  type DurableAlarmError,
+  type ThreadMaintenanceActivity,
+} from "../src/Alarm.ts";
 import { DurableObjectContext, ThreadObjectIdentity } from "../src/CloudflareBindings.ts";
 import { TEST_DIGESTS, finalParts, plannerDefinition } from "./fixtures.ts";
 
@@ -40,7 +44,11 @@ export const hostMaintenanceControls = new Map<
   Omit<HostMaintenance, "drainUntil"> & {
     readonly drainUntil: (
       ...args: Parameters<HostMaintenance["drainUntil"]>
-    ) => Effect.Effect<void, DurableAlarmError, Scope.Scope | WakeScheduler>;
+    ) => Effect.Effect<
+      void,
+      DurableAlarmError,
+      Scope.Scope | WakeScheduler | ThreadMaintenanceActivity
+    >;
   }
 >();
 
@@ -54,11 +62,10 @@ export const hostMaintenanceLayer = Layer.effectContext(
       get dispatchTimeoutMillis() {
         return hostMaintenanceControls.get(threadId)?.dispatchTimeoutMillis ?? 1;
       },
-      drainUntil: (finished, deadline, activity) =>
+      drainUntil: (finished, deadline) =>
         Effect.suspend(
           () =>
-            hostMaintenanceControls.get(threadId)?.drainUntil(finished, deadline, activity) ??
-            Effect.void,
+            hostMaintenanceControls.get(threadId)?.drainUntil(finished, deadline) ?? Effect.void,
         ).pipe(Effect.provideService(WakeScheduler, wakes)),
       pendingDeadline: Effect.suspend(
         () =>

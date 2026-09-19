@@ -10,6 +10,7 @@ import {
   Layer,
   Option,
   Schema,
+  type Scope,
   Stream,
 } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
@@ -386,8 +387,12 @@ describe("live Thread projection and alarm backfill", () => {
 
       hostMaintenanceControls.set(thread, {
         dispatchTimeoutMillis: 1_000,
-        drainUntil: (_closed, _until, activity) =>
-          activity.run(activity.ready.pipe(Effect.andThen(Effect.promise(() => held)))),
+        drainUntil: () =>
+          Effect.gen(function* () {
+            const activity = yield* ThreadMaintenanceActivity;
+
+            yield* activity.run(activity.ready.pipe(Effect.andThen(Effect.promise(() => held))));
+          }),
         pendingDeadline: Effect.succeed(Option.some(0)),
       });
       try {
@@ -491,12 +496,9 @@ describe("live Thread projection and alarm backfill", () => {
               ? Option.some(0)
               : Option.none(),
           ),
-          drainUntil: (dispatchClosed, _dispatchUntil, activity) =>
+          drainUntil: (dispatchClosed) =>
             Effect.gen(function* () {
               const wakes = yield* WakeScheduler;
-              const hinted = yield* Stream.toPull(wakes.wakes);
-              const checked = yield* Stream.toPull(activity.changes);
-              const notified = Effect.raceFirst(hinted, checked);
 
               const done = yield* Effect.forkScoped(
                 dispatchClosed.pipe(
@@ -541,25 +543,31 @@ describe("live Thread projection and alarm backfill", () => {
                 ),
               );
 
-              yield* ThreadMaintenanceActivity.all(activity, [
-                (child) =>
-                  Effect.gen(function* () {
-                    yield* child.run(child.ready.pipe(Effect.andThen(control)));
-                    while (done.pollUnsafe() === undefined) {
-                      const changed = yield* Effect.raceFirst(
-                        notified.pipe(
-                          Effect.as(true),
-                          Effect.catch(() => Effect.never),
-                        ),
-                        Fiber.join(done).pipe(Effect.as(false)),
-                      );
+              yield* ThreadMaintenanceActivity.all([
+                Effect.gen(function* () {
+                  const child = yield* ThreadMaintenanceActivity;
+                  const hinted = yield* Stream.toPull(wakes.wakes);
+                  const checked = yield* child.subscribeChanges;
+                  const notified = Effect.raceFirst(hinted, checked);
 
-                      if (!changed || done.pollUnsafe() !== undefined) return;
-                      yield* child.run(control);
-                    }
-                  }),
-                (child) =>
-                  child.run(
+                  yield* child.run(child.ready.pipe(Effect.andThen(control)));
+                  while (done.pollUnsafe() === undefined) {
+                    const changed = yield* Effect.raceFirst(
+                      notified.pipe(
+                        Effect.as(true),
+                        Effect.catch(() => Effect.never),
+                      ),
+                      Fiber.join(done).pipe(Effect.as(false)),
+                    );
+
+                    if (!changed || done.pollUnsafe() !== undefined) return;
+                    yield* child.run(control);
+                  }
+                }),
+                Effect.gen(function* () {
+                  const child = yield* ThreadMaintenanceActivity;
+
+                  yield* child.run(
                     child.ready.pipe(
                       Effect.andThen(
                         Effect.acquireUseRelease(
@@ -574,7 +582,8 @@ describe("live Thread projection and alarm backfill", () => {
                         ),
                       ),
                     ),
-                  ),
+                  );
+                }),
               ]);
             }),
         });
@@ -759,8 +768,9 @@ describe("live Thread projection and alarm backfill", () => {
         hostMaintenanceControls.set(thread, {
           pendingDeadline: Effect.succeed(held === "host" ? Option.some(0) : Option.none()),
           dispatchTimeoutMillis: 1_000,
-          drainUntil: (_closed, _until, activity) =>
+          drainUntil: () =>
             Effect.gen(function* () {
+              const activity = yield* ThreadMaintenanceActivity;
               const scheduler = yield* WakeScheduler;
               const notified = yield* Stream.toPull(scheduler.wakes);
 
@@ -1042,16 +1052,16 @@ it("exposes index services and preserves distinct publication and projection E/R
     DurableObjectContext | ThreadObjectNamespace
   >();
 
-  const activity: ThreadMaintenanceActivity = {
-    run: (wave) => wave,
-    ready: Effect.void,
-    changes: Stream.empty,
-  };
-
-  const pumps = ThreadMaintenanceActivity.all(activity, [
-    () => Destination.use(() => SetupError.make({})),
-  ]);
+  const pumps = ThreadMaintenanceActivity.all([Destination.use(() => SetupError.make({}))]);
 
   expectTypeOf<Effect.Error<typeof pumps>>().toEqualTypeOf<SetupError>();
-  expectTypeOf<Effect.Services<typeof pumps>>().toEqualTypeOf<Destination>();
+  expectTypeOf<Effect.Services<typeof pumps>>().toEqualTypeOf<
+    Destination | ThreadMaintenanceActivity
+  >();
+  expectTypeOf<
+    Effect.Services<ReturnType<Context.Service.Shape<typeof ThreadHostMaintenance>["drainUntil"]>>
+  >().toEqualTypeOf<Scope.Scope | ThreadMaintenanceActivity>();
+  expectTypeOf<ThreadMaintenanceActivity["Service"]["subscribeChanges"]>().toEqualTypeOf<
+    Effect.Effect<Effect.Effect<void>, never, Scope.Scope>
+  >();
 });

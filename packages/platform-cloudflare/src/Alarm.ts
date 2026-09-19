@@ -287,57 +287,63 @@ export class ThreadPublication extends Context.Service<
 }
 
 /** Event-local accounting shared by the existing maintenance pumps and native scheduler. */
-export interface ThreadMaintenanceActivity {
-  /**
-   * Account for one finite selection/dispatch, through joined completion or interruption.
-   * Register before reading/claiming work. After dispatch closes the body is not started.
-   * Host waves retain their declared allowance from this call; message Claims keep the driver's
-   * own deadline. Waiting for notifications belongs outside this bracket.
-   */
-  readonly run: <R>(
-    wave: Effect.Effect<void, DurableAlarmError, R>,
-  ) => Effect.Effect<void, DurableAlarmError, R>;
-  /** Acknowledge all initial subscriptions/scans. Composite hosts use `all` below. */
-  readonly ready: Effect.Effect<void>;
-  /** Recheck local due work when the owning scheduler scans, even if public wake hints are lost. */
-  readonly changes: Stream.Stream<void>;
-}
-
-/** Compose independent pumps without counting their passive lifetimes as active work. */
-export const ThreadMaintenanceActivity = {
+export class ThreadMaintenanceActivity extends Context.Service<
+  ThreadMaintenanceActivity,
+  {
+    /**
+     * Account for one finite selection/dispatch, through joined completion or interruption.
+     * Register before reading/claiming work. After dispatch closes the body is not started.
+     * Host waves retain their declared allowance from this call; message Claims keep the driver's
+     * own deadline. Waiting for notifications belongs outside this bracket.
+     */
+    readonly run: <R>(
+      wave: Effect.Effect<void, DurableAlarmError, R>,
+    ) => Effect.Effect<void, DurableAlarmError, R>;
+    /** Acknowledge all initial subscriptions/scans. Composite hosts use `all` below. */
+    readonly ready: Effect.Effect<void>;
+    /**
+     * Acquire an independent scoped subscription before the initial scan and `ready`.
+     * The returned wait observes coalesced native scan hints, including those published before
+     * its first execution. Each hint requests a current local due-work check.
+     */
+    readonly subscribeChanges: Effect.Effect<Effect.Effect<void>, never, Scope.Scope>;
+  }
+>()("@effect-agent/platform-cloudflare/ThreadMaintenanceActivity") {
   /** Join child pumps; acknowledge the parent only after every child is ready or has exited. */
-  all: <A, E, R>(
-    activity: ThreadMaintenanceActivity,
-    lanes: ReadonlyArray<(activity: ThreadMaintenanceActivity) => Effect.Effect<A, E, R>>,
-  ): Effect.Effect<ReadonlyArray<A>, E, R> =>
-    Effect.suspend(() => {
-      let remaining = lanes.length;
+  static readonly all = Effect.fnUntraced(function* <A, E, R>(
+    lanes: ReadonlyArray<Effect.Effect<A, E, R>>,
+  ): Effect.fn.Return<ReadonlyArray<A>, E, R | ThreadMaintenanceActivity> {
+    const activity = yield* ThreadMaintenanceActivity;
+    let remaining = lanes.length;
 
-      if (remaining === 0) return activity.ready.pipe(Effect.as([]));
+    if (remaining === 0) return yield* activity.ready.pipe(Effect.as([]));
 
-      return Effect.forEach(
-        lanes,
-        (lane) => {
-          let ready = false;
+    return yield* Effect.forEach(
+      lanes,
+      (lane) => {
+        let ready = false;
 
-          const child: ThreadMaintenanceActivity = {
-            ...activity,
-            ready: Effect.suspend(() => {
-              if (ready) return Effect.void;
-              ready = true;
+        const child: ThreadMaintenanceActivity["Service"] = {
+          ...activity,
+          ready: Effect.suspend(() => {
+            if (ready) return Effect.void;
+            ready = true;
 
-              return --remaining === 0 ? activity.ready : Effect.void;
-            }).pipe(Effect.uninterruptible),
-          };
+            return --remaining === 0 ? activity.ready : Effect.void;
+          }).pipe(Effect.uninterruptible),
+        };
 
-          // A failed initial setup is accounted for without swallowing its Cause. Callers
-          // may collect Exits when sibling pumps must keep their independent opportunities.
-          return lane(child).pipe(Effect.onExit(() => child.ready));
-        },
-        { concurrency: "unbounded" },
-      );
-    }),
-};
+        // A failed initial setup is accounted for without swallowing its Cause. Callers
+        // may collect Exits when sibling pumps must keep their independent opportunities.
+        return lane.pipe(
+          Effect.provideService(ThreadMaintenanceActivity, child),
+          Effect.onExit(() => child.ready),
+        );
+      },
+      { concurrency: "unbounded" },
+    );
+  });
+}
 
 /**
  * Host-assembled native message recovery. The driver bounds each actual Claim and persists its
@@ -348,8 +354,7 @@ export const ThreadMessageDelivery = Context.Reference<{
   readonly drainUntil: (
     dispatchClosed: Effect.Effect<void>,
     dispatchUntil: DateTime.Utc,
-    activity: ThreadMaintenanceActivity,
-  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope>;
+  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope | ThreadMaintenanceActivity>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
 }>("@effect-agent/platform-cloudflare/ThreadMessageDelivery", {
   defaultValue: () => ({
@@ -360,8 +365,9 @@ export const ThreadMessageDelivery = Context.Reference<{
 
 /**
  * Application obligations sharing this Object's alarm. Admit one initial external wave even on
- * a caught-up pass, then respond to wakes and activity.changes until dispatchClosed. Bracket
- * every independent finite lane with activity.run and acknowledge initial setup with activity.ready.
+ * a caught-up pass, then respond to wakes and ThreadMaintenanceActivity.subscribeChanges until
+ * dispatchClosed. Yield the event's ThreadMaintenanceActivity to bracket each finite lane with
+ * run and acknowledge initial setup with ready.
  * Passive subscriptions do not count as active work. Closure stops both new waves and native
  * Attempts; local admission/control subscriptions belong to the event Scope until teardown.
  * No deadline sleeps or automatic retry loops. Return after already-admitted waves finish.
@@ -382,8 +388,7 @@ export const ThreadHostMaintenance = Context.Reference<{
   readonly drainUntil: (
     dispatchClosed: Effect.Effect<void>,
     dispatchUntil: DateTime.Utc,
-    activity: ThreadMaintenanceActivity,
-  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope>;
+  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope | ThreadMaintenanceActivity>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
 }>("@effect-agent/platform-cloudflare/ThreadHostMaintenance", {
   defaultValue: () => ({
@@ -1474,9 +1479,9 @@ export class ThreadMaintenance extends Context.Service<
             Effect.uninterruptible,
           );
 
-          const activity: ThreadMaintenanceActivity = {
+          const activity: ThreadMaintenanceActivity["Service"] = {
             ready,
-            changes: Stream.fromPubSub(checks),
+            subscribeChanges: PubSub.subscribe(checks).pipe(Effect.map(PubSub.take)),
             run: (wave) =>
               Effect.acquireUseRelease(
                 Effect.sync(() => {
@@ -1567,9 +1572,10 @@ export class ThreadMaintenance extends Context.Service<
         // rather than gating its opportunity. Event interruption still closes every fiber.
         const deliveryFiber = yield* Effect.forkIn(
           Scope.provide(auxiliaryScope)(
-            messages
-              .drainUntil(stopDispatch, dispatchUntil, messageActivity.activity)
-              .pipe(Effect.onExit(() => messageActivity.activity.ready)),
+            messages.drainUntil(stopDispatch, dispatchUntil).pipe(
+              Effect.provideService(ThreadMaintenanceActivity, messageActivity.activity),
+              Effect.onExit(() => messageActivity.activity.ready),
+            ),
           ),
           auxiliaryScope,
         );
@@ -1604,7 +1610,9 @@ export class ThreadMaintenance extends Context.Service<
               );
 
               yield* Effect.raceFirst(
-                host.drainUntil(stopDispatch, dispatchUntil, hostActivity.activity),
+                host
+                  .drainUntil(stopDispatch, dispatchUntil)
+                  .pipe(Effect.provideService(ThreadMaintenanceActivity, hostActivity.activity)),
                 initialization,
               );
             }).pipe(Effect.onExit(() => hostActivity.activity.ready)),

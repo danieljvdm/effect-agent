@@ -18,7 +18,12 @@ import {
 } from "effect-agent/message-delivery";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 
-import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "../Alarm.ts";
+import {
+  DurableAlarmError,
+  ThreadMaintenanceActivity,
+  ThreadMessageDelivery,
+  ThreadMutationGate,
+} from "../Alarm.ts";
 import { ThreadObjectPlacement } from "../CloudflareBindings.ts";
 
 /** Every write prearms its owner; the delivery due index owns its recovery deadline. */
@@ -135,12 +140,13 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
     }).pipe(Effect.mapError(failure("prepare message delivery")));
 
     return Context.make(ThreadMessageDelivery, {
-      drainUntil: (dispatchClosed, dispatchUntil, activity) =>
+      drainUntil: (dispatchClosed, dispatchUntil) =>
         Effect.gen(function* () {
+          const activity = yield* ThreadMaintenanceActivity;
           // Subscribe before the initial scan. Only admission of new waves stops;
           // the enclosing event owns these resources until its actual teardown.
           const hinted = yield* Stream.toPull(wakes.wakes);
-          const checked = yield* Stream.toPull(activity.changes);
+          const checked = (yield* activity.subscribeChanges).pipe(Effect.as([undefined]));
           const notified = Effect.raceFirst(hinted, checked).pipe(Effect.catch(() => Effect.never));
 
           const done = yield* Effect.forkScoped(dispatchClosed);

@@ -344,14 +344,14 @@ const maintenance = Context.make(ThreadHostMaintenance, {
   dispatchTimeoutMillis: 60_000,
   // Captured local minimum across admission, outbox and reply deadlines.
   pendingDeadline: applicationPendingDeadline,
-  drainUntil: (dispatchClosed, dispatchUntil, activity) =>
+  drainUntil: (dispatchClosed, dispatchUntil) =>
     Effect.gen(function* () {
       // The supplied Scope belongs to the physical alarm, including retirement.
-      yield* ThreadMaintenanceActivity.all(activity, [
+      yield* ThreadMaintenanceActivity.all([
         // Install the event-scoped listener and account for its first local scan.
-        (child) => admission.startScoped(child),
-        (child) => outbox.drainUntil(dispatchClosed, dispatchUntil, child),
-        (child) => replies.drainUntil(dispatchClosed, dispatchUntil, child),
+        admission.startScoped,
+        outbox.drainUntil(dispatchClosed, dispatchUntil),
+        replies.drainUntil(dispatchClosed, dispatchUntil),
       ]);
     }),
 });
@@ -363,7 +363,19 @@ so abort controls and fresh replies remain available while unrelated cleanup is 
 Keep local admission and hub subscriptions in the event Scope until teardown. The pump returns
 after its admitted waves finish. Delivery retries belong to later alarms, not deadline-sleep loops.
 
-Each child installs its notifications, including `activity.changes`, before its initial scan.
+Each leaf yields the event-scoped `ThreadMaintenanceActivity` service; its requirement stays in
+the hook's `R` alongside `Scope`. The owner provides it for each pump, and `all` provides a child
+context for each lane. Acquire notifications before the initial scan:
+
+```ts
+const activity = yield * ThreadMaintenanceActivity;
+const changed = yield * activity.subscribeChanges;
+yield * activity.run(activity.ready.pipe(Effect.andThen(selectAndDispatch)));
+// Await changed alongside source notifications and dispatchClosed between finite waves.
+```
+
+`subscribeChanges` eagerly acquires an independent scoped subscription and returns an
+`Effect<void>` wait. A native check published before the first wait remains available.
 Bracket every finite selection/claim/dispatch with `activity.run(wave)`; passive notification
 waits stay outside. Call `activity.ready` once initial subscriptions and selections are accounted
 for, from inside the first registered `run`, before awaiting external work. `all` waits for every
@@ -383,7 +395,7 @@ opens one dispatch window. Recovery completion alone does not close it: finite h
 backfill waves keep fresh native dispatch available. At quiescence the owner checks local due work
 and closes atomically against wave registration; no native Attempt starts after closure. The
 window closes no later than the original native yield deadline. The existing periodic scan also
-notifies every `activity.changes` subscriber, recovering dropped wake hints without another timer.
+notifies every `subscribeChanges` subscriber, recovering dropped wake hints without another timer.
 Receipt-only bookkeeping does not create native recovery debt.
 
 Native message delivery keeps the driver's actual Claim deadline, including its timeout/retry
