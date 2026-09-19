@@ -1947,7 +1947,19 @@ const scanNonterminalWorklist = conformanceCase(
       );
       yield* ensure(
         mine.at(0)?.state === "running" && mine.at(1)?.state === "ready",
-        "scanNonterminal snapshots must carry the current Submission states",
+        "scanNonterminal entries must carry the current Submission states",
+      );
+      yield* ensure(
+        mine.at(0)?.receiptId === second.receiptId &&
+          mine.at(1)?.receiptId === third.receiptId &&
+          mine.every(
+            (entry) =>
+              entry.principal === CONFORMANCE_PRINCIPAL &&
+              !("inputPayload" in entry) &&
+              !("workerAdmission" in entry) &&
+              !("messageAdmission" in entry),
+          ),
+        "The worklist retains receipt and principal identity without execution payloads",
       );
       const start = scanned.findIndex((snapshot) => snapshot.submissionId === second.submissionId);
 

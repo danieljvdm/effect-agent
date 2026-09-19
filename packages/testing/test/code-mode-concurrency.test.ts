@@ -345,7 +345,7 @@ layer(Layer.mergeAll(ThreadHistory.layer, RunContextPreparationPassthrough), {
 
         expect(Exit.isFailure(killed)).toBe(true);
         expect(writes).toBe(1);
-        const reports = yield* runtime.runRecovery;
+        const reports = (yield* runtime.runRecovery()).reports;
 
         expect(
           reports.find((report) => report.submissionId === receipt.submissionId)?.decision._tag,

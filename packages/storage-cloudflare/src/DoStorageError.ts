@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { CanonicalSequence, ProducerEpoch } from "effect-agent/records";
+import { ThreadStoreDiagnostic } from "effect-agent/thread-store";
 
 /** The Durable Object's SQLite storage uses a private-development format this adapter cannot read. */
 export class DoStorageCompatibilityError extends Schema.TaggedError<DoStorageCompatibilityError>()(
@@ -18,6 +19,7 @@ export class DoStorageCorruptionError extends Schema.TaggedError<DoStorageCorrup
     message: Schema.String,
     rowKey: Schema.String,
     table: Schema.String,
+    diagnostic: Schema.optionalKey(ThreadStoreDiagnostic),
   },
 ) {}
 
@@ -26,6 +28,7 @@ export class DoStorageError extends Schema.TaggedError<DoStorageError>()("DoStor
   cause: Schema.optionalKey(Schema.Defect()),
   message: Schema.String,
   operation: Schema.String,
+  diagnostic: Schema.optionalKey(ThreadStoreDiagnostic),
 }) {}
 
 /**

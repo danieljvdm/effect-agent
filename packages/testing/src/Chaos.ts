@@ -1141,7 +1141,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     yield* failpoints.clear;
     if (options?.adapterFailpoints !== undefined) yield* options.adapterFailpoints.clear;
 
-    yield* tolerateTyped(runtime.runRecovery);
+    yield* tolerateTyped(runtime.runRecovery());
     // Second, unarmed pass guarantees forward progress for newly marked Unknown lanes.
     yield* resolutionPass(plan, states, desk);
 
@@ -1157,7 +1157,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
 
     const detail = Option.isSome(nonterminal)
       ? Array.from(nonterminal.value)
-          .map((row: SubmissionSnapshot) => `${row.submissionId}(${row.state})`)
+          .map((row) => `${row.submissionId}(${row.state})`)
           .join(", ")
       : "ledger scan failed";
 

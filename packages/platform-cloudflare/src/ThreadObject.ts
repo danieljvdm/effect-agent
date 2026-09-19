@@ -129,7 +129,7 @@ export {
  * D-P6-1): a factory returning a class that applications export from their Worker entry.
  * One SQLite-backed Object per Thread is the serialized owner (durability §6); the
  * Object never runs `runResolvedWorker`'s infinite loop — each ingress event or alarm runs
- * ONE bounded `runRecovery` + `processThreadHead` pass, and the persisted alarm
+ * ONE bounded maintenance event with selected-Thread recovery and old cleanup, and the persisted alarm
  * (the single multiplexed slot, D-P6-2) finishes accepted work across evictions WITHOUT any
  * incoming request.
  * `Services` exposes the same owner `SqlClient` used by the Thread stores. Compose optional
@@ -141,7 +141,7 @@ export {
  * alarm invariant. It deliberately does NOT run the recovery pass: parent recovery can
  * require child-Object reads and vice versa, and two Objects blocked in constructor gates
  * awaiting each other's RPC would deadlock (plan §1.4). Instead every pass runs
- * `runRecovery` BEFORE any claim, so reconciliation still strictly precedes new work.
+ * `runRecovery({ threadId })` BEFORE that Thread's claim; old recovery cannot gate fresh dispatch.
  */
 
 /** Construction options for one deployed Thread Object class. */

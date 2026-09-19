@@ -9,9 +9,11 @@ import {
   Duration,
   Effect,
   Equal,
+  Exit,
   Layer,
   Option,
   Ref,
+  Result,
   Schedule,
   Schema,
   Semaphore,
@@ -343,6 +345,7 @@ import {
   ThreadObservation,
   ThreadRead,
   ThreadStore,
+  ThreadStoreDiagnostic,
   ThreadStoreError,
   ThreadTailRequest,
   FencedAppendRequest,
@@ -554,6 +557,183 @@ export const recoveryRepairRecordId = (submissionId: SubmissionId, decisionTag: 
  */
 export { Receipt } from "../core/Receipt.ts";
 
+// Foreign names and tags may contain payloads. Retain only these static classifications.
+const RecoveryCauseTag = Schema.Literals([
+  "AdmissionPolicyError",
+  "DigestError",
+  "LedgerError",
+  "OwnershipLost",
+  "SettlementConflict",
+  "ThreadStoreError",
+  "ThreadNotMaterialized",
+  "AppendConflict",
+  "FenceRejected",
+  "RunJournalError",
+  "DurableRuntimeFailpointError",
+  "SchemaError",
+  "Error",
+  "TypeError",
+  "RangeError",
+  "ReferenceError",
+  "SyntaxError",
+  "URIError",
+  "EvalError",
+  "AggregateError",
+  "ForeignError",
+  "NonErrorCause",
+]);
+
+const isRecoveryCauseTag = Schema.is(RecoveryCauseTag);
+
+/** Recovery could not establish execution authority. This is never a Settlement or replay grant. */
+export class RecoveryFailure extends Schema.Class<RecoveryFailure>(
+  "@effect-agent/thread/RecoveryFailure",
+)({
+  phase: Schema.Literals(["history", "recovery"]),
+  reason: Schema.Literals(["failure", "defect", "timeout"]),
+  errorTag: Schema.String.check(Schema.isMaxLength(128)),
+  /** Static operation names only; error messages and payloads are deliberately excluded. */
+  operation: Schema.String.check(Schema.isMaxLength(256)),
+  /** Ordered, bounded classifications. Foreign labels, operations and prose stay private. */
+  causes: Schema.Array(
+    Schema.Struct({
+      errorTag: RecoveryCauseTag,
+    }),
+  ).check(Schema.isMaxLength(16)),
+  causesTruncated: Schema.optionalKey(Schema.Literal(true)),
+  diagnostic: Schema.optionalKey(ThreadStoreDiagnostic),
+}) {}
+
+const decodeRecoveryCause = Schema.decodeUnknownOption(
+  Schema.Struct({
+    diagnostic: Schema.optionalKey(Schema.Unknown),
+    cause: Schema.optionalKey(Schema.Unknown),
+  }),
+);
+
+/** Reuse the bounded foreign-error capture, then retain only content-free causal metadata. */
+const recoveryFailureDetails = (cause: Cause.Cause<DurableWorkerFailure>) => {
+  const pending = [FailureDiagnostic.capture(cause)];
+  const causes: Array<RecoveryFailure["causes"][number]> = [];
+  let truncated = false;
+
+  while (pending.length > 0 && causes.length < 16) {
+    const node = pending.shift();
+
+    if (node === undefined) break;
+    switch (node._tag) {
+      case "Cause":
+        pending.unshift(
+          ...node.reasons.flatMap((reason) =>
+            reason._tag === "Fail" ? [reason.error] : reason._tag === "Die" ? [reason.defect] : [],
+          ),
+        );
+        truncated ||= node.truncated === true;
+        break;
+      case "Error": {
+        const tag = node.errorTag ?? node.name;
+
+        causes.push({
+          errorTag: isRecoveryCauseTag(tag) ? tag : "ForeignError",
+        });
+        pending.unshift(
+          ...(node.cause === undefined ? [] : [node.cause]),
+          ...(node.reason === undefined ? [] : [node.reason]),
+          ...(node.errors ?? []),
+        );
+        truncated ||= node.truncated === true;
+        break;
+      }
+      case "Omitted":
+        truncated = true;
+        break;
+      case "Value":
+        causes.push({ errorTag: "NonErrorCause" });
+        break;
+    }
+  }
+
+  // Retain only adapter-created diagnostics, never reify a foreign structural lookalike.
+  // Foreign wrappers retain only approved classifications above, never their operation text.
+  let nested: unknown = Option.getOrUndefined(Cause.findErrorOption(cause));
+  let diagnostic: ThreadStoreDiagnostic | undefined;
+
+  for (let depth = 0; depth < 16 && nested !== undefined; depth++) {
+    const decoded = decodeRecoveryCause(nested);
+
+    if (Option.isNone(decoded)) break;
+    if (decoded.value.diagnostic instanceof ThreadStoreDiagnostic) {
+      diagnostic = decoded.value.diagnostic;
+      break;
+    }
+    nested = decoded.value.cause;
+  }
+
+  return {
+    causes,
+    ...(truncated || pending.length > 0 ? { causesTruncated: true as const } : {}),
+    ...(diagnostic === undefined ? {} : { diagnostic }),
+  };
+};
+
+/** @internal One bounded failure boundary for execution history and host recovery control reads. */
+export const isolateRecovery = Effect.fnUntraced(function* <A, E extends DurableWorkerFailure, R>(
+  body: Effect.Effect<A, E, R>,
+  options: {
+    readonly timeout: Duration.Duration;
+    readonly phase: () => RecoveryFailure["phase"];
+    readonly operation?: string;
+  },
+): Effect.fn.Return<Result.Result<A, RecoveryFailure>, E, Exclude<R, Scope.Scope>> {
+  const outcome = yield* body.pipe(
+    Effect.scoped,
+    Effect.timeoutOption(options.timeout),
+    Effect.exit,
+  );
+
+  if (Exit.isSuccess(outcome) && Option.isSome(outcome.value))
+    return Result.succeed(outcome.value.value);
+  if (
+    Exit.isFailure(outcome) &&
+    (Cause.hasInterrupts(outcome.cause) ||
+      outcome.cause.reasons.some(
+        (reason) => reason._tag === "Fail" && reason.error._tag === "DurableRuntimeFailpointError",
+      ))
+  )
+    return yield* Effect.failCause(outcome.cause);
+
+  const error = Exit.isFailure(outcome) ? Cause.findErrorOption(outcome.cause) : Option.none<E>();
+  const phase = options.phase();
+
+  return Result.fail(
+    RecoveryFailure.make({
+      phase,
+      reason: Exit.isSuccess(outcome)
+        ? "timeout"
+        : Cause.hasDies(outcome.cause)
+          ? "defect"
+          : "failure",
+      errorTag: Option.isSome(error)
+        ? error.value._tag
+        : Exit.isSuccess(outcome)
+          ? "RecoveryTimeout"
+          : "Defect",
+      operation:
+        Option.isSome(error) && "operation" in error.value
+          ? error.value.operation.slice(0, 256)
+          : (options.operation ??
+            (phase === "history" ? "read recovery history" : "recover submission")),
+      ...(Exit.isFailure(outcome) ? recoveryFailureDetails(outcome.cause) : { causes: [] }),
+    }),
+  );
+});
+
+/** One failed Thread remains pending; the host must not claim it before recovery succeeds. */
+export class RecoveryBlocked extends Schema.TaggedError<RecoveryBlocked>()("RecoveryBlocked", {
+  threadId: ThreadId,
+  failure: RecoveryFailure,
+}) {}
+
 /** One executed (or deliberately deferred) recovery decision (durability §14, DUR-013). */
 export class RecoveryReport extends Schema.Class<RecoveryReport>(
   "@effect-agent/thread/RecoveryReport",
@@ -569,6 +749,18 @@ export class RecoveryReport extends Schema.Class<RecoveryReport>(
    */
   disposition: Schema.Literals(["repaired", "deferred", "none", "unknown"]),
 }) {}
+
+/** Submission decisions and operational faults have different ownership and settlement semantics. */
+export class RecoverySweepResult extends Schema.Class<RecoverySweepResult>("RecoverySweepResult")({
+  reports: Schema.Array(RecoveryReport),
+  /** Exactly one fault per failed Thread, regardless of its queued Submission count. */
+  blocked: Schema.Array(RecoveryBlocked),
+}) {}
+
+/** Select one Thread before reading history, or omit to recover every pending Thread. */
+export interface RecoverySweepOptions {
+  readonly threadId?: ThreadId;
+}
 
 /** Per-submission options accepted by `DurableAgentRuntime.submit` (D2). */
 export interface DurableSubmitOptions {
@@ -731,6 +923,8 @@ export interface DurableRuntimeConfigOptions {
   readonly leaseRenewalInterval?: Duration.Duration | undefined;
   /** Active-Run abort-intent poll cadence (default 500ms). */
   readonly abortPollInterval?: Duration.Duration | undefined;
+  /** Cooperative bound for one Thread's recovery, including child reads (default 30s). */
+  readonly recoveryTimeout?: Duration.Duration | undefined;
   /** Deployment-owned model pricing authority, captured for every recoverable Run. */
   readonly estimateCostMicrousd?: RunCostEstimator | undefined;
 }
@@ -744,6 +938,7 @@ export class DurableRuntimeConfig extends Context.Service<
     readonly settlementPollInterval: Duration.Duration;
     readonly leaseRenewalInterval: Duration.Duration;
     readonly abortPollInterval: Duration.Duration;
+    readonly recoveryTimeout: Duration.Duration;
     readonly estimateCostMicrousd?: RunCostEstimator | undefined;
   }
 >()("@effect-agent/thread/DurableRuntimeConfig") {
@@ -754,6 +949,7 @@ export class DurableRuntimeConfig extends Context.Service<
       settlementPollInterval: options.settlementPollInterval ?? Duration.millis(500),
       leaseRenewalInterval: options.leaseRenewalInterval ?? Duration.seconds(10),
       abortPollInterval: options.abortPollInterval ?? Duration.millis(500),
+      recoveryTimeout: options.recoveryTimeout ?? Duration.seconds(30),
       ...(options.estimateCostMicrousd === undefined
         ? {}
         : { estimateCostMicrousd: options.estimateCostMicrousd }),
@@ -9511,50 +9707,69 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     return yield* recoverSnapshot(found.value, history);
   });
 
-  const runRecoveryImpl = Effect.fn("DurableAgentRuntime.runRecovery")(
-    function* (): Effect.fn.Return<ReadonlyArray<RecoveryReport>, DurableWorkerFailure> {
-      const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
-      const reports: Array<RecoveryReport> = [];
-      // SubmissionLedger guarantees `(threadId, queueSequence)` order. Capture and retain
-      // one verified canonical prefix only for the current contiguous Thread group: read
-      // work is one tail inspection plus `ceil(passStartTail / READ_PAGE)` pages per Thread
-      // rather than multiplied by its nonterminal Submission count, and the prefix becomes
-      // unreachable before the next Thread is read.
-      let index = 0;
+  const runRecovery = Effect.fn("DurableAgentRuntime.runRecovery")(function* (
+    options?: RecoverySweepOptions,
+  ): Effect.fn.Return<RecoverySweepResult, DurableWorkerFailure> {
+    const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+    const reports: Array<RecoveryReport> = [];
+    const blocked: Array<RecoveryBlocked> = [];
+    // SubmissionLedger guarantees `(threadId, queueSequence)` order. Capture and retain
+    // one verified canonical prefix only for the current contiguous Thread group: read
+    // work is one tail inspection plus `ceil(passStartTail / READ_PAGE)` pages per Thread
+    // rather than multiplied by its nonterminal Submission count, and the prefix becomes
+    // unreachable before the next Thread is read.
+    let index = 0;
 
-      while (index < nonterminal.length) {
-        const first = nonterminal[index];
+    while (index < nonterminal.length) {
+      const first = nonterminal[index];
 
-        if (first === undefined) break;
-        const submissionIds: Array<SubmissionId> = [];
-        let hasStandardReporting = false;
+      if (first === undefined) break;
+      const submissionIds: Array<SubmissionId> = [];
 
-        for (let offset = index; offset < nonterminal.length; offset += 1) {
-          const entry = nonterminal[offset];
+      for (let offset = index; offset < nonterminal.length; offset += 1) {
+        const entry = nonterminal[offset];
 
-          if (entry === undefined || entry.threadId !== first.threadId) break;
-          submissionIds.push(entry.submissionId);
-          hasStandardReporting ||= entry.workerAdmission?.origin.reporting?.mode === "standard";
-        }
-        const history = yield* readRecoveryHistory(first.threadId, submissionIds);
-
-        if (history.materialized && hasStandardReporting)
-          yield* updateRuntime.repair(first.threadId);
-
-        while (index < nonterminal.length) {
-          const submission = nonterminal[index];
-
-          if (submission === undefined || submission.threadId !== first.threadId) {
-            break;
-          }
-          reports.push(yield* recoverSnapshot(submission, history));
-          index += 1;
-        }
+        if (entry === undefined || entry.threadId !== first.threadId) break;
+        submissionIds.push(entry.submissionId);
       }
 
-      return reports;
-    },
-  );
+      index += submissionIds.length;
+      if (options?.threadId !== undefined && options.threadId !== first.threadId) continue;
+      let phase: RecoveryFailure["phase"] = "recovery";
+
+      // A retained record or child read can fail before any new Attempt exists. Isolate the
+      // entire Thread: a partial repair never grants a later head permission to run through
+      // incomplete evidence. Scope/timeout release resources before the next Thread starts.
+      const outcome = yield* isolateRecovery(
+        Effect.gen(function* () {
+          // The worklist contains only control state. Retained input/worker metadata belongs
+          // to this Thread's failure boundary, never to global discovery or fresh admission.
+          const group = yield* Effect.forEach(submissionIds, (submissionId) =>
+            lookupKnownSubmission("recover submission", submissionId),
+          );
+
+          phase = "history";
+          const history = yield* readRecoveryHistory(first.threadId, submissionIds);
+
+          phase = "recovery";
+          if (
+            history.materialized &&
+            group.some((row) => row.workerAdmission?.origin.reporting?.mode === "standard")
+          )
+            yield* updateRuntime.repair(first.threadId);
+
+          return yield* Effect.forEach(group, (submission) => recoverSnapshot(submission, history));
+        }),
+        { timeout: config.recoveryTimeout, phase: () => phase },
+      );
+
+      if (Result.isSuccess(outcome)) reports.push(...outcome.success);
+      else
+        blocked.push(RecoveryBlocked.make({ threadId: first.threadId, failure: outcome.failure }));
+    }
+
+    return RecoverySweepResult.make({ reports, blocked });
+  });
 
   const submit = Effect.fn("DurableAgentRuntime.submit")(function* <InputSchema extends Schema.Top>(
     agent: DurableSubmitAgent<InputSchema>,
@@ -10189,7 +10404,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
     for (const submission of nonterminal) {
       if (submission.threadId !== threadId) continue;
-      explanations.push(yield* explainSubmission(submission));
+      explanations.push(
+        yield* explainSubmission(
+          yield* lookupKnownSubmission("explain Thread", submission.submissionId),
+        ),
+      );
     }
 
     return explanations;
@@ -10207,13 +10426,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     // everything settled (DUR-015).
     const rows = new Map<SubmissionId, SubmissionSnapshot>();
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+    const named = new Set<SubmissionId>();
 
     for (const submission of nonterminal) {
-      if (submission.threadId === threadId) {
-        rows.set(submission.submissionId, submission);
-      }
+      if (submission.threadId === threadId) named.add(submission.submissionId);
     }
-    const named = new Set<SubmissionId>();
 
     for (const envelope of exported.records) {
       const payload = envelope.record.payload;
@@ -10400,10 +10617,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     const generatedAt = yield* nowUtc;
     const entries: Array<ObligationEntry> = [];
 
-    for (const submission of nonterminal) {
+    for (const entry of nonterminal) {
       const snapshot = yield* ledger.loadRecoverySnapshot(
-        RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
+        RecoverySnapshotRequest.make({ submissionId: entry.submissionId }),
       );
+
+      const submission = snapshot.submission;
 
       let blockedOn: ObligationBlockedOn;
       let since: DateTime.Utc = submission.readyAt ?? submission.createdAt;
@@ -10598,7 +10817,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     processThreadHead: processThreadHeadImpl,
     runWorker: runWorkerImpl,
     runResolvedWorker: runResolvedWorkerImpl,
-    runRecovery: runRecoveryImpl(),
+    runRecovery,
     recoverSubmission,
   });
 });
@@ -10894,7 +11113,17 @@ export class DurableAgentRuntime extends Context.Service<
       >
     >;
     readonly runResolvedWorker: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
-    readonly runRecovery: Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
+    /**
+     * Recover each pending Thread independently. History/child failures, defects and the
+     * configured timeout return one RecoveryBlocked per Thread; hosts must retain visibility
+     * outside execution history and exclude those Threads from claims. Ledger scan failures,
+     * owner interruption and injected crash boundaries still fail the whole sweep.
+     * Optional Thread selection lets a host recover its selected dispatch lane independently
+     * of old cleanup. Unselected Threads are neither read nor reported by this call.
+     */
+    readonly runRecovery: (
+      options?: RecoverySweepOptions,
+    ) => Effect.Effect<RecoverySweepResult, DurableWorkerFailure>;
     /** Apply one recovery decision; untouched ready input is deferred to its worker claim. */
     readonly recoverSubmission: (
       submissionId: SubmissionId,

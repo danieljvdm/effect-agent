@@ -37,6 +37,7 @@ import {
   ThreadStore,
   type ThreadCheckpoints,
   ThreadStoreError,
+  ThreadStoreDiagnostic,
   ThreadTail,
   ThreadTailRequest,
   FenceRejected,
@@ -112,18 +113,26 @@ const isDoFenceRejected = Schema.is(DoFenceRejected);
 const isDoAppendConflict = Schema.is(DoAppendConflict);
 const isDoCheckpointConflict = Schema.is(DoCheckpointConflict);
 
-const storeError = (operation: string, error: { readonly message: string }) =>
+const storeError = (
+  operation: string,
+  error: { readonly message: string; readonly diagnostic?: ThreadStoreDiagnostic },
+) =>
   ThreadStoreError.make({
     cause: error,
     operation,
     message: error.message,
+    ...(error.diagnostic === undefined ? {} : { diagnostic: error.diagnostic }),
   });
 
-const schemaStoreError = (operation: string, error: { readonly message: string }) =>
+const schemaStoreError = (operation: string, error: Schema.SchemaError) =>
   ThreadStoreError.make({
-    cause: error,
     operation,
-    message: error.message,
+    message: "A Thread storage value does not satisfy its schema",
+    diagnostic: ThreadStoreDiagnostic.make({
+      causeTag: error._tag,
+      operation,
+      issueTag: error.issue._tag,
+    }),
   });
 
 const makeOffset = Effect.fn(function* (
@@ -215,7 +224,23 @@ const decodeEnvelope = Effect.fn(function* (row: {
     Effect.mapError((error) =>
       ThreadStoreError.make({
         operation: "decode canonical record",
-        message: error.message,
+        message: "The canonical record does not satisfy its schema",
+        diagnostic: ThreadStoreDiagnostic.make({
+          causeTag: error._tag,
+          operation: "decode canonical record",
+          decoder: "CanonicalRecord",
+          sequence: row.sequence,
+          issueTag: error.issue._tag,
+        }),
+      }),
+    ),
+    Effect.tapError((error) =>
+      Effect.annotateCurrentSpan({
+        "storage.failure.operation": error.diagnostic?.operation,
+        "storage.failure.cause": error.diagnostic?.causeTag,
+        "storage.failure.decoder": error.diagnostic?.decoder,
+        "storage.failure.sequence": row.sequence,
+        "storage.failure.issue": error.diagnostic?.issueTag,
       }),
     ),
   );

@@ -14,6 +14,7 @@ import {
   CheckpointRejected,
   FenceRejected,
   ThreadNotMaterialized,
+  ThreadStoreDiagnostic,
   type SaveRecoveryCheckpointRequest,
 } from "effect-agent/thread-store";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -191,6 +192,11 @@ const storageError =
       cause: error,
       operation,
       message: error.message,
+      diagnostic: ThreadStoreDiagnostic.make({
+        causeTag: error._tag,
+        operation,
+        issueTag: error.reason._tag,
+      }),
     });
 
 /** Decode raw Durable Object SQLite rows against a Schema, reporting failures as typed corruption. */
@@ -200,13 +206,28 @@ export const decodeRows = Effect.fn(
     table: string,
     rowKey: string,
     rows: unknown,
+    decoder: string = table,
   ): Effect.Effect<ReadonlyArray<A>, DoStorageCorruptionError> =>
     Schema.decodeUnknownEffect(schema)(rows).pipe(
       Effect.mapError((error) =>
         DoStorageCorruptionError.make({
           table,
           rowKey,
-          message: String(error),
+          message: "Stored rows do not satisfy the storage schema",
+          diagnostic: ThreadStoreDiagnostic.make({
+            causeTag: error._tag,
+            operation: "decode storage rows",
+            decoder,
+            issueTag: error.issue._tag,
+          }),
+        }),
+      ),
+      Effect.tapError((error) =>
+        Effect.annotateCurrentSpan({
+          "storage.failure.operation": error.diagnostic?.operation,
+          "storage.failure.cause": error.diagnostic?.causeTag,
+          "storage.failure.decoder": decoder,
+          "storage.failure.issue": error.diagnostic?.issueTag,
         }),
       ),
     ),
@@ -1168,6 +1189,7 @@ const makeJournal = (
       "effect_agent_canonical_records",
       `${request.threadId}>${request.fromSequenceExclusive}`,
       planRows,
+      "ReadPlanRow",
     );
 
     const mismatch = () =>
@@ -1212,6 +1234,7 @@ const makeJournal = (
         "effect_agent_canonical_records",
         `${request.threadId}/${page[0].sequence}`,
         rows,
+        "RecordRow",
       );
 
       if (

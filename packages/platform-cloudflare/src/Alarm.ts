@@ -11,6 +11,7 @@ import {
   Option,
   Random,
   Ref,
+  Result,
   Schema,
   Scope,
   Semaphore,
@@ -20,11 +21,25 @@ import {
 import { type DurableBindingFailure } from "effect-agent/agent-registration";
 import {
   DurableAgentRuntime,
+  DurableRuntimeConfig,
+  isolateRecovery,
+  RecoveryBlocked,
+  RecoveryFailure,
   type DurableWorkerFailure,
   type RecoveryReport,
+  RecoverySweepResult,
 } from "effect-agent/durable-agent-runtime";
 import { ThreadId, SubmissionId } from "effect-agent/identifiers";
-import { SubmissionLedger, type SubmissionSnapshot } from "effect-agent/submission-ledger";
+import {
+  OperationAuthorizationRequest,
+  OperationAuthorizer,
+  type OperationDenied,
+} from "effect-agent/operation-authorizer";
+import {
+  AbortIntentRequest,
+  SubmissionLedger,
+  type SubmissionWorkItem,
+} from "effect-agent/submission-ledger";
 import {
   ThreadProjectionMaintenance,
   drainDue,
@@ -187,7 +202,7 @@ export class MaintenancePassReport extends Schema.Class<MaintenancePassReport>(
 )({
   /** `caught-up` ran no runtime work (publication may be pending); `actionable` ran recovery. */
   phase: Schema.Literals(["caught-up", "actionable"]),
-  /** Recovery decisions executed (or deferred) BEFORE any new claim in this pass. */
+  /** Recovery decisions and Thread faults observed during this event. */
   recovered: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** Head Attempts settled during the event. Joined input may settle with each head. */
   settled: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
@@ -211,6 +226,8 @@ export type ThreadMaintenanceFailpointLocation =
   | "maintenance:select:after"
   | "maintenance:binding-retry:before"
   | "maintenance:binding-retry:after"
+  | "maintenance:recovery-status:before"
+  | "maintenance:recovery-status:after"
   | "maintenance:retry:before"
   | "maintenance:retry:after"
   | "maintenance:checkpoint:before"
@@ -354,12 +371,62 @@ class BindingRetry extends Schema.Class<BindingRetry>("BindingRetry")({
   reportedAt: Schema.Finite,
 }) {}
 
+/**
+ * A durable observation of blocked recovery, independent of the execution journal. This is
+ * neither a Settlement nor proof that external effects did not happen. A successful recovery
+ * sweep clears it; repair must preserve canonical history and the original admission identity.
+ */
+export class ThreadRecoveryFault extends Schema.Class<ThreadRecoveryFault>(
+  "@effect-agent/platform-cloudflare/ThreadRecoveryFault",
+)({
+  schemaVersion: Schema.Literal(1),
+  threadId: ThreadId,
+  firstFailedAt: Schema.Finite,
+  lastFailedAt: Schema.Finite,
+  /** Earliest automatic recovery retry; new admissions do not erase this deadline. */
+  retryAt: Schema.Finite,
+  /** Saturates at 2^31 - 1; one observation per Thread per recovery sweep. */
+  attempts: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(2_147_483_647)),
+  failure: RecoveryFailure,
+}) {}
+
+const recoveryFaultKey = (threadId: ThreadId) =>
+  `effect-agent:thread-recovery-fault:v1:${threadId}`;
+
+const decodeRecoveryFaultValue = Schema.decodeUnknownSync(ThreadRecoveryFault);
+
+const decodeRecoveryFault = (threadId: ThreadId, encoded: unknown) => {
+  const fault = decodeRecoveryFaultValue(encoded);
+
+  if (fault.threadId !== threadId) throw new Error("Recovery status does not match its Thread key");
+
+  return fault;
+};
+
+const encodeRecoveryFault = Schema.encodeSync(ThreadRecoveryFault);
+
 interface NativePassResult {
   readonly phase: "caught-up" | "actionable";
-  readonly recovered: number;
   readonly settled: number;
   readonly nonterminal: number;
   readonly nextAttemptAt: number | undefined;
+}
+
+/** Event-local observations only; durable ingress keeps racing mutations dirty. */
+interface NativeRecovery {
+  readonly queue: Deferred.Deferred<ReadonlyArray<ThreadId>>;
+  readonly pending: Set<ThreadId>;
+  readonly loaded: Set<ThreadId>;
+  readonly reports: Map<SubmissionId, RecoveryReport>;
+  readonly faults: Map<ThreadId, ThreadRecoveryFault>;
+  observation?: {
+    readonly generation: bigint;
+    readonly activeAtStart: number;
+  };
+  started: boolean;
+  needsCheckpoint: boolean;
+  recovered: number;
+  repaired: boolean;
 }
 
 interface MaintenanceObservation {
@@ -384,6 +451,8 @@ class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
   nonterminal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** One physical-owner cursor; old single-lane records need no conversion. */
   lastServedThreadId: Schema.optionalKey(ThreadId),
+  /** Rotate old recovery independently of dispatch, including after eviction or timeout. */
+  lastRecoveredThreadId: Schema.optionalKey(ThreadId),
   bindingRetries: Schema.optionalKey(Schema.Array(BindingRetry)),
   /** Absent on older records. A newer mutation makes this retry obsolete. */
   retry: Schema.optionalKey(MaintenanceRetry),
@@ -425,7 +494,7 @@ const ensureTransactionAlarmBy = async (
 };
 
 const stableExternalWait = (
-  snapshot: SubmissionSnapshot,
+  snapshot: SubmissionWorkItem,
   reports: ReadonlyMap<string, RecoveryReport>,
 ): boolean => {
   const report = reports.get(snapshot.submissionId);
@@ -553,9 +622,9 @@ export type MaintenancePassFailure =
  *    recovery, ledger scans or canonical-history reads.
  * 2. Reconcile before each head Attempt, then checkpoint only the observed generation. A racing
  *    producer keeps its newer generation dirty. Native retries retain their durable backoff.
- * 3. After the initial native opportunity, stop admitting new external waves and let the
- *    active waves finish. While they remain in flight, native wakes and bounded scans can
- *    advance more heads. All Attempts share the event's original ten-minute yield deadline.
+ * 3. Keep delivery admission open while old recovery is pending, so fresh native replies can
+ *    publish in this event. Close once, at latest at the original ten-minute yield deadline;
+ *    native wakes can still advance heads while admitted deliveries retire.
  * 4. Native message delivery retains its driver-owned Claim deadline. Host/backfill joins are
  *    bounded independently; incoming native work never restarts or cancels their attempts.
  *    Auxiliary failures are reported after the current native opportunity.
@@ -573,6 +642,15 @@ export class ThreadMaintenance extends Context.Service<
      */
     readonly ensureAlarm: Effect.Effect<void, MaintenancePassFailure>;
     /**
+     * Authorize `explain`, then read one bounded local record without reading execution history.
+     * None means no recorded fault, not proof of health or settlement. The host authenticates
+     * callers and verifies local Thread membership before exposing this service across RPC.
+     * Provide OperationAuthorizer when constructing this Layer, as for DurableAgentRuntime.
+     */
+    readonly recoveryStatus: (
+      threadId: ThreadId,
+    ) => Effect.Effect<Option.Option<ThreadRecoveryFault>, DurableAlarmError | OperationDenied>;
+    /**
      * Serialize the pre-arm boundary with pass acknowledgement, advance the durable dirty
      * generation and arm the alarm in one transaction BEFORE running the caller's mutation.
      * A pass cannot acknowledge while that mutation remains in flight.
@@ -589,6 +667,7 @@ export class ThreadMaintenance extends Context.Service<
     | ThreadPublication
     | ThreadProjectionMaintenance
     | DurableAgentRuntime
+    | DurableRuntimeConfig
     | SubmissionLedger
     | WakeScheduler
     | DurableAlarmService
@@ -599,6 +678,7 @@ export class ThreadMaintenance extends Context.Service<
   > = Layer.effect(ThreadMaintenance)(
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+      const recoveryConfig = yield* DurableRuntimeConfig;
       const ledger = yield* SubmissionLedger;
       const wakes = yield* WakeScheduler;
       const alarm = yield* DurableAlarmService;
@@ -611,6 +691,7 @@ export class ThreadMaintenance extends Context.Service<
       const projection = yield* ThreadProjectionMaintenance;
       const messages = yield* ThreadMessageDelivery;
       const host = yield* ThreadHostMaintenance;
+      const authorizer = yield* OperationAuthorizer;
 
       // A broken disposable index still needs a retry alarm and must not prevent startup.
       const projectionDeadline = projection.pendingDeadline.pipe(
@@ -634,6 +715,97 @@ export class ThreadMaintenance extends Context.Service<
       const minimumAlarmDelay = Math.max(1, Math.ceil(config.alarmBackoffBase / 2));
 
       const runTransaction = yield* makeStorageOperation;
+
+      const recoveryStatus = Effect.fn("ThreadMaintenance.recoveryStatus")(function* (
+        threadId: ThreadId,
+      ) {
+        yield* authorizer.authorize(
+          OperationAuthorizationRequest.make({ operation: "explain", threadId }),
+        );
+
+        return yield* runTransaction("read Thread recovery status", async () => {
+          const encoded = await ctx.storage.get(recoveryFaultKey(threadId));
+
+          return encoded === undefined
+            ? Option.none()
+            : Option.some(decodeRecoveryFault(threadId, encoded));
+        });
+      });
+
+      const recordRecoveryStatus = Effect.fn("ThreadMaintenance.recordRecoveryStatus")(function* (
+        result: RecoverySweepResult,
+      ) {
+        const threads = new Map<ThreadId, RecoveryFailure | undefined>();
+
+        for (const report of result.reports) threads.set(report.threadId, undefined);
+        for (const blocked of result.blocked) threads.set(blocked.threadId, blocked.failure);
+        if (threads.size === 0) return new Map<ThreadId, ThreadRecoveryFault>();
+        const now = yield* Clock.currentTimeMillis;
+
+        yield* failpoint.hit("maintenance:recovery-status:before");
+
+        const retained = yield* runTransaction("record Thread recovery status", () =>
+          ctx.storage.transaction(async (transaction) => {
+            const newlyBlocked: Array<ThreadRecoveryFault> = [];
+            const faults = new Map<ThreadId, ThreadRecoveryFault>();
+
+            for (const [threadId, failure] of threads) {
+              const key = recoveryFaultKey(threadId);
+              const encoded = await transaction.get(key);
+
+              const previous =
+                encoded === undefined ? undefined : decodeRecoveryFault(threadId, encoded);
+
+              if (failure === undefined) {
+                if (previous !== undefined) await transaction.delete(key);
+                continue;
+              }
+
+              const fault = ThreadRecoveryFault.make({
+                schemaVersion: 1,
+                threadId,
+                firstFailedAt: previous?.firstFailedAt ?? now,
+                lastFailedAt: now,
+                attempts: Math.min(2_147_483_647, (previous?.attempts ?? 0) + 1),
+                retryAt: now + Math.min(60_000, 5_000 * 2 ** Math.min(30, previous?.attempts ?? 0)),
+                failure,
+              });
+
+              await transaction.put(key, encodeRecoveryFault(fault));
+              faults.set(threadId, fault);
+              if (previous === undefined) newlyBlocked.push(fault);
+            }
+
+            return { newlyBlocked, faults };
+          }),
+        );
+
+        yield* failpoint.hit("maintenance:recovery-status:after");
+        for (const fault of retained.newlyBlocked)
+          yield* Effect.logError(
+            "Native Thread recovery blocked; accepted work remains pending",
+            fault.failure.reason === "defect"
+              ? Cause.die(fault.failure)
+              : Cause.fail(fault.failure),
+          ).pipe(Effect.annotateLogs({ threadId: fault.threadId }));
+
+        return retained.faults;
+      });
+
+      const recoverThread = Effect.fn("ThreadMaintenance.recoverThread")(function* (
+        threadId: ThreadId,
+        recovery: NativeRecovery,
+      ) {
+        const result = yield* runtime.runRecovery({ threadId });
+        // Visibility is committed before a claim or any fallible auxiliary join.
+        const faults = yield* recordRecoveryStatus(result);
+
+        for (const report of result.reports) recovery.reports.set(report.submissionId, report);
+        recovery.faults.delete(threadId);
+        for (const [id, fault] of faults) recovery.faults.set(id, fault);
+        recovery.recovered += result.reports.length + result.blocked.length;
+        recovery.repaired ||= result.reports.some((report) => report.disposition === "repaired");
+      });
 
       const ensureAlarm = Effect.fn("ThreadMaintenance.ensureAlarm")(function* () {
         yield* failpoint.hit("maintenance:ensure:before");
@@ -821,6 +993,8 @@ export class ThreadMaintenance extends Context.Service<
         started: Effect.Success<ReturnType<typeof beginNative>>,
         yieldAfter: DateTime.Utc,
         observed: MaintenanceObservation,
+        recovery: NativeRecovery,
+        dispatch = true,
       ): Effect.fn.Return<NativePassResult, MaintenancePassFailure> {
         const deadline = yield* publication.pendingDeadline;
 
@@ -856,32 +1030,98 @@ export class ThreadMaintenance extends Context.Service<
 
           return {
             phase: "caught-up",
-            recovered: 0,
             settled: 0,
             nonterminal: started.nonterminal,
             nextAttemptAt,
           };
         }
-        // Step 2 — reconciliation strictly precedes new work in this pass (exit gate).
+        // Select from control state before reading execution history. A recovering or faulted
+        // Thread cannot enter dispatch; old cleanup has its own scoped opportunity below.
         observed.nativeOnly = true;
-        const recovered: ReadonlyArray<RecoveryReport> = yield* runtime.runRecovery;
-        const reports = new Map(recovered.map((report) => [report.submissionId, report]));
+
+        // Every checkpoint keeps the producer overlap that belongs to this recovery wave.
+        const observation = (recovery.observation ??= {
+          generation: started.generation,
+          activeAtStart: started.activeAtStart,
+        });
+
         const current = yield* Stream.runCollect(ledger.scanNonterminal);
-        const heads = new Map<ThreadId, SubmissionSnapshot>();
+        const selectionTime = yield* Clock.currentTimeMillis;
+
+        yield* runTransaction("read Thread recovery deadlines", async () => {
+          for (const threadId of new Set(current.map((row) => row.threadId))) {
+            if (recovery.loaded.has(threadId)) continue;
+            const encoded = await ctx.storage.get(recoveryFaultKey(threadId));
+
+            if (encoded !== undefined)
+              recovery.faults.set(threadId, decodeRecoveryFault(threadId, encoded));
+            recovery.loaded.add(threadId);
+          }
+        });
+        const reports = recovery.reports;
+        const recoveryFaults = recovery.faults;
+
+        const waiting = (row: SubmissionWorkItem) =>
+          !recovery.pending.has(row.threadId) &&
+          !recoveryFaults.has(row.threadId) &&
+          stableExternalWait(row, reports);
+
+        const heads = new Map<ThreadId, SubmissionWorkItem>();
 
         for (const row of current) {
-          // Parked uncertainty keeps its settlement obligation, but later input can run.
-          // Accepted aborts and every other wait remain subject to the lane's FIFO barrier.
-          if (row.state === "unknown" && stableExternalWait(row, reports)) continue;
+          // Only recovered uncertainty may release later input; accepted aborts retain FIFO.
+          if (row.state === "unknown" && waiting(row)) continue;
           if (!heads.has(row.threadId)) heads.set(row.threadId, row);
+        }
+        const stopping = new Set<ThreadId>();
+
+        for (const head of heads.values()) {
+          if (
+            head.state !== "ready" ||
+            recovery.pending.has(head.threadId) ||
+            recoveryFaults.has(head.threadId)
+          )
+            continue;
+
+          // An accepted abort is cleanup even when its input was never claimed. This
+          // control-only read must not decode the execution journal or a recovery snapshot.
+          const intent = yield* isolateRecovery(
+            ledger.readAbortIntent(AbortIntentRequest.make({ submissionId: head.submissionId })),
+            {
+              timeout: recoveryConfig.recoveryTimeout,
+              phase: () => "recovery",
+              operation: "read abort intent",
+            },
+          );
+
+          if (Result.isSuccess(intent)) {
+            if (intent.success !== undefined) stopping.add(head.threadId);
+          } else {
+            const faults = yield* recordRecoveryStatus(
+              RecoverySweepResult.make({
+                reports: [],
+                blocked: [
+                  RecoveryBlocked.make({ threadId: head.threadId, failure: intent.failure }),
+                ],
+              }),
+            );
+
+            for (const [threadId, fault] of faults) recoveryFaults.set(threadId, fault);
+            recovery.recovered++;
+          }
         }
 
         const eligible = [...heads.values()]
-          .filter((head) => !stableExternalWait(head, reports))
+          .filter(
+            (head) =>
+              !recovery.pending.has(head.threadId) &&
+              !stopping.has(head.threadId) &&
+              !recoveryFaults.has(head.threadId) &&
+              !waiting(head) &&
+              (head.state === "ready" || reports.has(head.submissionId)),
+          )
           .map((head) => head.threadId)
           .sort();
-
-        const selectionTime = yield* Clock.currentTimeMillis;
 
         yield* failpoint.hit("maintenance:select:before");
 
@@ -900,11 +1140,12 @@ export class ThreadMaintenance extends Context.Service<
                 ),
             );
 
-            const next =
-              runnable.find(
-                (threadId) =>
-                  state.lastServedThreadId === undefined || threadId > state.lastServedThreadId,
-              ) ?? runnable[0];
+            const next = dispatch
+              ? (runnable.find(
+                  (threadId) =>
+                    state.lastServedThreadId === undefined || threadId > state.lastServedThreadId,
+                ) ?? runnable[0])
+              : undefined;
 
             if (next !== undefined) {
               await transaction.put(
@@ -915,14 +1156,46 @@ export class ThreadMaintenance extends Context.Service<
               );
             }
 
-            return { selected: next, retries };
+            const backlog = recovery.started
+              ? []
+              : [...heads.keys()].filter((threadId) => {
+                  const fault = recoveryFaults.get(threadId);
+
+                  return (
+                    !eligible.includes(threadId) &&
+                    (fault === undefined || fault.retryAt <= selectionTime)
+                  );
+                });
+
+            // One finite wave, one Thread at a time, with the runtime's per-Thread deadline.
+            // This cursor ensures an event deadline/eviction cannot always restart at the front.
+            const after = backlog.filter(
+              (threadId) =>
+                state.lastRecoveredThreadId === undefined || threadId > state.lastRecoveredThreadId,
+            );
+
+            const before = backlog.filter(
+              (threadId) =>
+                state.lastRecoveredThreadId !== undefined &&
+                threadId <= state.lastRecoveredThreadId,
+            );
+
+            return { selected: next, retries, backlog: [...after, ...before] };
           }),
         );
 
         yield* failpoint.hit("maintenance:select:after");
+        if (!recovery.started) {
+          recovery.started = true;
+          recovery.needsCheckpoint = selection.backlog.length > 0;
+          for (const threadId of selection.backlog) recovery.pending.add(threadId);
+          yield* Deferred.succeed(recovery.queue, selection.backlog);
+        }
 
         const selected =
           selection.selected === undefined ? undefined : heads.get(selection.selected);
+
+        if (selected !== undefined) yield* recoverThread(selected.threadId, recovery);
 
         let retries = selection.retries;
         let bindingFailure: DurableBindingFailure | undefined;
@@ -930,7 +1203,7 @@ export class ThreadMaintenance extends Context.Service<
         // One runnable FIFO head per native opportunity. An absent agent waits for a deployment,
         // including for children; other local lanes and host deliveries remain independently due.
         const settlement =
-          selected === undefined
+          selected === undefined || recoveryFaults.has(selected.threadId)
             ? Option.none()
             : yield* runtime.processThreadHead(selected.threadId, { yieldAfter }).pipe(
                 Effect.catchTag("BindingUnavailable", (failure) => {
@@ -999,11 +1272,10 @@ export class ThreadMaintenance extends Context.Service<
         const waitingHeads = new Map<ThreadId, boolean>();
 
         const autonomous = remaining.some((snapshot) => {
-          if (snapshot.state === "unknown" && stableExternalWait(snapshot, reports)) return false;
+          if (snapshot.state === "unknown" && waiting(snapshot)) return false;
           const headWaiting = waitingHeads.get(snapshot.threadId);
 
-          if (headWaiting === undefined)
-            waitingHeads.set(snapshot.threadId, stableExternalWait(snapshot, reports));
+          if (headWaiting === undefined) waitingHeads.set(snapshot.threadId, waiting(snapshot));
           // FIFO followers cannot execute through a stable external wait. Only plain queued
           // input is dormant here; admission repairs and accepted aborts still need a pass.
           if (
@@ -1013,26 +1285,28 @@ export class ThreadMaintenance extends Context.Service<
           )
             return false;
 
-          return !stableExternalWait(snapshot, reports);
+          return !waiting(snapshot);
         });
 
-        const progressed =
-          Option.isSome(settlement) ||
-          recovered.some((report) => report.disposition === "repaired");
+        const progressed = Option.isSome(settlement) || recovery.repaired;
 
         const now = yield* Clock.currentTimeMillis;
         const ordinaryDelay = autonomous ? yield* rearmDelay(progressed, started.stalls) : 0;
 
-        const nextEligible = eligible.map(
-          (threadId) =>
-            retries.find((retry) => retry.submissionId === heads.get(threadId)?.submissionId)
-              ?.notBefore ?? now,
-        );
+        const nextEligible = [...recoveryFaults.values()]
+          .map((fault) => fault.retryAt)
+          .concat(
+            eligible.map(
+              (threadId) =>
+                retries.find((retry) => retry.submissionId === heads.get(threadId)?.submissionId)
+                  ?.notBefore ?? now,
+            ),
+          );
 
-        const bindingDelay =
+        const retryDelay =
           nextEligible.length === 0 ? 0 : Math.max(0, Math.min(...nextEligible) - now);
 
-        const delay = Math.max(ordinaryDelay, bindingDelay);
+        const delay = Math.max(ordinaryDelay, retryDelay);
 
         // Checkpoint native progress without changing the physical alarm. Auxiliary
         // delivery remains live; later mutations still advance the shared generation.
@@ -1044,11 +1318,14 @@ export class ThreadMaintenance extends Context.Service<
               const { state } = await readMaintenanceState(transaction);
 
               const processed =
-                autonomous || started.activeAtStart > 0 || active > 0
+                autonomous ||
+                observation.activeAtStart > 0 ||
+                started.activeAtStart > 0 ||
+                active > 0
                   ? state.processed
-                  : state.processed > started.generation
+                  : state.processed > observation.generation
                     ? state.processed
-                    : started.generation;
+                    : observation.generation;
 
               const next = ThreadMaintenanceState.make({
                 ...Struct.omit(state, ["retry"]),
@@ -1087,7 +1364,6 @@ export class ThreadMaintenance extends Context.Service<
 
         return {
           phase: "actionable",
-          recovered: recovered.length,
           settled: Option.isSome(settlement) ? 1 : 0,
           nonterminal: remaining.length,
           nextAttemptAt,
@@ -1106,12 +1382,51 @@ export class ThreadMaintenance extends Context.Service<
           Effect.catch(() => Effect.never),
         );
 
-        let started = yield* beginNative(observed);
+        // A wake may observe temporary backoff while this event's recovery is still running.
+        // Its completion must retain the original actionable observation for acknowledgement.
+        const started = yield* beginNative(observed);
 
         // This scope owns auxiliary dispatch and listeners, independently of native progress.
         // Close it before final alarm rearming, including on failure or event interruption.
         const auxiliaryScope = yield* Effect.acquireRelease(Scope.make("parallel"), (scope, exit) =>
           Scope.close(scope, exit),
+        );
+
+        const recovery: NativeRecovery = {
+          queue: yield* Deferred.make<ReadonlyArray<ThreadId>>(),
+          pending: new Set(),
+          loaded: new Set(),
+          reports: new Map(),
+          faults: new Map(),
+          started: false,
+          needsCheckpoint: false,
+          recovered: 0,
+          repaired: false,
+        };
+
+        const recoveryFiber = yield* Effect.forkIn(
+          Effect.gen(function* () {
+            for (const threadId of yield* Deferred.await(recovery.queue)) {
+              yield* failpoint.hit("maintenance:select:before");
+              yield* runTransaction("select old recovery lane", () =>
+                ctx.storage.transaction(async (transaction) => {
+                  const { state } = await readMaintenanceState(transaction);
+
+                  await transaction.put(
+                    MAINTENANCE_STATE_KEY,
+                    encodeMaintenanceState(
+                      ThreadMaintenanceState.make({ ...state, lastRecoveredThreadId: threadId }),
+                    ),
+                  );
+                }),
+              );
+              yield* failpoint.hit("maintenance:select:after");
+              yield* recoverThread(threadId, recovery);
+              recovery.pending.delete(threadId);
+              yield* wakes.notify(threadId);
+            }
+          }),
+          auxiliaryScope,
         );
 
         const dispatchClosed = yield* Deferred.make<void>();
@@ -1152,41 +1467,63 @@ export class ThreadMaintenance extends Context.Service<
           auxiliaryScope,
         );
 
-        let result = yield* advance(started, yieldAfter, observed);
+        let result = yield* advance(started, yieldAfter, observed, recovery);
+
+        // This event owns one finite old-recovery wave, including an empty caught-up wave.
+        recovery.started = true;
+        yield* Deferred.succeed(recovery.queue, []);
         let phase = result.phase;
-        let recovered = result.recovered;
         let settled = result.settled;
 
         observed.nativeOnly = false;
 
-        // Close admission of new delivery waves once, then keep advancing native
-        // work while the already-admitted waves finish. Neither lane restarts the
-        // other's work or receives a fresh event budget.
-        yield* Deferred.succeed(dispatchClosed, undefined);
-
-        const remaining = Math.max(
-          1,
-          DateTime.toEpochMillis(dispatchUntil) - (yield* Clock.currentTimeMillis),
-        );
-
+        // Old recovery may still admit fresh native dispatch. Keep its replies/deliveries
+        // eligible in this same window. Retirement starts only after that window closes;
+        // waiting for host retirement to close it would create a circular join.
         const hostJoin = yield* Effect.forkIn(
-          Fiber.join(hostFiber).pipe(
-            Effect.timeoutOption(Math.min(host.dispatchTimeoutMillis, remaining)),
-            Effect.tap((outcome) =>
-              Effect.annotateCurrentSpan({ "host.timedOut": Option.isNone(outcome) }),
-            ),
-          ),
+          Effect.gen(function* () {
+            yield* stopDispatch;
+
+            const remaining = Math.max(
+              1,
+              DateTime.toEpochMillis(dispatchUntil) - (yield* Clock.currentTimeMillis),
+            );
+
+            const outcome = yield* Fiber.join(hostFiber).pipe(
+              Effect.timeoutOption(Math.min(host.dispatchTimeoutMillis, remaining)),
+            );
+
+            yield* Effect.annotateCurrentSpan({ "host.timedOut": Option.isNone(outcome) });
+          }),
           auxiliaryScope,
         );
 
-        const retired = yield* Effect.forkChild(Fiber.joinAll([deliveryFiber, hostJoin, backfill]));
+        const retired = yield* Effect.forkChild(
+          Fiber.joinAll([deliveryFiber, hostJoin, backfill, recoveryFiber]),
+        );
 
         const auxiliaryPending = () =>
           deliveryFiber.pollUnsafe() === undefined ||
           hostFiber.pollUnsafe() === undefined ||
-          backfill.pollUnsafe() === undefined;
+          backfill.pollUnsafe() === undefined ||
+          recoveryFiber.pollUnsafe() === undefined;
 
-        while (retired.pollUnsafe() === undefined && auxiliaryPending()) {
+        while (true) {
+          const recoveryFinished = recoveryFiber.pollUnsafe() !== undefined;
+
+          if (recoveryFinished) {
+            if (recovery.needsCheckpoint) {
+              yield* Fiber.join(recoveryFiber);
+              // A head released by old recovery gets its native opportunity before the
+              // delivery window closes, never after all reply listeners have retired.
+              result = yield* advance(started, yieldAfter, observed, recovery, settled === 0);
+              if (result.phase === "actionable") phase = "actionable";
+              settled += result.settled;
+              recovery.needsCheckpoint = false;
+            }
+            yield* Deferred.succeed(dispatchClosed, undefined);
+          }
+          if (retired.pollUnsafe() !== undefined || !auxiliaryPending()) break;
           const now = yield* Clock.currentTimeMillis;
           const until = DateTime.toEpochMillis(yieldAfter);
 
@@ -1198,24 +1535,46 @@ export class ThreadMaintenance extends Context.Service<
             until,
           );
 
+          // A completion racing this iteration stays armed until the loop handles it.
+          const recoveryDone = recoveryFinished ? Effect.never : Fiber.await(recoveryFiber);
+
           const ready = yield* Effect.raceFirst(
-            Effect.raceFirst(notified, Effect.sleep(Math.max(0, next - now))).pipe(Effect.as(true)),
-            Fiber.await(retired).pipe(Effect.as(false)),
+            Effect.raceFirst(notified, Effect.sleep(Math.max(0, next - now))).pipe(
+              Effect.as("native" as const),
+            ),
+            Effect.raceFirst(
+              recoveryDone.pipe(Effect.as("recovery" as const)),
+              Fiber.await(retired).pipe(Effect.as("retired" as const)),
+            ),
           );
 
-          if (!ready || retired.pollUnsafe() !== undefined || !auxiliaryPending()) break;
+          // Recovery completion closes admission before joining host retirement. It must
+          // wake this loop directly: the public wake hint is allowed to be dropped.
+          if (ready === "recovery") continue;
+          if (ready === "retired" || retired.pollUnsafe() !== undefined) break;
+          if (!auxiliaryPending()) continue;
           if ((yield* Clock.currentTimeMillis) >= until) break;
 
-          started = yield* beginNative(observed);
-          result = yield* advance(started, yieldAfter, observed);
+          const awakened = yield* beginNative(observed);
+
+          result = yield* advance(awakened, yieldAfter, observed, recovery);
           if (result.phase === "actionable") phase = "actionable";
-          recovered += result.recovered;
           settled += result.settled;
           observed.nativeOnly = false;
         }
+        // The original native yield deadline closes all new waves even if old recovery
+        // is still pending. No recovery or delivery receives a renewed event budget.
+        yield* Deferred.succeed(dispatchClosed, undefined);
         // Preserve driver-owned Claim deadlines and failures, then close every
         // listener before the one final alarm decision.
         yield* Fiber.join(retired);
+        if (recovery.needsCheckpoint) {
+          // The native yield deadline ended dispatch before old recovery finished. Fold its
+          // control state into acknowledgement without starting an Attempt after retirement.
+          result = yield* advance(started, yieldAfter, observed, recovery, false);
+          if (result.phase === "actionable") phase = "actionable";
+          settled += result.settled;
+        }
         yield* Scope.close(auxiliaryScope, Exit.void);
         yield* failpoint.hit("maintenance:finish:before");
 
@@ -1256,7 +1615,7 @@ export class ThreadMaintenance extends Context.Service<
 
         const report = MaintenancePassReport.make({
           phase,
-          recovered,
+          recovered: recovery.recovered,
           settled,
           nonterminal: result.nonterminal,
           alarm: disposition,
@@ -1309,6 +1668,7 @@ export class ThreadMaintenance extends Context.Service<
           }),
         ),
         ensureAlarm: mutations.withSnapshot(() => ensureAlarm()),
+        recoveryStatus,
         withMutation: (body) =>
           mutations.withMutation(
             body.pipe(

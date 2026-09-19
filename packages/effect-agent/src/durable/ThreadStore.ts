@@ -436,10 +436,26 @@ export class LoadCheckpointRequest extends Schema.Class<LoadCheckpointRequest>(
   atOrBeforeSequence: Schema.optionalKey(CanonicalSequence),
 }) {}
 
+/**
+ * Content-free storage provenance constructed by adapters from source-authored labels.
+ * Raw foreign lookalikes are not trusted diagnostics. Never include rejected values, SQL,
+ * or schema messages.
+ */
+export class ThreadStoreDiagnostic extends Schema.Class<ThreadStoreDiagnostic>(
+  "@effect-agent/thread/ThreadStoreDiagnostic",
+)({
+  causeTag: Schema.String.check(Schema.isMaxLength(128)),
+  operation: Schema.String.check(Schema.isMaxLength(256)),
+  decoder: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),
+  issueTag: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),
+  sequence: Schema.optionalKey(CanonicalSequence),
+}) {}
+
 export class ThreadStoreError extends Schema.TaggedError<ThreadStoreError>()("ThreadStoreError", {
   operation: Schema.String,
   message: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
+  diagnostic: Schema.optionalKey(ThreadStoreDiagnostic),
 }) {}
 
 export class ThreadNotMaterialized extends Schema.TaggedError<ThreadNotMaterialized>()(

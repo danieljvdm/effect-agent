@@ -459,6 +459,70 @@ describe("SqliteSubmissionLedger", () => {
     }
   });
 
+  it.effect(
+    "discovers control state independently of poisoned payloads and rejects invalid control identities",
+    () =>
+      withTemporaryDatabase((filename) =>
+        Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const sql = yield* SqlClientService.SqlClient;
+          const request = yield* admission("retained-worker", "original", { work: "retained" });
+          const retained = yield* ledger.admit(request);
+
+          yield* ledger.markReady(MarkReadyRequest.make({ submissionId: retained.submissionId }));
+          yield* sql`UPDATE effect_agent_submissions
+          SET input_json = '{', worker_admission_json = '{'
+          WHERE submission_id = ${retained.submissionId}`;
+          const work = yield* Stream.runCollect(ledger.scanNonterminal);
+
+          expect(work).toEqual([
+            expect.objectContaining({
+              submissionId: retained.submissionId,
+              receiptId: retained.receiptId,
+              threadId: request.threadId,
+              principal: request.principal,
+              idempotencyKey: request.idempotencyKey,
+              deploymentId: request.deploymentId,
+              queueSequence: retained.queueSequence,
+              state: "ready",
+            }),
+          ]);
+          expect(work[0]).not.toHaveProperty("inputPayload");
+          expect(
+            yield* ledger
+              .lookup(
+                SubmissionLookupById.make({
+                  submissionId: retained.submissionId,
+                }),
+              )
+              .pipe(Effect.flip),
+          ).toMatchObject({ _tag: "LedgerError" });
+          expect(
+            yield* sql`SELECT input_json, worker_admission_json, receipt_id, state
+          FROM effect_agent_submissions WHERE submission_id = ${retained.submissionId}`,
+          ).toEqual([
+            {
+              input_json: "{",
+              worker_admission_json: "{",
+              receipt_id: retained.receiptId,
+              state: "ready",
+            },
+          ]);
+
+          yield* sql`UPDATE effect_agent_submissions SET receipt_id = ''
+          WHERE submission_id = ${retained.submissionId}`;
+          expect(yield* Stream.runCollect(ledger.scanNonterminal).pipe(Effect.flip)).toMatchObject({
+            _tag: "LedgerError",
+            operation: "ledger scan nonterminal",
+          });
+          expect(
+            yield* sql`SELECT state FROM effect_agent_submissions
+          WHERE submission_id = ${retained.submissionId}`,
+          ).toEqual([{ state: "ready" }]);
+        }).pipe(Effect.provide(combinedLayer(filename))),
+      ),
+  );
+
   it("keeps configuration, failpoint, SQL, and Crypto authority in the named Layer input", () => {
     const requirementsProof: SubmissionLedgerLayerRequirementsProof = true;
     const errorProof: SubmissionLedgerLayerErrorProof = true;

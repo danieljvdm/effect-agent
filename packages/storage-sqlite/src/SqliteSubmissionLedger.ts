@@ -72,6 +72,7 @@ import {
   SubmissionLookup,
   SubmissionLookupByKey,
   SubmissionSnapshot,
+  SubmissionWorkItem,
   SubmissionState,
   SettlementReservationSnapshot,
   settlementFailureFromRecord,
@@ -3129,7 +3130,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   const scanPage = Effect.fn("SqliteSubmissionLedger.scanPage")(function* (
     cursor: ScanCursor | undefined,
   ): Effect.fn.Return<
-    readonly [ReadonlyArray<SubmissionSnapshot>, Option.Option<ScanCursor | undefined>],
+    readonly [ReadonlyArray<SubmissionWorkItem>, Option.Option<ScanCursor | undefined>],
     LedgerError
   > {
     const operation = "ledger scan nonterminal";
@@ -3137,14 +3138,18 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     const rows = yield* (
       cursor === undefined
         ? sql<Record<string, unknown>>`
-          SELECT ${sql.literal(SUBMISSION_COLUMNS)}
+          SELECT submission_id AS "submissionId", thread_id AS "threadId",
+            queue_sequence AS "queueSequence", principal, idempotency_key AS "idempotencyKey",
+            deployment_id AS "deploymentId", receipt_id AS "receiptId", state
           FROM effect_agent_submissions
           WHERE state <> 'settled'
           ORDER BY thread_id ASC, queue_sequence ASC
           LIMIT ${SCAN_PAGE_SIZE}
         `
         : sql<Record<string, unknown>>`
-          SELECT ${sql.literal(SUBMISSION_COLUMNS)}
+          SELECT submission_id AS "submissionId", thread_id AS "threadId",
+            queue_sequence AS "queueSequence", principal, idempotency_key AS "idempotencyKey",
+            deployment_id AS "deploymentId", receipt_id AS "receiptId", state
           FROM effect_agent_submissions
           WHERE state <> 'settled'
             AND (thread_id, queue_sequence) > (${cursor.threadId}, ${cursor.queueSequence})
@@ -3153,11 +3158,12 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
         `
     ).pipe(Effect.mapError(sqlFailure(operation)));
 
-    const decoded = yield* decodeSubmissionRows(operation, "nonterminal_scan", rows);
-
-    const snapshots = yield* Effect.forEach(decoded, (row) =>
-      decodeSubmissionSnapshot(operation, row),
-    );
+    const decoded = yield* decodeRows(
+      Schema.Array(SubmissionWorkItem),
+      "effect_agent_submissions",
+      "nonterminal_scan",
+      rows,
+    ).pipe(Effect.mapError(internalFailure(operation)));
 
     const last = decoded[decoded.length - 1];
 
@@ -3165,16 +3171,16 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       last === undefined || decoded.length < SCAN_PAGE_SIZE
         ? Option.none()
         : Option.some({
-            threadId: last.thread_id,
-            queueSequence: last.queue_sequence,
+            threadId: last.threadId,
+            queueSequence: last.queueSequence,
           });
 
-    return [snapshots, next] as const;
+    return [decoded, next] as const;
   });
 
-  const scanNonterminal: Stream.Stream<SubmissionSnapshot, LedgerError> = Stream.paginate<
+  const scanNonterminal: Stream.Stream<SubmissionWorkItem, LedgerError> = Stream.paginate<
     ScanCursor | undefined,
-    SubmissionSnapshot,
+    SubmissionWorkItem,
     LedgerError
   >(undefined, scanPage);
 

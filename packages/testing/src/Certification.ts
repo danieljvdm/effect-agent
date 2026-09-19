@@ -729,11 +729,11 @@ const verifyLane = Effect.fn("Certification.verifyLane")(function* (
   const exported = yield* store.export(ThreadExportRequest.make({ threadId: lane }));
   const rows = new Map<SubmissionId, SubmissionSnapshot>();
   const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+  const named = new Set<SubmissionId>();
 
   for (const submission of nonterminal) {
-    if (submission.threadId === lane) rows.set(submission.submissionId, submission);
+    if (submission.threadId === lane) named.add(submission.submissionId);
   }
-  const named = new Set<SubmissionId>();
 
   for (const envelope of exported.records) {
     const payload = envelope.record.payload;
@@ -885,7 +885,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
     // Expire any lease a faulted Attempt left behind (D5): virtual time is the
     // adapter-neutral reclaim lever — a live lease may block every new claim.
     yield* TestClock.adjust(leaseAdvance);
-    yield* Effect.exit(runtime.runRecovery);
+    yield* Effect.exit(runtime.runRecovery());
     for (const lane of lanes) {
       yield* Effect.exit(driveLane(lane));
     }

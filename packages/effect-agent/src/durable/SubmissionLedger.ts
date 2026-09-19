@@ -204,22 +204,33 @@ export class SubmissionLookupByKey extends Schema.TaggedClass<SubmissionLookupBy
 export const SubmissionLookup = Schema.Union([SubmissionLookupById, SubmissionLookupByKey]);
 export type SubmissionLookup = typeof SubmissionLookup.Type;
 
-/** The full durable ledger view of one Submission. */
-export class SubmissionSnapshot extends Schema.Class<SubmissionSnapshot>(
-  "@effect-agent/thread/SubmissionSnapshot",
+/**
+ * Control-only worklist entry. Discovery validates identities, ordering and state without
+ * decoding retained execution payloads. Hydrate only the selected Thread through `lookup`
+ * or `loadRecoverySnapshot`, inside its recovery failure boundary.
+ */
+export class SubmissionWorkItem extends Schema.Class<SubmissionWorkItem>(
+  "@effect-agent/thread/SubmissionWorkItem",
 )({
   submissionId: SubmissionId,
   threadId: ThreadId,
   queueSequence: QueueSequence,
   principal: Principal,
   idempotencyKey: IdempotencyKey,
-  agentId: AgentId,
-  agentDigests: DefinitionDigests,
   deploymentId: DeploymentId,
-  inputPayload: PersistedJson,
-  inputDigest: Digest,
   receiptId: ReceiptId,
   state: SubmissionState,
+}) {}
+
+/** The full durable ledger view of one Submission. */
+export class SubmissionSnapshot extends Schema.Class<SubmissionSnapshot>(
+  "@effect-agent/thread/SubmissionSnapshot",
+)({
+  ...SubmissionWorkItem.fields,
+  agentId: AgentId,
+  agentDigests: DefinitionDigests,
+  inputPayload: PersistedJson,
+  inputDigest: Digest,
   settledOutcome: Schema.optionalKey(SettlementOutcome),
   createdAt: Schema.DateTimeUtcFromString,
   readyAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
@@ -1050,8 +1061,10 @@ export type SubmissionLedgerFailure =
  *   divergent re-resolution fails with `UnknownResolutionConflict`. Transitions
  *   `unknown → input-applied` once no open call remains, waking the lane. Fails with
  *   `SettlementConflict` once settled.
- * - `scanNonterminal` — streams every Submission whose state is not `settled`, ordered by
- *   (threadId, queueSequence); recovery's admission-independent worklist (DUR-014).
+ * - `scanNonterminal` — streams control-only entries for every Submission whose state is not
+ *   `settled`, ordered by (threadId, queueSequence); recovery's admission-independent worklist
+ *   (DUR-014). It must not decode execution payloads. SQL or control-identity corruption fails
+ *   the scan; selected-Thread payload hydration belongs inside the caller's isolation boundary.
  * - `loadRecoverySnapshot` — strongly consistent full snapshot for the pure recovery classifier.
  *
  * No operation claims exactly-once external side effects; the ledger records decisions
@@ -1137,7 +1150,7 @@ export class SubmissionLedger extends Context.Service<
     readonly releaseChildBudget: (
       request: ReleaseChildBudgetRequest,
     ) => Effect.Effect<ChildBudgetReservationSnapshot, ChildReservationConflict | LedgerError>;
-    readonly scanNonterminal: Stream.Stream<SubmissionSnapshot, LedgerError>;
+    readonly scanNonterminal: Stream.Stream<SubmissionWorkItem, LedgerError>;
     readonly loadRecoverySnapshot: (
       request: RecoverySnapshotRequest,
     ) => Effect.Effect<RecoverySnapshot, LedgerError>;

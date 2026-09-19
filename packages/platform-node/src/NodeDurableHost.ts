@@ -26,6 +26,7 @@ import {
   type DurableVerifyFailure,
   type DurableWorkerFailure,
   type Receipt,
+  type RecoveryBlocked,
   type RecoveryReport,
 } from "effect-agent/durable-agent-runtime";
 import { type ThreadId, type SubmissionId } from "effect-agent/identifiers";
@@ -70,7 +71,13 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: bool
   // stays a visible obligation for `runWorkers`; submissions parked on an Unknown Outcome are
   // reported `unknown` and wait for the authorized `resolveUnknown` path (DUR-017) — they consume
   // no worker permit while the settlement obligation stays owed and later input can run.
-  const startupRecovery = yield* runtime.runRecovery;
+  const startupRecovery = yield* runtime.runRecovery();
+
+  // This host opens one shared worker pool. A blocked Thread cannot safely enter it:
+  // recovery has not established execution authority, including after a read timeout.
+  const blocked = startupRecovery.blocked[0];
+
+  if (blocked !== undefined) return yield* blocked;
 
   const admission = yield* Ref.make(true);
 
@@ -149,7 +156,7 @@ const makeHost = Effect.fn("NodeDurableHost.make")(function* (startWorkers: bool
   yield* Effect.addFinalizer(() => Ref.set(admission, false));
 
   return NodeDurableHost.of({
-    startupRecovery,
+    startupRecovery: startupRecovery.reports,
     admissionOpen: Ref.get(admission),
     submit,
     awaitSettlement: runtime.awaitSettlement,
@@ -287,7 +294,7 @@ export class NodeDurableHost extends Context.Service<
    */
   static readonly layer: Layer.Layer<
     NodeDurableHost,
-    DurableWorkerFailure | MessageDeliveryError,
+    DurableWorkerFailure | RecoveryBlocked | MessageDeliveryError,
     DurableAgentRuntime | NodeDurableAgentRuntimeConfig | MessageDeliveryStore
   > = Layer.effect(NodeDurableHost)(makeHost(false));
 

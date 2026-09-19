@@ -373,7 +373,7 @@ const makeUnknownLane = (thread: string, key: string) =>
 
     expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
     yield* clearFailpoint;
-    const reports = yield* runtime.runRecovery;
+    const reports = (yield* runtime.runRecovery()).reports;
     const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
 
     expect(report?.disposition).toBe("unknown");

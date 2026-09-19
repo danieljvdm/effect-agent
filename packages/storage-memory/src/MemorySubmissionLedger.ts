@@ -93,6 +93,7 @@ import {
   SubmissionLookup,
   SubmissionLookupByKey,
   SubmissionSnapshot,
+  SubmissionWorkItem,
   SuspendRequest,
   SuspensionSnapshot,
   UnknownResolution,
@@ -2438,7 +2439,18 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   ? 1
                   : left.row.queueSequence - right.row.queueSequence,
             )
-            .map((stored) => toSnapshot(stored.row));
+            .map(({ row }) =>
+              SubmissionWorkItem.make({
+                submissionId: row.submissionId,
+                threadId: row.threadId,
+                queueSequence: row.queueSequence,
+                principal: row.principal,
+                idempotencyKey: row.idempotencyKey,
+                deploymentId: row.deploymentId,
+                receiptId: row.receiptId,
+                state: row.state,
+              }),
+            );
 
           return Stream.fromIterable(snapshots);
         }),

@@ -117,6 +117,68 @@ const batch = (
 let recoveryCase = 0;
 
 describe("DoThreadStore", () => {
+  for (const decoder of ["CanonicalRecord", "RecordRow"] as const) {
+    it(`retains content-free ${decoder} diagnostics through the ThreadStore boundary`, () =>
+      withThreadStorage(`decode-diagnostic:${decoder}`, (storage) =>
+        Effect.gen(function* () {
+          const store = yield* ThreadStore;
+          const threadId = thread(`decode-diagnostic:${decoder}`);
+          const privateValue = "private-canonical-payload-do-not-log";
+
+          yield* store.materialize(
+            ThreadMaterialization.make({ threadId, producerEpoch: epoch(0) }),
+          );
+          yield* store.append(
+            FencedAppendRequest.make({
+              threadId,
+              producerEpoch: epoch(0),
+              expectedTailSequence: sequence(0),
+              expectedTailDigest: EMPTY_TAIL_DIGEST,
+              batch: batch(`diagnostic:${decoder}`, [
+                inputRecord(`diagnostic:${decoder}`, privateValue),
+              ]),
+            }),
+          );
+          yield* Effect.sync(() => {
+            if (decoder === "CanonicalRecord")
+              storage.sql.exec(
+                "UPDATE effect_agent_canonical_records SET record_json = ? WHERE thread_id = ?",
+                `{"unexpected":"${privateValue}"}`,
+                threadId,
+              );
+            else
+              storage.sql.exec(
+                "UPDATE effect_agent_canonical_records SET record_id = '' WHERE thread_id = ?",
+                threadId,
+              );
+          });
+
+          const failure = yield* Stream.runCollect(
+            store.read(ThreadRead.make({ threadId, limit: 10 })),
+          ).pipe(Effect.flip);
+
+          expect(failure).toMatchObject({
+            _tag: "ThreadStoreError",
+            operation:
+              decoder === "CanonicalRecord" ? "decode canonical record" : "read canonical records",
+            diagnostic: { causeTag: "SchemaError", decoder },
+          });
+          if (isThreadStoreError(failure)) {
+            expect(failure.diagnostic?.operation).toBe(
+              decoder === "CanonicalRecord" ? "decode canonical record" : "decode storage rows",
+            );
+            if (decoder === "CanonicalRecord") expect(failure.diagnostic?.sequence).toBe(1);
+            const encoded = yield* Schema.encodeEffect(ThreadStoreError)(failure);
+
+            expect(JSON.stringify(encoded)).not.toContain(privateValue);
+            expect(yield* Schema.decodeEffect(ThreadStoreError)(encoded)).toMatchObject({
+              diagnostic: failure.diagnostic,
+            });
+          }
+        }).pipe(Effect.provide(layer({ storage }))),
+      ));
+  }
+
   it("rejects canonical records beyond the captured export tail", () =>
     withThreadStorage("bad-export-tail", (storage) =>
       Effect.gen(function* () {

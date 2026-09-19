@@ -367,7 +367,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(report?.disposition).toBe("repaired");
                 expect(yield* reservationStatuses(parentId)).toEqual(["released"]);
 
-                const second = yield* runtime.runRecovery;
+                const second = (yield* runtime.runRecovery()).reports;
                 const settleReport = second.find((entry) => entry.submissionId === parentId);
 
                 expect(settleReport?.decision._tag).toBe("SettleAborted");
@@ -612,9 +612,13 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 expect(parentReport?.decision._tag).toBe("PropagateChildAbort");
                 expect(parentReport?.disposition).toBe("repaired");
+
                 // Recovery scans lanes lexically. Allow the next pass to settle a child
                 // whose lane was visited before its parent's abort propagation.
-                const reports = [...host.startupRecovery, ...(yield* runtime.runRecovery)];
+                const reports = [
+                  ...host.startupRecovery,
+                  ...(yield* runtime.runRecovery()).reports,
+                ];
 
                 const childReport = reports.find(
                   (entry) =>
@@ -632,7 +636,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 // The settled children classify as a pending join; the parent then settles
                 // aborted strictly after the joins (spec §13.1).
-                const second = yield* runtime.runRecovery;
+                const second = (yield* runtime.runRecovery()).reports;
 
                 const wakeReport = second.find(
                   (entry) => entry.submissionId === parent.submissionId,
@@ -767,7 +771,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(child.state).toBe("settled");
                 expect(child.settledOutcome).toBe("aborted");
 
-                const second = yield* runtime.runRecovery;
+                const second = (yield* runtime.runRecovery()).reports;
                 const wakeReport = second.find((entry) => entry.submissionId === parentId);
 
                 expect(wakeReport?.decision._tag).toBe("ResumeWaitingParent");

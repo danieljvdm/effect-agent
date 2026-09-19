@@ -295,7 +295,7 @@ describe("DurableAgentRuntime recovery history", () => {
           yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
         }
         yield* probe.reset;
-        const reports = yield* runtime.runRecovery;
+        const reports = (yield* runtime.runRecovery()).reports;
 
         expect(reports.map((report) => report.disposition)).toEqual([
           "deferred",
@@ -359,7 +359,7 @@ describe("DurableAgentRuntime recovery history", () => {
       yield* ledger.markReady(MarkReadyRequest.make({ submissionId: fourth.submissionId }));
 
       yield* probe.reset;
-      const reports = yield* runtime.runRecovery;
+      const reports = (yield* runtime.runRecovery()).reports;
 
       expect(reports.map((report) => report.decision._tag)).toEqual([
         "RepairReadiness",
@@ -462,12 +462,16 @@ describe("DurableAgentRuntime recovery history", () => {
 
       yield* probe.reset;
       yield* probe.failReadAfter(prefixTail);
-      const failure = yield* runtime.runRecovery.pipe(Effect.flip);
+      const result = yield* runtime.runRecovery();
 
-      expect(failure).toMatchObject({
-        _tag: "ThreadStoreError",
-        operation: "read recovery history",
-      });
+      expect(result.reports).toEqual([]);
+      expect(result.blocked).toMatchObject([
+        {
+          threadId: THREAD_ID,
+          failure: { errorTag: "ThreadStoreError", operation: "read recovery history" },
+        },
+      ]);
+      expect(result.blocked).toHaveLength(1);
 
       const requests = (yield* probe.requests).map((request) => ({
         afterSequence: request.afterSequence,

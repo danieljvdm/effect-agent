@@ -72,6 +72,7 @@ import {
   SubmissionLookup,
   SubmissionLookupByKey,
   SubmissionSnapshot,
+  SubmissionWorkItem,
   SubmissionState,
   SettlementReservationSnapshot,
   settlementFailureFromRecord,
@@ -86,6 +87,7 @@ import {
   type ChildSettledOutcome,
   type SuspensionOutcome,
 } from "effect-agent/submission-ledger";
+import { ThreadStoreDiagnostic } from "effect-agent/thread-store";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
@@ -534,26 +536,27 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       operation: string,
       row: SubmissionRow,
     ): Effect.fn.Return<SubmissionSnapshot, LedgerError> {
+      const decodeFailure = (error: Schema.SchemaError) =>
+        internalFailure(operation)(
+          DoStorageCorruptionError.make({
+            table: "effect_agent_submissions",
+            rowKey: row.submission_id,
+            message: "Stored submission does not satisfy the ledger schema",
+            diagnostic: ThreadStoreDiagnostic.make({
+              causeTag: error._tag,
+              operation,
+              decoder: "SubmissionSnapshot",
+              issueTag: error.issue._tag,
+            }),
+          }),
+        );
+
       const agentDigests = yield* parseStoredJsonText(row.agent_digests_json).pipe(
-        Effect.mapError((error) =>
-          corruptionFailure(
-            operation,
-            "effect_agent_submissions",
-            row.submission_id,
-            error.message,
-          ),
-        ),
+        Effect.mapError(decodeFailure),
       );
 
       const inputPayload = yield* parseStoredJsonText(row.input_json).pipe(
-        Effect.mapError((error) =>
-          corruptionFailure(
-            operation,
-            "effect_agent_submissions",
-            row.submission_id,
-            error.message,
-          ),
-        ),
+        Effect.mapError(decodeFailure),
       );
 
       if ((row.parent_submission_id === null) !== (row.parent_tool_call_id === null)) {
@@ -584,21 +587,21 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           ? {}
           : {
               workerAdmission: yield* parseStoredJsonText(row.worker_admission_json).pipe(
-                Effect.mapError(internalFailure(operation)),
+                Effect.mapError(decodeFailure),
               ),
             }),
         ...(row.message_admission_json === null
           ? {}
           : {
               messageAdmission: yield* parseStoredJsonText(row.message_admission_json).pipe(
-                Effect.mapError(internalFailure(operation)),
+                Effect.mapError(decodeFailure),
               ),
             }),
         ...(row.admission_fence_json === null
           ? {}
           : {
               admissionFence: yield* parseStoredJsonText(row.admission_fence_json).pipe(
-                Effect.mapError(internalFailure(operation)),
+                Effect.mapError(decodeFailure),
               ),
             }),
         ...(row.settled_outcome === null ? {} : { settledOutcome: row.settled_outcome }),
@@ -611,16 +614,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
                 parentToolCallId: row.parent_tool_call_id,
               },
             }),
-      }).pipe(
-        Effect.mapError((error) =>
-          corruptionFailure(
-            operation,
-            "effect_agent_submissions",
-            row.submission_id,
-            error.message,
-          ),
-        ),
-      );
+      }).pipe(Effect.mapError(decodeFailure));
     },
   );
 
@@ -3235,7 +3229,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   const scanPage = Effect.fn("DoSubmissionLedger.scanPage")(function* (
     cursor: ScanCursor | undefined,
   ): Effect.fn.Return<
-    readonly [ReadonlyArray<SubmissionSnapshot>, Option.Option<ScanCursor | undefined>],
+    readonly [ReadonlyArray<SubmissionWorkItem>, Option.Option<ScanCursor | undefined>],
     LedgerError
   > {
     const operation = "ledger scan nonterminal";
@@ -3243,14 +3237,18 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     const rows = yield* (
       cursor === undefined
         ? sql<Record<string, unknown>>`
-          SELECT ${sql.literal(SUBMISSION_COLUMNS)}
+          SELECT submission_id AS "submissionId", thread_id AS "threadId",
+            queue_sequence AS "queueSequence", principal, idempotency_key AS "idempotencyKey",
+            deployment_id AS "deploymentId", receipt_id AS "receiptId", state
           FROM effect_agent_submissions
           WHERE state <> 'settled'
           ORDER BY thread_id ASC, queue_sequence ASC
           LIMIT ${SCAN_PAGE_SIZE}
         `
         : sql<Record<string, unknown>>`
-          SELECT ${sql.literal(SUBMISSION_COLUMNS)}
+          SELECT submission_id AS "submissionId", thread_id AS "threadId",
+            queue_sequence AS "queueSequence", principal, idempotency_key AS "idempotencyKey",
+            deployment_id AS "deploymentId", receipt_id AS "receiptId", state
           FROM effect_agent_submissions
           WHERE state <> 'settled'
             AND (thread_id, queue_sequence) > (${cursor.threadId}, ${cursor.queueSequence})
@@ -3259,11 +3257,13 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         `
     ).pipe(Effect.mapError(sqlFailure(operation)));
 
-    const decoded = yield* decodeSubmissionRows(operation, "nonterminal_scan", rows);
-
-    const snapshots = yield* Effect.forEach(decoded, (row) =>
-      decodeSubmissionSnapshot(operation, row),
-    );
+    const decoded = yield* decodeRows(
+      Schema.Array(SubmissionWorkItem),
+      "effect_agent_submissions",
+      "nonterminal_scan",
+      rows,
+      "SubmissionWorkItem",
+    ).pipe(Effect.mapError(internalFailure(operation)));
 
     const last = decoded[decoded.length - 1];
 
@@ -3271,16 +3271,16 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       last === undefined || decoded.length < SCAN_PAGE_SIZE
         ? Option.none()
         : Option.some({
-            threadId: last.thread_id,
-            queueSequence: last.queue_sequence,
+            threadId: last.threadId,
+            queueSequence: last.queueSequence,
           });
 
-    return [snapshots, next] as const;
+    return [decoded, next] as const;
   });
 
-  const scanNonterminal: Stream.Stream<SubmissionSnapshot, LedgerError> = Stream.paginate<
+  const scanNonterminal: Stream.Stream<SubmissionWorkItem, LedgerError> = Stream.paginate<
     ScanCursor | undefined,
-    SubmissionSnapshot,
+    SubmissionWorkItem,
     LedgerError
   >(undefined, scanPage);
 

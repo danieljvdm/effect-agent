@@ -296,6 +296,39 @@ later deployment that registers the agent. An obsolete pending tool operation do
 historical code: it receives an unavailable result when no mutation was dispatched, or stays
 unknown when an external effect may have occurred.
 
+The scheduler and admission limits discover work from the ledger's control-only worklist.
+The scheduler then hydrates and recovers the selected Thread before its claim. Accepted abort
+intents identify cleanup even for input that was never claimed; their reads share the recovery
+timeout and fault boundary, and skip Threads pending recovery or waiting for retry. Old recovery
+runs sequentially in the event Scope with a 30-second bound per Thread; the same alarm and
+wake loop can dispatch fresh Threads and publish their replies while old history is stalled.
+Unfinished cleanup retains its fences and settlement obligations across eviction.
+
+Unreadable retained payloads, history or a failed child recovery block only their Thread. Maintenance stores a
+bounded `ThreadRecoveryFault` outside canonical history and retries after 5, 10, 20, 40, then
+60 seconds. New admissions retain their receipts and do not bypass that Thread's deadline;
+other Threads remain eligible. A successful recovery clears the fault without changing history
+or resolving uncertain external effects.
+
+After a native pass, an authenticated host can inspect the local fault without decoding history:
+
+```ts
+import { ThreadMaintenance } from "@effect-agent/platform-cloudflare/alarm";
+import { ThreadId } from "effect-agent/identifiers";
+
+const status = ThreadMaintenance.use((maintenance) =>
+  maintenance.recoveryStatus(ThreadId.make("thread-1")),
+);
+// Effect<Option<ThreadRecoveryFault>, DurableAlarmError | OperationDenied, ThreadMaintenance>
+```
+
+`recoveryStatus` authorizes `explain` before reading storage, using the `OperationAuthorizer`
+provided when constructing `ThreadMaintenance.layer`. The host verifies local Thread membership
+before exposing it over RPC. `Some` carries failure phase, content-free diagnostics,
+first/last failure time, retry time and attempt count; `None` means no recorded fault. Neither
+proves settlement or health. Source-owned accepted-message notices must not wait for native
+settlement: a pre-claim fault can occur before any reply obligation or binding attempt exists.
+
 Application outboxes can supply `ThreadHostMaintenance` from the application Layer:
 
 ```ts
@@ -325,13 +358,16 @@ wave finishes. Delivery retries belong to later alarms, not deadline-sleep loops
 Declare the whole-wave `dispatchTimeoutMillis` as an integer from 1 to 300000 milliseconds.
 Use the sum for sequential operations and the maximum for parallel lanes. Admit a new wave only
 if its full allowance fits before `dispatchUntil`; otherwise leave the work durably due without
-claiming an attempt. Setup and `pendingDeadline` are bounded local operations.
+claiming an attempt. Setup and `pendingDeadline` are bounded local control operations; neither
+may read retained execution history. Hosts select current reply obligations before history reads.
 
-The native scheduler owns recovery, FIFO selection and retry timing. After its initial opportunity,
-it closes admission of external waves and keeps responding to native wakes while the admitted
-waves finish. Already-ready work and new admissions can execute without cancelling or restarting
-an unrelated delivery. Periodic generation checks recover dropped wake hints; receipt-only
-bookkeeping does not create native recovery debt.
+The native scheduler owns recovery, FIFO selection and retry timing. Its initial opportunity
+opens one delivery window, kept open while the old-recovery wave is pending so fresh replies
+can publish in the same event. The window closes once, no later than the native yield deadline;
+admitted waves then retire while native wakes can still advance work. Already-ready work and
+new admissions can execute without cancelling or restarting an unrelated delivery. Periodic
+generation checks recover dropped wake hints; receipt-only bookkeeping does not create native
+recovery debt.
 
 Native message delivery keeps the driver's actual Claim deadline, including its timeout/retry
 commit. The driver has four parallel permits and a retained attempt allowance of at most five

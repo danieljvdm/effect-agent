@@ -675,18 +675,18 @@ describe("DC alarm semantics", () => {
 
       const recovery = await runInDurableObject(stubFor(thread), (instance) =>
         instance[DurableObject.RunSymbol](
-          DurableAgentRuntime.use((runtime) => runtime.runRecovery),
+          DurableAgentRuntime.use((runtime) => runtime.runRecovery()),
         ),
       );
 
-      expect(recovery.find((report) => report.submissionId === receipt.submissionId)).toMatchObject(
-        {
-          decision: {
-            _tag: unsupportedRetry ? "ApplyUnknownResolutions" : "AwaitUnknownResolution",
-          },
-          disposition: "unknown",
+      expect(
+        recovery.reports.find((report) => report.submissionId === receipt.submissionId),
+      ).toMatchObject({
+        decision: {
+          _tag: unsupportedRetry ? "ApplyUnknownResolutions" : "AwaitUnknownResolution",
         },
-      );
+        disposition: "unknown",
+      });
 
       const follower = await submitTo(plannerDefinition, thread, `${thread}-follower`);
 

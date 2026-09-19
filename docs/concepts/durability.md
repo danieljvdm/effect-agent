@@ -78,6 +78,19 @@ later input can run in the same Thread while the original settlement obligation 
 Suspended, joining, and joined work retain their ordering barriers. At most one live owner can
 claim a Thread; a wake hint does not acquire ownership or advance its fencing epoch.
 
+`SubmissionLedger.scanNonterminal` discovers work through `SubmissionWorkItem`: identities,
+receipt, deployment, queue order and state, without execution payloads. Read `lookup` or
+`loadRecoverySnapshot` only for selected work. Recovery hydrates each Thread inside its fault
+boundary, so an unreadable retained input or worker origin cannot poison global discovery.
+
+`runRecovery()` isolates history, retained payload and child-recovery faults by Thread. It returns ordinary
+Submission `reports` and one `blocked` fault per failed Thread. Blocked Threads cannot be
+claimed until recovery succeeds. Pass `{ threadId }` to recover a selected Thread independently.
+The host owns durable fault visibility and retry scheduling outside the execution log. The
+default cooperative recovery bound is 30 seconds per Thread (`recoveryTimeout`). Interruption
+and global SQL/control-identity scan failures still fail the sweep. A recovery fault never settles accepted work,
+proves an external effect failed, or authorizes replay.
+
 ```text
 thread log              submission ledger
 what happened                 what is still owed

@@ -63,7 +63,7 @@ const workerLoop = Effect.gen(function* () {
 
   while (true) {
     // Heal what a killed sibling left behind, then drive every discovered lane once.
-    yield* tolerateTyped(runtime.runRecovery);
+    yield* tolerateTyped(runtime.runRecovery());
 
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal).pipe(
       Effect.exit,

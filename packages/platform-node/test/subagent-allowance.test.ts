@@ -397,7 +397,7 @@ it.effect(
               const runtime = yield* DurableAgentRuntime;
 
               // Complete admission from the request record, without a delegation handler.
-              yield* runtime.runRecovery;
+              yield* runtime.runRecovery();
               yield* runtime.processThreadResolved(parentId);
               expect(yield* runtime.processThreadResolved(childId)).toEqual([]);
               expect(starts).toEqual([]);
@@ -442,7 +442,7 @@ it.effect(
             Effect.gen(function* () {
               const runtime = yield* DurableAgentRuntime;
 
-              yield* runtime.runRecovery;
+              yield* runtime.runRecovery();
               const settlements = yield* runtime.processThreadResolved(childId);
 
               expect(settlements[0]?.outcome).toBe("completed");
