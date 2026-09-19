@@ -9,7 +9,6 @@ import {
   Digest,
   ObservationOffset,
 } from "effect-agent/records";
-import { SqlDialect } from "effect-agent/sql-dialect";
 import { makeSelectedReads } from "effect-agent/sql-thread-native-reads";
 import {
   AppendConflict,
@@ -903,20 +902,14 @@ const makeServices = Effect.fn("PostgresThreadStore.makeServices")(function* () 
 });
 
 /**
- * SQLite Thread Store implementation with configuration, failpoint, SQL, and Crypto
+ * Postgres Thread Store implementation with configuration, failpoint, SQL, and Crypto
  * authority kept visible in its input channel.
  */
 export const layerWithServices: Layer.Layer<
   ThreadStore,
   PostgresStorageInitializationError,
   PostgresStorageConfig | PostgresStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
-> = Layer.effectContext(makeServices()).pipe(Layer.provide(SqlDialect.layerPostgres));
-
-/**
- * Validated SQLite storage configuration Layer with the documented defaults applied. Shared
- * by the ThreadStore and SubmissionLedger convenience layers so their defaults cannot
- * drift.
- */
+> = Layer.effectContext(makeServices());
 
 /**
  * A composition-root convenience Layer for canonical Threads. Durable accepted work is

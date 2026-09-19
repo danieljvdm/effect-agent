@@ -228,7 +228,14 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
   "storage-postgres": ["effect-agent"],
   "storage-sqlite": ["effect-agent"],
   workflow: ["effect-agent", "storage-memory"],
-  testing: ["ai-decision", "effect-agent", "platform-node", "storage-memory", "storage-sqlite"],
+  testing: [
+    "ai-decision",
+    "effect-agent",
+    "platform-node",
+    "storage-memory",
+    "storage-postgres",
+    "storage-sqlite",
+  ],
 };
 
 const readManifest = (path: string) =>

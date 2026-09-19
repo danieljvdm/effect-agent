@@ -4,7 +4,6 @@ import {
   MessageDeliveryStore,
   type MessageDeliveryStoreLimits,
 } from "effect-agent/message-delivery";
-import { SqlDialect } from "effect-agent/sql-dialect";
 import {
   makeSqlMessageDeliveryStore,
   SqlMessageDeliveryTransaction,
@@ -40,4 +39,4 @@ export const layer = (limits?: MessageDeliveryStoreLimits) =>
 
       return yield* makeSqlMessageDeliveryStore(limits, { maxStoredValueBytes: 16 * 1024 * 1024 });
     }),
-  ).pipe(Layer.provide(transactions), Layer.provide(SqlDialect.layerPostgres));
+  ).pipe(Layer.provide(transactions));

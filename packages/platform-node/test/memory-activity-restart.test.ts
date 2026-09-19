@@ -30,7 +30,6 @@ import { revalidateMemoryLookup } from "effect-agent/memory-revalidation";
 import { MemoryScope, MemoryReader, MemoryWrite, MemoryWriter } from "effect-agent/memory-store";
 import { type ActiveMemoryDocument } from "effect-agent/memory-store";
 import { RunContextPreparationPassthrough } from "effect-agent/run-options";
-import { SqlDialect } from "effect-agent/sql-dialect";
 import { memoryReaderLayer, memoryStoreLayer } from "effect-agent/sql-memory-store";
 import { ThreadHistory } from "effect-agent/thread-history";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
@@ -137,16 +136,10 @@ const activityLayer = (filename: string) =>
   );
 
 const memoryLayer = (filename: string) =>
-  memoryStoreLayer.pipe(
-    Layer.provide(SqlDialect.layerSqlite),
-    Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })),
-  );
+  memoryStoreLayer.pipe(Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
 const readerLayer = (filename: string) =>
-  memoryReaderLayer.pipe(
-    Layer.provide(SqlDialect.layerSqlite),
-    Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })),
-  );
+  memoryReaderLayer.pipe(Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
 const readMemory = (filename: string, key = memoryKey) =>
   Effect.flatMap(MemoryReader, (reader) => reader.get(key)).pipe(

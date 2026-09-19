@@ -7,7 +7,7 @@ import {
 
 const noFailpoint: PostgresStorageFailpointHandler = () => Effect.void;
 
-/** Test-only control for replacing the active SQLite failpoint handler. */
+/** Test-only control for replacing the active Postgres failpoint handler. */
 export class PostgresStorageFailpointTestControl extends Context.Service<
   PostgresStorageFailpointTestControl,
   {

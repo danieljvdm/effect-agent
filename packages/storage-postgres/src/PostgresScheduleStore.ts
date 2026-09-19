@@ -22,12 +22,12 @@ import {
   applyScheduleChange,
   scheduleDeadline,
 } from "effect-agent/schedule-transition";
-import { SqlDialect } from "effect-agent/sql-dialect";
+import { jsonText } from "effect-agent/sql-json";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { initializePostgresJournal } from "./internal/postgres-journal.ts";
 import { withWriterLockTransaction } from "./internal/postgres-transactions.ts";
-import type { PostgresStorageConfig } from "./PostgresStorageConfig.ts";
+import { PostgresStorageConfig } from "./PostgresStorageConfig.ts";
 import type { PostgresStorageInitializationError } from "./PostgresStorageError.ts";
 import type { PostgresStorageFailpoint } from "./PostgresStorageFailpoint.ts";
 
@@ -118,18 +118,17 @@ const decodeInput = Effect.fn("PostgresScheduleStore.decodeInput")(function* <A,
 
 const makeScheduleStore = Effect.gen(function* () {
   const sql = yield* SqlClientService.SqlClient;
-  const dialect = yield* SqlDialect;
+  const { lockTimeout } = yield* PostgresStorageConfig;
   const scheduleFailpoint = yield* ScheduleFailpoint;
 
   yield* initializePostgresJournal();
 
   // The capacity predicate reads the authoritative record document, so both call sites
   // share one fragment rather than restating the dialect's JSON accessors.
-  const usesCapacity = sql`(${dialect.jsonText("record_json", ["pending"])} IS NOT NULL OR
-    (${dialect.jsonText("record_json", ["state"])} != 'cancelled' AND ${dialect.jsonText(
-      "record_json",
-      ["nextAtMillis"],
-    )} IS NOT NULL))`;
+  const usesCapacity = sql`(${jsonText(sql, "record_json", ["pending"])} IS NOT NULL OR
+    (${jsonText(sql, "record_json", ["state"])} != 'cancelled' AND ${jsonText(sql, "record_json", [
+      "nextAtMillis",
+    ])} IS NOT NULL))`;
 
   const readRows = Effect.fn("PostgresScheduleStore.readRows")(function* (
     key: ScheduleKey,
@@ -164,7 +163,10 @@ const makeScheduleStore = Effect.gen(function* () {
       const canonical = yield* decodeInput(operation, ScheduleRecord, record);
       const recordJson = yield* encodeRecord(canonical);
 
-      const result = yield* withWriterLockTransaction(sql)(
+      const result = yield* withWriterLockTransaction(
+        sql,
+        lockTimeout,
+      )(
         Effect.gen(function* () {
           const existing = yield* readOne(canonical, operation);
 
@@ -264,7 +266,10 @@ const makeScheduleStore = Effect.gen(function* () {
       const decodedKey = yield* decodeInput(operation, ScheduleKey, key);
       const decodedChange = yield* decodeInput(operation, ScheduleChange, change);
 
-      const result = yield* withWriterLockTransaction(sql)(
+      const result = yield* withWriterLockTransaction(
+        sql,
+        lockTimeout,
+      )(
         Effect.gen(function* () {
           const current = yield* readOne(decodedKey, operation);
 
@@ -402,4 +407,4 @@ export const layer: Layer.Layer<
   ScheduleStore,
   PostgresStorageInitializationError,
   PostgresStorageConfig | PostgresStorageFailpoint | SqlClientService.SqlClient
-> = Layer.effect(ScheduleStore)(makeScheduleStore).pipe(Layer.provide(SqlDialect.layerPostgres));
+> = Layer.effect(ScheduleStore)(makeScheduleStore);

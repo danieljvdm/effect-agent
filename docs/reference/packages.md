@@ -341,6 +341,22 @@ Use `memoryReaderLayer` when the application needs no writer. See
 progress for finite committed-activity passes. Its tables and fencing epochs are separate from
 the Thread journal and submission ledger.
 
+### `@effect-agent/storage-postgres`
+
+Stores thread history and pending work in a Postgres database that several Node processes may
+share. Verified against Postgres 16, 17 and 18; CI runs the ends of that range.
+Rejects incompatible stored versions; no migration path is promised.
+`CurrentPostgresStorageVersion` identifies the supported version.
+Test failpoints are in `@effect-agent/storage-postgres/testing/postgres-storage-failpoint-testing`.
+
+Writers serialise on a transaction-scoped advisory lock, the equivalent of SQLite's
+`BEGIN IMMEDIATE`; a blocked writer surfaces as the retryable `PostgresWriteContention`.
+Tables live in the connection's own schema. Selecting another schema means making it the
+connection default (`ALTER ROLE ... SET search_path`), because `search_path` binds per
+connection and cannot be set for the pool; startup verifies this and refuses to run otherwise.
+Build the client with `PostgresStorageClient.layer`: it decodes `BIGINT` to safe integers, which
+the shared row Schemas require. The `effect-agent/sql-memory-store` ports remain SQLite-only.
+
 ### `@effect-agent/platform-node`
 
 `NodeDurableHost.layer(registrations, options)` acquires storage, recovers pending work, and

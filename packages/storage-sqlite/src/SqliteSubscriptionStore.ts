@@ -1,5 +1,4 @@
 import { Effect, Layer, Schema } from "effect";
-import { SqlDialect } from "effect-agent/sql-dialect";
 import {
   makeSqlSubscriptionStore,
   SqlSubscriptionTransaction,
@@ -53,5 +52,4 @@ export const subscriptionStoreLayer = (
 > =>
   Layer.effect(SubscriptionStore, makeSubscriptionStore(partition)).pipe(
     Layer.provide(transactionLayer),
-    Layer.provide(SqlDialect.layerSqlite),
   );

@@ -2,7 +2,6 @@ import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import { Effect, Schema, Stream } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
-import { SqlDialect } from "effect-agent/sql-dialect";
 import { createMessageDeliveryPendingIndex } from "effect-agent/sql-message-delivery-store";
 import { checkV2ThreadLayout } from "effect-agent/sql-storage-v2-upgrade";
 import {
@@ -612,10 +611,9 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             yield* createNonterminalIndex;
             yield* failpoint("upgrade:after-mutation");
             yield* failpoint("upgrade:before-version");
-            yield* Effect.provide(createNativeReadIndexes, SqlDialect.layerSqlite);
+            yield* createNativeReadIndexes;
             yield* createMessageDeliveryPendingIndex;
             yield* seedNativeReadIndexes.pipe(
-              Effect.provide(SqlDialect.layerSqlite),
               Effect.catchTag("ThreadStoreError", (error) =>
                 DoStorageCorruptionError.make({
                   table: "effect_agent_canonical_records",
@@ -679,10 +677,9 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
                 message: "Predecessor storage is missing its required nonterminal index",
               });
             yield* failpoint("upgrade:before-mutation");
-            yield* Effect.provide(createNativeReadIndexes, SqlDialect.layerSqlite);
+            yield* createNativeReadIndexes;
             yield* createMessageDeliveryPendingIndex;
             yield* seedNativeReadIndexes.pipe(
-              Effect.provide(SqlDialect.layerSqlite),
               Effect.catchTag("ThreadStoreError", (error) =>
                 DoStorageCorruptionError.make({
                   table: "effect_agent_canonical_records",
@@ -1124,7 +1121,6 @@ const makeJournal = (
               );
 
               yield* indexCanonicalRecord(request.threadId, canonical).pipe(
-                Effect.provide(SqlDialect.layerSqlite),
                 Effect.provideService(SqlClient.SqlClient, sql),
                 Effect.mapError(storageError("index canonical record")),
               );

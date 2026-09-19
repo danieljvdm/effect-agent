@@ -9,7 +9,6 @@ import type * as PostgresSubmissionLedger from "@effect-agent/storage-postgres/p
 import type * as PostgresThreadStore from "@effect-agent/storage-postgres/postgres-thread-store";
 import { expect, it } from "@effect/vitest";
 import type { Crypto, Layer } from "effect";
-import type { SqlDialect } from "effect-agent/sql-dialect";
 import type * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 type Equal<Left, Right> =
@@ -56,11 +55,6 @@ type ClientErrorProof = Assert<
   Equal<Layer.Error<ReturnType<typeof PostgresStorageClient.layer>>, PostgresStorageError>
 >;
 
-/** The dialect needs only a client, so either adapter can supply it from its own connection. */
-type DialectRequirementsProof = Assert<
-  Equal<Layer.Services<typeof SqlDialect.layerPostgres>, SqlClientService.SqlClient>
->;
-
 it("keeps configuration, failpoint and client authority in the named Layer inputs", () => {
   const proofs: ReadonlyArray<true> = [
     true satisfies ThreadStoreRequirementsProof,
@@ -69,8 +63,7 @@ it("keeps configuration, failpoint and client authority in the named Layer input
     true satisfies LedgerErrorProof,
     true satisfies ConvenienceLayerProof,
     true satisfies ClientErrorProof,
-    true satisfies DialectRequirementsProof,
   ];
 
-  expect(proofs).toHaveLength(7);
+  expect(proofs).toHaveLength(6);
 });
