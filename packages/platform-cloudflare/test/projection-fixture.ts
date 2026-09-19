@@ -54,10 +54,11 @@ export const hostMaintenanceLayer = Layer.effectContext(
       get dispatchTimeoutMillis() {
         return hostMaintenanceControls.get(threadId)?.dispatchTimeoutMillis ?? 1;
       },
-      drainUntil: (finished, deadline) =>
+      drainUntil: (finished, deadline, activity) =>
         Effect.suspend(
           () =>
-            hostMaintenanceControls.get(threadId)?.drainUntil(finished, deadline) ?? Effect.void,
+            hostMaintenanceControls.get(threadId)?.drainUntil(finished, deadline, activity) ??
+            Effect.void,
         ).pipe(Effect.provideService(WakeScheduler, wakes)),
       pendingDeadline: Effect.suspend(
         () =>

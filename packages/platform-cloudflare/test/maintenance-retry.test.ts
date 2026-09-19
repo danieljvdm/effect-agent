@@ -143,22 +143,25 @@ describe("maintenance retry deadlines", () => {
                     pendingDeadline: Effect.sync(() =>
                       completed ? Option.none() : Option.some(0),
                     ),
-                    drainUntil: () =>
-                      Effect.gen(function* () {
-                        yield* Effect.acquireRelease(
-                          Effect.sync(() => {
-                            attempts++;
-                            active = true;
-                          }),
-                          () =>
+                    drainUntil: (_closed, _until, activity) =>
+                      activity.run(
+                        Effect.gen(function* () {
+                          yield* activity.ready;
+                          yield* Effect.acquireRelease(
                             Effect.sync(() => {
-                              active = false;
+                              attempts++;
+                              active = true;
                             }),
-                        );
-                        yield* Deferred.succeed(entered, undefined);
-                        yield* Deferred.await(release);
-                        completed = true;
-                      }),
+                            () =>
+                              Effect.sync(() => {
+                                active = false;
+                              }),
+                          );
+                          yield* Deferred.succeed(entered, undefined);
+                          yield* Deferred.await(release);
+                          completed = true;
+                        }),
+                      ),
                   }),
                 );
               }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
@@ -258,27 +261,30 @@ describe("maintenance retry deadlines", () => {
                     Effect.provideService(ThreadHostMaintenance, {
                       dispatchTimeoutMillis: 1_000,
                       pendingDeadline: Effect.sync(() => Option.fromUndefinedOr(hostDeadline)),
-                      drainUntil: () =>
-                        Effect.gen(function* () {
-                          yield* Effect.acquireRelease(
-                            Effect.sync(() => {
-                              activeHostResources++;
-                            }),
-                            () =>
+                      drainUntil: (_closed, _until, activity) =>
+                        activity.run(
+                          Effect.gen(function* () {
+                            yield* activity.ready;
+                            yield* Effect.acquireRelease(
                               Effect.sync(() => {
-                                activeHostResources--;
+                                activeHostResources++;
                               }),
-                          );
-                          if (hostFailure)
-                            return yield* DurableAlarmError.make({
-                              operation: "test host failure",
-                              message: "host delivery remains pending",
-                            });
-                          if (hostDeadline !== undefined) {
-                            hostDrains++;
-                            hostDeadline = undefined;
-                          }
-                        }),
+                              () =>
+                                Effect.sync(() => {
+                                  activeHostResources--;
+                                }),
+                            );
+                            if (hostFailure)
+                              return yield* DurableAlarmError.make({
+                                operation: "test host failure",
+                                message: "host delivery remains pending",
+                              });
+                            if (hostDeadline !== undefined) {
+                              hostDrains++;
+                              hostDeadline = undefined;
+                            }
+                          }),
+                        ),
                     }),
                     Effect.exit,
                   );

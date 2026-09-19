@@ -67,6 +67,9 @@ export const upgradedBookBindingThreads = new Set<string>();
 
 export const maintenanceClocks = new Map<string, Clock.Clock>();
 
+/** Hold only a provider request; the native Attempt and its abort watcher remain real. */
+export const modelRequestHolds = new Map<string, Effect.Effect<void>>();
+
 export const alarmAttemptHolds = new Map<
   string,
   {
@@ -1005,8 +1008,12 @@ export const joinDefinition = Agent.make("cf-join-host", {
 // Models
 // ---------------------------------------------------------------------------
 
-export const plannerModel = promptAwareModel("cf-planner", () =>
-  Stream.fromIterable(finalParts(FINAL_ANSWER)),
+export const plannerModel = promptAwareModel("cf-planner", (promptJson) =>
+  Stream.unwrap(
+    (modelRequestHolds.get(refFromPrompt(promptJson)) ?? Effect.void).pipe(
+      Effect.as(Stream.fromIterable(finalParts(FINAL_ANSWER))),
+    ),
+  ),
 );
 
 const contextCompactorModel = promptAwareModel("cf-context-compactor", (promptJson) =>

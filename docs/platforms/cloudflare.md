@@ -332,42 +332,59 @@ settlement: a pre-claim fault can occur before any reply obligation or binding a
 Application outboxes can supply `ThreadHostMaintenance` from the application Layer:
 
 ```ts
-import { ThreadHostMaintenance } from "@effect-agent/platform-cloudflare/alarm";
+import {
+  ThreadHostMaintenance,
+  ThreadMaintenanceActivity,
+} from "@effect-agent/platform-cloudflare/alarm";
 import { Context, Effect } from "effect";
 
 // Capture the application's services when constructing the hooks.
 const maintenance = Context.make(ThreadHostMaintenance, {
   // For example, a wave of four sequential commits allowing 15 seconds each.
   dispatchTimeoutMillis: 60_000,
-  pendingDeadline: outbox.pendingDeadline,
-  drainUntil: (dispatchClosed, dispatchUntil) =>
+  // Captured local minimum across admission, outbox and reply deadlines.
+  pendingDeadline: applicationPendingDeadline,
+  drainUntil: (dispatchClosed, dispatchUntil, activity) =>
     Effect.gen(function* () {
       // The supplied Scope belongs to the physical alarm, including retirement.
-      yield* admission.listen.pipe(Effect.forkScoped);
-      yield* outbox.drainUntil(dispatchClosed, dispatchUntil);
+      yield* ThreadMaintenanceActivity.all(activity, [
+        // Install the event-scoped listener and account for its first local scan.
+        (child) => admission.startScoped(child),
+        (child) => outbox.drainUntil(dispatchClosed, dispatchUntil, child),
+        (child) => replies.drainUntil(dispatchClosed, dispatchUntil, child),
+      ]);
     }),
 });
 ```
 
 The application pump admits an initial bounded wave, even on a caught-up alarm, and may dispatch
-new wake-driven waves until `dispatchClosed`. This signal stops new external waves; native
-execution can continue while the admitted waves finish. Keep local admission and hub subscriptions
-in the supplied event Scope until maintenance tears it down. The pump returns after its active
-wave finishes. Delivery retries belong to later alarms, not deadline-sleep loops in the hook.
+new waves until `dispatchClosed`. Native Attempts and delivery waves share this close boundary,
+so abort controls and fresh replies remain available while unrelated cleanup is in flight.
+Keep local admission and hub subscriptions in the event Scope until teardown. The pump returns
+after its admitted waves finish. Delivery retries belong to later alarms, not deadline-sleep loops.
+
+Each child installs its notifications, including `activity.changes`, before its initial scan.
+Bracket every finite selection/claim/dispatch with `activity.run(wave)`; passive notification
+waits stay outside. Call `activity.ready` once initial subscriptions and selections are accounted
+for, from inside the first registered `run`, before awaiting external work. `all` waits for every
+child's acknowledgement or terminal exit before acknowledging the parent, preserving failures
+and interruptions. It does not count the passive pump lifetime as active work. Composite hosts
+can collect child `Exit`s when a failed lane must leave sibling opportunities open.
 
 Declare the whole-wave `dispatchTimeoutMillis` as an integer from 1 to 300000 milliseconds.
 Use the sum for sequential operations and the maximum for parallel lanes. Admit a new wave only
 if its full allowance fits before `dispatchUntil`; otherwise leave the work durably due without
-claiming an attempt. Setup and `pendingDeadline` are bounded local control operations; neither
+claiming an attempt and retire that pump. Each registered host wave is bounded from its own start;
+later input cannot renew it. Setup and `pendingDeadline` are bounded local control operations; neither
 may read retained execution history. Hosts select current reply obligations before history reads.
 
 The native scheduler owns recovery, FIFO selection and retry timing. Its initial opportunity
-opens one delivery window, kept open while the old-recovery wave is pending so fresh replies
-can publish in the same event. The window closes once, no later than the native yield deadline;
-admitted waves then retire while native wakes can still advance work. Already-ready work and
-new admissions can execute without cancelling or restarting an unrelated delivery. Periodic
-generation checks recover dropped wake hints; receipt-only bookkeeping does not create native
-recovery debt.
+opens one dispatch window. Recovery completion alone does not close it: finite host, message and
+backfill waves keep fresh native dispatch available. At quiescence the owner checks local due work
+and closes atomically against wave registration; no native Attempt starts after closure. The
+window closes no later than the original native yield deadline. The existing periodic scan also
+notifies every `activity.changes` subscriber, recovering dropped wake hints without another timer.
+Receipt-only bookkeeping does not create native recovery debt.
 
 Native message delivery keeps the driver's actual Claim deadline, including its timeout/retry
 commit. The driver has four parallel permits and a retained attempt allowance of at most five
@@ -383,7 +400,9 @@ or clears the alarm once. A producer racing either checkpoint or retirement reta
 generation and prearmed wake. Persist exact envelopes and claims before network dispatch; local
 cancellation cannot roll back remote effects. Interrupted work remains recoverable after
 reconstruction. Typed failures, defects and a hook's own interruption retain recovery; only the
-owner's finite delivery cutoff is deferred work. The maintenance span records host cutoff use.
+owner's event cutoff is deferred work. Exceeding the declared allowance during host setup or a
+registered wave fails with `DurableAlarmError` while durable work stays pending. The maintenance
+span records host join cutoff use.
 
 Every accepted host mutation uses the shared `ThreadMutationGate`; hooks must not write the raw
 alarm slot. Native admission, approval, abort and unknown resolution retain the default

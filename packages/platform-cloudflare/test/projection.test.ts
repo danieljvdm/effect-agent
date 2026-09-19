@@ -1,11 +1,33 @@
-import { env, runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Context, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
-import { ProducerEpoch } from "effect-agent/records";
-import { ApprovalDecisionCommand } from "effect-agent/submission-ledger";
+import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import {
+  Cause,
+  Clock,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import type { Receipt } from "effect-agent/receipt";
+import { ProducerEpoch, type PersistedJson } from "effect-agent/records";
+import {
+  AbortCommand,
+  AbortIntentRequest,
+  ApprovalDecisionCommand,
+  SubmissionLedger,
+  SubmissionLookupById,
+  type AbortIntent,
+} from "effect-agent/submission-ledger";
 import type { ThreadProjectionMaintenance } from "effect-agent/thread-projection-maintenance";
 import {
   FencedAppendRequest,
   ThreadMaterialization,
+  ThreadRead,
   ThreadStore,
   ThreadTailRequest,
 } from "effect-agent/thread-store";
@@ -19,6 +41,7 @@ import {
   DurableAlarmError,
   ThreadHostMaintenance,
   ThreadMaintenance,
+  ThreadMaintenanceActivity,
   ThreadMaintenanceFailpoint,
 } from "../src/Alarm.ts";
 import type { DurableObjectContext, ThreadObjectNamespace } from "../src/CloudflareBindings.ts";
@@ -29,6 +52,7 @@ import {
   approvalDefinition,
   plannerDefinition,
   maintenanceClocks,
+  modelRequestHolds,
   submitOptions,
   decodeThreadId,
   armMaintenancePause,
@@ -43,6 +67,7 @@ import {
   readCanonical,
   runClient,
   scheduledAlarm,
+  stubFor,
 } from "./harness.ts";
 import {
   hostMaintenanceControls,
@@ -297,24 +322,52 @@ describe("live Thread projection and alarm backfill", () => {
       }),
   );
 
-  it("runs native work before reporting an unrelated host setup failure", () =>
-    withThread(async (thread, _now, advance) => {
-      await submit(thread, plannerDefinition);
-      hostMaintenanceControls.set(thread, {
-        dispatchTimeoutMillis: 1_000,
-        drainUntil: () =>
-          Effect.fail(
-            DurableAlarmError.make({ operation: "test host setup", message: "outbox unavailable" }),
-          ),
-        pendingDeadline: Effect.succeed(Option.some(0)),
-      });
-      await expect(alarm(thread)).rejects.toBeDefined();
-      expect(await allSettled(thread, namespace)()).toBe(true);
-      expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-      hostMaintenanceControls.delete(thread);
-      await advance(100);
-      await quiesce(thread);
-    }));
+  it.each(["failure", "timeout"] as const)(
+    "runs native work before reporting an unrelated host setup %s",
+    (failure) =>
+      withThread(async (thread, _now, advance) => {
+        await submit(thread, plannerDefinition);
+        let markEntered!: () => void;
+
+        const entered = new Promise<void>((resolve) => {
+          markEntered = resolve;
+        });
+
+        hostMaintenanceControls.set(thread, {
+          dispatchTimeoutMillis: 1_000,
+          drainUntil: () =>
+            Effect.suspend(() => {
+              markEntered();
+
+              return failure === "timeout"
+                ? Effect.never
+                : DurableAlarmError.make({
+                    operation: "test host setup",
+                    message: "outbox unavailable",
+                  });
+            }),
+          pendingDeadline: Effect.succeed(Option.some(0)),
+        });
+
+        const rejected = alarm(thread).then(
+          () => undefined,
+          (cause: unknown) => cause,
+        );
+
+        if (failure === "timeout") {
+          await entered;
+          await advance(1_000);
+        }
+        expect(String(await rejected)).toContain(
+          failure === "timeout" ? "initial maintenance before its allowance" : "outbox unavailable",
+        );
+        expect(await allSettled(thread, namespace)()).toBe(true);
+        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
+        hostMaintenanceControls.delete(thread);
+        await advance(100);
+        await quiesce(thread);
+      }),
+  );
 
   it("preserves a completed interruption while a sibling dispatch remains blocked", () =>
     withThread(async (thread, _now, advance) => {
@@ -333,7 +386,8 @@ describe("live Thread projection and alarm backfill", () => {
 
       hostMaintenanceControls.set(thread, {
         dispatchTimeoutMillis: 1_000,
-        drainUntil: () => Effect.promise(() => held),
+        drainUntil: (_closed, _until, activity) =>
+          activity.run(activity.ready.pipe(Effect.andThen(Effect.promise(() => held)))),
         pendingDeadline: Effect.succeed(Option.some(0)),
       });
       try {
@@ -351,6 +405,326 @@ describe("live Thread projection and alarm backfill", () => {
       await quiesce(thread);
       expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
     }));
+
+  // Incident regression: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-AA
+  it("keeps host abort and fresh reply work available for native dispatch during retirement", async () => {
+    const thread = `recovery-retirement-${crypto.randomUUID()}`;
+    const liveClock = Effect.runSync(Clock.Clock);
+    const nowMillis = () => Date.now() + 86_400_000;
+    const nowNanos = () => BigInt(nowMillis()) * 1_000_000n;
+
+    maintenanceClocks.set(thread, {
+      currentTimeMillisUnsafe: nowMillis,
+      currentTimeMillis: Effect.sync(nowMillis),
+      currentTimeNanosUnsafe: nowNanos,
+      currentTimeNanos: Effect.sync(nowNanos),
+      monotonicTimeNanosUnsafe: () => liveClock.monotonicTimeNanosUnsafe(),
+      monotonicTimeNanos: liveClock.monotonicTimeNanos,
+      sleep: (duration) => liveClock.sleep(duration),
+    });
+    const advance = (millis: number) => new Promise<void>((resolve) => setTimeout(resolve, millis));
+    const old = `${thread}-old`;
+    const fresh = `${thread}-fresh`;
+
+    const run = <A, E>(
+      body: Effect.Effect<
+        A,
+        E,
+        ThreadMaintenance | DurableAgentRuntime | SubmissionLedger | ThreadStore | WakeScheduler
+      >,
+    ) => runInDurableObject(stubFor(thread), (instance) => instance[DurableObject.RunSymbol](body));
+
+    const controls = await run(
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const maintenance = yield* ThreadMaintenance;
+        const ledger = yield* SubmissionLedger;
+        const store = yield* ThreadStore;
+        const releaseModel = yield* Deferred.make<void>();
+        const releaseCleanup = yield* Deferred.make<void>();
+        let oldActive = 0;
+        let oldEntered = 0;
+        let oldCompleted = false;
+        let freshEntered = 0;
+        let cleanupActive = false;
+        let closed = false;
+        let command: AbortCommand | undefined;
+        let abort: AbortIntent | undefined;
+        let freshReceipt: Receipt | undefined;
+        const published: Array<PersistedJson> = [];
+
+        modelRequestHolds.set(
+          old,
+          Effect.acquireUseRelease(
+            Effect.sync(() => {
+              oldActive++;
+              oldEntered++;
+            }),
+            () =>
+              Deferred.await(releaseModel).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    oldCompleted = true;
+                  }),
+                ),
+              ),
+            () =>
+              Effect.sync(() => {
+                oldActive--;
+              }),
+          ),
+        );
+        modelRequestHolds.set(
+          fresh,
+          Effect.sync(() => {
+            freshEntered++;
+          }),
+        );
+        hostMaintenanceControls.set(thread, {
+          // Covers the fixture's phase waits and the real native abort poll. Success must
+          // still precede cleanup release; no assertion depends on exhausting this allowance.
+          dispatchTimeoutMillis: 5_000,
+          pendingDeadline: Effect.sync(() =>
+            cleanupActive ||
+            (command !== undefined && abort === undefined) ||
+            (freshReceipt !== undefined && published.length === 0)
+              ? Option.some(0)
+              : Option.none(),
+          ),
+          drainUntil: (dispatchClosed, _dispatchUntil, activity) =>
+            Effect.gen(function* () {
+              const wakes = yield* WakeScheduler;
+              const hinted = yield* Stream.toPull(wakes.wakes);
+              const checked = yield* Stream.toPull(activity.changes);
+              const notified = Effect.raceFirst(hinted, checked);
+
+              const done = yield* Effect.forkScoped(
+                dispatchClosed.pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      closed = true;
+                    }),
+                  ),
+                ),
+              );
+
+              const control = Effect.gen(function* () {
+                if (command !== undefined && abort === undefined) {
+                  abort = yield* maintenance.withMutation(runtime.abort(command));
+                }
+                if (freshReceipt === undefined || published.length > 0) return;
+                const state = yield* runtime.submissionStatus(freshReceipt);
+
+                if (state._tag !== "settled") return;
+
+                const records = yield* Stream.runCollect(
+                  store.read(
+                    ThreadRead.make({
+                      threadId: decodeThreadId(fresh),
+                      limit: 100,
+                    }),
+                  ),
+                );
+
+                const completed = records.find(
+                  ({ record }) => record.payload._tag === "RunCompleted",
+                )?.record.payload;
+
+                if (completed?._tag === "RunCompleted") published.push(completed.output);
+              }).pipe(
+                Effect.mapError((cause) =>
+                  DurableAlarmError.make({
+                    operation: "fixture host control",
+                    message: "Host control failed",
+                    cause,
+                  }),
+                ),
+              );
+
+              yield* ThreadMaintenanceActivity.all(activity, [
+                (child) =>
+                  Effect.gen(function* () {
+                    yield* child.run(child.ready.pipe(Effect.andThen(control)));
+                    while (done.pollUnsafe() === undefined) {
+                      const changed = yield* Effect.raceFirst(
+                        notified.pipe(
+                          Effect.as(true),
+                          Effect.catch(() => Effect.never),
+                        ),
+                        Fiber.join(done).pipe(Effect.as(false)),
+                      );
+
+                      if (!changed || done.pollUnsafe() !== undefined) return;
+                      yield* child.run(control);
+                    }
+                  }),
+                (child) =>
+                  child.run(
+                    child.ready.pipe(
+                      Effect.andThen(
+                        Effect.acquireUseRelease(
+                          Effect.sync(() => {
+                            cleanupActive = true;
+                          }),
+                          () => Deferred.await(releaseCleanup),
+                          () =>
+                            Effect.sync(() => {
+                              cleanupActive = false;
+                            }),
+                        ),
+                      ),
+                    ),
+                  ),
+              ]);
+            }),
+        });
+
+        return {
+          get oldEntered() {
+            return oldEntered;
+          },
+          get oldActive() {
+            return oldActive;
+          },
+          get oldCompleted() {
+            return oldCompleted;
+          },
+          get freshEntered() {
+            return freshEntered;
+          },
+          get cleanupActive() {
+            return cleanupActive;
+          },
+          get closed() {
+            return closed;
+          },
+          get abort() {
+            return abort;
+          },
+          published,
+          clear: (value: AbortCommand) =>
+            Effect.sync(() => {
+              command = value;
+            }),
+          replyTo: (receipt: Receipt) =>
+            Effect.sync(() => {
+              freshReceipt = receipt;
+            }),
+          release: Deferred.succeed(releaseCleanup, undefined).pipe(
+            Effect.andThen(Deferred.succeed(releaseModel, undefined)),
+          ),
+          receipt: (receipt: Receipt) =>
+            ledger.lookup(SubmissionLookupById.make({ submissionId: receipt.submissionId })),
+        };
+      }),
+    );
+
+    const admit = (target: string, key: string) =>
+      run(
+        Effect.gen(function* () {
+          const maintenance = yield* ThreadMaintenance;
+          const runtime = yield* DurableAgentRuntime;
+
+          return yield* maintenance.withMutation(
+            runtime.submitRegistered(
+              { definition: plannerDefinition },
+              { question: "retirement", ref: target },
+              submitOptions(target, key),
+            ),
+          );
+        }),
+      );
+
+    await admit(thread, "bootstrap");
+    let retired = false;
+
+    const running = runDurableObjectAlarm(stubFor(thread)).finally(() => {
+      retired = true;
+    });
+
+    try {
+      for (let count = 0; count < 10 && !(await allSettled(thread)()); count++) await advance(100);
+      expect(await allSettled(thread)()).toBe(true);
+      expect(controls.cleanupActive).toBe(true);
+      await advance(100);
+      const oldReceipt = await admit(old, "old-model");
+
+      for (let count = 0; count < 5 && controls.oldEntered === 0; count++) await advance(100);
+      expect(controls.oldEntered).toBe(1);
+      expect(controls.oldActive).toBe(1);
+
+      const command = AbortCommand.make({
+        submissionId: oldReceipt.submissionId,
+        author: "fixture-owner",
+        reason: "retire the previous session",
+      });
+
+      await run(controls.clear(command));
+      const freshReceipt = await admit(fresh, "fresh-session");
+
+      await run(controls.replyTo(freshReceipt));
+      await run(WakeScheduler.use((wakes) => wakes.notify(decodeThreadId(thread))));
+      expect(await run(controls.receipt(freshReceipt))).toMatchObject({
+        _tag: "Some",
+        // Readiness is durable even if the concurrently running scheduler already claimed it.
+        value: { readyAt: expect.anything() },
+      });
+      for (let count = 0; count < 5 && controls.published.length === 0; count++) await advance(100);
+      expect({
+        closed: controls.closed,
+        aborted: controls.abort !== undefined,
+        model: controls.freshEntered,
+        replies: controls.published,
+      }).toEqual({
+        closed: false,
+        aborted: true,
+        model: 1,
+        replies: [{ answer: "done" }],
+      });
+      expect(controls.oldCompleted).toBe(false);
+      expect(controls.oldActive).toBe(0);
+      expect(controls.cleanupActive).toBe(true);
+      expect(retired).toBe(false);
+      expect(
+        await run(
+          ThreadStore.use((store) =>
+            Stream.runCollect(
+              store.read(ThreadRead.make({ threadId: decodeThreadId(fresh), limit: 100 })),
+            ).pipe(Effect.map((records) => records.map(({ record }) => record.payload._tag))),
+          ),
+        ),
+      ).toContain("ModelResponseRecorded");
+      expect(
+        await run(
+          SubmissionLedger.use((ledger) =>
+            ledger.readAbortIntent(
+              AbortIntentRequest.make({ submissionId: oldReceipt.submissionId }),
+            ),
+          ),
+        ),
+      ).toMatchObject({
+        ...command,
+        requestedAt: controls.abort?.requestedAt,
+        canonicalRecordId: expect.any(String),
+      });
+      expect(
+        await run(DurableAgentRuntime.use((runtime) => runtime.submissionStatus(oldReceipt))),
+      ).toMatchObject({
+        _tag: "settled",
+        settlement: { outcome: "aborted" },
+      });
+      expect(await admit(old, "old-model")).toEqual(oldReceipt);
+      expect(await admit(fresh, "fresh-session")).toEqual(freshReceipt);
+    } finally {
+      await run(controls.release);
+      modelRequestHolds.delete(old);
+      modelRequestHolds.delete(fresh);
+      for (let count = 0; count < 20 && !retired; count++) await advance(100);
+      await running;
+      hostMaintenanceControls.delete(thread);
+      maintenanceClocks.delete(thread);
+    }
+  });
 
   // Regression: https://github.com/danieljvdm/effect-agent/commit/0fe79ac5
   it.each(["host", "projection"] as const)(
@@ -385,7 +759,7 @@ describe("live Thread projection and alarm backfill", () => {
         hostMaintenanceControls.set(thread, {
           pendingDeadline: Effect.succeed(held === "host" ? Option.some(0) : Option.none()),
           dispatchTimeoutMillis: 1_000,
-          drainUntil: () =>
+          drainUntil: (_closed, _until, activity) =>
             Effect.gen(function* () {
               const scheduler = yield* WakeScheduler;
               const notified = yield* Stream.toPull(scheduler.wakes);
@@ -404,16 +778,32 @@ describe("live Thread projection and alarm backfill", () => {
                 Effect.forever,
                 Effect.forkScoped,
               );
-              if (held === "host") {
-                entered();
-                yield* Effect.promise(() => response);
-              }
+              yield* activity.run(
+                activity.ready.pipe(
+                  Effect.andThen(
+                    Effect.gen(function* () {
+                      if (held !== "host") return;
+                      entered();
+                      yield* Effect.promise(() => response);
+                    }),
+                  ),
+                ),
+              );
             }),
         });
 
-        const running = alarm(thread).then(() => {
-          retired = true;
-        });
+        const running = alarm(thread).then(
+          () => {
+            retired = true;
+
+            return undefined;
+          },
+          (cause: unknown) => {
+            retired = true;
+
+            return cause;
+          },
+        );
 
         try {
           await started;
@@ -454,6 +844,13 @@ describe("live Thread projection and alarm backfill", () => {
             "settled",
           ]);
           expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
+          const outcome = await running;
+
+          expect(held === "host" ? String(outcome) : outcome).toEqual(
+            held === "host"
+              ? expect.stringContaining("host wave exceeded its allowance")
+              : undefined,
+          );
         } finally {
           hostMaintenanceControls.delete(thread);
           projectionControls.delete(thread);
@@ -644,4 +1041,17 @@ it("exposes index services and preserves distinct publication and projection E/R
   expectTypeOf<Exclude<Layer.Services<typeof runtime>, Destination>>().toEqualTypeOf<
     DurableObjectContext | ThreadObjectNamespace
   >();
+
+  const activity: ThreadMaintenanceActivity = {
+    run: (wave) => wave,
+    ready: Effect.void,
+    changes: Stream.empty,
+  };
+
+  const pumps = ThreadMaintenanceActivity.all(activity, [
+    () => Destination.use(() => SetupError.make({})),
+  ]);
+
+  expectTypeOf<Effect.Error<typeof pumps>>().toEqualTypeOf<SetupError>();
+  expectTypeOf<Effect.Services<typeof pumps>>().toEqualTypeOf<Destination>();
 });
