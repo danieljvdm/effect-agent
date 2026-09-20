@@ -1,6 +1,5 @@
 import { createServer } from "node:http";
 
-import nativePuppeteer from "@cloudflare/puppeteer/internal/puppeteer-core.js";
 import {
   BrowserRunInteractiveBinding,
   BrowserRunPageObservation,
@@ -18,13 +17,15 @@ import {
   InteractiveBrowser,
   InteractiveBrowserPolicy,
 } from "effect-agent/interactive-browser";
+import nativePuppeteer from "puppeteer-core";
 import { vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
+import { browserResponse } from "./browser-response.ts";
 
 const sdk = vi.hoisted(() => ({ connect: vi.fn<() => Promise<object>>() }));
 
-vi.mock("@cloudflare/puppeteer", () => ({
+vi.mock("puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js", () => ({
   default: { ...sdk, acquire: async () => ({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }) },
 }));
 
@@ -148,8 +149,7 @@ it.live(
         Layer.provide(
           BrowserRunInteractiveBinding.layer({
             browser: {
-              fetch: async () =>
-                Response.json({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }),
+              fetch: async (_input, init) => browserResponse(init),
               quickAction: unused,
             },
           }).pipe(

@@ -44,10 +44,10 @@
     "@effect-agent/storage-cloudflare": "workspace:*",
     "@effect/platform-browser": "catalog:",
     "@effect/sql-sqlite-do": "catalog:",
-    "effect-agent": "workspace:*"
+    "effect-agent": "workspace:*",
+    "puppeteer-core": "catalog:"
   },
   "devDependencies": {
-    "@cloudflare/puppeteer": "catalog:",
     "@cloudflare/vitest-pool-workers": "catalog:",
     "@cloudflare/workers-types": "catalog:",
     "@effect-agent/testing": "workspace:*",
@@ -63,13 +63,7 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@cloudflare/puppeteer": "^1.1.0",
     "effect": "^4.0.0-rc.116",
     "effect-cf": "^0.44.1 || ^0.45.0"
-  },
-  "peerDependenciesMeta": {
-    "@cloudflare/puppeteer": {
-      "optional": true
-    }
   }
 }

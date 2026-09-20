@@ -1,6 +1,6 @@
-import type { Page } from "@cloudflare/puppeteer";
 import { Encoding } from "effect";
 import type { BrowserSelectFileRequest } from "effect-agent/interactive-browser";
+import type { Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 type Element = NonNullable<Awaited<ReturnType<Page["$"]>>>;
 

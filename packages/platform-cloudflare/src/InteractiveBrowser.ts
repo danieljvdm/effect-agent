@@ -1,13 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import {
-  type Browser,
-  type BrowserContext,
-  type CDPSession,
-  type HTTPRequest,
-  type Page,
-} from "@cloudflare/puppeteer";
-import {
   Cause,
   Context,
   Clock,
@@ -47,6 +40,13 @@ import {
 } from "effect-agent/interactive-browser";
 import { PageScreenshotResult } from "effect-agent/page-screenshot";
 import { SandboxImplementation } from "effect-agent/sandbox";
+import {
+  type Browser,
+  type BrowserContext,
+  type CDPSession,
+  type HTTPRequest,
+  type Page,
+} from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 import { BrowserRunBinding } from "./internal/browser-binding.ts";
 import {
@@ -380,7 +380,10 @@ export class BrowserRunInteractiveBinding extends Context.Service<
   BrowserRunInteractiveBinding,
   {
     readonly acquire: (keepAliveMillis: number) => Promise<unknown>;
-    readonly connect: (sessionId: string) => Promise<BrowserRunInteractiveBrowser>;
+    readonly connect: (
+      sessionId: string,
+      signal?: AbortSignal,
+    ) => Promise<BrowserRunInteractiveBrowser>;
     /** Success proves whole-browser termination or exact-session absence. */
     readonly closeSession: (
       sessionId: Redacted.Redacted<string>,
@@ -406,9 +409,10 @@ export class BrowserRunInteractiveBinding extends Context.Service<
         return {
           acquire: async (keepAliveMillis: number) =>
             binding.acquire(keepAliveMillis, "interactive.acquire"),
-          connect: async (sessionId: string) =>
+          connect: async (sessionId: string, signal?: AbortSignal) =>
             makeProductionBrowser(
-              await binding.connect(sessionId, "interactive.connect"),
+              await binding.connect(sessionId, "interactive.connect", signal),
+              sessionId,
               viewport,
             ),
           closeSession: (sessionId: Redacted.Redacted<string>) =>
@@ -1385,6 +1389,7 @@ const makeProductionContext = (
 
 const makeProductionBrowser = (
   browser: Browser,
+  sessionId: string,
   viewport?: BrowserRunViewport,
 ): BrowserRunInteractiveBrowser => ({
   detach: () => browser.disconnect(),
@@ -1417,7 +1422,7 @@ const makeProductionBrowser = (
       if (!isRemoteClosure(cause)) throw cause;
     }
   },
-  sessionId: () => browser.sessionId(),
+  sessionId: () => sessionId,
   isConnected: () => browser.isConnected(),
   onDisconnected: (listener) => {
     browser.on("disconnected", listener);
@@ -2673,7 +2678,7 @@ const makeHostService = (
                   signal,
                   closeLateAcquisition(
                     signal,
-                    () => binding.connect(sessionIdValue),
+                    () => binding.connect(sessionIdValue, signal),
                     (acquired) =>
                       runCleanup(
                         resume === undefined

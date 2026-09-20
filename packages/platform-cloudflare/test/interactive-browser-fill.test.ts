@@ -12,10 +12,11 @@ import {
 import { vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
+import { browserResponse } from "./browser-response.ts";
 
 const sdk = vi.hoisted(() => ({ connect: vi.fn<() => Promise<object>>() }));
 
-vi.mock("@cloudflare/puppeteer", () => ({
+vi.mock("puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js", () => ({
   default: sdk,
 }));
 
@@ -63,7 +64,7 @@ const nativeLayer = (element: object) => {
     Layer.provide(
       BrowserRunInteractiveBinding.layer({
         browser: {
-          fetch: async () => Response.json({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }),
+          fetch: async (_input, init) => browserResponse(init),
           quickAction: unusedRpc,
         },
       }).pipe(

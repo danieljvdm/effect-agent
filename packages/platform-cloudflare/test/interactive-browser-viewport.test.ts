@@ -12,10 +12,11 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { expectTypeOf, vi } from "vite-plus/test";
 
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
+import { browserResponse } from "./browser-response.ts";
 
 const sdk = vi.hoisted(() => ({ connect: vi.fn<(...args: Array<unknown>) => Promise<object>>() }));
 
-vi.mock("@cloudflare/puppeteer", () => ({
+vi.mock("puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js", () => ({
   default: sdk,
 }));
 
@@ -23,8 +24,8 @@ const unusedRpc = async (): Promise<Response> => {
   throw new Error("The mocked SDK must not call Browser Run");
 };
 
-const browser = {
-  fetch: async () => Response.json({ sessionId: "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99" }),
+const browser: Pick<BrowserRun, "fetch" | "quickAction"> = {
+  fetch: async (_input, init) => browserResponse(init),
   quickAction: unusedRpc,
 };
 
@@ -197,10 +198,12 @@ describe("Browser Run viewport boundary", () => {
         expect(cleanupCalls).toEqual([
           "DELETE /client/v4/accounts/1234567890abcdef1234567890abcdef/browser-rendering/devtools/browser/c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
         ]);
-        expect(sdk.connect).toHaveBeenCalledExactlyOnceWith(
-          { fetch: expect.any(Function) },
-          "c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
-        );
+        expect(sdk.connect).toHaveBeenCalledExactlyOnceWith({
+          transport: expect.objectContaining({
+            send: expect.any(Function),
+            close: expect.any(Function),
+          }),
+        });
         expect(setViewport.mock.calls).toEqual([
           ...(viewport === undefined
             ? []

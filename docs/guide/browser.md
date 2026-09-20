@@ -93,8 +93,8 @@ An interactive pass owns one browser, context, and page for one Scope. It is for
 need to inspect an active page, follow a known flow, or perform host-approved UI actions. It is not
 a general browsing session and cannot become an agent Tool.
 
-Install `@cloudflare/puppeteer@^1.1.0` alongside
-`@effect-agent/platform-cloudflare@beta`, `effect@^4.0.0-rc.116`, and `effect-cf@^0.44.1`. Then provide
+Install `@effect-agent/platform-cloudflare@beta`, `effect@^4.0.0-rc.116`, and `effect-cf@^0.44.1`.
+The adapter includes its Puppeteer client. Then provide
 `CloudflareInteractiveBrowser.layer({ browser: env.BROWSER, accountId, apiToken })` with
 `FetchHttpClient.layer` for browser actions. `CloudflareInteractiveBrowser.hostLayer` opts into
 trusted host controls for Live View and handoff. Both variants assemble the browser binding and
@@ -605,7 +605,9 @@ The host’s item/revision/owner exposure ledger remains application-owned and m
 A serialized checkpoint is not authorization: resume only the latest generation’s committed receipt.
 
 Resume attaches the exact saved browser context and page; missing or expired sessions fail instead
-of creating a replacement. All old refs and offers are invalidated. Detached tool handles cannot
+of creating a replacement. A failed attachment releases its local connection without terminating
+the host's retained session; the host keeps responsibility for its checkpoint and expiry cleanup.
+All old refs and offers are invalidated. Detached tool handles cannot
 close or act on the transferred session. Ordinary scope release still terminates an attached
 session. An uncertain handoff closes the exact session and never produces a resumable receipt;
 ordinary uncertain browser mutations remain non-replayable.

@@ -1,5 +1,10 @@
-import type { Browser, Page } from "@cloudflare/puppeteer";
-import nativePuppeteer from "@cloudflare/puppeteer/internal/puppeteer-core.js";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer } from "node:https";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
 import { BrowserCrypto } from "@effect/platform-browser";
 import { expect, it } from "@effect/vitest";
 import { Clock, Config, Effect, Layer, Option, Redacted, Schema } from "effect";
@@ -20,7 +25,18 @@ import {
   UseCredential,
 } from "effect-agent/protected-browser";
 import { TestClock } from "effect/testing";
+import nativePuppeteer from "puppeteer-core";
+import type * as BrowserClient from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
+import type { Browser, Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
+import { vi } from "vite-plus/test";
 
+import { BrowserRunHandoffRequest } from "../src/InteractiveBrowser.ts";
+import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
+import { browserRunProtectedBindingLayer } from "../src/protected-browser/binding.ts";
+import {
+  BrowserRunProtectedHost,
+  browserRunProtectedHostLayer,
+} from "../src/protected-browser/host.ts";
 import {
   makeProtectedNativeTransport,
   ProtectedNativeSession,
@@ -34,6 +50,27 @@ import {
 } from "../src/protected-browser/policy.ts";
 
 class ProbeError extends Schema.TaggedError<ProbeError>()("ProtectedNativeProbeError", {}) {}
+
+const sdk = vi.hoisted(() => ({ connected: vi.fn<(browser: Browser) => void>() }));
+
+// Capture the actual connection for native fixture controls; do not substitute SDK initialization.
+vi.mock("puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js", async (original) => {
+  const actual = await original<typeof BrowserClient>();
+
+  return {
+    ...actual,
+    default: {
+      ...actual.default,
+      connect: async (...args: Parameters<typeof actual.default.connect>) => {
+        const browser = await actual.default.connect(...args);
+
+        sdk.connected(browser);
+
+        return browser;
+      },
+    },
+  };
+});
 
 const native = <A>(run: () => Promise<A>) =>
   Effect.tryPromise({ try: run, catch: () => new ProbeError() });
@@ -1166,3 +1203,374 @@ it.live(
     ),
   { timeout: 30_000 },
 );
+
+for (const cacheControl of ["default", "no-store"] as const) {
+  it.live(
+    `reattaches the same polling page through two human handoffs and form navigation (${cacheControl})`,
+    (test) =>
+      Effect.gen(function* () {
+        const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
+
+        if (Option.isNone(executable)) return test.skip();
+
+        const directory = yield* Effect.acquireRelease(
+          native(() => mkdtemp(join(tmpdir(), "protected-reattach-"))),
+          (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+        );
+
+        yield* native(() =>
+          promisify(execFile)("openssl", [
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=protected-reattach.test",
+            "-keyout",
+            join(directory, "key.pem"),
+            "-out",
+            join(directory, "cert.pem"),
+          ]),
+        );
+        const key = yield* native(() => readFile(join(directory, "key.pem")));
+        const cert = yield* native(() => readFile(join(directory, "cert.pem")));
+        let shop = "";
+        let checkout = "";
+        let email = "before@example.test";
+        let writes = 0;
+        let polls = 0;
+
+        const server = yield* Effect.acquireRelease(
+          native(
+            () =>
+              new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
+                const server = createServer({ key, cert }, (request, response) => {
+                  const path = request.url ?? "/";
+
+                  if (cacheControl === "no-store") response.setHeader("cache-control", "no-store");
+                  if (path === "/poll") {
+                    polls++;
+                    response.end("ready");
+                  } else if (path === "/processor") {
+                    response.setHeader("content-type", "text/html");
+                    response.end(`<main>Payment frame</main><script>
+                let n=0; const poll=async()=>{await fetch('/poll');document.body.dataset.polls=String(++n)};
+                poll();setInterval(poll,1000);
+              </script>`);
+                  } else if (path === "/contact" && request.method === "POST") {
+                    const chunks: Uint8Array[] = [];
+
+                    request.on("data", (chunk: Uint8Array) => chunks.push(chunk));
+                    request.on("end", () => {
+                      email =
+                        new URLSearchParams(Buffer.concat(chunks).toString()).get("email") ?? "";
+                      writes++;
+                      response.writeHead(303, { location: "/checkout" }).end();
+                    });
+                  } else {
+                    response.setHeader("content-type", "text/html");
+                    response.end(
+                      path === "/checkout"
+                        ? `<main>Receipt email: ${email}</main><a href="/contact">Edit email</a><button disabled>Pay</button><iframe src="${shop}/processor"></iframe><script>addEventListener('pagehide',event=>sessionStorage.setItem('checkoutCached',String(event.persisted)))</script>`
+                        : path === "/contact"
+                          ? `<form method="POST"><label>Email<input id="email" name="email"></label><button>Save</button></form>`
+                          : `<a href="${checkout}/checkout">Checkout</a>`,
+                    );
+                  }
+                });
+
+                server.once("error", reject);
+                server.listen(0, "127.0.0.1", () => resolve(server));
+              }),
+          ),
+          (server) =>
+            Effect.promise(
+              () =>
+                new Promise<void>((resolve) => {
+                  server.closeAllConnections();
+                  server.close(() => resolve());
+                }),
+            ),
+        );
+
+        const address = server.address();
+
+        if (address === null || typeof address === "string")
+          return yield* Effect.die("Missing fixture port");
+        shop = `https://shop.test:${address.port}`;
+        checkout = `https://checkout.test:${address.port}`;
+
+        const provider = yield* Effect.acquireRelease(
+          native(() =>
+            nativePuppeteer.launch({
+              executablePath: executable.value,
+              headless: true,
+              args: [
+                "--host-resolver-rules=MAP *.test 127.0.0.1",
+                "--no-proxy-server",
+                "--ignore-certificate-errors",
+              ],
+            }),
+          ),
+          (browser) => Effect.promise(() => browser.close()),
+        );
+
+        const endpoint = provider.wsEndpoint();
+
+        yield* native(() => provider.disconnect());
+
+        const envelope = Schema.decodeUnknownSync(
+          Schema.fromJsonString(
+            Schema.Struct({
+              id: Schema.Int,
+              method: Schema.String,
+              sessionId: Schema.optionalKey(Schema.String),
+            }),
+          ),
+        );
+
+        const sockets: WebSocket[] = [];
+        const attachments: Browser[] = [];
+        let handoffs = 0;
+        let allocations = 0;
+        let active = false;
+        let closes = 0;
+        let priorCheckoutCached = false;
+
+        const upgrade = async () => {
+          const socket = new WebSocket(endpoint);
+
+          sockets.push(socket);
+          await new Promise<void>((resolve, reject) => {
+            socket.addEventListener("open", () => resolve(), { once: true });
+            socket.addEventListener("error", () => reject(new ProbeError()), { once: true });
+          });
+          const events = new EventTarget();
+
+          socket.addEventListener("message", (event) => {
+            events.dispatchEvent(new MessageEvent("message", { data: event.data }));
+          });
+          socket.addEventListener("close", () => events.dispatchEvent(new Event("close")));
+
+          const transportSocket = {
+            accept: () => {},
+            addEventListener: events.addEventListener.bind(events),
+            close: () => socket.close(),
+            send(message: string) {
+              const packet = envelope(message);
+
+              // Only proprietary human-control replies are substituted. The production
+              // binding, client, page, contexts, Fetch and reconnect all use real Chromium.
+              if (
+                packet.method === "Cloudflare.handoff" ||
+                packet.method === "Cloudflare.getHandoffState"
+              ) {
+                if (packet.method === "Cloudflare.handoff") {
+                  handoffs++;
+                  active = true;
+                }
+
+                const result =
+                  packet.method === "Cloudflare.handoff"
+                    ? { handoffId: `local-handoff-${handoffs}` }
+                    : { active, handoffId: `local-handoff-${handoffs}` };
+
+                queueMicrotask(() =>
+                  events.dispatchEvent(
+                    new MessageEvent("message", {
+                      data: JSON.stringify({ id: packet.id, sessionId: packet.sessionId, result }),
+                    }),
+                  ),
+                );
+              } else socket.send(message);
+            },
+          };
+
+          return Object.defineProperties(new Response(null), {
+            status: { value: 101 },
+            webSocket: { value: transportSocket },
+          });
+        };
+
+        sdk.connected.mockImplementation((browser) => attachments.push(browser));
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            for (const socket of sockets) socket.close();
+            sdk.connected.mockReset();
+          }),
+        );
+
+        const access = BrowserCredentialAccess.of({
+          caller: Effect.succeed(Redacted.make("native-reattach-test")),
+          list: () => Effect.succeed([]),
+          authorize: () => Effect.fail(new CredentialAccessError({ reason: "denied" })),
+          authorizeAction: () => Effect.void,
+          resolve: () => Effect.fail(new CredentialAccessError({ reason: "denied" })),
+          observation: () =>
+            Effect.succeed(
+              CredentialObservationGrant.make({
+                decision: "trust-recipient-no-credential-echo",
+                origins: [shop, checkout],
+              }),
+            ),
+        });
+
+        const lifecycle = Layer.succeed(BrowserRunSessionLifecycle, {
+          close: () =>
+            Effect.sync(() => {
+              closes++;
+            }).pipe(Effect.andThen(Effect.promise(() => provider.close()))),
+        });
+
+        const layer = browserRunProtectedHostLayer().pipe(
+          Layer.provide(
+            browserRunProtectedBindingLayer({
+              browser: {
+                fetch: async (_input, init) => {
+                  if (init?.method !== "POST") return upgrade();
+                  allocations++;
+
+                  return Response.json({ sessionId: "00000000-0000-4000-8000-000000000041" });
+                },
+              },
+            }),
+          ),
+          Layer.provide(Layer.merge(lifecycle, BrowserCrypto.layer)),
+          Layer.provideMerge(Layer.succeed(BrowserCredentialAccess, access)),
+        );
+
+        const request = BrowserRunHandoffRequest.make({
+          instructions: "Review only",
+          timeout: 60_000,
+        });
+
+        yield* Effect.gen(function* () {
+          const host = yield* BrowserRunProtectedHost;
+
+          const first = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const session = yield* host.open(
+                InteractiveBrowserPolicy.make({
+                  network: { _tag: "Unrestricted" },
+                  maxActions: 100,
+                  maxElapsedMillis: 120_000,
+                  maxReturnedBytes: 16_384,
+                }),
+              );
+
+              yield* session.handle.navigate(ProtectedBrowserNavigate.make({ url: `${shop}/` }));
+              yield* session.handle.navigate(
+                ProtectedBrowserNavigate.make({ url: `${checkout}/checkout` }),
+              );
+              yield* session.handle.observe;
+              const checkpoint = yield* session.suspend;
+
+              yield* session.detach;
+
+              return checkpoint;
+            }),
+          );
+
+          const human = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const session = yield* host.resume(first);
+              const checkpoint = yield* session.handoff(request);
+
+              yield* session.detach;
+
+              return checkpoint;
+            }),
+          );
+
+          const viewer = yield* native(() =>
+            nativePuppeteer.connect({ browserWSEndpoint: endpoint }),
+          );
+
+          active = false;
+          yield* native(() => viewer.disconnect());
+
+          const second = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const session = yield* host.resume(human);
+
+              yield* session.returnControl;
+              yield* session.handle.observe;
+              const browser = attachments.at(-1);
+
+              const context = browser
+                ?.browserContexts()
+                .find((context) => context.id === Redacted.value(first.contextId));
+
+              if (context === undefined) return yield* Effect.die("Missing retained context");
+              const pages = yield* native(() => context.pages());
+              const page = pages[0];
+
+              if (page === undefined) return yield* Effect.die("Missing retained page");
+              yield* native(() => page.goto(`${checkout}/contact`));
+              yield* native(() => page.type("#email", "corrected@example.test"));
+              yield* native(() => Promise.all([page.waitForNavigation(), page.click("button")]));
+              const observed = yield* session.handle.observe;
+
+              expect(observed.text).toContain("corrected@example.test");
+              expect(yield* native(() => page.$eval("button", (button) => button.disabled))).toBe(
+                true,
+              );
+              priorCheckoutCached =
+                (yield* native(() => page.evaluate("sessionStorage.getItem('checkoutCached')"))) ===
+                "true";
+              // Keep production caching behavior in the regression: disabling BFCache
+              // or its iframe targets must not turn the cacheable case into a false pass.
+              expect(priorCheckoutCached).toBe(cacheControl === "default");
+              const checkpoint = yield* session.suspend;
+
+              yield* session.detach;
+
+              return checkpoint;
+            }),
+          );
+
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const session = yield* host.resume(second);
+
+              const context = attachments
+                .at(-1)
+                ?.browserContexts()
+                .find((context) => context.id === Redacted.value(first.contextId));
+
+              if (context === undefined) return yield* Effect.die("Missing reattached context");
+              const pages = yield* native(() => context.pages());
+
+              const processor = pages[0]
+                ?.frames()
+                .find((frame) => frame.url() === `${shop}/processor`);
+
+              if (processor === undefined)
+                return yield* Effect.die("Missing live cross-origin frame");
+              expect(
+                yield* native(() => processor.evaluate("document.body.dataset.polls")),
+              ).toMatch(/^[1-9]\d*$/);
+              const checkpoint = yield* session.handoff(request);
+
+              expect(Redacted.value(checkpoint.contextId) === Redacted.value(first.contextId)).toBe(
+                true,
+              );
+              expect(Redacted.value(checkpoint.targetId) === Redacted.value(first.targetId)).toBe(
+                true,
+              );
+              expect(handoffs).toBe(2);
+              expect(allocations).toBe(1);
+              expect(writes).toBe(1);
+              expect(polls).toBeGreaterThan(0);
+              expect(closes).toBe(0);
+              yield* session.close;
+            }),
+          );
+        }).pipe(Effect.provide(layer));
+      }).pipe(Effect.scoped),
+    { timeout: 45_000 },
+  );
+}
