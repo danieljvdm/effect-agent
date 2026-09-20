@@ -34,6 +34,7 @@ import {
 } from "./checkout-store.ts";
 import {
   CheckoutTelemetry,
+  CheckoutTelemetryStore,
   makeTelemetry,
   measured,
   instrumentModels,
@@ -326,22 +327,28 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
       return Response.json({ armed: true });
     }
     if (operation === "approve") {
-      const decision = yield* body(Decision);
+      return yield* measured(
+        "approval",
+        "approve",
+        Effect.gen({ self: this }, function* () {
+          const decision = yield* body(Decision);
 
-      if (
-        this.control.running ||
-        this.control.controller !== "approval" ||
-        !sameQuote(decision.quote, this.control.pendingApproval)
-      )
-        return yield* failure("approval", "No matching pending approval");
-      const next = yield* transition(this.shop, { _tag: "approve", quote: decision.quote });
+          if (
+            this.control.running ||
+            this.control.controller !== "approval" ||
+            !sameQuote(decision.quote, this.control.pendingApproval)
+          )
+            return yield* failure("approval", "No matching pending approval");
+          const next = yield* transition(this.shop, { _tag: "approve", quote: decision.quote });
 
-      this.ctx.storage.transactionSync(() => {
-        this.write("shop", ShopState, next);
-        this.updateControl({ controller: "agent", pendingApproval: null });
-      });
+          this.ctx.storage.transactionSync(() => {
+            this.write("shop", ShopState, next);
+            this.updateControl({ controller: "agent", pendingApproval: null });
+          });
 
-      return Response.json({ approved: true });
+          return Response.json({ approved: true });
+        }),
+      );
     }
     if (operation === "human" || operation === "return") {
       if (
@@ -515,30 +522,31 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
 
     return Effect.runPromise(
       (surface === "_control"
-        ? Effect.gen({ self: this }, function* () {
+        ? this.controlRequest(request, operation).pipe(
             // Each HTTP request gets a distinct clock domain, including closure and approval.
-            const telemetry = yield* makeTelemetry(
-              () => (this.exists("spans") ? this.read("spans", CheckoutSpans).length + 1 : 0),
-              (span) => {
-                if (!this.exists("spans")) return;
-                const spans = this.read("spans", CheckoutSpans);
+            Effect.provide(
+              Layer.effect(CheckoutTelemetry, makeTelemetry()).pipe(
+                Layer.provide(
+                  Layer.succeed(CheckoutTelemetryStore, {
+                    allocateRequestUnsafe: () =>
+                      this.exists("spans") ? this.read("spans", CheckoutSpans).length + 1 : 0,
+                    recordUnsafe: (span) => {
+                      if (!this.exists("spans")) return;
+                      const spans = this.read("spans", CheckoutSpans);
 
-                this.write(
-                  "spans",
-                  CheckoutSpans,
-                  spans.some((item) => item.id === span.id)
-                    ? spans.map((item) => (item.id === span.id ? span : item))
-                    : [...spans, span],
-                );
-              },
-            );
-
-            return yield* (
-              operation === "approve"
-                ? measured("approval", "approve", this.controlRequest(request, operation))
-                : this.controlRequest(request, operation)
-            ).pipe(Effect.provideService(CheckoutTelemetry, telemetry));
-          })
+                      this.write(
+                        "spans",
+                        CheckoutSpans,
+                        spans.some((item) => item.id === span.id)
+                          ? spans.map((item) => (item.id === span.id ? span : item))
+                          : [...spans, span],
+                      );
+                    },
+                  }),
+                ),
+              ),
+            ),
+          )
         : this.storefront(request, operation)
       ).pipe(
         Effect.scoped,

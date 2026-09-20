@@ -16,11 +16,18 @@ type Details = Partial<
   >
 >;
 
+/** Synchronous storage is required by native tracer callbacks and atomic request allocation. */
+export class CheckoutTelemetryStore extends Context.Service<
+  CheckoutTelemetryStore,
+  {
+    readonly allocateRequestUnsafe: () => number;
+    readonly recordUnsafe: (span: Span) => void;
+  }
+>()("checkout/TelemetryStore") {}
+
 /** A request owns its clock and turn counter. Never serialize absolute monotonic timestamps. */
-export const makeTelemetry = Effect.fnUntraced(function* (
-  allocateRequest: () => number,
-  record: (span: Span) => void,
-) {
+export const makeTelemetry = Effect.fnUntraced(function* () {
+  const store = yield* CheckoutTelemetryStore;
   const clock = yield* Clock.Clock;
   const origin = clock.monotonicTimeNanosUnsafe();
   let request: number | undefined;
@@ -31,7 +38,7 @@ export const makeTelemetry = Effect.fnUntraced(function* (
   return {
     begin(phase: Span["phase"], operation: string, details: Details = {}) {
       // Allocate beside the first synchronous write, after any request-body suspension.
-      request ??= allocateRequest();
+      request ??= store.allocateRequestUnsafe();
       if (phase === "model" || phase === "decision" || phase === "text") turn++;
 
       const span: Span = {
@@ -45,7 +52,7 @@ export const makeTelemetry = Effect.fnUntraced(function* (
         ...details,
       };
 
-      record(span);
+      store.recordUnsafe(span);
 
       return (exit: Exit.Exit<unknown, unknown>, extra: Details = {}) => {
         const outcome = Exit.isSuccess(exit)
@@ -56,7 +63,7 @@ export const makeTelemetry = Effect.fnUntraced(function* (
               ? "defect"
               : "failure";
 
-        record({
+        store.recordUnsafe({
           ...span,
           ...extra,
           elapsedMillis: Math.max(0, millis() - span.offsetMillis),

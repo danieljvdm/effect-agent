@@ -444,6 +444,18 @@ it.live(
         409,
       );
 
+      const beforeRejected = yield* control("run", "evidence");
+      const beforeRejectedEvidence = yield* Effect.promise(() => beforeRejected.json());
+
+      assert.strictEqual((yield* dispatch("/_control/run/approve", {})).status, 401);
+      assert.strictEqual((yield* control("run", "approve")).status, 405);
+      const afterRejected = yield* control("run", "evidence");
+
+      assert.deepStrictEqual(
+        yield* Effect.promise(() => afterRejected.json()),
+        beforeRejectedEvidence,
+      );
+
       const login = yield* dispatch("/s/run/login", {
         email: "alex@example.test",
         password: "dummy-checkout-password",

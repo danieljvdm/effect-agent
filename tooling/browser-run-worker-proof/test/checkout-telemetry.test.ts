@@ -6,13 +6,16 @@ import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai";
 import { CheckoutSpan } from "../src/checkout-contract.ts";
 import {
   CheckoutTelemetry,
+  CheckoutTelemetryStore,
   instrumentModels,
   makeTelemetry,
   measured,
 } from "../src/checkout-telemetry.ts";
 
 expectTypeOf<Effect.Error<ReturnType<typeof makeTelemetry>>>().toEqualTypeOf<never>();
-expectTypeOf<Effect.Services<ReturnType<typeof makeTelemetry>>>().toEqualTypeOf<never>();
+expectTypeOf<
+  Effect.Services<ReturnType<typeof makeTelemetry>>
+>().toEqualTypeOf<CheckoutTelemetryStore>();
 
 type MeasuredModel = ReturnType<
   typeof instrumentModels<string, "expected", LanguageModel.LanguageModel>
@@ -33,9 +36,11 @@ it.effect(
       for (const outcome of ["success", "failure", "defect", "timeout", "interruption"] as const) {
         const recorded: Array<typeof CheckoutSpan.Type> = [];
 
-        const telemetry = yield* makeTelemetry(
-          () => 3,
-          (span) => recorded.push(CheckoutSpan.make(span)),
+        const telemetry = yield* makeTelemetry().pipe(
+          Effect.provideService(CheckoutTelemetryStore, {
+            allocateRequestUnsafe: () => 3,
+            recordUnsafe: (span) => recorded.push(CheckoutSpan.make(span)),
+          }),
         );
 
         const entered = yield* Deferred.make<void>();
@@ -88,9 +93,11 @@ it.effect(
     Effect.gen(function* () {
       const recorded: Array<typeof CheckoutSpan.Type> = [];
 
-      const telemetry = yield* makeTelemetry(
-        () => 7,
-        (span) => recorded.push(span),
+      const telemetry = yield* makeTelemetry().pipe(
+        Effect.provideService(CheckoutTelemetryStore, {
+          allocateRequestUnsafe: () => 7,
+          recordUnsafe: (span) => recorded.push(span),
+        }),
       );
 
       const toolkit = Toolkit.make(
@@ -174,14 +181,20 @@ it.effect(
 it.effect("keeps overlapping requests distinct when both arrive before their first span", () =>
   Effect.gen(function* () {
     const persisted = new Map<string, typeof CheckoutSpan.Type>();
-    const allocate = () => persisted.size + 1;
 
-    const record = (span: typeof CheckoutSpan.Type) => {
-      persisted.set(span.id, span);
-    };
+    const store = CheckoutTelemetryStore.of({
+      allocateRequestUnsafe: () => persisted.size + 1,
+      recordUnsafe: (span) => {
+        persisted.set(span.id, span);
+      },
+    });
 
-    const first = yield* makeTelemetry(allocate, record);
-    const second = yield* makeTelemetry(allocate, record);
+    const first = yield* makeTelemetry().pipe(Effect.provideService(CheckoutTelemetryStore, store));
+
+    const second = yield* makeTelemetry().pipe(
+      Effect.provideService(CheckoutTelemetryStore, store),
+    );
+
     const finishFirst = first.begin("resume", "agent.run");
     const finishSecond = second.begin("approval", "approve");
 
