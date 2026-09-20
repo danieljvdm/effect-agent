@@ -1428,6 +1428,9 @@ for (const cacheControl of ["default", "no-store"] as const) {
 
           const transportSocket = {
             accept: () => {},
+            get readyState() {
+              return socket.readyState;
+            },
             addEventListener: events.addEventListener.bind(events),
             removeEventListener: events.removeEventListener.bind(events),
             close: () => socket.close(),
@@ -1626,6 +1629,44 @@ for (const cacheControl of ["default", "no-store"] as const) {
           expect(sockets.at(-1)!.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
           expect(attachments).toHaveLength(1);
 
+          if (serviceWorker) {
+            // Disposal fault control, not a reproduction of the incident: a missing exact
+            // target refuses resume, and a broken SDK disconnect must not strand its CDP client.
+            const brokenDisconnect = vi
+              .fn<() => Promise<void>>()
+              .mockRejectedValue(new TypeError("private-sdk-disconnect-detail"));
+
+            sdk.connected.mockImplementationOnce((browser) => {
+              attachments.push(browser);
+              vi.spyOn(browser, "disconnect").mockImplementation(brokenDisconnect);
+            });
+
+            const refused = yield* host
+              .resume(
+                BrowserRunProtectedCheckpoint.make({
+                  ...first,
+                  targetId: Redacted.make("missing-exact-target"),
+                }),
+              )
+              .pipe(Effect.scoped, Effect.flip);
+
+            expect(refused).toMatchObject({
+              reason: "provider",
+              dispatch: "not-dispatched",
+              milestone: "none",
+              cleanup: "not-requested",
+            });
+            expect(attachments.at(-1)!.connected).toBe(false);
+            expect(attachments.at(-1)!.debugInfo.pendingProtocolErrors).toEqual([]);
+            expect(sockets.at(-1)!.readyState).toBe(WebSocket.CLOSED);
+            expect(brokenDisconnect).not.toHaveBeenCalled();
+            expect(closes).toBe(0);
+            expect(writes).toBe(0);
+            expect(reports).toHaveLength(1);
+            expect(JSON.stringify(reports)).toContain('"operation":"protected.resume"');
+            expect(JSON.stringify(reports)).not.toContain("private-sdk-disconnect-detail");
+          }
+
           const human = yield* Effect.scoped(
             Effect.gen(function* () {
               const session = yield* host.resume(first);
@@ -1735,7 +1776,7 @@ for (const cacheControl of ["default", "no-store"] as const) {
               );
               expect(checkpoint.protected.startedAt).toBe(first.protected.startedAt);
               expect(checkpoint.protected.policy).toEqual(first.protected.policy);
-              expect(new Set(attachments).size).toBe(4);
+              expect(new Set(attachments).size).toBe(serviceWorker ? 5 : 4);
               expect(handoffs).toBe(2);
               expect(allocations).toBe(1);
               expect(writes).toBe(1);
@@ -1766,7 +1807,7 @@ for (const cacheControl of ["default", "no-store"] as const) {
               expect([...methods.keys()].filter((method) => method.startsWith("Fetch."))).toEqual(
                 [],
               );
-              expect(reports).toEqual([]);
+              expect(reports).toHaveLength(serviceWorker ? 1 : 0);
             }),
           );
         }).pipe(

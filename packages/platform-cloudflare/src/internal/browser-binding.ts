@@ -27,6 +27,13 @@ const Version = Schema.Struct({
   protocolVersion: Schema.NonEmptyString,
 });
 
+/** Private attachment ownership is available before asynchronous SDK initialization completes. */
+export interface BrowserRunAttachment {
+  readonly browser: Promise<Browser>;
+  /** Fence SDK dispatch/callbacks and await local socket closure; never terminate the provider. */
+  readonly retire: Effect.Effect<void, BrowserRunFailure>;
+}
+
 /** Native transport port shared by both scoped adapters; the Layer owns the foreign binding. */
 export class BrowserRunBinding extends Context.Service<
   BrowserRunBinding,
@@ -39,7 +46,7 @@ export class BrowserRunBinding extends Context.Service<
       sessionId: string,
       operation: string,
       signal?: AbortSignal,
-    ) => Promise<Browser>;
+    ) => BrowserRunAttachment;
     readonly keepAlive: (sessionId: string) => Effect.Effect<void, BrowserRunFailure>;
   }
 >()("@effect-agent/platform-cloudflare/internal/BrowserRunBinding") {
@@ -96,62 +103,132 @@ export class BrowserRunBinding extends Context.Service<
 
         return Schema.decodeUnknownSync(Acquired)(await response.json()).sessionId;
       },
-      connect: async (sessionId, operation, signal) => {
+      connect: (sessionId, operation, signal) => {
         let socket: WebSocket | undefined;
+        let retired = false;
         let closedByAbort = false;
+        let retirementFailure: BrowserRunFailure | undefined;
 
-        try {
-          const connected = await upgrade(sessionId, operation, signal);
+        const disconnectOperation =
+          operation === "protected.connect" ? "protected.disconnect" : "interactive.disconnect";
 
-          socket = connected;
+        const transport: ConnectionTransport = {
+          send: (message) => {
+            if (retired || socket === undefined)
+              throw new BrowserRunFailure({ operation, reason: "provider" });
+            socket.send(message);
+          },
+          close: () => retireNow(),
+        };
 
-          const transport: ConnectionTransport = {
-            send: (message) => connected.send(message),
-            close: () => connected.close(),
-          };
+        const onMessage = (event: MessageEvent) => {
+          if (!retired) transport.onmessage?.(event.data);
+        };
 
-          connected.addEventListener("message", (event) => {
-            transport.onmessage?.(event.data);
-          });
-          connected.addEventListener("close", () => transport.onclose?.());
-          connected.accept();
+        const fence = () => {
+          if (retired) return;
+          retired = true;
+          const notify = transport.onclose;
 
-          const abort = () => {
-            try {
-              const wasOpen = connected.readyState === WebSocket.OPEN;
+          transport.onmessage = undefined;
+          transport.onclose = undefined;
+          // Notify the SDK before touching the socket: disposal must reject pending CDP calls
+          // even when the raw transport cannot close. The send fence also covers queued work.
+          try {
+            notify?.();
+          } finally {
+            socket?.removeEventListener("message", onMessage);
+          }
+        };
 
-              connected.close();
-              closedByAbort = wasOpen;
-            } catch {
-              // The local transport may already have closed; never terminate the provider here.
-            }
-          };
+        const retireNow = () => {
+          try {
+            fence();
+          } catch (cause) {
+            retirementFailure ??= browserFailure(disconnectOperation, cause);
+          }
+          try {
+            if (socket !== undefined && socket.readyState < WebSocket.CLOSING) socket.close();
+          } catch (cause) {
+            retirementFailure ??= browserFailure(disconnectOperation, cause);
+          }
+          if (retirementFailure !== undefined) throw retirementFailure;
+        };
 
-          signal?.addEventListener("abort", abort, { once: true });
+        const abort = () => {
+          closedByAbort = socket?.readyState === WebSocket.OPEN;
+          try {
+            retireNow();
+          } catch {
+            // The attachment owner observes this separately from the initiating failure.
+          }
+        };
+
+        signal?.addEventListener("abort", abort, { once: true });
+
+        const initialized = (async () => {
           try {
             signal?.throwIfAborted();
+            socket = await upgrade(sessionId, operation, signal);
+            socket.accept();
+            if (retired || signal?.aborted) {
+              // No SDK command may escape a late upgrade. Preserve a late local-close
+              // failure independently of the cancellation already returned to the owner.
+              retireNow();
+              signal?.throwIfAborted();
+              throw new BrowserRunFailure({ operation, reason: "provider" });
+            }
+            socket.addEventListener("message", onMessage);
+            socket.addEventListener(
+              "close",
+              () => {
+                try {
+                  fence();
+                } catch (cause) {
+                  retirementFailure ??= browserFailure(disconnectOperation, cause);
+                }
+              },
+              { once: true },
+            );
 
             return await puppeteer.connect({ transport });
+          } catch (cause) {
+            try {
+              retireNow();
+            } catch {
+              // Preserve both facts: initialization failed, and retirement may be unconfirmed.
+            }
+            const failure = browserFailure(operation, cause);
+
+            const localCancellation =
+              cause instanceof Error &&
+              signal?.aborted === true &&
+              (cause === signal.reason || (closedByAbort && cause.name === "TargetCloseError"));
+
+            throw localCancellation ? reportedBrowserError(failure) : failure;
           } finally {
             signal?.removeEventListener("abort", abort);
           }
-        } catch (cause) {
-          try {
-            socket?.close();
-          } catch {
-            // Preserve the connection failure when local release also fails.
-          }
-          const failure = browserFailure(operation, cause);
+        })();
 
-          // A local abort can reject SDK initialization as target-closed. Genuine late
-          // provider failures still report, even when the caller's signal has aborted.
-          const localCancellation =
-            cause instanceof Error &&
-            signal?.aborted === true &&
-            (cause === signal.reason || (closedByAbort && cause.name === "TargetCloseError"));
+        return {
+          browser: initialized,
+          retire: Effect.callback<void, BrowserRunFailure>((resume) => {
+            const connected = socket;
+            const onClose = () => resume(Effect.void);
 
-          throw localCancellation ? reportedBrowserError(failure) : failure;
-        }
+            try {
+              retireNow();
+              if (connected === undefined || connected.readyState === WebSocket.CLOSED)
+                resume(Effect.void);
+              else connected.addEventListener("close", onClose, { once: true });
+            } catch (cause) {
+              resume(Effect.fail(browserFailure(disconnectOperation, cause)));
+            }
+
+            return Effect.sync(() => connected?.removeEventListener("close", onClose));
+          }),
+        };
       },
       keepAlive: Effect.fnUntraced(function* (sessionId: string) {
         const operation = "protected.keepAlive";

@@ -9,7 +9,7 @@ import {
   type CDPSession,
 } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
-import { BrowserRunBinding } from "../internal/browser-binding.ts";
+import { BrowserRunBinding, type BrowserRunAttachment } from "../internal/browser-binding.ts";
 import {
   browserFailure,
   BrowserRunFailure,
@@ -86,6 +86,7 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
         let control: CDPSession | undefined;
         let providerIdentity: ProtectedProviderIdentity | undefined;
         let browser: Browser | undefined;
+        let attachment: BrowserRunAttachment | undefined;
         let driver: ProtectedBrowserTransport | undefined;
         let invalid = false;
         // SDK acquisition may finish after interruption. Its late-reply callback must await cleanup,
@@ -99,27 +100,47 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
 
           // A failed resume has not acquired the host's retained provider. Release only
           // this connection; successful attachments and new allocations own termination.
-          const cleanup = yield* identity !== undefined && driver === undefined
-            ? Effect.succeed("unconfirmed" as const)
-            : lifecycle.close(sessionId).pipe(
-                Effect.as("confirmed" as const),
-                Effect.catchCause((cause) =>
-                  reportBrowserCause("protected.close", cause).pipe(
-                    Effect.as("unconfirmed" as const),
-                  ),
-                ),
+          if (identity !== undefined && driver === undefined) {
+            if (attachment !== undefined)
+              yield* attachment.retire.pipe(
                 Effect.interruptible,
                 Effect.timeoutOrElse({
-                  duration: "10 seconds",
+                  duration: "1 second",
                   orElse: () =>
-                    reportBrowserCause(
-                      "protected.close",
-                      Cause.fail(
-                        new BrowserRunFailure({ operation: "protected.close", reason: "timeout" }),
-                      ),
-                    ).pipe(Effect.as("unconfirmed" as const)),
+                    Effect.fail(
+                      new BrowserRunFailure({
+                        operation: "protected.disconnect",
+                        reason: "timeout",
+                      }),
+                    ),
                 }),
+                Effect.catch((error) =>
+                  reportBrowserCause("protected.disconnect", Cause.fail(error)).pipe(
+                    Effect.andThen(() => Effect.die(reportedBrowserError(error))),
+                  ),
+                ),
               );
+
+            return "unconfirmed" as const;
+          }
+
+          const cleanup = yield* lifecycle.close(sessionId).pipe(
+            Effect.as("confirmed" as const),
+            Effect.catchCause((cause) =>
+              reportBrowserCause("protected.close", cause).pipe(Effect.as("unconfirmed" as const)),
+            ),
+            Effect.interruptible,
+            Effect.timeoutOrElse({
+              duration: "10 seconds",
+              orElse: () =>
+                reportBrowserCause(
+                  "protected.close",
+                  Cause.fail(
+                    new BrowserRunFailure({ operation: "protected.close", reason: "timeout" }),
+                  ),
+                ).pipe(Effect.as("unconfirmed" as const)),
+            }),
+          );
 
           // Local disconnect is not remote-closure evidence. Do it even when confirmation fails.
           const connected = browser;
@@ -169,7 +190,8 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
               }
               // Resume only a host-persisted exact page. Never open a replacement page or context.
               stage = "protected.connect";
-              browser = await binding.connect(Redacted.value(sessionId), stage, signal);
+              attachment = binding.connect(Redacted.value(sessionId), stage, signal);
+              browser = await attachment.browser;
               if (signal.aborted || invalid) {
                 await runCleanup(terminate);
                 throw new ProtectedTransportError({ reason: "stale-reference" });
@@ -273,8 +295,26 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
             orElse: () =>
               Effect.fail(new BrowserRunFailure({ operation: stage, reason: "timeout" })),
           }),
-          Effect.catch((error) =>
-            reportBrowserCause(stage, Cause.fail(error)).pipe(
+          Effect.catch((error) => {
+            if (identity !== undefined && driver === undefined)
+              return reportBrowserCause(stage, Cause.fail(error)).pipe(
+                Effect.andThen(
+                  Effect.fail(
+                    reportedBrowserError(
+                      new ProtectedBrowserError({
+                        ...failure(),
+                        reason: error.reason === "timeout" ? "timeout" : "provider",
+                        cleanup: "not-requested",
+                      }),
+                    ),
+                  ),
+                ),
+                // A disposal defect stays alongside the original failure. Only a pure typed
+                // failure proves that this pre-handle attachment is safe to relinquish.
+                Effect.ensuring(close),
+              );
+
+            return reportBrowserCause(stage, Cause.fail(error)).pipe(
               Effect.andThen(close),
               Effect.flatMap((cleanup) =>
                 Effect.fail(
@@ -282,14 +322,13 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
                     new ProtectedBrowserError({
                       ...failure(),
                       reason: error.reason === "timeout" ? "timeout" : "provider",
-                      cleanup:
-                        identity !== undefined && driver === undefined ? "not-requested" : cleanup,
+                      cleanup,
                     }),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          }),
         );
 
         driver = yield* makeProtectedNativeTransport(policy).pipe(

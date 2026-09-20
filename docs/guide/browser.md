@@ -609,6 +609,11 @@ A serialized checkpoint is not authorization: resume only the latest generationâ
 Resume attaches the exact saved browser context and page; missing or expired sessions fail instead
 of creating a replacement. A failed attachment releases its local connection without terminating
 the host's retained session; the host keeps responsibility for its checkpoint and expiry cleanup.
+A pure pre-handle `provider` failure with `not-dispatched`/`none`/`not-requested` evidence confirms
+that SDK initialization never started or its local attachment has retired and its socket closed.
+The owner can atomically restore its prior suspended claim. A mixed defect or interruption does
+not give that guarantee; inspect the complete failure cause. This does not prove provider health
+or undo commands already sent. Errors after a handle was returned do not qualify.
 All old refs and offers are invalidated. Detached tool handles cannot
 close or act on the transferred session. Ordinary scope release still terminates an attached
 session. An uncertain handoff closes the exact session and never produces a resumable receipt;
