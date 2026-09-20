@@ -1,15 +1,4 @@
-import {
-  Clock,
-  Context,
-  DateTime,
-  Effect,
-  Fiber,
-  Layer,
-  Option,
-  Ref,
-  Semaphore,
-  Stream,
-} from "effect";
+import { Clock, Context, Effect, Layer, Option, Ref, Semaphore } from "effect";
 import { type ThreadId } from "effect-agent/identifiers";
 import {
   MessageDeliveryDriver,
@@ -18,12 +7,7 @@ import {
 } from "effect-agent/message-delivery";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 
-import {
-  DurableAlarmError,
-  ThreadMaintenanceActivity,
-  ThreadMessageDelivery,
-  ThreadMutationGate,
-} from "../Alarm.ts";
+import { DurableAlarmError, ThreadMessageDelivery, ThreadMutationGate } from "../Alarm.ts";
 import { ThreadObjectPlacement } from "../CloudflareBindings.ts";
 
 /** Every write prearms its owner; the delivery due index owns its recovery deadline. */
@@ -89,7 +73,7 @@ export const guardedMessageDeliveryStoreLayer = Layer.effect(
       get: (key) => local(key.ownerThreadId, store.get(key)),
       list: (request) => local(request.ownerThreadId, store.list(request)),
       change: (key, change) => local(key.ownerThreadId, mutate(store.change(key, change))),
-      // Only the trusted physical-owner pump omits an owner. All returned keys still
+      // Only the trusted physical-owner selection omits an owner. All returned keys still
       // pass placement validation before the driver may dispatch any of the wave.
       due: (nowMillis, limit, owner) =>
         local(owner, store.due(nowMillis, limit, owner)).pipe(
@@ -116,8 +100,6 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
         message: "Durable message recovery remains pending",
       });
 
-    const wakes = yield* WakeScheduler;
-
     const prepare = Effect.gen(function* () {
       const deadline = yield* store.nextDeadline();
 
@@ -140,49 +122,7 @@ export const threadMessageDeliveryLayer = Layer.effectContext(
     }).pipe(Effect.mapError(failure("prepare message delivery")));
 
     return Context.make(ThreadMessageDelivery, {
-      drainUntil: (dispatchClosed, dispatchUntil) =>
-        Effect.gen(function* () {
-          const activity = yield* ThreadMaintenanceActivity;
-          // Subscribe before the initial scan. Only admission of new waves stops;
-          // the enclosing event owns these resources until its actual teardown.
-          const hinted = yield* Stream.toPull(wakes.wakes);
-          const checked = (yield* activity.subscribeChanges).pipe(Effect.as([undefined]));
-          const notified = Effect.raceFirst(hinted, checked).pipe(Effect.catch(() => Effect.never));
-
-          const done = yield* Effect.forkScoped(dispatchClosed);
-          let exhausted = false;
-
-          const select = Effect.fnUntraced(function* (initial = false) {
-            if (exhausted) return;
-            const wave = yield* prepare;
-            const now = yield* Clock.currentTimeMillis;
-
-            // Recheck after local preparation: a late selection cannot start another wave once
-            // dispatch closes. Always grant the initial opportunity to a caught-up alarm.
-            if (!initial && done.pollUnsafe() !== undefined) return;
-            if (now + wave.timeoutMillis > DateTime.toEpochMillis(dispatchUntil)) {
-              // This pump has used its event opportunity. Keep the durable deadline for the
-              // next alarm without repeatedly selecting a wave that cannot fit this event.
-              exhausted = true;
-
-              return;
-            }
-            yield* wave.run;
-          });
-
-          yield* activity.run(activity.ready.pipe(Effect.andThen(select(true))));
-          while (!exhausted && done.pollUnsafe() === undefined) {
-            const wake = yield* Effect.raceFirst(
-              notified.pipe(Effect.map(Option.some)),
-              Fiber.join(done).pipe(Effect.as(Option.none())),
-            );
-
-            if (Option.isNone(wake)) return;
-            yield* Effect.forEach(wake.value, () => activity.run(select()), { discard: true });
-          }
-          // No deadline sleeps: the driver finishes its one active parallel wave, including
-          // timeout/backoff commits; retained retries belong to a future physical alarm.
-        }),
+      prepare,
       pendingDeadline: store
         .nextDeadline()
         .pipe(Effect.map(Option.fromNullishOr), Effect.mapError(failure("read message deadline"))),

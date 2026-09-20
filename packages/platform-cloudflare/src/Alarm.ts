@@ -9,7 +9,6 @@ import {
   Fiber,
   Layer,
   Option,
-  PubSub,
   Random,
   Ref,
   Result,
@@ -286,116 +285,56 @@ export class ThreadPublication extends Context.Service<
   });
 }
 
-/** Event-local accounting shared by the existing maintenance pumps and native scheduler. */
-export class ThreadMaintenanceActivity extends Context.Service<
-  ThreadMaintenanceActivity,
-  {
-    /**
-     * Account for one finite selection/dispatch, through joined completion or interruption.
-     * Register before reading/claiming work. After dispatch closes the body is not started.
-     * Host waves retain their declared allowance from this call; message Claims keep the driver's
-     * own deadline. Waiting for notifications belongs outside this bracket.
-     */
-    readonly run: <R>(
-      wave: Effect.Effect<void, DurableAlarmError, R>,
-    ) => Effect.Effect<void, DurableAlarmError, R>;
-    /** Acknowledge all initial subscriptions/scans. Composite hosts use `all` below. */
-    readonly ready: Effect.Effect<void>;
-    /**
-     * Acquire an independent scoped subscription before the initial scan and `ready`.
-     * The returned wait observes coalesced native scan hints, including those published before
-     * its first execution. Each hint requests a current local due-work check.
-     */
-    readonly subscribeChanges: Effect.Effect<Effect.Effect<void>, never, Scope.Scope>;
-  }
->()("@effect-agent/platform-cloudflare/ThreadMaintenanceActivity") {
-  /** Join child pumps; acknowledge the parent only after every child is ready or has exited. */
-  static readonly all = Effect.fnUntraced(function* <A, E, R>(
-    lanes: ReadonlyArray<Effect.Effect<A, E, R>>,
-  ): Effect.fn.Return<ReadonlyArray<A>, E, R | ThreadMaintenanceActivity> {
-    const activity = yield* ThreadMaintenanceActivity;
-    let remaining = lanes.length;
-
-    if (remaining === 0) return yield* activity.ready.pipe(Effect.as([]));
-
-    return yield* Effect.forEach(
-      lanes,
-      (lane) => {
-        let ready = false;
-
-        const child: ThreadMaintenanceActivity["Service"] = {
-          ...activity,
-          ready: Effect.suspend(() => {
-            if (ready) return Effect.void;
-            ready = true;
-
-            return --remaining === 0 ? activity.ready : Effect.void;
-          }).pipe(Effect.uninterruptible),
-        };
-
-        // A failed initial setup is accounted for without swallowing its Cause. Callers
-        // may collect Exits when sibling pumps must keep their independent opportunities.
-        return lane.pipe(
-          Effect.provideService(ThreadMaintenanceActivity, child),
-          Effect.onExit(() => child.ready),
-        );
-      },
-      { concurrency: "unbounded" },
-    );
-  });
-}
-
 /**
- * Host-assembled native message recovery. The driver bounds each actual Claim and persists its
- * timeout/retry before this pump returns. Do not add a second timer starting at batch selection:
- * local Claim setup may take time, and expiration still owes the driver's local retry commit.
+ * Host-assembled native message recovery. Preparation is a bounded local selection; the
+ * driver bounds each actual Claim and persists its timeout/retry before `run` returns.
+ * The alarm must not add a timer starting at selection: Claim setup and retry commits belong
+ * to the driver. The prepared allowance decides only whether a wave fits this event.
  */
 export const ThreadMessageDelivery = Context.Reference<{
-  readonly drainUntil: (
-    dispatchClosed: Effect.Effect<void>,
-    dispatchUntil: DateTime.Utc,
-  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope | ThreadMaintenanceActivity>;
+  readonly prepare: Effect.Effect<
+    {
+      readonly timeoutMillis: number;
+      readonly run: Effect.Effect<void, DurableAlarmError>;
+    },
+    DurableAlarmError
+  >;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
 }>("@effect-agent/platform-cloudflare/ThreadMessageDelivery", {
   defaultValue: () => ({
-    drainUntil: () => Effect.void,
+    prepare: Effect.succeed({ timeoutMillis: 1, run: Effect.void }),
     pendingDeadline: Effect.succeed(Option.none()),
   }),
 });
 
 /**
- * Application obligations sharing this Object's alarm. Admit one initial external wave even on
- * a caught-up pass, then respond to wakes and ThreadMaintenanceActivity.subscribeChanges until
- * dispatchClosed. Yield the event's ThreadMaintenanceActivity to bracket each finite lane with
- * run and acknowledge initial setup with ready.
- * Passive subscriptions do not count as active work. Closure stops both new waves and native
- * Attempts; local admission/control subscriptions belong to the event Scope until teardown.
- * No deadline sleeps or automatic retry loops. Return after already-admitted waves finish.
+ * One independently schedulable application obligation. `run` selects and joins one finite
+ * wave, including its retry/receipt commits. The alarm gives every lane an initial opportunity,
+ * then checks its local pending deadline on completion, native progress, wakes and bounded scans.
+ * No subscriptions, readiness acknowledgements, deadline sleeps or dispatch loops are needed.
  *
- * Declare a finite whole-wave allowance (1..300000ms): maximum for parallel lanes, sum for
- * sequential operations. Admit a wave only if its allowance fits before dispatchUntil. Later
- * arrivals cannot renew an admitted wave's allowance. Maintenance bounds each registered wave,
- * interrupts and joins event Scope, then reads local deadlines under the mutation gate.
+ * Declare a whole-wave allowance (1..300000ms), including selection, local commits and cleanup. A wave
+ * starts only if that allowance fits the event and later arrivals cannot renew it. A failed
+ * lane is not retried within the event. The alarm joins admitted work and closes its Scope
+ * before reading durable deadlines under the shared ThreadMutationGate.
  *
- * Setup and pendingDeadline are bounded local operations. Persist claims/envelopes before
- * dispatch; interrupted waits leave exact retries/receipts recoverable. Cancellation is local,
- * not remote rollback. Retry accounting is unchanged. Network waits/finalizers must be
- * interruptible; short local atomic commits may be uninterruptible. Hooks never write the raw
- * alarm slot. Required native publication gates belong to ThreadPublication.
+ * `pendingDeadline` is bounded local control state, never a retained-history scan. Persist
+ * envelopes/claims before dispatch; cancellation is local, not remote rollback. Network waits
+ * and finalizers must be interruptible; short atomic commits may be uninterruptible. Mutations
+ * use the shared gate and producers notify the existing WakeScheduler after commit. Hooks never
+ * write the raw alarm slot. Required native publication gates belong to ThreadPublication.
  */
-export const ThreadHostMaintenance = Context.Reference<{
+export interface ThreadHostMaintenanceLane {
   readonly dispatchTimeoutMillis: number;
-  readonly drainUntil: (
-    dispatchClosed: Effect.Effect<void>,
-    dispatchUntil: DateTime.Utc,
-  ) => Effect.Effect<void, DurableAlarmError, Scope.Scope | ThreadMaintenanceActivity>;
+  readonly run: Effect.Effect<void, DurableAlarmError, Scope.Scope>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, DurableAlarmError>;
+}
+
+/** Independent lanes share the existing alarm; compose hosts by concatenating their lanes. */
+export const ThreadHostMaintenance = Context.Reference<{
+  readonly lanes: ReadonlyArray<ThreadHostMaintenanceLane>;
 }>("@effect-agent/platform-cloudflare/ThreadHostMaintenance", {
-  defaultValue: () => ({
-    dispatchTimeoutMillis: 1,
-    drainUntil: () => Effect.void,
-    pendingDeadline: Effect.succeed(Option.none()),
-  }),
+  defaultValue: () => ({ lanes: [] }),
 });
 
 const earliestDeadline = (
@@ -687,7 +626,7 @@ export type MaintenancePassFailure =
  *    retain their durable backoff.
  * 3. Keep native and delivery admission open together while finite waves remain active, so
  *    fresh replies and abort controls can progress during unrelated cleanup. Close atomically
- *    at quiescence, or at the original ten-minute yield deadline, before retiring listeners.
+ *    at quiescence, or at the original ten-minute yield deadline, then join admitted waves.
  * 4. Native message delivery retains its driver-owned Claim deadline. Host/backfill waves are
  *    bounded independently; incoming native work never restarts or cancels their attempts.
  *    Auxiliary failures are reported after the current native opportunity.
@@ -770,7 +709,13 @@ export class ThreadMaintenance extends Context.Service<
       const pendingDeadline = Effect.gen(function* () {
         return earliestDeadline(
           earliestDeadline(yield* publication.pendingDeadline, yield* messages.pendingDeadline),
-          earliestDeadline(yield* projectionDeadline, yield* host.pendingDeadline),
+          earliestDeadline(
+            yield* projectionDeadline,
+            (yield* Effect.forEach(host.lanes, (lane) => lane.pendingDeadline)).reduce(
+              earliestDeadline,
+              Option.none<number>(),
+            ),
+          ),
         );
       });
 
@@ -1451,88 +1396,27 @@ export class ThreadMaintenance extends Context.Service<
         // Its completion must retain the original actionable observation for acknowledgement.
         const started = yield* beginNative(observed);
 
-        // This scope owns auxiliary dispatch and listeners, independently of native progress.
+        // This scope owns every admitted finite wave, including native advancement.
         // Close it before final alarm rearming, including on failure or event interruption.
         const auxiliaryScope = yield* Effect.acquireRelease(Scope.make("parallel"), (scope, exit) =>
           Scope.close(scope, exit),
         );
 
-        const dispatchClosed = yield* Deferred.make<void>();
-        const stopDispatch = Deferred.await(dispatchClosed);
-        // Coalesce local scan hints while a lane is busy; one hint requests a current read.
-        const checks = yield* PubSub.sliding<void>(1);
+        const fork = <A, E>(work: Effect.Effect<A, E>) => Effect.forkIn(work, auxiliaryScope);
 
-        yield* Effect.addFinalizer(() => PubSub.shutdown(checks));
-        let dispatchOpen = true;
-        let activityChanged = yield* Deferred.make<void>();
-        const signalActivity = Effect.suspend(() => Deferred.succeed(activityChanged, undefined));
+        // Each lane has at most one finite wave. A completion is retained until the single
+        // scheduling loop observes it; a busy sibling cannot consume another lane's hint.
+        const lanes = host.lanes.map((lane) => ({
+          ...lane,
+          initial: true,
+          check: true,
+          exhausted: false,
+          fiber: undefined as Fiber.Fiber<boolean, DurableAlarmError> | undefined,
+        }));
 
-        const closeDispatch = Effect.sync(() => {
-          dispatchOpen = false;
-        }).pipe(Effect.andThen(Deferred.succeed(dispatchClosed, undefined)));
-
-        const makeActivity = Effect.fnUntraced(function* (allowance?: number) {
-          const initialized = yield* Deferred.make<void>();
-          let active = 0;
-          let failed = false;
-
-          const ready = Deferred.succeed(initialized, undefined).pipe(
-            Effect.andThen(signalActivity),
-            Effect.asVoid,
-            Effect.uninterruptible,
-          );
-
-          const activity: ThreadMaintenanceActivity["Service"] = {
-            ready,
-            subscribeChanges: PubSub.subscribe(checks).pipe(Effect.map(PubSub.take)),
-            run: (wave) =>
-              Effect.acquireUseRelease(
-                Effect.sync(() => {
-                  if (!dispatchOpen) return false;
-                  active++;
-
-                  return true;
-                }),
-                (admitted) =>
-                  !admitted
-                    ? Effect.void
-                    : (allowance === undefined
-                        ? wave
-                        : wave.pipe(
-                            Effect.timeoutOrElse({
-                              duration: allowance,
-                              orElse: () =>
-                                DurableAlarmError.make({
-                                  operation: "host dispatch allowance",
-                                  message:
-                                    "The admitted host wave exceeded its allowance; durable work remains pending",
-                                }),
-                            }),
-                          )
-                      ).pipe(
-                        Effect.onExit((exit) =>
-                          Effect.sync(() => {
-                            if (Exit.isFailure(exit)) failed = true;
-                          }),
-                        ),
-                      ),
-                (admitted) =>
-                  Effect.sync(() => {
-                    if (admitted) active--;
-                  }).pipe(Effect.andThen(signalActivity)),
-              ),
-          };
-
-          return {
-            activity,
-            initialized: Deferred.await(initialized),
-            quiet: () => active === 0 && Deferred.isDoneUnsafe(initialized),
-            failed: () => failed,
-          };
-        });
-
-        const messageActivity = yield* makeActivity();
-        const hostActivity = yield* makeActivity(host.dispatchTimeoutMillis);
+        let messageExhausted = false;
+        let delivery: Fiber.Fiber<void, DurableAlarmError> | undefined;
+        let failure: Cause.Cause<DurableAlarmError | ThreadProjectionError> | undefined;
 
         const recovery: NativeRecovery = {
           queue: yield* Deferred.make<ReadonlyArray<ThreadId>>(),
@@ -1546,7 +1430,7 @@ export class ThreadMaintenance extends Context.Service<
           repaired: false,
         };
 
-        const recoveryFiber = yield* Effect.forkIn(
+        const recoveryFiber = yield* fork(
           Effect.gen(function* () {
             for (const threadId of yield* Deferred.await(recovery.queue)) {
               yield* failpoint.hit("maintenance:select:before");
@@ -1568,210 +1452,264 @@ export class ThreadMaintenance extends Context.Service<
               yield* wakes.notify(threadId);
             }
           }),
-          auxiliaryScope,
         );
 
-        // Fork setup too: an ordinary auxiliary setup failure is reported after native work,
-        // rather than gating its opportunity. Event interruption still closes every fiber.
-        const deliveryFiber = yield* Effect.forkIn(
-          Scope.provide(auxiliaryScope)(
-            messages.drainUntil(stopDispatch, dispatchUntil).pipe(
-              Effect.provideService(ThreadMaintenanceActivity, messageActivity.activity),
-              Effect.onExit(() => messageActivity.activity.ready),
-            ),
-          ),
-          auxiliaryScope,
-        );
-
-        const hostFiber = yield* Effect.forkIn(
-          Scope.provide(auxiliaryScope)(
-            Effect.gen(function* () {
-              yield* Schema.decodeEffect(AuxiliaryDispatchMillis)(host.dispatchTimeoutMillis).pipe(
-                Effect.mapError((cause) =>
-                  DurableAlarmError.make({
-                    operation: "host dispatch allowance",
-                    message:
-                      "Declare an integer whole-wave allowance between 1 and 300000 milliseconds",
-                    cause,
-                  }),
-                ),
-              );
-
-              // Initial setup must also be finite. Once it is accounted for, each actual
-              // wave has its own unchanged allowance; passive listeners have no timer.
-              const initialization = hostActivity.initialized.pipe(
-                Effect.timeoutOrElse({
-                  duration: host.dispatchTimeoutMillis,
-                  orElse: () =>
-                    DurableAlarmError.make({
-                      operation: "host initialization",
-                      message:
-                        "The host did not account for initial maintenance before its allowance; durable work remains pending",
-                    }),
-                }),
-                Effect.andThen(Effect.never),
-              );
-
-              yield* Effect.raceFirst(
-                host
-                  .drainUntil(stopDispatch, dispatchUntil)
-                  .pipe(Effect.provideService(ThreadMaintenanceActivity, hostActivity.activity)),
-                initialization,
-              );
-            }).pipe(Effect.onExit(() => hostActivity.activity.ready)),
-          ),
-          auxiliaryScope,
-        );
-
-        // Backfill is one disposable wave; its timer starts beside native execution.
-        const backfill = yield* Effect.forkIn(
+        // Backfill is one disposable wave; native and host work keep their own opportunities.
+        const backfill = yield* fork(
           drainDue.pipe(
             Effect.provideService(ThreadProjectionMaintenance, projection),
             Effect.timeoutOption(config.projectionDispatchTimeoutMillis),
-            Effect.onExit(() => signalActivity),
           ),
-          auxiliaryScope,
         );
 
-        let result = yield* advance(started, yieldAfter, observed, recovery);
+        let backfillObserved = false;
+        let recoveryObserved = false;
 
-        // This event owns one finite old-recovery wave, including an empty caught-up wave.
-        recovery.started = true;
-        yield* Deferred.succeed(recovery.queue, []);
+        let native: Fiber.Fiber<NativePassResult, MaintenancePassFailure> | undefined = yield* fork(
+          advance(started, yieldAfter, observed, recovery),
+        );
+
+        let result: NativePassResult = {
+          phase: "caught-up",
+          settled: 0,
+          nonterminal: started.nonterminal,
+          nextAttemptAt: undefined,
+        };
+
         let phase = result.phase;
-        let settled = result.settled;
+        let settled = 0;
+        let nativeCheck = false;
+        const until = DateTime.toEpochMillis(yieldAfter);
+        const dispatchEnd = DateTime.toEpochMillis(dispatchUntil);
 
-        observed.nativeOnly = false;
-
-        // Pump termination and quiescence are distinct: listeners await closure, while their
-        // finite waves report activity. A held sibling never retires another lane's controls.
-        const hostJoin = yield* Effect.forkIn(
-          Effect.gen(function* () {
-            yield* stopDispatch;
-
-            const remaining = Math.max(
-              1,
-              DateTime.toEpochMillis(dispatchUntil) - (yield* Clock.currentTimeMillis),
-            );
-
-            const outcome = yield* Fiber.join(hostFiber).pipe(
-              Effect.timeoutOption(Math.min(host.dispatchTimeoutMillis, remaining)),
-            );
-
-            yield* Effect.annotateCurrentSpan({ "host.timedOut": Option.isNone(outcome) });
-          }),
-          auxiliaryScope,
-        );
-
-        const retired = yield* Effect.forkChild(
-          Fiber.joinAll([deliveryFiber, hostJoin, backfill, recoveryFiber]),
-        );
+        const checkLanes = () => {
+          for (const lane of lanes) lane.check = true;
+        };
 
         while (true) {
-          const recoveryFinished = recoveryFiber.pollUnsafe() !== undefined;
-          const retiredExit = retired.pollUnsafe();
+          if (native?.pollUnsafe() !== undefined) {
+            result = yield* Fiber.join(native);
+            native = undefined;
+            if (result.phase === "actionable") phase = "actionable";
+            settled += result.settled;
+            observed.nativeOnly = false;
+            // An empty initial scan still opens exactly one old-recovery opportunity.
+            recovery.started = true;
+            yield* Deferred.succeed(recovery.queue, []);
+            checkLanes();
+          }
+          if (!recoveryObserved && recoveryFiber.pollUnsafe() !== undefined) {
+            yield* Fiber.join(recoveryFiber);
+            recoveryObserved = true;
+            nativeCheck = recovery.needsCheckpoint;
+          }
+          if (!backfillObserved) {
+            const exit = backfill.pollUnsafe();
 
-          if (recoveryFinished) {
-            if (recovery.needsCheckpoint) {
-              yield* Fiber.join(recoveryFiber);
-              // Fold the original recovery observation into its checkpoint before closing.
-              result = yield* advance(started, yieldAfter, observed, recovery, settled === 0);
-              if (result.phase === "actionable") phase = "actionable";
-              settled += result.settled;
-              recovery.needsCheckpoint = false;
-              yield* PubSub.publish(checks, undefined);
+            if (exit !== undefined) {
+              backfillObserved = true;
+              if (Exit.isFailure(exit)) failure ??= exit.cause;
             }
           }
-          if (retiredExit !== undefined && Exit.isFailure(retiredExit)) break;
+          for (const lane of lanes) {
+            const exit = lane.fiber?.pollUnsafe();
 
-          if (
-            recoveryFinished &&
-            backfill.pollUnsafe() !== undefined &&
-            messageActivity.quiet() &&
-            hostActivity.quiet()
-          ) {
-            const now = yield* Clock.currentTimeMillis;
-            const messageDeadline = yield* messages.pendingDeadline;
-            const hostDeadline = yield* host.pendingDeadline;
-
-            const messageDue =
-              deliveryFiber.pollUnsafe() === undefined &&
-              !messageActivity.failed() &&
-              Option.isSome(messageDeadline) &&
-              messageDeadline.value <= now;
-
-            const hostDue =
-              hostFiber.pollUnsafe() === undefined &&
-              !hostActivity.failed() &&
-              now + host.dispatchTimeoutMillis <= DateTime.toEpochMillis(dispatchUntil) &&
-              Option.isSome(hostDeadline) &&
-              hostDeadline.value <= now;
-
-            // No asynchronous operation separates the activity recheck from closure. A
-            // racing registration either keeps this window open or cannot start its body.
-            const closed = yield* Effect.sync(() => {
-              if (messageDue || hostDue || !messageActivity.quiet() || !hostActivity.quiet())
-                return false;
-
-              dispatchOpen = false;
-
-              return true;
-            });
-
-            if (closed) break;
-            yield* PubSub.publish(checks, undefined);
+            if (exit === undefined) continue;
+            lane.fiber = undefined;
+            if (Exit.isFailure(exit)) {
+              failure ??= exit.cause;
+              lane.exhausted = true;
+            } else {
+              lane.check ||= exit.value;
+            }
           }
+          const deliveryExit = delivery?.pollUnsafe();
+
+          if (deliveryExit !== undefined) {
+            delivery = undefined;
+            if (Exit.isFailure(deliveryExit)) {
+              failure ??= deliveryExit.cause;
+              messageExhausted = true;
+            }
+          }
+
+          // Preserve the initial native opportunity even when auxiliary setup fails.
+          if (failure !== undefined && native === undefined)
+            return yield* Effect.failCause(failure);
           const now = yield* Clock.currentTimeMillis;
-          const until = DateTime.toEpochMillis(yieldAfter);
 
           if (now >= until) break;
 
+          for (const lane of lanes) {
+            if (lane.fiber !== undefined || lane.exhausted || !lane.check) continue;
+            lane.check = false;
+            lane.fiber = yield* fork(
+              Effect.gen(function* () {
+                yield* Schema.decodeEffect(AuxiliaryDispatchMillis)(
+                  lane.dispatchTimeoutMillis,
+                ).pipe(
+                  Effect.mapError((cause) =>
+                    DurableAlarmError.make({
+                      operation: "host dispatch allowance",
+                      message:
+                        "Declare an integer whole-wave allowance between 1 and 300000 milliseconds",
+                      cause,
+                    }),
+                  ),
+                );
+                if ((yield* Clock.currentTimeMillis) + lane.dispatchTimeoutMillis > dispatchEnd) {
+                  lane.exhausted = true;
+
+                  return false;
+                }
+
+                return yield* Effect.gen(function* () {
+                  if (!lane.initial) {
+                    const deadline = yield* lane.pendingDeadline;
+
+                    if (
+                      Option.isNone(deadline) ||
+                      deadline.value > (yield* Clock.currentTimeMillis)
+                    )
+                      return false;
+                  }
+                  const selectedAt = yield* Clock.currentTimeMillis;
+
+                  if (
+                    selectedAt >= until ||
+                    selectedAt + lane.dispatchTimeoutMillis > dispatchEnd
+                  ) {
+                    lane.exhausted = true;
+
+                    return false;
+                  }
+                  lane.initial = false;
+                  yield* lane.run;
+
+                  return true;
+                }).pipe(
+                  // Cleanup shares this wave's original allowance.
+                  Effect.scoped,
+                  Effect.timeoutOrElse({
+                    duration: lane.dispatchTimeoutMillis,
+                    orElse: () =>
+                      DurableAlarmError.make({
+                        operation: "host dispatch allowance",
+                        message:
+                          "The admitted host wave exceeded its allowance; durable work remains pending",
+                      }),
+                  }),
+                );
+              }),
+            );
+          }
+          if (delivery === undefined && !messageExhausted) {
+            // Selection is bounded local work. Fork only an actual due wave, so an empty
+            // deadline check cannot extend retirement or consume another scheduling turn.
+            const selected = yield* Effect.gen(function* () {
+              const deadline = yield* messages.pendingDeadline;
+
+              return Option.isSome(deadline) && deadline.value <= (yield* Clock.currentTimeMillis)
+                ? Option.some(yield* messages.prepare)
+                : Option.none();
+            }).pipe(Effect.exit);
+
+            if (Exit.isFailure(selected)) {
+              failure ??= selected.cause;
+              messageExhausted = true;
+            } else if (Option.isSome(selected.value)) {
+              const wave = selected.value.value;
+              const selectedAt = yield* Clock.currentTimeMillis;
+
+              if (selectedAt >= until || selectedAt + wave.timeoutMillis > dispatchEnd) {
+                messageExhausted = true;
+              } else {
+                // No second timeout: the driver owes the Claim's timeout/retry commit.
+                delivery = yield* fork(wave.run);
+              }
+            }
+          }
+
+          // Retire a quiet event before consuming hints queued during its native Attempt.
+          // Recovery still gets its checkpoint and, if needed, initial dispatch opportunity.
+          if (
+            native === undefined &&
+            recoveryObserved &&
+            !recovery.needsCheckpoint &&
+            backfillObserved &&
+            delivery === undefined &&
+            lanes.every((lane) => lane.fiber === undefined)
+          )
+            break;
+
+          if (native === undefined && nativeCheck) {
+            nativeCheck = false;
+            const checkpoint = recoveryObserved && recovery.needsCheckpoint;
+
+            if (checkpoint) recovery.needsCheckpoint = false;
+            native = yield* fork(
+              Effect.gen(function* () {
+                const awakened = checkpoint ? started : yield* beginNative(observed);
+
+                return yield* advance(
+                  awakened,
+                  yieldAfter,
+                  observed,
+                  recovery,
+                  !checkpoint || settled === 0,
+                );
+              }),
+            );
+          }
+
           const next = Math.min(
-            result.nextAttemptAt ?? Infinity,
+            native === undefined ? (result.nextAttemptAt ?? Infinity) : Infinity,
             now + config.wakeScanInterval,
             until,
           );
 
-          // A completion racing this iteration stays armed until the loop handles it.
-          const recoveryDone = recoveryFinished ? Effect.never : Fiber.await(recoveryFiber);
-          const retirementDone = retiredExit === undefined ? Fiber.await(retired) : Effect.never;
-          const changed = activityChanged;
+          const completing = [
+            ...(native === undefined ? [] : [native]),
+            ...(recoveryObserved ? [] : [recoveryFiber]),
+            ...(backfillObserved ? [] : [backfill]),
+            ...(delivery === undefined ? [] : [delivery]),
+            ...lanes.flatMap((lane) => (lane.fiber === undefined ? [] : [lane.fiber])),
+          ];
 
-          const ready = yield* Effect.raceFirst(
-            Effect.raceFirst(notified, Effect.sleep(Math.max(0, next - now))).pipe(
-              Effect.as("native" as const),
-            ),
-            Effect.raceFirst(
-              recoveryDone.pipe(Effect.as("recovery" as const)),
-              Effect.raceFirst(
-                retirementDone.pipe(Effect.as("retired" as const)),
-                Deferred.await(changed).pipe(Effect.as("activity" as const)),
+          const ready = yield* Effect.raceAllFirst([
+            ...completing.map((fiber) =>
+              Fiber.await<unknown, MaintenancePassFailure>(fiber).pipe(
+                Effect.as("completed" as const),
               ),
             ),
-          );
+            Effect.raceFirst(notified, Effect.sleep(Math.max(0, next - now))).pipe(
+              Effect.as("scan" as const),
+            ),
+          ]);
 
-          if (ready === "recovery" || ready === "retired") continue;
-          if (ready === "activity") activityChanged = yield* Deferred.make<void>();
-          if ((yield* Clock.currentTimeMillis) >= until) break;
-          if (ready === "native") yield* PubSub.publish(checks, undefined);
-
-          const awakened = yield* beginNative(observed);
-
-          result = yield* advance(awakened, yieldAfter, observed, recovery);
+          if (ready === "scan") {
+            nativeCheck = true;
+            checkLanes();
+          }
+        }
+        // Dispatch is closed. Join each admitted wave without renewing its allowance.
+        // Message Claims retain their driver's own timer and local retry commit.
+        if (native !== undefined) {
+          result = yield* Fiber.join(native);
           if (result.phase === "actionable") phase = "actionable";
           settled += result.settled;
           observed.nativeOnly = false;
-          if (result.settled > 0) yield* PubSub.publish(checks, undefined);
+          recovery.started = true;
+          yield* Deferred.succeed(recovery.queue, []);
         }
-        // The original native yield deadline closes all new waves even if old recovery
-        // is still pending. No recovery or delivery receives a renewed event budget.
-        yield* closeDispatch;
-        // Preserve driver-owned Claim deadlines and failures, then close every
-        // listener before the one final alarm decision.
-        yield* Fiber.join(retired);
+        yield* Fiber.joinAll([
+          recoveryFiber,
+          backfill,
+          ...(delivery === undefined ? [] : [delivery]),
+          ...lanes.flatMap((lane) => (lane.fiber === undefined ? [] : [lane.fiber])),
+        ]);
+        if (failure !== undefined) return yield* Effect.failCause(failure);
         if (recovery.needsCheckpoint) {
-          // The native yield deadline ended dispatch before old recovery finished. Fold its
-          // control state into acknowledgement without starting an Attempt after retirement.
           result = yield* advance(started, yieldAfter, observed, recovery, false);
           if (result.phase === "actionable") phase = "actionable";
           settled += result.settled;
