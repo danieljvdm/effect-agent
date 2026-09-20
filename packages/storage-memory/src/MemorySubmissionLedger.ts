@@ -1268,7 +1268,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 if (other === undefined) continue;
                 if (
                   id !== stored.row.submissionId &&
-                  other.joinedHostSubmissionId !== stored.row.submissionId &&
+                  !(
+                    other.joinedHostSubmissionId === stored.row.submissionId &&
+                    other.inputApplied !== undefined
+                  ) &&
                   other.abortIntent === undefined
                 ) {
                   submissions.set(id, {

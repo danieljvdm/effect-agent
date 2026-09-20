@@ -4576,6 +4576,13 @@ const assignmentSettlement = conformanceCase(
         },
         { name: "waiting", outcome: "completed", disposition: "waiting", terminal: undefined },
         { name: "failure", outcome: "failed", queued: true, terminal: "failed" },
+        {
+          name: "failure-joining",
+          outcome: "failed",
+          queued: true,
+          joining: true,
+          terminal: "failed",
+        },
         { name: "exhaustion", outcome: "completed", exhausted: true, terminal: "failed" },
         { name: "active-abort", outcome: "aborted", terminal: "cancelled" },
         { name: "queued-abort", outcome: "aborted", noRun: true, terminal: undefined },
@@ -4667,7 +4674,7 @@ const assignmentSettlement = conformanceCase(
             }),
           );
           yield* ledger.markReady(MarkReadyRequest.make({ submissionId: queued.submissionId }));
-          if ("joined" in scenario) {
+          if ("joined" in scenario || "joining" in scenario) {
             yield* ledger.claimJoining(
               ClaimJoiningRequest.make({
                 threadId,
@@ -4676,6 +4683,8 @@ const assignmentSettlement = conformanceCase(
                 maxCount: 1,
               }),
             );
+          }
+          if ("joined" in scenario) {
             yield* ledger.markJoined(
               MarkJoinedRequest.make({
                 submissionId: queued.submissionId,
@@ -4739,10 +4748,14 @@ const assignmentSettlement = conformanceCase(
           yield* ledger.admit(later);
         }
         if (queued !== undefined) {
+          if ("joining" in scenario)
+            yield* ledger.revertJoining(
+              RevertJoiningRequest.make({ submissionId: queued.submissionId }),
+            );
           const state = yield* recoverySnapshot(queued.submissionId);
 
           yield* ensure(
-            (state.abortIntent !== undefined) === (scenario.name === "failure"),
+            (state.abortIntent !== undefined) === (scenario.outcome === "failed"),
             "Failure aborts queued inputs; completion never cancels an accepted correction or joined member",
           );
         }

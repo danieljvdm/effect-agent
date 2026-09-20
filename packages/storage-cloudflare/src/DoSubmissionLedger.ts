@@ -2094,9 +2094,8 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               SELECT submission_id, ${submission.principal}, ${`Worker assignment ${terminal}`}, ${now.iso}
               FROM effect_agent_submissions WHERE thread_id = ${submission.thread_id} AND state <> 'settled'
               AND submission_id <> ${submission.submission_id}
-              AND (joined_host_submission_id IS NULL OR joined_host_submission_id <> ${submission.submission_id})`.pipe(
-              Effect.mapError(sqlFailure(operation)),
-            );
+              AND (joined_host_submission_id IS NULL OR joined_host_submission_id <> ${submission.submission_id}
+                OR input_applied_record_id IS NULL)`.pipe(Effect.mapError(sqlFailure(operation)));
           }
         }
 
