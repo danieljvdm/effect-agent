@@ -1408,9 +1408,9 @@ it.effect.each([false, true])(
   15_000,
 );
 
-it.effect.each([false, true])(
-  "retains the first public start capture when preparation races (changed brief=%s)",
-  (changed) =>
+it.effect.each(["same", "changed", "revoked"] as const)(
+  "retains the first public start capture when preparation races (%s)",
+  (replay) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -1418,6 +1418,14 @@ it.effect.each([false, true])(
         const preparing = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         let preparations = 0;
+        let denied = false;
+
+        const currentAuthority = Layer.succeed(WorkerHostAuthorizer)({
+          authorize: (request) =>
+            !denied && request.principal === principal && request.sourceThreadId === sourceThreadId
+              ? Effect.succeed(principal)
+              : WorkerError.make({ operation: request.operation, reason: "denied" }),
+        });
 
         const research = Subagent.make("research", {
           target: target.definition,
@@ -1446,7 +1454,7 @@ it.effect.each([false, true])(
               deploymentId: "capture-v1",
               producerId: "capture-node",
             },
-          ).pipe(Layer.provide(authority)),
+          ).pipe(Layer.provide(currentAuthority)),
         );
 
         const runtime = Context.get(context, DurableAgentRuntime);
@@ -1468,7 +1476,7 @@ it.effect.each([false, true])(
             Subagent.start(research, { question }, { idempotencyKey: key("same-command") }),
           );
 
-        const first = yield* start(changed ? "different brief" : "brief").pipe(
+        const first = yield* start(replay === "changed" ? "different brief" : "brief").pipe(
           Effect.result,
           Effect.forkChild,
         );
@@ -1476,14 +1484,19 @@ it.effect.each([false, true])(
         yield* Deferred.await(preparing);
         const winner = yield* start("brief");
 
+        denied = replay === "revoked";
         yield* Deferred.succeed(release, undefined);
         const loser = yield* Fiber.join(first);
 
         expect(loser).toMatchObject(
-          changed
-            ? { _tag: "Failure", failure: { reason: "idempotency-conflict" } }
+          replay !== "same"
+            ? {
+                _tag: "Failure",
+                failure: { reason: replay === "revoked" ? "denied" : "idempotency-conflict" },
+              }
             : { _tag: "Success", success: winner },
         );
+        denied = false;
         expect(yield* start("brief")).toEqual(winner);
         expect(preparations).toBe(2);
 

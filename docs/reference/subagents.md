@@ -355,8 +355,10 @@ stored format and identity.
 
 `Subagent.start` checks the retained command before running `prepareInput`. Reusing the same key
 and declared parameters/options in a later Run reuses the first captured input, including a launch
-still awaiting admission. Changed parameters or funding scope conflict, and current caller
-authorization still applies. Preparation must be free of external effects: competing first calls
+still awaiting admission. Changed parameters, grant, or funding scope conflict. Declaration policy
+and `toolCallAllowance` stay frozen with the first capture; changing that configuration requires a
+new command key. Current caller authorization still applies, including when preparation races
+another writer. Preparation must be free of external effects: competing first calls
 can prepare before the native outbox chooses one capture. Admission keeps its existing authority
 checks; a retained command is not permission for a fresh start.
 

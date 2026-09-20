@@ -2355,6 +2355,8 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
         const replay = (saved: MessageDeliveryRecord) =>
           Effect.gen(function* () {
+            const replayPrincipal = yield* authorize("start", "send");
+
             yield* binding(command.target, "start");
             const metadata = saved.envelope.workerAdmission;
 
@@ -2388,7 +2390,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                 messageId,
                 "prepare" in command ? saved.envelope.input : command.encodedInput,
                 parameters,
-                principal,
+                replayPrincipal,
                 "start",
               ),
             };

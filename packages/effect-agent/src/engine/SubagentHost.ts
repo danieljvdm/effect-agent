@@ -41,6 +41,8 @@ export interface StartWorkerRequest {
 /**
  * First-admission preparation stays lazy until the owner authorizes the caller and checks the
  * retained command. Replays compare declared parameters/options and reuse the original capture.
+ * Prepared policy, budget, and allowance are frozen first-admission configuration, not replay
+ * arguments; changing them requires a new command key. Current caller authorization still applies.
  * Preparation must be free of external effects: concurrent first admissions can prepare before
  * the retained delivery chooses its first writer.
  */

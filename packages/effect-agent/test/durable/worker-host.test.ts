@@ -1479,27 +1479,31 @@ layer(NodeCrypto.layer)((it) => {
             }),
           );
 
-          const declaration = Subagent.make("research", {
-            target,
-            parameters: Schema.Struct({ note: Schema.String }),
-            failure: PreparationFailed,
-            prepareInput: ({ note }, caller) =>
-              Effect.gen(function* () {
-                preparations++;
-                if (throwPreparation) return yield* new PreparationFailed();
+          const declarationFor = (maxToolCalls: number) =>
+            Subagent.make("research", {
+              target,
+              parameters: Schema.Struct({ note: Schema.String }),
+              failure: PreparationFailed,
+              prepareInput: ({ note }, caller) =>
+                Effect.gen(function* () {
+                  preparations++;
+                  if (throwPreparation) return yield* new PreparationFailed();
 
-                return {
-                  text: `${note}:${caller.source === "tool" ? caller.parent.runId : "programmatic"}`,
-                };
+                  return {
+                    text: `${note}:${caller.source === "tool" ? caller.parent.runId : "programmatic"}`,
+                  };
+                }),
+              policy: Subagent.SubagentPolicy.make({
+                maxChildren: 10,
+                maxConcurrency: 1,
+                maxTurns: 2,
+                maxToolCalls,
+                maxDuration: "1 second",
               }),
-            policy: Subagent.SubagentPolicy.make({
-              maxChildren: 10,
-              maxConcurrency: 1,
-              maxTurns: 2,
-              maxToolCalls: 2,
-              maxDuration: "1 second",
-            }),
-          });
+              toolCallAllowance: { default: maxToolCalls },
+            });
+
+          const declaration = declarationFor(2);
 
           const facet = (run: string) =>
             h.runtime.facet(
@@ -1543,6 +1547,13 @@ layer(NodeCrypto.layer)((it) => {
           if (!pending) expect(replay).toEqual(first);
           throwPreparation = true;
           expect(yield* start.pipe(Effect.provideService(SubagentHost, later))).toEqual(replay);
+          expect(
+            yield* Subagent.start(
+              declarationFor(1),
+              { note: "immutable brief" },
+              { idempotencyKey: key },
+            ).pipe(Effect.provideService(SubagentHost, later)),
+          ).toEqual(replay);
           for (const changed of [
             Subagent.start(declaration, { note: "changed brief" }, { idempotencyKey: key }),
             Subagent.start(
