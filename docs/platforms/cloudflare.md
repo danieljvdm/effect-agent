@@ -308,7 +308,8 @@ Unreadable retained payloads, history or a failed child recovery block only thei
 bounded `ThreadRecoveryFault` outside canonical history and retries after 5, 10, 20, 40, then
 60 seconds. New admissions retain their receipts and do not bypass that Thread's deadline;
 other Threads remain eligible. A successful recovery clears the fault without changing history
-or resolving uncertain external effects.
+or resolving uncertain external effects. Creating, updating or clearing a fault notifies
+`WakeScheduler` after commit, so status observers can refresh while other maintenance remains active.
 
 After a native pass, an authenticated host can inspect the local fault without decoding history:
 
