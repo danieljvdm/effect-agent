@@ -237,7 +237,7 @@ export default defineConfig({
       },
       "release:checked-publish": {
         cache: false,
-        command: "vp run --no-cache release:publish --check-continuity",
+        command: "vp run --no-cache release:publish --check-continuity --check-checkout",
       },
     },
   },

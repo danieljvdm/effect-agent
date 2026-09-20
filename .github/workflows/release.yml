@@ -77,7 +77,8 @@ jobs:
     # head (workflow_run's default-branch SHA can otherwise have moved ahead).
     if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.repository.full_name == github.repository && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.head_sha == github.sha }}
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    # Leave time after the bounded publication step for recorded cleanup and artifacts.
+    timeout-minutes: 100
     permissions:
       contents: write
       actions: read
@@ -86,6 +87,11 @@ jobs:
     env:
       CI: "true"
       VP_GIT_HOOKS: "0"
+      CHECKOUT_MODEL: gpt-5.6-luna
+      CHECKOUT_REPETITIONS: "2"
+      CHECKOUT_CONCURRENCY: "4"
+      CHECKOUT_START_INTERVAL_MS: "1000"
+      CHECKOUT_HUMAN: "false"
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -133,8 +139,19 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
+      - name: Prepare isolated checkout attempt
+        if: ${{ steps.pending.outputs.empty == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHECKOUT_TOKEN="$(openssl rand -hex 32)"
+          echo "::add-mask::$CHECKOUT_TOKEN"
+          echo "CHECKOUT_TOKEN=$CHECKOUT_TOKEN" >> "$GITHUB_ENV"
+          echo "CHECKOUT_RUN_ID=checkout-$(openssl rand -hex 6)" >> "$GITHUB_ENV"
+
       - name: Publish release
         if: ${{ steps.pending.outputs.empty == 'true' }}
+        timeout-minutes: 75
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
         with:
           publish: ./node_modules/.bin/vp run --no-cache release:checked-publish
@@ -146,6 +163,38 @@ jobs:
           EFFECT_AGENT_LIVE: "1"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXT_EVAL_MODEL: ${{ vars.CONTEXT_EVAL_MODEL || 'gpt-6-astra' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
+          BROWSER_RENDERING_API_TOKEN: ${{ secrets.BROWSER_RENDERING_API_TOKEN }}
+
+      - name: Retry recorded checkout cleanup
+        if: ${{ always() && env.CHECKOUT_RUN_ID != '' }}
+        timeout-minutes: 10
+        shell: bash
+        env:
+          CHECKOUT_CLEANUP: "true"
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
+          BROWSER_RENDERING_API_TOKEN: ${{ secrets.BROWSER_RENDERING_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          report="tooling/browser-run-worker-proof/.checkout-proof/$CHECKOUT_RUN_ID/report.json"
+          if [[ -f "$report" && "$(jq -r '.cleanup' "$report")" != confirmed ]]; then
+            ./node_modules/.bin/vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
+          fi
+
+      - name: Preserve checkout gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: checkout-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tooling/browser-run-worker-proof/.checkout-proof/${{ env.CHECKOUT_RUN_ID }}/report.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Preserve continuity gate evidence
         if: always()

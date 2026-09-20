@@ -583,16 +583,17 @@ absence. A pending close or transport/authentication failure is not proof of cle
 failures before retrying. The [interactive browser API comments](https://github.com/danieljvdm/effect-agent/blob/main/packages/platform-cloudflare/src/interactive-browser.ts)
 describe action timing and lifecycle details.
 
-## Hosted binding proof
+## Hosted browser and checkout proof
 
 The repository includes an [opt-in temporary deployment proof](https://github.com/danieljvdm/effect-agent/tree/main/tooling/browser-run-worker-proof).
 It exercises the hosted Browser Run binding with Markdown capture, selector scrape, PNG screenshot,
-an interactive pass, a short Live View, and a short handoff. After closing that session it opens a
-host-owned session, fills two dummy login layouts and a card frame through a credential Tool,
-checks current grants and authenticated continuation across reattachment, confirms cleanup, then
-deletes the temporary Worker.
-It needs Cloudflare credentials and is not a turnkey application or a durable browser-session
-solution. Its README documents the environment variables and the explicit command.
+an interactive pass, credentials and uploads. A real buyer then discovers a multi-step store,
+uses cross-origin card fields or an accelerated wallet, pauses for approval, and resumes the same
+browser through a consumer-owned Durable Object. The server checks the exact purchase and every
+payment attempt, including declines and uncertain confirmations. An operator profile adds human
+takeover and return. Alchemy owns deployment and teardown; reports retain unsuccessful attempts.
+It needs Cloudflare and model credentials. Its README documents the command, recovery, deliberate
+CI policy, and the distinction between simulated checkout behavior and actual provider compatibility.
 
 ## Next steps
 

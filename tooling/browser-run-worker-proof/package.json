@@ -5,20 +5,25 @@
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json",
-    "prove:live": "node --experimental-transform-types src/live-main.ts",
+    "prove:live": "vp test run --config vite.live.config.ts",
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
     "@effect-agent/platform-cloudflare": "workspace:*",
+    "@effect/ai-openai": "catalog:",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "effect-agent": "workspace:*",
-    "effect-cf": "catalog:"
+    "effect-cf": "catalog:",
+    "puppeteer-core": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
+    "alchemy": "catalog:",
+    "esbuild": "catalog:",
+    "miniflare": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
     "wrangler": "catalog:"

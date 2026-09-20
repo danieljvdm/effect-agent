@@ -7,9 +7,11 @@ import { expect, layer } from "@effect/vitest";
 import {
   Cause,
   Config,
+  ConfigProvider,
   Effect,
   Exit,
   FileSystem,
+  Option,
   Path,
   PlatformError,
   Schema,
@@ -18,13 +20,14 @@ import {
 import { Command } from "effect/unstable/cli";
 import { Yaml } from "effect/unstable/encoding";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
-import { ChildProcess } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { compareBundles } from "../../../scripts/bundle-size.ts";
 import { checkReleasePackages } from "../../../scripts/check-release-packages.ts";
 import {
   command as releaseCommand,
   PublishManifest,
+  publishRelease,
   withTemporaryManifest,
   withPublishManifests,
   withUnpublishedRelease,
@@ -73,6 +76,7 @@ const WorkflowJob = Schema.Struct({
   needs: Schema.optionalKey(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
   outputs: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   permissions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   steps: Schema.optionalKey(Schema.Array(WorkflowStep)),
 });
 
@@ -680,6 +684,111 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     }),
   );
 
+  it.effect("requires successful paid gates before publication and skips them for dry runs", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "release-gates-test-" });
+      const manifest = { name: "release-fixture", version: "1.0.0" };
+
+      yield* fs.makeDirectory(`${root}/packages/fixture`, { recursive: true });
+      yield* fs.writeFileString(`${root}/package.json`, JSON.stringify({ catalog: {} }));
+      yield* fs.writeFileString(`${root}/packages/fixture/package.json`, JSON.stringify(manifest));
+
+      for (const scenario of [
+        { published: true, continuity: true, dryRun: false, failure: "", expected: [] },
+        {
+          published: false,
+          continuity: true,
+          dryRun: false,
+          failure: "context-continuity-eval",
+          expected: ["build", "context-continuity-eval"],
+        },
+        {
+          published: false,
+          continuity: true,
+          dryRun: false,
+          failure: "prove:live",
+          expected: ["build", "context-continuity-eval", "prove:live"],
+        },
+        {
+          published: false,
+          continuity: true,
+          dryRun: false,
+          failure: "",
+          expected: ["build", "context-continuity-eval", "prove:live", "publish"],
+        },
+        { published: true, continuity: false, dryRun: false, failure: "", expected: [] },
+        {
+          published: false,
+          continuity: false,
+          dryRun: false,
+          failure: "",
+          expected: ["build", "prove:live", "publish"],
+        },
+        {
+          published: false,
+          continuity: true,
+          dryRun: true,
+          failure: "",
+          expected: ["build", "pack"],
+        },
+      ]) {
+        const observed: Array<string> = [];
+
+        const commands = ChildProcessSpawner.make((command) => {
+          if (command._tag !== "StandardCommand") return Effect.die("Unexpected pipeline");
+
+          const operation = command.args.find((arg) =>
+            ["build", "context-continuity-eval", "prove:live", "publish", "pack"].includes(arg),
+          );
+
+          if (operation === undefined) return Effect.die("Unexpected release command");
+          observed.push(operation);
+          if (operation === "prove:live") {
+            expect(command.args).toContain("--no-cache");
+            expect(command.args).toContain("@effect-agent/example-browser-run-worker-proof");
+          }
+
+          // Exercise the real process exit boundary without building, deploying, or publishing.
+          return spawner.spawn(
+            ChildProcess.make("node", [
+              "-e",
+              `process.exit(${operation === scenario.failure ? 1 : 0})`,
+            ]),
+          );
+        });
+
+        const registry = HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              Response.json(manifest, { status: scenario.published ? 200 : 404 }),
+            ),
+          ),
+        );
+
+        const exit = yield* publishRelease(root, {
+          dryRun: scenario.dryRun,
+          checkContinuity: scenario.continuity,
+          checkCheckout: true,
+          otp: Option.none(),
+        }).pipe(
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, commands),
+          Effect.provideService(HttpClient.HttpClient, registry),
+          Effect.exit,
+        );
+
+        expect(observed).toEqual(scenario.expected);
+        expect(Exit.isFailure(exit)).toBe(scenario.failure !== "");
+        expect(yield* fs.readFileString(`${root}/packages/fixture/package.json`)).toBe(
+          JSON.stringify(manifest),
+        );
+      }
+    }),
+  );
+
   it.effect("restores the source manifest after a partial temporary-install failure", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1220,8 +1329,8 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(gate?.env?.CONTEXT_EVAL_PROFILE).toBe(
         "${{ inputs.profile || 'explicit-rollover-sqlite-v1' }}",
       );
-      expect(wrapper).toContain('"--profile",\n          "explicit-rollover-sqlite-v1"');
-      expect(wrapper).toContain('"--max-cost-usd",\n          "10"');
+      expect(wrapper).toMatch(/"--profile",\s*"explicit-rollover-sqlite-v1"/);
+      expect(wrapper).toMatch(/"--max-cost-usd",\s*"10"/);
       expect(tasks).toContain('"context-continuity-eval": {\n        cache: false');
       expect(workflowStep(continuity, "evaluate", "Preserve this attempt's evidence")?.if).toBe(
         "always()",
@@ -1232,14 +1341,60 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     }),
   );
 
+  it.effect(
+    "keeps hosted checkout on release/manual paths with automated settings and safe artifacts",
+    () =>
+      Effect.gen(function* () {
+        const manual = yield* readWorkflow(".github/workflows/checkout-proof.yml");
+        const release = yield* readWorkflow(".github/workflows/release.yml");
+        const ci = yield* readRepositoryFile(".github/workflows/ci.yml");
+        const tasks = yield* readRepositoryFile("vite.config.ts");
+
+        expect(Object.keys(manual.on)).toEqual(["workflow_dispatch"]);
+        expect(manual.permissions).toEqual({ contents: "read" });
+        expect(manual.concurrency?.["cancel-in-progress"]).toBe(false);
+        expect(workflowStep(manual, "evaluate", "Check out the exact candidate")?.with?.ref).toBe(
+          "${{ github.sha }}",
+        );
+        expect(tasks).toContain("release:publish --check-continuity --check-checkout");
+        expect(ci).not.toMatch(/prove:live|release:checked-publish|checkout-proof/);
+
+        for (const [workflow, job] of [
+          [manual, "evaluate"],
+          [release, "release"],
+        ] as const) {
+          expect(workflow.jobs[job]?.env).toMatchObject({
+            CHECKOUT_MODEL: "gpt-5.6-luna",
+            CHECKOUT_REPETITIONS: "2",
+            CHECKOUT_CONCURRENCY: "4",
+            CHECKOUT_START_INTERVAL_MS: "1000",
+            CHECKOUT_HUMAN: "false",
+          });
+          const cleanup = workflowStep(workflow, job, "Retry recorded checkout cleanup");
+
+          expect(cleanup?.if).toContain("always()");
+          expect(cleanup?.env?.CHECKOUT_CLEANUP).toBe("true");
+          expect(cleanup?.run).toContain("prove:live");
+          const artifact = workflowStep(workflow, job, "Preserve checkout gate evidence");
+
+          expect(artifact?.if).toBe("always()");
+          expect(artifact?.with?.path).toBe(
+            "tooling/browser-run-worker-proof/.checkout-proof/${{ env.CHECKOUT_RUN_ID }}/report.json",
+          );
+          expect(artifact?.with?.["include-hidden-files"]).toBe(true);
+          expect(artifact?.with?.["retention-days"]).toBe(30);
+        }
+      }),
+  );
+
   it.effect("publishes without flags and requires an explicit dry-run opt-in", () =>
     Effect.gen(function* () {
-      const modes: Array<boolean> = [];
+      const modes: Array<{ dryRun: boolean; checkCheckout: boolean }> = [];
 
       const run = Command.runWith(
-        Command.withHandler(releaseCommand, ({ dryRun }) =>
+        Command.withHandler(releaseCommand, ({ dryRun, checkCheckout }) =>
           Effect.sync(() => {
-            modes.push(dryRun);
+            modes.push({ dryRun, checkCheckout });
           }),
         ),
         { version: "1.0.0", renderErrors: false },
@@ -1247,7 +1402,12 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
       yield* run([]);
       yield* run(["--dry-run"]);
-      expect(modes).toEqual([false, true]);
+      yield* run(["--check-checkout"]);
+      expect(modes).toEqual([
+        { dryRun: false, checkCheckout: false },
+        { dryRun: true, checkCheckout: false },
+        { dryRun: false, checkCheckout: true },
+      ]);
     }),
   );
 
