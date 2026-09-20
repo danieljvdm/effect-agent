@@ -205,6 +205,7 @@
     "quiet-hosted-completion",
     "quiet-model-parameter-rejections",
     "quiet-model-threads",
+    "quiet-owls-retain",
     "quiet-recovery-notices",
     "quiet-retained-prompts",
     "quiet-runs-own-scope",

@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.120
+
+### Patch Changes
+
+- [#583](https://github.com/danieljvdm/effect-agent/pull/583) [`037d29a`](https://github.com/danieljvdm/effect-agent/commit/037d29a754034551520c8df9cb41bfb7660cde40) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Retain attempt resources before durable approval suspension with `DurableApprovalSuspension`. Resume approvals that arrive during retention with fresh attempt services and the same pending tool batch.
+
+- Updated dependencies [[`037d29a`](https://github.com/danieljvdm/effect-agent/commit/037d29a754034551520c8df9cb41bfb7660cde40)]:
+  - effect-agent@0.1.0-beta.120
+  - @effect-agent/storage-cloudflare@0.1.0-beta.120
+
 ## 0.1.0-beta.119
 
 ### Patch Changes
