@@ -1,6 +1,16 @@
 import { BrowserCrypto } from "@effect/platform-browser";
 import { expect, it } from "@effect/vitest";
-import { Cause, Clock, Deferred, Effect, Fiber, Layer, Redacted, Schema } from "effect";
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Effect,
+  ErrorReporter,
+  Fiber,
+  Layer,
+  Redacted,
+  Schema,
+} from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { TestClock } from "effect/testing";
 
@@ -50,7 +60,8 @@ const endpoint = Effect.fnUntraced(function* (mode: "success" | "reject" | "pend
   const requests: Array<{ method: string; path: string }> = [];
 
   pair[1].accept();
-  pair[1].addEventListener("close", () => Effect.runSync(Deferred.succeed(closed, undefined)));
+  pair[1].addEventListener("close", () => pair[1].close());
+  pair[0].addEventListener("close", () => Effect.runSync(Deferred.succeed(closed, undefined)));
   pair[1].addEventListener("message", (event) => {
     const message = packet(event.data);
 
@@ -123,6 +134,7 @@ it.effect("releases the raw attachment when client initialization rejects", () =
     ).pipe(Effect.flip);
 
     expect(failure).toMatchObject({ operation: "protected.connect", reason: "provider" });
+    expect(ErrorReporter.isIgnored(failure)).toBe(false);
     expect(JSON.stringify(failure)).not.toContain("private-provider-detail");
     expect(fixture.socket.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
     yield* Deferred.await(fixture.closed);
@@ -130,11 +142,77 @@ it.effect("releases the raw attachment when client initialization rejects", () =
   }).pipe(Effect.scoped),
 );
 
+it.effect.each(["refusal", "defect"] as const)(
+  "reports a genuine late resume failure after interruption (%s)",
+  (mode) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const respond = yield* Deferred.make<void>();
+      const reported = yield* Deferred.make<void>();
+      const reports: Array<Cause.Cause<unknown>> = [];
+
+      const layer = browserRunProtectedBindingLayer({
+        browser: {
+          fetch: async () => {
+            Effect.runSync(Deferred.succeed(started, undefined));
+            await Effect.runPromise(Deferred.await(respond));
+            if (mode === "defect") throw new TypeError("private-late-provider-detail");
+
+            return new Response("private-late-provider-detail", { status: 503 });
+          },
+        },
+      }).pipe(
+        Layer.provide(BrowserCrypto.layer),
+        Layer.provide(
+          Layer.succeed(BrowserRunSessionLifecycle, {
+            close: () => Effect.die("A failed resume must not terminate the retained provider"),
+          }),
+        ),
+      );
+
+      const attempt = yield* Effect.gen(function* () {
+        return yield* (yield* BrowserRunProtectedBinding).open(
+          InteractiveBrowserPolicy.make({
+            network: { _tag: "Unrestricted" },
+            maxActions: 10,
+            maxElapsedMillis: 60_000,
+            maxReturnedBytes: 16_384,
+          }),
+          identity,
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide([
+          layer,
+          ErrorReporter.layer([
+            ErrorReporter.make(({ cause }) => {
+              reports.push(cause);
+              Effect.runSync(Deferred.succeed(reported, undefined));
+            }),
+          ]),
+        ]),
+        Effect.forkChild,
+      );
+
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(attempt);
+      yield* Deferred.succeed(respond, undefined);
+      yield* Deferred.await(reported);
+      expect(reports).toHaveLength(1);
+      expect(JSON.stringify(reports)).toContain('"operation":"protected.connect"');
+      expect(JSON.stringify(reports)).toContain(
+        mode === "refusal" ? '"status":503' : '"name":"TypeError"',
+      );
+      expect(JSON.stringify(reports)).not.toContain("private-late-provider-detail");
+    }).pipe(Effect.scoped),
+);
+
 it.effect.each(["timeout", "interruption"] as const)(
   "releases a pending resume connection without terminating the retained provider (%s)",
   (ending) =>
     Effect.gen(function* () {
       const fixture = yield* endpoint("pending");
+      const reports: Array<Cause.Cause<unknown>> = [];
       let terminations = 0;
 
       const layer = browserRunProtectedBindingLayer({ browser: fixture.browser }).pipe(
@@ -159,7 +237,14 @@ it.effect.each(["timeout", "interruption"] as const)(
           }),
           identity,
         );
-      }).pipe(Effect.scoped, Effect.provide(layer), Effect.forkChild);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide([
+          layer,
+          ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))]),
+        ]),
+        Effect.forkChild,
+      );
 
       yield* Deferred.await(fixture.started);
       expect(fixture.socket.readyState).toBe(WebSocket.OPEN);
@@ -178,6 +263,9 @@ it.effect.each(["timeout", "interruption"] as const)(
       }
       expect(fixture.socket.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
       yield* Deferred.await(fixture.closed);
+      yield* Effect.yieldNow;
+      expect(reports).toHaveLength(ending === "timeout" ? 1 : 0);
+      expect(JSON.stringify(reports)).not.toContain('"reason":"provider"');
       expect(terminations).toBe(0);
       expect(fixture.requests).toHaveLength(1);
       expect(fixture.methods).not.toContain("Browser.close");
@@ -187,6 +275,7 @@ it.effect.each(["timeout", "interruption"] as const)(
 it.effect("releases an ordinary retained connection when its initialization times out", () =>
   Effect.gen(function* () {
     const fixture = yield* endpoint("pending");
+    const reports: Array<Cause.Cause<unknown>> = [];
     let terminations = 0;
 
     const layer = browserRunInteractiveHostLayer().pipe(
@@ -230,7 +319,14 @@ it.effect("releases an ordinary retained connection when its initialization time
 
     const attempt = yield* Effect.gen(function* () {
       return yield* (yield* BrowserRunInteractiveHost).resume(checkpoint, { pendingInput: false });
-    }).pipe(Effect.scoped, Effect.provide(layer), Effect.forkChild);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide([
+        layer,
+        ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))]),
+      ]),
+      Effect.forkChild,
+    );
 
     yield* Deferred.await(fixture.started);
     yield* TestClock.adjust(10_000);
@@ -239,6 +335,9 @@ it.effect("releases an ordinary retained connection when its initialization time
     });
     expect(fixture.socket.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
     yield* Deferred.await(fixture.closed);
+    yield* Effect.yieldNow;
+    expect(reports).toHaveLength(1);
+    expect(JSON.stringify(reports)).toContain('"operation":"interactive.resume"');
     expect(terminations).toBe(0);
     expect(fixture.requests).toHaveLength(1);
     expect(fixture.methods).not.toContain("Browser.close");

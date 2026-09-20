@@ -5,7 +5,7 @@ import puppeteer, {
   type ConnectionTransport,
 } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
-import { browserFailure, BrowserRunFailure } from "./browser-failure.ts";
+import { browserFailure, BrowserRunFailure, reportedBrowserError } from "./browser-failure.ts";
 
 const Acquired = Schema.Struct({ sessionId: Schema.String.check(Schema.isUUID()) });
 
@@ -52,6 +52,7 @@ export class BrowserRunBinding extends Context.Service<
       },
       connect: async (sessionId, operation, signal) => {
         let socket: WebSocket | undefined;
+        let closedByAbort = false;
 
         try {
           const response = await browser.fetch(
@@ -91,7 +92,10 @@ export class BrowserRunBinding extends Context.Service<
 
           const abort = () => {
             try {
+              const wasOpen = connected.readyState === WebSocket.OPEN;
+
               connected.close();
+              closedByAbort = wasOpen;
             } catch {
               // The local transport may already have closed; never terminate the provider here.
             }
@@ -111,7 +115,16 @@ export class BrowserRunBinding extends Context.Service<
           } catch {
             // Preserve the connection failure when local release also fails.
           }
-          throw browserFailure(operation, cause);
+          const failure = browserFailure(operation, cause);
+
+          // A local abort can reject SDK initialization as target-closed. Genuine late
+          // provider failures still report, even when the caller's signal has aborted.
+          const localCancellation =
+            cause instanceof Error &&
+            signal?.aborted === true &&
+            (cause === signal.reason || (closedByAbort && cause.name === "TargetCloseError"));
+
+          throw localCancellation ? reportedBrowserError(failure) : failure;
         }
       },
     });
