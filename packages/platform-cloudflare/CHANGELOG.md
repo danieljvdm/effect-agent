@@ -1,5 +1,23 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.123
+
+### Minor Changes
+
+- [#590](https://github.com/danieljvdm/effect-agent/pull/590) [`72e07a3`](https://github.com/danieljvdm/effect-agent/commit/72e07a35010564acb411845e250fa5d552edef0d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Replace protected browser passes with application-owned Cloudflare sessions, native Puppeteer actions, and authorized credential filling.
+
+  BEHAVIOR CHANGE: Migrate removed `protected-browser` APIs to `browser-session` and `browser-credentials`; ordinary page observations may expose filled values, and application owners must retain session references and close browsers on completion or expiry.
+
+### Patch Changes
+
+- [#590](https://github.com/danieljvdm/effect-agent/pull/590) [`72e07a3`](https://github.com/danieljvdm/effect-agent/commit/72e07a35010564acb411845e250fa5d552edef0d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve acknowledged credential writes, dispatch evidence, and browser cleanup status in credential timeout failures.
+
+  BEHAVIOR CHANGE: Call `session.fillCredential(request)` instead of the standalone `fillCredential(page, request)` helper.
+
+- Updated dependencies [[`72e07a3`](https://github.com/danieljvdm/effect-agent/commit/72e07a35010564acb411845e250fa5d552edef0d)]:
+  - effect-agent@0.1.0-beta.123
+  - @effect-agent/storage-cloudflare@0.1.0-beta.123
+
 ## 0.1.0-beta.122
 
 ### Patch Changes
