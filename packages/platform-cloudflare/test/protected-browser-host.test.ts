@@ -104,6 +104,7 @@ const fixture = () => {
   });
 
   const binding = Layer.succeed(BrowserRunProtectedBinding, {
+    keepAlive: () => Effect.void,
     open: (_policy, previous) =>
       Effect.gen(function* () {
         if (closed)
@@ -430,6 +431,58 @@ it.effect("preserves exhausted action budgets and elapsed deadlines across host 
     expect(f.attachments()).toBe(2);
   }).pipe(Effect.provide(f.layer));
 });
+
+it.effect(
+  "resumes a persisted task-owned allowance after an hour without resetting its start",
+  () => {
+    const f = fixture();
+    const codec = Schema.fromJsonString(Schema.toCodecJson(BrowserRunProtectedCheckpoint));
+
+    return Effect.gen(function* () {
+      const host = yield* BrowserRunProtectedHost;
+
+      const original = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* host.open({ ...policy, maxElapsedMillis: 8 * 60 * 60_000 });
+
+          yield* session.handle.observe;
+          const checkpoint = yield* session.suspend;
+
+          yield* session.detach;
+
+          return Schema.encodeSync(codec)(checkpoint);
+        }),
+      );
+
+      yield* TestClock.adjust("2 hours");
+      const checkpoint = Schema.decodeSync(codec)(original);
+
+      const next = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* host.resume(checkpoint);
+
+          yield* session.returnControl;
+          yield* session.handle.observe;
+          const next = yield* session.suspend;
+
+          yield* session.detach;
+
+          return next;
+        }),
+      );
+
+      expect(next.protected.startedAt).toBe(checkpoint.protected.startedAt);
+      expect(next.protected.policy).toEqual(checkpoint.protected.policy);
+      expect(next.protected.actions).toBe(checkpoint.protected.actions + 1);
+      expect(Redacted.value(next.sessionId)).toBe(Redacted.value(checkpoint.sessionId));
+      expect(Redacted.value(next.contextId)).toBe(Redacted.value(checkpoint.contextId));
+      expect(Redacted.value(next.targetId)).toBe(Redacted.value(checkpoint.targetId));
+      yield* TestClock.adjust("6 hours");
+      expect((yield* host.resume(next).pipe(Effect.scoped, Effect.flip)).reason).toBe("timeout");
+      expect(f.attachments()).toBe(2);
+    }).pipe(Effect.provide(f.layer));
+  },
+);
 
 it.effect(
   "keeps the Return observation gate closed when the fresh observation exceeds its byte budget",

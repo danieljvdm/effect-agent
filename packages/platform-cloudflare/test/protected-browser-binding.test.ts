@@ -92,9 +92,9 @@ const policy = InteractiveBrowserPolicy.make({
   maxReturnedBytes: 16_384,
 });
 
-it.effect(
-  "reattaches exactly the saved context and page, reinstalls interception, and releases without closure",
-  () => {
+it.effect.each(["Unrestricted", "ExactHosts"] as const)(
+  "reattaches the exact page with interception only for a restricted policy (%s)",
+  (network) => {
     const closed: Array<string> = [];
     const before = { ...provider.counters };
 
@@ -117,7 +117,16 @@ it.effect(
     return Effect.gen(function* () {
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const session = yield* (yield* BrowserRunProtectedBinding).open(policy, identity);
+          const session = yield* (yield* BrowserRunProtectedBinding).open(
+            {
+              ...policy,
+              network:
+                network === "Unrestricted"
+                  ? { _tag: network }
+                  : { _tag: network, allowedHosts: ["shop.test"] },
+            },
+            identity,
+          );
 
           expect(Redacted.value(session.identity.targetId)).toBe("existing-page");
           expect(Redacted.value(session.identity.contextId)).toBe("existing-context");
@@ -128,7 +137,9 @@ it.effect(
       expect(provider.counters.acquired).toBe(before.acquired);
       expect(provider.counters.contexts).toBe(before.contexts);
       expect(provider.counters.pages).toBe(before.pages);
-      expect(provider.counters.intercepted).toBe(before.intercepted + 1);
+      expect(provider.counters.intercepted).toBe(
+        before.intercepted + (network === "ExactHosts" ? 1 : 0),
+      );
       expect(provider.counters.disconnected).toBe(before.disconnected + 1);
     }).pipe(Effect.provide(layer));
   },

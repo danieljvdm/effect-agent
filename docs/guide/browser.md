@@ -406,6 +406,8 @@ Human handoff receipts remain host-owned; `getHandoffState` queries the reattach
 `BrowserRunSessionLifecycle` used above, and an invocation-specific `BrowserCredentialAccess`.
 Use `ExactHosts` for a fixed network allowlist. `Unrestricted` is an explicit host choice;
 `PublicWeb` is unsupported. Credential grants never expand network policy.
+`Unrestricted` preserves normal service-worker and request handling; only restricted passes
+install request interception and bypass service workers.
 
 The host access service owns caller authentication, vault lookup, current grants, and recipient
 trust. Derive caller identity from the authorized invocation, never model arguments or possession
@@ -607,6 +609,11 @@ A serialized checkpoint is not authorization: resume only the latest generation�
 Resume attaches the exact saved browser context and page; missing or expired sessions fail instead
 of creating a replacement. A failed attachment releases its local connection without terminating
 the host's retained session; the host keeps responsibility for its checkpoint and expiry cleanup.
+A pure pre-handle `provider` failure with `not-dispatched`/`none`/`not-requested` evidence confirms
+that SDK initialization never started or its local attachment has retired and its socket closed.
+The owner can atomically restore its prior suspended claim. A mixed defect or interruption does
+not give that guarantee; inspect the complete failure cause. This does not prove provider health
+or undo commands already sent. Errors after a handle was returned do not qualify.
 All old refs and offers are invalidated. Detached tool handles cannot
 close or act on the transferred session. Ordinary scope release still terminates an attached
 session. An uncertain handoff closes the exact session and never produces a resumable receipt;
@@ -614,9 +621,18 @@ ordinary uncertain browser mutations remain non-replayable.
 
 Hosted takeover requires `Unrestricted` network policy because attachment-local interception
 cannot enforce `ExactHosts` while detached. Current origin-specific credential and observation
-grants still apply. The original elapsed deadline includes human time; Cloudflare’s shorter idle
-expiry may end the session first. Workflow pauses retain these same deadlines. The host must reconcile expiry and perform exact-session cleanup
+grants still apply. Set `maxElapsedMillis` from the task's finite total allowance. The original
+elapsed deadline includes human time and workflow pauses; activity does not reset it. Applications
+may enforce a separate sliding idle expiry without rewriting the checkpoint's start time.
+Cloudflare’s shorter idle expiry may end the session first. The host must reconcile expiry and perform exact-session cleanup
 with `closeSession`. This API does not add popup, wallet, passkey, or 3DS automation support.
+
+While a retained pass remains authorized, the application's existing alarm can call
+`host.keepAlive(sessionId)` within the provider's idle window. It acknowledges one
+`Browser.getVersion` command through a short connection, then disconnects. It does not attach to
+a page, transfer control, change the checkpoint, or extend the application's expiry. The call is
+bounded to ten seconds and releases only its own connection on failure or interruption; the host
+still owns reconciliation and cleanup. Keepalive does not restore an expired provider session.
 
 ## Limits, cleanup, and network boundaries
 
@@ -627,8 +643,9 @@ Browser APIs use finite requests and typed expected failures:
 - `PageCrawl` fixes the start host, purposes, page/depth/byte/deadline limits, and cancellation
   lifecycle. Its stream ends only after the provider reports a terminal result or a typed failure.
 - `PageScreenshot` accepts only PNG and enforces a caller-selected byte limit.
-- An interactive policy fixes network mode, at most 1,000 actions, at most 60 minutes, and at most
-  8 MiB from one result. Handles expire at policy limits or explicit close.
+- An interactive policy fixes network mode, at most 1,000 actions, a caller-selected positive safe
+  integer elapsed allowance in milliseconds, and at most 8 MiB from one result. Handles expire at
+  policy limits or explicit close.
 
 Quick Action failures retain bounded response text and Browser Run API status, selected request
 identifiers, and body truncation metadata in their host-only `cause`. That status describes the
@@ -656,7 +673,11 @@ hosted provider lifecycle behavior requires separate live evidence.
 
 The protected Cloudflare binding requests at most ten minutes of provider idle keep-alive,
 independently of the total pass deadline. A longer policy permits active work; it does not promise
-that an idle browser will remain available for the whole hour or reconnect an expired session.
+that an idle browser will remain available for the full allowance or reconnect an expired session.
+Cloudflare supports longer retention only while commands arrive within that inactivity window;
+detached approval waits need application-owned keepalive calls. See
+[provider session limits](https://developers.cloudflare.com/browser-run/limits/) and the
+[Durable Object example](https://developers.cloudflare.com/browser-run/how-to/browser-run-with-do/).
 
 These caps do not authorize the destination, protect every network path, or make provider actions
 replay-safe. Keep an application allowlist for stateless capture; choose the interactive network

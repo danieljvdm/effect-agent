@@ -47,7 +47,7 @@ type OpenResult =
   ReturnType<Open> extends Effect.Effect<infer A, infer E, infer R> ? [A, E, R] : never;
 
 describe("InteractiveBrowser schemas", () => {
-  it("bounds non-secret fill, authorized address metadata, and hour-long policies", () => {
+  it("bounds non-secret fill, authorized address metadata, and task-owned elapsed budgets", () => {
     const ref = "12345678-1234-4234-9234-123456789abc";
 
     expect(
@@ -80,7 +80,7 @@ describe("InteractiveBrowser schemas", () => {
         billingAddress: { line1: "x".repeat(201) },
       })._tag,
     ).toBe("Failure");
-    for (const maxElapsedMillis of [600_001, 3_600_000])
+    for (const maxElapsedMillis of [600_001, 3_600_000, 3_600_001, 8 * 60 * 60_000])
       expect(
         Schema.decodeExit(InteractiveBrowserPolicy, { onExcessProperty: "error" })({
           network: { _tag: "ExactHosts", allowedHosts: ["example.com"] },
@@ -259,7 +259,8 @@ describe("InteractiveBrowser schemas", () => {
       { ...valid, maxActions: 0 },
       { ...valid, maxActions: 1_001 },
       { ...valid, maxElapsedMillis: 0 },
-      { ...valid, maxElapsedMillis: 3_600_001 },
+      { ...valid, maxElapsedMillis: 1.5 },
+      { ...valid, maxElapsedMillis: Number.MAX_SAFE_INTEGER + 1 },
       { ...valid, maxElapsedMillis: Number.POSITIVE_INFINITY },
       { ...valid, maxElapsedMillis: Number.NaN },
       { ...valid, maxReturnedBytes: 0 },

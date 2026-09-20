@@ -83,6 +83,14 @@ export interface BrowserRunProtectedSession {
 export class BrowserRunProtectedHost extends Context.Service<
   BrowserRunProtectedHost,
   {
+    /**
+     * Refresh provider inactivity on an exact retained session with one browser-level command.
+     * Internally scoped and bounded to ten seconds; releases only its own connection on every exit.
+     * Does not acquire a page, transfer control, extend host expiry, or close the provider on failure.
+     */
+    readonly keepAlive: (
+      sessionId: Redacted.Redacted<string>,
+    ) => Effect.Effect<void, ProtectedBrowserError>;
     readonly open: (
       policy: InteractiveBrowserPolicy,
     ) => Effect.Effect<
@@ -90,6 +98,13 @@ export class BrowserRunProtectedHost extends Context.Service<
       ProtectedBrowserError,
       Scope.Scope | BrowserCredentialAccess
     >;
+    /**
+     * A pure pre-handle provider failure with not-dispatched/none/not-requested evidence
+     * retires this attempt's SDK callbacks and confirms local socket closure before returning
+     * (or never starts SDK initialization). Raw retirement failure remains a mixed defect.
+     * This does not confirm provider health or undo already-sent CDP; the host still owns
+     * atomic claim restoration and must exclude defects, interruption, and post-handle errors.
+     */
     readonly resume: (
       checkpoint: BrowserRunProtectedCheckpoint,
     ) => Effect.Effect<
@@ -362,6 +377,7 @@ export const browserRunProtectedHostLayer = () =>
       }, Effect.withTracerEnabled(false));
 
       return {
+        keepAlive: binding.keepAlive,
         open: (policy: InteractiveBrowserPolicy) => open(policy),
         resume: (checkpoint: BrowserRunProtectedCheckpoint) =>
           Schema.decodeEffect(BrowserRunProtectedCheckpoint)(checkpoint).pipe(

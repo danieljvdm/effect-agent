@@ -411,7 +411,7 @@ export class BrowserRunInteractiveBinding extends Context.Service<
             binding.acquire(keepAliveMillis, "interactive.acquire"),
           connect: async (sessionId: string, signal?: AbortSignal) =>
             makeProductionBrowser(
-              await binding.connect(sessionId, "interactive.connect", signal),
+              await binding.connect(sessionId, "interactive.connect", signal).browser,
               sessionId,
               viewport,
             ),

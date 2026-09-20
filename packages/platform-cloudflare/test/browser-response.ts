@@ -6,6 +6,7 @@ export const browserResponse = (
 ) => {
   if (init?.method === "POST") return Response.json({ sessionId });
   const events = new EventTarget();
+  let closed = false;
 
   return Object.defineProperties(new Response(null), {
     status: { value: 101 },
@@ -13,7 +14,14 @@ export const browserResponse = (
       value: {
         accept: () => {},
         addEventListener: events.addEventListener.bind(events),
-        close: () => events.dispatchEvent(new Event("close")),
+        removeEventListener: events.removeEventListener.bind(events),
+        get readyState() {
+          return closed ? 3 : 1;
+        },
+        close: () => {
+          closed = true;
+          events.dispatchEvent(new Event("close"));
+        },
         send: () => {
           throw new Error("Unexpected protocol message through SDK substitute");
         },
