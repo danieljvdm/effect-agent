@@ -25,7 +25,6 @@ import {
   DurableAlarmError,
   ThreadHostMaintenance,
   ThreadMaintenance,
-  ThreadMaintenanceActivity,
   ThreadMaintenanceFailpoint,
   type ThreadMaintenanceFailpointLocation,
 } from "../src/Alarm.ts";
@@ -140,33 +139,29 @@ describe("maintenance retry deadlines", () => {
                 }).pipe(
                   Effect.provide(services),
                   Effect.provideService(ThreadHostMaintenance, {
-                    dispatchTimeoutMillis: 1_000,
-                    pendingDeadline: Effect.sync(() =>
-                      completed ? Option.none() : Option.some(0),
-                    ),
-                    drainUntil: () =>
-                      Effect.gen(function* () {
-                        const activity = yield* ThreadMaintenanceActivity;
-
-                        yield* activity.run(
-                          Effect.gen(function* () {
-                            yield* activity.ready;
-                            yield* Effect.acquireRelease(
+                    lanes: [
+                      {
+                        dispatchTimeoutMillis: 1_000,
+                        pendingDeadline: Effect.sync(() =>
+                          completed ? Option.none() : Option.some(0),
+                        ),
+                        run: Effect.gen(function* () {
+                          yield* Effect.acquireRelease(
+                            Effect.sync(() => {
+                              attempts++;
+                              active = true;
+                            }),
+                            () =>
                               Effect.sync(() => {
-                                attempts++;
-                                active = true;
+                                active = false;
                               }),
-                              () =>
-                                Effect.sync(() => {
-                                  active = false;
-                                }),
-                            );
-                            yield* Deferred.succeed(entered, undefined);
-                            yield* Deferred.await(release);
-                            completed = true;
-                          }),
-                        );
-                      }),
+                          );
+                          yield* Deferred.succeed(entered, undefined);
+                          yield* Deferred.await(release);
+                          completed = true;
+                        }),
+                      },
+                    ],
                   }),
                 );
               }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
@@ -264,36 +259,32 @@ describe("maintenance retry deadlines", () => {
                       wakeScanInterval: 1_000,
                     }),
                     Effect.provideService(ThreadHostMaintenance, {
-                      dispatchTimeoutMillis: 1_000,
-                      pendingDeadline: Effect.sync(() => Option.fromUndefinedOr(hostDeadline)),
-                      drainUntil: () =>
-                        Effect.gen(function* () {
-                          const activity = yield* ThreadMaintenanceActivity;
-
-                          yield* activity.run(
-                            Effect.gen(function* () {
-                              yield* activity.ready;
-                              yield* Effect.acquireRelease(
+                      lanes: [
+                        {
+                          dispatchTimeoutMillis: 1_000,
+                          pendingDeadline: Effect.sync(() => Option.fromUndefinedOr(hostDeadline)),
+                          run: Effect.gen(function* () {
+                            yield* Effect.acquireRelease(
+                              Effect.sync(() => {
+                                activeHostResources++;
+                              }),
+                              () =>
                                 Effect.sync(() => {
-                                  activeHostResources++;
+                                  activeHostResources--;
                                 }),
-                                () =>
-                                  Effect.sync(() => {
-                                    activeHostResources--;
-                                  }),
-                              );
-                              if (hostFailure)
-                                return yield* DurableAlarmError.make({
-                                  operation: "test host failure",
-                                  message: "host delivery remains pending",
-                                });
-                              if (hostDeadline !== undefined) {
-                                hostDrains++;
-                                hostDeadline = undefined;
-                              }
-                            }),
-                          );
-                        }),
+                            );
+                            if (hostFailure)
+                              return yield* DurableAlarmError.make({
+                                operation: "test host failure",
+                                message: "host delivery remains pending",
+                              });
+                            if (hostDeadline !== undefined) {
+                              hostDrains++;
+                              hostDeadline = undefined;
+                            }
+                          }),
+                        },
+                      ],
                     }),
                     Effect.exit,
                   );

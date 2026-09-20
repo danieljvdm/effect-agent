@@ -4,20 +4,14 @@ import {
   storageConfigLayer,
   threadStoreLayer,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
-import { Clock, Context, DateTime, Duration, Effect, Fiber, Layer, Option, Stream } from "effect";
+import { Clock, Context, Duration, Effect, Layer, Option, Stream } from "effect";
 import { type ResolvedBinding } from "effect-agent/agent-registration";
 import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
 import { type PersistedJson } from "effect-agent/records";
 import { SubmissionLedger, type SubmissionLookupByKey } from "effect-agent/submission-ledger";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
-import { WakeScheduler } from "effect-agent/wake-scheduler";
 
-import {
-  DurableAlarmError,
-  ThreadHostMaintenance,
-  ThreadMaintenance,
-  ThreadMaintenanceActivity,
-} from "../src/Alarm.ts";
+import { DurableAlarmError, ThreadHostMaintenance, ThreadMaintenance } from "../src/Alarm.ts";
 import {
   DurableObjectContext,
   ThreadObjectIdentity,
@@ -43,7 +37,6 @@ const replyHost = Layer.effectContext(
     const { threadId } = yield* ThreadObjectIdentity;
     const ledger = yield* SubmissionLedger;
     const store = yield* ThreadStore;
-    const wakes = yield* WakeScheduler;
 
     const failure = (cause: unknown) =>
       DurableAlarmError.make({
@@ -52,8 +45,6 @@ const replyHost = Layer.effectContext(
         cause,
       });
 
-    // Match a host that stops admitting waves once dispatchClosed fires. A native completion
-    // after that signal would remain due until another alarm; the regression must detect it.
     const dispatchTimeoutMillis = 1_000;
 
     const pendingDeadline = Effect.gen(function* () {
@@ -90,46 +81,15 @@ const replyHost = Layer.effectContext(
     }).pipe(Effect.mapError(failure));
 
     return Context.make(ThreadHostMaintenance, {
-      dispatchTimeoutMillis,
-      pendingDeadline,
-      drainUntil: (dispatchClosed, dispatchUntil) =>
-        Effect.gen(function* () {
-          const activity = yield* ThreadMaintenanceActivity;
-          const hinted = yield* Stream.toPull(wakes.wakes);
-          const checked = yield* activity.subscribeChanges;
-
-          const notified = Effect.raceFirst(hinted, checked).pipe(
-            Effect.asVoid,
-            Effect.catch(() => Effect.never),
-          );
-
-          const done = yield* Effect.forkScoped(dispatchClosed);
-
-          const select = Effect.fnUntraced(function* (initial = false) {
-            const deadline = yield* pendingDeadline;
-            const now = yield* Clock.currentTimeMillis;
-
-            if (
-              Option.isNone(deadline) ||
-              deadline.value > now ||
-              (!initial && done.pollUnsafe() !== undefined) ||
-              now + dispatchTimeoutMillis > DateTime.toEpochMillis(dispatchUntil)
-            )
-              return;
-            yield* flush;
-          });
-
-          yield* activity.run(activity.ready.pipe(Effect.andThen(select(true))));
-          while (done.pollUnsafe() === undefined) {
-            const changed = yield* Effect.raceFirst(
-              notified.pipe(Effect.as(true)),
-              Fiber.join(done).pipe(Effect.as(false)),
-            );
-
-            if (!changed) return;
-            yield* activity.run(select());
-          }
-        }),
+      lanes: [
+        {
+          dispatchTimeoutMillis,
+          pendingDeadline,
+          run: Effect.gen(function* () {
+            if (Option.isSome(yield* pendingDeadline)) yield* flush;
+          }),
+        },
+      ],
     });
   }),
 );

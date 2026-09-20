@@ -6,7 +6,6 @@ import {
   Deferred,
   Effect,
   Exit,
-  Fiber,
   Layer,
   Option,
   Schema,
@@ -41,8 +40,8 @@ import { describe, expect, expectTypeOf, it } from "vite-plus/test";
 import {
   DurableAlarmError,
   ThreadHostMaintenance,
+  ThreadMessageDelivery,
   ThreadMaintenance,
-  ThreadMaintenanceActivity,
   ThreadMaintenanceFailpoint,
 } from "../src/Alarm.ts";
 import type { DurableObjectContext, ThreadObjectNamespace } from "../src/CloudflareBindings.ts";
@@ -323,8 +322,8 @@ describe("live Thread projection and alarm backfill", () => {
       }),
   );
 
-  it.each(["failure", "timeout"] as const)(
-    "runs native work before reporting an unrelated host setup %s",
+  it.each(["failure", "timeout", "message preparation"] as const)(
+    "runs native work before reporting an unrelated maintenance %s",
     (failure) =>
       withThread(async (thread, _now, advance) => {
         await submit(thread, plannerDefinition);
@@ -334,10 +333,10 @@ describe("live Thread projection and alarm backfill", () => {
           markEntered = resolve;
         });
 
-        hostMaintenanceControls.set(thread, {
-          dispatchTimeoutMillis: 1_000,
-          drainUntil: () =>
-            Effect.suspend(() => {
+        hostMaintenanceControls.set(thread, [
+          {
+            dispatchTimeoutMillis: 1_000,
+            run: Effect.suspend(() => {
               markEntered();
 
               return failure === "timeout"
@@ -347,10 +346,30 @@ describe("live Thread projection and alarm backfill", () => {
                     message: "outbox unavailable",
                   });
             }),
-          pendingDeadline: Effect.succeed(Option.some(0)),
-        });
+            pendingDeadline: Effect.succeed(Option.some(0)),
+          },
+        ]);
 
-        const rejected = alarm(thread).then(
+        const runAlarm =
+          failure === "message preparation"
+            ? runInDurableObject(stub(thread), (instance) =>
+                instance[DurableObject.RunSymbol](
+                  ThreadMaintenance.use((maintenance) => maintenance.pass).pipe(
+                    Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
+                    Effect.provideService(ThreadHostMaintenance, { lanes: [] }),
+                    Effect.provideService(ThreadMessageDelivery, {
+                      prepare: DurableAlarmError.make({
+                        operation: "test message preparation",
+                        message: "outbox unavailable",
+                      }),
+                      pendingDeadline: Effect.succeed(Option.some(0)),
+                    }),
+                  ),
+                ),
+              )
+            : alarm(thread);
+
+        const rejected = runAlarm.then(
           () => undefined,
           (cause: unknown) => cause,
         );
@@ -360,7 +379,7 @@ describe("live Thread projection and alarm backfill", () => {
           await advance(1_000);
         }
         expect(String(await rejected)).toContain(
-          failure === "timeout" ? "initial maintenance before its allowance" : "outbox unavailable",
+          failure === "timeout" ? "host wave exceeded its allowance" : "outbox unavailable",
         );
         expect(await allSettled(thread, namespace)()).toBe(true);
         expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
@@ -385,16 +404,13 @@ describe("live Thread projection and alarm backfill", () => {
         release = resolve;
       });
 
-      hostMaintenanceControls.set(thread, {
-        dispatchTimeoutMillis: 1_000,
-        drainUntil: () =>
-          Effect.gen(function* () {
-            const activity = yield* ThreadMaintenanceActivity;
-
-            yield* activity.run(activity.ready.pipe(Effect.andThen(Effect.promise(() => held))));
-          }),
-        pendingDeadline: Effect.succeed(Option.some(0)),
-      });
+      hostMaintenanceControls.set(thread, [
+        {
+          dispatchTimeoutMillis: 1_000,
+          run: Effect.promise(() => held),
+          pendingDeadline: Effect.succeed(Option.some(0)),
+        },
+      ]);
       try {
         await expect(alarm(thread)).rejects.toBeDefined();
         expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
@@ -452,7 +468,6 @@ describe("live Thread projection and alarm backfill", () => {
         let oldCompleted = false;
         let freshEntered = 0;
         let cleanupActive = false;
-        let closed = false;
         let command: AbortCommand | undefined;
         let abort: AbortIntent | undefined;
         let freshReceipt: Receipt | undefined;
@@ -485,108 +500,65 @@ describe("live Thread projection and alarm backfill", () => {
             freshEntered++;
           }),
         );
-        hostMaintenanceControls.set(thread, {
-          // Covers the fixture's phase waits and the real native abort poll. Success must
-          // still precede cleanup release; no assertion depends on exhausting this allowance.
-          dispatchTimeoutMillis: 5_000,
-          pendingDeadline: Effect.sync(() =>
-            cleanupActive ||
-            (command !== undefined && abort === undefined) ||
-            (freshReceipt !== undefined && published.length === 0)
-              ? Option.some(0)
-              : Option.none(),
-          ),
-          drainUntil: (dispatchClosed) =>
-            Effect.gen(function* () {
-              const wakes = yield* WakeScheduler;
 
-              const done = yield* Effect.forkScoped(
-                dispatchClosed.pipe(
-                  Effect.tap(() =>
-                    Effect.sync(() => {
-                      closed = true;
-                    }),
-                  ),
-                ),
-              );
+        const control = Effect.gen(function* () {
+          if (command !== undefined && abort === undefined) {
+            abort = yield* maintenance.withMutation(runtime.abort(command));
+          }
+          if (freshReceipt === undefined || published.length > 0) return;
+          const state = yield* runtime.submissionStatus(freshReceipt);
 
-              const control = Effect.gen(function* () {
-                if (command !== undefined && abort === undefined) {
-                  abort = yield* maintenance.withMutation(runtime.abort(command));
-                }
-                if (freshReceipt === undefined || published.length > 0) return;
-                const state = yield* runtime.submissionStatus(freshReceipt);
+          if (state._tag !== "settled") return;
 
-                if (state._tag !== "settled") return;
+          const records = yield* Stream.runCollect(
+            store.read(
+              ThreadRead.make({
+                threadId: decodeThreadId(fresh),
+                limit: 100,
+              }),
+            ),
+          );
 
-                const records = yield* Stream.runCollect(
-                  store.read(
-                    ThreadRead.make({
-                      threadId: decodeThreadId(fresh),
-                      limit: 100,
-                    }),
-                  ),
-                );
+          const completed = records.find(({ record }) => record.payload._tag === "RunCompleted")
+            ?.record.payload;
 
-                const completed = records.find(
-                  ({ record }) => record.payload._tag === "RunCompleted",
-                )?.record.payload;
-
-                if (completed?._tag === "RunCompleted") published.push(completed.output);
-              }).pipe(
-                Effect.mapError((cause) =>
-                  DurableAlarmError.make({
-                    operation: "fixture host control",
-                    message: "Host control failed",
-                    cause,
-                  }),
-                ),
-              );
-
-              yield* ThreadMaintenanceActivity.all([
-                Effect.gen(function* () {
-                  const child = yield* ThreadMaintenanceActivity;
-                  const hinted = yield* Stream.toPull(wakes.wakes);
-                  const checked = yield* child.subscribeChanges;
-                  const notified = Effect.raceFirst(hinted, checked);
-
-                  yield* child.run(child.ready.pipe(Effect.andThen(control)));
-                  while (done.pollUnsafe() === undefined) {
-                    const changed = yield* Effect.raceFirst(
-                      notified.pipe(
-                        Effect.as(true),
-                        Effect.catch(() => Effect.never),
-                      ),
-                      Fiber.join(done).pipe(Effect.as(false)),
-                    );
-
-                    if (!changed || done.pollUnsafe() !== undefined) return;
-                    yield* child.run(control);
-                  }
-                }),
-                Effect.gen(function* () {
-                  const child = yield* ThreadMaintenanceActivity;
-
-                  yield* child.run(
-                    child.ready.pipe(
-                      Effect.andThen(
-                        Effect.acquireUseRelease(
-                          Effect.sync(() => {
-                            cleanupActive = true;
-                          }),
-                          () => Deferred.await(releaseCleanup),
-                          () =>
-                            Effect.sync(() => {
-                              cleanupActive = false;
-                            }),
-                        ),
-                      ),
-                    ),
-                  );
-                }),
-              ]);
+          if (completed?._tag === "RunCompleted") published.push(completed.output);
+        }).pipe(
+          Effect.mapError((cause) =>
+            DurableAlarmError.make({
+              operation: "fixture host control",
+              message: "Host control failed",
+              cause,
             }),
-        });
+          ),
+        );
+
+        hostMaintenanceControls.set(thread, [
+          {
+            dispatchTimeoutMillis: 5_000,
+            pendingDeadline: Effect.sync(() =>
+              (command !== undefined && abort === undefined) ||
+              (freshReceipt !== undefined && published.length === 0)
+                ? Option.some(0)
+                : Option.none(),
+            ),
+            run: control,
+          },
+          {
+            dispatchTimeoutMillis: 5_000,
+            pendingDeadline: Effect.succeed(Option.none()),
+            run: Effect.acquireUseRelease(
+              Effect.sync(() => {
+                cleanupActive = true;
+              }),
+              () => Deferred.await(releaseCleanup),
+              () =>
+                Effect.sync(() => {
+                  cleanupActive = false;
+                }),
+            ),
+          },
+        ]);
 
         return {
           get oldEntered() {
@@ -603,9 +575,6 @@ describe("live Thread projection and alarm backfill", () => {
           },
           get cleanupActive() {
             return cleanupActive;
-          },
-          get closed() {
-            return closed;
           },
           get abort() {
             return abort;
@@ -680,12 +649,10 @@ describe("live Thread projection and alarm backfill", () => {
       });
       for (let count = 0; count < 5 && controls.published.length === 0; count++) await advance(100);
       expect({
-        closed: controls.closed,
         aborted: controls.abort !== undefined,
         model: controls.freshEntered,
         replies: controls.published,
       }).toEqual({
-        closed: false,
         aborted: true,
         model: 1,
         replies: [{ answer: "done" }],
@@ -751,7 +718,6 @@ describe("live Thread projection and alarm backfill", () => {
           release = resolve;
         });
 
-        let wakes = 0;
         let released = false;
         let retired = false;
 
@@ -765,42 +731,22 @@ describe("live Thread projection and alarm backfill", () => {
             release: response,
           });
         }
-        hostMaintenanceControls.set(thread, {
-          pendingDeadline: Effect.succeed(held === "host" ? Option.some(0) : Option.none()),
-          dispatchTimeoutMillis: 1_000,
-          drainUntil: () =>
-            Effect.gen(function* () {
-              const activity = yield* ThreadMaintenanceActivity;
-              const scheduler = yield* WakeScheduler;
-              const notified = yield* Stream.toPull(scheduler.wakes);
-
+        hostMaintenanceControls.set(thread, [
+          {
+            pendingDeadline: Effect.succeed(held === "host" ? Option.some(0) : Option.none()),
+            dispatchTimeoutMillis: 1_000,
+            run: Effect.gen(function* () {
+              if (held !== "host") return;
               yield* Effect.addFinalizer(() =>
                 Effect.sync(() => {
                   released = true;
                 }),
               );
-              yield* notified.pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    wakes++;
-                  }),
-                ),
-                Effect.forever,
-                Effect.forkScoped,
-              );
-              yield* activity.run(
-                activity.ready.pipe(
-                  Effect.andThen(
-                    Effect.gen(function* () {
-                      if (held !== "host") return;
-                      entered();
-                      yield* Effect.promise(() => response);
-                    }),
-                  ),
-                ),
-              );
+              entered();
+              yield* Effect.promise(() => response);
             }),
-        });
+          },
+        ]);
 
         const running = alarm(thread).then(
           () => {
@@ -826,7 +772,6 @@ describe("live Thread projection and alarm backfill", () => {
           }
           expect(await allSettled(thread, namespace)()).toBe(true);
           expect(retired).toBe(false);
-          const previousWakes = wakes;
 
           await runClient(
             Effect.flatMap(CloudflareThreadClient, (client) =>
@@ -838,7 +783,6 @@ describe("live Thread projection and alarm backfill", () => {
             ),
             namespace,
           );
-          expect(wakes).toBeGreaterThan(previousWakes);
           expect(released).toBe(false);
           await advance(100);
           expect(retired).toBe(false);
@@ -848,7 +792,7 @@ describe("live Thread projection and alarm backfill", () => {
           ]);
           await advance(1_000);
           expect(retired).toBe(true);
-          expect(released).toBe(true);
+          expect(released).toBe(held === "host");
           expect((await laneRows(thread, namespace)).map((row) => row.state)).toEqual([
             "settled",
             "settled",
@@ -892,9 +836,13 @@ describe("live Thread projection and alarm backfill", () => {
                     : Effect.void,
               }),
               Effect.provideService(ThreadHostMaintenance, {
-                dispatchTimeoutMillis: 1_000,
-                pendingDeadline: Effect.succeed(Option.none()),
-                drainUntil: () => Effect.never,
+                lanes: [
+                  {
+                    dispatchTimeoutMillis: 1_000,
+                    pendingDeadline: Effect.succeed(Option.none()),
+                    run: Effect.never,
+                  },
+                ],
               }),
               Effect.exit,
             ),
@@ -1052,16 +1000,7 @@ it("exposes index services and preserves distinct publication and projection E/R
     DurableObjectContext | ThreadObjectNamespace
   >();
 
-  const pumps = ThreadMaintenanceActivity.all([Destination.use(() => SetupError.make({}))]);
-
-  expectTypeOf<Effect.Error<typeof pumps>>().toEqualTypeOf<SetupError>();
-  expectTypeOf<Effect.Services<typeof pumps>>().toEqualTypeOf<
-    Destination | ThreadMaintenanceActivity
-  >();
-  expectTypeOf<
-    Effect.Services<ReturnType<Context.Service.Shape<typeof ThreadHostMaintenance>["drainUntil"]>>
-  >().toEqualTypeOf<Scope.Scope | ThreadMaintenanceActivity>();
-  expectTypeOf<ThreadMaintenanceActivity["Service"]["subscribeChanges"]>().toEqualTypeOf<
-    Effect.Effect<Effect.Effect<void>, never, Scope.Scope>
-  >();
+  type Lane = Context.Service.Shape<typeof ThreadHostMaintenance>["lanes"][number];
+  expectTypeOf<Effect.Services<Lane["run"]>>().toEqualTypeOf<Scope.Scope>();
+  expectTypeOf<Effect.Error<Lane["run"]>>().toEqualTypeOf<DurableAlarmError>();
 });
