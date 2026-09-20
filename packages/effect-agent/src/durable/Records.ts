@@ -805,9 +805,10 @@ export class SubagentLineageRecorded extends Schema.TaggedClass<SubagentLineageR
 }) {}
 
 export const WorkerReportingIntent = Schema.Struct({
-  /** Standard framework reports or an application-mapped input projection. */
+  /** Absent only in historical custom-report origins; these remain readable as evidence. */
   mode: Schema.optionalKey(Schema.Literal("standard")),
   sourceDigests: DefinitionDigests,
+  /** Historical custom destination evidence. New worker origins never write this field. */
   destinationDelegationId: Schema.optionalKey(DelegationId),
   /** Frozen by the sender before acceptance. Standard emission never reads the source runtime. */
   returnAddress: Schema.optionalKey(

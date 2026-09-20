@@ -118,26 +118,16 @@ export class WorkerReportPreparationFailure extends Schema.TaggedError<WorkerRep
 ) {}
 
 /**
- * Source-owned projection discovered from background tools or supplied by a custom registration.
+ * Source-owned standard projection discovered from background tools.
  * The concrete descriptor retains its E/R; durable registration captures R and records
  * bounded preparation failure rather than serializing arbitrary application errors.
  */
 export interface WorkerReporting<E = never, R = never> {
   readonly delegationId: DelegationId;
   readonly target: Agent.AnyDefinition;
-  /** Standard messages retain the parent's original application input. */
-  readonly mode?: "standard";
-  readonly input?: Schema.Top;
-  /** Required for custom mapping when the receiving coordinator is itself an established worker. */
-  readonly destination?: {
-    readonly delegationId: DelegationId;
-    readonly target: Agent.AnyDefinition;
-  };
   readonly prepare: (report: WorkerRunReport) => Effect.Effect<
     {
-      readonly encodedInput: Schema.Json;
-      readonly encodedParameters?: Schema.Json;
-      readonly message?: WorkerCompletion;
+      readonly message: WorkerCompletion;
     },
     E | WorkerReportPreparationFailure,
     R

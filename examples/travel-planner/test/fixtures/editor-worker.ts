@@ -23,7 +23,7 @@ import {
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
 import { PlannerAttempt } from "../../src/server/progress.ts";
 import { ownerOfThread } from "../../src/server/tenancy.ts";
-import { AppEditorBackground, EditorInput } from "../../src/trip-app/editor.ts";
+import { ReportingAppEditorActions, EditorInput } from "../../src/trip-app/editor.ts";
 import { AppSourceStore } from "../../src/trip-app/source.ts";
 import { AppTools } from "../../src/trip-app/tools.ts";
 import { FixtureBrowserLive } from "./browser.ts";
@@ -301,13 +301,14 @@ const FixtureEditorModel = Model.make(
                 if (!started) return yield* Effect.die("Fixture needs an existing editor");
 
                 const result = yield* Schema.decodeUnknownEffect(
-                  AppEditorBackground.tools.app_editor_start.successSchema,
+                  ReportingAppEditorActions.tools.app_editor_start.successSchema,
                 )(started.result).pipe(Effect.orDie);
 
                 return Stream.fromIterable(
                   call("app_editor_follow_up", {
                     worker: Schema.encodeSync(
-                      AppEditorBackground.tools.app_editor_follow_up.parametersSchema.fields.worker,
+                      ReportingAppEditorActions.tools.app_editor_follow_up.parametersSchema.fields
+                        .worker,
                     )(result.worker),
                     parameters: {
                       tripId: input.selectedTripId,

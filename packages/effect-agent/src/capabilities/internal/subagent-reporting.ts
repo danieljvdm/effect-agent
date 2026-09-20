@@ -3,11 +3,7 @@ import { Effect, Schema } from "effect";
 import { utf8ByteLength } from "../../core/internal/utf8.ts";
 import { Receipt } from "../../core/Receipt.ts";
 import { type WorkerReport, WorkerCompletion } from "../../core/Worker.ts";
-import {
-  WorkerReportPreparationFailure,
-  type WorkerReporting,
-  type WorkerRunReport,
-} from "../../engine/SubagentHost.ts";
+import { WorkerReportPreparationFailure, type WorkerRunReport } from "../../engine/SubagentHost.ts";
 import { type Declaration } from "./subagent-background.ts";
 import { SubagentExecutionFailure } from "./subagent-contract.ts";
 
@@ -100,7 +96,7 @@ const projectReport = <
     return { projected, encodedResult };
   });
 
-/** Framework reporting shares the same bounded declaration projection as custom mapping. */
+/** Project a canonical child outcome into the bounded standard completion message. */
 export const automaticReporting = <
   const Name extends string,
   Input extends Schema.Top,
@@ -115,7 +111,6 @@ export const automaticReporting = <
 ) => ({
   delegationId: declaration.delegationId,
   target: declaration.target,
-  mode: "standard" as const,
   prepare: Effect.fn("Subagent.automaticReport")(function* (report: WorkerRunReport) {
     const { projected, encodedResult } = yield* projectReport(declaration)(report);
 
@@ -136,126 +131,6 @@ export const automaticReporting = <
       budgetExhausted: report.observation.budgetExhausted,
     }).pipe(Effect.mapError(() => WorkerReportPreparationFailure.make({ stage: "projection" })));
 
-    return { encodedInput: null, message };
+    return { message };
   }),
 });
-
-/**
- * Define an optional application-specific conversion for `background({ reportToParent: report })`.
- * Existing Agent Registration `reporting` arrays remain supported. The input Schema must be the coordinator Definition's exact input Schema.
- * Preparation is bounded by the durable host; a retained prepared envelope is never reprojected
- * during delivery retries. The callback should be deterministic and have no external side effects.
- */
-export const reporting = <
-  const Name extends string,
-  Input extends Schema.Top,
-  Output extends Schema.Top,
-  Parameters extends Schema.Top,
-  Success extends Schema.Top,
-  Failure extends Schema.Top,
-  Prepare,
-  Project,
-  CoordinatorInput extends Schema.Top,
-  ReportFailure extends Schema.Top = typeof Schema.Never,
-  ReportRequirements = never,
->(
-  declaration: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
-  options: {
-    readonly input: CoordinatorInput;
-    readonly failure?: ReportFailure;
-    readonly prepare: (
-      report: WorkerReport<Success>,
-    ) => Effect.Effect<CoordinatorInput["Type"], ReportFailure["Type"], ReportRequirements>;
-  },
-): WorkerReporting<
-  Failure["Type"] | ReportFailure["Type"],
-  | Parameters["DecodingServices"]
-  | Output["DecodingServices"]
-  | Success["EncodingServices"]
-  | CoordinatorInput["EncodingServices"]
-  | Project
-  | ReportRequirements
-> => {
-  const prepare = Effect.fn("Subagent.reporting.prepare")(function* (report: WorkerRunReport) {
-    const { projected } = yield* projectReport(declaration)(report);
-    const input = yield* options.prepare(projected);
-
-    const encoded = yield* Schema.encodeEffect(options.input)(input).pipe(
-      Effect.mapError(() => WorkerReportPreparationFailure.make({ stage: "input" })),
-    );
-
-    const encodedInput = yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
-      Effect.mapError(() => WorkerReportPreparationFailure.make({ stage: "input" })),
-    );
-
-    return { encodedInput };
-  });
-
-  return Object.freeze({
-    delegationId: declaration.delegationId,
-    target: declaration.target,
-    input: options.input,
-    prepare,
-  });
-};
-
-/**
- * Adapt a report expressed in a receiving worker declaration's Parameters to its Agent input.
- * Use this on that worker's registration when it can itself launch reporting workers. This
- * explicit conversion preserves custom Parameters and charges the next input to its ancestor.
- */
-export const reportingToWorker = <
-  E,
-  R,
-  const Name extends string,
-  Input extends Schema.Top,
-  Output extends Schema.Top,
-  Parameters extends Schema.Top,
-  Success extends Schema.Top,
-  Failure extends Schema.Top,
-  Prepare,
-  Project,
->(
-  report: WorkerReporting<E, R>,
-  destination: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
-): WorkerReporting<
-  E | Failure["Type"],
-  R | Prepare | Parameters["DecodingServices"] | Input["EncodingServices"]
-> => {
-  if (report.input !== destination.parameters) {
-    throw new TypeError(
-      "Worker reporting must use the destination declaration's Parameters Schema",
-    );
-  }
-
-  return Object.freeze({
-    delegationId: report.delegationId,
-    target: report.target,
-    input: destination.target.input,
-    destination: { delegationId: destination.delegationId, target: destination.target },
-    prepare: Effect.fn("Subagent.reportingToWorker.prepare")(function* (run: WorkerRunReport) {
-      const encodedParameters = (yield* report.prepare(run)).encodedInput;
-      const invalid = () => WorkerReportPreparationFailure.make({ stage: "input" });
-
-      const parameters = yield* Schema.decodeEffect(destination.parameters)(encodedParameters).pipe(
-        Effect.mapError(invalid),
-      );
-
-      const input = yield* destination.prepareInput(parameters, {
-        source: "programmatic",
-        delegationId: destination.delegationId,
-        parent: { agentId: run.context.source.agentId, threadId: run.context.source.threadId },
-      });
-
-      const encoded = yield* Schema.encodeEffect(destination.target.input)(input).pipe(
-        Effect.mapError(invalid),
-      );
-
-      const encodedInput = yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
-        Effect.mapError(invalid),
-      );
-
-      return { encodedInput, encodedParameters };
-    }),
-  });
-};

@@ -239,29 +239,10 @@ const onlyStart = Subagent.background(declaration, { start: true });
 const onlyInspect = Subagent.background(declaration, { inspect: true });
 const automatic = Subagent.background(declaration, { start: true, reportToParent: true });
 
-const mapped = Subagent.background(declaration, {
-  start: true,
-  reportToParent: Subagent.reporting(declaration, {
-    input: text,
-    prepare: (report) =>
-      Effect.as(Project, report.outcome === "completed" ? report.result : "failed"),
-  }),
-});
-
 const conditionalReporting = (enabled: boolean) => ({
   automatic: Subagent.background(declaration, {
     list: true,
     reportToParent: enabled ? true : undefined,
-  }),
-  mapped: Subagent.background(declaration, {
-    list: true,
-    reportToParent: enabled
-      ? Subagent.reporting(declaration, {
-          input: text,
-          prepare: (report) =>
-            Effect.as(Project, report.outcome === "completed" ? report.result : "failed"),
-        })
-      : undefined,
   }),
 });
 
@@ -272,13 +253,7 @@ const conditionalServices: [
       Project | Encoder | Decoder
     >
   >,
-  Assert<
-    Equal<
-      Layer.Services<ReturnType<typeof conditionalReporting>["mapped"]["layer"]>,
-      Project | Encoder | Decoder
-    >
-  >,
-] = [true, true];
+] = [true];
 
 const conditionalOperations = (prepare: boolean, project: boolean) => ({
   start: Subagent.background(declaration, { start: prepare ? true : undefined }),
@@ -316,10 +291,6 @@ const conditionalOperationServices: [
 
 const automaticServices: Assert<
   Equal<Layer.Services<typeof automatic.layer>, Prepare | Project | Encoder | Decoder>
-> = true;
-
-const mappedServices: Assert<
-  Equal<Layer.Services<typeof mapped.layer>, Prepare | Project | Encoder | Decoder>
 > = true;
 
 const automaticErrors: Assert<Equal<Layer.Error<typeof automatic.layer>, never>> = true;
@@ -459,7 +430,7 @@ describe("background authoring types", () => {
     expect(directTypes.every(Boolean)).toBe(true);
     expect(updateTypes.every(Boolean)).toBe(true);
     expect(dispositionTypes.every(Boolean)).toBe(true);
-    expect(automaticServices && mappedServices && automaticErrors && automaticKeys).toBe(true);
+    expect(automaticServices && automaticErrors && automaticKeys).toBe(true);
     expect(conditionalServices.every(Boolean)).toBe(true);
     expect(conditionalOperationServices.every(Boolean)).toBe(true);
     expect(nestedParameterProof && nestedSuccessProof).toBe(true);

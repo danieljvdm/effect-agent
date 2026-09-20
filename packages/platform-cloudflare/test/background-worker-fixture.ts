@@ -30,7 +30,6 @@ const definition = (name: string) =>
   });
 
 export const backgroundSource = definition("cf-background-source");
-export const backgroundReportSource = definition("cf-background-report-source");
 export const backgroundTarget = definition("cf-background-target");
 
 const model = Model.make(
@@ -218,12 +217,12 @@ const standardReports = Subagent.background(backgroundReportingWorkers, {
 });
 
 export const backgroundStandardReportSource = Agent.make("cf-background-standard-report-source", {
-  input: backgroundReportSource.input,
-  output: backgroundReportSource.output,
+  input: backgroundSource.input,
+  output: backgroundSource.output,
   instructions: ({ question }) => `Answer ${question} and consume WorkerCompletion messages.`,
   inputPrompt: ({ question }) => question,
   toolkit: standardReports.toolkit,
-  policy: backgroundReportSource.policy,
+  policy: backgroundSource.policy,
 });
 
 export const independentBudgetSource = Agent.make("cf-independent-source", {
@@ -413,25 +412,6 @@ export const backgroundWorkerBindings = Effect.all([
   ).pipe(Effect.provide(independentScoutHandlers)),
   DurableWorkerBinding.make(Agent.withModel(backgroundSource, model), TEST_DIGESTS),
   DurableWorkerBinding.make(Agent.withModel(backgroundTarget, model), TEST_DIGESTS),
-  DurableWorkerBinding.make(Agent.withModel(backgroundReportSource, model), TEST_DIGESTS, [
-    Subagent.reporting(backgroundReportingWorkers, {
-      input: backgroundReportSource.input,
-      prepare: (report) =>
-        Effect.sync(() => {
-          backgroundReportProjections.set(
-            report.runId,
-            (backgroundReportProjections.get(report.runId) ?? 0) + 1,
-          );
-
-          return {
-            question:
-              report.outcome === "completed"
-                ? `report:${report.runId}:${report.result.answer}`
-                : "report:failed",
-          };
-        }),
-    }),
-  ]),
   DurableWorkerBinding.make(Agent.withModel(reportTarget, reportModel), TEST_DIGESTS).pipe(
     Effect.provide(reportToolkit.toLayer({ report_checkpoint: () => Effect.succeed("ready") })),
   ),
@@ -537,4 +517,3 @@ export const backgroundWorkerAuthority = Layer.mergeAll(
 /** Explicitly suppress worker wake hints while the recovery test drives stored alarms. */
 export const backgroundWakeDropPrefixes = new Set<string>();
 /** External projection counter survives Object eviction; it is not runtime state. */
-export const backgroundReportProjections = new Map<string, number>();

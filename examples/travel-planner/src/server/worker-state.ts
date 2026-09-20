@@ -13,7 +13,7 @@ import { WorkerEnvironment } from "effect-cf";
 
 import { PlannerError, PlannerWorkerDetail, PlannerWorkerRequest } from "../domain.ts";
 import { ScoutFindings } from "../research/contracts.ts";
-import { ResearchScout, updatingResearchScout } from "../research/scout.ts";
+import { UpdatingResearchScout, updatingResearchScout } from "../research/scout.ts";
 import { plannerActivity } from "./activity.ts";
 import { readDiagnostics } from "./diagnostics.ts";
 import { ProgressStore } from "./progress.ts";
@@ -169,7 +169,7 @@ export const workerStatus = Effect.fn("workerStatus")(
 
     const findings =
       completed?._tag === "RunCompleted" &&
-      request.worker.delegationId === ResearchScout.delegationId
+      request.worker.delegationId === UpdatingResearchScout.delegationId
         ? Schema.decodeUnknownOption(ScoutFindings)(completed.output)
         : Option.none();
 

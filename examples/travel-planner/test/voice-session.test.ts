@@ -11,7 +11,7 @@ import {
   type ResearchScoutActivity,
   type TripApp,
 } from "../src/domain.ts";
-import type { planner, previousTextPlanner } from "../src/server/planner.ts";
+import type { planner } from "../src/server/planner.ts";
 import { emptyProgress } from "../src/server/progress.ts";
 import {
   appendCaption,
@@ -690,12 +690,8 @@ it("selects public output by receipt and attempt and leaves structured previews 
   if (event.type === "session.input_transcript.delta")
     expect(appendCaption([event], event)).toEqual([event]);
   expectTypeOf<Effect.Error<ReturnType<typeof runVoiceSession>>>().toEqualTypeOf<VoiceError>();
-  expectTypeOf<Effect.Error<ReturnType<typeof planner.instructions>>>().toEqualTypeOf<
-    Effect.Error<ReturnType<typeof previousTextPlanner.instructions>>
-  >();
-  expectTypeOf<Effect.Services<ReturnType<typeof planner.instructions>>>().toEqualTypeOf<
-    Effect.Services<ReturnType<typeof previousTextPlanner.instructions>>
-  >();
+  expectTypeOf<Effect.Error<ReturnType<typeof planner.instructions>>>().toEqualTypeOf<never>();
+  expectTypeOf<Effect.Services<ReturnType<typeof planner.instructions>>>().toEqualTypeOf<never>();
   expectTypeOf<Effect.Services<ReturnType<typeof runVoiceSession>>>().toEqualTypeOf<
     VoiceBackend | VoiceConnection
   >();

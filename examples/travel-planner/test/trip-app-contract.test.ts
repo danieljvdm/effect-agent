@@ -1,8 +1,6 @@
 import type { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { type Crypto, Effect, Schema } from "effect";
 import { AgentRuntime, ThreadHistory } from "effect-agent";
-import type { WorkerReportPreparationFailure } from "effect-agent/subagent-host";
-import type { SubmissionLedger } from "effect-agent/submission-ledger";
 import { Tool, type Toolkit } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 import { expect, expectTypeOf, it } from "vite-plus/test";
@@ -10,8 +8,7 @@ import { expect, expectTypeOf, it } from "vite-plus/test";
 import { TripToolsLive } from "../src/agent.ts";
 import { safeMessageUrl } from "../src/components/message-text.tsx";
 import { AppFilePath, type PlannerError, type TripSiteStore } from "../src/domain.ts";
-import type { researchScoutReport } from "../src/research/runtime.ts";
-import { researchScout } from "../src/research/scout.ts";
+import { updatingResearchScout } from "../src/research/scout.ts";
 import {
   previousContinuingPlanner as planner,
   planner as currentPlanner,
@@ -65,7 +62,7 @@ it("keeps every model tool schema free of unsupported regex lookaround", () => {
   for (const tool of [
     ...Object.values(currentPlanner.toolkit.tools),
     ...Object.values(appEditor.toolkit.tools),
-    ...Object.values(researchScout.toolkit.tools),
+    ...Object.values(updatingResearchScout.toolkit.tools),
   ]) {
     if (Tool.isProviderDefined(tool)) continue;
     const schema = Tool.getJsonSchema(tool, { transformer: toCodecOpenAI });
@@ -136,25 +133,24 @@ it("keeps the conversational coordinator's native worker requirements and typed 
   expectTypeOf<Extract<Effect.Error<typeof run>, PlannerError>>().toEqualTypeOf<PlannerError>();
 });
 
-it("keeps research reports dependent on canonical storage and scouts free of mutation services", () => {
-  expectTypeOf<
-    Effect.Services<ReturnType<typeof researchScoutReport.prepare>>
-  >().toEqualTypeOf<SubmissionLedger>();
-  expectTypeOf<Effect.Error<ReturnType<typeof researchScoutReport.prepare>>>().toEqualTypeOf<
-    PlannerError | WorkerReportPreparationFailure
-  >();
-  const run = AgentRuntime.runUnknown(researchScout, {}).pipe(Effect.provide(FixtureModel));
+it("keeps standard-report scouts free of mutation services", () => {
+  const run = AgentRuntime.runUnknown(updatingResearchScout, {}).pipe(Effect.provide(FixtureModel));
 
   expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
-    ThreadHistory.ThreadHistory | Tool.HandlersFor<typeof researchScout.toolkit.tools>
+    | ThreadHistory.ThreadHistory
+    | Exclude<
+        Tool.HandlersFor<typeof updatingResearchScout.toolkit.tools>,
+        Tool.Handler<"emit_update">
+      >
   >();
   expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<
-    AgentRuntime.AgentRuntimeFailure<typeof researchScout>
+    AgentRuntime.AgentRuntimeFailure<typeof updatingResearchScout>
   >();
-  expect(Object.keys(researchScout.toolkit.tools)).toEqual([
+  expect(Object.keys(updatingResearchScout.toolkit.tools)).toEqual([
     "finish_research",
     "read_travel_page",
     "OpenAiWebSearch",
+    "emit_update",
   ]);
 });
 

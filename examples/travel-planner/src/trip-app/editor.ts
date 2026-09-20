@@ -14,8 +14,6 @@ import { TripRepository } from "../server/trips.ts";
 import { requireAppTrip } from "./scope.ts";
 import { AppTools } from "./tools.ts";
 
-export const coordinatorId = "travel-planner-v8";
-
 export const EditorRequest = Schema.Struct({ tripId: TripId, message: Text });
 
 export const EditorInput = Schema.Struct({
@@ -86,15 +84,6 @@ export const AppEditor = Subagent.make("app_editor", {
     maxDepth: 1,
     childLifetimes: [],
   }),
-});
-
-export const AppEditorBackground = Subagent.background(AppEditor, {
-  start: true,
-  followUp: true,
-  summary: true,
-  inspect: true,
-  list: true,
-  budgetScope: "worker-run",
 });
 
 /** Input preparation uses the admitted settings of the fenced parent attempt. */

@@ -2374,7 +2374,7 @@ export function layer<
   return toolkit.toLayer(build);
 }
 
-export { reporting, reportingToWorker, WorkerReport } from "./internal/subagent-reporting.ts";
+export { WorkerReport } from "./internal/subagent-reporting.ts";
 
 export {
   Worker,

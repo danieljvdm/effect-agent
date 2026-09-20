@@ -4,7 +4,7 @@ import type { ThreadExport } from "effect-agent/thread-store";
 import type { ResearchScoutActivity } from "../domain.ts";
 import { emptyProgress } from "../server/progress.ts";
 import { ScoutRequest } from "./contracts.ts";
-import { ResearchScout } from "./scout.ts";
+import { UpdatingResearchScout } from "./scout.ts";
 
 /** Discover the newest task per source-owned worker without reading any child objects. */
 export const researchOverview = (records: ThreadExport["records"]): ResearchScoutActivity[] => {
@@ -19,7 +19,7 @@ export const researchOverview = (records: ThreadExport["records"]): ResearchScou
 
     if (
       payload._tag !== "WorkerInputRequested" ||
-      payload.admission.origin.worker.delegationId !== ResearchScout.delegationId
+      payload.admission.origin.worker.delegationId !== UpdatingResearchScout.delegationId
     )
       continue;
     const worker = payload.admission.origin.worker;

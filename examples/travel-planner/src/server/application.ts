@@ -23,7 +23,6 @@ import {
   type PlannerSnapshot,
   type SendMessageRequest,
 } from "../domain.ts";
-import { ScoutReportInput } from "../research/contracts.ts";
 import { researchOverview } from "../research/state.ts";
 import { PlannerResponse } from "../response.ts";
 import { TravelContent } from "../travel-content.ts";
@@ -33,12 +32,7 @@ import { AppRepository } from "../trip-app/repository.ts";
 import { plannerActivity } from "./activity.ts";
 import { completedAnswer, type Messages } from "./conversation.ts";
 import { readDiagnostics } from "./diagnostics.ts";
-import {
-  planner,
-  previousProgressPlanner,
-  previousTextPlanner,
-  previousVoicePlanner,
-} from "./planner.ts";
+import { planner } from "./planner.ts";
 import { requestsPublication } from "./security.ts";
 import { ownerOfThread } from "./tenancy.ts";
 import { TripRepository } from "./trips.ts";
@@ -120,15 +114,9 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
     // Resubmission completes readiness; finding an admitted ledger row alone is not acceptance.
     const options = { threadId, principal, idempotencyKey };
 
-    yield* (
-      admitted.value.agentId === previousTextPlanner.id
-        ? runtime.submitRegistered({ definition: previousTextPlanner }, input, options)
-        : admitted.value.agentId === previousVoicePlanner.id
-          ? runtime.submitRegistered({ definition: previousVoicePlanner }, input, options)
-          : admitted.value.agentId === previousProgressPlanner.id
-            ? runtime.submitRegistered({ definition: previousProgressPlanner }, input, options)
-            : runtime.submitRegistered({ definition: planner }, input, options)
-    ).pipe(Effect.mapError(unavailable));
+    yield* runtime
+      .submitRegistered({ definition: planner }, input, options)
+      .pipe(Effect.mapError(unavailable));
 
     return { accepted: true as const };
   }
@@ -219,11 +207,6 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
           if (payload.submissionId !== undefined) reportSubmissions.add(payload.submissionId);
           break;
         }
-        if (
-          payload.submissionId !== undefined &&
-          Schema.decodeUnknownOption(ScoutReportInput)(payload.input)._tag === "Some"
-        )
-          reportSubmissions.add(payload.submissionId);
         const input = Schema.decodeUnknownOption(PlannerInput)(payload.input);
 
         if (input._tag === "Some") {

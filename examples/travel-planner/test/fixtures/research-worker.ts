@@ -1,8 +1,6 @@
 import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
-import { IdempotencyKey, Principal } from "effect-agent/receipt";
 import { SubmissionLedger } from "effect-agent/submission-ledger";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
@@ -19,29 +17,14 @@ import {
   PlannerError,
   PlannerInput,
   PlannerWorkerDetail,
-  PlannerSettings,
   SaveTripRequest,
   Trip,
   TripSiteStore,
 } from "../../src/domain.ts";
 import { ReadTravelPage } from "../../src/research.ts";
 import { ScoutInput } from "../../src/research/contracts.ts";
-import {
-  ResearchScoutBackground,
-  ProgressResearchScoutBackground,
-  RecoverableResearchScoutBackground,
-  UpdatingResearchScoutActions,
-  PreviousRecoverableResearchScoutBackground,
-  PreviousProgressResearchScoutBackground,
-} from "../../src/research/scout.ts";
+import { UpdatingResearchScoutActions } from "../../src/research/scout.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
-import {
-  previousEditorPlanner,
-  previousResearchPlanner,
-  previousProgressPlanner,
-  previousDelegatingPlanner,
-  previousRecoverablePlanner,
-} from "../../src/server/planner.ts";
 import { PlannerAttempt } from "../../src/server/progress.ts";
 import { ownerOfThread } from "../../src/server/tenancy.ts";
 import {
@@ -176,10 +159,6 @@ const model = Model.make(
               );
               const key = `gate/${scout.input.title}`;
 
-              const updateTool = tools.some((tool) => tool.name === "emit_update")
-                ? "emit_update"
-                : "report_research_progress";
-
               const milestone = {
                 summary:
                   (scout.input.title === "Report denial" ? "Report denial: " : "") +
@@ -189,15 +168,11 @@ const model = Model.make(
 
               if (
                 ["Live progress", "Report denial"].includes(scout.input.title) &&
-                tools.some((tool) => tool.name === updateTool) &&
-                !results(prompt, scout.index).some((result) => result.name === updateTool)
+                tools.some((tool) => tool.name === "emit_update") &&
+                !results(prompt, scout.index).some((result) => result.name === "emit_update")
               )
                 return Stream.fromIterable(
-                  call(
-                    updateTool,
-                    updateTool === "emit_update" ? { value: milestone } : milestone,
-                    `milestone-${scout.index}`,
-                  ),
+                  call("emit_update", { value: milestone }, `milestone-${scout.index}`),
                 );
 
               yield* Effect.promise(() => bucket.put(`${key}/entered`, "yes"));
@@ -265,7 +240,9 @@ const model = Model.make(
               if (
                 report?.role === "user" &&
                 report.content.some(
-                  (part) => part.type === "text" && part.text.includes("Report denial"),
+                  (part) =>
+                    part.type === "text" &&
+                    (part.text.includes("Report denial") || part.text.includes("Stays:")),
                 )
               )
                 return Stream.fromIterable(
@@ -279,6 +256,22 @@ const model = Model.make(
                   ),
                 );
 
+              if (
+                completion?.index === frameworkIndex &&
+                report?.role === "user" &&
+                report.content.some(
+                  (part) => part.type === "text" && part.text.includes("Activities:"),
+                )
+              ) {
+                const save = updateCurrentTrip(
+                  prompt,
+                  frameworkIndex,
+                  "Research findings saved after restart",
+                );
+
+                if (save) return Stream.fromIterable(save);
+              }
+
               return Stream.fromIterable(
                 finish(
                   frameworkIndex === update?.index
@@ -290,61 +283,6 @@ const model = Model.make(
               );
             }
 
-            const internalIndex = prompt.content.findLastIndex(
-              (message) =>
-                message.role === "user" &&
-                message.content.some(
-                  (part) =>
-                    part.type === "text" &&
-                    (part.text.startsWith("Internal research milestone") ||
-                      part.text.startsWith("Internal app editor completion")),
-                ),
-            );
-
-            if (internalIndex > (parent?.index ?? -1))
-              return Stream.fromIterable(
-                finish("Verified milestone received while research continues."),
-              );
-
-            const reportIndex = prompt.content.findLastIndex(
-              (message) =>
-                message.role === "user" &&
-                message.content.some(
-                  (part) =>
-                    part.type === "text" && part.text.startsWith("Internal research completion"),
-                ),
-            );
-
-            if (reportIndex > (parent?.index ?? -1)) {
-              const report = prompt.content[reportIndex];
-
-              if (
-                report?.role === "user" &&
-                report.content.some(
-                  (part) => part.type === "text" && part.text.includes('"title":"Stays"'),
-                )
-              )
-                return Stream.fromIterable(
-                  call(
-                    "research_scout_start",
-                    { title: "Recursive scout", message: "Must be denied" },
-                    `recursive-${reportIndex}`,
-                  ),
-                );
-
-              return Stream.fromIterable(
-                (report?.role === "user" &&
-                report.content.some(
-                  (part) => part.type === "text" && part.text.includes('"title":"Live progress"'),
-                )
-                  ? undefined
-                  : updateCurrentTrip(
-                      prompt,
-                      reportIndex,
-                      "Research findings saved after restart",
-                    )) ?? finish("Research update received."),
-              );
-            }
             if (!parent) return Stream.fromIterable(finish("Ready"));
             const current = results(prompt, parent.index);
 
@@ -367,31 +305,8 @@ const model = Model.make(
 
               if (!started) return yield* Effect.die("Missing live scout");
 
-              const previous = Option.isSome(
-                Schema.decodeUnknownOption(
-                  ProgressResearchScoutBackground.tools.research_scout_start.successSchema,
-                )(started.result),
-              );
-
-              const recoverable = Option.isSome(
-                Schema.decodeUnknownOption(
-                  RecoverableResearchScoutBackground.tools.research_scout_start.successSchema,
-                )(started.result),
-              );
-
-              const start = previous
-                ? ProgressResearchScoutBackground.tools.research_scout_start
-                : recoverable
-                  ? RecoverableResearchScoutBackground.tools.research_scout_start
-                  : UpdatingResearchScoutActions.tools.research_scout_start;
-
-              const follow = previous
-                ? PreviousProgressResearchScoutBackground.tools
-                    .previous_progress_research_scout_follow_up
-                : recoverable
-                  ? PreviousRecoverableResearchScoutBackground.tools
-                      .previous_recoverable_research_scout_follow_up
-                  : UpdatingResearchScoutActions.tools.research_scout_follow_up;
+              const start = UpdatingResearchScoutActions.tools.research_scout_start;
+              const follow = UpdatingResearchScoutActions.tools.research_scout_follow_up;
 
               const accepted = yield* Schema.decodeUnknownEffect(start.successSchema)(
                 started.result,
@@ -470,7 +385,7 @@ const model = Model.make(
             }
             if (
               parent.input.message.startsWith("follow research") &&
-              !current.some((result) => result.name === "previous_research_scout_follow_up")
+              !current.some((result) => result.name === "research_scout_follow_up")
             ) {
               const started = results(prompt).find(
                 (result) => result.name === "research_scout_start" && !result.isFailure,
@@ -479,16 +394,16 @@ const model = Model.make(
               if (!started) return yield* Effect.die("Missing existing scout");
 
               const accepted = yield* Schema.decodeUnknownEffect(
-                ResearchScoutBackground.tools.research_scout_start.successSchema,
+                UpdatingResearchScoutActions.tools.research_scout_start.successSchema,
               )(started.result).pipe(Effect.orDie);
 
               return Stream.fromIterable(
                 call(
-                  "previous_research_scout_follow_up",
+                  "research_scout_follow_up",
                   {
                     worker: Schema.encodeSync(
-                      ResearchScoutBackground.tools.research_scout_follow_up.parametersSchema.fields
-                        .worker,
+                      UpdatingResearchScoutActions.tools.research_scout_follow_up.parametersSchema
+                        .fields.worker,
                     )(accepted.worker),
                     parameters: { title: "Stays", message: parent.input.message },
                   },
@@ -635,61 +550,6 @@ export class TravelPlannerThread extends makeTravelPlannerThread(
           url.searchParams.get("thread") ?? identity.threadId,
         );
 
-        if (
-          url.pathname === "/__research/seed" ||
-          url.pathname === "/__research/seed-research" ||
-          url.pathname === "/__research/seed-progress"
-        ) {
-          const runtime = yield* DurableAgentRuntime;
-          const owner = ownerOfThread(threadId);
-          const progress = url.pathname === "/__research/seed-progress";
-          const research = progress || url.pathname === "/__research/seed-research";
-
-          const input = {
-            message: progress
-              ? "start live progress"
-              : research
-                ? "start research"
-                : "Previous trip conversation",
-            selectedTripId: null,
-            publication: null,
-            ...(research
-              ? {
-                  settings: yield* Schema.decodeUnknownEffect(
-                    Schema.fromJsonString(PlannerSettings),
-                  )(url.searchParams.get("settings")),
-                }
-              : {}),
-          };
-
-          const options = {
-            threadId,
-            principal: Schema.decodeSync(Principal)(owner),
-            idempotencyKey: Schema.decodeSync(IdempotencyKey)(
-              research ? "previous-research-input" : "previous-planner-input",
-            ),
-          };
-
-          yield* progress
-            ? runtime.submitRegistered(
-                {
-                  definition:
-                    url.searchParams.get("version") === "recoverable"
-                      ? previousRecoverablePlanner
-                      : url.searchParams.get("version") === "delegating"
-                        ? previousDelegatingPlanner
-                        : previousProgressPlanner,
-                },
-                input,
-                options,
-              )
-            : research
-              ? runtime.submitRegistered({ definition: previousResearchPlanner }, input, options)
-              : runtime.submitRegistered({ definition: previousEditorPlanner }, input, options);
-
-          return Response.json({ accepted: true });
-        }
-
         return new Response(
           yield* Schema.encodeEffect(Schema.fromJsonString(ThreadExport))(
             yield* store.export(ThreadExportRequest.make({ threadId })),
@@ -710,14 +570,6 @@ export default {
         request.headers.get("authorization") !== `Bearer ${env.PLANNER_TOKEN}`
       )
         return new Response("Unauthorized", { status: 401 });
-      if (
-        url.pathname === "/__research/seed" ||
-        url.pathname === "/__research/seed-research" ||
-        url.pathname === "/__research/seed-progress"
-      )
-        return env.ACCOUNT_THREADS.getByName(
-          ownerOfThread(url.searchParams.get("thread") ?? ""),
-        ).fetch(request);
       if (url.pathname === "/__research/journal") {
         const threadId = url.searchParams.get("thread") ?? "";
 
