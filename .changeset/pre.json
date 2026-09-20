@@ -273,6 +273,7 @@
     "tidy-browsers-roam",
     "tidy-clouds-listen",
     "tidy-memory-accounting",
+    "tidy-protected-browser-lifetime",
     "transient-native-rpc-tracing",
     "trusted-tool-failure-observer",
     "typed-agent-model-provision",

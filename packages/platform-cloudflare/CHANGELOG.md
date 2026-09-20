@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.122
+
+### Patch Changes
+
+- [#587](https://github.com/danieljvdm/effect-agent/pull/587) [`83fb830`](https://github.com/danieljvdm/effect-agent/commit/83fb83078a95a5fb60fffa0ea818dca98d4e88bd) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow callers to set finite browser pass allowances beyond one hour and keep retained protected sessions active with `BrowserRunProtectedHost.keepAlive(sessionId)`. Preserve unrestricted service-worker handling and distinguish failed-resume attachment retirement from uncertain local cleanup.
+
+- Updated dependencies [[`83fb830`](https://github.com/danieljvdm/effect-agent/commit/83fb83078a95a5fb60fffa0ea818dca98d4e88bd)]:
+  - effect-agent@0.1.0-beta.122
+  - @effect-agent/storage-cloudflare@0.1.0-beta.122
+
 ## 0.1.0-beta.121
 
 ### Patch Changes
