@@ -286,6 +286,14 @@ Unfinished input remains fenced until its SDK work settles or provider terminati
 Screenshots and scrolling operate on that same page, and explicit closure ends the pass early.
 Provider session identity and operator controls remain private host capabilities.
 
+**Browser Session**
+
+A host-owned Cloudflare browser, context, and page identified by a private, expiring reference.
+The application retains ownership through approval waits, corrections, and human takeover.
+Attempts borrow scoped local attachments with current authority; disconnecting an attachment
+preserves the remote session. The owner closes it at completion or expiry. Provider state remains
+ephemeral: a retained reference does not recreate an expired browser or make actions replayable.
+
 **Approval**  
 A policy decision that suspends or denies a proposed Tool Call before its Handler starts. Approval
 is not inferred from model prose.

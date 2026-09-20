@@ -40,18 +40,21 @@ The deployment credential stays in the local workflow. Only the account ID and t
 token enter the temporary Worker; deleting the Worker also removes that secret. Remote browser
 cleanup must confirm exact-session termination before the proof succeeds.
 
-After the general session closes, a fresh protected session uses ordinary Effect AI Tools with
-opaque references against this Worker's controlled `/protected/` fixtures. Two login layouts
-accept dummy credentials and return an authenticated dashboard; a same-origin iframe accepts a
-dummy card. The proof rejects a revoked offer, continues browsing without exposing field values,
-and requires confirmed exact-session cleanup. These public fixtures contain no real accounts,
-payments, vaults, or production authorization. The host trusts these recipients not to echo
-credentials and treats Cloudflare administrators/token holders as trusted operators.
+After the general session closes, a host-owned native session fills this Worker's controlled
+`/credentials/` fixtures through an ordinary Effect AI credential Tool. Two login layouts accept
+dummy credentials and return an authenticated dashboard; a same-origin iframe accepts a dummy
+card. The host supplies current grants and material. The proof rejects a revoked fill before
+dispatch, continues with ordinary page reads, disconnects and reattaches the same authenticated
+page, and requires confirmed exact-session cleanup. The proof owner retains its private reference
+in memory; a production owner commits that reference and its controller in durable storage.
+These public fixtures contain no real accounts, payments, vaults, or production authorization.
 
 The local native Chromium test also exercises different HTTPS origins and a cross-origin processor
 frame. The hosted proof uses one origin; it does not establish PCI compliance or secrecy against
 hostile recipients. Ordinary CI does not establish hosted-provider behavior: run the opt-in command
-with your account to verify it. Protected sessions never create a viewer, handoff, or recording.
+with your account to verify it. Native browser observations can reveal field values and page
+echoes; the credential helper does not filter subsequent page reads. Cloudflare administrators
+and token holders remain trusted operators. Session acquisition disables recording.
 
 A final ordinary session selects a synthetic PDF through a file input and a button that creates
 a chooser dynamically. The controlled multipart receiver computes SHA-256 from the received bytes;

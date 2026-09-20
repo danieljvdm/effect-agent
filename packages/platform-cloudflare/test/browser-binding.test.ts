@@ -1,4 +1,3 @@
-import { BrowserCrypto } from "@effect/platform-browser";
 import { expect, expectTypeOf, it } from "@effect/vitest";
 import {
   Cause,
@@ -12,9 +11,13 @@ import {
   Schema,
 } from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
-import { ProtectedBrowserError } from "effect-agent/protected-browser";
 import { TestClock } from "effect/testing";
 
+import {
+  BrowserSessionError,
+  BrowserSessionReference,
+  BrowserSessions,
+} from "../src/BrowserSession.ts";
 import {
   BrowserRunInteractiveBinding,
   BrowserRunInteractiveCheckpoint,
@@ -25,14 +28,6 @@ import {
 import { BrowserRunBinding } from "../src/internal/browser-binding.ts";
 import { browserFailure } from "../src/internal/browser-failure.ts";
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
-import {
-  BrowserRunProtectedBinding,
-  browserRunProtectedBindingLayer,
-} from "../src/protected-browser/binding.ts";
-import {
-  BrowserRunProtectedHost,
-  browserRunProtectedHostLayer,
-} from "../src/protected-browser/host.ts";
 
 const identity = {
   sessionId: Redacted.make("00000000-0000-4000-8000-000000000091"),
@@ -128,9 +123,8 @@ const endpoint = Effect.fnUntraced(function* (
 });
 
 const keepAliveHost = (browser: Pick<BrowserRun, "fetch">) =>
-  browserRunProtectedHostLayer().pipe(
-    Layer.provide(browserRunProtectedBindingLayer({ browser })),
-    Layer.provide(BrowserCrypto.layer),
+  BrowserSessions.layerNoDeps.pipe(
+    Layer.provide(BrowserRunBinding.layer(browser)),
     Layer.provide(
       Layer.succeed(BrowserRunSessionLifecycle, {
         close: () => Effect.die("Keepalive must never terminate the provider"),
@@ -145,9 +139,9 @@ it.effect(
       const fixture = yield* endpoint("success");
 
       yield* Effect.gen(function* () {
-        const call = (yield* BrowserRunProtectedHost).keepAlive(identity.sessionId);
+        const call = (yield* BrowserSessions).keepAlive(identity.sessionId);
 
-        expectTypeOf(call).toEqualTypeOf<Effect.Effect<void, ProtectedBrowserError>>();
+        expectTypeOf(call).toEqualTypeOf<Effect.Effect<void, BrowserSessionError>>();
         yield* call;
       }).pipe(Effect.provide(keepAliveHost(fixture.browser)));
       yield* Deferred.await(fixture.closed);
@@ -166,9 +160,7 @@ it.effect.each(["reject", "malformed", "disconnect"] as const)(
       const reports: Array<Cause.Cause<unknown>> = [];
 
       const error = yield* Effect.gen(function* () {
-        return yield* (yield* BrowserRunProtectedHost)
-          .keepAlive(identity.sessionId)
-          .pipe(Effect.flip);
+        return yield* (yield* BrowserSessions).keepAlive(identity.sessionId).pipe(Effect.flip);
       }).pipe(
         Effect.provide([
           keepAliveHost(fixture.browser),
@@ -185,7 +177,7 @@ it.effect.each(["reject", "malformed", "disconnect"] as const)(
       yield* Deferred.await(fixture.closed);
       expect(fixture.methods).toEqual(["Browser.getVersion"]);
       expect(reports).toHaveLength(1);
-      expect(JSON.stringify(reports)).toContain('"operation":"protected.keepAlive"');
+      expect(JSON.stringify(reports)).toContain('"operation":"session.keepAlive"');
       expect(JSON.stringify(reports)).toContain(
         `"reason":"${mode === "malformed" ? "malformed" : "provider"}"`,
       );
@@ -201,7 +193,7 @@ it.effect.each(["timeout", "interruption", "wrong-id"] as const)(
       const reports: Array<Cause.Cause<unknown>> = [];
 
       const attempt = yield* Effect.gen(function* () {
-        yield* (yield* BrowserRunProtectedHost).keepAlive(identity.sessionId);
+        yield* (yield* BrowserSessions).keepAlive(identity.sessionId);
       }).pipe(
         Effect.provide([
           keepAliveHost(fixture.browser),
@@ -242,7 +234,7 @@ it.effect.each(["upgrade", "refusal", "defect"] as const)(
       const reports: Array<Cause.Cause<unknown>> = [];
 
       const attempt = yield* Effect.gen(function* () {
-        yield* (yield* BrowserRunProtectedHost).keepAlive(identity.sessionId);
+        yield* (yield* BrowserSessions).keepAlive(identity.sessionId);
       }).pipe(
         Effect.provide([
           keepAliveHost({
@@ -291,11 +283,11 @@ it.effect.each(["upgrade", "refusal", "defect"] as const)(
 
 it.effect("refuses an invalid keepalive identity before contacting the provider", () =>
   Effect.gen(function* () {
-    const error = yield* (yield* BrowserRunProtectedHost)
+    const error = yield* (yield* BrowserSessions)
       .keepAlive(Redacted.make("../not-a-session"))
       .pipe(Effect.flip);
 
-    expect(error).toMatchObject({ reason: "denied", cleanup: "not-requested" });
+    expect(error).toMatchObject({ reason: "invalid", cleanup: "not-requested" });
   }).pipe(
     Effect.provide(
       keepAliveHost({
@@ -316,7 +308,7 @@ it.effect("connects through a Workers upgrade and releases only the attachment",
     );
 
     const browser = yield* native(
-      () => binding.connect(Redacted.value(identity.sessionId), "protected.connect").browser,
+      () => binding.connect(Redacted.value(identity.sessionId), "session.connect").browser,
     );
 
     expect(browser.browserContexts().map((context) => context.id)).toContain("retained-context");
@@ -338,7 +330,7 @@ it.effect("retires SDK pending callbacks before acknowledging raw attachment clo
       Effect.provide(BrowserRunBinding.layer(fixture.browser)),
     );
 
-    const attachment = binding.connect(Redacted.value(identity.sessionId), "protected.connect");
+    const attachment = binding.connect(Redacted.value(identity.sessionId), "session.connect");
     const browser = yield* native(() => attachment.browser);
     const pending = yield* native(() => browser.version()).pipe(Effect.flip, Effect.forkChild);
 
@@ -368,10 +360,10 @@ it.effect("releases the raw attachment when client initialization rejects", () =
     );
 
     const failure = yield* native(
-      () => binding.connect(Redacted.value(identity.sessionId), "protected.connect").browser,
+      () => binding.connect(Redacted.value(identity.sessionId), "session.connect").browser,
     ).pipe(Effect.flip);
 
-    expect(failure).toMatchObject({ operation: "protected.connect", reason: "provider" });
+    expect(failure).toMatchObject({ operation: "session.connect", reason: "provider" });
     expect(ErrorReporter.isIgnored(failure)).toBe(false);
     expect(JSON.stringify(failure)).not.toContain("private-provider-detail");
     expect(fixture.socket.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
@@ -407,20 +399,20 @@ it.effect.each(["refusal", "defect", "upgrade", "close-failure"] as const)(
         });
       }
 
-      const layer = browserRunProtectedBindingLayer({
-        browser: {
-          fetch: async (input, init) => {
-            Effect.runSync(Deferred.succeed(started, undefined));
-            await Effect.runPromise(Deferred.await(respond));
-            if (mode === "defect") throw new TypeError("private-late-provider-detail");
-            if (mode === "upgrade" || mode === "close-failure")
-              return fixture.browser.fetch(input, init);
+      const layer = BrowserSessions.layerNoDeps.pipe(
+        Layer.provide(
+          BrowserRunBinding.layer({
+            fetch: async (input, init) => {
+              Effect.runSync(Deferred.succeed(started, undefined));
+              await Effect.runPromise(Deferred.await(respond));
+              if (mode === "defect") throw new TypeError("private-late-provider-detail");
+              if (mode === "upgrade" || mode === "close-failure")
+                return fixture.browser.fetch(input, init);
 
-            return new Response("private-late-provider-detail", { status: 503 });
-          },
-        },
-      }).pipe(
-        Layer.provide(BrowserCrypto.layer),
+              return new Response("private-late-provider-detail", { status: 503 });
+            },
+          }),
+        ),
         Layer.provide(
           Layer.succeed(BrowserRunSessionLifecycle, {
             close: () => Effect.die("A failed resume must not terminate the retained provider"),
@@ -429,14 +421,13 @@ it.effect.each(["refusal", "defect", "upgrade", "close-failure"] as const)(
       );
 
       const attempt = yield* Effect.gen(function* () {
-        return yield* (yield* BrowserRunProtectedBinding).open(
-          InteractiveBrowserPolicy.make({
-            network: { _tag: "Unrestricted" },
-            maxActions: 10,
-            maxElapsedMillis: 60_000,
-            maxReturnedBytes: 16_384,
+        return yield* (yield* BrowserSessions).attach(
+          BrowserSessionReference.make({
+            ...identity,
+            version: 1,
+            expiresAt: 120_000,
+            commandTimeoutMillis: 30_000,
           }),
-          identity,
         );
       }).pipe(
         Effect.scoped,
@@ -466,8 +457,8 @@ it.effect.each(["refusal", "defect", "upgrade", "close-failure"] as const)(
       expect(reports).toHaveLength(1);
       expect(JSON.stringify(reports)).toContain(
         mode === "close-failure"
-          ? '"operation":"protected.disconnect"'
-          : '"operation":"protected.connect"',
+          ? '"operation":"session.disconnect"'
+          : '"operation":"session.connect"',
       );
       expect(JSON.stringify(reports)).toContain(
         mode === "refusal" ? '"status":503' : '"name":"TypeError"',
@@ -485,8 +476,8 @@ it.effect.each(["timeout", "interruption"] as const)(
       const reports: Array<Cause.Cause<unknown>> = [];
       let terminations = 0;
 
-      const layer = browserRunProtectedBindingLayer({ browser: fixture.browser }).pipe(
-        Layer.provide(BrowserCrypto.layer),
+      const layer = BrowserSessions.layerNoDeps.pipe(
+        Layer.provide(BrowserRunBinding.layer(fixture.browser)),
         Layer.provide(
           Layer.succeed(BrowserRunSessionLifecycle, {
             close: () =>
@@ -498,14 +489,13 @@ it.effect.each(["timeout", "interruption"] as const)(
       );
 
       const attempt = yield* Effect.gen(function* () {
-        return yield* (yield* BrowserRunProtectedBinding).open(
-          InteractiveBrowserPolicy.make({
-            network: { _tag: "Unrestricted" },
-            maxActions: 10,
-            maxElapsedMillis: 60_000,
-            maxReturnedBytes: 16_384,
+        return yield* (yield* BrowserSessions).attach(
+          BrowserSessionReference.make({
+            ...identity,
+            version: 1,
+            expiresAt: 120_000,
+            commandTimeoutMillis: 30_000,
           }),
-          identity,
         );
       }).pipe(
         Effect.scoped,
@@ -562,8 +552,8 @@ it.effect.each(["throws", "unacknowledged"] as const)(
         },
       });
 
-      const layer = browserRunProtectedBindingLayer({ browser: fixture.browser }).pipe(
-        Layer.provide(BrowserCrypto.layer),
+      const layer = BrowserSessions.layerNoDeps.pipe(
+        Layer.provide(BrowserRunBinding.layer(fixture.browser)),
         Layer.provide(
           Layer.succeed(BrowserRunSessionLifecycle, {
             close: () => Effect.die("Failed resume must not DELETE the retained browser"),
@@ -572,14 +562,13 @@ it.effect.each(["throws", "unacknowledged"] as const)(
       );
 
       const attempt = yield* Effect.gen(function* () {
-        return yield* (yield* BrowserRunProtectedBinding).open(
-          InteractiveBrowserPolicy.make({
-            network: { _tag: "Unrestricted" },
-            maxActions: 10,
-            maxElapsedMillis: 60_000,
-            maxReturnedBytes: 16_384,
+        return yield* (yield* BrowserSessions).attach(
+          BrowserSessionReference.make({
+            ...identity,
+            version: 1,
+            expiresAt: 120_000,
+            commandTimeoutMillis: 30_000,
           }),
-          identity,
         );
       }).pipe(
         Effect.scoped,
@@ -602,12 +591,12 @@ it.effect.each(["throws", "unacknowledged"] as const)(
         exit.cause.reasons.some(
           (reason) =>
             Cause.isFailReason(reason) &&
-            Schema.is(ProtectedBrowserError)(reason.error) &&
+            Schema.is(BrowserSessionError)(reason.error) &&
             reason.error.reason === "timeout" &&
             reason.error.cleanup === "not-requested",
         ),
       ).toBe(true);
-      expect(JSON.stringify(reports)).toContain('"operation":"protected.disconnect"');
+      expect(JSON.stringify(reports)).toContain('"operation":"session.disconnect"');
       expect(JSON.stringify(reports)).not.toContain("private-local-close-detail");
       expect(fixture.methods).toEqual(["Target.getBrowserContexts"]);
       expect(fixture.socket.readyState).toBe(WebSocket.OPEN);
@@ -712,13 +701,13 @@ it.effect.each(["refused", "missing-socket"] as const)(
       );
 
       const failure = yield* native(
-        () => binding.connect(Redacted.value(identity.sessionId), "protected.connect").browser,
+        () => binding.connect(Redacted.value(identity.sessionId), "session.connect").browser,
       ).pipe(Effect.flip);
 
       expect(failure).toMatchObject(
         mode === "refused"
-          ? { operation: "protected.connect", reason: "provider", status: 403 }
-          : { operation: "protected.connect", reason: "malformed" },
+          ? { operation: "session.connect", reason: "provider", status: 403 }
+          : { operation: "session.connect", reason: "malformed" },
       );
       expect(JSON.stringify(failure)).not.toContain("private-cancellation-detail");
       expect(cancelled).toBe(mode === "refused");

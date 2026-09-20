@@ -6,23 +6,24 @@ description: Capture rendered pages, crawl Markdown, and run bounded interactive
 # Browser tools
 
 Give an agent rendered page text, extract records, collect a site's Markdown, or let an operator
-watch an interactive browser pass. The browser services return bounded, Schema-defined results;
-your application supplies Cloudflare bindings or credentials.
+watch an interactive browser pass. Your application supplies Cloudflare bindings or credentials,
+authorizes actions, and chooses the data its Tools return.
 
 Start with a stateless capture for one page. Choose a crawl only when the task needs a bounded set
 of same-host pages. Use an interactive pass only when navigation or page actions are essential.
 
-| Need                                                                  | Choose                                | Where it runs                     | What the application provides                          |
-| --------------------------------------------------------------------- | ------------------------------------- | --------------------------------- | ------------------------------------------------------ |
-| Render one URL as Markdown, scrape selectors, or take a PNG           | **Quick Actions**                     | A Cloudflare Worker               | A Browser Run binding                                  |
-| Render Markdown, links, selector groups, or structured data from Node | **REST capture**                      | Any host with Effect `HttpClient` | Cloudflare account ID and API token                    |
-| Crawl a site into bounded rendered Markdown records                   | **REST crawl**                        | Any host with Effect `HttpClient` | Account ID, API token, and a Scope                     |
-| Navigate, read, click, fill, scroll, or capture one active page       | **Interactive Browser**               | A Cloudflare Worker               | Browser binding, lifecycle token, and Puppeteer        |
-| Let an operator inspect or take over an active pass                   | **Interactive Browser host controls** | A trusted Cloudflare Worker host  | A Browser Run API token, kept private                  |
-| Fill host-owned login or card credentials and continue browsing       | **Protected Browser**                 | A trusted Cloudflare Worker host  | Private vault/grants, browser binding, lifecycle token |
+| Need                                                                  | Choose                                | Where it runs                     | What the application provides                                      |
+| --------------------------------------------------------------------- | ------------------------------------- | --------------------------------- | ------------------------------------------------------------------ |
+| Render one URL as Markdown, scrape selectors, or take a PNG           | **Quick Actions**                     | A Cloudflare Worker               | A Browser Run binding                                              |
+| Render Markdown, links, selector groups, or structured data from Node | **REST capture**                      | Any host with Effect `HttpClient` | Cloudflare account ID and API token                                |
+| Crawl a site into bounded rendered Markdown records                   | **REST crawl**                        | Any host with Effect `HttpClient` | Account ID, API token, and a Scope                                 |
+| Navigate, read, click, fill, scroll, or capture one active page       | **Interactive Browser**               | A Cloudflare Worker               | Browser binding, lifecycle token, and Puppeteer                    |
+| Let an operator inspect or take over an active pass                   | **Interactive Browser host controls** | A trusted Cloudflare Worker host  | A Browser Run API token, kept private                              |
+| Keep one page through approval, credentials, and human takeover       | **Browser Sessions**                  | A trusted Cloudflare Worker host  | Durable owner, current authority, browser binding, lifecycle token |
 
-Browser output is untrusted input. Validate model-selected URLs against your host policy and keep
-credentials, handles, Live View URLs, and handoff identities out of model Tools and agent journals.
+Browser output is untrusted input. Validate model-selected URLs against your host policy. Resolve
+vault credentials in the host; keep provider handles, Live View URLs, and handoff identities out of
+model Tools and agent journals.
 
 In your application, install the browser adapters:
 
@@ -398,241 +399,109 @@ containing that node. Guarded click and fill validate and dispatch on the node i
 guarded click uses native DOM click semantics rather than pointer coordinates.
 Human handoff receipts remain host-owned; `getHandoffState` queries the reattached provider page.
 
-## Protected login and card filling
+## Keep a browser across attempts {#browser-sessions}
 
-`ProtectedBrowser` is a separate private pass, not an upgrade of an interactive session. Import
-`browserRunProtectedLayer` and `browserRunProtectedBindingLayer` from
-`@effect-agent/platform-cloudflare/protected-browser`. Provide the binding Layer, the same
-`BrowserRunSessionLifecycle` used above, and an invocation-specific `BrowserCredentialAccess`.
-Use `ExactHosts` for a fixed network allowlist. `Unrestricted` is an explicit host choice;
-`PublicWeb` is unsupported. Credential grants never expand network policy.
-`Unrestricted` preserves normal service-worker and request handling; only restricted passes
-install request interception and bypass service workers.
+`BrowserSessions` keeps one native Cloudflare page under host ownership while scoped attachments
+come and go. The same page can survive an approval wait, a correction, or human takeover.
 
-The host access service owns caller authentication, vault lookup, current grants, and recipient
-trust. Derive caller identity from the authorized invocation, never model arguments or possession
-of an offer. `list` authorizes only bounded display metadata, such as a label, brand, last four
-digits, and optional plaintext `billingAddress`, not vault keys or credentials. Include address
-metadata only when the caller may see it for the authorized checkout. `authorize` checks current ownership, purpose, field roles,
-submission permission, and exact canonical HTTPS top-level, frame, and form-recipient origins,
-including non-default ports. Card grants must match both merchant and processor/frame. `resolve`
-returns Schema-validated `Redacted` material after those checks; authorization repeats before each
-field write and submission. Host services must never put material in logs, defects, or traces.
+```text
+Host owner ── retains ──> Cloudflare browser
+Attempt ── authorized attachment ──> same browser
+Human   ── authorized Live View  ──> same browser
+```
 
-The runtime protocol needs no site-specific selectors:
+Import `BrowserSessions` from `@effect-agent/platform-cloudflare/browser-session`. Provide
+`BrowserSessions.layer({ browser: env.BROWSER, accountId, apiToken })` and `FetchHttpClient.layer`.
+The binding runs native browser commands; the private API token permits exact-session cleanup.
 
-1. `navigate` to a host-authorized HTTPS URL, then `observe` bounded text and native controls.
-2. Select discovered field references and request `listCredentialOffers({ kind, target })`.
-3. Propose `useCredential({ offer, fields, submit? })` with only opaque refs and field roles.
-4. Continue with `observe`, `navigate`, `fill`, or `click` under the post-exposure observation grant.
+```ts twoslash
+import {
+  BrowserSessions,
+  type BrowserSessionReference,
+} from "@effect-agent/platform-cloudflare/browser-session";
+import { Effect } from "effect";
 
-`fill(ProtectedBrowserFill.make({ ref, value }))` accepts up to 8,192 characters of non-secret text
-for a discovered `text` or `select` control. Empty text clears a text field. Ordinary selects expose
-`options` with visible `label`, `selected`, and `disabled` state; raw option values remain private.
-Fill with one enabled option's exact observed label. Ambiguous, disabled, or missing labels are
-unsupported; raw values and approximate labels are not a fallback. The first 256 choices are
-inspected, and labels longer than 200 characters are omitted rather than shortened. Omitted choices
-set the observation's `truncated` flag. A confirmed refusal before assignment performs no write and
-keeps the same pass available; a lost reply or failure after assignment retains conservative cleanup.
-Ordinary inputs and textareas need no form. Credential roles, including username, remain exclusive
-to `useCredential`; never supply secrets to ordinary fill. Credential selects match private values
-and expose neither choices nor selection.
-`click` also accepts native `radio` and `checkbox` controls, whose observations include `checked`.
-Native submit clicks require the host's optional `BrowserCredentialAccess.authorizeAction` hook.
-When present, this hook runs before **every** ordinary navigation, fill, and click, with
-`{ caller, action, exposures }`. `action._tag` is `Navigate`, `Fill`, `Click`, or `Submit`;
-navigation includes its URL, while control actions include the current opaque ref, exact target,
-and role (implicit for Submit). Link observations and `Click` actions with role `link` also include
-the resolved HTTPS destination `url`; their `target.recipientOrigin` is the destination origin.
-The native fingerprint pins the full destination, including changes to `href` or the document base,
-and the policy checks it again after authorization. Fill values are omitted. Recheck user intent, caller ownership,
-current grants for every prior exposure, and the requested merchant/frame/recipient target.
-The policy rechecks caller and target after authorization returns. No authorization is cached.
+declare const retain: (reference: BrowserSessionReference) => Effect.Effect<void>;
+declare const authorize: Effect.Effect<void>;
 
-This allows a merchant `Submit` after separate processor-frame credential fills: each prior
-target appears in `exposures`, while the submit has its own merchant target. Without the hook,
-native submit clicks remain unsupported and ordinary actions retain their observation gate.
-For a submit in the same credential form, `useCredential({ offer, fields, submit })` supports both
-login and card offers through the existing `authorize` call with `submit: true`.
-Fill and click can trigger page handlers and side effects; authorize them in the host.
-They share the private pass lock, limits, and failure cleanup.
+const startBrowser = Effect.gen(function* () {
+  const sessions = yield* BrowserSessions;
+  const reference = yield* sessions.create({ maxElapsedMillis: 3_600_000 }, retain);
 
-References bind actual nodes, documents, frames, forms, and roles. Node replacement, changed
-form/action/role, frame navigation, rediscovery, or 60 seconds of elapsed time invalidates them.
-Offers expire after 60 seconds, are single-use, and bind caller, kind, and target. Listing reclaims
-expired offers from the 64-offer session capacity; failed lists retain no new offers. A private lock
-spans checks, resolution, mutation, and post-use checks; competing operations return `busy`.
-The adapter uses an isolated browser world and native setters, not model-provided JavaScript.
-
-Supported controls are native username/email/password inputs, native login form submission, and
-standard `cc-*` card fields, including native selects. Credential fields must have an associated
-native form, either by containment or an explicit `form` attribute. Standalone credential fields are unsupported.
-Inspection rejects action URLs or fingerprint attributes longer than 2,048 characters inside the
-browser before serialization; fingerprints remain in the browser. HTTPS frames may be same- or cross-origin
-when every involved origin is allowed. Blank and opaque child frames are omitted from observations
-and cannot supply references. The main document still requires a valid HTTPS origin. Popups, shadow/custom controls, CAPTCHA,
-OTP, passkeys, wallets, and 3DS have no automation fallback. Invalid native form requirements
-produce `needs-attention`. Card filling without an explicit submit does not dispatch native form submission. Filling can itself execute page
-handlers and cause side effects, which the host must authorize.
-
-### Protection and recipient trust
-
-Secrets enter only the private browser transport, not Tool arguments/results, normal errors,
-traces, checkpoints, or journals. The handle exposes no selectors, JavaScript, screenshot, Live
-View, DevTools, handoff, or provider identity. A fresh session is acquired with `recording=false`
-explicitly on the wire. This relies on Cloudflare's opt-in recording behavior; no independent
-recording-enabled attestation endpoint exists.
-
-Cloudflare account administrators and Browser Rendering token holders are trusted operators.
-Only an explicitly authorized human may receive the hosted takeover described below. Do not attach
-other viewers, DevTools, recordings, or observers to private sessions.
-Protection does not extend to those operators or a compromised provider. Expiring a viewer URL
-does not remove the human’s access to information already seen. A returned protected session
-retains human-exposure authority and requires renewed recipient trust before observation.
-
-After any possibly dispatched secret write, every observation and non-secret action requires
-`observation` to approve current origins and prior exposures. The string
-`trust-recipient-no-credential-echo` trusts all current HTTPS observation origins. To select only
-host-authorized recipients, return:
-
-```ts
-CredentialObservationGrant.make({
-  decision: "trust-recipient-no-credential-echo",
-  origins: ["https://merchant.example", "https://processor.example"],
+  return yield* Effect.gen(function* () {
+    const session = yield* sessions.attach(reference);
+    return yield* session.run(authorize, async (page) => {
+      await page.goto("https://example.com/");
+      return await page.title();
+    });
+  }).pipe(Effect.scoped);
 });
 ```
 
-The current top origin must be included. Excluded frames supply neither text nor usable refs;
-expanding a later grant cannot revive discarded refs. The hook receives all current frame origins
-on every check, so the host can reconsider selection. If trust narrows during discovery, the result
-is withheld. Origin selection never widens network policy, grants credential use, or authorizes
-submission. The library never infers trust from prior card exposures.
+`retain` commits the private reference to the application's existing durable owner. Creation
+attempts exact-session cleanup if that commit fails. Keep references outside Tool results and agent journals.
+The reference identifies the exact provider session, context, and page, with a fixed expiry.
+Attachment never creates a replacement page.
 
-This explicitly trusts the recipient not to echo raw, encoded, transformed, or delayed credentials.
-It is not universal secrecy against hostile pages. Discovery omits input values, but DOM scrubbing
-and substring redaction cannot make arbitrary pages safe. Denial blocks observation before reading
-page text. The same private context retains authenticated state; no cookie export or general-browser
-conversion occurs. Request interception does not contain every worker, socket, or page network path.
-Only use recipients the host is willing to trust with the material.
+The owner retains the reference and remains responsible for cleanup after an attachment's Scope
+exits. Attachments disconnect locally; they do not transfer ownership or close the remote browser.
+At task completion, cancellation, or expiry, the owner calls `sessions.close(reference.sessionId)`
+and reconciles unconfirmed cleanup. An Attempt may supply current authority and borrow an
+attachment through `attemptLayer`; its end does not require a browser checkpoint or handoff.
 
-### Lifetime, evidence, and recovery
+Every `session.run(authorize, action)` checks the supplied Effect before invoking native Puppeteer
+code. Recheck the current controller and grants there. The application owns network restrictions,
+bounded Tool results, and durable receipts for external actions. Native callbacks are trusted host
+code: await every SDK operation and never accept model-provided JavaScript. A settled native SDK
+rejection leaves the session available for inspection, with uncertain dispatch evidence. Inspect
+and reconcile the page before deciding what to do next; never automatically replay that operation.
+Unfinished commands interrupted by timeout or cancellation, uncertain credential writes, and
+uncertain handoffs fence and terminate the session. Confirmed cleanup does not undo website effects.
 
-`browserRunProtectedLayer()` requires the transport and `Crypto.Crypto`;
-`browserRunProtectedBindingLayer({ browser })` requires `BrowserRunSessionLifecycle` and
-`Crypto.Crypto`. Supply `BrowserCrypto.layer` from `@effect/platform-browser` at the Worker
-composition root. Time comes from Effect's `Clock`, including native field-reference expiry.
-The native adapter acquires its browser/page and cleanup authority from one scoped private
-`ProtectedNativeSession`. Its typed Effect transport decodes SDK output before returning it to
-the policy, and each credential write requires the policy's `ProtectedBrowserDispatch` service.
+For human control, fence agent dispatch in the owner, then use the attachment's `handoff`,
+`getLiveView`, and `getHandoffState` methods with current operator authorization. Keep Live View
+URLs private to the authorized recipient. Before returning to agent control, verify the recorded
+handoff completed and inspect the current page under the new controller's authority.
 
-Build `ProtectedBrowserSession.layer(policy)` once around an execution and provide it to native
-Effect AI Toolkit handlers. Its lazy `get` shares one handle across successive Tool calls. Do not
-scope each Tool separately or put caller/vault/session state in a process or Durable Object singleton.
-The [compiled consumer example](https://github.com/danieljvdm/effect-agent/blob/main/tooling/browser-run-worker-proof/src/protected-browser.ts)
-shows handlers and dummy grants.
+Cloudflare may expire an idle session before the application's deadline. The owner's existing
+alarm can call `sessions.keepAlive(reference.sessionId)` while the session remains authorized;
+this neither extends the reference's expiry nor restores an expired browser. See
+[session options](../reference/packages#browser-session-options) for bounds and defaults.
 
-For durable execution, put the handlers and session Layer in `AgentRegistration.attemptLayer`.
-Its factory receives trusted `threadId`, `submissionId`, and `attemptId`; use these to resolve the
-authorized invocation. The Layer spans all Tool/model turns of one fenced Attempt and finalizes on
-completion, suspension, failure, or interruption. A replacement Attempt builds fresh services.
-Keep fallible browser acquisition in `session.get`, not Layer construction. No additional browser
-Durable Object or persisted browser-session record is needed.
+### Fill login or card credentials
 
-For approval waits that retain the same page, provide
-[`DurableApprovalSuspension`](../concepts/durability#retain-resources-while-awaiting-approval) from
-the same attempt Layer, using the host's existing checkpoint and handoff operation.
+Use `session.fillCredential(request)` on that same page. Import its schemas and
+`BrowserCredentialAccess` from `@effect-agent/platform-cloudflare/browser-credentials`.
+Each call requires current invocation authority: the host authorizes the actual top-page,
+frame, and form-recipient origins and resolves redacted credential material from its vault.
+Bind the invocation's caller and credential identifier to one vault item; repeated authorization
+checks consult that item's current grants.
 
-Credential Tools are ordinary effectful Tools. Do not mark them readonly or idempotent. Host
-resource authorization still applies to brokered calls. The existing prepared/settled journal
-governs recovery; Code Mode treats the entire generated program as uncertain:
-an unresolved mutation is never automatically replayed after ownership loss. Old refs fail in a
-replacement Attempt; the application/operator must reconcile an uncertain external outcome.
+A `FillCredentialRequest` contains an opaque credential identifier, `kind`, an optional iframe
+selector path, and explicit `{ selector, role }` fields. All selected fields must belong to one
+native form. Use separate calls for separate forms or processor frames. The helper fills supported
+native controls; it does not infer fields or submit the form. Authorize filling itself because
+the site's input/change handlers may send data immediately. Submission remains an ordinary,
+separately authorized browser action.
 
-`CredentialUseResult` and `ProtectedBrowserError` report independent `dispatch`, `milestone`,
-`observation`, and `cleanup` fields. `filled` proves acknowledged writes, not authentication;
-`submission-dispatched` proves dispatch, not login success. `authentication` is always `unverified`.
-Check an approved authenticated page separately. `possibly-dispatched` can coexist with
-`partial-fill` and confirmed cleanup: closure does not undo effects. Provider defects are sanitized;
-failures after dispatch and cancellation invalidate and close the pass, except for recoverable `busy`
-after acknowledged actions. Uncertain dispatch, interruption, provider failure, and timeout still
-close the pass. Close waits for exact-session
-termination/absence and reports `unconfirmed` when it cannot prove cleanup. Logs contain only a
-fixed cleanup warning, never provider diagnostics or secret-bearing page data.
+Credential material stays out of fill arguments, results, logs, and traces. The browser is allowed
+to display it: subsequent native observations, screenshots, and page content follow the host's
+ordinary disclosure policy. There is no protected observation mode or promise to scrub page echoes.
 
-Any `BrowserCredentialAccess` hook may fail with `new CredentialAccessError({ reason: "busy" })`
-while host authority is temporarily unavailable. Return promptly when accepted input needs the
-current Tool batch to finish; waiting inside the hook would prevent that input from being applied.
-The operation stops before the next field or submit, retains known `dispatched` and
-`partial-fill`/`filled` evidence, and keeps the same pass usable once authority resumes. Check current
-intent and dispatch evidence before proposing another action; `busy` never retries an action or
-reuses a consumed credential offer.
+`CredentialFillResult.filled` counts acknowledged assignments. It proves neither authentication
+nor payment acceptance. Inspect the site's result separately. An error's dispatch, filled count,
+and cleanup retain partial-write and termination evidence; an uncertain fill must not be retried
+automatically. Confirmed cleanup does not undo website effects.
 
-### Durable human takeover
+The [runnable Worker proof](https://github.com/danieljvdm/effect-agent/blob/main/tooling/browser-run-worker-proof/src/credentials.ts)
+uses dummy credentials, continues with ordinary observations, and reattaches the same session.
 
-Use the host-only `BrowserRunProtectedHost` from `@effect-agent/platform-cloudflare/protected-browser`
-when a workflow pause or human takeover must retain the **same** protected page. Compose `browserRunProtectedHostLayer()`
-with `browserRunProtectedBindingLayer`, `BrowserRunSessionLifecycle`, and `BrowserCrypto.layer`.
-Its `open(policy)` and `resume(checkpoint)` require an invocation-specific `BrowserCredentialAccess`
-and `Scope`. Keep the returned `session.handle` as the only agent capability.
+### Replace the removed Protected Browser API
 
-The application owns controller generations, authorized human recipients, operation receipts,
-checkpoint integrity, and expiry cleanup. These are required host responsibilities:
-
-1. Fence the agent and call `session.suspend`. Atomically persist its schema-encoded
-   `BrowserRunProtectedCheckpoint` with the workflow continuation and the host’s own
-   credential exposure ledger. Call `session.detach` only after that durable commit.
-2. The receiving host calls `resume(checkpoint)`. It remains quiesced. For an information pause,
-   restore the current worker’s authority and call `returnControl`, then `handle.observe` before
-   acting. This does not start or query a provider handoff. An authorized human’s
-   takeover calls `handoff(request)` and persists the updated checkpoint, which now includes a
-   handoff ID. Only then expose a short-lived `getLiveView(request)` URL to that specific human.
-3. Query `getHandoffState` and require completion before committing Return. If the host needs
-   the page’s current origin for its return policy, call `getReturnOrigin`; it reads only the
-   provider’s current top origin after that handoff completes and leaves agent tools paused.
-   Transfer the latest checkpoint and original credential exposure ledger to the continuing worker under a new
-   controller generation. Detach the old attachment before resuming another.
-4. Resume with the current worker’s credential authority and call `returnControl`. For a recorded
-   human handoff, the provider must report that same handoff completed. Return completes controller
-   bookkeeping without reading page data or requesting observation authority. The agent must
-   successfully `observe` before page actions or credential operations. The host’s `observation` hook
-   must approve current origins; it receives `humanExposure` and `humanOrigins` captured before
-   human takeover, even when no vault credential was used. Pending or denied authority keeps page
-   data and actions blocked while the same returned session remains available.
-
-Suspension does not itself mark human exposure. A checkpoint retains the original policy,
-start time, action usage, credential-exposure targets, and independent dispatch evidence. It holds
-redacted provider/session/page identities, but no credentials, cookies, page content, offers, or
-usable control references. Keep it in private host storage, never Tool results or the agent journal.
-The host’s item/revision/owner exposure ledger remains application-owned and must be restored too.
-A serialized checkpoint is not authorization: resume only the latest generation’s committed receipt.
-
-Resume attaches the exact saved browser context and page; missing or expired sessions fail instead
-of creating a replacement. A failed attachment releases its local connection without terminating
-the host's retained session; the host keeps responsibility for its checkpoint and expiry cleanup.
-A pure pre-handle `provider` failure with `not-dispatched`/`none`/`not-requested` evidence confirms
-that SDK initialization never started or its local attachment has retired and its socket closed.
-The owner can atomically restore its prior suspended claim. A mixed defect or interruption does
-not give that guarantee; inspect the complete failure cause. This does not prove provider health
-or undo commands already sent. Errors after a handle was returned do not qualify.
-All old refs and offers are invalidated. Detached tool handles cannot
-close or act on the transferred session. Ordinary scope release still terminates an attached
-session. An uncertain handoff closes the exact session and never produces a resumable receipt;
-ordinary uncertain browser mutations remain non-replayable.
-
-Hosted takeover requires `Unrestricted` network policy because attachment-local interception
-cannot enforce `ExactHosts` while detached. Current origin-specific credential and observation
-grants still apply. Set `maxElapsedMillis` from the task's finite total allowance. The original
-elapsed deadline includes human time and workflow pauses; activity does not reset it. Applications
-may enforce a separate sliding idle expiry without rewriting the checkpoint's start time.
-Cloudflare’s shorter idle expiry may end the session first. The host must reconcile expiry and perform exact-session cleanup
-with `closeSession`. This API does not add popup, wallet, passkey, or 3DS automation support.
-
-While a retained pass remains authorized, the application's existing alarm can call
-`host.keepAlive(sessionId)` within the provider's idle window. It acknowledges one
-`Browser.getVersion` command through a short connection, then disconnects. It does not attach to
-a page, transfer control, change the checkpoint, or extend the application's expiry. The call is
-bounded to ten seconds and releases only its own connection on failure or interruption; the host
-still owns reconciliation and cleanup. Keepalive does not restore an expired provider session.
+The `/protected-browser` APIs and transfer checkpoints have been removed. Move browser ownership
+to the host and use `/browser-session` plus `/browser-credentials`. Existing protected checkpoints
+are not new session references: close or reconcile their provider sessions through the owning
+application, then create a fresh session. Preserve existing operation and cleanup evidence.
 
 ## Limits, cleanup, and network boundaries
 
@@ -671,14 +540,6 @@ browser termination. Provider navigation/readiness limits remain important. The 
 retry that RPC. Tests with a scripted binding establish local waiting and reader cleanup only;
 hosted provider lifecycle behavior requires separate live evidence.
 
-The protected Cloudflare binding requests at most ten minutes of provider idle keep-alive,
-independently of the total pass deadline. A longer policy permits active work; it does not promise
-that an idle browser will remain available for the full allowance or reconnect an expired session.
-Cloudflare supports longer retention only while commands arrive within that inactivity window;
-detached approval waits need application-owned keepalive calls. See
-[provider session limits](https://developers.cloudflare.com/browser-run/limits/) and the
-[Durable Object example](https://developers.cloudflare.com/browser-run/how-to/browser-run-with-do/).
-
 These caps do not authorize the destination, protect every network path, or make provider actions
 replay-safe. Keep an application allowlist for stateless capture; choose the interactive network
 policy that matches the actual isolation guarantee; and treat all rendered data as untrusted.
@@ -703,13 +564,13 @@ Set the initial `viewport` on `BrowserRunInteractiveBinding.layer` or use the ho
 Mobile, touch, and orientation options are unsupported. Resizing consumes no agent action but
 remains subject to the pass deadline and lock. Authorize viewport changes in your host.
 
-Durable hosts should call `host.acquire(policy)`, persist the returned private `sessionId`,
+For `BrowserRunInteractiveHost`, call `host.acquire(policy)`, persist the returned private `sessionId`,
 then run `acquisition.connect`. The acquisition owns the browser in its original Scope even
 if connection or page setup fails; connection is attempted at most once. `host.open(policy)`
 combines these steps for callers that do not need a persistence boundary. Acquisition failures
 without an identity remain indeterminate unless the provider conclusively refused allocation.
 
-Install an Effect `ErrorReporter` in the invocation runtime to capture recovered protected-browser
+Install an Effect `ErrorReporter` in the invocation runtime to capture recovered browser
 and cleanup failures. Adapters report only source-authored stages, failure categories, and HTTP
 statuses, including work that settles after interruption. Public errors retain dispatch and cleanup
 evidence without provider text or session capabilities. In-process public projections carry
@@ -727,8 +588,9 @@ describe action timing and lifecycle details.
 The repository includes an [opt-in temporary deployment proof](https://github.com/danieljvdm/effect-agent/tree/main/tooling/browser-run-worker-proof).
 It exercises the hosted Browser Run binding with Markdown capture, selector scrape, PNG screenshot,
 an interactive pass, a short Live View, and a short handoff. After closing that session it opens a
-fresh protected pass, exercises two dummy login layouts and a card frame, checks revocation and
-authenticated continuation, confirms cleanup, then deletes the temporary Worker.
+host-owned session, fills two dummy login layouts and a card frame through a credential Tool,
+checks current grants and authenticated continuation across reattachment, confirms cleanup, then
+deletes the temporary Worker.
 It needs Cloudflare credentials and is not a turnkey application or a durable browser-session
 solution. Its README documents the environment variables and the explicit command.
 

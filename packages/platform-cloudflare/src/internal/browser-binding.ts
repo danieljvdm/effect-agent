@@ -40,7 +40,7 @@ export class BrowserRunBinding extends Context.Service<
   {
     readonly acquire: (
       keepAliveMillis: number,
-      operation: "protected.acquire" | "interactive.acquire",
+      operation: "interactive.acquire" | "session.acquire",
     ) => Promise<string>;
     readonly connect: (
       sessionId: string,
@@ -110,7 +110,7 @@ export class BrowserRunBinding extends Context.Service<
         let retirementFailure: BrowserRunFailure | undefined;
 
         const disconnectOperation =
-          operation === "protected.connect" ? "protected.disconnect" : "interactive.disconnect";
+          operation === "session.connect" ? "session.disconnect" : "interactive.disconnect";
 
         const transport: ConnectionTransport = {
           send: (message) => {
@@ -231,7 +231,7 @@ export class BrowserRunBinding extends Context.Service<
         };
       },
       keepAlive: Effect.fnUntraced(function* (sessionId: string) {
-        const operation = "protected.keepAlive";
+        const operation = "session.keepAlive";
         const runReport = Effect.runPromiseWith(yield* Effect.context<never>());
 
         const release = (socket: WebSocket) =>
