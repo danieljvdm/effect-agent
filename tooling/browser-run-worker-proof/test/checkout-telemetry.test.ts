@@ -14,6 +14,18 @@ import {
 expectTypeOf<Effect.Error<ReturnType<typeof makeTelemetry>>>().toEqualTypeOf<never>();
 expectTypeOf<Effect.Services<ReturnType<typeof makeTelemetry>>>().toEqualTypeOf<never>();
 
+type MeasuredModel = ReturnType<
+  typeof instrumentModels<string, "expected", LanguageModel.LanguageModel>
+>;
+type MeasuredOperation = ReturnType<
+  typeof measured<string, "expected", LanguageModel.LanguageModel>
+>;
+
+expectTypeOf<Effect.Error<MeasuredModel>>().toEqualTypeOf<"expected">();
+expectTypeOf<Effect.Services<MeasuredModel>>().toEqualTypeOf<LanguageModel.LanguageModel>();
+expectTypeOf<Effect.Error<MeasuredOperation>>().toEqualTypeOf<"expected">();
+expectTypeOf<Effect.Services<MeasuredOperation>>().toEqualTypeOf<LanguageModel.LanguageModel>();
+
 it.effect(
   "retains running spans and monotonic duration on success, failure, defect, timeout and interruption",
   () =>
