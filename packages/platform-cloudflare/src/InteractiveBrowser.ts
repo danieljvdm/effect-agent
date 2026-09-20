@@ -56,6 +56,10 @@ import {
 } from "./internal/browser-failure.ts";
 import { makeFileSelection } from "./internal/browser-file-selection.ts";
 import {
+  BrowserRunOriginOverride,
+  makeOriginOverride,
+} from "./internal/browser-origin-override.ts";
+import {
   BrowserRunSessionLifecycle,
   type BrowserRunLifecycleOptions,
 } from "./internal/browser-session-lifecycle.ts";
@@ -64,6 +68,8 @@ export {
   BrowserRunCleanupError,
   BrowserRunSessionLifecycle,
 } from "./internal/browser-session-lifecycle.ts";
+
+export { BrowserRunOriginOverride } from "./internal/browser-origin-override.ts";
 
 export const browserRunInteractiveImplementation = SandboxImplementation.make({
   isolation: "isolated",
@@ -360,6 +366,8 @@ export interface BrowserRunInteractiveContext {
 }
 
 export interface BrowserRunInteractiveBrowser {
+  /** Origin-mapped test sessions must retain their request-intercepting controller. */
+  readonly supportsHandoff?: boolean;
   readonly detach?: () => Promise<void>;
   readonly reattach?: (
     identity: BrowserRunPageIdentity,
@@ -393,6 +401,7 @@ export class BrowserRunInteractiveBinding extends Context.Service<
   static layer(options: {
     readonly browser: BrowserRun;
     readonly viewport?: BrowserRunViewport;
+    readonly originOverride?: BrowserRunOriginOverride;
   }): Layer.Layer<
     BrowserRunInteractiveBinding,
     InteractiveBrowserPolicyDeniedError,
@@ -406,6 +415,18 @@ export class BrowserRunInteractiveBinding extends Context.Service<
         const viewport =
           options.viewport === undefined ? undefined : yield* decodeViewport(options.viewport);
 
+        const originOverride =
+          options.originOverride === undefined
+            ? undefined
+            : yield* Schema.decodeEffect(BrowserRunOriginOverride)(options.originOverride, {
+                onExcessProperty: "error",
+              }).pipe(
+                Effect.mapError(() => policyError("The browser origin override is malformed")),
+              );
+
+        const resolveRequest =
+          originOverride === undefined ? undefined : yield* makeOriginOverride(originOverride);
+
         return {
           acquire: async (keepAliveMillis: number) =>
             binding.acquire(keepAliveMillis, "interactive.acquire"),
@@ -414,6 +435,8 @@ export class BrowserRunInteractiveBinding extends Context.Service<
               await binding.connect(sessionId, "interactive.connect", signal),
               sessionId,
               viewport,
+              originOverride,
+              resolveRequest,
             ),
           closeSession: (sessionId: Redacted.Redacted<string>) =>
             lifecycle
@@ -509,10 +532,15 @@ export class BrowserRunInteractiveHost extends Context.Service<
   }
 >()("@effect-agent/platform-cloudflare/BrowserRunInteractiveHost") {}
 
-const makeProductionRequest = (request: HTTPRequest): BrowserRunInteractiveRequest => ({
+const makeProductionRequest = (
+  request: HTTPRequest,
+  signal: AbortSignal,
+  resolveRequest?: (request: HTTPRequest, signal: AbortSignal) => Promise<void>,
+): BrowserRunInteractiveRequest => ({
   url: () => request.url(),
   abort: () => request.abort("blockedbyclient"),
-  continue: () => request.continue(),
+  continue: () =>
+    resolveRequest === undefined ? request.continue() : resolveRequest(request, signal),
 });
 
 const makeProductionCdpSession = (session: CDPSession): BrowserRunInteractiveCdpSession => ({
@@ -1221,9 +1249,17 @@ const guardedPageInput = async (
   if (observed._tag !== "Text") throw new BrowserRunActionUndispatched(1);
 };
 
-const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
+const makeProductionPage = (
+  page: Page,
+  originOverride?: BrowserRunOriginOverride,
+  resolveRequest?: (request: HTTPRequest, signal: AbortSignal) => Promise<void>,
+): BrowserRunInteractivePage => {
   const prepareFileSelection = makeFileSelection(page);
   const listeners = new Map<BrowserRunInteractiveRequestListener, (request: HTTPRequest) => void>();
+  let socketGuard: CDPSession | undefined;
+  const pendingRequests = new AbortController();
+
+  if (originOverride !== undefined) page.once("close", () => pendingRequests.abort());
 
   return {
     identity: async () => {
@@ -1241,6 +1277,7 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
       }
     },
     close: async () => {
+      pendingRequests.abort();
       if (!page.browser().isConnected()) return;
       try {
         await page.close();
@@ -1249,9 +1286,21 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
       }
     },
     setBypassServiceWorker: (enabled) => page.setBypassServiceWorker(enabled),
-    setRequestInterception: (enabled) => page.setRequestInterception(enabled),
+    setRequestInterception: async (enabled) => {
+      if (enabled && originOverride !== undefined && socketGuard === undefined) {
+        socketGuard = await page.createCDPSession();
+        const host = new URL(originOverride.productionUrl).host;
+
+        await socketGuard.send("Network.enable");
+        await socketGuard.send("Network.setBlockedURLs", {
+          urls: [`ws://${host}/*`, `wss://${host}/*`],
+        });
+      }
+      await page.setRequestInterception(enabled);
+    },
     onRequest: (listener) => {
-      const sdkListener = (request: HTTPRequest) => listener(makeProductionRequest(request));
+      const sdkListener = (request: HTTPRequest) =>
+        listener(makeProductionRequest(request, pendingRequests.signal, resolveRequest));
 
       listeners.set(listener, sdkListener);
       page.on("request", sdkListener);
@@ -1369,13 +1418,15 @@ const makeProductionPage = (page: Page): BrowserRunInteractivePage => {
 const makeProductionContext = (
   context: BrowserContext,
   viewport?: BrowserRunViewport,
+  originOverride?: BrowserRunOriginOverride,
+  resolveRequest?: (request: HTTPRequest, signal: AbortSignal) => Promise<void>,
 ): BrowserRunInteractiveContext => ({
   newPage: async () => {
     const page = await context.newPage();
 
     if (viewport !== undefined) await page.setViewport(viewport);
 
-    return makeProductionPage(page);
+    return makeProductionPage(page, originOverride, resolveRequest);
   },
   close: async () => {
     if (!context.browser().isConnected()) return;
@@ -1391,8 +1442,11 @@ const makeProductionBrowser = (
   browser: Browser,
   sessionId: string,
   viewport?: BrowserRunViewport,
+  originOverride?: BrowserRunOriginOverride,
+  resolveRequest?: (request: HTTPRequest, signal: AbortSignal) => Promise<void>,
 ): BrowserRunInteractiveBrowser => ({
-  detach: () => browser.disconnect(),
+  supportsHandoff: originOverride === undefined,
+  ...(originOverride === undefined ? { detach: () => browser.disconnect() } : {}),
   reattach: async (identity) => {
     const context = browser
       .browserContexts()
@@ -1403,16 +1457,25 @@ const makeProductionBrowser = (
 
     if (pages.length > 64) throw new Error("The browser target inventory exceeds its bound");
     for (const candidate of pages) {
-      const page = makeProductionPage(candidate);
+      const page = makeProductionPage(candidate, originOverride, resolveRequest);
       const current = await page.identity?.();
 
       if (current?.targetId === identity.targetId)
-        return { context: makeProductionContext(context), page };
+        return {
+          context: makeProductionContext(context, viewport, originOverride, resolveRequest),
+          page,
+        };
     }
 
     return undefined;
   },
-  createContext: async () => makeProductionContext(await browser.createBrowserContext(), viewport),
+  createContext: async () =>
+    makeProductionContext(
+      await browser.createBrowserContext(),
+      viewport,
+      originOverride,
+      resolveRequest,
+    ),
   // Exact-session termination may already have closed the provider transport.
   close: async () => {
     if (!browser.isConnected()) return;
@@ -2914,6 +2977,12 @@ const makeHostService = (
         const detach = yield* Effect.cached(
           Effect.uninterruptible(
             Effect.gen(function* () {
+              if (browser.supportsHandoff === false)
+                return yield* InteractiveBrowserUnsupportedError.make({
+                  implementation: browserRunInteractiveImplementation,
+                  feature: "policy",
+                  message: "Origin-mapped test sessions cannot detach their routing controller",
+                });
               if (browser.detach === undefined)
                 return yield* protocolError("The browser binding does not support detachment");
               lifecycle.retained = true;
@@ -3102,32 +3171,44 @@ const makeHostService = (
               ),
             ),
           handoff: (request) =>
-            Schema.decodeEffect(BrowserRunHandoffRequest)(request).pipe(
-              Effect.mapError(() => policyError("The browser handoff request is malformed")),
-              Effect.flatMap((decoded) =>
-                runtime.run(
-                  cdpCommand(
-                    page,
-                    state,
-                    "Cloudflare.handoff",
-                    { instructions: decoded.instructions, timeout: decoded.timeout },
-                    HandoffObservation,
-                    "Cloudflare returned a malformed browser handoff response",
-                  ).pipe(
-                    Effect.flatMap((observation) =>
-                      Schema.decodeEffect(BrowserRunHandoffResult)({
-                        handoffId: Redacted.make(observation.handoffId),
-                      }).pipe(
-                        Effect.mapError(() =>
-                          protocolError("Cloudflare returned a malformed browser handoff response"),
+            browser.supportsHandoff === false
+              ? Effect.fail(
+                  InteractiveBrowserUnsupportedError.make({
+                    implementation: browserRunInteractiveImplementation,
+                    feature: "policy",
+                    message: "Origin-mapped test sessions do not support human handoff",
+                  }),
+                )
+              : Schema.decodeEffect(BrowserRunHandoffRequest)(request).pipe(
+                  Effect.mapError(() => policyError("The browser handoff request is malformed")),
+                  Effect.flatMap((decoded) =>
+                    runtime.run(
+                      cdpCommand(
+                        page,
+                        state,
+                        "Cloudflare.handoff",
+                        { instructions: decoded.instructions, timeout: decoded.timeout },
+                        HandoffObservation,
+                        "Cloudflare returned a malformed browser handoff response",
+                      ).pipe(
+                        Effect.flatMap((observation) =>
+                          Schema.decodeEffect(BrowserRunHandoffResult)({
+                            handoffId: Redacted.make(observation.handoffId),
+                          }).pipe(
+                            Effect.mapError(() =>
+                              protocolError(
+                                "Cloudflare returned a malformed browser handoff response",
+                              ),
+                            ),
+                          ),
                         ),
+                      ),
+                      currentPagePreflight.pipe(
+                        Effect.andThen(requestFitsSession(decoded.timeout)),
                       ),
                     ),
                   ),
-                  currentPagePreflight.pipe(Effect.andThen(requestFitsSession(decoded.timeout))),
                 ),
-              ),
-            ),
           getHandoffState: runtime.run(
             cdpCommand(
               page,
@@ -3224,6 +3305,7 @@ export const browserRunInteractiveLayer = (): Layer.Layer<
 export interface CloudflareInteractiveBrowserOptions extends BrowserRunLifecycleOptions {
   readonly browser: BrowserRun;
   readonly viewport?: BrowserRunViewport;
+  readonly originOverride?: BrowserRunOriginOverride;
 }
 
 const interactiveBindingLayer = (options: CloudflareInteractiveBrowserOptions) =>
