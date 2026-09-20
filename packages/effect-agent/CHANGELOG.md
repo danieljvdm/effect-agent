@@ -1,5 +1,12 @@
 # effect-agent
 
+## 0.1.0-beta.118
+
+### Patch Changes
+
+- [#579](https://github.com/danieljvdm/effect-agent/pull/579) [`ff29420`](https://github.com/danieljvdm/effect-agent/commit/ff2942050eae59ad3ccc9731caaf809e13d957f1) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow credential access hooks to report recoverable `busy` while preserving known protected browser dispatch evidence and the same usable session.
+  Complete protected controller Return independently of observation authority, requiring a fresh authorized observation before subsequent operations.
+
 ## 0.1.0-beta.117
 
 ## 0.1.0-beta.116
