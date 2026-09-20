@@ -186,6 +186,7 @@
     "progressive-tool-discovery",
     "prompt-cloudflare-message-delivery",
     "protect-prepared-context",
+    "protected-browser-busy-authority",
     "protected-browser-contact-email",
     "protected-browser-credentials",
     "protected-browser-human-handoff",
