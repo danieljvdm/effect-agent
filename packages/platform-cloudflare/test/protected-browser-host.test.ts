@@ -10,6 +10,7 @@ import { Effect, Layer, Redacted, Schema, type Scope } from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import {
   BrowserCredentialAccess,
+  CredentialAccessError,
   CredentialObservationGrant,
   CredentialOfferMetadata,
   CredentialTarget,
@@ -60,8 +61,10 @@ const fixture = () => {
   let attachment = 0;
   let closed = false;
   let active = false;
-  let allowObservation = true;
+  let observationAuthority: "allow" | "busy" | "deny" = "allow";
   let uncertainHandoff = false;
+  let reads = 0;
+  const actions: Array<string> = [];
   const commands: Array<string> = [];
   const restored: Array<ProtectedProviderIdentity> = [];
   const observations: Array<Parameters<BrowserCredentialAccess["Service"]["observation"]>[0]> = [];
@@ -86,10 +89,12 @@ const fixture = () => {
         }),
       ),
     observation: (request) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         observations.push(request);
+        if (observationAuthority === "busy")
+          return yield* new CredentialAccessError({ reason: "busy" });
 
-        return allowObservation
+        return observationAuthority === "allow"
           ? CredentialObservationGrant.make({
               decision: "trust-recipient-no-credential-echo",
               origins: ["https://shop.test"],
@@ -143,6 +148,7 @@ const fixture = () => {
               frameOrigins: [target.frameOrigin],
             }),
             discover: Effect.sync(() => {
+              reads++;
               controls = [
                 ProtectedBrowserControl.make({
                   ref: crypto.randomUUID(),
@@ -168,8 +174,18 @@ const fixture = () => {
               };
             }),
             target: get,
-            navigate: () => Effect.void,
-            click: (ref) => get(ref).pipe(Effect.asVoid),
+            navigate: () =>
+              Effect.sync(() => {
+                actions.push("navigate");
+              }),
+            click: (ref) =>
+              get(ref).pipe(
+                Effect.andThen(
+                  Effect.sync(() => {
+                    actions.push("click");
+                  }),
+                ),
+              ),
             fill: (ref, _role, value) =>
               Effect.gen(function* () {
                 yield* get(ref);
@@ -232,6 +248,8 @@ const fixture = () => {
     layer,
     filled,
     observations,
+    actions,
+    reads: () => reads,
     commands,
     restored,
     closed: () => closed,
@@ -239,8 +257,8 @@ const fixture = () => {
     complete: () => {
       active = false;
     },
-    deny: () => {
-      allowObservation = false;
+    setObservationAuthority: (value: typeof observationAuthority) => {
+      observationAuthority = value;
     },
     loseReply: () => {
       uncertainHandoff = true;
@@ -465,20 +483,73 @@ it.effect(
   },
 );
 
-it.effect(
-  "requires explicit observation trust after human entry even without a vault exposure",
-  () => {
+it.effect.each(["busy", "deny"] as const)(
+  "completes Return with %s observation authority while fencing actual page use",
+  (authority) => {
     const f = fixture();
 
     return Effect.gen(function* () {
-      const session = yield* (yield* BrowserRunProtectedHost).open(policy);
+      const host = yield* BrowserRunProtectedHost;
 
-      yield* session.handoff(takeover);
+      const saved = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* host.open(policy);
+          const initial = yield* session.handle.observe;
+          const checkpoint = yield* session.handoff(takeover);
+
+          f.setObservationAuthority(authority);
+          expect((yield* session.returnControl.pipe(Effect.flip)).reason).toBe("busy");
+          expect(f.observations).toEqual([]);
+          yield* session.detach;
+
+          return { checkpoint, document: initial.document };
+        }),
+      );
+
       f.complete();
-      f.deny();
-      expect((yield* session.returnControl.pipe(Effect.flip)).reason).toBe("observation-blocked");
-      expect((yield* session.handle.observe.pipe(Effect.flip)).reason).toBe("busy");
+      const session = yield* host.resume(saved.checkpoint);
+
+      yield* session.returnControl;
+      expect(f.observations).toEqual([]);
+      expect(yield* session.handle.observe.pipe(Effect.flip)).toMatchObject({
+        reason: authority === "busy" ? "busy" : "observation-blocked",
+        dispatch: "not-dispatched",
+        milestone: "none",
+        observation: "protected",
+        cleanup: "not-requested",
+      });
       expect(f.observations.at(-1)).toMatchObject({ humanExposure: true, exposures: [] });
+      expect(f.reads()).toBe(1);
+      expect(
+        yield* session.handle.navigate({ url: "https://shop.test" }).pipe(Effect.flip),
+      ).toMatchObject({
+        reason: "stale-reference",
+        dispatch: "not-dispatched",
+      });
+      expect(f.actions).toEqual([]);
+      expect(f.filled).toEqual([]);
+      expect(f.closed()).toBe(false);
+
+      f.setObservationAuthority("allow");
+      const observation = yield* session.handle.observe;
+
+      expect(observation.document).toBe(saved.document);
+      expect(observation.observation).toBe("approved-after-exposure");
+      expect(f.attachments()).toBe(2);
+      expect(f.restored.map((entry) => Redacted.value(entry.targetId))).toEqual(["exact-page"]);
+      f.setObservationAuthority("deny");
+      expect(
+        yield* session.handle.click({ ref: observation.controls[1]!.ref }).pipe(Effect.flip),
+      ).toMatchObject({
+        reason: "observation-blocked",
+        dispatch: "not-dispatched",
+      });
+      expect(f.actions).toEqual([]);
+      f.setObservationAuthority("allow");
+      yield* session.handle.click({ ref: observation.controls[1]!.ref });
+      expect(f.actions).toEqual(["click"]);
+      expect(yield* session.close).toBe("confirmed");
+      expect(f.closed()).toBe(true);
     }).pipe(Effect.scoped, Effect.provide(f.layer));
   },
 );

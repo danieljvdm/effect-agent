@@ -580,9 +580,12 @@ checkpoint integrity, and expiry cleanup. These are required host responsibiliti
    Transfer the latest checkpoint and original credential exposure ledger to the continuing worker under a new
    controller generation. Detach the old attachment before resuming another.
 4. Resume with the current worker’s credential authority and call `returnControl`. For a recorded
-   human handoff, the provider must report that same handoff completed. The host’s `observation` hook must approve current
-   origins; it receives `humanExposure` and `humanOrigins` captured before human takeover, even
-   when no vault credential was used. The agent must `observe` again before any other operation.
+   human handoff, the provider must report that same handoff completed. Return completes controller
+   bookkeeping without reading page data or requesting observation authority. The agent must
+   successfully `observe` before page actions or credential operations. The host’s `observation` hook
+   must approve current origins; it receives `humanExposure` and `humanOrigins` captured before
+   human takeover, even when no vault credential was used. Pending or denied authority keeps page
+   data and actions blocked while the same returned session remains available.
 
 Suspension does not itself mark human exposure. A checkpoint retains the original policy,
 start time, action usage, credential-exposure targets, and independent dispatch evidence. It holds

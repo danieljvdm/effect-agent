@@ -816,7 +816,6 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
       Effect.gen(function* () {
         if (detached || observation === "closed") return yield* fail("closed");
         if (!suspended) return yield* fail("denied");
-        yield* permitObservation;
         offers.clear();
         driver.resetReferences();
         needsObservation = true;
