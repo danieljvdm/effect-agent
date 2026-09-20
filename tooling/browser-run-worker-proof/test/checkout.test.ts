@@ -103,7 +103,6 @@ it.effect("the tool layer scopes its saved browser attachment across success and
           CheckoutOwner.of({
             authorize: unused(),
             observe: unused,
-            observeIndexed: unused,
             record: unused,
             approval: unused(),
             human: unused(),

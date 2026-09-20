@@ -1,5 +1,4 @@
-import { TypeSafeClient } from "@effect/ai-typesafe";
-import { Cause, Clock, Context, Effect, Exit, Layer, Option, Tracer } from "effect";
+import { Cause, Clock, Context, Effect, Exit, Option, Tracer } from "effect";
 import { Telemetry } from "effect/unstable/ai";
 
 import type { CheckoutSpan } from "./checkout-contract.ts";
@@ -107,16 +106,7 @@ export const instrumentModels = Effect.fnUntraced(function* <A, E, R>(
 
       if (!options.name.startsWith("chat ") && !options.name.startsWith("LanguageModel."))
         return span;
-
-      const parent =
-        Option.isSome(options.parent) && options.parent.value._tag === "Span"
-          ? options.parent.value.name
-          : undefined;
-
-      const phase =
-        parent === "checkout.text" ? "text" : parent === "checkout.decision" ? "decision" : "model";
-
-      const finish = telemetry?.begin(phase, options.name, { requestedModel });
+      const finish = telemetry?.begin("model", options.name, { requestedModel });
 
       return {
         _tag: span._tag,
@@ -171,31 +161,3 @@ export const instrumentModels = Effect.fnUntraced(function* <A, E, R>(
     }),
   );
 });
-
-/** Observe native provider metadata without replacing DecisionModel validation or normalizing answers. */
-export const typeSafeTelemetry = Layer.effect(
-  TypeSafeClient.TypeSafeClient,
-  Effect.gen(function* () {
-    const client = yield* TypeSafeClient.TypeSafeClient;
-
-    return TypeSafeClient.TypeSafeClient.of({
-      ...client,
-      systemOne: (request) =>
-        measured(
-          "decision",
-          "TypeSafeClient.systemOne",
-          client.systemOne(request),
-          { requestedModel: request.model },
-          (response) => ({
-            resolvedModel: response.model,
-            ...(response.usage?.input_tokens === undefined
-              ? {}
-              : { inputTokens: response.usage.input_tokens }),
-            ...(response.usage?.output_tokens === undefined
-              ? {}
-              : { outputTokens: response.usage.output_tokens }),
-          }),
-        ),
-    });
-  }),
-);

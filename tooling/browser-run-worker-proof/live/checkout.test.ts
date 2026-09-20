@@ -9,7 +9,6 @@ import {
   type CheckoutScenario,
   AgentOutput,
   CheckoutConcurrency,
-  CheckoutController,
   failure,
   policy,
   Report,
@@ -33,9 +32,6 @@ const lifecycle = Test.make({ providers: Cloudflare.providers(), dev: false });
 const config = Config.all({
   run: Config.schema(Schema.String.check(Schema.isPattern(/^[a-z0-9-]{1,24}$/)), "CHECKOUT_RUN_ID"),
   model: Config.NonEmptyString("CHECKOUT_MODEL"),
-  controller: Config.schema(CheckoutController, "CHECKOUT_CONTROLLER").pipe(
-    Config.withDefault("baseline"),
-  ),
   token: Config.Redacted("CHECKOUT_TOKEN"),
   repetitions: Config.Int("CHECKOUT_REPETITIONS").pipe(Config.withDefault(1)),
   concurrency: Config.schema(CheckoutConcurrency, "CHECKOUT_CONCURRENCY").pipe(
@@ -178,7 +174,6 @@ const initialize = Effect.gen(function* () {
     model: settings.model,
     sourceCommit,
     dirty,
-    controller: settings.controller,
     repetitions: settings.repetitions,
     profile: settings.human ? "operator" : "automated",
     execution: {

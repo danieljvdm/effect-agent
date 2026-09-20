@@ -484,11 +484,6 @@ native controls; it does not infer fields or submit the form. Authorize filling 
 the site's input/change handlers may send data immediately. Submission remains an ordinary,
 separately authorized browser action.
 
-An indexed controller can supply a trusted `CredentialTargetGuard` as the second argument. It
-creates an isolated-realm predicate that checks the actual node synchronously beside each write,
-so a replaced control cannot inherit an old index. The session owns the predicate handle and
-releases it on every exit. See the [indexed checkout consumer](https://github.com/danieljvdm/effect-agent/blob/main/tooling/browser-run-worker-proof/src/checkout-indexed-browser.ts) for observation binding.
-
 Credential material stays out of fill arguments, results, logs, and traces. The browser is allowed
 to display it: subsequent native observations, screenshots, and page content follow the host's
 ordinary disclosure policy. There is no protected observation mode or promise to scrub page echoes.

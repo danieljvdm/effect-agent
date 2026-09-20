@@ -3,8 +3,7 @@ import { Deferred, Effect, Exit, Fiber, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Response, Tool, Toolkit } from "effect/unstable/ai";
 
-import { afterActionObservation, recordInput } from "../src/checkout-agent.ts";
-import { CheckoutSpan, failure } from "../src/checkout-contract.ts";
+import { CheckoutSpan } from "../src/checkout-contract.ts";
 import {
   CheckoutTelemetry,
   instrumentModels,
@@ -14,69 +13,6 @@ import {
 
 expectTypeOf<Effect.Error<ReturnType<typeof makeTelemetry>>>().toEqualTypeOf<never>();
 expectTypeOf<Effect.Services<ReturnType<typeof makeTelemetry>>>().toEqualTypeOf<never>();
-
-it.effect("records completed input before a failed read and never re-enters it on recovery", () =>
-  Effect.gen(function* () {
-    const events: Array<string> = [];
-    let dispatched = 0;
-
-    const record = (value: { outcome: string }) =>
-      Effect.sync(() => {
-        events.push(value.outcome);
-      });
-
-    const input = Effect.sync(() => {
-      dispatched++;
-      events.push("input");
-    });
-
-    const read = Effect.sync(() => {
-      events.push("read");
-    }).pipe(Effect.andThen(failure("read", "Frame navigated")));
-
-    const result = yield* recordInput("click", input, record).pipe(
-      Effect.andThen(afterActionObservation(read)),
-    );
-
-    assert.strictEqual(result.execution, "completed");
-    assert.strictEqual(result.observation, null);
-    assert.include(result.readFailure ?? "", "without repeating");
-    yield* afterActionObservation(Effect.succeed({ url: "https://shop.test/orders", frames: [] }));
-    assert.strictEqual(dispatched, 1);
-    assert.deepStrictEqual(events, ["dispatching", "input", "completed", "read"]);
-  }),
-);
-
-it.effect(
-  "retains uncertainty during input interruption and completion during post-input interruption",
-  () =>
-    Effect.gen(function* () {
-      for (const stage of ["input", "read"] as const) {
-        const events: Array<string> = [];
-        const entered = yield* Deferred.make<void>();
-
-        const record = (value: { outcome: string }) =>
-          Effect.sync(() => {
-            events.push(value.outcome);
-          });
-
-        const pending = Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never));
-
-        const fiber = yield* recordInput(
-          "click",
-          stage === "input" ? pending : Effect.void,
-          record,
-        ).pipe(Effect.andThen(afterActionObservation(pending)), Effect.forkChild);
-
-        yield* Deferred.await(entered);
-        yield* Fiber.interrupt(fiber);
-        assert.deepStrictEqual(events, [
-          "dispatching",
-          stage === "input" ? "uncertain:interrupted" : "completed",
-        ]);
-      }
-    }),
-);
 
 it.effect(
   "retains running spans and monotonic duration on success, failure, defect, timeout and interruption",

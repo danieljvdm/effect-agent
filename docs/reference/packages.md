@@ -430,12 +430,6 @@ an optional `frame` path selects at most eight nested iframes. The service autho
 origins and resolves host-only material. The helper fills without submitting and returns only
 dispatch evidence and the number of acknowledged writes. Ordinary browser observations remain
 available after filling.
-The optional second argument, `CredentialTargetGuard`, is trusted host code that returns an
-isolated-realm predicate handle for the selected frame. It receives the actual native field and
-zero-based request-field index immediately before each assignment. False or a thrown predicate
-rejects that write as `stale-target`; earlier acknowledged writes remain reported. The helper
-disposes the handle on success, failure, timeout, and interruption. Never construct its program
-from model output or page content.
 If a fill times out, `CredentialFillError` reports `reason: "timeout"`, the acknowledged
 `filled` count, dispatch evidence, and whether browser cleanup was confirmed. A pending write
 reply remains `possibly-dispatched`; its assignment is not included in `filled`.

@@ -1,8 +1,6 @@
 import { Schema, Struct } from "effect";
 import { RunTotals } from "effect-agent/usage";
 
-import { IndexedObservation } from "./checkout-indexed-contract.ts";
-
 export const CheckoutFlow = Schema.Literals(["embedded-card", "accelerated"]);
 export const CheckoutScenario = Schema.Literals(["success", "correction", "ambiguous", "handoff"]);
 export const RunKey = Schema.String.check(Schema.isPattern(/^[a-z0-9-]{1,80}$/));
@@ -110,20 +108,6 @@ export const BrowserObservation = Schema.Struct({
   frames: Schema.Array(Schema.Struct({ url: Schema.String, html: Schema.String })),
 });
 
-export const CheckoutController = Schema.Literals([
-  "baseline",
-  "action-observations",
-  "indexed-luna",
-  "indexed-jev",
-]);
-
-/** Input completion remains success even when the following read fails. Never repeat the input. */
-export const ActionObservation = Schema.Struct({
-  execution: Schema.Literal("completed"),
-  observation: Schema.NullOr(BrowserObservation),
-  readFailure: Schema.NullOr(Text),
-});
-
 export const AgentRun = Schema.Struct({
   turns: Schema.Natural,
   finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
@@ -168,9 +152,6 @@ export const RunEvidence = Schema.Struct({
   shop: ShopState,
   control: Schema.Struct(Struct.omit(Control.fields, ["handoffId"])),
   browserIdentityUnchanged: Schema.Boolean,
-  indexedObservations: Schema.optionalKey(
-    Schema.Array(IndexedObservation).check(Schema.isMaxLength(150)),
-  ),
   observations: Schema.Array(BrowserObservation).check(Schema.isMaxLength(150)),
   outputs: Schema.Array(AgentOutput).check(Schema.isMaxLength(8)),
   runs: Schema.optionalKey(Schema.Array(AgentRun).check(Schema.isMaxLength(8))),
@@ -204,7 +185,6 @@ export const Report = Schema.Struct({
   model: Schema.String,
   sourceCommit: Schema.String,
   dirty: Schema.Boolean,
-  controller: Schema.optionalKey(CheckoutController),
   repetitions: Schema.Natural,
   profile: Schema.Literals(["automated", "operator"]),
   // Optional additions keep previously retained reports usable for cleanup.

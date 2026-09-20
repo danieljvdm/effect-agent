@@ -58,22 +58,20 @@ and retains the Alchemy stage when browser recovery is still needed.
 
 Required environment:
 
-| Variable                       | Purpose                                                                       |
-| ------------------------------ | ----------------------------------------------------------------------------- |
-| `CLOUDFLARE_ACCOUNT_ID`        | Intended account; checked against Alchemy's resolved account                  |
-| `CLOUDFLARE_API_TOKEN`         | Local deployment credential with Workers and Durable Object permissions       |
-| `BROWSER_RENDERING_API_TOKEN`  | Narrow account-scoped Browser Run Write token                                 |
-| `CLOUDFLARE_WORKERS_SUBDOMAIN` | Workers subdomain, without `.workers.dev`; also used for recovery             |
-| `OPENAI_API_KEY`               | Real model credential, injected by the operator's secret manager              |
-| `CHECKOUT_MODEL`               | Explicit OpenAI model ID                                                      |
-| `CHECKOUT_CONTROLLER`          | `baseline` (default), `action-observations`, `indexed-luna`, or `indexed-jev` |
-| `TYPESAFEAI_API_KEY`           | Required only for `indexed-jev`; temporary Worker secret                      |
-| `CHECKOUT_TOKEN`               | Fresh random bearer token for the fixture control API                         |
-| `CHECKOUT_RUN_ID`              | Fresh lowercase letters/digits/hyphens, at most 24 characters                 |
-| `CHECKOUT_REPETITIONS`         | 1–5 repetitions of every automated scenario; default 1                        |
-| `CHECKOUT_CONCURRENCY`         | 1–12 simultaneous checkout cases; default 4                                   |
-| `CHECKOUT_START_INTERVAL_MS`   | Minimum interval between case admissions, 1000–60000 ms; default 1000         |
-| `CHECKOUT_HUMAN`               | `true` runs one operator takeover before the matrix; default `false`          |
+| Variable                       | Purpose                                                                 |
+| ------------------------------ | ----------------------------------------------------------------------- |
+| `CLOUDFLARE_ACCOUNT_ID`        | Intended account; checked against Alchemy's resolved account            |
+| `CLOUDFLARE_API_TOKEN`         | Local deployment credential with Workers and Durable Object permissions |
+| `BROWSER_RENDERING_API_TOKEN`  | Narrow account-scoped Browser Run Write token                           |
+| `CLOUDFLARE_WORKERS_SUBDOMAIN` | Workers subdomain, without `.workers.dev`; also used for recovery       |
+| `OPENAI_API_KEY`               | Real model credential, injected by the operator's secret manager        |
+| `CHECKOUT_MODEL`               | Explicit OpenAI model ID                                                |
+| `CHECKOUT_TOKEN`               | Fresh random bearer token for the fixture control API                   |
+| `CHECKOUT_RUN_ID`              | Fresh lowercase letters/digits/hyphens, at most 24 characters           |
+| `CHECKOUT_REPETITIONS`         | 1–5 repetitions of every automated scenario; default 1                  |
+| `CHECKOUT_CONCURRENCY`         | 1–12 simultaneous checkout cases; default 4                             |
+| `CHECKOUT_START_INTERVAL_MS`   | Minimum interval between case admissions, 1000–60000 ms; default 1000   |
+| `CHECKOUT_HUMAN`               | `true` runs one operator takeover before the matrix; default `false`    |
 
 The browser and OpenAI credentials enter only temporary Workers as secret bindings. The deployment
 credential stays local. Keep the bearer token, `.alchemy` state and temporary Live View file private.
@@ -120,32 +118,11 @@ requests and cleanup. Admission queueing is excluded from cases and included in 
 Deployment, readiness, the binding proof and retirement have separate totals. Spans may nest or
 overlap: do not add their durations to estimate wall time. Timing adds two synchronous SQLite
 writes per span and native response metadata collection; hosted comparisons must use the same
-instrumentation. Running spans survive process loss; interruption retains finalizer outcomes.
+instrumentation. Worker clocks may coarsen synchronous work; zero-duration spans do not imply
+zero cost. Running spans survive process loss; interruption retains finalizer outcomes.
 
-The `action-observations` arm returns the same frame-aware HTML observation after navigation,
-click, text entry, selection, credential fill and the existing wait. Explicit observation remains
-available for initial reads and recovery. The owner records input before the following read; a
-failed read returns `execution: "completed"` with no observation, so recovery cannot resubmit it.
-Uncertain input fences further browser dispatch. This is an experimental controller choice;
-adoption requires matched hosted receipts, cleanup and latency evidence.
-The indexed arms share one frame-aware observation and executor. Models choose an operation and
-observed indices; native node/document identity, state, visibility, enabled state and origins are
-checked again before input. Credential predicates run beside the native write. Renderer-held
-observations are released before attachment scope exit. Failed input is never replayed.
-
-`indexed-luna` classifies with the configured LanguageModel. `indexed-jev` uses pinned
-`jev-1.13.0` through upstream `TypeSafeClient.layerConfig`, `TypeSafeDecisionModel.model`,
-`Decision.make`, `Decision.classify` and `DecisionModel.decide`. One request answers the operation
-and conditional target heads; empty heads are omitted and singleton targets resolve only after
-operation selection. Native invalid-output errors are retained. Only TYPE requests generated text
-from Luna; saved credentials remain host-owned. DONE is a claim, verified by the same receipt and
-attempt-ledger assertions. AutoModel still selects a model for a thread; it is not this controller.
-
-Each request has a five-minute duration, 60-turn, 120-action and 500,000-token budget; each scenario
-permits at most six continuations. Screening uses all four arms with identical matrix settings;
-adoption requires three additional alternating baseline/candidate pairs, complete receipts and
-cleanup, and at least 25% lower median start-through-closure latency. Keep every failure and slow
-sample. Browser placement is provider-selected, so regional variation remains a comparison limit.
+Each request has a five-minute duration, 60-turn, 120-tool-call and 500,000-token budget; each
+scenario permits at most six continuations.
 Provider/model work costs money. Repetitions use fresh stores and browsers; failed attempts are
 retained without automatic model or purchase retries. Deterministic fixtures do not make model
 actions deterministic.
