@@ -223,10 +223,17 @@ export const CardCredential = Schema.TaggedStruct("CardCredential", {
 export const BrowserCredentialMaterial = Schema.Union([LoginCredential, CardCredential]);
 export type BrowserCredentialMaterial = typeof BrowserCredentialMaterial.Type;
 
+/** Use busy for transient host-authority unavailability; return promptly without waiting for Tool completion. */
 export class CredentialAccessError extends Schema.TaggedError<CredentialAccessError>()(
   "CredentialAccessError",
   {
-    reason: Schema.Literals(["denied", "missing-credential", "needs-attention", "resolver"]),
+    reason: Schema.Literals([
+      "denied",
+      "missing-credential",
+      "needs-attention",
+      "busy",
+      "resolver",
+    ]),
   },
 ) {}
 

@@ -404,7 +404,8 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
                 const interrupt = cause.reasons.some((reason) => reason._tag === "Interrupt");
 
                 if (
-                  dispatch !== "not-dispatched" ||
+                  dispatch === "possibly-dispatched" ||
+                  (dispatch === "dispatched" && reason !== "busy") ||
                   interrupt ||
                   reason === "provider" ||
                   reason === "timeout"
@@ -815,7 +816,6 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
       Effect.gen(function* () {
         if (detached || observation === "closed") return yield* fail("closed");
         if (!suspended) return yield* fail("denied");
-        yield* permitObservation;
         offers.clear();
         driver.resetReferences();
         needsObservation = true;

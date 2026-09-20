@@ -62,7 +62,10 @@ export interface BrowserRunProtectedSession {
   readonly getHandoffState: Effect.Effect<BrowserRunHandoffState, ProtectedBrowserError>;
   /** Read only the exact page’s current origin after its recorded handoff completes; tools remain paused. */
   readonly getReturnOrigin: Effect.Effect<typeof CredentialOrigin.Type, ProtectedBrowserError>;
-  /** Resume a committed pause; human handoffs also require provider completion. Observe before acting. */
+  /**
+   * Resume a committed pause; human handoffs also require provider completion. Returns no page data.
+   * A fresh authorized observation must succeed before page actions or credential operations.
+   */
   readonly returnControl: Effect.Effect<void, ProtectedBrowserError>;
   /** Release this attachment only after committing its suspended checkpoint; preserve the remote browser. */
   readonly detach: Effect.Effect<void, ProtectedBrowserError>;

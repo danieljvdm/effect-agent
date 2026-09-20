@@ -541,9 +541,19 @@ replacement Attempt; the application/operator must reconcile an uncertain extern
 `submission-dispatched` proves dispatch, not login success. `authentication` is always `unverified`.
 Check an approved authenticated page separately. `possibly-dispatched` can coexist with
 `partial-fill` and confirmed cleanup: closure does not undo effects. Provider defects are sanitized;
-failures after dispatch and cancellation invalidate and close the pass. Close waits for exact-session
+failures after dispatch and cancellation invalidate and close the pass, except for recoverable `busy`
+after acknowledged actions. Uncertain dispatch, interruption, provider failure, and timeout still
+close the pass. Close waits for exact-session
 termination/absence and reports `unconfirmed` when it cannot prove cleanup. Logs contain only a
 fixed cleanup warning, never provider diagnostics or secret-bearing page data.
+
+Any `BrowserCredentialAccess` hook may fail with `new CredentialAccessError({ reason: "busy" })`
+while host authority is temporarily unavailable. Return promptly when accepted input needs the
+current Tool batch to finish; waiting inside the hook would prevent that input from being applied.
+The operation stops before the next field or submit, retains known `dispatched` and
+`partial-fill`/`filled` evidence, and keeps the same pass usable once authority resumes. Check current
+intent and dispatch evidence before proposing another action; `busy` never retries an action or
+reuses a consumed credential offer.
 
 ### Durable human takeover
 
@@ -570,9 +580,12 @@ checkpoint integrity, and expiry cleanup. These are required host responsibiliti
    Transfer the latest checkpoint and original credential exposure ledger to the continuing worker under a new
    controller generation. Detach the old attachment before resuming another.
 4. Resume with the current worker’s credential authority and call `returnControl`. For a recorded
-   human handoff, the provider must report that same handoff completed. The host’s `observation` hook must approve current
-   origins; it receives `humanExposure` and `humanOrigins` captured before human takeover, even
-   when no vault credential was used. The agent must `observe` again before any other operation.
+   human handoff, the provider must report that same handoff completed. Return completes controller
+   bookkeeping without reading page data or requesting observation authority. The agent must
+   successfully `observe` before page actions or credential operations. The host’s `observation` hook
+   must approve current origins; it receives `humanExposure` and `humanOrigins` captured before
+   human takeover, even when no vault credential was used. Pending or denied authority keeps page
+   data and actions blocked while the same returned session remains available.
 
 Suspension does not itself mark human exposure. A checkpoint retains the original policy,
 start time, action usage, credential-exposure targets, and independent dispatch evidence. It holds

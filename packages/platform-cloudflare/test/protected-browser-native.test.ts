@@ -16,6 +16,7 @@ import {
   ProtectedBrowserFill,
   ProtectedBrowserNavigate,
   ProtectedBrowserClick,
+  ProtectedBrowserSession,
   UseCredential,
 } from "effect-agent/protected-browser";
 import { TestClock } from "effect/testing";
@@ -44,6 +45,172 @@ const policy = InteractiveBrowserPolicy.make({
   maxElapsedMillis: 60_000,
   maxReturnedBytes: 16384,
 });
+
+for (const { before, writes, milestone } of [
+  { before: "next field", writes: ["username"], milestone: "partial-fill" },
+  { before: "submit", writes: ["username", "password"], milestone: "filled" },
+] as const) {
+  it.live(
+    `retains the same native page when authority is busy before ${before}`,
+    (test) =>
+      Effect.gen(function* () {
+        const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
+
+        if (Option.isNone(executable)) return test.skip();
+
+        const browser = yield* Effect.acquireRelease(
+          native(() =>
+            nativePuppeteer.launch({ executablePath: executable.value, headless: true }),
+          ),
+          (browser) => Effect.promise(() => browser.close()),
+        );
+
+        const page = yield* native(() => browser.newPage());
+
+        yield* native(() => page.setRequestInterception(true));
+        page.on("request", (request) => {
+          void request
+            .respond({
+              contentType: "text/html",
+              body: `<form onsubmit="event.preventDefault();window.submits++">
+              <label>Account<input name="username" autocomplete="username"></label>
+              <label>Password<input name="password" type="password"></label>
+              <button>Sign in</button></form>
+              <label>Address<input name="address"></label>
+              <script>
+                window.writes=[];window.submits=0;
+                document.addEventListener('input', e => window.writes.push(e.target.name));
+              </script>`,
+            })
+            .catch(() => {});
+        });
+        let pending = false;
+
+        const access = BrowserCredentialAccess.of({
+          caller: Effect.succeed(Redacted.make("authorized-test-invocation")),
+          list: () =>
+            Effect.succeed([
+              {
+                key: Redacted.make("dummy-vault-id"),
+                metadata: CredentialOfferMetadata.make({ label: "Dummy only" }),
+              },
+            ]),
+          authorize: () =>
+            Effect.gen(function* () {
+              const count = yield* native(() => page.evaluate("window.writes.length")).pipe(
+                Effect.mapError(() => new CredentialAccessError({ reason: "resolver" })),
+              );
+
+              if (pending && count === writes.length)
+                return yield* new CredentialAccessError({ reason: "busy" });
+            }),
+          resolve: () =>
+            Effect.succeed(
+              LoginCredential.make({
+                username: Redacted.make("dummy@example.test"),
+                password: Redacted.make(secret),
+              }),
+            ),
+          authorizeAction: () =>
+            pending ? Effect.fail(new CredentialAccessError({ reason: "busy" })) : Effect.void,
+          observation: () =>
+            pending
+              ? Effect.fail(new CredentialAccessError({ reason: "busy" }))
+              : Effect.succeed("trust-recipient-no-credential-echo"),
+        });
+
+        const driver = yield* makeProtectedNativeTransport(policy).pipe(
+          Effect.provideService(ProtectedNativeSession, {
+            browser: browser as unknown as Browser,
+            page: page as unknown as Page,
+            close: native(() => browser.close()).pipe(
+              Effect.as("confirmed" as const),
+              Effect.catch(() => Effect.succeed("unconfirmed" as const)),
+            ),
+          }),
+        );
+
+        const layer = browserRunProtectedLayer().pipe(
+          Layer.provide(
+            Layer.succeed(BrowserRunProtectedTransport, {
+              open: () => Effect.succeed(driver),
+            }),
+          ),
+          Layer.provideMerge(Layer.succeed(BrowserCredentialAccess, access)),
+        );
+
+        yield* Effect.gen(function* () {
+          const session = yield* ProtectedBrowserSession;
+          const handle = yield* session.get;
+
+          yield* handle.navigate(
+            ProtectedBrowserNavigate.make({ url: "https://alpha.test/login" }),
+          );
+          const initial = yield* handle.observe;
+          const username = initial.controls.find((control) => control.role === "username")!;
+          const password = initial.controls.find((control) => control.role === "password")!;
+          const submit = initial.controls.find((control) => control.role === "submit")!;
+
+          const offers = yield* handle.listCredentialOffers(
+            ListCredentialOffers.make({ kind: "login", target: username.ref }),
+          );
+
+          const request = UseCredential.make({
+            offer: offers[0]!.ref,
+            fields: [
+              { ref: username.ref, role: "username" },
+              { ref: password.ref, role: "password" },
+            ],
+            submit: submit.ref,
+          });
+
+          pending = true;
+          expect(yield* handle.useCredential(request).pipe(Effect.flip)).toMatchObject({
+            reason: "busy",
+            dispatch: "dispatched",
+            milestone,
+            observation: "protected",
+            cleanup: "not-requested",
+          });
+          expect(yield* native(() => page.evaluate("window.writes"))).toEqual(writes);
+          expect(yield* native(() => page.evaluate("window.submits"))).toBe(0);
+          expect(yield* handle.observe.pipe(Effect.flip)).toMatchObject({
+            reason: "busy",
+            dispatch: "not-dispatched",
+            cleanup: "not-requested",
+          });
+
+          pending = false;
+          expect(yield* session.get).toBe(handle);
+          expect(yield* handle.useCredential(request).pipe(Effect.flip)).toMatchObject({
+            reason: "stale-reference",
+            dispatch: "not-dispatched",
+          });
+          const current = yield* handle.observe;
+
+          expect(current.document).toBe(initial.document);
+          expect(current.observation).toBe("approved-after-exposure");
+          const address = current.controls.find((control) => control.label === "Address")!;
+
+          yield* handle.fill(ProtectedBrowserFill.make({ ref: address.ref, value: "New address" }));
+          expect(yield* native(() => page.evaluate("window.writes"))).toEqual([
+            ...writes,
+            "address",
+          ]);
+          expect(yield* native(() => page.evaluate("window.submits"))).toBe(0);
+          expect(page.isClosed()).toBe(false);
+          expect(yield* handle.close).toBe("confirmed");
+          expect(browser.isConnected()).toBe(false);
+          expect(yield* handle.observe.pipe(Effect.flip)).toMatchObject({ reason: "closed" });
+        }).pipe(
+          Effect.provide(ProtectedBrowserSession.layer(policy)),
+          Effect.scoped,
+          Effect.provide(layer),
+        );
+      }).pipe(Effect.scoped, Effect.provide(BrowserCrypto.layer)),
+    { timeout: 30_000 },
+  );
+}
 
 it.live(
   "fills checkout email, rejects replaced nodes, preserves login, and fills a merchant-bound payment frame",
