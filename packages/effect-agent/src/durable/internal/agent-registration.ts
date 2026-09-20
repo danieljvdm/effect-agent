@@ -422,6 +422,7 @@ export type AgentRegistration<A extends ExecutableAgentBinding = ExecutableAgent
    * Finalizes on completion, suspension, failure and interruption. Never reused after eviction.
    * Resolve invocation authority from the trusted claim identity, not captured caller state.
    * Keep fallible resource acquisition lazy in typed Tool operations; this Layer cannot fail.
+   * Provide DurableApprovalSuspension here when resources need retention before approval waits.
    */
   readonly attemptLayer?: (context: AgentAttemptContext) => Layer.Layer<never, never, unknown>;
 };
