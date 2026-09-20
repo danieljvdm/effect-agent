@@ -1,5 +1,21 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.115
+
+### Minor Changes
+
+- [#570](https://github.com/danieljvdm/effect-agent/pull/570) [`8948e5d`](https://github.com/danieljvdm/effect-agent/commit/8948e5d7d149c94ca82699b0519601a165702bb5) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Let the Cloudflare alarm schedule independent finite host lanes and native message waves. BEHAVIOR CHANGE: replace `ThreadHostMaintenance.drainUntil` and `ThreadMaintenanceActivity` with `lanes` of `run`, `pendingDeadline` and `dispatchTimeoutMillis`; route producer hints through `WakeScheduler`, and replace `ThreadMessageDelivery.drainUntil` with `prepare`.
+
+### Patch Changes
+
+- [#568](https://github.com/danieljvdm/effect-agent/pull/568) [`1c33f81`](https://github.com/danieljvdm/effect-agent/commit/1c33f812e4339f1b5757d2721aa8318c8119aa51) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add durable worker-wide stop and indexed summaries with exact accepted and applied input identities. Replay retained starts before public input preparation and drain up to 32 accepted worker inputs at each safe steering boundary.
+
+- [#569](https://github.com/danieljvdm/effect-agent/pull/569) [`0f2c67c`](https://github.com/danieljvdm/effect-agent/commit/0f2c67c1eb459d0192d0d7cc7f752e087c8807c7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow ordinary protected browser filling for checkout and contact email fields. BEHAVIOR CHANGE: Treat email-only login forms marked solely `autocomplete="email"` as ordinary text without saved-login offers; retain offers for explicit `autocomplete="username"` and preserve password-form and card protections.
+
+- Updated dependencies [[`1c33f81`](https://github.com/danieljvdm/effect-agent/commit/1c33f812e4339f1b5757d2721aa8318c8119aa51), [`d1313aa`](https://github.com/danieljvdm/effect-agent/commit/d1313aaf2a1be18b34e5ebfa680ed12f4cef31bc), [`432036c`](https://github.com/danieljvdm/effect-agent/commit/432036cedbe59e8ecbdcd4c71417b730d5b781df)]:
+  - effect-agent@0.1.0-beta.115
+  - @effect-agent/storage-cloudflare@0.1.0-beta.115
+
 ## 0.1.0-beta.114
 
 ### Patch Changes
