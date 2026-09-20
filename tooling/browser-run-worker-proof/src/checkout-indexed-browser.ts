@@ -262,7 +262,7 @@ const framePath = async (frame: Frame, scroll: boolean) => {
   return path;
 };
 
-export const observeIndexed = Effect.fnUntraced(function* (
+const observeIndexedOnce = Effect.fnUntraced(function* (
   session: Pick<BrowserSession, "run">,
   origins: ReadonlyArray<string>,
 ) {
@@ -302,6 +302,27 @@ export const observeIndexed = Effect.fnUntraced(function* (
   });
 
   return { observation, frames: result.frames };
+});
+
+/** Navigation may destroy a read context after an acknowledged click. Only the read is retried. */
+export const observeIndexed = Effect.fnUntraced(function* (
+  session: Pick<BrowserSession, "run">,
+  origins: ReadonlyArray<string>,
+) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = yield* observeIndexedOnce(session, origins).pipe(Effect.result);
+
+    if (result._tag === "Success") return result.success;
+    if (
+      result.failure._tag !== "BrowserSessionError" ||
+      result.failure.reason !== "provider" ||
+      attempt === 2
+    )
+      return yield* Effect.fail(result.failure);
+    yield* measured("wait", "observation.recovery", Effect.sleep("700 millis"));
+  }
+
+  return yield* failure("agent", "Observation recovery exhausted");
 });
 
 export type Snapshot = Effect.Success<ReturnType<typeof observeIndexed>>;

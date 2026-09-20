@@ -1,10 +1,17 @@
+import {
+  BrowserSessionError,
+  type BrowserSession,
+} from "@effect-agent/platform-cloudflare/browser-session";
 import { expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 import type { AiError } from "effect/unstable/ai";
 import { DecisionModel, LanguageModel } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
 
+import { CheckoutOwner } from "../src/checkout-agent.ts";
 import type { CheckoutError } from "../src/checkout-contract.ts";
+import { observeIndexed } from "../src/checkout-indexed-browser.ts";
 import { ControllerInput, type Operation } from "../src/checkout-indexed-contract.ts";
 import { chooseIndexed, decisionDefinition } from "../src/checkout-indexed.ts";
 
@@ -122,3 +129,63 @@ it("retains native model requirements and errors", () => {
     DecisionModel.DecisionModel | LanguageModel.LanguageModel
   >();
 });
+
+it.effect("bounds read-only recovery without replaying input or swallowing interruption", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    let writes = 0;
+
+    const session: Pick<BrowserSession, "run"> = {
+      run: (authorize) =>
+        authorize.pipe(
+          Effect.andThen(
+            Effect.suspend(() => {
+              reads++;
+
+              return BrowserSessionError.make({
+                reason: "provider",
+                dispatch: "possibly-dispatched",
+                cleanup: "not-requested",
+              });
+            }),
+          ),
+        ),
+    };
+
+    const owner = CheckoutOwner.of({
+      authorize: Effect.void,
+      observe: () => Effect.void,
+      observeIndexed: () => Effect.void,
+      record: () =>
+        Effect.sync(() => {
+          writes++;
+        }),
+      approval: Effect.die("unused"),
+      human: Effect.die("unused"),
+    });
+
+    const fiber = yield* observeIndexed(session, ["https://shop.test"]).pipe(
+      Effect.provideService(CheckoutOwner, owner),
+      Effect.result,
+      Effect.forkChild,
+    );
+
+    yield* TestClock.adjust("2 seconds");
+    const result = yield* Fiber.join(fiber);
+
+    expect(result._tag).toBe("Failure");
+    expect(reads).toBe(3);
+    expect(writes).toBe(0);
+    reads = 0;
+
+    const interrupted = yield* observeIndexed(session, ["https://shop.test"]).pipe(
+      Effect.provideService(CheckoutOwner, owner),
+      Effect.forkChild,
+    );
+
+    yield* Effect.yieldNow;
+    yield* Fiber.interrupt(interrupted);
+    expect(reads).toBe(1);
+    expect(writes).toBe(0);
+  }),
+);
