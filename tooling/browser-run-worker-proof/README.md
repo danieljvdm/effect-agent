@@ -105,6 +105,11 @@ report or model history. Automated runs never wait for an operator and do not es
 The ignored `tooling/browser-run-worker-proof/.checkout-proof/<run>/report.json` records model,
 source commit/dirty state, policy, selected profile, completion rate, failures, observations, tool
 outcomes, model usage and finish reasons, server orders, attempt ledger and cleanup result.
+Click and credential-fill outcomes include the requested frame selectors, target selectors and
+credential field roles. Pseudo-selector text arguments become `[redacted]`; attribute literals are
+retained only for source-owned fixture names, types, titles and autocomplete tokens. URL/value
+attributes, URL schemes, escaped/encoded selectors and other literal-bearing selectors become `null`.
+These target records omit credential identifiers, material, session capabilities and raw exceptions.
 It also records concurrency, admission spacing, each case's elapsed time (including browser closure),
 and deployment, readiness, binding-proof, matrix, retirement and total durations. Concurrent case
 durations overlap and must not be summed as wall time. These timers do not separate model latency

@@ -1,3 +1,4 @@
+import { CredentialFieldRole } from "@effect-agent/platform-cloudflare/browser-credentials";
 import { Schema, Struct } from "effect";
 import { RunTotals } from "effect-agent/usage";
 
@@ -115,6 +116,115 @@ export const AgentRun = Schema.Struct({
   usage: Schema.optionalKey(RunTotals),
 });
 
+const EvidenceSelector = Schema.NonEmptyString.check(Schema.isMaxLength(2_048));
+const SelectorSyntax = Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9 .#_*~()>+,:-]*$/));
+
+const fixtureAttributes = new Map([
+  [
+    "name",
+    new Set([
+      "name",
+      "email",
+      "password",
+      "number",
+      "expiry",
+      "cvc",
+      "product",
+      "quantity",
+      "color",
+      "size",
+      "line1",
+      "city",
+      "region",
+      "postalCode",
+      "country",
+      "shipping",
+      "code",
+    ]),
+  ],
+  ["type", new Set(["text", "email", "password", "number", "hidden", "radio", "submit"])],
+  ["title", new Set(["Secure card payment"])],
+  [
+    "autocomplete",
+    new Set([
+      "name",
+      "username",
+      "current-password",
+      "email",
+      "address-line1",
+      "address-level2",
+      "address-level1",
+      "postal-code",
+      "one-time-code",
+      "cc-name",
+      "cc-number",
+      "cc-exp",
+      "cc-csc",
+    ]),
+  ],
+]);
+
+const pseudoText = /(:[a-zA-Z-]+\(\s*)(["'])(.*?)\2(\s*\))/g;
+
+// Keep pseudo-selector structure, but never retain its text arguments or arbitrary attribute
+// literals. Only the fixture's source-owned attribute tokens above may enter target evidence.
+export const evidenceSelector = (selector: string) => {
+  if (
+    /[\\/%@?&]/.test(selector) ||
+    /\b(?:https?|wss?|ftp|file|data|blob|javascript|mailto|tel|about):/i.test(selector) ||
+    /\[\s*(?:value|href|src|action|formaction)\b/i.test(selector)
+  )
+    return null;
+
+  const redacted = selector.replace(pseudoText, "$1$2[redacted]$2$4");
+  let allowed = true;
+
+  const syntax = redacted.replace(pseudoText, "$1$4").replace(/\[[^\]]*\]/g, (attribute) => {
+    if (/^\[\s*[a-zA-Z-]+\s*\]$/.test(attribute)) return "";
+
+    const parts =
+      /^\[\s*(name|type|title|autocomplete)\s*[~|^$*]?=\s*(?:"([^"]*)"|'([^']*)'|([a-zA-Z0-9_-]+))\s*(?:[is]\s*)?\]$/i.exec(
+        attribute,
+      );
+
+    const value = parts?.[2] ?? parts?.[3] ?? parts?.[4];
+
+    if (
+      parts?.[1] === undefined ||
+      value === undefined ||
+      !fixtureAttributes.get(parts[1].toLowerCase())?.has(value)
+    )
+      allowed = false;
+
+    return "";
+  });
+
+  const literalArgument =
+    /(?!:(?:has|is|not|where|nth-(?:last-)?(?:child|of-type))\():[a-zA-Z-]+\(\s*[^)\s]/i.test(
+      syntax,
+    );
+
+  return allowed &&
+    !literalArgument &&
+    Schema.is(SelectorSyntax)(syntax) &&
+    Schema.is(EvidenceSelector)(redacted)
+    ? redacted
+    : null;
+};
+
+const TargetSelector = Schema.NullOr(EvidenceSelector);
+const TargetFrame = Schema.Array(TargetSelector).check(Schema.isMaxLength(8));
+
+const ToolTarget = Schema.Union([
+  Schema.Struct({ frame: TargetFrame, selector: TargetSelector }),
+  Schema.Struct({
+    frame: TargetFrame,
+    fields: Schema.Array(
+      Schema.Struct({ selector: TargetSelector, role: CredentialFieldRole }),
+    ).check(Schema.isMaxLength(8)),
+  }),
+]);
+
 export const RunEvidence = Schema.Struct({
   shop: ShopState,
   control: Schema.Struct(Struct.omit(Control.fields, ["handoffId"])),
@@ -122,9 +232,9 @@ export const RunEvidence = Schema.Struct({
   observations: Schema.Array(BrowserObservation).check(Schema.isMaxLength(150)),
   outputs: Schema.Array(AgentOutput).check(Schema.isMaxLength(8)),
   runs: Schema.optionalKey(Schema.Array(AgentRun).check(Schema.isMaxLength(8))),
-  toolCalls: Schema.Array(Schema.Struct({ name: Text, outcome: Text })).check(
-    Schema.isMaxLength(300),
-  ),
+  toolCalls: Schema.Array(
+    Schema.Struct({ name: Text, outcome: Text, target: Schema.optionalKey(ToolTarget) }),
+  ).check(Schema.isMaxLength(300)),
 });
 
 export const Seed = Schema.Struct({ key: RunKey, flow: CheckoutFlow, scenario: CheckoutScenario });
