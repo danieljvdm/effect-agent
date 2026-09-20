@@ -1,5 +1,16 @@
 # @effect-agent/storage-sqlite
 
+## 0.1.0-beta.115
+
+### Patch Changes
+
+- [#568](https://github.com/danieljvdm/effect-agent/pull/568) [`1c33f81`](https://github.com/danieljvdm/effect-agent/commit/1c33f812e4339f1b5757d2721aa8318c8119aa51) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add durable worker-wide stop and indexed summaries with exact accepted and applied input identities. Replay retained starts before public input preparation and drain up to 32 accepted worker inputs at each safe steering boundary.
+
+- [#571](https://github.com/danieljvdm/effect-agent/pull/571) [`432036c`](https://github.com/danieljvdm/effect-agent/commit/432036cedbe59e8ecbdcd4c71417b730d5b781df) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add opt-in terminal worker assignments that remain steerable while waiting and permanently reject new work after completion, failure, or cancellation. Preserve existing reusable workers and upgrade native storage seals without resetting retained data.
+
+- Updated dependencies [[`1c33f81`](https://github.com/danieljvdm/effect-agent/commit/1c33f812e4339f1b5757d2721aa8318c8119aa51), [`d1313aa`](https://github.com/danieljvdm/effect-agent/commit/d1313aaf2a1be18b34e5ebfa680ed12f4cef31bc), [`432036c`](https://github.com/danieljvdm/effect-agent/commit/432036cedbe59e8ecbdcd4c71417b730d5b781df)]:
+  - effect-agent@0.1.0-beta.115
+
 ## 0.1.0-beta.114
 
 ### Patch Changes
