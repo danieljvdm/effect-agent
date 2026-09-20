@@ -229,6 +229,7 @@
     "retain-browser-startup-identity",
     "retain-upgraded-worker-authority",
     "retained-context-tool-contracts",
+    "retained-follow-up-input",
     "retained-message-delivery",
     "retained-worker-delivery",
     "returned-tool-results-before-input",
