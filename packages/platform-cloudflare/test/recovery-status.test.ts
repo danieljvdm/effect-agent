@@ -35,6 +35,7 @@ import {
   SubmissionLookupById,
   SubmissionLookupByKey,
 } from "effect-agent/submission-ledger";
+import { ThreadProjectionMaintenance } from "effect-agent/thread-projection-maintenance";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObject } from "effect-cf";
@@ -225,6 +226,171 @@ const restoreHistory = (owner: string, thread: string, original: string, sequenc
   });
 
 describe("recovery faults independent of execution history", () => {
+  // Incident: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-AA
+  // Regression: https://github.com/danieljvdm/effect-agent/pull/570
+  // A fresh pre-claim fault must wake its status reader while unrelated delivery is held.
+  it("publishes recovery status changes without waking unchanged ready heads", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const owner = `recovery-wake-${crypto.randomUUID()}`;
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(owner, yield* Clock.Clock);
+        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(owner)));
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+        const receipt = yield* localRun(owner, [])(submit(owner, "accepted"));
+        const original = yield* corruptHistory(owner, owner);
+
+        yield* Effect.promise(() =>
+          runInDurableObject(stubFor(owner), (instance, state) =>
+            instance[DurableObject.RunSymbol](
+              Effect.gen(function* () {
+                const runtime = yield* DurableAgentRuntime;
+                const wakes = yield* WakeScheduler;
+                const projection = yield* ThreadProjectionMaintenance;
+                const threadId = decodeThreadId(owner);
+                const notifications: Array<string> = [];
+                let attempts = 0;
+                let activeProjection = false;
+                let held: Deferred.Deferred<void> | undefined;
+                let checkpoint = yield* Deferred.make<void>();
+
+                const services = Layer.fresh(ThreadMaintenance.layer).pipe(
+                  Layer.provide(
+                    Layer.succeed(DurableAgentRuntime, {
+                      ...runtime,
+                      // The public head port may decline a claim. Retain ready input to
+                      // expose a self-wake loop without executing or settling that input.
+                      processThreadHead: () =>
+                        Effect.sync(() => {
+                          attempts++;
+
+                          return Option.none();
+                        }),
+                    }),
+                  ),
+                  Layer.provide(
+                    Layer.succeed(WakeScheduler, {
+                      ...wakes,
+                      notify: (id) =>
+                        wakes.notify(id).pipe(
+                          Effect.tap(() =>
+                            Effect.sync(() => {
+                              notifications.push(id);
+                            }),
+                          ),
+                        ),
+                    }),
+                  ),
+                  Layer.provide(
+                    Layer.succeed(ThreadProjectionMaintenance, {
+                      ...projection,
+                      pendingDeadline: Effect.sync(() =>
+                        held === undefined ? Option.none() : Option.some(0),
+                      ),
+                      drain: Effect.suspend(() => {
+                        const release = held;
+
+                        if (release === undefined) return Effect.void;
+
+                        return Effect.acquireUseRelease(
+                          Effect.sync(() => {
+                            activeProjection = true;
+                          }),
+                          () => Deferred.await(release),
+                          () =>
+                            Effect.sync(() => {
+                              activeProjection = false;
+                            }),
+                        );
+                      }),
+                    }),
+                  ),
+                  Layer.provide(
+                    Layer.succeed(ThreadMaintenanceFailpoint, {
+                      hit: (location) =>
+                        location === "maintenance:checkpoint:after"
+                          ? Deferred.succeed(checkpoint, undefined).pipe(Effect.asVoid)
+                          : Effect.void,
+                    }),
+                  ),
+                );
+
+                yield* Effect.gen(function* () {
+                  const maintenance = yield* ThreadMaintenance;
+                  const wake = yield* wakes.subscribe(threadId);
+                  const notified = yield* Effect.forkChild(wake);
+
+                  held = yield* Deferred.make<void>();
+                  const first = yield* Effect.forkChild(maintenance.pass);
+
+                  yield* Deferred.await(checkpoint);
+                  expect(activeProjection).toBe(true);
+                  expect(first.pollUnsafe()).toBeUndefined();
+                  expect(notifications).toEqual([owner]);
+                  expect(notified.pollUnsafe()).toEqual(Exit.void);
+                  const fault = Option.getOrThrow(yield* maintenance.recoveryStatus(threadId));
+
+                  expect(fault).toMatchObject({
+                    attempts: 1,
+                    failure: { phase: "history", reason: "failure", errorTag: "ThreadStoreError" },
+                  });
+                  expect(attempts).toBe(0);
+                  yield* Deferred.succeed(held, undefined);
+                  held = undefined;
+                  yield* Fiber.join(first);
+                  expect(activeProjection).toBe(false);
+
+                  notifications.length = 0;
+                  yield* maintenance.pass;
+                  expect(yield* maintenance.recoveryStatus(threadId)).toEqual(Option.some(fault));
+                  expect(notifications).toEqual([]);
+
+                  yield* clock.adjust(fault.retryAt - (yield* Clock.currentTimeMillis));
+                  yield* maintenance.pass;
+                  const updated = Option.getOrThrow(yield* maintenance.recoveryStatus(threadId));
+
+                  expect(updated.attempts).toBe(2);
+                  // A changed status and the old-recovery completion each retain their hint.
+                  expect(notifications).toEqual([owner, owner]);
+                  notifications.length = 0;
+                  state.storage.sql.exec(
+                    "UPDATE effect_agent_canonical_records SET record_json = ? WHERE thread_id = ? AND sequence = 1",
+                    original,
+                    owner,
+                  );
+                  yield* clock.adjust(updated.retryAt - (yield* Clock.currentTimeMillis));
+                  yield* maintenance.pass;
+                  expect(yield* maintenance.recoveryStatus(threadId)).toEqual(Option.none());
+                  expect(notifications).toEqual([owner, owner]);
+
+                  notifications.length = 0;
+                  checkpoint = yield* Deferred.make<void>();
+                  held = yield* Deferred.make<void>();
+                  const previousAttempts = attempts;
+
+                  yield* maintenance.withMutation(Effect.void);
+                  const unchanged = yield* Effect.forkChild(maintenance.pass);
+
+                  yield* Deferred.await(checkpoint);
+                  expect(activeProjection).toBe(true);
+                  expect(unchanged.pollUnsafe()).toBeUndefined();
+                  expect(notifications).toEqual([]);
+                  yield* Deferred.succeed(held, undefined);
+                  held = undefined;
+                  yield* Fiber.join(unchanged);
+                  expect(activeProjection).toBe(false);
+                  expect(attempts).toBe(previousAttempts + 1);
+                  expect(notifications).toEqual([]);
+                  expect(yield* runtime.submissionStatus(receipt)).toEqual({ _tag: "pending" });
+                }).pipe(Effect.provide(services));
+              }).pipe(Effect.scoped),
+            ),
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
+
   it("keeps accepted work visible across eviction, serves healthy lanes, and never replays an uncertain action", () =>
     Effect.runPromise(
       Effect.gen(function* () {

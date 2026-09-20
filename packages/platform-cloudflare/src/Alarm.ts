@@ -647,6 +647,7 @@ export class ThreadMaintenance extends Context.Service<
      * Authorize `explain`, then read one bounded local record without reading execution history.
      * None means no recorded fault, not proof of health or settlement. The host authenticates
      * callers and verifies local Thread membership before exposing this service across RPC.
+     * Created, updated and cleared faults notify WakeScheduler after their durable commit.
      * Provide OperationAuthorizer when constructing this Layer, as for DurableAgentRuntime.
      */
     readonly recoveryStatus: (
@@ -754,6 +755,7 @@ export class ThreadMaintenance extends Context.Service<
 
         const retained = yield* runTransaction("record Thread recovery status", () =>
           ctx.storage.transaction(async (transaction) => {
+            const changed: Array<ThreadId> = [];
             const newlyBlocked: Array<ThreadRecoveryFault> = [];
             const faults = new Map<ThreadId, ThreadRecoveryFault>();
 
@@ -765,7 +767,10 @@ export class ThreadMaintenance extends Context.Service<
                 encoded === undefined ? undefined : decodeRecoveryFault(threadId, encoded);
 
               if (failure === undefined) {
-                if (previous !== undefined) await transaction.delete(key);
+                if (previous !== undefined) {
+                  await transaction.delete(key);
+                  changed.push(threadId);
+                }
                 continue;
               }
 
@@ -780,15 +785,18 @@ export class ThreadMaintenance extends Context.Service<
               });
 
               await transaction.put(key, encodeRecoveryFault(fault));
+              changed.push(threadId);
               faults.set(threadId, fault);
               if (previous === undefined) newlyBlocked.push(fault);
             }
 
-            return { newlyBlocked, faults };
+            return { changed, newlyBlocked, faults };
           }),
         );
 
         yield* failpoint.hit("maintenance:recovery-status:after");
+        // A healthy unchanged head must not wake its own maintenance loop.
+        for (const threadId of retained.changed) yield* wakes.notify(threadId);
         for (const fault of retained.newlyBlocked)
           yield* Effect.logError(
             "Native Thread recovery blocked; accepted work remains pending",
