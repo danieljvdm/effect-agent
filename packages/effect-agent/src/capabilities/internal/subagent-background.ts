@@ -223,10 +223,6 @@ const operations = <
     parameters: Parameters["Type"],
     caller: WorkerContext,
   ) {
-    const encodedParameters = yield* Schema.encodeEffect(declaration.parameters)(parameters).pipe(
-      Effect.mapError((cause) => projectionFailure("input", cause)),
-    );
-
     const source = caller.source;
 
     const preparation: SubagentPrepareContext =
@@ -249,7 +245,7 @@ const operations = <
       Effect.mapError((cause) => projectionFailure("input", cause)),
     );
 
-    return { encodedParameters, encodedInput };
+    return encodedInput;
   });
 
   const validateKey = (key: IdempotencyKey, operation: "start" | "followUp") =>
@@ -286,24 +282,8 @@ const operations = <
       });
     }
 
-    const prepared = yield* prepare(parameters, caller);
-
-    const effectiveTarget = yield* service.resolveTargetPolicy({
-      target: declaration.target,
-      encodedInput: prepared.encodedInput,
-      start: { delegationId: declaration.delegationId, idempotencyKey: key },
-    });
-
-    const resolvedTarget = Option.getOrUndefined(effectiveTarget);
-
-    const resolved = resolveSubagentPolicy(
-      declaration,
-      options.budgetScope === "worker-run"
-        ? (resolvedTarget ?? declaration.target.policy)
-        : caller.policy,
-      undefined,
-      options.budgetScope === "worker-run" ? "root-attached" : "conserved",
-      resolvedTarget,
+    const encodedParameters = yield* Schema.encodeEffect(declaration.parameters)(parameters).pipe(
+      Effect.mapError((cause) => projectionFailure("input", cause)),
     );
 
     const encodedGrant = yield* Schema.encodeEffect(SubagentGrant)(grant).pipe(
@@ -311,26 +291,50 @@ const operations = <
     );
 
     const started = yield* service.start({
-      ...prepared,
       delegationId: declaration.delegationId,
       target: declaration.target,
       idempotencyKey: key,
-      ...(options.budgetScope === undefined ? {} : { budgetScope: options.budgetScope }),
+      encodedParameters,
       encodedGrant,
-      policy: resolved.childPolicy,
-      budget: SubagentBudgetReservation.make({
-        caps: resolved.caps,
-        allocation: resolved.allocation,
-        ...(resolved.policy.descendantInvocations === undefined
-          ? {}
-          : { descendantInvocations: resolved.policy.descendantInvocations }),
+      ...(options.budgetScope === undefined ? {} : { budgetScope: options.budgetScope }),
+      prepare: Effect.gen(function* () {
+        const encodedInput = yield* prepare(parameters, caller);
+
+        const effectiveTarget = yield* service.resolveTargetPolicy({
+          target: declaration.target,
+          encodedInput,
+        });
+
+        const resolvedTarget = Option.getOrUndefined(effectiveTarget);
+
+        const resolved = resolveSubagentPolicy(
+          declaration,
+          options.budgetScope === "worker-run"
+            ? (resolvedTarget ?? declaration.target.policy)
+            : caller.policy,
+          undefined,
+          options.budgetScope === "worker-run" ? "root-attached" : "conserved",
+          resolvedTarget,
+        );
+
+        return {
+          encodedInput,
+          policy: resolved.childPolicy,
+          budget: SubagentBudgetReservation.make({
+            caps: resolved.caps,
+            allocation: resolved.allocation,
+            ...(resolved.policy.descendantInvocations === undefined
+              ? {}
+              : { descendantInvocations: resolved.policy.descendantInvocations }),
+          }),
+          toolCallAllowance: resolveToolCallAllowance(
+            declaration.toolCallAllowance,
+            parameters,
+            resolved.policy,
+            resolved.childPolicy,
+          ),
+        };
       }),
-      toolCallAllowance: resolveToolCallAllowance(
-        declaration.toolCallAllowance,
-        parameters,
-        resolved.policy,
-        resolved.childPolicy,
-      ),
     });
 
     const validated = yield* Schema.decodeEffect(WorkerStarted)(started).pipe(
@@ -357,12 +361,18 @@ const operations = <
     const validated = yield* validateWorker(worker, "followUp");
     const caller = yield* context;
     const key = yield* validateKey(options.idempotencyKey, "followUp");
-    const prepared = yield* prepare(parameters, caller);
+
+    const encodedParameters = yield* Schema.encodeEffect(declaration.parameters)(parameters).pipe(
+      Effect.mapError((cause) => projectionFailure("input", cause)),
+    );
+
+    const encodedInput = yield* prepare(parameters, caller);
 
     const delivery = yield* validateDelivery(
       validated,
       yield* service.followUp({
-        ...prepared,
+        encodedParameters,
+        encodedInput,
         worker: validated,
         target: declaration.target,
         idempotencyKey: key,

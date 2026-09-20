@@ -20,6 +20,7 @@ import { IdempotencyKey, Receipt } from "../../core/Receipt.ts";
 import { SubagentDelegationCaps, SubagentGrant } from "../../core/SubagentContract.ts";
 import {
   type WorkerSummary,
+  type WorkerStarted,
   WorkerCompletion,
   FrameworkMessage,
   WorkerUpdate,
@@ -31,6 +32,8 @@ import {
 } from "../../core/Worker.ts";
 import {
   type SubagentHost,
+  type DeferredStartWorkerRequest,
+  type StartWorkerRequest,
   type WorkerObservation,
   type WorkerReceiptRequest,
   type WorkerRunReport,
@@ -2320,163 +2323,178 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       resolveTargetPolicy: Effect.fn("WorkerHost.resolvePreparedTargetPolicy")(function* (request) {
         yield* authorize("start", "send");
 
-        if (request.start !== undefined && Option.isSome(deps.deliveries)) {
-          const messageId = yield* messageIdFor([
-            context.source.threadId,
-            request.start.delegationId,
-            request.start.idempotencyKey,
-          ]);
-
-          const saved = yield* deps.deliveries.value
-            .get({ ownerThreadId: context.source.threadId, messageId })
-            .pipe(Effect.mapError(storageFailure("start")));
-
-          if (saved !== null) {
-            yield* binding(request.target, "start");
-            const origin = saved.envelope.workerAdmission?.origin;
-            const input = yield* decode(PersistedJson, request.encodedInput, "start");
-
-            if (
-              origin === undefined ||
-              origin.worker.targetAgentId !== request.target.id ||
-              !sameJson(saved.envelope.input, input)
-            )
-              return yield* failure("start", "idempotency-conflict");
-
-            return Option.some(origin.policy);
-          }
-        }
-
         return (yield* preparedTarget(request.target, request.encodedInput)).policy;
       }),
-      start: Effect.fn("WorkerHost.start")(function* (request) {
+      start: Effect.fn("WorkerHost.start")(function* <E = never, R = never>(
+        command: StartWorkerRequest | DeferredStartWorkerRequest<E, R>,
+      ): Effect.fn.Return<WorkerStarted, WorkerError | E, R> {
         const principal = yield* authorize("start", "send");
 
         if (context.depth !== 0 && sourceSubmissionId === undefined)
           return yield* failure("start", "denied");
 
-        const grant = yield* Schema.decodeUnknownEffect(SubagentGrant)(request.encodedGrant).pipe(
+        const grant = yield* Schema.decodeUnknownEffect(SubagentGrant)(command.encodedGrant).pipe(
           Effect.mapError((cause) => failure("start", "corrupt", cause)),
         );
 
+        const parameters = yield* decode(PersistedJson, command.encodedParameters, "start");
+
         const messageId = yield* messageIdFor([
           context.source.threadId,
-          request.delegationId,
-          request.idempotencyKey,
+          command.delegationId,
+          command.idempotencyKey,
         ]);
 
         if (Option.isNone(deps.deliveries)) return yield* failure("start", "unavailable");
+        const deliveries = deps.deliveries.value;
 
-        const existing = yield* deps.deliveries.value
-          .get({ ownerThreadId: context.source.threadId, messageId })
-          .pipe(Effect.mapError(storageFailure("start")));
+        const retained = () =>
+          deliveries
+            .get({ ownerThreadId: context.source.threadId, messageId })
+            .pipe(Effect.mapError(storageFailure("start")));
 
-        const previousOrigin = existing?.envelope.workerAdmission?.origin;
+        const replay = (saved: MessageDeliveryRecord) =>
+          Effect.gen(function* () {
+            yield* binding(command.target, "start");
+            const metadata = saved.envelope.workerAdmission;
 
-        if (existing !== null) {
-          yield* binding(request.target, "start");
-          if (
-            previousOrigin === undefined ||
-            previousOrigin.worker.targetAgentId !== request.target.id ||
-            !samePolicy(previousOrigin.policy, request.policy) ||
-            !Schema.toEquivalence(WorkerOrigin.fields.budget)(
-              previousOrigin.budget,
-              request.budget,
-            ) ||
-            !Schema.toEquivalence(SubagentGrant)(previousOrigin.grant, grant) ||
-            previousOrigin.budgetScope !== request.budgetScope ||
-            previousOrigin.toolCallAllowance !== request.toolCallAllowance ||
-            previousOrigin.depth !== context.depth + 1
-          )
-            return yield* failure("start", "idempotency-conflict");
+            if (metadata === undefined) return yield* failure("start", "idempotency-conflict");
+            const origin = metadata.origin;
 
-          return {
-            worker: previousOrigin.worker,
-            delivery: yield* send(
-              previousOrigin,
-              messageId,
-              request.encodedInput,
-              request.encodedParameters,
-              principal,
-              "start",
-            ),
-          };
-        }
-        const prepared = yield* preparedTarget(request.target, request.encodedInput);
-        const resolved = prepared.resolved;
-        const sourcePolicy = Option.getOrElse(prepared.source.policyOverride, () => context.policy);
-        const now = yield* Clock.currentTimeMillis;
-        const sourceBinding = prepared.source.binding;
+            if (
+              origin.firstMessageId !== messageId ||
+              metadata.messageId !== messageId ||
+              origin.source.threadId !== context.source.threadId ||
+              origin.worker.delegationId !== command.delegationId ||
+              origin.worker.targetAgentId !== command.target.id ||
+              !sameJson(metadata.parameters, parameters) ||
+              !Schema.toEquivalence(SubagentGrant)(origin.grant, grant) ||
+              origin.budgetScope !== command.budgetScope ||
+              origin.depth !== context.depth + 1 ||
+              (!("prepare" in command) &&
+                (!samePolicy(origin.policy, command.policy) ||
+                  !Schema.toEquivalence(WorkerOrigin.fields.budget)(
+                    origin.budget,
+                    command.budget,
+                  ) ||
+                  origin.toolCallAllowance !== command.toolCallAllowance))
+            )
+              return yield* failure("start", "idempotency-conflict");
 
-        if (sourceBinding === undefined) return yield* failure("start", "declaration-unavailable");
+            return {
+              worker: origin.worker,
+              delivery: yield* send(
+                origin,
+                messageId,
+                "prepare" in command ? saved.envelope.input : command.encodedInput,
+                parameters,
+                principal,
+                "start",
+              ),
+            };
+          });
 
-        const reporting = yield* reportIntent(
-          sourceBinding,
-          resolved,
-          request.delegationId,
-          prepared.source,
-        );
+        const existing = yield* retained();
 
-        if (reporting?.mode === "standard" && sourceSubmissionId === undefined)
-          return yield* failure("start", "denied");
+        if (existing !== null) return yield* replay(existing);
 
-        const origin = yield* decode(
-          WorkerOrigin,
-          {
-            worker: {
-              schemaVersion: 1,
-              delegationId: request.delegationId,
-              targetAgentId: request.target.id,
-              threadId: Schema.decodeSync(ThreadId)(messageId),
+        return yield* Effect.gen(function* () {
+          const request =
+            "prepare" in command ? { ...(yield* command.prepare), ...command } : command;
+
+          const prepared = yield* preparedTarget(request.target, request.encodedInput);
+          const resolved = prepared.resolved;
+
+          const sourcePolicy = Option.getOrElse(
+            prepared.source.policyOverride,
+            () => context.policy,
+          );
+
+          const now = yield* Clock.currentTimeMillis;
+          const sourceBinding = prepared.source.binding;
+
+          if (sourceBinding === undefined)
+            return yield* failure("start", "declaration-unavailable");
+
+          const reporting = yield* reportIntent(
+            sourceBinding,
+            resolved,
+            request.delegationId,
+            prepared.source,
+          );
+
+          if (reporting?.mode === "standard" && sourceSubmissionId === undefined)
+            return yield* failure("start", "denied");
+
+          const origin = yield* decode(
+            WorkerOrigin,
+            {
+              worker: {
+                schemaVersion: 1,
+                delegationId: request.delegationId,
+                targetAgentId: request.target.id,
+                threadId: Schema.decodeSync(ThreadId)(messageId),
+              },
+              source: context.source,
+              targetDigests: resolved.digests,
+              policy: request.policy,
+              budget: request.budget,
+              ...(request.budgetScope === undefined ? {} : { budgetScope: request.budgetScope }),
+              grant,
+              depth: context.depth + 1,
+              firstMessageId: messageId,
+              createdAtMillis: now,
+              expiresAtMillis: now + deps.limits.lifetimeMillis,
+              ...(reporting === undefined ? {} : { reporting }),
+              ...(request.toolCallAllowance === undefined
+                ? {}
+                : { toolCallAllowance: request.toolCallAllowance }),
             },
-            source: context.source,
-            targetDigests: resolved.digests,
-            policy: request.policy,
-            budget: request.budget,
-            ...(request.budgetScope === undefined ? {} : { budgetScope: request.budgetScope }),
-            grant,
-            depth: context.depth + 1,
-            firstMessageId: messageId,
-            createdAtMillis: now,
-            expiresAtMillis: now + deps.limits.lifetimeMillis,
-            ...(reporting === undefined ? {} : { reporting }),
-            ...(request.toolCallAllowance === undefined
-              ? {}
-              : { toolCallAllowance: request.toolCallAllowance }),
-          },
-          "start",
-        );
+            "start",
+          );
 
-        yield* authorizeBudget(origin, principal);
+          yield* authorizeBudget(origin, principal);
 
-        const targetPolicy = Option.isSome(prepared.policy)
-          ? prepared.policy.value
-          : origin.budgetScope === "worker-run"
-            ? resolved.definition.policy
-            : AgentPolicy.resolve(
-                resolved.definition.policyOverrides ?? resolved.definition.policy,
-                sourcePolicy,
-              );
+          const targetPolicy = Option.isSome(prepared.policy)
+            ? prepared.policy.value
+            : origin.budgetScope === "worker-run"
+              ? resolved.definition.policy
+              : AgentPolicy.resolve(
+                  resolved.definition.policyOverrides ?? resolved.definition.policy,
+                  sourcePolicy,
+                );
 
-        if (
-          !withinPolicy(
-            origin,
-            origin.budgetScope === "worker-run" ? targetPolicy : sourcePolicy,
-            targetPolicy,
+          if (
+            !withinPolicy(
+              origin,
+              origin.budgetScope === "worker-run" ? targetPolicy : sourcePolicy,
+              targetPolicy,
+            )
           )
-        )
-          return yield* failure("start", "capacity");
+            return yield* failure("start", "capacity");
 
-        const delivery = yield* send(
-          origin,
-          messageId,
-          request.encodedInput,
-          request.encodedParameters,
-          principal,
-          "start",
+          const delivery = yield* send(
+            origin,
+            messageId,
+            request.encodedInput,
+            request.encodedParameters,
+            principal,
+            "start",
+          );
+
+          return { worker: origin.worker, delivery };
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              if (!("prepare" in command)) return yield* Effect.fail(error);
+              // A concurrent first writer may have retained the command during preparation or insert.
+              // Only its exact declared arguments permit replay; absent proof preserves the failure.
+              const saved = yield* retained();
+
+              return saved === null ? yield* Effect.fail(error) : yield* replay(saved);
+            }),
+          ),
         );
-
-        return { worker: origin.worker, delivery };
       }),
       followUp: Effect.fn("WorkerHost.followUp")(function* (request) {
         const principal = yield* authorize("followUp", "send", request.worker);

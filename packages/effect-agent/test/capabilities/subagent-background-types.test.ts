@@ -6,7 +6,7 @@ import { MessageRef, type MessageStatus } from "effect-agent/messaging";
 import { IdempotencyKey, type JoinedToHost, Receipt } from "effect-agent/receipt";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentGrant } from "effect-agent/subagent-contract";
-import type { SubagentHost } from "effect-agent/subagent-host";
+import type { StartWorkerRequest, SubagentHost } from "effect-agent/subagent-host";
 import type { WorkerError } from "effect-agent/worker";
 import type { Tool } from "effect/unstable/ai";
 import { Toolkit } from "effect/unstable/ai";
@@ -198,6 +198,25 @@ const receipt = Schema.decodeSync(Receipt)({
 });
 
 const key = Schema.decodeSync(IdempotencyKey)("start-key");
+
+const hostStartTypes = (host: SubagentHost["Service"], request: StartWorkerRequest) => {
+  const prepared = host.start(request);
+
+  const deferred = host.start({
+    ...request,
+    prepare: Effect.flatMap(Prepare, () => Effect.fail(new DeclaredFailure())),
+  });
+
+  const proofs: [
+    Assert<Equal<Effect.Error<typeof prepared>, WorkerError>>,
+    Assert<Equal<Effect.Services<typeof prepared>, never>>,
+    Assert<Equal<Effect.Error<typeof deferred>, WorkerError | DeclaredFailure>>,
+    Assert<Equal<Effect.Services<typeof deferred>, Prepare>>,
+  ] = [true, true, true, true];
+
+  return proofs;
+};
+
 const start = Subagent.start(declaration, "input", { idempotencyKey: key });
 const followUp = Subagent.followUp(declaration, worker, "next", { idempotencyKey: key });
 const inspect = Subagent.inspect(declaration, worker, receipt);
@@ -433,6 +452,7 @@ const rejectInvalidCalls = () => {
 describe("background authoring types", () => {
   it("preserves operation errors, schema services, and selected native Tool names", () => {
     expect(typeof updateLayerProofs).toBe("function");
+    expect(typeof hostStartTypes).toBe("function");
     expect(typeof dispositionLayerProofs).toBe("function");
     expect(proofs.every(Boolean)).toBe(true);
     expect(stopProofs.every(Boolean)).toBe(true);

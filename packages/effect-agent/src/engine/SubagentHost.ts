@@ -38,6 +38,28 @@ export interface StartWorkerRequest {
   readonly budgetScope?: WorkerBudgetScope;
 }
 
+/**
+ * First-admission preparation stays lazy until the owner authorizes the caller and checks the
+ * retained command. Replays compare declared parameters/options and reuse the original capture.
+ * Preparation must be free of external effects: concurrent first admissions can prepare before
+ * the retained delivery chooses its first writer.
+ */
+export interface DeferredStartWorkerRequest<E = never, R = never> extends Pick<
+  StartWorkerRequest,
+  | "delegationId"
+  | "target"
+  | "idempotencyKey"
+  | "encodedParameters"
+  | "encodedGrant"
+  | "budgetScope"
+> {
+  readonly prepare: Effect.Effect<
+    Pick<StartWorkerRequest, "encodedInput" | "policy" | "budget" | "toolCallAllowance">,
+    E,
+    R
+  >;
+}
+
 export interface FollowUpWorkerRequest {
   readonly worker: WorkerRef;
   readonly target: Agent.AnyDefinition;
@@ -138,13 +160,11 @@ export class SubagentHost extends Context.Service<
     readonly resolveTargetPolicy: (request: {
       readonly target: Agent.AnyDefinition;
       readonly encodedInput: unknown;
-      /** Reconcile a retained launch before asking authority to prepare a new one. */
-      readonly start?: {
-        readonly delegationId: DelegationId;
-        readonly idempotencyKey: IdempotencyKey;
-      };
     }) => Effect.Effect<Option.Option<AgentPolicy>, WorkerError>;
-    readonly start: (request: StartWorkerRequest) => Effect.Effect<WorkerStarted, WorkerError>;
+    /** Prepared callers retain strict input/policy conflicts; deferred callers replay the saved capture. */
+    readonly start: <E = never, R = never>(
+      request: StartWorkerRequest | DeferredStartWorkerRequest<E, R>,
+    ) => Effect.Effect<WorkerStarted, WorkerError | E, R>;
     readonly followUp: (
       request: FollowUpWorkerRequest,
     ) => Effect.Effect<MessageStatus, WorkerError>;

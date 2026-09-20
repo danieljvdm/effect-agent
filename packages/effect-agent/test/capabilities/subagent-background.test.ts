@@ -143,11 +143,14 @@ const settled: WorkerRunReport["observation"] = {
   budgetExhausted: true,
 };
 
-const host = (overrides: Partial<SubagentHost["Service"]> = {}): SubagentHost["Service"] => ({
+const host = (
+  overrides: Partial<Omit<SubagentHost["Service"], "start">> & {
+    readonly start?: (request: StartWorkerRequest) => Effect.Effect<WorkerStarted, WorkerError>;
+  } = {},
+): SubagentHost["Service"] => ({
   ...SubagentHost.unavailable,
   context: Effect.succeed(caller),
   resolveTargetPolicy: () => Effect.succeed(Option.none()),
-  start: () => Effect.succeed(started),
   followUp: () => Effect.succeed(nextDelivery),
   inspect: () => Effect.succeed(settled),
   await: () => Effect.succeed(settled),
@@ -173,6 +176,15 @@ const host = (overrides: Partial<SubagentHost["Service"]> = {}): SubagentHost["S
     }),
   cancel: () => Effect.void,
   ...overrides,
+  start: (request) =>
+    Effect.gen(function* () {
+      if (!("prepare" in request))
+        return yield* overrides.start?.(request) ?? Effect.succeed(started);
+      const { prepare, ...command } = request;
+      const prepared = { ...(yield* prepare), ...command };
+
+      return yield* overrides.start?.(prepared) ?? Effect.succeed(started);
+    }),
 });
 
 class ProjectionDenied extends Schema.TaggedError<ProjectionDenied>()("ProjectionDenied", {}) {}

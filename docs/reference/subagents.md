@@ -353,6 +353,13 @@ with `WorkerError`; preserve the same key and parameters when retrying an uncert
 Authorization and input-validation failures remain typed errors. Existing delivery rows keep their
 stored format and identity.
 
+`Subagent.start` checks the retained command before running `prepareInput`. Reusing the same key
+and declared parameters/options in a later Run reuses the first captured input, including a launch
+still awaiting admission. Changed parameters or funding scope conflict, and current caller
+authorization still applies. Preparation must be free of external effects: competing first calls
+can prepare before the native outbox chooses one capture. Admission keeps its existing authority
+checks; a retained command is not permission for a fresh start.
+
 ```ts
 const Research = Subagent.make("research", { target: researcher });
 const tools = Subagent.background(Research, {

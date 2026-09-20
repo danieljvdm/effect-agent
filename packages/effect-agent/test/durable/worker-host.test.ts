@@ -23,12 +23,14 @@ import {
   ToolCallId,
 } from "effect-agent/identifiers";
 import { IdempotencyKey, JoinedToHost, QueueSequence, Receipt } from "effect-agent/receipt";
+import * as Subagent from "effect-agent/subagent";
 import {
   SubagentDelegationCaps,
   SubagentGrant,
   SubagentReservationAmounts,
 } from "effect-agent/subagent-contract";
 import {
+  SubagentHost,
   WorkerReportPreparationFailure,
   type StartWorkerRequest,
   type WorkerReporting,
@@ -1435,13 +1437,6 @@ layer(NodeCrypto.layer)((it) => {
           principal,
         );
 
-        expect(
-          yield* later.resolveTargetPolicy({
-            target,
-            encodedInput: original.encodedInput,
-            start: { delegationId: original.delegationId, idempotencyKey: original.idempotencyKey },
-          }),
-        ).toEqual(Option.some(policy));
         expect(yield* later.start(original)).toEqual(first);
         for (const changed of [
           { ...original, encodedInput: { text: "changed" } },
@@ -1457,6 +1452,137 @@ layer(NodeCrypto.layer)((it) => {
         expect(h.submissions.size).toBe(1);
       }),
   );
+
+  for (const pending of [false, true])
+    it.effect(
+      `public start replays the retained capture before preparation (pending=${pending})`,
+      () =>
+        Effect.gen(function* () {
+          class PreparationFailed extends Schema.TaggedError<PreparationFailed>()(
+            "PreparationFailed",
+            {},
+          ) {}
+          let preparations = 0;
+          let throwPreparation = false;
+          let denyFresh = false;
+
+          const h = yield* harness().pipe(
+            Effect.provideService(WorkerPolicyResolver, {
+              resolveSource: () => Effect.succeed(Option.none()),
+              resolveTarget: (request) =>
+                denyFresh &&
+                request._tag === "InitialInput" &&
+                request.source._tag === "tool" &&
+                request.source.runId === "later-run"
+                  ? WorkerError.make({ operation: "start", reason: "denied" })
+                  : Effect.succeed(Option.none()),
+            }),
+          );
+
+          const declaration = Subagent.make("research", {
+            target,
+            parameters: Schema.Struct({ note: Schema.String }),
+            failure: PreparationFailed,
+            prepareInput: ({ note }, caller) =>
+              Effect.gen(function* () {
+                preparations++;
+                if (throwPreparation) return yield* new PreparationFailed();
+
+                return {
+                  text: `${note}:${caller.source === "tool" ? caller.parent.runId : "programmatic"}`,
+                };
+              }),
+            policy: Subagent.SubagentPolicy.make({
+              maxChildren: 10,
+              maxConcurrency: 1,
+              maxTurns: 2,
+              maxToolCalls: 2,
+              maxDuration: "1 second",
+            }),
+          });
+
+          const facet = (run: string) =>
+            h.runtime.facet(
+              {
+                source: {
+                  _tag: "tool",
+                  agentId: sourceAgent.id,
+                  threadId: sourceId,
+                  runId: Schema.decodeSync(RunId)(run),
+                  toolCallId: Schema.decodeSync(ToolCallId)(`call:${run}`),
+                },
+                policy: sourceAgent.policy,
+                depth: 0,
+              },
+              principal,
+            );
+
+          const key = Schema.decodeSync(IdempotencyKey)("public-command");
+
+          const start = Subagent.start(
+            declaration,
+            { note: "immutable brief" },
+            { idempotencyKey: key },
+          );
+
+          if (pending) h.fail("worker:before-source-append");
+          const first = yield* start.pipe(Effect.provideService(SubagentHost, facet("first-run")));
+          // Use the retained store's exact envelope; no conversation/history reconstruction.
+          const envelope = [...h.deliveries.values()][0]?.envelope;
+
+          expect(envelope?.input).toEqual({ text: "immutable brief:first-run" });
+          expect(first.delivery.receipt === null).toBe(pending);
+          h.fail(undefined);
+          if (pending) yield* TestClock.adjust("31 seconds");
+          denyFresh = true;
+          const later = facet("later-run");
+          const replay = yield* start.pipe(Effect.provideService(SubagentHost, later));
+
+          expect(replay.worker).toEqual(first.worker);
+          expect(replay.delivery.message).toEqual(first.delivery.message);
+          if (!pending) expect(replay).toEqual(first);
+          throwPreparation = true;
+          expect(yield* start.pipe(Effect.provideService(SubagentHost, later))).toEqual(replay);
+          for (const changed of [
+            Subagent.start(declaration, { note: "changed brief" }, { idempotencyKey: key }),
+            Subagent.start(
+              declaration,
+              { note: "immutable brief" },
+              { idempotencyKey: key, budgetScope: "worker-run" },
+            ),
+          ])
+            expect(
+              yield* changed.pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+            ).toMatchObject({ reason: "idempotency-conflict" });
+          h.deny("send");
+          expect(
+            yield* start.pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+          ).toMatchObject({ reason: "denied" });
+          h.deny(undefined);
+          expect(preparations).toBe(1);
+          expect(h.deliveries.size).toBe(1);
+          expect([...h.deliveries.values()][0]?.envelope).toEqual(envelope);
+          expect(h.submissions.size).toBe(1);
+          expect(
+            yield* Subagent.start(
+              declaration,
+              { note: "fresh brief" },
+              {
+                idempotencyKey: Schema.decodeSync(IdempotencyKey)("preparation-error"),
+              },
+            ).pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+          ).toEqual(new PreparationFailed());
+          throwPreparation = false;
+          expect(
+            yield* Subagent.start(
+              declaration,
+              { note: "fresh brief" },
+              { idempotencyKey: Schema.decodeSync(IdempotencyKey)("fresh-command") },
+            ).pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+          ).toMatchObject({ reason: "denied" });
+          expect(h.deliveries.size).toBe(1);
+        }),
+    );
 
   // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
   it.effect(

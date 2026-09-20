@@ -1407,3 +1407,97 @@ it.effect.each([false, true])(
     ).pipe(Effect.provide(NodeFileSystem.layer)),
   15_000,
 );
+
+it.effect.each([false, true])(
+  "retains the first public start capture when preparation races (changed brief=%s)",
+  (changed) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-capture-race-" });
+        const preparing = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let preparations = 0;
+
+        const research = Subagent.make("research", {
+          target: target.definition,
+          policy: declaration.policy,
+          prepareInput: ({ question }) =>
+            Effect.gen(function* () {
+              const capture = ++preparations;
+
+              if (capture === 1) {
+                yield* Deferred.succeed(preparing, undefined);
+                yield* Deferred.await(release);
+              }
+
+              return { question: `${question}:${capture}` };
+            }),
+        });
+
+        const context = yield* Layer.build(
+          NodeHost.NodeDurableHost.layerRegistered(
+            [
+              { agent: source, definitions },
+              { agent: target, definitions },
+            ],
+            {
+              filename: `${directory}/runtime.sqlite`,
+              deploymentId: "capture-v1",
+              producerId: "capture-node",
+            },
+          ).pipe(Layer.provide(authority)),
+        );
+
+        const runtime = Context.get(context, DurableAgentRuntime);
+
+        yield* runtime.submitRegistered(
+          source,
+          { question: "launch" },
+          {
+            threadId: sourceThreadId,
+            principal,
+            idempotencyKey: key("source"),
+          },
+        );
+        const owner = yield* runtime.workerHost({ sourceThreadId, principal });
+
+        const start = (question: string) =>
+          withFacet(
+            owner,
+            Subagent.start(research, { question }, { idempotencyKey: key("same-command") }),
+          );
+
+        const first = yield* start(changed ? "different brief" : "brief").pipe(
+          Effect.result,
+          Effect.forkChild,
+        );
+
+        yield* Deferred.await(preparing);
+        const winner = yield* start("brief");
+
+        yield* Deferred.succeed(release, undefined);
+        const loser = yield* Fiber.join(first);
+
+        expect(loser).toMatchObject(
+          changed
+            ? { _tag: "Failure", failure: { reason: "idempotency-conflict" } }
+            : { _tag: "Success", success: winner },
+        );
+        expect(yield* start("brief")).toEqual(winner);
+        expect(preparations).toBe(2);
+
+        const retained = yield* Context.get(context, MessageDeliveryStore).list({
+          ownerThreadId: sourceThreadId,
+          limit: 10,
+        });
+
+        expect(retained.items).toHaveLength(1);
+        expect(retained.items[0]?.envelope.input).toEqual({ question: "brief:2" });
+        expect(retained.items[0]?.envelope.workerAdmission?.parameters).toEqual({
+          question: "brief",
+        });
+      }),
+    ).pipe(Effect.provide(NodeFileSystem.layer)),
+  15_000,
+);
