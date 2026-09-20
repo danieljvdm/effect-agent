@@ -13,6 +13,7 @@ import {
   LoginCredential,
   CardCredential,
   ProtectedBrowser,
+  ProtectedBrowserFill,
   ProtectedBrowserNavigate,
   ProtectedBrowserClick,
   UseCredential,
@@ -45,7 +46,7 @@ const policy = InteractiveBrowserPolicy.make({
 });
 
 it.live(
-  "discovers different native forms, rejects replaced nodes, preserves login, and fills a merchant-bound payment frame",
+  "fills checkout email, rejects replaced nodes, preserves login, and fills a merchant-bound payment frame",
   (test) =>
     Effect.gen(function* () {
       const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
@@ -84,6 +85,14 @@ it.live(
           body = '<section><input autocomplete="username"><input type="password"></section>'.repeat(
             2,
           );
+        else if (url.pathname === "/checkout")
+          body = `
+            <form><label>Receipt email<input name="email" type="email" autocomplete="email"></label>
+              <input aria-label="Card number" autocomplete="cc-number">
+              <input aria-label="Security code" autocomplete="cc-csc"></form>
+            <form><input aria-label="Email-first account" type="email" autocomplete="username"></form>
+            <form><input aria-label="Login email" type="email" autocomplete="email">
+              <input aria-label="Password" type="password"></form>`;
         else if (url.pathname === "/pay")
           body =
             '<form onsubmit="event.preventDefault();document.body.append(\'Purchase submitted\')"><button>Pay now</button></form><iframe src="https://processor.test/fields"></iframe><iframe src="https://incidental.test/noise"></iframe>';
@@ -192,6 +201,55 @@ it.live(
 
       yield* Effect.gen(function* () {
         const handle = yield* (yield* ProtectedBrowser).open(policy);
+
+        phase = "checkout-email";
+        yield* handle.navigate(
+          ProtectedBrowserNavigate.make({ url: "https://alpha.test/checkout" }),
+        );
+        const checkoutControls = (yield* handle.observe).controls;
+        const email = checkoutControls.find((control) => control.label === "Receipt email")!;
+
+        yield* handle.fill(
+          ProtectedBrowserFill.make({ ref: email.ref, value: "receipt@example.test" }),
+        );
+        expect(email.role).toBe("text");
+        for (const [label, role] of [
+          ["Card number", "card-number"],
+          ["Security code", "card-security-code"],
+          ["Email-first account", "username"],
+          ["Login email", "username"],
+          ["Password", "password"],
+        ] as const) {
+          const control = checkoutControls.find((control) => control.label === label)!;
+
+          expect(control.role).toBe(role);
+          expect(
+            yield* handle
+              .fill(ProtectedBrowserFill.make({ ref: control.ref, value: "ordinary" }))
+              .pipe(Effect.flip),
+          ).toMatchObject({
+            reason: "unsupported",
+            dispatch: "not-dispatched",
+            observation: "before-exposure",
+            cleanup: "not-requested",
+          });
+        }
+        expect(
+          yield* handle.listCredentialOffers(
+            ListCredentialOffers.make({
+              kind: "login",
+              target: checkoutControls.find((control) => control.label === "Email-first account")!
+                .ref,
+            }),
+          ),
+        ).toHaveLength(1);
+        expect(
+          yield* native(() =>
+            page.evaluate("[...document.querySelectorAll('input')].map(el => el.value)"),
+          ),
+        ).toEqual(["receipt@example.test", "", "", "", "", ""]);
+        expect(resolutions).toBe(0);
+        expect((yield* handle.observe).observation).toBe("before-exposure");
 
         phase = "native-reference-expiry";
         yield* handle.navigate(ProtectedBrowserNavigate.make({ url: "https://alpha.test/login" }));
