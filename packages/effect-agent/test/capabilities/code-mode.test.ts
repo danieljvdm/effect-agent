@@ -39,6 +39,11 @@ const Query = Tool.make("query_warehouse", {
   success: Schema.Struct({ rows: Schema.Array(Schema.Int), truncated: Schema.Boolean }),
 }).annotate(ToolExecutionClass, "readonly");
 
+const Empty = Tool.make("empty_warehouse", {
+  parameters: Schema.Record(Schema.String, Schema.Never),
+  success: Schema.Record(Schema.String, Schema.Never),
+}).annotate(ToolExecutionClass, "readonly");
+
 const Unannotated = Tool.make("unannotated", {
   parameters: Schema.Struct({ key: Schema.String }),
   success: Schema.String,
@@ -362,6 +367,7 @@ const identifiers = Layer.succeed(IdGenerator, {
 });
 
 interface ScenarioOutcome {
+  readonly declarations: string;
   readonly answer: { readonly answer: string };
   /** Every tool-message part the final model request observed. */
   readonly toolResults: ReadonlyArray<{
@@ -369,6 +375,7 @@ interface ScenarioOutcome {
     readonly isFailure: boolean;
   }>;
   readonly queryCalls: number;
+  readonly emptyCalls: number;
 }
 
 const runWithCode = <R = never>(
@@ -386,7 +393,7 @@ const runWithCode = <R = never>(
   Effect.gen(function* () {
     const definition = CodeMode.make("run_javascript", {
       description: "Run JavaScript over the warehouse",
-      tools: { warehouse: { query: Query } },
+      tools: { warehouse: { query: Query, empty: Empty } },
       ...(options?.maxEgressBytes === undefined ? {} : { maxEgressBytes: options.maxEgressBytes }),
       ...(options?.redactEgress === undefined ? {} : { redactEgress: options.redactEgress }),
     });
@@ -467,14 +474,16 @@ const runWithCode = <R = never>(
     );
 
     const queryCalls = yield* Ref.make(0);
+    const emptyCalls = yield* Ref.make(0);
 
     const handlerLayer = definition.handlers.pipe(
       Layer.provide(
-        Toolkit.make(Query).toLayer({
+        Toolkit.make(Query, Empty).toLayer({
           query_warehouse: ({ sql }) =>
             Ref.update(queryCalls, (n) => n + 1).pipe(
               Effect.as({ rows: sql.includes("empty") ? [] : [1, 2, 3], truncated: false }),
             ),
+          empty_warehouse: () => Ref.update(emptyCalls, (n) => n + 1).pipe(Effect.as({})),
         }),
       ),
       Layer.provide(scriptedExecutorLayer),
@@ -487,9 +496,11 @@ const runWithCode = <R = never>(
     ).pipe(Effect.provide(handlerLayer), Effect.scoped);
 
     return {
+      declarations: definition.declarations,
       answer: result.output,
       toolResults: yield* Ref.get(toolResults),
       queryCalls: yield* Ref.get(queryCalls),
+      emptyCalls: yield* Ref.get(emptyCalls),
     } satisfies ScenarioOutcome;
   });
 
@@ -500,6 +511,31 @@ const testLayer = Layer.mergeAll(
 );
 
 layer(testLayer)("CAP-016 Code Mode handler through a scripted executor", (it) => {
+  it.effect("renders strict empty objects and rejects nonempty or non-object inner inputs", () =>
+    Effect.gen(function* () {
+      const valid = yield* runWithCode("CALL warehouse.empty {}");
+
+      expect(valid.declarations).toContain(
+        "empty(input: Record<string, never>): Promise<Record<string, never>>;",
+      );
+      expect(valid.emptyCalls).toBe(1);
+      expect(valid.toolResults[0]).toMatchObject({
+        isFailure: false,
+        result: { result: { ok: {} } },
+      });
+
+      for (const input of ['{"extra":true}', "[]", "null", "42"]) {
+        const invalid = yield* runWithCode(`CALL warehouse.empty ${input}`);
+
+        expect(invalid.emptyCalls).toBe(0);
+        expect(invalid.toolResults[0]).toMatchObject({
+          isFailure: false,
+          result: { result: { caught: { _tag: "ModelProtocolError" } } },
+        });
+      }
+    }),
+  );
+
   it.effect("recovers invalid outer Code Mode arguments and keeps inner validation catchable", () =>
     Effect.gen(function* () {
       const outer = yield* runWithCode('CALL warehouse.query {"sql":"select 1"}', {
