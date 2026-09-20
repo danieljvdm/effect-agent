@@ -50,6 +50,9 @@ export class BrowserRunProtectedBinding extends Context.Service<
       policy: InteractiveBrowserPolicy,
       identity?: ProtectedProviderIdentity,
     ) => Effect.Effect<ProtectedProviderSession, ProtectedBrowserError, Scope.Scope>;
+    readonly keepAlive: (
+      sessionId: Redacted.Redacted<string>,
+    ) => Effect.Effect<void, ProtectedBrowserError>;
   }
 >()("@effect-agent/platform-cloudflare/BrowserRunProtectedBinding") {}
 
@@ -214,32 +217,38 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
                 targetId: Redacted.make(info.targetInfo.targetId),
               });
 
-              stage = "protected.interception";
-              await page.setBypassServiceWorker(true);
-              await page.setRequestInterception(true);
-              page.on("request", (request) => {
-                let allowed = policy.network._tag === "Unrestricted";
+              // Unrestricted passes need no attachment-local network enforcement. Leave their
+              // service workers and requests alone, including across host-owned detach/resume.
+              if (policy.network._tag !== "Unrestricted") {
+                stage = "protected.interception";
+                await page.setBypassServiceWorker(true);
+                await page.setRequestInterception(true);
+                page.on("request", (request) => {
+                  let allowed = false;
 
-                try {
-                  const url = new URL(request.url());
+                  try {
+                    const url = new URL(request.url());
 
-                  allowed ||=
-                    policy.network._tag === "ExactHosts" &&
-                    url.protocol === "https:" &&
-                    !url.username &&
-                    !url.password &&
-                    policy.network.allowedHosts.includes(url.host);
-                } catch {
-                  /* Refuse malformed destinations. */
-                }
-                void (
-                  allowed && !invalid ? request.continue() : request.abort("blockedbyclient")
-                ).catch(async (cause) => {
-                  invalid = true;
-                  driver?.invalidate();
-                  await runCleanup(reportBrowserCause("protected.interception", Cause.fail(cause)));
+                    allowed =
+                      policy.network._tag === "ExactHosts" &&
+                      url.protocol === "https:" &&
+                      !url.username &&
+                      !url.password &&
+                      policy.network.allowedHosts.includes(url.host);
+                  } catch {
+                    /* Refuse malformed destinations. */
+                  }
+                  void (
+                    allowed && !invalid ? request.continue() : request.abort("blockedbyclient")
+                  ).catch(async (cause) => {
+                    invalid = true;
+                    driver?.invalidate();
+                    await runCleanup(
+                      reportBrowserCause("protected.interception", Cause.fail(cause)),
+                    );
+                  });
                 });
-              });
+              }
               if (signal.aborted || invalid) {
                 await runCleanup(terminate);
                 throw new ProtectedTransportError({ reason: "stale-reference" });
@@ -346,7 +355,38 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
         };
       }, Effect.withTracerEnabled(false));
 
-      return { open };
+      const keepAlive = Effect.fn("BrowserRunProtectedBinding.keepAlive")(function* (
+        sessionId: Redacted.Redacted<string>,
+      ) {
+        const failure = (reason: ProtectedBrowserError["reason"]) =>
+          new ProtectedBrowserError({
+            reason,
+            dispatch: "not-dispatched",
+            milestone: "none",
+            observation: "protected",
+            cleanup: "not-requested",
+          });
+
+        const id = yield* Schema.decodeEffect(ProtectedProviderIdentity.fields.sessionId)(
+          sessionId,
+        ).pipe(Effect.mapError(() => failure("denied")));
+
+        yield* binding.keepAlive(Redacted.value(id)).pipe(
+          Effect.timeoutOrElse({
+            duration: "10 seconds",
+            orElse: () =>
+              Effect.fail(
+                new BrowserRunFailure({ operation: "protected.keepAlive", reason: "timeout" }),
+              ),
+          }),
+          Effect.tapError((error) => reportBrowserCause("protected.keepAlive", Cause.fail(error))),
+          Effect.mapError((error) =>
+            reportedBrowserError(failure(error.reason === "timeout" ? "timeout" : "provider")),
+          ),
+        );
+      }, Effect.withTracerEnabled(false));
+
+      return { open, keepAlive };
     }),
   ).pipe(Layer.provide(BrowserRunBinding.layer(options.browser)));
 

@@ -1,13 +1,31 @@
 /// <reference types="@cloudflare/workers-types" />
-import { Context, Layer, Schema } from "effect";
+import { Cause, Context, Effect, Layer, Schema } from "effect";
 import puppeteer, {
   type Browser,
   type ConnectionTransport,
 } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
-import { browserFailure, BrowserRunFailure, reportedBrowserError } from "./browser-failure.ts";
+import {
+  browserFailure,
+  BrowserRunFailure,
+  reportBrowserCause,
+  reportedBrowserError,
+} from "./browser-failure.ts";
 
 const Acquired = Schema.Struct({ sessionId: Schema.String.check(Schema.isUUID()) });
+
+const VersionReply = Schema.fromJsonString(
+  Schema.Struct({
+    id: Schema.optionalKey(Schema.Int),
+    result: Schema.optionalKey(Schema.Unknown),
+    error: Schema.optionalKey(Schema.Unknown),
+  }),
+);
+
+const Version = Schema.Struct({
+  product: Schema.NonEmptyString,
+  protocolVersion: Schema.NonEmptyString,
+});
 
 /** Native transport port shared by both scoped adapters; the Layer owns the foreign binding. */
 export class BrowserRunBinding extends Context.Service<
@@ -22,9 +40,37 @@ export class BrowserRunBinding extends Context.Service<
       operation: string,
       signal?: AbortSignal,
     ) => Promise<Browser>;
+    readonly keepAlive: (sessionId: string) => Effect.Effect<void, BrowserRunFailure>;
   }
 >()("@effect-agent/platform-cloudflare/internal/BrowserRunBinding") {
   static layer(browser: Pick<BrowserRun, "fetch">) {
+    const upgrade = async (sessionId: string, operation: string, signal?: AbortSignal) => {
+      const response = await browser.fetch(
+        `https://browser-rendering.cloudflare.com/v1/devtools/browser/${sessionId}`,
+        { headers: { Upgrade: "websocket" }, ...(signal === undefined ? {} : { signal }) },
+      );
+
+      if (response.status !== 101) {
+        const failure = new BrowserRunFailure({
+          operation,
+          reason: "provider",
+          status: response.status,
+        });
+
+        try {
+          await response.body?.cancel();
+        } catch {
+          // Preserve the provider refusal when local response release also fails.
+        }
+        throw failure;
+      }
+      const socket = response.webSocket;
+
+      if (socket === null) throw new BrowserRunFailure({ operation, reason: "malformed" });
+
+      return socket;
+    };
+
     return Layer.succeed(this)({
       // One allocation path, with recording explicitly disabled for private sessions.
       acquire: async (keepAliveMillis, operation) => {
@@ -55,28 +101,8 @@ export class BrowserRunBinding extends Context.Service<
         let closedByAbort = false;
 
         try {
-          const response = await browser.fetch(
-            `https://browser-rendering.cloudflare.com/v1/devtools/browser/${sessionId}`,
-            { headers: { Upgrade: "websocket" }, ...(signal === undefined ? {} : { signal }) },
-          );
+          const connected = await upgrade(sessionId, operation, signal);
 
-          if (response.status !== 101) {
-            const failure = new BrowserRunFailure({
-              operation,
-              reason: "provider",
-              status: response.status,
-            });
-
-            try {
-              await response.body?.cancel();
-            } catch {
-              // Body cancellation cannot replace the provider refusal.
-            }
-            throw failure;
-          }
-          const connected = response.webSocket;
-
-          if (connected === null) throw new BrowserRunFailure({ operation, reason: "malformed" });
           socket = connected;
 
           const transport: ConnectionTransport = {
@@ -127,6 +153,91 @@ export class BrowserRunBinding extends Context.Service<
           throw localCancellation ? reportedBrowserError(failure) : failure;
         }
       },
+      keepAlive: Effect.fnUntraced(function* (sessionId: string) {
+        const operation = "protected.keepAlive";
+        const runReport = Effect.runPromiseWith(yield* Effect.context<never>());
+
+        const release = (socket: WebSocket) =>
+          Effect.sync(() => socket.close()).pipe(
+            Effect.catchCause((cause) => reportBrowserCause(operation, cause)),
+          );
+
+        const socket = yield* Effect.acquireRelease(
+          Effect.tryPromise({
+            try: async (signal) => {
+              let acquired: WebSocket | undefined;
+
+              try {
+                acquired = await upgrade(sessionId, operation, signal);
+                acquired.accept();
+                // The binding may resolve an upgrade after the Effect was interrupted.
+                signal.throwIfAborted();
+
+                return acquired;
+              } catch (cause) {
+                if (acquired !== undefined) await runReport(release(acquired));
+                if (signal.aborted && cause !== signal.reason)
+                  await runReport(reportBrowserCause(operation, Cause.fail(cause)));
+                throw cause;
+              }
+            },
+            catch: (cause) => browserFailure(operation, cause),
+          }),
+          release,
+          { interruptible: true },
+        );
+
+        yield* Effect.callback<void, BrowserRunFailure>((resume) => {
+          const finish = (result: Effect.Effect<void, BrowserRunFailure>) => {
+            removeListeners();
+            resume(result);
+          };
+
+          const fail = (reason: BrowserRunFailure["reason"]) =>
+            finish(Effect.fail(new BrowserRunFailure({ operation, reason })));
+
+          const onMessage = (event: MessageEvent) => {
+            try {
+              if (typeof event.data !== "string" || event.data.length > 16_384) {
+                fail("malformed");
+
+                return;
+              }
+              const reply = Schema.decodeSync(VersionReply)(event.data);
+
+              if (reply.id !== 1) return;
+              if (reply.error !== undefined) {
+                fail("provider");
+
+                return;
+              }
+              Schema.decodeUnknownSync(Version)(reply.result);
+              finish(Effect.void);
+            } catch {
+              fail("malformed");
+            }
+          };
+
+          const onClose = () => fail("provider");
+
+          const removeListeners = () => {
+            socket.removeEventListener("message", onMessage);
+            socket.removeEventListener("close", onClose);
+            socket.removeEventListener("error", onClose);
+          };
+
+          socket.addEventListener("message", onMessage);
+          socket.addEventListener("close", onClose);
+          socket.addEventListener("error", onClose);
+          try {
+            socket.send(JSON.stringify({ id: 1, method: "Browser.getVersion" }));
+          } catch (cause) {
+            finish(Effect.fail(browserFailure(operation, cause)));
+          }
+
+          return Effect.sync(removeListeners);
+        });
+      }, Effect.scoped),
     });
   }
 }

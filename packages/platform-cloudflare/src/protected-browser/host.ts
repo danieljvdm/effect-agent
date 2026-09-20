@@ -83,6 +83,14 @@ export interface BrowserRunProtectedSession {
 export class BrowserRunProtectedHost extends Context.Service<
   BrowserRunProtectedHost,
   {
+    /**
+     * Refresh provider inactivity on an exact retained session with one browser-level command.
+     * Internally scoped and bounded to ten seconds; releases only its own connection on every exit.
+     * Does not acquire a page, transfer control, extend host expiry, or close the provider on failure.
+     */
+    readonly keepAlive: (
+      sessionId: Redacted.Redacted<string>,
+    ) => Effect.Effect<void, ProtectedBrowserError>;
     readonly open: (
       policy: InteractiveBrowserPolicy,
     ) => Effect.Effect<
@@ -362,6 +370,7 @@ export const browserRunProtectedHostLayer = () =>
       }, Effect.withTracerEnabled(false));
 
       return {
+        keepAlive: binding.keepAlive,
         open: (policy: InteractiveBrowserPolicy) => open(policy),
         resume: (checkpoint: BrowserRunProtectedCheckpoint) =>
           Schema.decodeEffect(BrowserRunProtectedCheckpoint)(checkpoint).pipe(

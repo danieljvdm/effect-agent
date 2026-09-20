@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import type { ServerResponse } from "node:http";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,7 +8,8 @@ import { promisify } from "node:util";
 
 import { BrowserCrypto } from "@effect/platform-browser";
 import { expect, it } from "@effect/vitest";
-import { Clock, Config, Effect, Layer, Option, Redacted, Schema } from "effect";
+import type { Cause } from "effect";
+import { Clock, Config, Effect, ErrorReporter, Layer, Option, Redacted, Schema } from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import {
   BrowserCredentialAccess,
@@ -31,9 +33,11 @@ import type { Browser, Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-c
 import { vi } from "vite-plus/test";
 
 import { BrowserRunHandoffRequest } from "../src/InteractiveBrowser.ts";
+import { BrowserRunFailure } from "../src/internal/browser-failure.ts";
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 import { browserRunProtectedBindingLayer } from "../src/protected-browser/binding.ts";
 import {
+  BrowserRunProtectedCheckpoint,
   BrowserRunProtectedHost,
   browserRunProtectedHostLayer,
 } from "../src/protected-browser/host.ts";
@@ -1242,6 +1246,21 @@ for (const cacheControl of ["default", "no-store"] as const) {
         let email = "before@example.test";
         let writes = 0;
         let polls = 0;
+        const serviceWorker = cacheControl === "no-store";
+        let delayedResponse: ServerResponse | undefined;
+        let markDelayedStarted = () => {};
+
+        const delayedStarted = new Promise<void>((resolve) => {
+          markDelayedStarted = resolve;
+        });
+
+        let markDetachedPoll = () => {};
+
+        const detachedPoll = new Promise<void>((resolve) => {
+          markDetachedPoll = resolve;
+        });
+
+        let detached = false;
 
         const server = yield* Effect.acquireRelease(
           native(
@@ -1253,10 +1272,28 @@ for (const cacheControl of ["default", "no-store"] as const) {
                   if (cacheControl === "no-store") response.setHeader("cache-control", "no-store");
                   if (path === "/poll") {
                     polls++;
+                    if (detached) markDetachedPoll();
                     response.end("ready");
+                  } else if (path === "/delayed") {
+                    delayedResponse = response;
+                    markDelayedStarted();
+                  } else if (path === "/sw.js") {
+                    response.setHeader("content-type", "text/javascript");
+                    response.end(`
+                      self.addEventListener('install', () => self.skipWaiting());
+                      self.addEventListener('activate', event => event.waitUntil(self.clients.claim()));
+                      self.addEventListener('fetch', event => {
+                        if (new URL(event.request.url).pathname === '/worker-response')
+                          event.respondWith(new Response('from-service-worker'));
+                      });
+                    `);
+                  } else if (path === "/worker-response") {
+                    response.end("from-network");
                   } else if (path === "/processor") {
                     response.setHeader("content-type", "text/html");
-                    response.end(`<main>Payment frame</main><script>
+                    response.end(`<main>Payment frame</main>
+                <form><label>Card number<input name="card" autocomplete="cc-number"></label></form><script>
+                window.cardWrites=0;document.querySelector('input').addEventListener('input',()=>window.cardWrites++);
                 let n=0; const poll=async()=>{await fetch('/poll');document.body.dataset.polls=String(++n)};
                 poll();setInterval(poll,1000);
               </script>`);
@@ -1334,6 +1371,10 @@ for (const cacheControl of ["default", "no-store"] as const) {
 
         const sockets: WebSocket[] = [];
         const attachments: Browser[] = [];
+        const connectionMethods: Array<string[]> = [];
+        const methods = new Map<string, number>();
+        const protocolErrors: Array<{ method: string; stage: string; code: number }> = [];
+        const reports: Array<Cause.Cause<unknown>> = [];
         let handoffs = 0;
         let allocations = 0;
         let active = false;
@@ -1342,15 +1383,45 @@ for (const cacheControl of ["default", "no-store"] as const) {
 
         const upgrade = async () => {
           const socket = new WebSocket(endpoint);
+          const sentMethods: string[] = [];
 
           sockets.push(socket);
+          connectionMethods.push(sentMethods);
           await new Promise<void>((resolve, reject) => {
             socket.addEventListener("open", () => resolve(), { once: true });
             socket.addEventListener("error", () => reject(new ProbeError()), { once: true });
           });
           const events = new EventTarget();
+          const pending = new Map<number, string>();
+
+          const reply = Schema.decodeUnknownSync(
+            Schema.fromJsonString(
+              Schema.Struct({
+                id: Schema.optionalKey(Schema.Int),
+                error: Schema.optionalKey(Schema.Struct({ code: Schema.Int })),
+              }),
+            ),
+          );
 
           socket.addEventListener("message", (event) => {
+            const packet = reply(event.data);
+
+            if (packet.id !== undefined) {
+              const method = pending.get(packet.id);
+
+              pending.delete(packet.id);
+              if (packet.error !== undefined && method !== undefined)
+                protocolErrors.push({
+                  method,
+                  stage:
+                    method === "Fetch.continueRequest" || method === "Fetch.failRequest"
+                      ? "request-callback"
+                      : method === "Network.setBypassServiceWorker" || method === "Fetch.enable"
+                        ? "interception-setup"
+                        : "command-reply",
+                  code: packet.error.code,
+                });
+            }
             events.dispatchEvent(new MessageEvent("message", { data: event.data }));
           });
           socket.addEventListener("close", () => events.dispatchEvent(new Event("close")));
@@ -1358,9 +1429,14 @@ for (const cacheControl of ["default", "no-store"] as const) {
           const transportSocket = {
             accept: () => {},
             addEventListener: events.addEventListener.bind(events),
+            removeEventListener: events.removeEventListener.bind(events),
             close: () => socket.close(),
             send(message: string) {
               const packet = envelope(message);
+
+              sentMethods.push(packet.method);
+              pending.set(packet.id, packet.method);
+              methods.set(packet.method, (methods.get(packet.method) ?? 0) + 1);
 
               // Only proprietary human-control replies are substituted. The production
               // binding, client, page, contexts, Fetch and reconnect all use real Chromium.
@@ -1405,10 +1481,25 @@ for (const cacheControl of ["default", "no-store"] as const) {
 
         const access = BrowserCredentialAccess.of({
           caller: Effect.succeed(Redacted.make("native-reattach-test")),
-          list: () => Effect.succeed([]),
-          authorize: () => Effect.fail(new CredentialAccessError({ reason: "denied" })),
+          list: () =>
+            Effect.succeed([
+              {
+                key: Redacted.make("dummy-card-key"),
+                metadata: CredentialOfferMetadata.make({ label: "Dummy card" }),
+              },
+            ]),
+          authorize: () => Effect.void,
           authorizeAction: () => Effect.void,
-          resolve: () => Effect.fail(new CredentialAccessError({ reason: "denied" })),
+          resolve: () =>
+            Effect.succeed(
+              CardCredential.make({
+                name: Redacted.make("Dummy Shopper"),
+                number: Redacted.make("4111111111111111"),
+                expiry: Redacted.make("09/2030"),
+                expiryMonth: Redacted.make("09"),
+                expiryYear: Redacted.make("2030"),
+              }),
+            ),
           observation: () =>
             Effect.succeed(
               CredentialObservationGrant.make({
@@ -1440,12 +1531,21 @@ for (const cacheControl of ["default", "no-store"] as const) {
           ),
           Layer.provide(Layer.merge(lifecycle, BrowserCrypto.layer)),
           Layer.provideMerge(Layer.succeed(BrowserCredentialAccess, access)),
+          Layer.provideMerge(
+            ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))]),
+          ),
         );
 
         const request = BrowserRunHandoffRequest.make({
           instructions: "Review only",
           timeout: 60_000,
         });
+
+        const lifetimeClock = yield* TestClock.make();
+
+        const checkpointCodec = Schema.fromJsonString(
+          Schema.toCodecJson(BrowserRunProtectedCheckpoint),
+        );
 
         yield* Effect.gen(function* () {
           const host = yield* BrowserRunProtectedHost;
@@ -1456,7 +1556,7 @@ for (const cacheControl of ["default", "no-store"] as const) {
                 InteractiveBrowserPolicy.make({
                   network: { _tag: "Unrestricted" },
                   maxActions: 100,
-                  maxElapsedMillis: 120_000,
+                  maxElapsedMillis: cacheControl === "default" ? 8 * 60 * 60_000 : 120_000,
                   maxReturnedBytes: 16_384,
                 }),
               );
@@ -1465,18 +1565,87 @@ for (const cacheControl of ["default", "no-store"] as const) {
               yield* session.handle.navigate(
                 ProtectedBrowserNavigate.make({ url: `${checkout}/checkout` }),
               );
-              yield* session.handle.observe;
+              const observed = yield* session.handle.observe;
+              const card = observed.controls.find((control) => control.role === "card-number")!;
+
+              const offers = yield* session.handle.listCredentialOffers(
+                ListCredentialOffers.make({ kind: "card", target: card.ref }),
+              );
+
+              expect(
+                yield* session.handle.useCredential(
+                  UseCredential.make({
+                    offer: offers[0]!.ref,
+                    fields: [{ ref: card.ref, role: "card-number" }],
+                  }),
+                ),
+              ).toMatchObject({ dispatch: "dispatched", milestone: "filled" });
+              const pages = yield* native(() => attachments[0]!.pages());
+              const page = pages.find((page) => page.url() === `${checkout}/checkout`)!;
+
+              yield* host.keepAlive(session.sessionId);
+              expect(connectionMethods.at(-1)).toEqual(["Browser.getVersion"]);
+              expect(sockets.at(-1)!.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
+              expect(attachments).toHaveLength(1);
+              expect(attachments[0]!.isConnected()).toBe(true);
+
+              if (serviceWorker) {
+                yield* native(() =>
+                  page.evaluate(`(async () => {
+                    await navigator.serviceWorker.register('/sw.js');
+                    await navigator.serviceWorker.ready;
+                    if (!navigator.serviceWorker.controller)
+                      await new Promise(resolve => navigator.serviceWorker.addEventListener(
+                        'controllerchange', () => resolve(), { once: true }));
+                  })()`),
+                );
+              }
+              yield* native(() =>
+                page.evaluate(
+                  "void fetch('/delayed').then(() => { document.body.dataset.delayed = 'complete'; })",
+                ),
+              );
+              yield* native(() => delayedStarted);
               const checkpoint = yield* session.suspend;
 
               yield* session.detach;
 
-              return checkpoint;
+              return Schema.decodeSync(checkpointCodec)(
+                Schema.encodeSync(checkpointCodec)(checkpoint),
+              );
             }),
           );
+
+          if (cacheControl === "default") yield* lifetimeClock.adjust("2 hours");
+          detached = true;
+          delayedResponse!.end("released-after-detach");
+          yield* native(() => detachedPoll);
+          detached = false;
+          yield* host.keepAlive(first.sessionId);
+          expect(connectionMethods.at(-1)).toEqual(["Browser.getVersion"]);
+          expect(sockets.at(-1)!.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
+          expect(attachments).toHaveLength(1);
 
           const human = yield* Effect.scoped(
             Effect.gen(function* () {
               const session = yield* host.resume(first);
+
+              const page = (yield* native(() => attachments.at(-1)!.pages())).find(
+                (page) => page.url() === `${checkout}/checkout`,
+              )!;
+
+              yield* native(() =>
+                page.waitForFunction("document.body.dataset.delayed === 'complete'"),
+              );
+              const processor = page.frames().find((frame) => frame.url() === `${shop}/processor`)!;
+
+              expect(yield* native(() => processor.evaluate("window.cardWrites"))).toBe(1);
+              if (serviceWorker)
+                expect(
+                  yield* native(() =>
+                    page.evaluate(async () => (await fetch("/worker-response")).text()),
+                  ),
+                ).toBe("from-service-worker");
               const checkpoint = yield* session.handoff(request);
 
               yield* session.detach;
@@ -1561,15 +1730,75 @@ for (const cacheControl of ["default", "no-store"] as const) {
               expect(Redacted.value(checkpoint.targetId) === Redacted.value(first.targetId)).toBe(
                 true,
               );
+              expect(Redacted.value(checkpoint.sessionId) === Redacted.value(first.sessionId)).toBe(
+                true,
+              );
+              expect(checkpoint.protected.startedAt).toBe(first.protected.startedAt);
+              expect(checkpoint.protected.policy).toEqual(first.protected.policy);
+              expect(new Set(attachments).size).toBe(4);
               expect(handoffs).toBe(2);
               expect(allocations).toBe(1);
               expect(writes).toBe(1);
               expect(polls).toBeGreaterThan(0);
               expect(closes).toBe(0);
-              yield* session.close;
+              if (serviceWorker) {
+                active = false;
+                yield* session.returnControl;
+                yield* session.handle.observe;
+                // A real transport loss must still fence tools; no SDK failure is injected.
+                yield* native(
+                  () =>
+                    new Promise<void>((resolve) => {
+                      attachments.at(-1)!.once("disconnected", () => resolve());
+                      sockets.at(-1)!.close();
+                    }),
+                );
+                expect(yield* session.handle.observe.pipe(Effect.flip)).toMatchObject({
+                  reason: "stale-reference",
+                  dispatch: "not-dispatched",
+                });
+                expect(writes).toBe(1);
+              }
+              expect(yield* session.close).toBe("confirmed");
+              expect(closes).toBe(1);
+              expect(attachments.at(-1)!.isConnected()).toBe(false);
+              expect(methods.has("Network.setBypassServiceWorker")).toBe(false);
+              expect([...methods.keys()].filter((method) => method.startsWith("Fetch."))).toEqual(
+                [],
+              );
+              expect(reports).toEqual([]);
             }),
           );
-        }).pipe(Effect.provide(layer));
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              // Method names, stages and numeric CDP error codes only: never wire payloads.
+              console.info(
+                JSON.stringify({
+                  cacheControl,
+                  interception: [...methods].filter(
+                    ([method]) =>
+                      method === "Network.setBypassServiceWorker" || method.startsWith("Fetch."),
+                  ),
+                  protocolErrors,
+                  reports: reports.map((cause) =>
+                    cause.reasons.map((reason) =>
+                      reason._tag === "Fail" && reason.error instanceof BrowserRunFailure
+                        ? {
+                            classification: reason._tag,
+                            operation: reason.error.operation,
+                            reason: reason.error.reason,
+                          }
+                        : { classification: reason._tag },
+                    ),
+                  ),
+                }),
+              );
+            }),
+          ),
+          Effect.provide(layer),
+          Effect.provideService(Clock.Clock, lifetimeClock),
+        );
       }).pipe(Effect.scoped),
     { timeout: 45_000 },
   );

@@ -1,5 +1,5 @@
 import { BrowserCrypto } from "@effect/platform-browser";
-import { expect, it } from "@effect/vitest";
+import { expect, expectTypeOf, it } from "@effect/vitest";
 import {
   Cause,
   Clock,
@@ -12,6 +12,7 @@ import {
   Schema,
 } from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
+import type { ProtectedBrowserError } from "effect-agent/protected-browser";
 import { TestClock } from "effect/testing";
 
 import {
@@ -28,6 +29,10 @@ import {
   BrowserRunProtectedBinding,
   browserRunProtectedBindingLayer,
 } from "../src/protected-browser/binding.ts";
+import {
+  BrowserRunProtectedHost,
+  browserRunProtectedHostLayer,
+} from "../src/protected-browser/host.ts";
 
 const identity = {
   sessionId: Redacted.make("00000000-0000-4000-8000-000000000091"),
@@ -44,7 +49,9 @@ const packet = Schema.decodeUnknownSync(
 
 // Real Workers WebSockets and the published browser client. Only the remote CDP
 // endpoint is substituted; these tests run inside the existing workerd lane.
-const endpoint = Effect.fnUntraced(function* (mode: "success" | "reject" | "pending") {
+const endpoint = Effect.fnUntraced(function* (
+  mode: "success" | "reject" | "pending" | "wrong-id" | "malformed" | "disconnect",
+) {
   const pair = yield* Effect.acquireRelease(
     Effect.sync(() => new WebSocketPair()),
     (pair) =>
@@ -68,17 +75,27 @@ const endpoint = Effect.fnUntraced(function* (mode: "success" | "reject" | "pend
     methods.push(message.method);
     Effect.runSync(Deferred.succeed(started, undefined));
     if (mode === "pending") return;
+    if (mode === "malformed") {
+      pair[1].send("private-malformed-provider-detail");
+
+      return;
+    }
+    if (mode === "disconnect") {
+      pair[1].close();
+
+      return;
+    }
     pair[1].send(
       JSON.stringify(
         mode === "reject"
           ? { id: message.id, error: { code: -32000, message: "private-provider-detail" } }
           : {
-              id: message.id,
+              id: mode === "wrong-id" ? message.id + 1 : message.id,
               result:
                 message.method === "Target.getBrowserContexts"
                   ? { browserContextIds: ["retained-context"] }
                   : message.method === "Browser.getVersion"
-                    ? { product: "Fixture Chromium" }
+                    ? { product: "Fixture Chromium", protocolVersion: "1.3" }
                     : {},
             },
       ),
@@ -97,6 +114,186 @@ const endpoint = Effect.fnUntraced(function* (mode: "success" | "reject" | "pend
 
   return { browser, socket: pair[0], started, closed, methods, requests };
 });
+
+const keepAliveHost = (browser: Pick<BrowserRun, "fetch">) =>
+  browserRunProtectedHostLayer().pipe(
+    Layer.provide(browserRunProtectedBindingLayer({ browser })),
+    Layer.provide(BrowserCrypto.layer),
+    Layer.provide(
+      Layer.succeed(BrowserRunSessionLifecycle, {
+        close: () => Effect.die("Keepalive must never terminate the provider"),
+      }),
+    ),
+  );
+
+it.effect(
+  "keeps an exact session alive with one browser command and releases its raw attachment",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* endpoint("success");
+
+      yield* Effect.gen(function* () {
+        const call = (yield* BrowserRunProtectedHost).keepAlive(identity.sessionId);
+
+        expectTypeOf(call).toEqualTypeOf<Effect.Effect<void, ProtectedBrowserError>>();
+        yield* call;
+      }).pipe(Effect.provide(keepAliveHost(fixture.browser)));
+      yield* Deferred.await(fixture.closed);
+      expect(fixture.methods).toEqual(["Browser.getVersion"]);
+      expect(fixture.requests).toEqual([
+        { method: "GET", path: `/v1/devtools/browser/${Redacted.value(identity.sessionId)}` },
+      ]);
+    }).pipe(Effect.scoped),
+);
+
+it.effect.each(["reject", "malformed", "disconnect"] as const)(
+  "sanitizes keepalive failure and releases only its connection (%s)",
+  (mode) =>
+    Effect.gen(function* () {
+      const fixture = yield* endpoint(mode);
+      const reports: Array<Cause.Cause<unknown>> = [];
+
+      const error = yield* Effect.gen(function* () {
+        return yield* (yield* BrowserRunProtectedHost)
+          .keepAlive(identity.sessionId)
+          .pipe(Effect.flip);
+      }).pipe(
+        Effect.provide([
+          keepAliveHost(fixture.browser),
+          ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))]),
+        ]),
+      );
+
+      expect(error).toMatchObject({
+        reason: "provider",
+        dispatch: "not-dispatched",
+        cleanup: "not-requested",
+      });
+      expect(ErrorReporter.isIgnored(error)).toBe(true);
+      yield* Deferred.await(fixture.closed);
+      expect(fixture.methods).toEqual(["Browser.getVersion"]);
+      expect(reports).toHaveLength(1);
+      expect(JSON.stringify(reports)).toContain('"operation":"protected.keepAlive"');
+      expect(JSON.stringify(reports)).toContain(
+        `"reason":"${mode === "malformed" ? "malformed" : "provider"}"`,
+      );
+      expect(JSON.stringify({ error, reports })).not.toContain("private-");
+    }).pipe(Effect.scoped),
+);
+
+it.effect.each(["timeout", "interruption", "wrong-id"] as const)(
+  "does not accept missing or unrelated keepalive replies (%s)",
+  (ending) =>
+    Effect.gen(function* () {
+      const fixture = yield* endpoint(ending === "wrong-id" ? "wrong-id" : "pending");
+      const reports: Array<Cause.Cause<unknown>> = [];
+
+      const attempt = yield* Effect.gen(function* () {
+        yield* (yield* BrowserRunProtectedHost).keepAlive(identity.sessionId);
+      }).pipe(
+        Effect.provide([
+          keepAliveHost(fixture.browser),
+          ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))]),
+        ]),
+        Effect.forkChild,
+      );
+
+      yield* Deferred.await(fixture.started);
+      if (ending === "interruption") {
+        yield* Fiber.interrupt(attempt);
+        const exit = yield* Fiber.await(attempt);
+
+        expect(exit._tag === "Failure" && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+      } else {
+        yield* TestClock.adjust(10_000);
+        expect(yield* Fiber.join(attempt).pipe(Effect.flip)).toMatchObject({
+          reason: "timeout",
+          dispatch: "not-dispatched",
+          cleanup: "not-requested",
+        });
+      }
+      yield* Deferred.await(fixture.closed);
+      expect(fixture.methods).toEqual(["Browser.getVersion"]);
+      expect(reports).toHaveLength(ending === "interruption" ? 0 : 1);
+      expect(JSON.stringify(reports)).not.toContain('"reason":"provider"');
+    }).pipe(Effect.scoped),
+);
+
+it.effect.each(["upgrade", "refusal", "defect"] as const)(
+  "cleans a late keepalive upgrade and preserves genuine late failures (%s)",
+  (ending) =>
+    Effect.gen(function* () {
+      const fixture = yield* endpoint("success");
+      const fetching = yield* Deferred.make<void>();
+      const respond = yield* Deferred.make<void>();
+      const lateFailure = yield* Deferred.make<void>();
+      const reports: Array<Cause.Cause<unknown>> = [];
+
+      const attempt = yield* Effect.gen(function* () {
+        yield* (yield* BrowserRunProtectedHost).keepAlive(identity.sessionId);
+      }).pipe(
+        Effect.provide([
+          keepAliveHost({
+            fetch: async (input, init) => {
+              Effect.runSync(Deferred.succeed(fetching, undefined));
+              await Effect.runPromise(Deferred.await(respond));
+              if (ending === "defect") throw new TypeError("private-late-keepalive-detail");
+
+              return ending === "refusal"
+                ? new Response("private-refusal-detail", { status: 503 })
+                : fixture.browser.fetch(input, init);
+            },
+          }),
+          ErrorReporter.layer([
+            ErrorReporter.make(({ cause }) => {
+              reports.push(cause);
+              if (reports.length === 2) Effect.runSync(Deferred.succeed(lateFailure, undefined));
+            }),
+          ]),
+        ]),
+        Effect.forkChild,
+      );
+
+      yield* Deferred.await(fetching);
+      yield* TestClock.adjust(10_000);
+      expect(yield* Fiber.join(attempt).pipe(Effect.flip)).toMatchObject({
+        reason: "timeout",
+        cleanup: "not-requested",
+      });
+      yield* Deferred.succeed(respond, undefined);
+      if (ending === "upgrade") {
+        yield* Deferred.await(fixture.closed);
+        expect(reports).toHaveLength(1);
+      } else {
+        yield* Deferred.await(lateFailure);
+        expect(JSON.stringify(reports[1])).toContain(
+          ending === "refusal" ? '"status":503' : '"name":"TypeError"',
+        );
+        // This fixture endpoint was never handed to the adapter in these two cases.
+        fixture.socket.accept();
+      }
+      expect(fixture.methods).toEqual([]);
+      expect(JSON.stringify(reports)).not.toContain("private-");
+    }).pipe(Effect.scoped),
+);
+
+it.effect("refuses an invalid keepalive identity before contacting the provider", () =>
+  Effect.gen(function* () {
+    const error = yield* (yield* BrowserRunProtectedHost)
+      .keepAlive(Redacted.make("../not-a-session"))
+      .pipe(Effect.flip);
+
+    expect(error).toMatchObject({ reason: "denied", cleanup: "not-requested" });
+  }).pipe(
+    Effect.provide(
+      keepAliveHost({
+        fetch: async () => {
+          throw new Error("Must not fetch");
+        },
+      }),
+    ),
+  ),
+);
 
 it.effect("connects through a Workers upgrade and releases only the attachment", () =>
   Effect.gen(function* () {
