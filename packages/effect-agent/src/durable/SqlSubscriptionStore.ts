@@ -154,9 +154,11 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     record_json: StoredJson,
   });
 
+  const integer = sql.literal(sql.onDialectOrElse({ orElse: () => "INTEGER", pg: () => "BIGINT" }));
+
   yield* sql`CREATE TABLE IF NOT EXISTS effect_agent_event_retention (
-    tenant_id TEXT NOT NULL, source_address TEXT NOT NULL, replay_horizon_millis INTEGER NOT NULL,
-    next_maintenance_at_millis INTEGER, tombstone_count INTEGER NOT NULL DEFAULT 0, event_cursor TEXT NOT NULL DEFAULT '', delivery_cursor TEXT NOT NULL DEFAULT '', PRIMARY KEY (tenant_id, source_address)
+    tenant_id TEXT NOT NULL, source_address TEXT NOT NULL, replay_horizon_millis ${integer} NOT NULL,
+    next_maintenance_at_millis ${integer}, tombstone_count ${integer} NOT NULL DEFAULT 0, event_cursor TEXT NOT NULL DEFAULT '', delivery_cursor TEXT NOT NULL DEFAULT '', PRIMARY KEY (tenant_id, source_address)
   )`.pipe(Effect.mapError(() => unavailable("initialize event retention")));
 
   yield* sql`
