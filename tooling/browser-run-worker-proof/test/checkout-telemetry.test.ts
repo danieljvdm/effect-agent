@@ -20,7 +20,12 @@ it.effect(
     Effect.gen(function* () {
       for (const outcome of ["success", "failure", "defect", "timeout", "interruption"] as const) {
         const recorded: Array<typeof CheckoutSpan.Type> = [];
-        const telemetry = yield* makeTelemetry(3, (span) => recorded.push(CheckoutSpan.make(span)));
+
+        const telemetry = yield* makeTelemetry(
+          () => 3,
+          (span) => recorded.push(CheckoutSpan.make(span)),
+        );
+
         const entered = yield* Deferred.make<void>();
 
         const work = Effect.gen(function* () {
@@ -70,7 +75,11 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const recorded: Array<typeof CheckoutSpan.Type> = [];
-      const telemetry = yield* makeTelemetry(7, (span) => recorded.push(span));
+
+      const telemetry = yield* makeTelemetry(
+        () => 7,
+        (span) => recorded.push(span),
+      );
 
       const toolkit = Toolkit.make(
         Tool.make("observe", { parameters: Tool.EmptyParams, success: Schema.String }),
@@ -148,4 +157,35 @@ it.effect(
       assert.strictEqual(completed[0]?.outputTokens, 3);
       assert.strictEqual(completed[0]?.resolvedModel, "resolved-version");
     }),
+);
+
+it.effect("keeps overlapping requests distinct when both arrive before their first span", () =>
+  Effect.gen(function* () {
+    const persisted = new Map<string, typeof CheckoutSpan.Type>();
+    const allocate = () => persisted.size + 1;
+
+    const record = (span: typeof CheckoutSpan.Type) => {
+      persisted.set(span.id, span);
+    };
+
+    const first = yield* makeTelemetry(allocate, record);
+    const second = yield* makeTelemetry(allocate, record);
+    const finishFirst = first.begin("resume", "agent.run");
+    const finishSecond = second.begin("approval", "approve");
+
+    finishSecond(Exit.void);
+    const finishBrowser = first.begin("browser", "click");
+
+    finishBrowser(Exit.void);
+    finishFirst(Exit.void);
+    const spans = [...persisted.values()];
+
+    assert.strictEqual(spans.length, 3);
+    assert.notStrictEqual(spans[0]?.request, spans[1]?.request);
+    assert.strictEqual(spans[0]?.request, spans[2]?.request);
+    assert.deepStrictEqual(
+      spans.map((span) => span.outcome),
+      ["completed", "completed", "completed"],
+    );
+  }),
 );

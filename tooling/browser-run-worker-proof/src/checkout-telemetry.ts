@@ -18,17 +18,20 @@ type Details = Partial<
 
 /** A request owns its clock and turn counter. Never serialize absolute monotonic timestamps. */
 export const makeTelemetry = Effect.fnUntraced(function* (
-  request: number,
+  allocateRequest: () => number,
   record: (span: Span) => void,
 ) {
   const clock = yield* Clock.Clock;
   const origin = clock.monotonicTimeNanosUnsafe();
+  let request: number | undefined;
   let sequence = 0;
   let turn = 0;
   const millis = () => Number(clock.monotonicTimeNanosUnsafe() - origin) / 1_000_000;
 
   return {
     begin(phase: Span["phase"], operation: string, details: Details = {}) {
+      // Allocate beside the first synchronous write, after any request-body suspension.
+      request ??= allocateRequest();
       if (phase === "model" || phase === "decision" || phase === "text") turn++;
 
       const span: Span = {

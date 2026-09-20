@@ -518,7 +518,7 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
         ? Effect.gen({ self: this }, function* () {
             // Each HTTP request gets a distinct clock domain, including closure and approval.
             const telemetry = yield* makeTelemetry(
-              this.exists("spans") ? this.read("spans", CheckoutSpans).length + 1 : 0,
+              () => (this.exists("spans") ? this.read("spans", CheckoutSpans).length + 1 : 0),
               (span) => {
                 if (!this.exists("spans")) return;
                 const spans = this.read("spans", CheckoutSpans);
