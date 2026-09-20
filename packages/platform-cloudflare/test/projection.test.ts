@@ -389,6 +389,71 @@ describe("live Thread projection and alarm backfill", () => {
       }),
   );
 
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/b0a978cbf654962a42d8a794c2e826cc23a4c625
+  it("includes interruptible finalizers in the host lane's original allowance", () =>
+    withThread(async (thread, _now, advance) => {
+      await submit(thread, plannerDefinition);
+      let entered!: () => void;
+      let finalizing!: () => void;
+      let release!: () => void;
+      let finalized = false;
+
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+
+      const cleanupStarted = new Promise<void>((resolve) => {
+        finalizing = resolve;
+      });
+
+      const cleanup = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+
+      hostMaintenanceControls.set(thread, [
+        {
+          dispatchTimeoutMillis: 1_000,
+          pendingDeadline: Effect.succeed(Option.none()),
+          run: Effect.gen(function* () {
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(finalizing).pipe(
+                Effect.andThen(Effect.promise(() => cleanup)),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    finalized = true;
+                  }),
+                ),
+                Effect.interruptible,
+              ),
+            );
+            entered();
+            yield* Effect.sleep(400);
+          }),
+        },
+      ]);
+
+      const running = alarm(thread).then(
+        () => "unexpected success",
+        (cause: unknown) => String(cause),
+      );
+
+      try {
+        await started;
+        await advance(400);
+        await cleanupStarted;
+        await advance(599);
+        expect(finalized).toBe(false);
+        await advance(1);
+        expect(finalized).toBe(true);
+        expect(await running).toContain("host wave exceeded its allowance");
+        expect(await allSettled(thread, namespace)()).toBe(true);
+        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
+      } finally {
+        release();
+        await running;
+      }
+    }));
+
   it("preserves a completed interruption while a sibling dispatch remains blocked", () =>
     withThread(async (thread, _now, advance) => {
       projectionControls.set(thread, { skipLive: true });

@@ -360,7 +360,7 @@ by concatenating their `lanes`; do not join independent operations into one `run
 
 `run` returns `Effect<void, DurableAlarmError, Scope>` and its Scope closes after each wave.
 Declare `dispatchTimeoutMillis` as an integer from 1 to 300000 milliseconds, covering
-selection, delivery and retry/receipt commits. Use the sum for sequential operations within
+selection, delivery, retry/receipt commits and cleanup. Use the sum for sequential operations within
 one lane. The alarm starts a wave only when its allowance fits the event; later arrivals
 cannot renew that allowance. A failed lane is not retried within the event.
 `pendingDeadline` returns `Effect<Option<number>, DurableAlarmError>` from bounded local

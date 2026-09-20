@@ -313,7 +313,7 @@ export const ThreadMessageDelivery = Context.Reference<{
  * then checks its local pending deadline on completion, native progress, wakes and bounded scans.
  * No subscriptions, readiness acknowledgements, deadline sleeps or dispatch loops are needed.
  *
- * Declare a whole-wave allowance (1..300000ms), including selection and local commits. A wave
+ * Declare a whole-wave allowance (1..300000ms), including selection, local commits and cleanup. A wave
  * starts only if that allowance fits the event and later arrivals cannot renew it. A failed
  * lane is not retried within the event. The alarm joins admitted work and closes its Scope
  * before reading durable deadlines under the shared ThreadMutationGate.
@@ -1402,8 +1402,7 @@ export class ThreadMaintenance extends Context.Service<
           Scope.close(scope, exit),
         );
 
-        const fork = <A, E>(work: Effect.Effect<A, E, Scope.Scope>) =>
-          Effect.forkIn(Effect.scoped(work), auxiliaryScope);
+        const fork = <A, E>(work: Effect.Effect<A, E>) => Effect.forkIn(work, auxiliaryScope);
 
         // Each lane has at most one finite wave. A completion is retained until the single
         // scheduling loop observes it; a busy sibling cannot consume another lane's hint.
@@ -1589,6 +1588,8 @@ export class ThreadMaintenance extends Context.Service<
 
                   return true;
                 }).pipe(
+                  // Cleanup shares this wave's original allowance.
+                  Effect.scoped,
                   Effect.timeoutOrElse({
                     duration: lane.dispatchTimeoutMillis,
                     orElse: () =>
