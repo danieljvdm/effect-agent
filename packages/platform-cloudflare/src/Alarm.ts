@@ -1630,6 +1630,18 @@ export class ThreadMaintenance extends Context.Service<
             }
           }
 
+          // Retire a quiet event before consuming hints queued during its native Attempt.
+          // Recovery still gets its checkpoint and, if needed, initial dispatch opportunity.
+          if (
+            native === undefined &&
+            recoveryObserved &&
+            !recovery.needsCheckpoint &&
+            backfillObserved &&
+            delivery === undefined &&
+            lanes.every((lane) => lane.fiber === undefined)
+          )
+            break;
+
           if (native === undefined && nativeCheck) {
             nativeCheck = false;
             const checkpoint = recoveryObserved && recovery.needsCheckpoint;
@@ -1649,14 +1661,6 @@ export class ThreadMaintenance extends Context.Service<
               }),
             );
           }
-          if (
-            native === undefined &&
-            recoveryObserved &&
-            backfillObserved &&
-            delivery === undefined &&
-            lanes.every((lane) => lane.fiber === undefined)
-          )
-            break;
 
           const next = Math.min(
             native === undefined ? (result.nextAttemptAt ?? Infinity) : Infinity,
