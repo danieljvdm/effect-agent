@@ -324,7 +324,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect-agent/platform-cloudflare": "workspace:*",
-        "@effect/platform-browser": "catalog:",
         "@effect/platform-node": "catalog:",
         "effect": "catalog:",
         "effect-agent": "workspace:*",

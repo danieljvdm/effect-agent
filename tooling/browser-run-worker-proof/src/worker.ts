@@ -1,3 +1,4 @@
+import { BrowserSessions } from "@effect-agent/platform-cloudflare/browser-session";
 import {
   BrowserQuickActionBrowserBinding,
   CloudflareBrowser,
@@ -9,13 +10,7 @@ import {
   CloudflareInteractiveBrowser,
   BrowserRunInteractiveHost,
   BrowserRunLiveViewRequest,
-  BrowserRunSessionLifecycle,
 } from "@effect-agent/platform-cloudflare/interactive-browser";
-import {
-  browserRunProtectedLayer,
-  browserRunProtectedBindingLayer,
-} from "@effect-agent/platform-cloudflare/protected-browser";
-import { BrowserCrypto } from "@effect/platform-browser";
 import { Config, Duration, Effect, Layer, Option, Redacted, Schema, Stream } from "effect";
 import {
   BrowserNavigateRequest,
@@ -45,7 +40,7 @@ import {
   PROOF_FACT,
   PROOF_SOURCE_URL,
 } from "./contract.ts";
-import { protectedFixture, runProtectedProof } from "./protected-browser.ts";
+import { credentialFixture, runCredentialProof } from "./credentials.ts";
 import { uploadFixture, runUploadProof } from "./uploads.ts";
 
 const proofCapture = WebCapture.make("capture_example_domain", {
@@ -115,16 +110,12 @@ const proofLayer = Layer.unwrap(
       ...lifecycleConfig,
     }).pipe(Layer.provide(FetchHttpClient.layer));
 
-    const protectedLayer = browserRunProtectedLayer().pipe(
-      Layer.provide(browserRunProtectedBindingLayer({ browser: env.BROWSER })),
-      Layer.provide(
-        BrowserRunSessionLifecycle.layer(lifecycleConfig).pipe(
-          Layer.provide(FetchHttpClient.layer),
-        ),
-      ),
-    );
+    const sessionLayer = BrowserSessions.layer({
+      browser: env.BROWSER,
+      ...lifecycleConfig,
+    }).pipe(Layer.provide(FetchHttpClient.layer));
 
-    const browserRunLayer = Layer.mergeAll(quickActionLayer, interactiveLayer, protectedLayer);
+    const browserRunLayer = Layer.mergeAll(quickActionLayer, interactiveLayer, sessionLayer);
 
     return Layer.merge(
       CloudflareBrowser.layer(proofCapture, { browser: env.BROWSER }),
@@ -298,9 +289,9 @@ const runProof = Effect.gen(function* () {
       }),
     );
 
-    stage = "protected-browser";
+    stage = "browser-credentials";
     const request = yield* Worker.NativeRequest;
-    const protectedBrowser = yield* runProtectedProof(new URL(request.url).origin);
+    const browserCredentials = yield* runCredentialProof(new URL(request.url).origin);
 
     stage = "file-upload";
     const fileUpload = yield* runUploadProof(new URL(request.url).origin);
@@ -319,7 +310,7 @@ const runProof = Effect.gen(function* () {
           pngSignatureValid: true,
         },
         interactive,
-        protectedBrowser,
+        browserCredentials,
         fileUpload,
       }),
     );
@@ -348,15 +339,15 @@ const runProof = Effect.gen(function* () {
 });
 
 export default Worker.make(
-  proofLayer.pipe(Layer.provideMerge(BrowserCrypto.layer)),
+  proofLayer,
   Effect.gen(function* () {
     const request = yield* Worker.NativeRequest;
 
     if (new URL(request.url).pathname.startsWith("/uploads/")) return yield* uploadFixture(request);
 
-    return yield* new URL(request.url).pathname.startsWith("/protected/")
-      ? protectedFixture(request).pipe(
-          Effect.catch(() => Effect.succeed(new Response("Fixture failed", { status: 500 }))),
+    return yield* new URL(request.url).pathname.startsWith("/credentials/")
+      ? credentialFixture(request).pipe(
+          Effect.orElseSucceed(() => new Response("Fixture failed", { status: 500 })),
         )
       : runProof;
   }),

@@ -388,13 +388,48 @@ Browser adapters use separate imports:
 | `/cloudflare-browser`   | Page capture through a browser binding; structured extraction also needs explicit Workers AI authorization and accounting |
 | `/browser-rest-capture` | Node-safe page capture with account credentials and `HttpClient`                                                          |
 | `/browser-rest-crawl`   | Node-safe same-host Markdown crawl with bounded polling and scoped job cleanup                                            |
-| `/interactive-browser`  | Interactive browser and host controls; requires `@cloudflare/puppeteer@^1.1.0`                                            |
-| `/protected-browser`    | Binding and target-policy Layers for protected browser requests                                                           |
+| `/interactive-browser`  | Bounded interactive browser and host controls with the included Puppeteer client                                          |
+| `/browser-session`      | Host-owned native sessions, scoped attachments, operator controls, keepalive, and exact-session cleanup                   |
+| `/browser-credentials`  | Login/card fill schemas and invocation-specific credential authority; fills the current native page                       |
 
-Durable hosts and the other browser adapters do not need Puppeteer.
+Durable hosts and the stateless browser adapters do not load Puppeteer.
 
 See [browser setup and limits](../guide/browser) for credentials, network policies,
 action failures, and cleanup.
+
+#### Browser session options
+
+`BrowserSessions.layer({ browser, accountId, apiToken })` requires `HttpClient`.
+`create(options, retain)` calls the host's retention Effect with a private
+`BrowserSessionReference`; successful retention makes the host responsible for remote cleanup.
+`attach(reference)` acquires a local connection in `Scope`. Its finalizer disconnects locally.
+
+| Creation option        | Default  | Meaning                                                        |
+| ---------------------- | -------- | -------------------------------------------------------------- |
+| `maxElapsedMillis`     | Required | Positive safe integer; fixes the session's absolute expiry     |
+| `keepAliveMillis`      | `600000` | Requested provider idle allowance, from 1 through 600,000 ms   |
+| `commandTimeoutMillis` | `30000`  | Positive safe integer; bounds each authorized native operation |
+
+The reference stores redacted session, context, and page identities, `expiresAt`, and
+`commandTimeoutMillis`. Keep it in private host storage. `keepAlive(sessionId)` refreshes
+provider inactivity without changing `expiresAt`; `close(sessionId)` requires confirmed
+termination or exact-session absence. The owner supplies its existing expiry/cleanup trigger.
+Provider expiry can happen sooner; attachment never creates a replacement session.
+
+`session.run(authorize, action)` checks current host authority under the attachment's lock before
+passing its native Puppeteer page to trusted code. The host owns network policy, output bounds,
+controller fencing, and action receipts. `handoff`, `getLiveView`, and `getHandoffState` take the
+same authorization Effect and use the existing `BrowserRun` request/result schemas.
+Await all SDK work inside the native callback. A settled SDK rejection preserves the session for
+inspection while reporting uncertain dispatch; unfinished or unsafe operations can terminate it.
+Neither outcome authorizes automatic replay.
+
+`session.fillCredential(request)` requires `BrowserCredentialAccess` for each call. Its
+`FillCredentialRequest` selects 1–8 fields by explicit selector and role within one native form;
+an optional `frame` path selects at most eight nested iframes. The service authorizes current
+origins and resolves host-only material. The helper fills without submitting and returns only
+dispatch evidence and the number of acknowledged writes. Ordinary browser observations remain
+available after filling.
 
 ### `@effect-agent/pr-review`
 

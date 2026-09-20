@@ -27,16 +27,6 @@ import {
   type InteractiveBrowserError as BrowserError,
 } from "effect-agent/interactive-browser";
 import { type PageScreenshotResult } from "effect-agent/page-screenshot";
-import {
-  type ProtectedBrowser,
-  type ProtectedBrowserHandle,
-  type ProtectedBrowserError,
-  type BrowserCredentialAccess,
-  CredentialOrigin,
-  CardCredential,
-  CredentialOfferMetadata,
-  ProtectedBrowserFill,
-} from "effect-agent/protected-browser";
 import { SandboxImplementation } from "effect-agent/sandbox";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -47,39 +37,7 @@ type OpenResult =
   ReturnType<Open> extends Effect.Effect<infer A, infer E, infer R> ? [A, E, R] : never;
 
 describe("InteractiveBrowser schemas", () => {
-  it("bounds non-secret fill, authorized address metadata, and task-owned elapsed budgets", () => {
-    const ref = "12345678-1234-4234-9234-123456789abc";
-
-    expect(
-      Schema.decodeSync(ProtectedBrowserFill, { onExcessProperty: "error" })({ ref, value: "" })
-        .value,
-    ).toBe("");
-    for (const request of [
-      { ref: "#address", value: "text" },
-      { ref, value: "x".repeat(8193) },
-      { ref, value: "text", selector: "input" },
-      { ref, value: "text", script: "document.body" },
-    ])
-      expect(
-        Schema.decodeExit(ProtectedBrowserFill, { onExcessProperty: "error" })(request)._tag,
-      ).toBe("Failure");
-
-    const metadata = CredentialOfferMetadata.make({
-      label: "Personal card",
-      billingAddress: { line1: "123 Example Street", postalCode: "12345" },
-    });
-
-    expect(
-      Schema.decodeSync(CredentialOfferMetadata)(
-        Schema.encodeSync(CredentialOfferMetadata)(metadata),
-      ),
-    ).toEqual(metadata);
-    expect(
-      Schema.decodeExit(CredentialOfferMetadata)({
-        label: "Card",
-        billingAddress: { line1: "x".repeat(201) },
-      })._tag,
-    ).toBe("Failure");
+  it("accepts task-owned elapsed budgets beyond the provider idle window", () => {
     for (const maxElapsedMillis of [600_001, 3_600_000, 3_600_001, 8 * 60 * 60_000])
       expect(
         Schema.decodeExit(InteractiveBrowserPolicy, { onExcessProperty: "error" })({
@@ -89,45 +47,6 @@ describe("InteractiveBrowser schemas", () => {
           maxReturnedBytes: 1024,
         })._tag,
       ).toBe("Success");
-
-    const fill: Equal<
-      ReturnType<ProtectedBrowserHandle["fill"]>,
-      Effect.Effect<void, ProtectedBrowserError>
-    > = true;
-
-    expect(fill).toBe(true);
-  });
-  it("keeps protected material and authority outside the model contract", () => {
-    const open: Equal<
-      ReturnType<ProtectedBrowser["Service"]["open"]>,
-      Effect.Effect<
-        ProtectedBrowserHandle,
-        ProtectedBrowserError,
-        Scope.Scope | BrowserCredentialAccess
-      >
-    > = true;
-
-    const channels: Equal<
-      Extract<keyof ProtectedBrowserHandle, "screenshot" | "sessionId" | "getLiveView" | "handoff">,
-      never
-    > = true;
-
-    expect(open && channels).toBe(true);
-    for (const origin of [
-      "https://example.com/",
-      "https://example.com:443",
-      "http://example.com",
-      "https://EXAMPLE.com",
-      "https://u:p@example.com",
-    ]) {
-      expect(Schema.decodeExit(CredentialOrigin)(origin)._tag).toBe("Failure");
-    }
-    expect(
-      Schema.decodeUnknownExit(CardCredential)({
-        _tag: "CardCredential",
-        number: "4111111111111111",
-      })._tag,
-    ).toBe("Failure");
   });
   it("round-trips policy, requests, results, and typed errors", () => {
     const implementation = SandboxImplementation.make({

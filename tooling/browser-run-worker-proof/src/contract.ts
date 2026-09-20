@@ -17,7 +17,7 @@ export const BrowserRunProofStage = Schema.Literals([
   "handoff-state",
   "close",
   "closed-handle",
-  "protected-browser",
+  "browser-credentials",
   "file-upload",
 ]);
 
@@ -71,10 +71,11 @@ export class BrowserRunWorkerProofResult extends Schema.Class<BrowserRunWorkerPr
   scrape: ScrapeProof,
   screenshot: ScreenshotProof,
   interactive: BrowserRunInteractiveProof,
-  protectedBrowser: Schema.Struct({
+  browserCredentials: Schema.Struct({
     loginLayouts: Schema.Literal(2),
     authenticatedContinuation: Schema.Literal(true),
-    revokedOfferRefused: Schema.Literal(true),
+    retainedSession: Schema.Literal(true),
+    revokedFillRefused: Schema.Literal(true),
     cardFilled: Schema.Literal(true),
     closed: Schema.Literal(true),
   }),

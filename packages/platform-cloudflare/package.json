@@ -28,7 +28,8 @@
     "./cloudflare-subscriptions": "./src/CloudflareSubscriptions.ts",
     "./cloudflare-thread-client": "./src/CloudflareThreadClient.ts",
     "./interactive-browser": "./src/InteractiveBrowser.ts",
-    "./protected-browser": "./src/ProtectedBrowser.ts",
+    "./browser-session": "./src/BrowserSession.ts",
+    "./browser-credentials": "./src/BrowserCredentials.ts",
     "./thread-object": "./src/ThreadObject.ts",
     "./wake-scheduler": "./src/WakeScheduler.ts",
     "./cloudflare-ai-gateway": "./src/CloudflareAiGateway.ts"

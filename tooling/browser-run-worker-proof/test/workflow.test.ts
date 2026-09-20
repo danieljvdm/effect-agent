@@ -37,10 +37,11 @@ const proofResult = () =>
       handoffActive: true,
       closed: true,
     },
-    protectedBrowser: {
+    browserCredentials: {
       loginLayouts: 2,
       authenticatedContinuation: true,
-      revokedOfferRefused: true,
+      retainedSession: true,
+      revokedFillRefused: true,
       cardFilled: true,
       closed: true,
     },
