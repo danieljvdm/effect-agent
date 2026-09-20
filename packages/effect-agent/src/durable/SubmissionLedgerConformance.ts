@@ -26,6 +26,7 @@ import {
   WorkerAdmission,
   type SettlementFailureDiagnostic,
 } from "./Records.ts";
+import { runIdForSubmission } from "./RunJournal.ts";
 import {
   type AdmissionResult,
   AbortCommand,
@@ -64,6 +65,7 @@ import {
   ResolutionSafeToRetry,
   RevertJoiningRequest,
   SettlementConflict,
+  Settlement,
   SettlementFinalization,
   SettlementReservation,
   SubmissionLedger,
@@ -538,6 +540,50 @@ const admissionIdempotency = conformanceCase(
     }),
 );
 
+const workerMetadata = (base: AdmissionRequest) =>
+  WorkerAdmission.make({
+    messageId: base.idempotencyKey,
+    sourceSubmissionId: Schema.decodeSync(SubmissionId)("source-input"),
+    deliveryPrincipal: base.principal,
+    parameters: { prompt: "original projection parameters" },
+    createdAtMillis: 1,
+    origin: {
+      worker: {
+        schemaVersion: 1,
+        threadId: base.threadId,
+        targetAgentId: CONFORMANCE_AGENT,
+        delegationId: Schema.decodeSync(DelegationId)("worker-research"),
+      },
+      source: {
+        _tag: "programmatic",
+        threadId: decodeThreadId("worker-source"),
+        agentId: CONFORMANCE_AGENT,
+      },
+      targetDigests: CONFORMANCE_DIGESTS,
+      policy: AgentPolicy.resolve(),
+      budget: {
+        caps: SubagentDelegationCaps.make({
+          maxConcurrentChildren: 1,
+          maxTotalChildInvocations: 2,
+        }),
+        allocation: SubagentReservationAmounts.make({
+          turns: 12,
+          toolCalls: 24,
+          durationMillis: 300_000,
+          inputTokens: 0,
+          outputTokens: 0,
+          costMicrousd: 0,
+          resultBytes: 1_000,
+        }),
+      },
+      grant: SubagentGrant.make({ maxDepth: 1, allowedToolNames: [] }),
+      depth: 1,
+      firstMessageId: base.idempotencyKey,
+      createdAtMillis: 1,
+      expiresAtMillis: 1_000_000,
+    },
+  });
+
 const workerAdmissionIdentity = conformanceCase(
   "retains immutable worker admission metadata and rejects same-key changes or omission",
   ({ ensure, expectFailure, expectSome }) =>
@@ -550,48 +596,7 @@ const workerAdmissionIdentity = conformanceCase(
         { text: "first" },
       );
 
-      const metadata = WorkerAdmission.make({
-        messageId: base.idempotencyKey,
-        sourceSubmissionId: Schema.decodeSync(SubmissionId)("source-input"),
-        deliveryPrincipal: base.principal,
-        parameters: { prompt: "original projection parameters" },
-        createdAtMillis: 1,
-        origin: {
-          worker: {
-            schemaVersion: 1,
-            threadId: base.threadId,
-            targetAgentId: CONFORMANCE_AGENT,
-            delegationId: Schema.decodeSync(DelegationId)("worker-research"),
-          },
-          source: {
-            _tag: "programmatic",
-            threadId: decodeThreadId("worker-source"),
-            agentId: CONFORMANCE_AGENT,
-          },
-          targetDigests: CONFORMANCE_DIGESTS,
-          policy: AgentPolicy.resolve(),
-          budget: {
-            caps: SubagentDelegationCaps.make({
-              maxConcurrentChildren: 1,
-              maxTotalChildInvocations: 2,
-            }),
-            allocation: SubagentReservationAmounts.make({
-              turns: 12,
-              toolCalls: 24,
-              durationMillis: 300_000,
-              inputTokens: 0,
-              outputTokens: 0,
-              costMicrousd: 0,
-              resultBytes: 1_000,
-            }),
-          },
-          grant: SubagentGrant.make({ maxDepth: 1, allowedToolNames: [] }),
-          depth: 1,
-          firstMessageId: base.idempotencyKey,
-          createdAtMillis: 1,
-          expiresAtMillis: 1_000_000,
-        },
-      });
+      const metadata = workerMetadata(base);
 
       const admitted = yield* ledger.admit(
         AdmissionRequest.make({ ...base, workerAdmission: metadata }),
@@ -4553,6 +4558,218 @@ const abortedSettledRowIsNotAJoiningGap = conformanceCase(
     }),
 );
 
+const assignmentSettlement = conformanceCase(
+  "seals terminal assignments atomically while waiting and unapplied corrections remain steerable",
+  ({ ensure, expectSome, expectFailure }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      if (ledger.inspectWorker === undefined) return;
+
+      // Each row isolates one ownership rule. The same cases run on every native adapter.
+      const cases = [
+        {
+          name: "completed",
+          outcome: "completed",
+          disposition: "completed",
+          terminal: "completed",
+        },
+        { name: "waiting", outcome: "completed", disposition: "waiting", terminal: undefined },
+        { name: "failure", outcome: "failed", queued: true, terminal: "failed" },
+        {
+          name: "failure-joining",
+          outcome: "failed",
+          queued: true,
+          joining: true,
+          terminal: "failed",
+        },
+        { name: "exhaustion", outcome: "completed", exhausted: true, terminal: "failed" },
+        { name: "active-abort", outcome: "aborted", terminal: "cancelled" },
+        { name: "queued-abort", outcome: "aborted", noRun: true, terminal: undefined },
+        {
+          name: "reusable",
+          outcome: "completed",
+          disposition: "completed",
+          reusable: true,
+          terminal: undefined,
+        },
+        {
+          name: "late-correction",
+          outcome: "completed",
+          disposition: "completed",
+          queued: true,
+          terminal: undefined,
+        },
+        {
+          name: "applied-correction",
+          outcome: "completed",
+          disposition: "completed",
+          queued: true,
+          joined: true,
+          terminal: "completed",
+        },
+      ] as const;
+
+      for (const scenario of cases) {
+        const threadId = decodeThreadId(`assignment-${scenario.name}`);
+        const base = yield* admissionRequest(threadId, "first", { text: "first" });
+        const metadata = workerMetadata(base);
+
+        const workerAdmission = WorkerAdmission.make({
+          ...metadata,
+          origin: {
+            ...metadata.origin,
+            ...("reusable" in scenario ? {} : { lifecycle: "assignment" as const }),
+          },
+        });
+
+        const request = AdmissionRequest.make({ ...base, workerAdmission });
+
+        const first = yield* ledger.admit(request);
+
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: first.submissionId }));
+        const claim = yield* expectSome("assignment claim", yield* claimLane(threadId, PRODUCER_A));
+        const runId = runIdForSubmission(first.submissionId);
+
+        const payload = yield* Schema.decodeEffect(SubmissionSettledRecord)(
+          SubmissionSettled.make({
+            submissionId: first.submissionId,
+            settlementId: submissionSettlementId(first.submissionId),
+            receiptId: first.receiptId,
+            outcome: scenario.outcome,
+            ...("noRun" in scenario ? {} : { runId }),
+            ...(scenario.outcome === "aborted"
+              ? {}
+              : {
+                  result:
+                    scenario.outcome === "failed"
+                      ? { errorTag: "TestFailure", message: "Failed task" }
+                      : { answer: "done" },
+                }),
+            ...("disposition" in scenario ? { runDisposition: scenario.disposition } : {}),
+            ...("exhausted" in scenario
+              ? { finishReason: "budget-exhausted" as const, exhausted: "turns" as const }
+              : {}),
+          }),
+        ).pipe(Effect.orDie);
+
+        const record = RecordEnvelope.make({
+          recordId: submissionSettlementRecordId(first.submissionId),
+          family: "thread",
+          schemaVersion: 1,
+          createdAt: CONFORMANCE_CREATED_AT,
+          deploymentId: CONFORMANCE_DEPLOYMENT,
+          payload,
+        });
+
+        let queued: AdmissionResult | undefined;
+
+        if ("queued" in scenario) {
+          const next = yield* admissionRequest(threadId, "correction", { text: "correction" });
+
+          queued = yield* ledger.admit(
+            AdmissionRequest.make({
+              ...next,
+              workerAdmission: { ...workerAdmission, messageId: next.idempotencyKey },
+            }),
+          );
+          yield* ledger.markReady(MarkReadyRequest.make({ submissionId: queued.submissionId }));
+          if ("joined" in scenario || "joining" in scenario) {
+            yield* ledger.claimJoining(
+              ClaimJoiningRequest.make({
+                threadId,
+                hostSubmissionId: first.submissionId,
+                ownershipToken: claim.ownershipToken,
+                maxCount: 1,
+              }),
+            );
+          }
+          if ("joined" in scenario) {
+            yield* ledger.markJoined(
+              MarkJoinedRequest.make({
+                submissionId: queued.submissionId,
+                ownershipToken: claim.ownershipToken,
+                recordId: submissionInputRecordId(queued.submissionId),
+                sequence: Schema.decodeSync(CanonicalSequence)(2),
+              }),
+            );
+          }
+        }
+        yield* ledger.reserveSettlement(
+          SettlementReservation.make({
+            submissionId: first.submissionId,
+            ownershipToken: claim.ownershipToken,
+            settlementId: payload.settlementId,
+            outcome: scenario.outcome,
+            record,
+            recordDigest: yield* digestJson(
+              yield* Schema.encodeEffect(RecordEnvelope)(record).pipe(Effect.orDie),
+            ),
+          }),
+        );
+
+        const finalization = SettlementFinalization.make({
+          submissionId: first.submissionId,
+          settlementId: payload.settlementId,
+        });
+
+        const settled = yield* ledger.finalizeSettlement(finalization);
+
+        yield* ensure(
+          Schema.toEquivalence(Settlement)(settled, yield* ledger.finalizeSettlement(finalization)),
+          "Finalization replay must preserve its exact outcome",
+        );
+        const control = yield* ledger.inspectWorker(threadId);
+
+        yield* ensure(
+          control.terminal === scenario.terminal &&
+            control.stopped === (scenario.terminal !== undefined),
+          `Wrong assignment state for ${scenario.name}`,
+        );
+        yield* ensure(
+          (yield* ledger.admit(request)).receiptId === first.receiptId,
+          "A seal must preserve same-command receipt replay",
+        );
+        const next = yield* admissionRequest(threadId, "later", { text: "later" });
+
+        const later = AdmissionRequest.make({
+          ...next,
+          workerAdmission: { ...workerAdmission, messageId: next.idempotencyKey },
+        });
+
+        if (scenario.terminal !== undefined) {
+          const refusal = yield* expectFailure("terminal admission", ledger.admit(later));
+
+          yield* ensure(
+            Schema.is(AdmissionPolicyError)(refusal) && refusal.code === "worker-stopped",
+            "New instructions cannot reopen a terminal assignment",
+          );
+        } else {
+          yield* ledger.admit(later);
+        }
+        if (queued !== undefined) {
+          if ("joining" in scenario)
+            yield* ledger.revertJoining(
+              RevertJoiningRequest.make({ submissionId: queued.submissionId }),
+            );
+          const state = yield* recoverySnapshot(queued.submissionId);
+
+          yield* ensure(
+            (state.abortIntent !== undefined) === (scenario.outcome === "failed"),
+            "Failure aborts queued inputs; completion never cancels an accepted correction or joined member",
+          );
+        }
+        if (scenario.terminal !== undefined && ledger.stopWorker !== undefined) {
+          yield* ledger.stopWorker({ threadId, author: CONFORMANCE_PRINCIPAL });
+          yield* ensure(
+            (yield* ledger.inspectWorker(threadId)).terminal === scenario.terminal,
+            "Explicit stop cannot replace an assignment's first terminal outcome",
+          );
+        }
+      }
+    }),
+);
+
 /**
  * The shared, adapter-parameterized SubmissionLedger contract suite (STORE-010). Every durable
  * ledger adapter test suite must execute each case against its own ledger provisioning, inside
@@ -4561,6 +4778,7 @@ const abortedSettledRowIsNotAJoiningGap = conformanceCase(
 export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerConformanceCase> = [
   admissionIdempotency,
   workerAdmissionIdentity,
+  assignmentSettlement,
   messageAdmissionIdentity,
   workerCompletionIdentity,
   workerUpdateIdentity,

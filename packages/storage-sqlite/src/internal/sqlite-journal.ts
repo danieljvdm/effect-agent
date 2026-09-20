@@ -547,6 +547,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
     version.user_version !== 10 &&
     version.user_version !== 11 &&
     version.user_version !== 12 &&
+    version.user_version !== 13 &&
     version.user_version !== CurrentSqliteStorageVersion
   ) {
     return yield* SqliteStorageCompatibilityError.make({
@@ -555,7 +556,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
       message:
         `The SQLite file uses unsupported storage version ${version.user_version}; ` +
         `this build supports exactly version ${CurrentSqliteStorageVersion}. ` +
-        "Only supported v7, v8, v9, v10, v11 and v12 can be upgraded automatically. Keep the original file and use a compatible library version.",
+        "Only supported v7, v8, v9, v10, v11, v12 and v13 can be upgraded automatically. Keep the original file and use a compatible library version.",
     });
   }
 
@@ -691,7 +692,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
             ),
           );
           yield* createWorkerStops;
-          yield* sql`PRAGMA user_version = 13`;
+          yield* sql`PRAGMA user_version = 14`;
           yield* failpoint("upgrade:after-version");
         }),
       )
@@ -771,11 +772,11 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         Effect.gen(function* () {
           const current = yield* sql<{ user_version: number }>`PRAGMA user_version`;
 
-          if (current[0]?.user_version === 13) return;
+          if (current[0]?.user_version === 14) return;
           if (current[0]?.user_version !== 11)
             return yield* SqliteStorageCompatibilityError.make({
               actualVersion: current[0]?.user_version ?? -1,
-              supportedVersion: 13,
+              supportedVersion: 14,
               message: "Storage version changed during native index upgrade",
             });
           yield* checkPredecessorLayout(10);
@@ -786,7 +787,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           if (requiredIndex.length !== 1)
             return yield* SqliteStorageCompatibilityError.make({
               actualVersion: 11,
-              supportedVersion: 13,
+              supportedVersion: 14,
               message: "Predecessor storage is missing its required nonterminal index",
             });
           yield* failpoint("upgrade:before-mutation");
@@ -804,7 +805,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           yield* failpoint("upgrade:after-mutation");
           yield* failpoint("upgrade:before-version");
           yield* createWorkerStops;
-          yield* sql`PRAGMA user_version = 13`;
+          yield* sql`PRAGMA user_version = 14`;
           yield* failpoint("upgrade:after-version");
         }),
       )
@@ -825,11 +826,11 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
         Effect.gen(function* () {
           const current = yield* sql<{ user_version: number }>`PRAGMA user_version`;
 
-          if (current[0]?.user_version === 13) return;
+          if (current[0]?.user_version === 14) return;
           if (current[0]?.user_version !== 12)
             return yield* SqliteStorageCompatibilityError.make({
               actualVersion: current[0]?.user_version ?? -1,
-              supportedVersion: 13,
+              supportedVersion: 14,
               message: "Storage version changed during worker stop upgrade",
             });
           yield* checkPredecessorLayout(12);
@@ -838,7 +839,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           yield* createWorkerStops;
           yield* failpoint("upgrade:after-mutation");
           yield* failpoint("upgrade:before-version");
-          yield* sql`PRAGMA user_version = 13`;
+          yield* sql`PRAGMA user_version = 14`;
           yield* failpoint("upgrade:after-version");
         }),
       )
@@ -847,6 +848,62 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           SqliteStorageError.make({
             operation: "upgrade worker stop",
             message: "Worker stop upgrade failed",
+            cause,
+          }),
+        ),
+      );
+  }
+
+  if (version.user_version === 13) {
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const current = yield* sql<{ user_version: number }>`PRAGMA user_version`;
+
+          if (current[0]?.user_version === 14) return;
+          if (current[0]?.user_version !== 13)
+            return yield* SqliteStorageCompatibilityError.make({
+              actualVersion: current[0]?.user_version ?? -1,
+              supportedVersion: 14,
+              message: "Storage version changed during assignment seal upgrade",
+            });
+          yield* checkPredecessorLayout(12);
+          yield* verifyWorkerPredecessor(true);
+          const columns = yield* sql`PRAGMA table_info(effect_agent_worker_stops)`;
+
+          yield* Schema.decodeUnknownEffect(
+            Schema.Tuple([
+              Schema.Struct({
+                cid: Schema.Literal(0),
+                name: Schema.Literal("thread_id"),
+                type: Schema.Literal("TEXT"),
+                notnull: Schema.Literal(1),
+                dflt_value: Schema.Null,
+                pk: Schema.Literal(1),
+              }),
+            ]),
+          )(columns).pipe(
+            Effect.mapError(() =>
+              SqliteStorageCompatibilityError.make({
+                actualVersion: 13,
+                supportedVersion: 14,
+                message: "Unsupported worker seal layout; no upgrade was committed",
+              }),
+            ),
+          );
+          yield* failpoint("upgrade:before-mutation");
+          yield* sql`ALTER TABLE effect_agent_worker_stops ADD COLUMN terminal TEXT`;
+          yield* failpoint("upgrade:after-mutation");
+          yield* failpoint("upgrade:before-version");
+          yield* sql`PRAGMA user_version = 14`;
+          yield* failpoint("upgrade:after-version");
+        }),
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          SqliteStorageError.make({
+            operation: "upgrade assignment seals",
+            message: "Assignment seal upgrade failed",
             cause,
           }),
         ),

@@ -131,7 +131,7 @@ const inputPromptDefinition = Agent.make("input-prompt-type-proof", {
   }),
 });
 
-const RunDisposition = Schema.Literal("application-complete");
+const RunDisposition = Schema.Literal("completed");
 
 const dispositionDefinition = Agent.make("disposition-type-proof", {
   input: Schema.Struct({ destination: Schema.String }),
@@ -148,6 +148,7 @@ const dispositionDefinition = Agent.make("disposition-type-proof", {
     toolConcurrency: 1,
   }),
   runDisposition: {
+    workerLifecycle: "assignment",
     schema: RunDisposition,
     fromOutput: (output) => output.runDisposition,
   },
@@ -259,7 +260,7 @@ type OutputProjectionProof = Assert<
   Equal<Agent.Output<typeof agent>, { readonly summary: string }>
 >;
 type RunDispositionProjectionProof = Assert<
-  Equal<Agent.RunDisposition<typeof dispositionDefinition>, "application-complete">
+  Equal<Agent.RunDisposition<typeof dispositionDefinition>, "completed">
 >;
 type RunDispositionRequirementsProof = Assert<
   Equal<Agent.DefinitionRequirements<typeof dispositionDefinition>, never>

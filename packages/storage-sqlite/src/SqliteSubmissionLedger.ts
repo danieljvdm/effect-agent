@@ -18,6 +18,7 @@ import {
   AbortCommand,
   WorkerStopCommand,
   WorkerLedgerState,
+  workerTerminalFromRecord,
   AbortIntent,
   AbortIntentRequest,
   AdmissionAdmitted,
@@ -1893,7 +1894,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       );
     }
 
-    return { reservation: reservation.value, settlementFailure };
+    return { reservation: reservation.value, reservationRecord, settlementFailure };
   });
 
   const replayFinalization = Effect.fn("SqliteSubmissionLedger.replayFinalization")(function* (
@@ -1991,12 +1992,48 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           yield* readReservation(operation, validated.submissionId),
         );
 
-        const { reservation, settlementFailure } = state;
+        const { reservation, reservationRecord, settlementFailure } = state;
         const submission = yield* requireSubmission(operation, validated.submissionId);
 
         if (submission.state === "settled")
           return yield* replayFinalization(validated, submission, state);
         const now = yield* currentInstant;
+
+        const terminal =
+          submission.worker_admission_json === null
+            ? undefined
+            : workerTerminalFromRecord(
+                yield* decodeSubmissionSnapshot(operation, submission),
+                reservationRecord,
+              );
+
+        if (terminal !== undefined) {
+          // Admission and finalization serialize here. An accepted correction that this Run
+          // has not applied vetoes its completion, including admission after RunCompleted.
+          const pending =
+            terminal === "completed"
+              ? yield* sql`SELECT submission_id FROM effect_agent_submissions
+                WHERE thread_id = ${submission.thread_id} AND queue_sequence > ${submission.queue_sequence}
+                AND queue_sequence = (SELECT MAX(queue_sequence) FROM effect_agent_submissions WHERE thread_id = ${submission.thread_id})
+                AND (joined_host_submission_id IS NULL OR joined_host_submission_id <> ${submission.submission_id}
+                  OR input_applied_record_id IS NULL) LIMIT 1`.pipe(
+                  Effect.mapError(sqlFailure(operation)),
+                )
+              : [];
+
+          if (pending.length === 0) {
+            yield* sql`INSERT OR IGNORE INTO effect_agent_worker_stops (thread_id, terminal)
+              VALUES (${submission.thread_id}, ${terminal})`.pipe(
+              Effect.mapError(sqlFailure(operation)),
+            );
+            yield* sql`INSERT OR IGNORE INTO effect_agent_abort_intents (submission_id, author, reason, requested_at)
+              SELECT submission_id, ${submission.principal}, ${`Worker assignment ${terminal}`}, ${now.iso}
+              FROM effect_agent_submissions WHERE thread_id = ${submission.thread_id} AND state <> 'settled'
+              AND submission_id <> ${submission.submission_id}
+              AND (joined_host_submission_id IS NULL OR joined_host_submission_id <> ${submission.submission_id}
+                OR input_applied_record_id IS NULL)`.pipe(Effect.mapError(sqlFailure(operation)));
+          }
+        }
 
         yield* sql`
           UPDATE effect_agent_submissions
@@ -2056,11 +2093,18 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           const active = yield* read(true);
 
           const stops =
-            yield* sql`SELECT thread_id FROM effect_agent_worker_stops WHERE thread_id = ${threadId}`.pipe(
+            yield* sql`SELECT terminal FROM effect_agent_worker_stops WHERE thread_id = ${threadId}`.pipe(
               Effect.mapError(sqlFailure(operation)),
             );
 
-          return WorkerLedgerState.make({ latest, active, stopped: stops.length > 0 });
+          return yield* Schema.decodeUnknownEffect(Schema.toType(WorkerLedgerState))({
+            latest,
+            active,
+            stopped: stops.length > 0,
+            ...(stops[0] === undefined || stops[0].terminal === null
+              ? {}
+              : { terminal: stops[0].terminal }),
+          }).pipe(Effect.mapError(internalFailure(operation)));
         }),
       )
       .pipe(Effect.catchTag("SqlError", (cause) => sqlFailure(operation)(cause)));

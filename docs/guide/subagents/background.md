@@ -29,6 +29,35 @@ Reports join an active parent run at an input boundary or start a later run in t
 The framework delivers them separately from the parent's application input: no report tags,
 mapper, input union, or extra host registration is required. Existing callers must opt in.
 
+## Retain one assignment
+
+Opt a worker definition into assignment completion through its typed output:
+
+```ts twoslash
+import { Agent, Worker } from "effect-agent";
+import { Schema } from "effect";
+import { Toolkit } from "effect/unstable/ai";
+
+const Task = Agent.make("task", {
+  input: Schema.String,
+  output: Schema.Struct({ status: Worker.AssignmentDisposition, answer: Schema.String }),
+  instructions: "Use waiting when you need an answer; completed only when the assignment is done.",
+  toolkit: Toolkit.empty,
+  runDisposition: {
+    workerLifecycle: "assignment",
+    schema: Worker.AssignmentDisposition,
+    fromOutput: (output) => output.status,
+  },
+});
+```
+
+Start and steer `Task` through the same background APIs. A `waiting` result ends that run and
+keeps the assignment steerable. A `completed` result permanently seals the assignment only after
+its latest accepted instructions have been applied. Failed or exhausted runs also seal it.
+Inspect the worker's `state` to distinguish assignment completion from a completed run.
+The choice is retained at worker creation; existing workers and definitions without this opt-in
+remain reusable. See the [terminal contract](../../reference/subagents#terminal-assignments).
+
 ## Send intermediate findings
 
 Declare the update Schema on the Agent once, then enable parent reporting:

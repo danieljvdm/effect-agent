@@ -63,9 +63,16 @@ export type NativeModel<ModelValue> =
 
 /** Definition-owned boundary for selecting and validating an application run disposition. */
 export interface RunDispositionDeclaration<Output, DispositionSchema extends Schema.Top> {
+  /**
+   * Opt background workers into one retained assignment. The encoded disposition must be
+   * Worker.AssignmentDisposition: completed seals the worker, waiting leaves it steerable.
+   * Failures and exhausted Runs seal as failed; aborting an active Run seals as cancelled.
+   * The worker origin retains this choice. Omission preserves reusable workers.
+   */
+  readonly workerLifecycle?: "assignment" | undefined;
   /** Canonical Schema used to validate and encode the selected disposition. */
   readonly schema: DispositionSchema;
-  /** Pure selection from decoded output; `undefined` means this ordinary Run declares none. */
+  /** Pure selection from decoded output. `undefined` declares none, except for assignments. */
   readonly fromOutput: (output: Output) => unknown;
 }
 

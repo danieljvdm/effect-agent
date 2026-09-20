@@ -8,6 +8,14 @@ import { MessageStatus } from "./internal/message-status.ts";
 import { IdempotencyKey, Receipt } from "./Receipt.ts";
 import { SubagentExecutionFailure, SubagentGrant } from "./SubagentContract.ts";
 
+/** Assignment output selected through the Definition's runDisposition declaration. */
+export const AssignmentDisposition = Schema.Literals(["completed", "waiting"]);
+export type AssignmentDisposition = typeof AssignmentDisposition.Type;
+
+/** A permanent destination outcome; an ordinary Run completion does not imply this. */
+export const AssignmentTerminal = Schema.Literals(["completed", "failed", "cancelled"]);
+export type AssignmentTerminal = typeof AssignmentTerminal.Type;
+
 /** A reusable child Thread, correlated with its declaration. This value grants no authority. */
 export const WorkerRef = Schema.Struct({
   schemaVersion: Schema.Literal(1),
@@ -94,7 +102,16 @@ export const WorkerSummary = Schema.Struct({
   worker: WorkerRef,
   latestReceipt: Schema.NullOr(Receipt),
   /** stopping/stopped identify an owner-issued worker stop, never an ordinary Receipt abort. */
-  state: Schema.Literals(["starting", "active", "idle", "stopping", "stopped"]),
+  state: Schema.Literals([
+    "starting",
+    "active",
+    "idle",
+    "stopping",
+    "stopped",
+    "completed",
+    "failed",
+    "cancelled",
+  ]),
   acceptedInput: Schema.NullOr(WorkerInput),
   appliedInput: Schema.NullOr(WorkerAppliedInput),
   run: Schema.NullOr(WorkerRun),

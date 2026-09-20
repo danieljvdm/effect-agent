@@ -15,6 +15,7 @@ import {
 import type { JoinedToHost } from "../core/Receipt.ts";
 import { IdempotencyKey, QueueSequence, Principal } from "../core/Receipt.ts";
 import { RunUsageSummary } from "../core/Usage.ts";
+import { AssignmentTerminal } from "../core/Worker.ts";
 import {
   AbortRequested,
   ApprovalDecision,
@@ -246,7 +247,8 @@ export const WorkerLedgerState = Schema.Struct({
   latest: Schema.NullOr(SubmissionSnapshot),
   active: Schema.NullOr(SubmissionSnapshot),
   stopped: Schema.Boolean,
-});
+  terminal: Schema.optionalKey(AssignmentTerminal),
+}).check(Schema.makeFilter((state) => state.terminal === undefined || state.stopped));
 
 export type WorkerLedgerState = typeof WorkerLedgerState.Type;
 
@@ -425,6 +427,30 @@ export const settlementFailureFromRecord = (
   return payload._tag === "SubmissionSettled" && payload.outcome === "failed"
     ? payload.result
     : undefined;
+};
+
+/**
+ * Assignment intent derived only from frozen admission and exact settlement evidence.
+ * Joined receipts and cancellation before a Run starts do not finish an assignment.
+ * Adapters suppress completed intent when newer accepted input remains unapplied, then
+ * install the first seal and outstanding abort intents atomically before releasing the lane.
+ */
+export const workerTerminalFromRecord = (
+  submission: SubmissionSnapshot,
+  record: RecordEnvelope,
+): AssignmentTerminal | undefined => {
+  const payload = record.payload;
+
+  if (
+    submission.workerAdmission?.origin.lifecycle !== "assignment" ||
+    payload._tag !== "SubmissionSettled" ||
+    (payload.runId !== undefined && payload.runId !== `run:${submission.submissionId}`)
+  )
+    return undefined;
+  if (payload.outcome === "failed" || payload.finishReason === "budget-exhausted") return "failed";
+  if (payload.outcome === "aborted") return payload.runId === undefined ? undefined : "cancelled";
+
+  return payload.runDisposition === "completed" ? "completed" : undefined;
 };
 
 /** Destination-owned permanent inbox seal; recorded atomically with all outstanding abort intents. */
@@ -1012,7 +1038,8 @@ export type SubmissionLedgerFailure =
  *   recovery settles aborted never-claimed queued work immediately, without waiting for it to
  *   head the lane. Both exceptions are outcome- and state-narrow; everything else stays fenced.
  * - `finalizeSettlement` — idempotent terminal transition (state → settled) after the reserved
- *   record is canonical; releases the lane so the next `queueSequence` becomes claimable. It
+ *   record is canonical. Native adapters seal opted-in worker assignments atomically before
+ *   releasing the lane. Otherwise the next `queueSequence` becomes claimable. It
  *   requires no ownership token: canonical history authorizes finalization (DUR-015). A
  *   finalization that disagrees with the recorded outcome fails with `SettlementConflict`.
  * - `requestAbort` — durable, idempotent by `submissionId`: repeating returns the recorded

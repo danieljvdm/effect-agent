@@ -491,13 +491,16 @@ checkpoints continue to populate and compare these fields; absent metadata falls
 canonical replay.
 
 The persistent adapters automatically upgrade supported predecessor formats on acquisition:
-Cloudflare Thread stores move from version 2, 3, 4, or 5 to 6; Schedule and Subscription stores move
-from version 2 to 3; the combined SQLite file moves from version 7, 8, 9, or 10 to 11. Thread and SQLite
-stores add an index containing only unfinished submissions, plus recovery checkpoint and message
-delivery storage where those are missing from a supported predecessor. Recovery scans use the
-index in Thread and queue order, seeking from the previous page's cursor without revisiting its
-prefix. Each owning store upgrades in one native transaction and advances its version marker
-last. Reopening after interruption retries the entire uncommitted upgrade.
+Cloudflare Thread stores move from versions 2–8 to 9; Schedule and Subscription stores move
+from version 2 to 3; combined SQLite files move from versions 7–13 to 14. Thread and SQLite
+stores add native read indexes, worker destination seals, recovery checkpoints and message delivery
+storage where missing. The immediate predecessor adds only a nullable terminal-outcome column to
+the existing worker seal. Existing explicit stops remain stopped; historical worker origins without
+an assignment lifecycle remain reusable. No completed receipt is retroactively treated as assignment
+completion, and supported stores never require a reset.
+
+Each owning store upgrades in one native transaction and advances its version marker last.
+Reopening after interruption retries the entire uncommitted upgrade.
 Namespaces, canonical history and digests, receipts, pending work, ownership, deadlines, alarm
 generations and scan cursors are preserved. Keep the existing namespace/file and the old source
 versions, input bindings and agent registrations needed to finish retained work.

@@ -7,13 +7,13 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
 import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
-export const CurrentSqliteStorageVersion = 13;
+export const CurrentSqliteStorageVersion = 14;
 
 /** One permanent destination inbox fence, including workers stopped before admission. */
 export const createWorkerStops = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  yield* sql`CREATE TABLE effect_agent_worker_stops (thread_id TEXT PRIMARY KEY NOT NULL)`;
+  yield* sql`CREATE TABLE effect_agent_worker_stops (thread_id TEXT PRIMARY KEY NOT NULL, terminal TEXT)`;
   yield* sql`CREATE INDEX effect_agent_worker_starts ON effect_agent_message_deliveries(owner_thread_id,
     json_extract(record_json, '$.envelope.workerAdmission.origin.worker.delegationId'),
     json_extract(record_json, '$.envelope.workerAdmission.origin.worker.targetAgentId'), message_id)
@@ -368,6 +368,6 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
     yield* createMessageDeliveryPendingIndex;
     yield* createRecoveryCheckpointTable;
     yield* createWorkerStops;
-    yield* sql`PRAGMA user_version = 13`.withoutTransform;
+    yield* sql`PRAGMA user_version = 14`.withoutTransform;
   }),
 });

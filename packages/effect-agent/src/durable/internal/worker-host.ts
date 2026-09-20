@@ -2284,15 +2284,17 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         return {
           worker: origin.worker,
           latestReceipt: acceptedInput?.receipt ?? null,
-          state: control.stopped
-            ? control.active === null
-              ? "stopped"
-              : "stopping"
-            : control.active !== null
-              ? "active"
-              : delivery !== undefined
-                ? "starting"
-                : "idle",
+          state:
+            control.terminal ??
+            (control.stopped
+              ? control.active === null
+                ? "stopped"
+                : "stopping"
+              : control.active !== null
+                ? "active"
+                : delivery !== undefined
+                  ? "starting"
+                  : "idle"),
           acceptedInput,
           appliedInput,
           run,
@@ -2438,6 +2440,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                 threadId: Schema.decodeSync(ThreadId)(messageId),
               },
               source: context.source,
+              ...(resolved.definition.runDisposition?.workerLifecycle === "assignment"
+                ? { lifecycle: "assignment" }
+                : {}),
               targetDigests: resolved.digests,
               policy: request.policy,
               budget: request.budget,
