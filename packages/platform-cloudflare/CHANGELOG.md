@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.117
+
+### Patch Changes
+
+- [#577](https://github.com/danieljvdm/effect-agent/pull/577) [`8b6130e`](https://github.com/danieljvdm/effect-agent/commit/8b6130e21881edaa0928ec2ff30c4d6129b9c5b9) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Notify recovery-status observers when a fault is created, updated or cleared, including while unrelated maintenance remains active.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.117
+  - effect-agent@0.1.0-beta.117
+
 ## 0.1.0-beta.116
 
 ### Patch Changes
