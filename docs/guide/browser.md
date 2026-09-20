@@ -438,7 +438,10 @@ Ordinary inputs and textareas need no form. Credential roles, including username
 to `useCredential`; never supply secrets to ordinary fill. Credential selects match private values
 and expose neither choices nor selection.
 `click` also accepts native `radio` and `checkbox` controls, whose observations include `checked`.
-Native submit clicks require the host's optional `BrowserCredentialAccess.authorizeAction` hook.
+Enabled native buttons without a form owner use ordinary `button` actions, including default and
+explicit `type="submit"` controls. Disabled and reset controls remain unsupported.
+Native submit controls with a form owner, including an explicit `form` attribute association,
+require the host's optional `BrowserCredentialAccess.authorizeAction` hook.
 When present, this hook runs before **every** ordinary navigation, fill, and click, with
 `{ caller, action, exposures }`. `action._tag` is `Navigate`, `Fill`, `Click`, or `Submit`;
 navigation includes its URL, while control actions include the current opaque ref, exact target,

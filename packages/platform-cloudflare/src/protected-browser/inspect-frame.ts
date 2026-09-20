@@ -58,7 +58,8 @@ export const inspectFrame = `(() => {
         else role = 'text';
       }
     } else if (el instanceof HTMLButtonElement || (el instanceof HTMLInputElement && ['submit','button'].includes(type))) {
-      if (!el.matches(':disabled')) role = type === 'submit' && form ? 'submit' : type === 'button' ? 'button' : 'unsupported';
+      // Submit controls without a native form owner only have their ordinary click behavior.
+      if (!el.matches(':disabled')) role = type === 'submit' && form ? 'submit' : ['submit','button'].includes(type) ? 'button' : 'unsupported';
     } else if (el instanceof HTMLAnchorElement) role = 'link';
     const options = [];
     let truncated = false;

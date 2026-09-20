@@ -1208,6 +1208,123 @@ it.live(
   { timeout: 30_000 },
 );
 
+for (const failure of ["before-write", "after-write"] as const) {
+  it.live(
+    `preserves native formless button dispatch evidence for ${failure} failure`,
+    (test) =>
+      Effect.gen(function* () {
+        const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
+
+        if (Option.isNone(executable)) return test.skip();
+
+        const browser = yield* Effect.acquireRelease(
+          native(() =>
+            nativePuppeteer.launch({ executablePath: executable.value, headless: true }),
+          ),
+          (browser) => Effect.promise(() => browser.close()),
+        );
+
+        const page = yield* native(() => browser.newPage());
+
+        yield* native(() => page.setRequestInterception(true));
+        page.on("request", (request) => {
+          void request
+            .respond({
+              contentType: "text/html",
+              body: "<button onclick=\"document.querySelector('output').textContent++\">Add to cart</button><output>0</output>",
+            })
+            .catch(() => {});
+        });
+        const writes = native(() => page.$eval("output", (output) => output.textContent));
+        let closedWrites: string | null | undefined;
+        let closes = 0;
+
+        const driver = yield* makeProtectedNativeTransport(policy).pipe(
+          Effect.provideService(ProtectedNativeSession, {
+            browser: browser as unknown as Browser,
+            page: page as unknown as Page,
+            close: Effect.gen(function* () {
+              closedWrites = yield* writes.pipe(Effect.orDie);
+              closes++;
+
+              return yield* native(() => browser.close()).pipe(
+                Effect.as("confirmed" as const),
+                Effect.catch(() => Effect.succeed("unconfirmed" as const)),
+              );
+            }),
+          }),
+        );
+
+        const transport: ProtectedBrowserTransport = {
+          ...driver,
+          click: (ref) =>
+            Effect.gen(function* () {
+              // Fail on entry or lose a real native completion; policy must mark before either.
+              if (failure === "after-write") yield* driver.click(ref);
+
+              return yield* new ProtectedTransportError({ reason: "provider" });
+            }),
+        };
+
+        const layer = browserRunProtectedLayer().pipe(
+          Layer.provide(
+            Layer.succeed(BrowserRunProtectedTransport, {
+              open: () => Effect.succeed(transport),
+            }),
+          ),
+          Layer.provideMerge(
+            Layer.succeed(BrowserCredentialAccess, {
+              caller: Effect.succeed(Redacted.make("native-button-test")),
+              list: () => Effect.succeed([]),
+              authorize: () => Effect.fail(new CredentialAccessError({ reason: "denied" })),
+              resolve: () => Effect.fail(new CredentialAccessError({ reason: "denied" })),
+              observation: () => Effect.succeed("deny"),
+            }),
+          ),
+        );
+
+        yield* Effect.gen(function* () {
+          const handle = yield* (yield* ProtectedBrowser).open(policy);
+
+          yield* handle.navigate(ProtectedBrowserNavigate.make({ url: "https://alpha.test/cart" }));
+          expect(
+            yield* native(() =>
+              page.$eval("button", (button) => ({
+                typeAttribute: button.getAttribute("type"),
+                type: button.type,
+                form: button.form,
+              })),
+            ),
+          ).toEqual({ typeAttribute: null, type: "submit", form: null });
+
+          const button = (yield* handle.observe).controls.find(
+            (control) => control.label === "Add to cart",
+          )!;
+
+          const request = ProtectedBrowserClick.make({ ref: button.ref });
+
+          expect(yield* writes).toBe("0");
+          expect(yield* handle.click(request).pipe(Effect.flip)).toMatchObject({
+            reason: "outcome-unknown",
+            dispatch: "possibly-dispatched",
+            milestone: "none",
+            observation: "closed",
+            cleanup: "confirmed",
+          });
+          expect(closedWrites).toBe(failure === "after-write" ? "1" : "0");
+          expect(closes).toBe(1);
+          expect(browser.connected).toBe(false);
+          expect(yield* handle.click(request).pipe(Effect.flip)).toMatchObject({
+            reason: "closed",
+            dispatch: "not-dispatched",
+          });
+          expect(closes).toBe(1);
+        }).pipe(Effect.provide(layer));
+      }).pipe(Effect.scoped, Effect.provide(BrowserCrypto.layer)),
+    { timeout: 30_000 },
+  );
+}
+
 for (const cacheControl of ["default", "no-store"] as const) {
   it.live(
     `reattaches the same polling page through two human handoffs and form navigation (${cacheControl})`,
@@ -1314,7 +1431,16 @@ for (const cacheControl of ["default", "no-store"] as const) {
                         ? `<main>Receipt email: ${email}</main><a href="/contact">Edit email</a><button disabled>Pay</button><iframe src="${shop}/processor"></iframe><script>addEventListener('pagehide',event=>sessionStorage.setItem('checkoutCached',String(event.persisted)))</script>`
                         : path === "/contact"
                           ? `<form method="POST"><label>Email<input id="email" name="email"></label><button>Save</button></form>`
-                          : `<a href="${checkout}/checkout">Checkout</a>`,
+                          : `<a href="${checkout}/checkout">Checkout</a>
+                            <button id="default">Add to cart</button>
+                            <button id="explicit" type="submit">Continue</button>
+                            <input id="input" type="submit" aria-label="Input submit">
+                            <button disabled>Unavailable</button><button type="reset">Reset</button>
+                            <form id="login"><input type="password"><button>Sign in</button></form>
+                            <button id="external" form="login">External submit</button><output>0</output>
+                            <script>document.addEventListener('click', event => {
+                              if (event.target.matches('button,input[type=submit]')) document.querySelector('output').textContent++;
+                            });</script>`,
                     );
                   }
                 });
@@ -1492,7 +1618,6 @@ for (const cacheControl of ["default", "no-store"] as const) {
               },
             ]),
           authorize: () => Effect.void,
-          authorizeAction: () => Effect.void,
           resolve: () =>
             Effect.succeed(
               CardCredential.make({
@@ -1565,6 +1690,90 @@ for (const cacheControl of ["default", "no-store"] as const) {
               );
 
               yield* session.handle.navigate(ProtectedBrowserNavigate.make({ url: `${shop}/` }));
+              const pages = yield* native(() => attachments[0]!.pages());
+              const page = pages.find((page) => page.url() === `${shop}/`)!;
+              const product = yield* session.handle.observe;
+
+              expect(
+                yield* native(() =>
+                  page.evaluate(`['default','explicit','input','external'].map(id => {
+                    const element = document.getElementById(id);
+                    return {id, typeAttribute: element.getAttribute('type'), type: element.type,
+                      form: element.form?.id ?? null, ancestorForm: element.closest('form')?.id ?? null};
+                  })`),
+                ),
+              ).toEqual([
+                {
+                  id: "default",
+                  typeAttribute: null,
+                  type: "submit",
+                  form: null,
+                  ancestorForm: null,
+                },
+                {
+                  id: "explicit",
+                  typeAttribute: "submit",
+                  type: "submit",
+                  form: null,
+                  ancestorForm: null,
+                },
+                {
+                  id: "input",
+                  typeAttribute: "submit",
+                  type: "submit",
+                  form: null,
+                  ancestorForm: null,
+                },
+                {
+                  id: "external",
+                  typeAttribute: null,
+                  type: "submit",
+                  form: "login",
+                  ancestorForm: null,
+                },
+              ]);
+              for (const [label, role] of [
+                ["Unavailable", "unsupported"],
+                ["Reset", "unsupported"],
+                ["Sign in", "submit"],
+                ["External submit", "submit"],
+              ]) {
+                const control = product.controls.find((control) => control.label === label)!;
+
+                expect(control.role).toBe(role);
+                expect(
+                  yield* session.handle
+                    .click(ProtectedBrowserClick.make({ ref: control.ref }))
+                    .pipe(Effect.flip),
+                ).toMatchObject({ reason: "unsupported", dispatch: "not-dispatched" });
+              }
+              expect(
+                yield* native(() => page.$eval("output", (output) => output.textContent)),
+              ).toBe("0");
+              for (const [index, label] of ["Add to cart", "Continue", "Input submit"].entries()) {
+                const control = product.controls.find((control) => control.label === label)!;
+
+                yield* session.handle.click(ProtectedBrowserClick.make({ ref: control.ref }));
+                expect(control.role).toBe("button");
+                expect(
+                  yield* native(() => page.$eval("output", (output) => output.textContent)),
+                ).toBe(String(index + 1));
+              }
+              yield* native(() =>
+                page.$eval("#default", (button) => button.setAttribute("form", "login")),
+              );
+              expect(
+                yield* session.handle
+                  .click(
+                    ProtectedBrowserClick.make({
+                      ref: product.controls.find((control) => control.label === "Add to cart")!.ref,
+                    }),
+                  )
+                  .pipe(Effect.flip),
+              ).toMatchObject({ reason: "stale-reference", dispatch: "not-dispatched" });
+              expect(
+                yield* native(() => page.$eval("output", (output) => output.textContent)),
+              ).toBe("3");
               yield* session.handle.navigate(
                 ProtectedBrowserNavigate.make({ url: `${checkout}/checkout` }),
               );
@@ -1583,9 +1792,6 @@ for (const cacheControl of ["default", "no-store"] as const) {
                   }),
                 ),
               ).toMatchObject({ dispatch: "dispatched", milestone: "filled" });
-              const pages = yield* native(() => attachments[0]!.pages());
-              const page = pages.find((page) => page.url() === `${checkout}/checkout`)!;
-
               yield* host.keepAlive(session.sessionId);
               expect(connectionMethods.at(-1)).toEqual(["Browser.getVersion"]);
               expect(sockets.at(-1)!.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
