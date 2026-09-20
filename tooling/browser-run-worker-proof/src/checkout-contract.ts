@@ -159,7 +159,7 @@ export const Report = Schema.Struct({
   completed: Schema.Natural,
   attempted: Schema.Natural,
   completionRate: Schema.Finite,
-  cleanup: Schema.Literals(["pending", "confirmed", "failed"]),
+  cleanup: Schema.Literals(["pending", "browsers-closed", "confirmed", "failed"]),
   providerCompatibility: Schema.Literal("not-established"),
 });
 

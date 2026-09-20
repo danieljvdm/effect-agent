@@ -177,7 +177,6 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
           ),
       );
     }
-    const session = yield* sessions.attach(this.read("reference", Reference));
 
     const owner = Layer.succeed(CheckoutOwner, {
       authorize: Effect.suspend(() =>
@@ -221,7 +220,7 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
         Layer.mergeAll(
           InMemory.layer,
           buyerTools({
-            session,
+            reference: this.read("reference", Reference),
             shopOrigin: origin,
             processorOrigin: this.env.PROCESSOR_ORIGIN,
           }).pipe(Layer.provide(owner)),

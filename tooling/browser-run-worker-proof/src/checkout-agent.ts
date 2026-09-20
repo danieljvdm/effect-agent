@@ -9,7 +9,8 @@ import {
 } from "@effect-agent/platform-cloudflare/browser-credentials";
 import {
   BrowserSessionError,
-  type BrowserSession,
+  BrowserSessions,
+  type BrowserSessionReference,
 } from "@effect-agent/platform-cloudflare/browser-session";
 import { Context, Effect, Layer, Redacted, Schema } from "effect";
 import { Agent } from "effect-agent";
@@ -151,15 +152,17 @@ export class CheckoutOwner extends Context.Service<
   }
 >()("checkout/CheckoutOwner") {}
 
-/** Bind one scoped native attachment; acquire durable authority through the Layer's requirements. */
+/** Acquire one scoped attachment and durable authority through the Layer's requirements. */
 export const buyerTools = (options: {
-  readonly session: BrowserSession;
+  readonly reference: BrowserSessionReference;
   readonly shopOrigin: string;
   readonly processorOrigin: string;
 }) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const host = yield* CheckoutOwner;
+      const sessions = yield* BrowserSessions;
+      const session = yield* sessions.attach(options.reference);
 
       const allowed = (url: string) => {
         try {
@@ -172,7 +175,7 @@ export const buyerTools = (options: {
       const authorize = host.authorize;
 
       const native = <A>(name: string, action: (page: Page) => Promise<A>) =>
-        options.session.run(authorize, action).pipe(
+        session.run(authorize, action).pipe(
           Effect.tap(() => host.record({ name, outcome: "completed" })),
           Effect.tapError((error) =>
             host.record({
@@ -325,7 +328,7 @@ export const buyerTools = (options: {
           wait: () => authorize.pipe(Effect.andThen(Effect.sleep("700 millis"))),
           fill_credential: ({ request }) =>
             authorize.pipe(
-              Effect.andThen(options.session.fillCredential(request)),
+              Effect.andThen(session.fillCredential(request)),
               Effect.tap(() => host.record({ name: "fill_credential", outcome: request.kind })),
               Effect.tapError((error) =>
                 host.record({

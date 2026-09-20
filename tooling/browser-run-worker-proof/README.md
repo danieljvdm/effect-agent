@@ -106,7 +106,8 @@ CHECKOUT_CLEANUP=true vp run --no-cache -F @effect-agent/example-browser-run-wor
 ```
 
 Recovery reads the existing report, closes its recorded sessions, destroys the same Alchemy stage,
-and confirms all three Worker scripts are absent. It never deploys or reruns purchases. A fresh
+and confirms all three Worker scripts are absent. Browser retirement is recorded atomically before
+Worker teardown, so recovery also handles an already-absent owner. It never deploys or reruns purchases. A fresh
 attempt needs a fresh run ID; existing evidence cannot be overwritten. Hard termination can prevent
 local finalizers, so the owner alarm and explicit recovery remain necessary.
 

@@ -1,6 +1,12 @@
 import { fileURLToPath } from "node:url";
 
 import { BrowserCredentialAccess } from "@effect-agent/platform-cloudflare/browser-credentials";
+import {
+  BrowserSessionReference,
+  BrowserSessions,
+  type BrowserSession,
+  type BrowserSessionError,
+} from "@effect-agent/platform-cloudflare/browser-session";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { assert, expectTypeOf, it } from "@effect/vitest";
 import { Effect, Layer, Redacted, Schema } from "effect";
@@ -10,8 +16,7 @@ import { FetchHttpClient } from "effect/unstable/http";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 
-import type { buyerTools, CheckoutOwner } from "../src/checkout-agent.ts";
-import { buyer, tools } from "../src/checkout-agent.ts";
+import { buyer, buyerTools, CheckoutOwner, tools } from "../src/checkout-agent.ts";
 import type { CheckoutError } from "../src/checkout-contract.ts";
 import { Control, RunEvidence, savedAddress, ShopState } from "../src/checkout-contract.ts";
 import {
@@ -30,8 +35,87 @@ expectTypeOf<Effect.Services<typeof run>>().toEqualTypeOf<
 expectTypeOf<Effect.Error<typeof run>>().toEqualTypeOf<
   AgentRuntime.AgentRuntimeFailure<typeof buyer>
 >();
-expectTypeOf<Layer.Services<ReturnType<typeof buyerTools>>>().toEqualTypeOf<CheckoutOwner>();
+expectTypeOf<Layer.Services<ReturnType<typeof buyerTools>>>().toEqualTypeOf<
+  CheckoutOwner | BrowserSessions
+>();
+expectTypeOf<Layer.Error<ReturnType<typeof buyerTools>>>().toEqualTypeOf<BrowserSessionError>();
 expectTypeOf<Effect.Error<ReturnType<typeof transition>>>().toEqualTypeOf<CheckoutError>();
+
+it.effect("the tool layer scopes its saved browser attachment across success and failure", () =>
+  Effect.gen(function* () {
+    for (const fails of [false, true]) {
+      let attached = 0;
+      let released = 0;
+
+      const reference = BrowserSessionReference.make({
+        version: 1,
+        sessionId: Redacted.make("00000000-0000-4000-8000-000000000001"),
+        contextId: Redacted.make("saved-context"),
+        targetId: Redacted.make("saved-page"),
+        expiresAt: 1_900_000_000_000,
+        commandTimeoutMillis: 1_000,
+      });
+
+      const unused = () => Effect.die("Only attachment lifetime is exercised here");
+
+      const session: BrowserSession = {
+        reference,
+        run: unused,
+        fillCredential: unused,
+        handoff: unused,
+        getLiveView: unused,
+        getHandoffState: unused,
+      };
+
+      const result = yield* Effect.gen(function* () {
+        yield* tools;
+        assert.strictEqual(attached, 1);
+        assert.strictEqual(released, 0);
+        if (fails) return yield* Effect.fail("consumer failed");
+      }).pipe(
+        Effect.provide(
+          buyerTools({
+            reference,
+            shopOrigin: "https://shop.example.test",
+            processorOrigin: "https://pay.example.test",
+          }),
+        ),
+        Effect.provideService(
+          BrowserSessions,
+          BrowserSessions.of({
+            create: unused,
+            attach: (saved) =>
+              Effect.acquireRelease(
+                Effect.sync(() => {
+                  assert.strictEqual(saved, reference);
+                  attached++;
+
+                  return session;
+                }),
+                () => Effect.sync(() => released++),
+              ),
+            keepAlive: unused,
+            close: unused,
+          }),
+        ),
+        Effect.provideService(
+          CheckoutOwner,
+          CheckoutOwner.of({
+            authorize: unused(),
+            observe: unused,
+            record: unused,
+            approval: unused(),
+            human: unused(),
+          }),
+        ),
+        Effect.exit,
+      );
+
+      assert.strictEqual(result._tag, fails ? "Failure" : "Success");
+      assert.strictEqual(released, 1);
+    }
+  }),
+);
 
 it.effect("resumes an inactive handoff without a provider ID only after verified human input", () =>
   Effect.gen(function* () {

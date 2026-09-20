@@ -6,7 +6,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import type { CheckoutFlow, CheckoutScenario } from "../src/checkout-contract.ts";
 import { AgentOutput, failure, policy, Report, RunEvidence } from "../src/checkout-contract.ts";
-import { withRetirement } from "../src/checkout-lifecycle.ts";
+import { retirementPlan, withRetirement, writeReportSnapshot } from "../src/checkout-lifecycle.ts";
 import { checkoutStack } from "../src/checkout-stack.ts";
 import { assertPurchase, expectedQuote, sameQuote } from "../src/checkout-store.ts";
 import { BrowserRunWorkerProofResult } from "../src/contract.ts";
@@ -36,10 +36,7 @@ const writeReport = Effect.gen(function* () {
   const directory = `.checkout-proof/${run}`;
 
   yield* fs.makeDirectory(directory, { recursive: true });
-  yield* fs.writeFileString(
-    `${directory}/report.json`,
-    yield* Schema.encodeEffect(Schema.fromJsonString(Report))(report),
-  );
+  yield* writeReportSnapshot(`${directory}/report.json`, report);
 });
 
 const workerStatus = Effect.fnUntraced(function* (name: string) {
@@ -370,25 +367,41 @@ const proof = Effect.gen(function* () {
 const retire = Effect.gen(function* () {
   if (!ownsStage) return;
   let cleanupFailed = false;
-
-  if (shopUrl !== undefined)
-    for (const key of started) {
-      const closed = yield* call(key, "close", Schema.NullOr(RunEvidence), {}).pipe(Effect.exit);
-
-      if (Exit.isFailure(closed) || (closed.value !== null && !closed.value.control.closed))
-        cleanupFailed = true;
-      if (Exit.isSuccess(closed) && report !== undefined)
-        report = {
-          ...report,
-          results: report.results.map((result) =>
-            result.key === key ? { ...result, evidence: closed.value } : result,
-          ),
-        };
-    }
   const { run } = yield* config;
+
+  if (shopUrl !== undefined) {
+    const status = yield* workerStatus(`ea-checkout-${run}-shop`).pipe(Effect.exit);
+
+    const plan = Exit.isSuccess(status)
+      ? retirementPlan(
+          status.value,
+          report?.cleanup ?? "pending",
+          report?.results.map((result) => result.evidence?.control.closed === true) ?? [false],
+        )
+      : "blocked";
+
+    if (plan === "blocked") cleanupFailed = true;
+    if (plan === "close")
+      for (const key of started) {
+        const closed = yield* call(key, "close", Schema.NullOr(RunEvidence), {}).pipe(Effect.exit);
+
+        if (Exit.isFailure(closed) || (closed.value !== null && !closed.value.control.closed))
+          cleanupFailed = true;
+        if (Exit.isSuccess(closed) && report !== undefined)
+          report = {
+            ...report,
+            results: report.results.map((result) =>
+              result.key === key ? { ...result, evidence: closed.value } : result,
+            ),
+          };
+      }
+  }
 
   // Preserve the durable owner if exact-session closure is unconfirmed; it holds the recovery reference.
   if (!cleanupFailed) {
+    // Commit closure acknowledgements before destruction can make the owner unreachable.
+    if (report !== undefined) report = { ...report, cleanup: "browsers-closed" };
+    yield* writeReport;
     const destroyed = yield* lifecycle.destroy(checkoutStack, { stage: run }).pipe(Effect.exit);
 
     if (Exit.isFailure(destroyed)) cleanupFailed = true;
@@ -398,7 +411,15 @@ const retire = Effect.gen(function* () {
 
     if (Exit.isFailure(status) || status.value !== 404) cleanupFailed = true;
   }
-  if (report !== undefined) report = { ...report, cleanup: cleanupFailed ? "failed" : "confirmed" };
+  if (report !== undefined)
+    report = {
+      ...report,
+      cleanup: !cleanupFailed
+        ? "confirmed"
+        : report.cleanup === "browsers-closed"
+          ? "browsers-closed"
+          : "failed",
+    };
   yield* writeReport;
   if (cleanupFailed)
     return yield* failure(
