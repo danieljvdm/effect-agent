@@ -1,3 +1,4 @@
+import { FillCredentialRequest } from "@effect-agent/platform-cloudflare/browser-credentials";
 import { Schema, Struct } from "effect";
 import { RunTotals } from "effect-agent/usage";
 
@@ -105,7 +106,14 @@ export const AgentOutput = Schema.Struct({
 
 export const BrowserObservation = Schema.Struct({
   url: Schema.String,
-  frames: Schema.Array(Schema.Struct({ url: Schema.String, html: Schema.String })),
+  frames: Schema.Array(
+    Schema.Struct({
+      url: Schema.String,
+      // Optional only for reports produced before explicit frame paths were recorded.
+      frame: Schema.optionalKey(Schema.Array(Schema.String)),
+      html: Schema.String,
+    }),
+  ),
 });
 
 export const AgentRun = Schema.Struct({
@@ -156,9 +164,14 @@ export const RunEvidence = Schema.Struct({
   outputs: Schema.Array(AgentOutput).check(Schema.isMaxLength(8)),
   runs: Schema.optionalKey(Schema.Array(AgentRun).check(Schema.isMaxLength(8))),
   spans: Schema.optionalKey(CheckoutSpans),
-  toolCalls: Schema.Array(Schema.Struct({ name: Text, outcome: Text })).check(
-    Schema.isMaxLength(300),
-  ),
+  toolCalls: Schema.Array(
+    Schema.Struct({
+      name: Text,
+      outcome: Text,
+      // Target diagnostics contain aliases and selectors, never resolved credential material.
+      credentialRequest: Schema.optionalKey(FillCredentialRequest),
+    }),
+  ).check(Schema.isMaxLength(300)),
 });
 
 export const Seed = Schema.Struct({ key: RunKey, flow: CheckoutFlow, scenario: CheckoutScenario });
