@@ -69,6 +69,8 @@ Required environment:
 | `CHECKOUT_TOKEN`               | Fresh random bearer token for the fixture control API                   |
 | `CHECKOUT_RUN_ID`              | Fresh lowercase letters/digits/hyphens, at most 24 characters           |
 | `CHECKOUT_REPETITIONS`         | 1–5 repetitions of every automated scenario; default 1                  |
+| `CHECKOUT_CONCURRENCY`         | 1–12 simultaneous checkout cases; default 4                             |
+| `CHECKOUT_START_INTERVAL_MS`   | Minimum interval between case admissions, 1000–60000 ms; default 1000   |
 | `CHECKOUT_HUMAN`               | `true` runs one operator takeover before the matrix; default `false`    |
 
 The browser and OpenAI credentials enter only temporary Workers as secret bindings. The deployment
@@ -81,19 +83,32 @@ export CHECKOUT_RUN_ID="checkout-$(openssl rand -hex 6)"
 export CHECKOUT_TOKEN="$(openssl rand -hex 32)"
 export CHECKOUT_MODEL=gpt-5.6-luna
 export CHECKOUT_REPETITIONS=2
-export CHECKOUT_HUMAN=true
+export CHECKOUT_CONCURRENCY=4
+export CHECKOUT_HUMAN=false
 vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
 ```
 
-For takeover, the runner prints the path to a temporary `live-view.txt` file. Open its private URL,
+The automated matrix runs four isolated checkouts at a time, admitting at most one new case per
+second. Actions and approval continuations within each checkout remain sequential. Deployment and
+the binding proof finish before the matrix starts; stage retirement waits for all case fibers,
+including interrupted children. Report updates are serialized and published atomically. Adjust
+concurrency and admission spacing to the account's browser and model limits; failed requests are
+not retried automatically.
+
+Human takeover is a separate, optional operator check. Set `CHECKOUT_HUMAN=true` explicitly to run
+it before the automated matrix. The runner prints the path to a temporary `live-view.txt` file. Open its private URL,
 enter the fixture code `246810`, and select **Verify and use saved details** within five minutes.
 Select **Done** if Live View offers it. The owner resumes after verification and an inactive provider
-handoff; no further browser action is needed. The URL is removed afterward and is never put in the report or model history. An automated profile
-does not establish human takeover; full acceptance requires the operator profile.
+handoff; no further browser action is needed. The URL is removed afterward and is never put in the
+report or model history. Automated runs never wait for an operator and do not establish human takeover.
 
 The ignored `tooling/browser-run-worker-proof/.checkout-proof/<run>/report.json` records model,
 source commit/dirty state, policy, selected profile, completion rate, failures, observations, tool
-outcomes, model usage and finish reasons, server orders, attempt ledger and cleanup result. Each request has a five-minute duration,
+outcomes, model usage and finish reasons, server orders, attempt ledger and cleanup result.
+It also records concurrency, admission spacing, each case's elapsed time (including browser closure),
+and deployment, readiness, binding-proof, matrix, retirement and total durations. Concurrent case
+durations overlap and must not be summed as wall time. These timers do not separate model latency
+from browser latency. Each request has a five-minute duration,
 60-turn, 120-tool-call and 500,000-token budget; each scenario permits at most six continuations.
 Provider/model work costs money. Repetitions use fresh stores and browsers; failed attempts are
 retained without automatic model or purchase retries. Deterministic fixtures do not make model
@@ -131,6 +146,6 @@ Ordinary PR CI runs deterministic state tests, lifecycle failure/interruption te
 workerd receiver checks without credentials or deployment. The hosted command is a deliberate
 operator-run acceptance gate for browser/payment changes, not a PR, push or scheduled job. Run it
 on a trusted revision with dedicated credentials, retain failed reports, and confirm cleanup.
-Use at least two repetitions when collecting completion evidence. An automated-only report must
-keep its profile label and be accompanied by an operator takeover run before claiming full coverage.
+Use at least two repetitions when collecting completion evidence. Keep automated and operator
+profiles distinct; only an explicit operator run establishes human takeover coverage.
 Share `report.json` only; never upload `.alchemy` or `live-view.txt` as CI artifacts.

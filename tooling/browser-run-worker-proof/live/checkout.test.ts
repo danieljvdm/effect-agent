@@ -1,12 +1,27 @@
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Test from "alchemy/Test/Vitest";
-import { Cause, Config, Console, Effect, Exit, FileSystem, Schema } from "effect";
+import { Cause, Clock, Config, Console, Effect, Exit, FileSystem, Layer, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import type { CheckoutFlow, CheckoutScenario } from "../src/checkout-contract.ts";
-import { AgentOutput, failure, policy, Report, RunEvidence } from "../src/checkout-contract.ts";
-import { retirementPlan, withRetirement, writeReportSnapshot } from "../src/checkout-lifecycle.ts";
+import {
+  type CheckoutFlow,
+  type CheckoutScenario,
+  AgentOutput,
+  CheckoutConcurrency,
+  failure,
+  policy,
+  Report,
+  RunEvidence,
+  StartIntervalMillis,
+  type Timings,
+} from "../src/checkout-contract.ts";
+import {
+  CheckoutReport,
+  retirementPlan,
+  runCheckoutCases,
+  withRetirement,
+} from "../src/checkout-lifecycle.ts";
 import { checkoutStack } from "../src/checkout-stack.ts";
 import { assertPurchase, expectedQuote, sameQuote } from "../src/checkout-store.ts";
 import { BrowserRunWorkerProofResult } from "../src/contract.ts";
@@ -19,24 +34,50 @@ const config = Config.all({
   model: Config.NonEmptyString("CHECKOUT_MODEL"),
   token: Config.Redacted("CHECKOUT_TOKEN"),
   repetitions: Config.Int("CHECKOUT_REPETITIONS").pipe(Config.withDefault(1)),
+  concurrency: Config.schema(CheckoutConcurrency, "CHECKOUT_CONCURRENCY").pipe(
+    Config.withDefault(4),
+  ),
+  startIntervalMillis: Config.schema(StartIntervalMillis, "CHECKOUT_START_INTERVAL_MS").pipe(
+    Config.withDefault(1_000),
+  ),
   human: Config.Boolean("CHECKOUT_HUMAN").pipe(Config.withDefault(false)),
   cleanupOnly: Config.Boolean("CHECKOUT_CLEANUP").pipe(Config.withDefault(false)),
 });
 
-let report: typeof Report.Type | undefined;
 let shopUrl: string | undefined;
 let names: ReadonlyArray<string> = [];
 const started: Array<string> = [];
 let ownsStage = false;
 
-const writeReport = Effect.gen(function* () {
-  if (report === undefined) return;
-  const fs = yield* FileSystem.FileSystem;
-  const { run } = yield* config;
-  const directory = `.checkout-proof/${run}`;
+const currentReport = Effect.gen(function* () {
+  return yield* (yield* CheckoutReport).get;
+});
 
-  yield* fs.makeDirectory(directory, { recursive: true });
-  yield* writeReportSnapshot(`${directory}/report.json`, report);
+const updateReport = Effect.fnUntraced(function* (
+  f: (report: typeof Report.Type) => typeof Report.Type,
+) {
+  yield* (yield* CheckoutReport).update((report) => (report === undefined ? undefined : f(report)));
+});
+
+const measure = Effect.fnUntraced(function* <A, E, R>(
+  phase: keyof typeof Timings.Type,
+  effect: Effect.Effect<A, E, R>,
+) {
+  if ((yield* config).cleanupOnly) return yield* effect;
+  const start = yield* Clock.currentTimeMillis;
+
+  return yield* effect.pipe(
+    Effect.ensuring(
+      Effect.gen(function* () {
+        const elapsed = Math.max(0, (yield* Clock.currentTimeMillis) - start);
+
+        yield* updateReport((report) => ({
+          ...report,
+          timings: { ...report.timings, [phase]: elapsed },
+        }));
+      }).pipe(Effect.orDie),
+    ),
+  );
 });
 
 const workerStatus = Effect.fnUntraced(function* (name: string) {
@@ -91,9 +132,11 @@ const initialize = Effect.gen(function* () {
   const reportPath = `.checkout-proof/${settings.run}/report.json`;
 
   if (settings.cleanupOnly) {
-    report = yield* fs
+    const report = yield* fs
       .readFileString(reportPath)
       .pipe(Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Report))));
+
+    yield* (yield* CheckoutReport).update(() => report);
     const subdomain = yield* Config.NonEmptyString("CLOUDFLARE_WORKERS_SUBDOMAIN");
 
     shopUrl = `https://${names[0]}.${subdomain}.workers.dev`;
@@ -122,13 +165,19 @@ const initialize = Effect.gen(function* () {
   const dirty =
     (yield* spawner.string(ChildProcess.make("git", ["status", "--porcelain"]))).trim().length > 0;
 
-  report = {
+  yield* fs.makeDirectory(`.checkout-proof/${settings.run}`, { recursive: true });
+  yield* (yield* CheckoutReport).update(() => ({
     version: 1,
     model: settings.model,
     sourceCommit,
     dirty,
     repetitions: settings.repetitions,
     profile: settings.human ? "operator" : "automated",
+    execution: {
+      concurrency: settings.concurrency,
+      startIntervalMillis: settings.startIntervalMillis,
+    },
+    timings: {},
     bindingProof: false,
     suiteFailure: null,
     configuration: policy,
@@ -138,8 +187,7 @@ const initialize = Effect.gen(function* () {
     completionRate: 0,
     cleanup: "pending",
     providerCompatibility: "not-established",
-  };
-  yield* writeReport;
+  }));
   ownsStage = true;
 });
 
@@ -251,31 +299,39 @@ const scenario = Effect.fn("CheckoutProof.scenario")(function* (
 
 const proof = Effect.gen(function* () {
   yield* initialize;
-  const { run, repetitions, human, cleanupOnly } = yield* config;
+  const { run, repetitions, human, cleanupOnly, concurrency, startIntervalMillis } = yield* config;
 
   if (cleanupOnly) return;
-  const deployed = yield* lifecycle.deploy(checkoutStack, { stage: run });
+
+  const deployed = yield* measure(
+    "deploymentMillis",
+    lifecycle.deploy(checkoutStack, { stage: run }),
+  );
 
   if (!deployed.shopUrl || !deployed.processorUrl || !deployed.bindingUrl)
     return yield* failure("deployment", "Three HTTPS origins are required");
   shopUrl = deployed.shopUrl;
-  yield* Effect.sleep("15 seconds");
+  const bindingUrl = deployed.bindingUrl;
+
+  yield* measure("readinessMillis", Effect.sleep("15 seconds"));
   const client = yield* HttpClient.HttpClient;
 
-  const bindingResponse = yield* client
-    .get(deployed.bindingUrl)
-    .pipe(Effect.timeout("150 seconds"));
+  yield* measure(
+    "bindingProofMillis",
+    Effect.gen(function* () {
+      const bindingResponse = yield* client.get(bindingUrl).pipe(Effect.timeout("150 seconds"));
 
-  if (bindingResponse.status !== 200)
-    return yield* failure(
-      "binding-proof",
-      `HTTP ${bindingResponse.status}; invocation was not retried`,
-    );
-  yield* bindingResponse.json.pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunWorkerProofResult)),
+      if (bindingResponse.status !== 200)
+        return yield* failure(
+          "binding-proof",
+          `HTTP ${bindingResponse.status}; invocation was not retried`,
+        );
+      yield* bindingResponse.json.pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunWorkerProofResult)),
+      );
+      yield* updateReport((report) => ({ ...report, bindingProof: true }));
+    }),
   );
-  if (report !== undefined) report = { ...report, bindingProof: true };
-  yield* writeReport;
 
   const cases = [
     { flow: "embedded-card", scenario: "success" },
@@ -293,13 +349,16 @@ const proof = Effect.gen(function* () {
     ),
   ];
 
-  for (const { repetition, ...item } of scheduled) {
+  const runCase = Effect.fnUntraced(function* ({
+    repetition,
+    ...item
+  }: (typeof scheduled)[number]) {
     const key = `${run}-${item.flow}-${item.scenario}-${repetition}`;
+    const start = yield* Clock.currentTimeMillis;
 
     yield* Console.log(`Checkout ${key}`);
-    if (report === undefined) return yield* failure("evidence", "Report was not initialized");
     // Persist the denominator before dispatch: interruption cannot erase an unsuccessful attempt.
-    report = {
+    yield* updateReport((report) => ({
       ...report,
       results: [
         ...report.results,
@@ -310,11 +369,10 @@ const proof = Effect.gen(function* () {
           failure: "Interrupted or unresolved attempt",
           evidence: null,
         },
-      ],
+      ].sort((left, right) => left.key.localeCompare(right.key)),
       attempted: report.attempted + 1,
       completionRate: report.completed / (report.attempted + 1),
-    };
-    yield* writeReport;
+    }));
     const result = yield* scenario(key, item.flow, item.scenario).pipe(Effect.exit);
     const closed = yield* call(key, "close", Schema.NullOr(RunEvidence), {}).pipe(Effect.exit);
 
@@ -328,7 +386,9 @@ const proof = Effect.gen(function* () {
       closed.value !== null &&
       closed.value.control.closed;
 
-    report = {
+    const elapsedMillis = Math.max(0, (yield* Clock.currentTimeMillis) - start);
+
+    yield* updateReport((report) => ({
       ...report,
       results: report.results.map((previous) =>
         previous.key !== key
@@ -343,31 +403,43 @@ const proof = Effect.gen(function* () {
                   ? "Browser cleanup failed"
                   : null,
               evidence,
+              elapsedMillis,
             },
       ),
       completed: report.completed + Number(passed),
-    };
-    report = { ...report, completionRate: report.completed / report.attempted };
-    yield* writeReport;
-    yield* Console.log(`${key}: ${passed ? "passed" : "FAILED"}`);
-  }
+      completionRate: (report.completed + Number(passed)) / report.attempted,
+    }));
+    yield* Console.log(`${key}: ${passed ? "passed" : "FAILED"} (${elapsedMillis}ms)`);
+  });
+
+  // Operator takeover is opt-in and stays outside the automated concurrent batch.
+  for (const item of scheduled.filter((item) => item.scenario === "handoff")) yield* runCase(item);
+  yield* measure(
+    "matrixMillis",
+    runCheckoutCases(
+      scheduled.filter((item) => item.scenario !== "handoff"),
+      runCase,
+      { concurrency, startIntervalMillis },
+    ),
+  );
+  const report = yield* currentReport;
+
   if (report?.completed !== report?.attempted)
     return yield* failure(
       "assertion",
       "Checkout failures retained in .checkout-proof; no attempts were retried",
     );
 }).pipe(
-  Effect.tapCause((cause) => {
-    if (report !== undefined) report = { ...report, suiteFailure: Cause.pretty(cause) };
-
-    return writeReport.pipe(Effect.orDie);
-  }),
+  Effect.tapCause((cause) =>
+    updateReport((report) => ({ ...report, suiteFailure: Cause.pretty(cause) })).pipe(Effect.orDie),
+  ),
 );
 
 const retire = Effect.gen(function* () {
   if (!ownsStage) return;
   let cleanupFailed = false;
   const { run } = yield* config;
+  const report = yield* currentReport;
 
   if (shopUrl !== undefined) {
     const status = yield* workerStatus(`ea-checkout-${run}-shop`).pipe(Effect.exit);
@@ -387,21 +459,20 @@ const retire = Effect.gen(function* () {
 
         if (Exit.isFailure(closed) || (closed.value !== null && !closed.value.control.closed))
           cleanupFailed = true;
-        if (Exit.isSuccess(closed) && report !== undefined)
-          report = {
+        if (Exit.isSuccess(closed))
+          yield* updateReport((report) => ({
             ...report,
             results: report.results.map((result) =>
               result.key === key ? { ...result, evidence: closed.value } : result,
             ),
-          };
+          }));
       }
   }
 
   // Preserve the durable owner if exact-session closure is unconfirmed; it holds the recovery reference.
   if (!cleanupFailed) {
     // Commit closure acknowledgements before destruction can make the owner unreachable.
-    if (report !== undefined) report = { ...report, cleanup: "browsers-closed" };
-    yield* writeReport;
+    yield* updateReport((report) => ({ ...report, cleanup: "browsers-closed" }));
     const destroyed = yield* lifecycle.destroy(checkoutStack, { stage: run }).pipe(Effect.exit);
 
     if (Exit.isFailure(destroyed)) cleanupFailed = true;
@@ -411,16 +482,14 @@ const retire = Effect.gen(function* () {
 
     if (Exit.isFailure(status) || status.value !== 404) cleanupFailed = true;
   }
-  if (report !== undefined)
-    report = {
-      ...report,
-      cleanup: !cleanupFailed
-        ? "confirmed"
-        : report.cleanup === "browsers-closed"
-          ? "browsers-closed"
-          : "failed",
-    };
-  yield* writeReport;
+  yield* updateReport((report) => ({
+    ...report,
+    cleanup: !cleanupFailed
+      ? "confirmed"
+      : report.cleanup === "browsers-closed"
+        ? "browsers-closed"
+        : "failed",
+  }));
   if (cleanupFailed)
     return yield* failure(
       "cleanup",
@@ -430,5 +499,13 @@ const retire = Effect.gen(function* () {
 
 lifecycle.test(
   "the binding and real buyer complete the hosted proof",
-  withRetirement(proof, retire),
+  measure("totalMillis", withRetirement(proof, measure("retirementMillis", retire))).pipe(
+    Effect.provide(
+      Layer.unwrap(
+        config.pipe(
+          Effect.map(({ run }) => CheckoutReport.layer(`.checkout-proof/${run}/report.json`)),
+        ),
+      ),
+    ),
+  ),
 );

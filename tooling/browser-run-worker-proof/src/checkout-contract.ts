@@ -131,6 +131,21 @@ export const Seed = Schema.Struct({ key: RunKey, flow: CheckoutFlow, scenario: C
 export const Start = Schema.Struct({ message: Schema.String.check(Schema.isMaxLength(4_096)) });
 export const Decision = Schema.Struct({ quote: Quote });
 
+export const CheckoutConcurrency = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 12 }));
+
+export const StartIntervalMillis = Schema.Int.check(
+  Schema.isBetween({ minimum: 1_000, maximum: 60_000 }),
+);
+
+export const Timings = Schema.Struct({
+  deploymentMillis: Schema.optionalKey(Schema.Natural),
+  readinessMillis: Schema.optionalKey(Schema.Natural),
+  bindingProofMillis: Schema.optionalKey(Schema.Natural),
+  matrixMillis: Schema.optionalKey(Schema.Natural),
+  retirementMillis: Schema.optionalKey(Schema.Natural),
+  totalMillis: Schema.optionalKey(Schema.Natural),
+});
+
 export const Report = Schema.Struct({
   version: Schema.Literal(1),
   model: Schema.String,
@@ -138,6 +153,11 @@ export const Report = Schema.Struct({
   dirty: Schema.Boolean,
   repetitions: Schema.Natural,
   profile: Schema.Literals(["automated", "operator"]),
+  // Optional additions keep previously retained reports usable for cleanup.
+  execution: Schema.optionalKey(
+    Schema.Struct({ concurrency: CheckoutConcurrency, startIntervalMillis: StartIntervalMillis }),
+  ),
+  timings: Schema.optionalKey(Timings),
   bindingProof: Schema.Boolean,
   suiteFailure: Schema.NullOr(Schema.String),
   configuration: Schema.Struct({
@@ -154,6 +174,7 @@ export const Report = Schema.Struct({
       passed: Schema.Boolean,
       failure: Schema.NullOr(Schema.String),
       evidence: Schema.NullOr(RunEvidence),
+      elapsedMillis: Schema.optionalKey(Schema.Natural),
     }),
   ),
   completed: Schema.Natural,

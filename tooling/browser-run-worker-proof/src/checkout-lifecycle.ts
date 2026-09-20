@@ -1,4 +1,13 @@
-import { Effect, FileSystem, Schema } from "effect";
+import {
+  Clock,
+  Context,
+  Effect,
+  FileSystem,
+  Layer,
+  Schema,
+  Semaphore,
+  SynchronizedRef,
+} from "effect";
 
 import { Report } from "./checkout-contract.ts";
 
@@ -27,6 +36,62 @@ export const writeReportSnapshot = Effect.fnUntraced(function* (
 
   yield* fs.writeFileString(`${path}.tmp`, encoded);
   yield* fs.rename(`${path}.tmp`, path);
+});
+
+const makeReportStore = Effect.fnUntraced(function* (path: string) {
+  const state = yield* SynchronizedRef.make<typeof Report.Type | undefined>(undefined);
+
+  return {
+    get: SynchronizedRef.get(state),
+    update: (f: (report: typeof Report.Type | undefined) => typeof Report.Type | undefined) =>
+      SynchronizedRef.updateEffect(state, (previous) =>
+        Effect.gen(function* () {
+          const next = f(previous);
+
+          if (next !== undefined) yield* writeReportSnapshot(path, next);
+
+          return next;
+        }),
+      ).pipe(Effect.uninterruptible),
+  };
+});
+
+/** One owner serializes read/modify/publish, including the shared temporary filename. */
+export class CheckoutReport extends Context.Service<
+  CheckoutReport,
+  Effect.Success<ReturnType<typeof makeReportStore>>
+>()("checkout/Report") {
+  static layer(path: string) {
+    return Layer.effect(CheckoutReport, makeReportStore(path));
+  }
+}
+
+/** Bound whole cases, pace their admission, and join every child before stage retirement. */
+export const runCheckoutCases = Effect.fnUntraced(function* <A, B, E, R>(
+  cases: ReadonlyArray<A>,
+  run: (item: A) => Effect.Effect<B, E, R>,
+  options: { readonly concurrency: number; readonly startIntervalMillis: number },
+) {
+  const starts = yield* Semaphore.make(1);
+  let nextStart = 0;
+
+  return yield* Effect.forEach(
+    cases,
+    (item) =>
+      Effect.gen(function* () {
+        yield* starts.withPermit(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+
+            yield* Effect.sleep(Math.max(0, nextStart - now));
+            nextStart = (yield* Clock.currentTimeMillis) + options.startIntervalMillis;
+          }),
+        );
+
+        return yield* run(item);
+      }),
+    { concurrency: options.concurrency },
+  );
 });
 
 /** Register retirement before deployment, including partially acknowledged provisioning. */
