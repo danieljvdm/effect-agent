@@ -16,6 +16,8 @@ import {
 } from "effect-agent/records";
 import {
   AbortCommand,
+  WorkerStopCommand,
+  WorkerLedgerState,
   AbortIntent,
   AbortIntentRequest,
   AdmissionAdmitted,
@@ -1146,6 +1148,14 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             }).pipe(Effect.mapError(internalFailure(operation)));
           }
 
+          const stopped =
+            yield* sql`SELECT thread_id FROM effect_agent_worker_stops WHERE thread_id = ${validated.threadId}`.pipe(
+              Effect.mapError(sqlFailure(operation)),
+            );
+
+          if (stopped.length > 0)
+            return yield* AdmissionPolicyError.make({ reason: "refused", code: "worker-stopped" });
+
           // The first accepted input fixes ordinary/worker lane identity atomically with admission.
           // Canonical origin materialization can lag admission; a log scan cannot fence that race.
           const firstRows = yield* sql<Record<string, unknown>>`
@@ -2019,6 +2029,77 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     return settlement;
   });
 
+  const inspectWorker = Effect.fn("SqliteSubmissionLedger.inspectWorker")(function* (
+    threadId: SubmissionSnapshot["threadId"],
+  ) {
+    const operation = "inspect worker";
+
+    return yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const read = Effect.fnUntraced(function* (active: boolean) {
+            const rows =
+              yield* sql`SELECT ${sql.literal(SUBMISSION_COLUMNS)} FROM effect_agent_submissions
+          WHERE thread_id = ${threadId} ${active ? sql`AND state <> 'settled'` : sql``}
+          ORDER BY queue_sequence ${active ? sql`ASC` : sql`DESC`} LIMIT 1`.pipe(
+                Effect.mapError(sqlFailure(operation)),
+              );
+
+            const decoded = yield* decodeSubmissionRows(operation, threadId, rows);
+
+            return decoded[0] === undefined
+              ? null
+              : yield* decodeSubmissionSnapshot(operation, decoded[0]);
+          });
+
+          const latest = yield* read(false);
+          const active = yield* read(true);
+
+          const stops =
+            yield* sql`SELECT thread_id FROM effect_agent_worker_stops WHERE thread_id = ${threadId}`.pipe(
+              Effect.mapError(sqlFailure(operation)),
+            );
+
+          return WorkerLedgerState.make({ latest, active, stopped: stops.length > 0 });
+        }),
+      )
+      .pipe(Effect.catchTag("SqlError", (cause) => sqlFailure(operation)(cause)));
+  });
+
+  const stopWorker = Effect.fn("SqliteSubmissionLedger.stopWorker")(function* (
+    request: WorkerStopCommand,
+  ) {
+    const operation = "ledger stop worker";
+
+    const validated = yield* Schema.decodeEffect(WorkerStopCommand)(request).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
+
+    return yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const now = yield* currentInstant;
+
+        yield* sql`INSERT OR IGNORE INTO effect_agent_worker_stops (thread_id) VALUES (${validated.threadId})`.pipe(
+          Effect.mapError(sqlFailure(operation)),
+        );
+        yield* sql`INSERT OR IGNORE INTO effect_agent_abort_intents (submission_id, author, reason, requested_at)
+        SELECT submission_id, ${validated.author}, 'Worker owner stopped the worker', ${now.iso}
+        FROM effect_agent_submissions WHERE thread_id = ${validated.threadId} AND state <> 'settled'`.pipe(
+          Effect.mapError(sqlFailure(operation)),
+        );
+
+        const rows = yield* sql`SELECT o.submission_id FROM effect_agent_submission_ownership o
+        JOIN effect_agent_submissions s ON s.submission_id = o.submission_id
+        WHERE s.thread_id = ${validated.threadId} AND s.state <> 'settled'`.pipe(
+          Effect.mapError(sqlFailure(operation)),
+        );
+
+        return rows.length;
+      }),
+    );
+  });
+
   const requestAbort: SubmissionLedger["Service"]["requestAbort"] = Effect.fn(
     "SqliteSubmissionLedger.requestAbort",
   )(function* (request: AbortCommand) {
@@ -2143,6 +2224,13 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
         }
         // The host Attempt already owns the lane; no epoch bump happens here (plan §2.5).
         yield* requireOwnership(operation, host, validated.ownershipToken);
+
+        const stopped =
+          yield* sql`SELECT thread_id FROM effect_agent_worker_stops WHERE thread_id = ${validated.threadId}`.pipe(
+            Effect.mapError(sqlFailure(operation)),
+          );
+
+        if (stopped.length > 0) return [];
 
         const laterRows = yield* sql<Record<string, unknown>>`
           SELECT ${sql.literal(SUBMISSION_COLUMNS)}
@@ -3496,6 +3584,8 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       reserveSettlement,
       finalizeSettlement,
       requestAbort,
+      stopWorker,
+      inspectWorker,
       claimJoining,
       markJoined,
       revertJoining,

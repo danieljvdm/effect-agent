@@ -108,7 +108,10 @@ A follow-up returns its retained delivery state and joins an active worker run a
 boundary or starts a later run. Keep the returned message reference: inspect that delivery or wait
 for a report instead of sending the command again. Opt in to `inspect`, `list`, or `cancel` tools
 when needed. Inspection accepts a message reference for delivery state or a receipt for a saved
-result. Cancellation targets one input's receipt; it does not close the worker.
+result. Cancellation targets one input's receipt; it does not close the worker. Application code can
+permanently seal the worker with `Subagent.stop` and a stable command key. See the
+[control contract](../../reference/subagents#background-delivery-and-recovery) for stop and input
+application facts.
 Several inputs joining one run produce one logical report.
 An input cancelled before it starts a run produces no completion message.
 

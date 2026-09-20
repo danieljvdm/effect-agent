@@ -5,7 +5,7 @@ import { Update } from "./AgentUpdates.ts";
 import * as FailureDiagnostic from "./FailureDiagnostic.ts";
 import { AgentId, DelegationId, RunId, SettlementId, ThreadId, ToolCallId } from "./Identifiers.ts";
 import { MessageStatus } from "./internal/message-status.ts";
-import { Receipt } from "./Receipt.ts";
+import { IdempotencyKey, Receipt } from "./Receipt.ts";
 import { SubagentExecutionFailure, SubagentGrant } from "./SubagentContract.ts";
 
 /** A reusable child Thread, correlated with its declaration. This value grants no authority. */
@@ -30,6 +30,14 @@ export const WorkerStarted = Schema.Struct({
 );
 
 export type WorkerStarted = typeof WorkerStarted.Type;
+
+/** Stable owner command. Reusing its key for a different worker conflicts. */
+export const WorkerStop = Schema.Struct({ worker: WorkerRef, idempotencyKey: IdempotencyKey });
+export type WorkerStop = typeof WorkerStop.Type;
+
+/** The inbox is sealed and active execution has released ownership. External actions are not undone. */
+export const WorkerStopped = WorkerStop;
+export type WorkerStopped = typeof WorkerStopped.Type;
 
 /** A host-authorized Run allowance is independent of the immutable delegation lineage. */
 export const WorkerBudgetScope = Schema.Literals(["source-subtree", "worker-run"]);
@@ -63,11 +71,41 @@ export const WorkerContext = Schema.Struct({
 
 export type WorkerContext = typeof WorkerContext.Type;
 
+/** Admission identity is distinct from canonical input application. */
+export const WorkerInput = Schema.Struct({ receipt: Receipt, messageId: IdempotencyKey });
+export type WorkerInput = typeof WorkerInput.Type;
+
+export const WorkerAppliedInput = Schema.Struct({
+  ...WorkerInput.fields,
+  runId: RunId,
+  sequence: Schema.Natural,
+});
+
+/** A Run outcome is not assignment completion. Interpret only a Definition's disposition. */
+export const WorkerRun = Schema.Struct({
+  runId: RunId,
+  hostReceipt: Receipt,
+  outcome: Schema.NullOr(Schema.Literals(["completed", "failed", "aborted"])),
+  disposition: Schema.NullOr(Schema.Json),
+});
+
 /** Bounded durable listing data; a latest Receipt never substitutes for a requested Receipt. */
 export const WorkerSummary = Schema.Struct({
   worker: WorkerRef,
   latestReceipt: Schema.NullOr(Receipt),
-  state: Schema.Literals(["starting", "active", "idle"]),
+  /** stopping/stopped identify an owner-issued worker stop, never an ordinary Receipt abort. */
+  state: Schema.Literals(["starting", "active", "idle", "stopping", "stopped"]),
+  acceptedInput: Schema.NullOr(WorkerInput),
+  appliedInput: Schema.NullOr(WorkerAppliedInput),
+  run: Schema.NullOr(WorkerRun),
+  /** One retained unadmitted input, if any; its state is independent of destination execution. */
+  pendingDelivery: Schema.NullOr(MessageStatus),
+  /** Consistent destination facts; pending delivery has its own source-owned version. */
+  watermark: Schema.Struct({
+    canonicalSequence: Schema.Natural,
+    acceptedQueueSequence: Schema.Natural,
+    pendingDeliveryVersion: Schema.NullOr(Schema.Natural),
+  }),
 });
 
 export type WorkerSummary = typeof WorkerSummary.Type;
@@ -107,6 +145,7 @@ export class WorkerError extends Schema.TaggedError<WorkerError>()("WorkerError"
     "await",
     "list",
     "cancel",
+    "stop",
   ]),
   reason: Schema.Literals([
     "denied",

@@ -58,6 +58,7 @@ export const memoryMessageDeliveryStoreLayer = (
       const state = yield* Ref.make({
         records: new Map<string, string>(),
         pending: new Map<ThreadId, ReadonlySet<MessageDeliveryKey["messageId"]>>(),
+        workers: new Map<string, ReadonlySet<MessageDeliveryKey["messageId"]>>(),
       });
 
       const commit = (record: MessageDeliveryRecord, encoded: string) =>
@@ -72,7 +73,36 @@ export const memoryMessageDeliveryStoreLayer = (
           if (keys.size === 0) pending.delete(record.key.ownerThreadId);
           else pending.set(record.key.ownerThreadId, keys);
 
-          return { records: new Map(current.records).set(key, encoded), pending };
+          const workers = new Map(current.workers);
+          const admission = record.envelope.workerAdmission;
+
+          if (admission !== undefined) {
+            const worker = admission.origin.worker;
+
+            const startKey = JSON.stringify([
+              record.key.ownerThreadId,
+              worker.delegationId,
+              worker.targetAgentId,
+            ]);
+
+            if (record.key.messageId === admission.origin.firstMessageId)
+              workers.set(
+                startKey,
+                new Set([...(workers.get(startKey) ?? []), record.key.messageId]),
+              );
+            const pendingKey = JSON.stringify([record.key.ownerThreadId, worker.threadId]);
+            const inputs = new Set(workers.get(pendingKey));
+
+            if (
+              (record.status === "pending" || record.status === "parked") &&
+              record.receipt === null
+            )
+              inputs.add(record.key.messageId);
+            else inputs.delete(record.key.messageId);
+            workers.set(pendingKey, inputs);
+          }
+
+          return { records: new Map(current.records).set(key, encoded), pending, workers };
         });
 
       const lock = yield* Semaphore.make(1);
@@ -237,20 +267,36 @@ export const memoryMessageDeliveryStoreLayer = (
 
           const current = yield* Ref.get(state);
 
-          const retained = input.pendingOnly
-            ? yield* Effect.forEach(
-                [...(current.pending.get(input.ownerThreadId) ?? [])]
-                  .filter((messageId) => input.after === undefined || messageId > input.after)
-                  .sort()
-                  .slice(0, input.limit + 1),
-                (messageId) =>
-                  decode(
-                    current.records.get(
-                      messageDeliveryKeyString({ ownerThreadId: input.ownerThreadId, messageId }),
-                    ) ?? "",
-                  ),
-              )
-            : yield* all();
+          const workerKey =
+            input.workerStarts !== undefined
+              ? JSON.stringify([
+                  input.ownerThreadId,
+                  input.workerStarts.delegationId,
+                  input.workerStarts.targetAgentId,
+                ])
+              : input.pendingWorker !== undefined
+                ? JSON.stringify([input.ownerThreadId, input.pendingWorker])
+                : undefined;
+
+          const retained =
+            workerKey !== undefined || input.pendingOnly
+              ? yield* Effect.forEach(
+                  [
+                    ...((workerKey === undefined
+                      ? current.pending.get(input.ownerThreadId)
+                      : current.workers.get(workerKey)) ?? []),
+                  ]
+                    .filter((messageId) => input.after === undefined || messageId > input.after)
+                    .sort()
+                    .slice(0, input.limit + 1),
+                  (messageId) =>
+                    decode(
+                      current.records.get(
+                        messageDeliveryKeyString({ ownerThreadId: input.ownerThreadId, messageId }),
+                      ) ?? "",
+                    ),
+                )
+              : yield* all();
 
           const records = retained
             .filter(

@@ -206,6 +206,13 @@ const deliveryStatus = Subagent.inspect(declaration, worker, message);
 const workerSummary = Subagent.inspect(declaration, worker);
 const awaitResult = Subagent.await(declaration, worker, receipt);
 const cancel = Subagent.cancel(declaration, worker, receipt);
+const stopped = Subagent.stop(declaration, worker, { idempotencyKey: key });
+
+const stopProofs: [
+  Assert<Equal<Effect.Services<typeof stopped>, SubagentHost>>,
+  Assert<Equal<Effect.Error<typeof stopped>, WorkerError>>,
+] = [true, true];
+
 const listed = Subagent.list(declaration);
 const selected = Subagent.background(declaration, { start: true, inspect: true, cancel: true });
 const onlyList = Subagent.background(declaration, { list: true });
@@ -428,6 +435,7 @@ describe("background authoring types", () => {
     expect(typeof updateLayerProofs).toBe("function");
     expect(typeof dispositionLayerProofs).toBe("function");
     expect(proofs.every(Boolean)).toBe(true);
+    expect(stopProofs.every(Boolean)).toBe(true);
     expect(directTypes.every(Boolean)).toBe(true);
     expect(updateTypes.every(Boolean)).toBe(true);
     expect(dispositionTypes.every(Boolean)).toBe(true);

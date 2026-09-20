@@ -8,7 +8,23 @@ import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
 import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
 /** The current storage version recorded in `effect_agent_meta`. */
-export const CurrentDoStorageVersion = 7;
+export const CurrentDoStorageVersion = 8;
+
+/** One permanent destination inbox fence, including workers stopped before admission. */
+export const createWorkerStops = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  yield* sql`CREATE TABLE effect_agent_worker_stops (thread_id TEXT PRIMARY KEY NOT NULL)`;
+  yield* sql`CREATE INDEX effect_agent_worker_starts ON effect_agent_message_deliveries(owner_thread_id,
+    json_extract(record_json, '$.envelope.workerAdmission.origin.worker.delegationId'),
+    json_extract(record_json, '$.envelope.workerAdmission.origin.worker.targetAgentId'), message_id)
+    WHERE message_id = json_extract(record_json, '$.envelope.workerAdmission.origin.firstMessageId')`;
+  yield* sql`CREATE INDEX effect_agent_worker_pending ON effect_agent_message_deliveries(owner_thread_id,
+    json_extract(record_json, '$.envelope.workerAdmission.origin.worker.threadId'), message_id)
+    WHERE state IN ('pending', 'parked') AND json_extract(record_json, '$.receipt') IS NULL`;
+  yield* sql`CREATE INDEX effect_agent_worker_execution ON effect_agent_canonical_records(thread_id,
+    json_extract(record_json, '$.payload._tag'), sequence) WHERE json_extract(record_json, '$.payload.runId') IS NOT NULL`;
+});
 
 /** Index only outstanding obligations, ordered by the recovery scan's stable cursor. */
 export const createNonterminalIndex = Effect.gen(function* () {
@@ -272,6 +288,7 @@ export const doMigrations = SqliteMigrator.fromRecord({
     yield* createMessageDeliveryTables;
     yield* createMessageDeliveryPendingIndex;
     yield* createRecoveryCheckpointTable;
+    yield* createWorkerStops;
     yield* sql`
       CREATE TABLE effect_agent_meta (
         key TEXT PRIMARY KEY NOT NULL,

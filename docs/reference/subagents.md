@@ -298,11 +298,13 @@ terminal preparation validates the original owner retained by the first worker i
 ## Start workers from application code
 
 The [background guide](../guide/subagents/background) shows model-facing tools. Application code can also call
-`Subagent.start`, `followUp`, `inspect`, `await`, and `cancel` with an authorized `SubagentHost`.
+`Subagent.start`, `followUp`, `inspect`, `await`, `stop`, and `cancel` with an authorized `SubagentHost`.
 
 A programmatic start needs an **idempotency key**: a stable identifier for one intended input.
 If delivery is retried, reuse the same key and parameters so the host can recognize that input.
-Use a new key for a new input. Native model tools derive their keys automatically.
+Use a new key for a new input. A retained launch is reconciled before fresh input authority
+preparation, even from another source Run. Current caller authentication still applies; changed
+input, parameters, grants or budget arguments conflict. Native model tools derive their keys automatically.
 
 ```ts twoslash
 import { Subagent } from "effect-agent";
@@ -393,7 +395,43 @@ children retain their existing cancellation and join semantics. Worker provenanc
 and reservations survive later coordinator Runs and host reconstruction. The admission ledger
 atomically prevents replacing an ordinary Thread lane with a worker lane or changing its origin.
 
-`Subagent.list(Research, { limit, after })` returns a bounded page. Read canonical history with
+`Subagent.stop(Research, worker, { idempotencyKey })` permanently seals that worker's inbox,
+including retained inputs that have not reached admission, queued steering, and later continuations.
+It waits for active ownership to release before acknowledging. Retry the same key after a timeout,
+interruption or lost acknowledgement; reusing a stop key for another worker conflicts. Storage
+failure leaves acknowledgement uncertain. Stop does not undo external actions, erase unresolved
+outcomes, stop independent descendants, or perform application-owned cleanup.
+
+```ts
+const stopped = yield * Subagent.stop(Research, worker, { idempotencyKey: stopCommandId });
+// stopped: { worker, idempotencyKey: stopCommandId }
+const snapshot = yield * Subagent.inspect(Research, worker);
+const latestInstructionsApplied =
+  snapshot.acceptedInput !== null &&
+  snapshot.acceptedInput.messageId === snapshot.appliedInput?.messageId;
+```
+
+Worker summaries retain `latestReceipt` and expose these native facts:
+
+| Field             | Meaning                                                                                         |
+| ----------------- | ----------------------------------------------------------------------------------------------- |
+| `acceptedInput`   | Exact latest destination Receipt and retained message ID. Acceptance does not mean application. |
+| `appliedInput`    | Exact latest canonical input, its Run ID and canonical sequence.                                |
+| `run`             | Latest actual Run, its host Receipt, canonical outcome and optional application disposition.    |
+| `pendingDelivery` | One retained input still awaiting admission, if any. Inspect its message for delivery details.  |
+| `watermark`       | Consistent canonical sequence, accepted queue sequence, and source delivery version.            |
+
+`active` includes queued input; `starting` can have no Receipt. Only an owner-issued worker stop
+produces `stopping` or `stopped`; an ordinary Receipt abort does not. These states let a parent
+distinguish an intentional stop from a recoverable failure, even when a completion report says
+`aborted`. `stopping` retains unsettled obligations behind the permanent fence; `stopped` has none.
+Follow-up after either state is refused with `reason: "worker-stopped"`, including after restart.
+`idle` and a completed Run do **not** mean the assignment is finished. Interpret the Definition's
+`runDisposition`, and require the relevant accepted instructions to be canonically applied before
+using an older result as completion.
+
+`Subagent.list(Research, { limit, after })` returns an indexed, bounded page of retained starts,
+including those not yet admitted. Read canonical history with
 `Subagent.observe(Research, worker, { after })`: this is a finite Stream through the tail captured
 at acquisition, using bounded storage pages. Pass its last `sequence` as the next cursor.
 Observation acquires no execution permit and does not cancel work when interrupted.

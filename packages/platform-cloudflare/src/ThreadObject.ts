@@ -184,11 +184,13 @@ const isMutatingPortRequest = (request: PortRequest): boolean => {
   switch (request._tag) {
     case "LedgerAdmit":
     case "LedgerMarkReady":
+    case "LedgerStopWorker":
     case "LedgerRequestAbort":
     case "LedgerRecordChildSettled":
     case "StoreMaterialize":
     case "StoreAppend":
       return true;
+    case "LedgerInspectWorker":
     case "LedgerLookup":
     case "LedgerResolveAdmission":
     case "StoreReadPage":
@@ -363,6 +365,8 @@ const requirePortThread = (request: PortRequest) => {
       return requireSubmissionThread(request.request.submissionId);
     case "LedgerRecordChildSettled":
       return requireSubmissionThread(request.request.parentSubmissionId);
+    case "LedgerInspectWorker":
+    case "LedgerStopWorker":
     case "LedgerAdmit":
     case "LedgerResolveAdmission":
     case "StoreMaterialize":

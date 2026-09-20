@@ -197,6 +197,12 @@ export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLoc
   // Background workers use retained delivery, source capacity, and child-origin paths absent
   // from these six attached/ordinary scenarios. The before/after creation and completion
   // boundaries are exercised by packages/effect-agent/test/durable/worker-host.test.ts.
+  // Owner-wide stop is absent from these scenarios. The four boundaries and actual storage
+  // restart are covered by packages/platform-node/test/background-workers.test.ts.
+  "worker:before-stop-append",
+  "worker:after-stop-append",
+  "worker:before-stop-seal",
+  "worker:after-stop-seal",
   "worker:before-source-append",
   "worker:after-source-append",
   "worker:before-origin-append",

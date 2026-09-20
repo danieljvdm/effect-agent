@@ -336,6 +336,24 @@ const harness = Effect.fn("workerHostHarness")(function* (
           if (selection?._tag === "RecordId") {
             records = all.filter((entry) => entry.record.recordId === selection.recordId);
             reads.exact++;
+          } else if (selection?._tag === "WorkerExecution") {
+            records = ["UserInputRecorded", "RunStarted"]
+              .flatMap((tag) =>
+                all
+                  .filter(
+                    ({ record: { payload } }) =>
+                      payload._tag === tag && "runId" in payload && payload.runId !== undefined,
+                  )
+                  .slice(-1),
+              )
+              .sort((a, b) => a.sequence - b.sequence);
+          } else if (selection?._tag === "RunInput") {
+            records = all.filter(
+              ({ record: { payload } }) =>
+                payload._tag === "UserInputRecorded" &&
+                payload.kind === "user" &&
+                payload.runId === selection.runId,
+            );
           } else if (selection?._tag === "WorkerState") {
             records = all.filter(({ record: { payload } }) =>
               payload._tag === "SubtreeBudgetReserved"
@@ -449,12 +467,31 @@ const harness = Effect.fn("workerHostHarness")(function* (
 
           return changed;
         }),
-      list: ({ ownerThreadId, limit }) =>
-        Effect.succeed({
-          items: [...deliveries.values()]
-            .filter((record) => record.key.ownerThreadId === ownerThreadId)
-            .slice(0, limit),
-          next: null,
+      list: ({ ownerThreadId, limit, after, workerStarts, pendingWorker }) =>
+        Effect.sync(() => {
+          const rows = [...deliveries.values()]
+            .filter((record) => {
+              const origin = record.envelope.workerAdmission?.origin;
+
+              return (
+                record.key.ownerThreadId === ownerThreadId &&
+                (after === undefined || record.key.messageId > after) &&
+                (workerStarts === undefined ||
+                  (origin?.worker.delegationId === workerStarts.delegationId &&
+                    origin.worker.targetAgentId === workerStarts.targetAgentId &&
+                    origin.firstMessageId === record.key.messageId)) &&
+                (pendingWorker === undefined ||
+                  (origin?.worker.threadId === pendingWorker &&
+                    record.receipt === null &&
+                    (record.status === "pending" || record.status === "parked")))
+              );
+            })
+            .sort((a, b) => a.key.messageId.localeCompare(b.key.messageId));
+
+          return {
+            items: rows.slice(0, limit),
+            next: rows.length > limit ? rows[limit - 1]!.key.messageId : null,
+          };
         }),
       due: () =>
         Effect.succeed(
@@ -465,6 +502,18 @@ const harness = Effect.fn("workerHostHarness")(function* (
       nextDeadline: () => Effect.succeed(null),
     }),
     Effect.provideService(SubmissionLedger, {
+      inspectWorker: (threadId) =>
+        Effect.sync(() => {
+          const rows = [...submissions.values()]
+            .filter((row) => row.threadId === threadId)
+            .sort((a, b) => a.queueSequence - b.queueSequence);
+
+          return {
+            latest: rows.at(-1) ?? null,
+            active: rows.find((row) => row.state !== "settled") ?? null,
+            stopped: false,
+          };
+        }),
       lookup: (request) =>
         Effect.sync(() => {
           checkThread(
@@ -1347,6 +1396,65 @@ layer(NodeCrypto.layer)((it) => {
     }),
   );
 
+  it.effect(
+    "reconciles a retained launch across Runs before fresh preparation and preserves argument conflicts",
+    () =>
+      Effect.gen(function* () {
+        let denyFresh = false;
+
+        const h = yield* harness().pipe(
+          Effect.provideService(WorkerPolicyResolver, {
+            resolveSource: () => Effect.succeed(Option.none()),
+            resolveTarget: (request) =>
+              denyFresh && request._tag === "InitialInput"
+                ? WorkerError.make({ operation: "start", reason: "denied" })
+                : Effect.succeed(Option.none()),
+          }),
+        );
+
+        const original = request("retained-command");
+        const first = yield* h.host.start(original);
+
+        denyFresh = true;
+
+        const later = h.runtime.facet(
+          {
+            source: {
+              _tag: "tool",
+              agentId: sourceAgent.id,
+              threadId: sourceId,
+              runId: Schema.decodeSync(RunId)("later-run"),
+              toolCallId: Schema.decodeSync(ToolCallId)("retry"),
+            },
+            policy: sourceAgent.policy,
+            depth: 0,
+          },
+          principal,
+        );
+
+        expect(
+          yield* later.resolveTargetPolicy({
+            target,
+            encodedInput: original.encodedInput,
+            start: { delegationId: original.delegationId, idempotencyKey: original.idempotencyKey },
+          }),
+        ).toEqual(Option.some(policy));
+        expect(yield* later.start(original)).toEqual(first);
+        for (const changed of [
+          { ...original, encodedInput: { text: "changed" } },
+          { ...original, encodedParameters: { note: "changed" } },
+          { ...original, policy: AgentPolicy.make({ ...policy, maxTurns: 1 }) },
+          { ...original, toolCallAllowance: 1 },
+        ])
+          expect((yield* later.start(changed).pipe(Effect.flip)).reason).toBe(
+            "idempotency-conflict",
+          );
+        h.deny("send");
+        expect((yield* later.start(original).pipe(Effect.flip)).reason).toBe("denied");
+        expect(h.submissions.size).toBe(1);
+      }),
+  );
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
   it.effect(
     "serializes source-aware active slots across raced starts, steering and idle reactivation",
@@ -1884,7 +1992,7 @@ layer(NodeCrypto.layer)((it) => {
         yield* TestClock.adjust("1 second");
         const started = yield* h.host.start(start);
 
-        expect(initialCalls).toBeGreaterThanOrEqual(4);
+        expect(initialCalls).toBeGreaterThanOrEqual(3);
 
         const origin = h.submissions.get(started.delivery.receipt!.submissionId)!.workerAdmission!
           .origin;
@@ -2138,18 +2246,23 @@ layer(NodeCrypto.layer)((it) => {
 
       const active = { worker: first.worker, latestReceipt: latest.receipt, state: "active" };
 
-      expect(yield* h.host.summary({ worker: first.worker, target })).toEqual(active);
+      const beforeSummaryReads = { ...h.reads };
+
+      expect(yield* h.host.summary({ worker: first.worker, target })).toMatchObject(active);
       expect(
         (yield* h.host.list({ delegationId: first.worker.delegationId, target, limit: 10 })).items,
-      ).toEqual([active]);
+      ).toMatchObject([active]);
 
+      expect(h.reads.exported).toBe(beforeSummaryReads.exported);
+      expect(h.reads.paged).toBe(beforeSummaryReads.paged);
+      expect(h.reads.worker).toBe(beforeSummaryReads.worker);
       yield* h.settle(first.delivery.receipt!);
       const idle = { ...active, state: "idle" };
 
-      expect(yield* h.host.summary({ worker: first.worker, target })).toEqual(idle);
+      expect(yield* h.host.summary({ worker: first.worker, target })).toMatchObject(idle);
       expect(
         (yield* h.host.list({ delegationId: first.worker.delegationId, target, limit: 10 })).items,
-      ).toEqual([idle]);
+      ).toMatchObject([idle]);
     }),
   );
 
@@ -2177,7 +2290,7 @@ layer(NodeCrypto.layer)((it) => {
           reason: "storage",
         });
         h.fail(undefined);
-        expect(yield* h.host.summary({ worker: first.worker, target })).toEqual({
+        expect(yield* h.host.summary({ worker: first.worker, target })).toMatchObject({
           worker: first.worker,
           latestReceipt: first.delivery.receipt!,
           state: "starting",
@@ -2207,14 +2320,14 @@ layer(NodeCrypto.layer)((it) => {
           state: "active",
         };
 
-        expect(yield* h.host.summary({ worker: first.worker, target })).toEqual(active);
+        expect(yield* h.host.summary({ worker: first.worker, target })).toMatchObject(active);
         expect(
           (yield* h.host.list({ delegationId: first.worker.delegationId, target, limit: 10 }))
             .items,
-        ).toEqual([active]);
+        ).toMatchObject([active]);
         yield* h.settle(earlierReceipt.receipt!);
         yield* h.settle(latestReceipt.receipt!);
-        expect(yield* h.host.summary({ worker: first.worker, target })).toEqual({
+        expect(yield* h.host.summary({ worker: first.worker, target })).toMatchObject({
           ...active,
           state: "idle",
         });

@@ -270,7 +270,21 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
       const rows = yield* query(
         "list",
-        sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.ownerThreadId} ${input.after === undefined ? sql`` : sql`AND message_id > ${input.after}`} ${input.pendingOnly ? sql`AND state NOT IN ('processed', 'refused')` : sql``} ORDER BY message_id LIMIT ${input.limit + 1}`,
+        sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.ownerThreadId} ${input.after === undefined ? sql`` : sql`AND message_id > ${input.after}`} ${input.pendingOnly ? sql`AND state NOT IN ('processed', 'refused')` : sql``}
+        ${
+          input.workerStarts === undefined
+            ? sql``
+            : sql`AND json_extract(record_json, '$.envelope.workerAdmission.origin.worker.delegationId') = ${input.workerStarts.delegationId}
+          AND json_extract(record_json, '$.envelope.workerAdmission.origin.worker.targetAgentId') = ${input.workerStarts.targetAgentId}
+          AND message_id = json_extract(record_json, '$.envelope.workerAdmission.origin.firstMessageId')`
+        }
+        ${
+          input.pendingWorker === undefined
+            ? sql``
+            : sql`AND json_extract(record_json, '$.envelope.workerAdmission.origin.worker.threadId') = ${input.pendingWorker}
+          AND state IN ('pending', 'parked') AND json_extract(record_json, '$.receipt') IS NULL`
+        }
+        ORDER BY message_id LIMIT ${input.limit + 1}`,
       );
 
       const records = yield* decodeRows(rows);

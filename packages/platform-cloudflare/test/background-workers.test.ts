@@ -1326,3 +1326,89 @@ it("retries unavailable worker funding admission with the same durable input ide
     droppedMessageWakes.delete(source);
   }
 }, 20_000);
+
+it("routes worker stop through its owning Object and keeps queued input fenced after native eviction", async () => {
+  const source = `background-cf-report-stop-${crypto.randomUUID()}`;
+
+  await runClient(
+    Effect.flatMap(CloudflareThreadClient, (client) =>
+      client.submit(
+        { definition: backgroundSource },
+        { question: "launch" },
+        submitOptions(source, "source"),
+      ),
+    ),
+  );
+  await drainAlarmsUntil(source, allSettled(source));
+
+  const started = await withOwner(source, (host) =>
+    Subagent.start(
+      backgroundReportingWorkers,
+      { question: source },
+      {
+        idempotencyKey: submitOptions(source, "worker").idempotencyKey,
+      },
+    ).pipe(Effect.provideService(SubagentHost, host)),
+  );
+
+  await expect
+    .poll(async () =>
+      (await readCanonical(started.worker.threadId)).some(
+        ({ record }) => record.payload._tag === "RunStarted",
+      ),
+    )
+    .toBe(true);
+
+  const steering = await withOwner(source, (host) =>
+    Subagent.followUp(
+      backgroundReportingWorkers,
+      started.worker,
+      { question: "correction" },
+      {
+        idempotencyKey: submitOptions(source, "steer").idempotencyKey,
+      },
+    ).pipe(Effect.provideService(SubagentHost, host)),
+  );
+
+  const stop = () =>
+    withOwner(source, (host) =>
+      Subagent.stop(backgroundReportingWorkers, started.worker, {
+        idempotencyKey: submitOptions(source, "stop").idempotencyKey,
+      }).pipe(Effect.provideService(SubagentHost, host)),
+    );
+
+  const acknowledged = await stop();
+
+  await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
+  await evict(started.worker.threadId);
+  await evict(source);
+  expect(await stop()).toEqual(acknowledged);
+  await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
+
+  const summary = await withOwner(source, (host) =>
+    host.summary({ worker: started.worker, target: backgroundReportingWorkers.target }),
+  );
+
+  expect(summary).toMatchObject({
+    state: "stopped",
+    acceptedInput: { receipt: steering.receipt },
+    appliedInput: { receipt: started.delivery.receipt },
+    run: { hostReceipt: started.delivery.receipt, outcome: "aborted" },
+  });
+  const records = await readCanonical(started.worker.threadId);
+
+  expect(records.filter(({ record }) => record.payload._tag === "RunStarted")).toHaveLength(1);
+  expect(records.some(({ record }) => record.payload._tag === "ToolCallPrepared")).toBe(false);
+  expect(
+    await withOwner(source, (host) =>
+      Subagent.followUp(
+        backgroundReportingWorkers,
+        started.worker,
+        { question: "continue" },
+        {
+          idempotencyKey: submitOptions(source, "continue").idempotencyKey,
+        },
+      ).pipe(Effect.provideService(SubagentHost, host)),
+    ),
+  ).toMatchObject({ status: "refused", reason: "worker-stopped" });
+});

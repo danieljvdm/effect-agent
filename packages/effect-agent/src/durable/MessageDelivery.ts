@@ -1,7 +1,7 @@
 import { Clock, Context, Crypto, Effect, Layer, Result, Schema, Semaphore } from "effect";
 
 import * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
-import { ThreadId } from "../core/Identifiers.ts";
+import { AgentId, DelegationId, ThreadId } from "../core/Identifiers.ts";
 import { Receipt } from "../core/Receipt.ts";
 import { WorkerUpdate } from "../core/Worker.ts";
 import { digestJson } from "./Digest.ts";
@@ -181,13 +181,28 @@ export const MessageDeliveryChange = Schema.Union([
 
 export type MessageDeliveryChange = typeof MessageDeliveryChange.Type;
 
+/** Select one native index per page; index filters cannot be combined. */
 export const MessageDeliveryPageRequest = Schema.Struct({
   ownerThreadId: ThreadId,
   limit: Positive.check(Schema.isLessThanOrEqualTo(4096)),
   after: Schema.optionalKey(IdempotencyKey),
   /** Native pending index, including accepted, future-due and parked obligations. */
   pendingOnly: Schema.optionalKey(Schema.Boolean),
-});
+  /** First retained envelopes, including starts not admitted at the destination. */
+  workerStarts: Schema.optionalKey(
+    Schema.Struct({ delegationId: DelegationId, targetAgentId: AgentId }),
+  ),
+  /** Retained inputs not yet acknowledged by one destination worker. */
+  pendingWorker: Schema.optionalKey(ThreadId),
+}).check(
+  Schema.makeFilter(
+    (request) =>
+      Number(request.pendingOnly === true) +
+        Number(request.workerStarts !== undefined) +
+        Number(request.pendingWorker !== undefined) <=
+      1,
+  ),
+);
 
 export type MessageDeliveryPageRequest = typeof MessageDeliveryPageRequest.Type;
 

@@ -282,7 +282,17 @@ export const assertSubscriptionReplay = Effect.gen(function* () {
 });
 
 /** Reconstruct the exact predecessor format before exercising an upgrade. */
+export const removeWorkerContractIndexes = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  yield* sql`DROP TABLE effect_agent_worker_stops`;
+  yield* sql`DROP INDEX effect_agent_worker_starts`;
+  yield* sql`DROP INDEX effect_agent_worker_pending`;
+  yield* sql`DROP INDEX effect_agent_worker_execution`;
+});
+
 export const removeNativeReadIndexes = Effect.gen(function* () {
+  yield* removeWorkerContractIndexes;
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql`DROP INDEX effect_agent_message_deliveries_pending`;

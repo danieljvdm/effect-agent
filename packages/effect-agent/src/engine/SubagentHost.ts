@@ -10,6 +10,8 @@ import { type IdempotencyKey, type JoinedToHost, type Receipt } from "../core/Re
 import type { SubagentBudgetReservation } from "../core/SubagentContract.ts";
 import {
   WorkerError,
+  type WorkerStop,
+  type WorkerStopped,
   type WorkerCompletion,
   type WorkerHistoryEntry,
   type WorkerContext,
@@ -136,6 +138,11 @@ export class SubagentHost extends Context.Service<
     readonly resolveTargetPolicy: (request: {
       readonly target: Agent.AnyDefinition;
       readonly encodedInput: unknown;
+      /** Reconcile a retained launch before asking authority to prepare a new one. */
+      readonly start?: {
+        readonly delegationId: DelegationId;
+        readonly idempotencyKey: IdempotencyKey;
+      };
     }) => Effect.Effect<Option.Option<AgentPolicy>, WorkerError>;
     readonly start: (request: StartWorkerRequest) => Effect.Effect<WorkerStarted, WorkerError>;
     readonly followUp: (
@@ -165,6 +172,10 @@ export class SubagentHost extends Context.Service<
       readonly limit: number;
       readonly after?: ThreadId;
     }) => Effect.Effect<WorkerPage, WorkerError>;
+    /** Seal the whole worker; retries reconcile the same command, including a lost acknowledgement. */
+    readonly stop: (
+      request: WorkerStop & { readonly target: Agent.AnyDefinition },
+    ) => Effect.Effect<WorkerStopped, WorkerError>;
     /** Cancel exactly this Receipt; preserve JoinedToHost without broadening its target. */
     readonly cancel: (
       request: WorkerReceiptRequest,
@@ -181,6 +192,7 @@ export class SubagentHost extends Context.Service<
     observe: () => Stream.fail(WorkerError.make({ operation: "observe", reason: "unavailable" })),
     await: () => WorkerError.make({ operation: "await", reason: "unavailable" }),
     list: () => WorkerError.make({ operation: "list", reason: "unavailable" }),
+    stop: () => WorkerError.make({ operation: "stop", reason: "unavailable" }),
     cancel: () => WorkerError.make({ operation: "cancel", reason: "unavailable" }),
   };
 

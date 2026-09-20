@@ -2386,6 +2386,7 @@ export {
   awaitWorker as await,
   list,
   cancel,
+  stop,
   type BackgroundOptions,
   type BackgroundTools,
 } from "./internal/subagent-background.ts";

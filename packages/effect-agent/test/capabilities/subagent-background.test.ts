@@ -153,7 +153,22 @@ const host = (overrides: Partial<SubagentHost["Service"]> = {}): SubagentHost["S
   await: () => Effect.succeed(settled),
   list: () =>
     Effect.succeed({
-      items: [{ worker: started.worker, latestReceipt: nextReceipt, state: "active" }],
+      items: [
+        {
+          worker: started.worker,
+          latestReceipt: nextReceipt,
+          state: "active",
+          acceptedInput: { receipt: nextReceipt, messageId: nextDelivery.message.messageId },
+          appliedInput: null,
+          run: null,
+          pendingDelivery: null,
+          watermark: {
+            canonicalSequence: 0,
+            acceptedQueueSequence: nextReceipt.queueSequence,
+            pendingDeliveryVersion: null,
+          },
+        },
+      ],
       next: null,
     }),
   cancel: () => Effect.void,
@@ -562,7 +577,10 @@ describe("Subagent background authoring", () => {
         yield* Subagent.list(delegation, { limit: 1 }).pipe(
           Effect.provideService(SubagentHost, service),
         ),
-      ).toEqual({ items: [{ worker, latestReceipt: nextReceipt, state: "active" }], next: null });
+      ).toMatchObject({
+        items: [{ worker, latestReceipt: nextReceipt, state: "active" }],
+        next: null,
+      });
 
       const wrongReceipt = yield* Subagent.inspect(delegation, worker, receipt).pipe(
         Effect.provideService(
