@@ -81,7 +81,7 @@ export const availableTargets = (snapshot: Snapshot) => {
       !control.form ||
       control.disabled ||
       control.readOnly ||
-      !/^(username|current-password|new-password|cc-)/.test(control.autocomplete)
+      !/^(username|email|current-password|new-password|cc-)/.test(control.autocomplete)
     )
       continue;
     const key = `${control.frame}:${control.form}`;
@@ -94,8 +94,7 @@ export const availableTargets = (snapshot: Snapshot) => {
     const values = [...groups.values()]
       .filter((controls) =>
         operation === "LOGIN"
-          ? controls.some((c) => c.autocomplete === "username") &&
-            controls.some((c) => /password/.test(c.autocomplete))
+          ? controls.some((c) => c.autocomplete === "username" || c.autocomplete === "email")
           : controls.some((c) => c.autocomplete === "cc-number"),
       )
       .map((controls) => ({
@@ -321,7 +320,10 @@ export const runIndexed = Effect.fnUntraced(
           operation,
           recordInput(
             operation,
-            dispatchIndexed(session, snapshot, control, operation, value),
+            dispatchIndexed(session, snapshot, control, operation, value, [
+              options.shopOrigin,
+              options.processorOrigin,
+            ]),
             owner.record,
           ),
         );

@@ -67,7 +67,8 @@ const capture = (registry: string, nonce: string, frame: number) => {
       Reflect.get(el, "checked"),
       el instanceof HTMLInputElement ||
       el instanceof HTMLSelectElement ||
-      el instanceof HTMLTextAreaElement
+      el instanceof HTMLTextAreaElement ||
+      el instanceof HTMLButtonElement
         ? [el.form?.action, el.form?.method, el.form?.enctype]
         : null,
     ]);
@@ -190,6 +191,13 @@ const capture = (registry: string, nonce: string, frame: number) => {
         readOnly: Reflect.get(el, "readOnly") === true,
         href: el instanceof HTMLAnchorElement ? el.href.slice(0, 2048) : "",
         form: input || select ? (el.form ? path(el.form) : "") : "",
+        recipient:
+          input || select || el instanceof HTMLButtonElement
+            ? (el instanceof HTMLButtonElement || el instanceof HTMLInputElement) &&
+              el.hasAttribute("formaction")
+              ? el.formAction
+              : (el.form?.action ?? "")
+            : "",
         autocomplete,
         operations,
         selector: path(el),
@@ -285,7 +293,7 @@ export const observeIndexed = Effect.fnUntraced(function* (
     (result) => ({ observationBytes: new TextEncoder().encode(JSON.stringify(result)).byteLength }),
   );
 
-  const observation = Schema.decodeUnknownSync(IndexedObservation)({
+  const observation = yield* Schema.decodeEffect(IndexedObservation)({
     url: result.url,
     frames: result.frames.map(({ index, url, document, text }) => ({ index, url, document, text })),
     controls: result.frames
@@ -304,6 +312,7 @@ export const dispatchIndexed = Effect.fnUntraced(function* (
   control: IndexedControl,
   operation: "CLICK" | "TYPE" | "SELECT",
   value: string,
+  origins: ReadonlyArray<string>,
 ) {
   const owner = yield* CheckoutOwner;
 
@@ -319,12 +328,10 @@ export const dispatchIndexed = Effect.fnUntraced(function* (
       (await framePath(frame, true)) === undefined
     )
       return "stale";
-    if (
-      operation === "CLICK" &&
-      control.href &&
-      !snapshot.frames.some((f) => new URL(f.url).origin === new URL(control.href).origin)
-    )
+    if (operation === "CLICK" && control.href && !origins.includes(new URL(control.href).origin))
       return "stale";
+
+    if (control.recipient && !origins.includes(new URL(control.recipient).origin)) return "stale";
 
     const raw = await frame.isolatedRealm().evaluate(
       (registry, nonce, index, op, text) => {
@@ -358,6 +365,7 @@ export const credentialTarget = (
 
   const roles: Record<string, (typeof FillCredentialRequest.Type.fields)[number]["role"]> = {
     username: "username",
+    email: "username",
     "current-password": "password",
     "new-password": "password",
     "cc-name": "card-name",
@@ -382,7 +390,7 @@ export const credentialTarget = (
   )
     return undefined;
 
-  const request = Schema.decodeUnknownSync(FillCredentialRequest)({
+  const request = Schema.decodeSync(FillCredentialRequest)({
     credential,
     kind,
     frame: source.path,

@@ -76,7 +76,12 @@ it.live(
       expect(snapshot.observation.frames).toHaveLength(2);
       const control = snapshot.observation.controls.find((c) => c.label === "Continue")!;
 
-      expect(yield* dispatchIndexed(session, snapshot, control, "CLICK", "")).toBe("completed");
+      expect(
+        yield* dispatchIndexed(session, snapshot, control, "CLICK", "", [
+          "https://shop.test",
+          "https://processor.test",
+        ]),
+      ).toBe("completed");
       const frame = page.frames().find((f) => f.url().startsWith("https://processor.test"))!;
 
       expect(yield* Effect.promise(() => frame.evaluate(() => document.body.dataset.clicked))).toBe(
@@ -104,7 +109,12 @@ it.live(
             }
           }, change),
         );
-        expect(yield* dispatchIndexed(session, current, main, "CLICK", "")).toBe("stale");
+        expect(
+          yield* dispatchIndexed(session, current, main, "CLICK", "", [
+            "https://shop.test",
+            "https://processor.test",
+          ]),
+        ).toBe("stale");
         expect(
           yield* Effect.promise(() => page.evaluate(() => document.body.dataset.clicked)),
         ).toBeUndefined();

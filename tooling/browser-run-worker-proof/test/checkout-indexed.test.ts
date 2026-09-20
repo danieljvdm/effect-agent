@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import type { AiError } from "effect/unstable/ai";
 import { DecisionModel, LanguageModel } from "effect/unstable/ai";
 import { expectTypeOf } from "vite-plus/test";
@@ -70,16 +70,14 @@ it.effect(
 
       const selected = yield* chooseIndexed(input, targets, "jev").pipe(
         Effect.provideService(DecisionModel.DecisionModel, native),
-        Effect.provide(
-          Layer.succeed(
-            LanguageModel.LanguageModel,
-            yield* LanguageModel.make({
-              generateText: () => Effect.die("Unexpected text model"),
-              streamText: () => {
-                throw new Error("Unexpected stream");
-              },
-            }),
-          ),
+        Effect.provideService(
+          LanguageModel.LanguageModel,
+          yield* LanguageModel.make({
+            generateText: () => Effect.die("Unexpected text model"),
+            streamText: () => {
+              throw new Error("Unexpected stream");
+            },
+          }),
         ),
       );
 

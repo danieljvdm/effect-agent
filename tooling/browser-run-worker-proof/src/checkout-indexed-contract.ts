@@ -32,6 +32,7 @@ export const IndexedControl = Schema.Struct({
   readOnly: Schema.Boolean,
   href: Text,
   form: Text,
+  recipient: Text,
   autocomplete: Text,
   operations: Schema.Array(Operation),
   options: Schema.Array(
