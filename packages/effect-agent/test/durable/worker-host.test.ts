@@ -107,6 +107,8 @@ import {
   ThreadNotMaterialized,
   ThreadTail,
   ThreadStore,
+  ThreadStoreError,
+  type ThreadReadRequest,
 } from "../../src/durable/ThreadStore.ts";
 
 const sourceId = Schema.decodeSync(ThreadId)("source");
@@ -187,6 +189,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
     readonly deliveryLimits?: Partial<MessageDeliveryStoreLimits>;
     readonly maxStoredValueBytes?: number;
     readonly authorize?: (typeof WorkerHostAuthorizer.Service)["authorize"];
+    readonly beforeRead?: (request: ThreadReadRequest) => Effect.Effect<void, ThreadStoreError>;
     readonly sourceRevisions?: ReadonlyArray<{
       readonly definition: Agent.AnyDefinition;
       readonly digests: DefinitionDigests;
@@ -383,7 +386,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
                 return entry;
               }),
           );
-        }),
+        }).pipe(Stream.onStart(Effect.suspend(() => options.beforeRead?.(request) ?? Effect.void))),
       export: ({ threadId }) =>
         Effect.suspend(() => {
           checkThread(threadId);
@@ -2221,6 +2224,100 @@ layer(NodeCrypto.layer)((it) => {
         ).toEqual(next.receipt);
       }),
   );
+
+  it.effect("worker summaries retry a selected-read failure after a concurrent append", () =>
+    Effect.gen(function* () {
+      let onRead: Effect.Effect<void, ThreadStoreError> = Effect.void;
+      let selectedReads = 0;
+
+      const h = yield* harness({
+        beforeRead: (request) =>
+          Effect.suspend(() => {
+            if (!("selection" in request) || request.selection._tag !== "WorkerExecution")
+              return Effect.void;
+            selectedReads++;
+
+            return onRead;
+          }),
+      });
+
+      const first = yield* h.host.start(request("concurrent-summary"));
+      const receipt = first.delivery.receipt;
+
+      if (receipt === null) return yield* Effect.die("Expected an admitted worker input");
+      const runId = Schema.decodeSync(RunId)(`run:${receipt.submissionId}`);
+
+      onRead = Effect.sync(() => {
+        onRead = Effect.void;
+        h.push(
+          first.worker.threadId,
+          UserInputRecorded.make({
+            submissionId: receipt.submissionId,
+            kind: "user",
+            runId,
+            input: { text: "concurrent-summary" },
+          }),
+          "concurrent-input",
+        );
+      }).pipe(
+        Effect.andThen(
+          ThreadStoreError.make({ operation: "selected read", message: "Canonical tail changed" }),
+        ),
+      );
+
+      const summary = yield* h.host.summary({ worker: first.worker, target });
+
+      expect(summary.appliedInput).toMatchObject({
+        receipt,
+        messageId: first.delivery.message.messageId,
+        runId,
+      });
+      expect(summary.watermark.canonicalSequence).toBe(summary.appliedInput?.sequence);
+      expect(selectedReads).toBe(2);
+    }),
+  );
+
+  for (const watermark of ["unchanged", "unavailable"] as const)
+    it.effect(
+      `worker summaries preserve a selected-read error when the watermark is ${watermark}`,
+      () =>
+        Effect.gen(function* () {
+          let selectedReads = 0;
+
+          const readFailure = ThreadStoreError.make({
+            operation: "selected read",
+            message: "Canonical tail changed",
+          });
+
+          let onRead: Effect.Effect<void, ThreadStoreError> = readFailure;
+
+          const h = yield* harness({
+            beforeRead: (request) =>
+              Effect.suspend(() => {
+                if (!("selection" in request) || request.selection._tag !== "WorkerExecution")
+                  return Effect.void;
+                selectedReads++;
+
+                return onRead;
+              }),
+          });
+
+          const first = yield* h.host.start(request("failed-summary"));
+
+          if (watermark === "unavailable")
+            onRead = Effect.sync(() => h.logs.delete(first.worker.threadId)).pipe(
+              Effect.andThen(readFailure),
+            );
+
+          const failure = yield* h.host
+            .list({ delegationId: first.worker.delegationId, target, limit: 1 })
+            .pipe(Effect.flip);
+
+          expect(failure).toMatchObject({ operation: "list", reason: "storage" });
+          expect(failure.cause).toBe(readFailure);
+          expect(selectedReads).toBe(1);
+        }),
+    );
 
   it.effect("worker summaries remain active after the latest queued input is cancelled", () =>
     Effect.gen(function* () {

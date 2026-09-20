@@ -2186,7 +2186,27 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                   },
                   page: { limit: 2 },
                 })
-                .pipe(Stream.runCollect, Effect.mapError(storageFailure(operation)));
+                .pipe(
+                  Stream.runCollect,
+                  Effect.mapError(storageFailure(operation)),
+                  Effect.catch((error) =>
+                    Effect.gen(function* () {
+                      // An unavailable recheck cannot justify discarding the original error.
+                      const after = yield* tail().pipe(Effect.orElseSucceed(() => current));
+
+                      if (
+                        after !== undefined &&
+                        (current.tailSequence !== after.tailSequence ||
+                          current.tailDigest !== after.tailDigest)
+                      )
+                        return undefined;
+
+                      return yield* error;
+                    }),
+                  ),
+                );
+
+        if (records === undefined) continue;
 
         const applied = records.find((entry) => entry.record.payload._tag === "UserInputRecorded");
 
