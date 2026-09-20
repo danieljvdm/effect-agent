@@ -18,7 +18,7 @@ import {
 import * as Agent from "effect-agent/agent";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
-import { ThreadId } from "effect-agent/identifiers";
+import { ThreadId, ToolCallId } from "effect-agent/identifiers";
 import {
   MessageDeliveryFailpoint,
   MessageDeliveryFailpointError,
@@ -26,11 +26,12 @@ import {
 } from "effect-agent/message-delivery";
 import type { Receipt } from "effect-agent/receipt";
 import { DefinitionDigestInput } from "effect-agent/records";
+import { RunToolAuthorization } from "effect-agent/run-options";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentHost } from "effect-agent/subagent-host";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
+import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { readOutstanding, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { WorkerError } from "effect-agent/worker";
+import { WorkerError, type WorkerSummary } from "effect-agent/worker";
 import { WorkerConcurrencyResolver, WorkerHostAuthorizer } from "effect-agent/worker-host";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
@@ -1141,6 +1142,267 @@ it.effect(
           disposition: "assignment-complete",
         });
         expect(after.state).toBe("idle");
+      }),
+    ).pipe(Effect.provide(NodeFileSystem.layer)),
+  15_000,
+);
+
+it.effect.each([false, true])(
+  "drains approval-held worker corrections before the next model request and fences newer input (late=%s)",
+  (late) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-approval-input-" });
+        const nextModel = yield* Deferred.make<void>();
+        const releaseModel = yield* Deferred.make<void>();
+        const prompts: Array<ReadonlyArray<string>> = [];
+        const consentCalls: Array<string> = [];
+        let dispatches = 0;
+        let latest: Effect.Effect<WorkerSummary> = Effect.die("Worker not started");
+        const corrections = ["clarification", "first email", "corrected email"];
+        const consentId = Schema.decodeSync(ToolCallId)("consent-1");
+
+        const toolkit = Toolkit.make(
+          Tool.make("consent", {
+            parameters: Schema.Struct({ purpose: Schema.String }),
+            success: Schema.String,
+            needsApproval: true,
+          }),
+          Tool.make("navigate", { parameters: Schema.Struct({}), success: Schema.String }),
+        );
+
+        const child = Agent.withModel(
+          Agent.make("approval-input-worker", {
+            input: target.definition.input,
+            inputPrompt: ({ question }) => Effect.succeed(question),
+            output: target.definition.output,
+            instructions: "Request consent, then navigate using the latest instructions.",
+            toolkit,
+            policy: { maxTurns: 5, maxToolCalls: 3, maxDuration: "1 minute", toolConcurrency: 1 },
+          }),
+          Model.make(
+            "scripted",
+            "approval-input",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: ({ prompt }) =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      const turn = prompts.length;
+
+                      prompts.push(
+                        prompt.content.flatMap((message) =>
+                          message.role === "user"
+                            ? message.content.flatMap((part) =>
+                                part.type === "text" ? [part.text] : [],
+                              )
+                            : [],
+                        ),
+                      );
+                      if (turn === 1) {
+                        yield* Deferred.succeed(nextModel, undefined);
+                        yield* Deferred.await(releaseModel);
+                      }
+
+                      return Stream.fromIterable<Response.StreamPartEncoded>(
+                        turn < 2
+                          ? [
+                              {
+                                type: "tool-call",
+                                id: turn === 0 ? consentId : "navigate-1",
+                                name: turn === 0 ? "consent" : "navigate",
+                                params: turn === 0 ? { purpose: "original request" } : {},
+                                providerExecuted: false,
+                              },
+                              {
+                                type: "finish",
+                                reason: "tool-calls",
+                                usage: { inputTokens: {}, outputTokens: {} },
+                              },
+                            ]
+                          : parts,
+                      );
+                    }),
+                  ),
+              }),
+            ),
+          ),
+        );
+
+        const handlers = toolkit.toLayer({
+          consent: ({ purpose }) =>
+            Effect.sync(() => {
+              consentCalls.push(purpose);
+
+              return "approved";
+            }),
+          navigate: () =>
+            Effect.sync(() => {
+              dispatches++;
+
+              return "navigated";
+            }),
+        });
+
+        const research = Subagent.make("research", {
+          target: child.definition,
+          policy: Subagent.SubagentPolicy.make({
+            maxChildren: 5,
+            maxConcurrency: 2,
+            maxTurns: 3,
+            maxToolCalls: 3,
+            maxDuration: "10 seconds",
+          }),
+        });
+
+        const context = yield* Layer.build(
+          NodeHost.NodeDurableHost.layerRegistered(
+            [
+              { agent: source, definitions },
+              { agent: child, definitions },
+            ],
+            {
+              filename: `${directory}/runtime.sqlite`,
+              deploymentId: "approval-input-v1",
+              producerId: "approval-input-node",
+              toolAuthorization: Layer.succeed(RunToolAuthorization, {
+                authorize: ({ call }) =>
+                  Effect.gen(function* () {
+                    if (call.toolName === "consent") return { _tag: "allowed" as const };
+                    const snapshot = yield* latest;
+
+                    return snapshot.acceptedInput?.messageId === snapshot.appliedInput?.messageId
+                      ? { _tag: "allowed" as const }
+                      : { _tag: "denied" as const, reason: "Newer worker input is pending" };
+                  }),
+              }),
+            },
+          ).pipe(Layer.provide([authority, handlers])),
+        );
+
+        const runtime = Context.get(context, DurableAgentRuntime);
+        const history = Context.get(context, ThreadStore);
+
+        yield* runtime.submitRegistered(
+          source,
+          { question: "launch" },
+          { threadId: sourceThreadId, principal, idempotencyKey: key("source") },
+        );
+        yield* runtime.processThreadResolved(sourceThreadId);
+        const owner = yield* runtime.workerHost({ sourceThreadId, principal });
+
+        const start = yield* withFacet(
+          owner,
+          Subagent.start(research, { question: "original" }, { idempotencyKey: key("first") }),
+        );
+
+        latest = withFacet(owner, Subagent.inspect(research, start.worker)).pipe(Effect.orDie);
+        const receipt = start.delivery.receipt;
+
+        if (receipt === null) return yield* Effect.die("Expected an admitted worker");
+        yield* runtime.processThreadResolved(start.worker.threadId);
+        expect(prompts).toEqual([["original"]]);
+        expect(consentCalls).toEqual([]);
+
+        const followUp = (question: string) =>
+          withFacet(
+            owner,
+            Subagent.followUp(
+              research,
+              start.worker,
+              { question },
+              { idempotencyKey: key(question) },
+            ),
+          );
+
+        const updates = yield* Effect.forEach(corrections, followUp);
+        const held = yield* latest;
+
+        expect(updates.every((update) => update.receipt !== null)).toBe(true);
+        expect(held.acceptedInput?.messageId).toBe(updates[2]?.message.messageId);
+        expect(held.appliedInput?.messageId).toBe(start.delivery.message.messageId);
+        yield* runtime.resolveApproval(
+          ApprovalDecisionCommand.make({
+            submissionId: receipt.submissionId,
+            toolCallId: consentId,
+            decision: "approved",
+            resolver: "operator",
+            reason: "Approve the original consent request",
+          }),
+        );
+
+        const resumed = yield* runtime
+          .processThreadResolved(start.worker.threadId)
+          .pipe(Effect.forkChild);
+
+        yield* Deferred.await(nextModel);
+        expect(prompts).toEqual([["original"], ["original", ...corrections]]);
+        expect(consentCalls).toEqual(["original request"]);
+        const drained = yield* latest;
+
+        expect(drained.appliedInput?.messageId).toBe(updates[2]?.message.messageId);
+        expect(drained.run?.runId).toBe(held.run?.runId);
+        if (late) {
+          const newer = yield* followUp("arrived after drain");
+          const pending = yield* latest;
+
+          expect(pending.acceptedInput?.messageId).toBe(newer.message.messageId);
+          expect(pending.appliedInput).toEqual(drained.appliedInput);
+        }
+        yield* Deferred.succeed(releaseModel, undefined);
+        yield* Fiber.join(resumed);
+        expect(dispatches).toBe(late ? 0 : 1);
+        expect(consentCalls).toEqual(["original request"]);
+
+        const log = yield* history.export(
+          ThreadExportRequest.make({ threadId: start.worker.threadId }),
+        );
+
+        const payloads = log.records.map(({ record }) => record.payload);
+        const inputs = payloads.filter((payload) => payload._tag === "UserInputRecorded");
+
+        expect(inputs).toHaveLength(late ? 5 : 4);
+        expect(inputs.slice(0, 4).map((input) => input.submissionId)).toEqual([
+          receipt.submissionId,
+          ...updates.map((update) => update.receipt?.submissionId),
+        ]);
+        expect(inputs.slice(0, 4).every((input) => input.runId === held.run?.runId)).toBe(true);
+        expect(payloads.filter((payload) => payload._tag === "ToolApprovalRequested")).toHaveLength(
+          1,
+        );
+        expect(payloads.filter((payload) => payload._tag === "ToolApprovalDecided")).toMatchObject([
+          { toolCallId: consentId, decision: "approved" },
+        ]);
+        expect(
+          payloads.findIndex((payload) => payload._tag === "ToolApprovalDecided"),
+        ).toBeLessThan(
+          payloads.findIndex(
+            (payload) =>
+              payload._tag === "UserInputRecorded" &&
+              payload.submissionId === updates[0]?.receipt?.submissionId,
+          ),
+        );
+        expect(
+          payloads.filter(
+            (payload) => payload._tag === "ToolCallPrepared" && payload.toolCallId === consentId,
+          ),
+        ).toHaveLength(1);
+        expect(payloads.filter((payload) => payload._tag === "RunStarted")).toHaveLength(
+          late ? 2 : 1,
+        );
+
+        const sourceLog = yield* history.export(
+          ThreadExportRequest.make({ threadId: sourceThreadId }),
+        );
+
+        expect(
+          sourceLog.records.flatMap(({ record }) =>
+            record.payload._tag === "UserInputRecorded" ? [record.payload.input] : [],
+          ),
+        ).toEqual([{ question: "launch" }]);
       }),
     ).pipe(Effect.provide(NodeFileSystem.layer)),
   15_000,

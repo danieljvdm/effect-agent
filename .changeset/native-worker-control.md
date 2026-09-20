@@ -8,4 +8,4 @@
 "@effect-agent/testing": patch
 ---
 
-Add durable worker-wide stop and indexed worker summaries with exact accepted and applied input identities. Reconcile retained launches across Runs before fresh input preparation.
+Add durable worker-wide stop and indexed summaries with exact accepted and applied input identities. Reconcile retained launches across Runs and drain up to 32 accepted worker inputs at each safe steering boundary.

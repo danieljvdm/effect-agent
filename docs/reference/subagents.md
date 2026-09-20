@@ -390,7 +390,12 @@ Receipt and preserves `JoinedToHost` if it joined another input's Run. Cancellat
 close the worker or cancel an entire work tree.
 
 Inputs can join an active Run at a safe boundary or start a later Run. Callers use the same
-operation for both. Parent completion or abort leaves background work running; attached
+operation for both. At each safe steering boundary, the native worker drains up to 32 ready inputs
+in FIFO order before the next model request. An approved, retained Tool batch resumes before that
+boundary with its original arguments. Larger backlogs and inputs accepted after the drain still
+require the application's accepted-versus-applied check before external actions.
+
+Parent completion or abort leaves background work running; attached
 children retain their existing cancellation and join semantics. Worker provenance, authority,
 and reservations survive later coordinator Runs and host reconstruction. The admission ledger
 atomically prevents replacing an ordinary Thread lane with a worker lane or changing its origin.
