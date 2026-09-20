@@ -57,7 +57,11 @@ export class ProtectedTransportError extends Schema.TaggedError<ProtectedTranspo
 /** Per-write evidence authority, provided by the policy immediately around a transport fill. */
 export class ProtectedBrowserDispatch extends Context.Service<
   ProtectedBrowserDispatch,
-  { readonly mark: Effect.Effect<void> }
+  {
+    readonly mark: Effect.Effect<void>;
+    /** Only an acknowledged reply before assignment may restore the preceding dispatch evidence. */
+    readonly confirmNoWrite: Effect.Effect<void>;
+  }
 >()("@effect-agent/platform-cloudflare/ProtectedBrowserDispatch") {}
 
 /** Decoded adapter boundary. SDK exceptions and page diagnostics never cross this port. */
@@ -577,12 +581,17 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
             target: control.target,
             role: control.role,
           });
+          const previousDispatch = dispatch;
+
           yield* publicFailure(
             driver.fill(decoded.ref, control.role, Redacted.make(decoded.value)),
           ).pipe(
             Effect.provideService(ProtectedBrowserDispatch, {
               mark: Effect.sync(() => {
                 dispatch = "possibly-dispatched";
+              }),
+              confirmNoWrite: Effect.sync(() => {
+                dispatch = previousDispatch;
               }),
             }),
           );
@@ -726,6 +735,8 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
             const value = secretFor(material, field.role);
 
             if (value === undefined) return yield* fail("missing-credential");
+            const previousDispatch = dispatch;
+
             observation = "protected";
             yield* publicFailure(driver.fill(field.ref, field.role, value)).pipe(
               Effect.provideService(ProtectedBrowserDispatch, {
@@ -733,6 +744,10 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
                   dispatch = "possibly-dispatched";
                   if (!exposures.some((target) => sameTarget(target, offer.target)))
                     exposures.push(offer.target);
+                }),
+                // A refused later field cannot erase a completed earlier field or its exposure.
+                confirmNoWrite: Effect.sync(() => {
+                  dispatch = previousDispatch;
                 }),
               }),
             );

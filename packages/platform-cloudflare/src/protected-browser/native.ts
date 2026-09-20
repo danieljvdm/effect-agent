@@ -36,9 +36,12 @@ const Description = Schema.Struct({
   action: Schema.String.check(Schema.isMaxLength(maxAttributeLength)),
   label: Schema.String.check(Schema.isMaxLength(200)),
   checked: Schema.optionalKey(Schema.Boolean),
+  options: ProtectedBrowserControl.fields.options,
+  truncated: Schema.optionalKey(Schema.Boolean),
 });
 
 const Descriptions = Schema.Array(Schema.NullOr(Description)).check(Schema.isMaxLength(65));
+const FillResult = Schema.Literals([true, false, "unsupported-before-write", "unsupported"]);
 
 interface FrameState {
   readonly frame: Frame;
@@ -367,6 +370,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
           const desc = descriptions[index];
 
           if (!desc) continue;
+          if (desc.truncated) truncated = true;
           if (discovered.length === 64) {
             truncated = true;
             break;
@@ -387,6 +391,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
             role: desc.role,
             label: desc.label,
             ...(desc.checked === undefined ? {} : { checked: desc.checked }),
+            ...(desc.options === undefined ? {} : { options: desc.options }),
             ...(desc.role === "link" ? { url: desc.action } : {}),
             target: CredentialTarget.make({
               topOrigin: before.topOrigin,
@@ -439,7 +444,7 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
       // CDP dispatch may mutate before its reply is lost, so uncertainty starts here.
       yield* dispatch.mark;
 
-      const filled = yield* remote("protected.fill", () =>
+      const raw = yield* remote("protected.fill", () =>
         state.frame.handle.evaluate(
           (held, index, expectedRole, secret) => {
             if (typeof held !== "object" || held === null) return false;
@@ -452,8 +457,15 @@ export const makeProtectedNativeTransport = Effect.fn("ProtectedNativeTransport.
         ),
       );
 
+      const filled = yield* decode(FillResult, raw);
+
+      if (filled === false || filled === "unsupported-before-write") {
+        yield* dispatch.confirmNoWrite;
+
+        return yield* transportError(filled === false ? "stale-reference" : "unsupported");
+      }
+
       if (filled === "unsupported") return yield* transportError("unsupported");
-      if (filled !== true) return yield* transportError("stale-reference");
     }),
     click: Effect.fn("ProtectedNativeTransport.click")(function* (ref) {
       const state = yield* get(ref);
