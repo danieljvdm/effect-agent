@@ -13,6 +13,7 @@ import {
   AgentOutput,
   AgentRun,
   BrowserObservation,
+  CheckoutSpans,
   Control,
   Decision,
   failure,
@@ -31,6 +32,12 @@ import {
   ShopAction,
   transition,
 } from "./checkout-store.ts";
+import {
+  CheckoutTelemetry,
+  makeTelemetry,
+  measured,
+  instrumentModels,
+} from "./checkout-telemetry.ts";
 
 export interface CheckoutEnv {
   CHECKOUTS: DurableObjectNamespace<CheckoutRun>;
@@ -138,6 +145,7 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
       outputs: this.read("outputs", Outputs),
       runs: this.read("runs", Runs),
       toolCalls: this.read("calls", Calls),
+      ...(this.exists("spans") ? { spans: this.read("spans", CheckoutSpans) } : {}),
     });
   }
 
@@ -148,7 +156,7 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
       const sessions = yield* BrowserSessions;
       const reference = this.read("reference", Reference);
 
-      yield* sessions.close(reference.sessionId);
+      yield* measured("close", "session.close", sessions.close(reference.sessionId));
     }
     this.updateControl({ closed: true });
     yield* rpc(() => this.ctx.storage.deleteAlarm());
@@ -166,15 +174,19 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
 
     if (!this.exists("reference")) {
       yield* rpc(() => this.ctx.storage.setAlarm(Date.now() + 30_000));
-      yield* sessions.create(
-        { maxElapsedMillis: 1_200_000, commandTimeoutMillis: 30_000 },
-        (reference) =>
-          Effect.sync(() =>
-            this.ctx.storage.transactionSync(() => {
-              this.write("reference", Reference, reference);
-              this.write("identity", Schema.String, Redacted.value(reference.targetId));
-            }),
-          ),
+      yield* measured(
+        "create",
+        "session.create",
+        sessions.create(
+          { maxElapsedMillis: 1_200_000, commandTimeoutMillis: 30_000 },
+          (reference) =>
+            Effect.sync(() =>
+              this.ctx.storage.transactionSync(() => {
+                this.write("reference", Reference, reference);
+                this.write("identity", Schema.String, Redacted.value(reference.targetId));
+              }),
+            ),
+        ),
       );
     }
 
@@ -215,24 +227,27 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
       }),
     });
 
-    const result = yield* AgentRuntime.run(buyer, message).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          InMemory.layer,
-          buyerTools({
-            reference: this.read("reference", Reference),
-            shopOrigin: origin,
-            processorOrigin: this.env.PROCESSOR_ORIGIN,
-          }).pipe(Layer.provide(owner)),
-          OpenAiLanguageModel.model(this.env.CHECKOUT_MODEL, { max_output_tokens: 4_096 }).pipe(
-            Layer.provide(
-              OpenAiClient.layer({ apiKey: Redacted.make(this.env.OPENAI_API_KEY) }).pipe(
-                Layer.provide(FetchHttpClient.layer),
+    const result = yield* instrumentModels(
+      AgentRuntime.run(buyer, message).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            InMemory.layer,
+            buyerTools({
+              reference: this.read("reference", Reference),
+              shopOrigin: origin,
+              processorOrigin: this.env.PROCESSOR_ORIGIN,
+            }).pipe(Layer.provide(owner)),
+            OpenAiLanguageModel.model(this.env.CHECKOUT_MODEL, { max_output_tokens: 4_096 }).pipe(
+              Layer.provide(
+                OpenAiClient.layer({ apiKey: Redacted.make(this.env.OPENAI_API_KEY) }).pipe(
+                  Layer.provide(FetchHttpClient.layer),
+                ),
               ),
             ),
           ),
         ),
       ),
+      this.env.CHECKOUT_MODEL,
     );
 
     this.write("runs", Runs, [
@@ -288,6 +303,7 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
         this.write("outputs", Outputs, []);
         this.write("runs", Runs, []);
         this.write("calls", Calls, []);
+        this.write("spans", CheckoutSpans, []);
         this.write("cookie", Schema.String, crypto.randomUUID());
       });
 
@@ -367,7 +383,11 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
     if (operation === "run") {
       const input = yield* body(Start);
 
-      const output = yield* this.run(input.message, new URL(request.url).origin).pipe(
+      const output = yield* measured(
+        "resume",
+        "agent.run",
+        this.run(input.message, new URL(request.url).origin),
+      ).pipe(
         Effect.onExit((exit) =>
           Exit.isFailure(exit)
             ? Effect.sync(() =>
@@ -495,7 +515,30 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
 
     return Effect.runPromise(
       (surface === "_control"
-        ? this.controlRequest(request, operation)
+        ? Effect.gen({ self: this }, function* () {
+            // Each HTTP request gets a distinct clock domain, including closure and approval.
+            const telemetry = yield* makeTelemetry(
+              this.exists("spans") ? this.read("spans", CheckoutSpans).length + 1 : 0,
+              (span) => {
+                if (!this.exists("spans")) return;
+                const spans = this.read("spans", CheckoutSpans);
+
+                this.write(
+                  "spans",
+                  CheckoutSpans,
+                  spans.some((item) => item.id === span.id)
+                    ? spans.map((item) => (item.id === span.id ? span : item))
+                    : [...spans, span],
+                );
+              },
+            );
+
+            return yield* (
+              operation === "approve"
+                ? measured("approval", "approve", this.controlRequest(request, operation))
+                : this.controlRequest(request, operation)
+            ).pipe(Effect.provideService(CheckoutTelemetry, telemetry));
+          })
         : this.storefront(request, operation)
       ).pipe(
         Effect.scoped,

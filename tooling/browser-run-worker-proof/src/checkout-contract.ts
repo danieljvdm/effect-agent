@@ -115,6 +115,39 @@ export const AgentRun = Schema.Struct({
   usage: Schema.optionalKey(RunTotals),
 });
 
+/** Durations use one request-local monotonic clock; concurrent/nested spans are not additive. */
+export const CheckoutSpan = Schema.Struct({
+  id: Schema.String,
+  request: Schema.Natural,
+  turn: Schema.optionalKey(Schema.Natural),
+  phase: Schema.Literals([
+    "model",
+    "decision",
+    "text",
+    "browser",
+    "observation",
+    "wait",
+    "attach",
+    "create",
+    "close",
+    "approval",
+    "resume",
+  ]),
+  operation: Text,
+  offsetMillis: Schema.Finite,
+  elapsedMillis: Schema.optionalKey(Schema.Finite),
+  outcome: Schema.Literals(["running", "completed", "failure", "defect", "interrupted"]),
+  error: Schema.optionalKey(Text),
+  requestedModel: Schema.optionalKey(Text),
+  resolvedModel: Schema.optionalKey(Text),
+  tools: Schema.optionalKey(Schema.Array(Text)),
+  inputTokens: Schema.optionalKey(Schema.Natural),
+  outputTokens: Schema.optionalKey(Schema.Natural),
+  observationBytes: Schema.optionalKey(Schema.Natural),
+});
+
+export const CheckoutSpans = Schema.Array(CheckoutSpan).check(Schema.isMaxLength(8_000));
+
 export const RunEvidence = Schema.Struct({
   shop: ShopState,
   control: Schema.Struct(Struct.omit(Control.fields, ["handoffId"])),
@@ -122,6 +155,7 @@ export const RunEvidence = Schema.Struct({
   observations: Schema.Array(BrowserObservation).check(Schema.isMaxLength(150)),
   outputs: Schema.Array(AgentOutput).check(Schema.isMaxLength(8)),
   runs: Schema.optionalKey(Schema.Array(AgentRun).check(Schema.isMaxLength(8))),
+  spans: Schema.optionalKey(CheckoutSpans),
   toolCalls: Schema.Array(Schema.Struct({ name: Text, outcome: Text })).check(
     Schema.isMaxLength(300),
   ),
@@ -158,6 +192,17 @@ export const Report = Schema.Struct({
     Schema.Struct({ concurrency: CheckoutConcurrency, startIntervalMillis: StartIntervalMillis }),
   ),
   timings: Schema.optionalKey(Timings),
+  measurement: Schema.optionalKey(
+    Schema.Struct({
+      version: Schema.Literal(1),
+      clock: Schema.Literal("monotonic-per-request"),
+      queue: Schema.Literal("excluded-from-case-included-in-matrix"),
+      caseBoundary: Schema.Literal("before-seed-through-exact-browser-closure"),
+      browserProtocolCalls: Schema.Literal("unavailable"),
+      cost: Schema.Literal("unpriced"),
+      maxOutputTokens: Schema.Natural,
+    }),
+  ),
   bindingProof: Schema.Boolean,
   suiteFailure: Schema.NullOr(Schema.String),
   configuration: Schema.Struct({

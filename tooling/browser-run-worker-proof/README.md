@@ -105,6 +105,20 @@ report or model history. Automated runs never wait for an operator and do not es
 The ignored `tooling/browser-run-worker-proof/.checkout-proof/<run>/report.json` records model,
 source commit/dirty state, policy, selected profile, completion rate, failures, observations, tool
 outcomes, model usage and finish reasons, server orders, attempt ledger and cleanup result.
+
+Instrumented reports retain request-local monotonic spans for model calls, browser dispatch,
+observations, waits, attachment, approval/resume and exact closure. Each browser span identifies
+the model turn that requested it; model spans retain requested/resolved model IDs, tool names
+and reported tokens. An observation-only turn can therefore be counted independently from an
+observation tool call. Observation sizes are UTF-8 bytes. Missing usage and browser protocol
+counts remain unavailable; provider costs are unpriced, not zero.
+
+Case elapsed time starts before seeding and ends after exact browser closure, including approval
+requests and cleanup. Admission queueing is excluded from cases and included in matrix time.
+Deployment, readiness, the binding proof and retirement have separate totals. Spans may nest or
+overlap: do not add their durations to estimate wall time. Timing adds two synchronous SQLite
+writes per span and native response metadata collection; hosted comparisons must use the same
+instrumentation. Running spans survive process loss; interruption retains finalizer outcomes.
 It also records concurrency, admission spacing, each case's elapsed time (including browser closure),
 and deployment, readiness, binding-proof, matrix, retirement and total durations. Concurrent case
 durations overlap and must not be summed as wall time. These timers do not separate model latency

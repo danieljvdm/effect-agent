@@ -25,6 +25,7 @@ import {
   policy,
   type RunEvidence,
 } from "./checkout-contract.ts";
+import { measured } from "./checkout-telemetry.ts";
 
 const Selector = Schema.NonEmptyString.check(Schema.isMaxLength(2_048));
 const Target = { frame: Schema.Array(Selector).check(Schema.isMaxLength(4)), selector: Selector };
@@ -162,7 +163,12 @@ export const buyerTools = (options: {
     Effect.gen(function* () {
       const host = yield* CheckoutOwner;
       const sessions = yield* BrowserSessions;
-      const session = yield* sessions.attach(options.reference);
+
+      const session = yield* measured(
+        "attach",
+        "session.attach",
+        sessions.attach(options.reference),
+      );
 
       const allowed = (url: string) => {
         try {
@@ -174,8 +180,18 @@ export const buyerTools = (options: {
 
       const authorize = host.authorize;
 
-      const native = <A>(name: string, action: (page: Page) => Promise<A>) =>
-        session.run(authorize, action).pipe(
+      const native = <A>(
+        name: string,
+        action: (page: Page) => Promise<A>,
+        resultDetails?: (value: A) => { observationBytes: number },
+      ) =>
+        measured(
+          name === "observe" ? "observation" : "browser",
+          name,
+          session.run(authorize, action),
+          {},
+          resultDetails,
+        ).pipe(
           Effect.tap(() => host.record({ name, outcome: "completed" })),
           Effect.tapError((error) =>
             host.record({
@@ -232,77 +248,86 @@ export const buyerTools = (options: {
       return tools
         .toLayer({
           observe: () =>
-            native("observe", async (page) => {
-              const frames = [];
+            native(
+              "observe",
+              async (page) => {
+                const frames = [];
 
-              for (const frame of page.frames()) {
-                if (!allowed(frame.url())) continue;
-                let visible = true;
+                for (const frame of page.frames()) {
+                  if (!allowed(frame.url())) continue;
+                  let visible = true;
 
-                // A collapsed disclosure can keep its frame loaded without exposing its controls.
-                for (
-                  let ancestor: Frame | null = frame;
-                  ancestor !== null && ancestor !== page.mainFrame();
-                  ancestor = ancestor.parentFrame()
-                ) {
-                  const element = await ancestor.frameElement();
+                  // A collapsed disclosure can keep its frame loaded without exposing its controls.
+                  for (
+                    let ancestor: Frame | null = frame;
+                    ancestor !== null && ancestor !== page.mainFrame();
+                    ancestor = ancestor.parentFrame()
+                  ) {
+                    const element = await ancestor.frameElement();
 
-                  if (element === null) {
-                    visible = false;
-                    break;
+                    if (element === null) {
+                      visible = false;
+                      break;
+                    }
+                    try {
+                      visible = await element.evaluate((node) => {
+                        const bounds = node.getBoundingClientRect();
+
+                        return (
+                          node.checkVisibility({
+                            contentVisibilityAuto: true,
+                            opacityProperty: true,
+                            visibilityProperty: true,
+                          }) &&
+                          bounds.width > 0 &&
+                          bounds.height > 0
+                        );
+                      });
+                    } finally {
+                      await element.dispose();
+                    }
+                    if (!visible) break;
                   }
-                  try {
-                    visible = await element.evaluate((node) => {
-                      const bounds = node.getBoundingClientRect();
+                  if (!visible) continue;
 
-                      return (
-                        node.checkVisibility({
-                          contentVisibilityAuto: true,
-                          opacityProperty: true,
-                          visibilityProperty: true,
-                        }) &&
-                        bounds.width > 0 &&
-                        bounds.height > 0
-                      );
+                  const html = await frame.$eval("body", (body) => {
+                    const snapshot = body.cloneNode(true);
+
+                    if (!(snapshot instanceof HTMLElement))
+                      throw new Error("Missing document body");
+                    const controls = body.querySelectorAll("input,select,textarea");
+
+                    snapshot.querySelectorAll("input,select,textarea").forEach((copy, index) => {
+                      const live = controls[index];
+
+                      if (live instanceof HTMLInputElement && copy instanceof HTMLInputElement) {
+                        copy.setAttribute("value", live.value);
+                        copy.toggleAttribute("checked", live.checked);
+                      } else if (
+                        live instanceof HTMLSelectElement &&
+                        copy instanceof HTMLSelectElement
+                      ) {
+                        for (const option of copy.options)
+                          option.toggleAttribute("selected", option.value === live.value);
+                      } else if (live instanceof HTMLTextAreaElement) copy.textContent = live.value;
                     });
-                  } finally {
-                    await element.dispose();
-                  }
-                  if (!visible) break;
-                }
-                if (!visible) continue;
 
-                const html = await frame.$eval("body", (body) => {
-                  const snapshot = body.cloneNode(true);
-
-                  if (!(snapshot instanceof HTMLElement)) throw new Error("Missing document body");
-                  const controls = body.querySelectorAll("input,select,textarea");
-
-                  snapshot.querySelectorAll("input,select,textarea").forEach((copy, index) => {
-                    const live = controls[index];
-
-                    if (live instanceof HTMLInputElement && copy instanceof HTMLInputElement) {
-                      copy.setAttribute("value", live.value);
-                      copy.toggleAttribute("checked", live.checked);
-                    } else if (
-                      live instanceof HTMLSelectElement &&
-                      copy instanceof HTMLSelectElement
-                    ) {
-                      for (const option of copy.options)
-                        option.toggleAttribute("selected", option.value === live.value);
-                    } else if (live instanceof HTMLTextAreaElement) copy.textContent = live.value;
+                    return snapshot.innerHTML
+                      .replace(/<(script|style|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+                      .slice(0, 24_000);
                   });
 
-                  return snapshot.innerHTML
-                    .replace(/<(script|style|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
-                    .slice(0, 24_000);
-                });
+                  frames.push({ url: frame.url(), html });
+                }
 
-                frames.push({ url: frame.url(), html });
-              }
-
-              return { url: page.url(), frames };
-            }).pipe(Effect.tap(host.observe)),
+                return { url: page.url(), frames };
+              },
+              (value) => ({
+                observationBytes: new TextEncoder().encode(
+                  Schema.encodeSync(Schema.fromJsonString(BrowserObservation))(value),
+                ).byteLength,
+              }),
+            ).pipe(Effect.tap(host.observe)),
           navigate: ({ url }) =>
             allowed(url)
               ? native("navigate", async (page) => {
@@ -325,10 +350,13 @@ export const buyerTools = (options: {
             native("select", async (page) => {
               await (await inFrame(page, frame)).select(selector, value);
             }),
-          wait: () => authorize.pipe(Effect.andThen(Effect.sleep("700 millis"))),
+          wait: () =>
+            measured("wait", "wait", authorize.pipe(Effect.andThen(Effect.sleep("700 millis")))),
           fill_credential: ({ request }) =>
             authorize.pipe(
-              Effect.andThen(session.fillCredential(request)),
+              Effect.andThen(
+                measured("browser", "fill_credential", session.fillCredential(request)),
+              ),
               Effect.tap(() => host.record({ name: "fill_credential", outcome: request.kind })),
               Effect.tapError((error) =>
                 host.record({
@@ -340,7 +368,8 @@ export const buyerTools = (options: {
                 }),
               ),
             ),
-          request_approval: () => authorize.pipe(Effect.andThen(host.approval)),
+          request_approval: () =>
+            measured("approval", "request_approval", authorize.pipe(Effect.andThen(host.approval))),
           request_human: () => authorize.pipe(Effect.andThen(host.human)),
         })
         .pipe(Layer.provideMerge(Layer.succeed(BrowserCredentialAccess, access)));
