@@ -55,7 +55,7 @@ export interface PostgresStorageOptions {
   readonly schema?: string | undefined;
   /** Journal observation polling interval in milliseconds. Defaults to 25. */
   readonly observationPollInterval?: number | undefined;
-  /** Positive writer-lock timeout in milliseconds. Defaults to 5,000; zero disables PostgreSQL's bound. */
+  /** Positive writer-lock timeout in milliseconds. Defaults to 5,000. */
   readonly lockTimeout?: number | undefined;
   /** Ownership lease in milliseconds. Defaults to the SubmissionLedger's lease duration. */
   readonly ownershipLeaseDuration?: number | undefined;
