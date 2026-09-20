@@ -66,31 +66,18 @@ export class CheckoutReport extends Context.Service<
   }
 }
 
-/** Bound whole cases, pace their admission, and join every child before stage retirement. */
-export const runCheckoutCases = Effect.fnUntraced(function* <A, B, E, R>(
-  cases: ReadonlyArray<A>,
-  run: (item: A) => Effect.Effect<B, E, R>,
-  options: { readonly concurrency: number; readonly startIntervalMillis: number },
-) {
+/** Space admissions without holding the permit for an entire checkout. */
+export const makeCaseAdmission = Effect.fnUntraced(function* (startIntervalMillis: number) {
   const starts = yield* Semaphore.make(1);
   let nextStart = 0;
 
-  return yield* Effect.forEach(
-    cases,
-    (item) =>
-      Effect.gen(function* () {
-        yield* starts.withPermit(
-          Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis;
+  return starts.withPermit(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
 
-            yield* Effect.sleep(Math.max(0, nextStart - now));
-            nextStart = (yield* Clock.currentTimeMillis) + options.startIntervalMillis;
-          }),
-        );
-
-        return yield* run(item);
-      }),
-    { concurrency: options.concurrency },
+      yield* Effect.sleep(Math.max(0, nextStart - now));
+      nextStart = (yield* Clock.currentTimeMillis) + startIntervalMillis;
+    }),
   );
 });
 

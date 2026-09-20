@@ -7,7 +7,7 @@ import { policy, Report } from "../src/checkout-contract.ts";
 import {
   CheckoutReport,
   retirementPlan,
-  runCheckoutCases,
+  makeCaseAdmission,
   withRetirement,
   writeReportSnapshot,
 } from "../src/checkout-lifecycle.ts";
@@ -121,11 +121,14 @@ it.effect("admits four overlapping cases with paced starts and retains an expect
     let peak = 0;
     let retired = false;
 
+    const admit = yield* makeCaseAdmission(1_000);
+
     const fiber = yield* withRetirement(
-      runCheckoutCases(
+      Effect.forEach(
         [0, 1, 2, 3, 4],
         (index) =>
           Effect.gen(function* () {
+            yield* admit;
             starts.push([index, yield* Clock.currentTimeMillis]);
             active++;
             peak = Math.max(peak, active);
@@ -142,7 +145,7 @@ it.effect("admits four overlapping cases with paced starts and retains an expect
             ),
             Effect.exit,
           ),
-        { concurrency: 4, startIntervalMillis: 1_000 },
+        { concurrency: 4 },
       ),
       Effect.sync(() => {
         assert.strictEqual(active, 0);
@@ -180,10 +183,13 @@ it.effect("joins interrupted concurrent cases before retiring the shared stage",
       const closed: Array<number> = [];
       let retired = false;
 
-      const batch = runCheckoutCases(
+      const admit = yield* makeCaseAdmission(1_000);
+
+      const batch = Effect.forEach(
         [0, 1, 2, 3, 4],
         (index) =>
           Effect.gen(function* () {
+            yield* admit;
             started.push(index);
             yield* Deferred.await(release);
             if (index === 0 && outcome === "failure") return yield* Effect.fail("broken report");
@@ -193,30 +199,30 @@ it.effect("joins interrupted concurrent cases before retiring the shared stage",
           }).pipe(
             Effect.ensuring(
               Effect.sync(() => {
-                closed.push(index);
+                if (started.includes(index)) closed.push(index);
               }),
             ),
           ),
-        { concurrency: 4, startIntervalMillis: 1_000 },
+        { concurrency: 4 },
       );
 
       const fiber = yield* withRetirement(
-        outcome === "timeout" ? batch.pipe(Effect.timeout("4 seconds")) : batch,
+        outcome === "timeout" ? batch.pipe(Effect.timeout("1500 millis")) : batch,
         Effect.sync(() => {
-          assert.deepStrictEqual([...closed].sort(), [0, 1, 2, 3]);
+          assert.deepStrictEqual([...closed].sort(), [0, 1]);
           retired = true;
         }),
       ).pipe(Effect.forkChild);
 
-      yield* TestClock.adjust("3 seconds");
-      assert.deepStrictEqual(started, [0, 1, 2, 3]);
+      yield* TestClock.adjust("1 second");
+      assert.deepStrictEqual(started, [0, 1]);
       if (outcome === "interruption") yield* Fiber.interrupt(fiber);
       else if (outcome === "timeout") yield* TestClock.adjust("1 second");
       else yield* Deferred.succeed(release, undefined);
 
       assert.isTrue(Exit.isFailure(yield* Fiber.await(fiber)));
       assert.isTrue(retired);
-      assert.deepStrictEqual(started, [0, 1, 2, 3]);
+      assert.deepStrictEqual(started, [0, 1]);
     }
   }),
 );

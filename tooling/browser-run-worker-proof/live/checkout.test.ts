@@ -18,8 +18,8 @@ import {
 } from "../src/checkout-contract.ts";
 import {
   CheckoutReport,
+  makeCaseAdmission,
   retirementPlan,
-  runCheckoutCases,
   withRetirement,
 } from "../src/checkout-lifecycle.ts";
 import { checkoutStack } from "../src/checkout-stack.ts";
@@ -414,12 +414,14 @@ const proof = Effect.gen(function* () {
 
   // Operator takeover is opt-in and stays outside the automated concurrent batch.
   for (const item of scheduled.filter((item) => item.scenario === "handoff")) yield* runCase(item);
+  const admit = yield* makeCaseAdmission(startIntervalMillis);
+
   yield* measure(
     "matrixMillis",
-    runCheckoutCases(
+    Effect.forEach(
       scheduled.filter((item) => item.scenario !== "handoff"),
-      runCase,
-      { concurrency, startIntervalMillis },
+      (item) => admit.pipe(Effect.andThen(runCase(item))),
+      { concurrency, discard: true },
     ),
   );
   const report = yield* currentReport;
