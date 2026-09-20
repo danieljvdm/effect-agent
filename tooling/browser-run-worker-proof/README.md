@@ -38,7 +38,9 @@ An accidental second submission fails the proof even though the receiver refuses
 The generic browser tools expose observations, navigation, clicks, text entry, selections and
 credential filling. The buyer receives no selectors, click sequence or purchase API. Its owner
 allows only the two fixture origins and supplies dummy credentials through the native fill helper.
-Normal observations can include dummy field values; this is not a credential-secrecy proof.
+Observations include visible frames and current control values, so collapsed payment sections must
+be opened before their fields become observable. Dummy field values can be visible; this is not a
+credential-secrecy proof.
 
 Approval belongs to the owner. The agent can request a pause but cannot grant approval. The runner
 approves the independently checked quote through a separate authenticated request. Changing cart,
