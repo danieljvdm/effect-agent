@@ -144,14 +144,16 @@ const settled: WorkerRunReport["observation"] = {
 };
 
 const host = (
-  overrides: Partial<Omit<SubagentHost["Service"], "start">> & {
+  overrides: Partial<Omit<SubagentHost["Service"], "start" | "followUp">> & {
     readonly start?: (request: StartWorkerRequest) => Effect.Effect<WorkerStarted, WorkerError>;
+    readonly followUp?: (
+      request: FollowUpWorkerRequest,
+    ) => Effect.Effect<MessageStatus, WorkerError>;
   } = {},
 ): SubagentHost["Service"] => ({
   ...SubagentHost.unavailable,
   context: Effect.succeed(caller),
   resolveTargetPolicy: () => Effect.succeed(Option.none()),
-  followUp: () => Effect.succeed(nextDelivery),
   inspect: () => Effect.succeed(settled),
   await: () => Effect.succeed(settled),
   list: () =>
@@ -184,6 +186,15 @@ const host = (
       const prepared = { ...(yield* prepare), ...command };
 
       return yield* overrides.start?.(prepared) ?? Effect.succeed(started);
+    }),
+  followUp: (request) =>
+    Effect.gen(function* () {
+      if (!("prepare" in request))
+        return yield* overrides.followUp?.(request) ?? Effect.succeed(nextDelivery);
+      const { prepare, ...command } = request;
+      const prepared = { ...(yield* prepare), ...command };
+
+      return yield* overrides.followUp?.(prepared) ?? Effect.succeed(nextDelivery);
     }),
 });
 

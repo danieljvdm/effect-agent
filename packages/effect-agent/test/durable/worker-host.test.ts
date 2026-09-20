@@ -4,6 +4,7 @@ import {
   Clock,
   Context,
   DateTime,
+  Deferred,
   Duration,
   Effect,
   Fiber,
@@ -1635,6 +1636,224 @@ layer(NodeCrypto.layer)((it) => {
             ).pipe(Effect.provideService(SubagentHost, later), Effect.flip),
           ).toMatchObject({ reason: "denied" });
           expect(h.deliveries.size).toBe(1);
+        }),
+    );
+
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/4ff21e2a4c3735be34955e7d5caf64f623d33f81
+  // Reuse the public-start retained-command fixture from #568 for follow-up correction provenance.
+  for (const pending of [false, true])
+    it.effect(
+      `public follow-up replays its original correction across Runs without preparation (pending=${pending})`,
+      () =>
+        Effect.gen(function* () {
+          class PreparationFailed extends Schema.TaggedError<PreparationFailed>()(
+            "PreparationFailed",
+            {},
+          ) {}
+          let preparations = 0;
+          let throwPreparation = false;
+          const h = yield* harness();
+          const first = yield* h.host.start(request("original task"));
+
+          const declaration = Subagent.make("research", {
+            target,
+            parameters: Schema.Struct({ note: Schema.String }),
+            failure: PreparationFailed,
+            prepareInput: ({ note }, caller) =>
+              Effect.gen(function* () {
+                preparations++;
+                if (throwPreparation) return yield* new PreparationFailed();
+
+                return {
+                  text: `${note}:${caller.source === "tool" ? caller.parent.runId : "programmatic"}`,
+                };
+              }),
+          });
+
+          const facet = (run: string) =>
+            h.runtime.facet(
+              {
+                source: {
+                  _tag: "tool",
+                  agentId: sourceAgent.id,
+                  threadId: sourceId,
+                  runId: Schema.decodeSync(RunId)(run),
+                  toolCallId: Schema.decodeSync(ToolCallId)(`call:${run}`),
+                },
+                policy: sourceAgent.policy,
+                depth: 0,
+              },
+              principal,
+            );
+
+          const worker = Schema.decodeSync(Subagent.Worker(declaration))(first.worker);
+          const key = Schema.decodeSync(IdempotencyKey)("explicit-correction");
+
+          const followUp = Subagent.followUp(
+            declaration,
+            worker,
+            { note: "corrected brief" },
+            { idempotencyKey: key },
+          );
+
+          if (pending) h.fail("worker:before-source-append");
+
+          const correction = yield* followUp.pipe(
+            Effect.provideService(SubagentHost, facet("human-correction-run")),
+          );
+
+          const envelope = structuredClone(
+            h.deliveries.get(correction.message.messageId)!.envelope,
+          );
+
+          expect(envelope.input).toEqual({ text: "corrected brief:human-correction-run" });
+          expect(envelope.workerAdmission?.origin).toEqual(
+            h.deliveries.get(first.delivery.message.messageId)!.envelope.workerAdmission?.origin,
+          );
+          expect(correction.receipt === null).toBe(pending);
+          h.fail(undefined);
+          if (pending) yield* TestClock.adjust("31 seconds");
+          const later = facet("later-run");
+          const replay = yield* followUp.pipe(Effect.provideService(SubagentHost, later));
+
+          expect(replay.message).toEqual(correction.message);
+          expect(replay.receipt).not.toBeNull();
+          if (!pending) expect(replay).toEqual(correction);
+          throwPreparation = true;
+          expect(yield* followUp.pipe(Effect.provideService(SubagentHost, later))).toEqual(replay);
+          expect(
+            yield* Subagent.followUp(
+              declaration,
+              worker,
+              { note: "changed brief" },
+              { idempotencyKey: key },
+            ).pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+          ).toMatchObject({ reason: "idempotency-conflict" });
+          for (const changed of [
+            {
+              encodedInput: { text: "different capture" },
+              encodedParameters: { note: "corrected brief" },
+            },
+            { encodedInput: envelope.input, encodedParameters: { note: "different parameters" } },
+          ])
+            expect(
+              yield* later
+                .followUp({ worker, target, idempotencyKey: key, ...changed })
+                .pipe(Effect.flip),
+            ).toMatchObject({ reason: "idempotency-conflict" });
+          h.deny("send");
+          expect(
+            yield* followUp.pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+          ).toMatchObject({ reason: "denied" });
+          h.deny(undefined);
+          expect(preparations).toBe(1);
+          expect(h.deliveries.get(correction.message.messageId)!.envelope).toEqual(envelope);
+          expect(h.submissions.get(replay.receipt!.submissionId)?.inputPayload).toEqual(
+            envelope.input,
+          );
+          expect(h.submissions.size).toBe(2);
+          expect(
+            yield* Subagent.followUp(
+              declaration,
+              worker,
+              { note: "new correction" },
+              {
+                idempotencyKey: Schema.decodeSync(IdempotencyKey)("fresh-command"),
+              },
+            ).pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+          ).toEqual(new PreparationFailed());
+          expect(h.deliveries.size).toBe(2);
+        }),
+    );
+
+  // Equal-input regression: https://github.com/danieljvdm/effect-agent/commit/3ab9045fc293d09a22801c7d881c4d89e562461a
+  for (const [preparation, denied] of [
+    ["changed", undefined],
+    ["failed", undefined],
+    ["failed", "caller"],
+    ["failed", "policy"],
+    ["equal", "caller"],
+    ["equal", "policy"],
+  ] as const)
+    it.effect(
+      `public follow-up reconciles concurrent retention with current authority (${preparation}, denied=${denied ?? "none"})`,
+      () =>
+        Effect.gen(function* () {
+          class PreparationFailed extends Schema.TaggedError<PreparationFailed>()(
+            "PreparationFailed",
+            {},
+          ) {}
+          let denyPolicy = false;
+
+          const h = yield* harness().pipe(
+            Effect.provideService(WorkerPolicyResolver, {
+              resolveSource: () => Effect.succeed(Option.none()),
+              resolveTarget: () =>
+                denyPolicy
+                  ? WorkerError.make({ operation: "followUp", reason: "denied" })
+                  : Effect.succeed(Option.none()),
+            }),
+          );
+
+          const first = yield* h.host.start(request("original task"));
+          const preparing = yield* Deferred.make<void>();
+          const resume = yield* Deferred.make<void>();
+
+          const declaration = Subagent.make("research", {
+            target,
+            parameters: Schema.Struct({ note: Schema.String }),
+            failure: PreparationFailed,
+            prepareInput: ({ note }) => Effect.succeed({ text: note }),
+          });
+
+          const worker = Schema.decodeSync(Subagent.Worker(declaration))(first.worker);
+          const key = Schema.decodeSync(IdempotencyKey)("racing-correction");
+
+          const loser = yield* Subagent.followUp(
+            {
+              ...declaration,
+              prepareInput: () =>
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(preparing, undefined);
+                  yield* Deferred.await(resume);
+                  if (preparation === "failed") return yield* new PreparationFailed();
+
+                  return {
+                    text:
+                      preparation === "equal" ? "original correction" : "later correction capture",
+                  };
+                }),
+            },
+            worker,
+            { note: "original correction" },
+            { idempotencyKey: key },
+          ).pipe(Effect.provideService(SubagentHost, h.host), Effect.result, Effect.forkChild);
+
+          yield* Deferred.await(preparing);
+
+          const winner = yield* Subagent.followUp(
+            declaration,
+            worker,
+            { note: "original correction" },
+            {
+              idempotencyKey: key,
+            },
+          ).pipe(Effect.provideService(SubagentHost, h.host));
+
+          const envelope = structuredClone(h.deliveries.get(winner.message.messageId)!.envelope);
+
+          if (denied === "caller") h.deny("send");
+          if (denied === "policy") denyPolicy = true;
+          yield* Deferred.succeed(resume, undefined);
+          const result = yield* Fiber.join(loser);
+
+          if (denied !== undefined)
+            expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "denied" } });
+          else expect(result).toMatchObject({ _tag: "Success", success: winner });
+          expect(h.deliveries.get(winner.message.messageId)!.envelope).toEqual(envelope);
+          expect(envelope.input).toEqual({ text: "original correction" });
+          expect(h.deliveries.size).toBe(2);
+          expect(h.submissions.size).toBe(2);
         }),
     );
 
