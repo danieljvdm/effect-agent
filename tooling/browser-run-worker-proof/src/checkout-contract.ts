@@ -108,6 +108,20 @@ export const BrowserObservation = Schema.Struct({
   frames: Schema.Array(Schema.Struct({ url: Schema.String, html: Schema.String })),
 });
 
+export const CheckoutController = Schema.Literals([
+  "baseline",
+  "action-observations",
+  "indexed-luna",
+  "indexed-jev",
+]);
+
+/** Input completion remains success even when the following read fails. Never repeat the input. */
+export const ActionObservation = Schema.Struct({
+  execution: Schema.Literal("completed"),
+  observation: Schema.NullOr(BrowserObservation),
+  readFailure: Schema.NullOr(Text),
+});
+
 export const AgentRun = Schema.Struct({
   turns: Schema.Natural,
   finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
@@ -185,6 +199,7 @@ export const Report = Schema.Struct({
   model: Schema.String,
   sourceCommit: Schema.String,
   dirty: Schema.Boolean,
+  controller: Schema.optionalKey(CheckoutController),
   repetitions: Schema.Natural,
   profile: Schema.Literals(["automated", "operator"]),
   // Optional additions keep previously retained reports usable for cleanup.

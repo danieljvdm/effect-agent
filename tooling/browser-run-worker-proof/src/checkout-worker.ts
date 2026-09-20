@@ -8,12 +8,13 @@ import { Cause, Effect, Exit, Layer, Redacted, Schema, Struct } from "effect";
 import { AgentRuntime, InMemory } from "effect-agent";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { buyer, buyerTools, CheckoutOwner } from "./checkout-agent.ts";
+import { makeBuyer, buyerTools, CheckoutOwner } from "./checkout-agent.ts";
 import {
   AgentOutput,
   AgentRun,
   BrowserObservation,
   CheckoutSpans,
+  CheckoutController,
   Control,
   Decision,
   failure,
@@ -45,6 +46,7 @@ export interface CheckoutEnv {
   CHECKOUT_TOKEN: string;
   OPENAI_API_KEY: string;
   CHECKOUT_MODEL: string;
+  CHECKOUT_CONTROLLER?: string;
   PROCESSOR_ORIGIN: string;
   CLOUDFLARE_ACCOUNT_ID: string;
   BROWSER_RENDERING_API_TOKEN: string;
@@ -204,7 +206,16 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
           ]),
         ),
       record: (value) =>
-        Effect.sync(() => this.write("calls", Calls, [...this.read("calls", Calls), value])),
+        Effect.sync(() =>
+          this.ctx.storage.transactionSync(() => {
+            this.write("calls", Calls, [...this.read("calls", Calls), value]);
+            if (value.outcome.startsWith("uncertain:"))
+              this.updateControl({
+                controller: "failed",
+                failure: "Unresolved browser input; do not replay",
+              });
+          }),
+        ),
       approval: Effect.sync(() => {
         const current = quote(this.shop);
 
@@ -227,8 +238,14 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
       }),
     });
 
+    const controller = yield* Schema.decodeUnknownEffect(CheckoutController)(
+      this.env.CHECKOUT_CONTROLLER ?? "baseline",
+    );
+
+    const returnObservations = controller === "action-observations";
+
     const result = yield* instrumentModels(
-      AgentRuntime.run(buyer, message).pipe(
+      AgentRuntime.run(makeBuyer(returnObservations), message).pipe(
         Effect.provide(
           Layer.mergeAll(
             InMemory.layer,
@@ -236,6 +253,7 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
               reference: this.read("reference", Reference),
               shopOrigin: origin,
               processorOrigin: this.env.PROCESSOR_ORIGIN,
+              returnObservations,
             }).pipe(Layer.provide(owner)),
             OpenAiLanguageModel.model(this.env.CHECKOUT_MODEL, { max_output_tokens: 4_096 }).pipe(
               Layer.provide(

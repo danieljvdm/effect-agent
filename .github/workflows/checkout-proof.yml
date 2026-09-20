@@ -3,6 +3,14 @@ name: Manual hosted checkout
 # Paid acceptance evidence for the selected revision; ordinary PRs use local tests.
 on:
   workflow_dispatch:
+    inputs:
+      controller:
+        description: Checkout controller to measure
+        type: choice
+        default: baseline
+        options:
+          - baseline
+          - action-observations
 
 permissions:
   contents: read
@@ -19,6 +27,7 @@ jobs:
       CI: "true"
       VP_GIT_HOOKS: "0"
       CHECKOUT_MODEL: gpt-5.6-luna
+      CHECKOUT_CONTROLLER: ${{ inputs.controller }}
       CHECKOUT_REPETITIONS: "2"
       CHECKOUT_CONCURRENCY: "4"
       CHECKOUT_START_INTERVAL_MS: "1000"

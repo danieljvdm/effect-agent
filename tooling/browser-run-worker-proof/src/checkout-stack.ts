@@ -5,6 +5,8 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import * as Output from "alchemy/Output";
 import { Config, Effect, Schema } from "effect";
 
+import { CheckoutController } from "./checkout-contract.ts";
+
 export const checkoutStack = Alchemy.Stack(
   "effect-agent-checkout",
   {
@@ -28,6 +30,11 @@ export const checkoutStack = Alchemy.Stack(
     const openaiKey = yield* Config.Redacted("OPENAI_API_KEY");
     const browserToken = yield* Config.Redacted("BROWSER_RENDERING_API_TOKEN");
     const model = yield* Config.NonEmptyString("CHECKOUT_MODEL");
+
+    const controller = yield* Config.schema(CheckoutController, "CHECKOUT_CONTROLLER").pipe(
+      Config.withDefault("baseline"),
+    );
+
     const bindingName = `ea-checkout-${run}-binding`;
 
     const binding = yield* Cloudflare.Worker("BindingProof", {
@@ -61,6 +68,7 @@ export const checkoutStack = Alchemy.Stack(
         CHECKOUT_TOKEN: checkoutToken,
         OPENAI_API_KEY: openaiKey,
         CHECKOUT_MODEL: model,
+        CHECKOUT_CONTROLLER: controller,
         PROCESSOR_ORIGIN: Output.map(payment.url, (url) => url ?? "https://unavailable.invalid"),
         CLOUDFLARE_ACCOUNT_ID: accountId,
         BROWSER_RENDERING_API_TOKEN: browserToken,

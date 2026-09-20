@@ -66,6 +66,7 @@ Required environment:
 | `CLOUDFLARE_WORKERS_SUBDOMAIN` | Workers subdomain, without `.workers.dev`; also used for recovery       |
 | `OPENAI_API_KEY`               | Real model credential, injected by the operator's secret manager        |
 | `CHECKOUT_MODEL`               | Explicit OpenAI model ID                                                |
+| `CHECKOUT_CONTROLLER`          | `baseline` (default) or the experimental `action-observations` arm      |
 | `CHECKOUT_TOKEN`               | Fresh random bearer token for the fixture control API                   |
 | `CHECKOUT_RUN_ID`              | Fresh lowercase letters/digits/hyphens, at most 24 characters           |
 | `CHECKOUT_REPETITIONS`         | 1–5 repetitions of every automated scenario; default 1                  |
@@ -119,6 +120,13 @@ Deployment, readiness, the binding proof and retirement have separate totals. Sp
 overlap: do not add their durations to estimate wall time. Timing adds two synchronous SQLite
 writes per span and native response metadata collection; hosted comparisons must use the same
 instrumentation. Running spans survive process loss; interruption retains finalizer outcomes.
+
+The `action-observations` arm returns the same frame-aware HTML observation after navigation,
+click, text entry, selection, credential fill and the existing wait. Explicit observation remains
+available for initial reads and recovery. The owner records input before the following read; a
+failed read returns `execution: "completed"` with no observation, so recovery cannot resubmit it.
+Uncertain input fences further browser dispatch. This is an experimental controller choice;
+adoption requires matched hosted receipts, cleanup and latency evidence.
 It also records concurrency, admission spacing, each case's elapsed time (including browser closure),
 and deployment, readiness, binding-proof, matrix, retirement and total durations. Concurrent case
 durations overlap and must not be summed as wall time. These timers do not separate model latency
