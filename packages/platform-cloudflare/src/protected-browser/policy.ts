@@ -404,7 +404,8 @@ export const makeProtectedBrowserPolicy = Effect.fn("ProtectedBrowser.open")(fun
                 const interrupt = cause.reasons.some((reason) => reason._tag === "Interrupt");
 
                 if (
-                  dispatch !== "not-dispatched" ||
+                  dispatch === "possibly-dispatched" ||
+                  (dispatch === "dispatched" && reason !== "busy") ||
                   interrupt ||
                   reason === "provider" ||
                   reason === "timeout"

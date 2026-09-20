@@ -449,7 +449,7 @@ it.effect("retains acquisition status once without exporting provider content", 
     f.setAuthorizeAction(() =>
       Effect.failCause(
         Cause.fromReasons([
-          Cause.makeFailReason(new CredentialAccessError({ reason: "denied" })),
+          Cause.makeFailReason(new CredentialAccessError({ reason: "busy" })),
           Cause.makeDieReason(new TypeError("sentinel-private-defect")),
         ]),
       ),
@@ -1098,9 +1098,14 @@ it.effect("discloses billing metadata only through an authorized bounded offer",
   }).pipe(Effect.scoped, Effect.provide(f.layer));
 });
 
-it.effect.each(["before", "after"] as const)(
-  "requires the post-exposure grant %s ordinary fill",
-  (when) => {
+it.effect.each([
+  { when: "before", reason: "observation-blocked" },
+  { when: "after", reason: "observation-blocked" },
+  { when: "before", reason: "busy" },
+  { when: "after", reason: "busy" },
+] as const)(
+  "preserves ordinary fill evidence when observation is $reason $when dispatch",
+  ({ when, reason }) => {
     const f = fixture();
 
     const control = ProtectedBrowserControl.make({
@@ -1116,25 +1121,44 @@ it.effect.each(["before", "after"] as const)(
 
       yield* handle.useCredential(yield* proposal(f, handle));
       let writes = 0;
+      let blocked = when === "before";
+
+      f.setObservation(() =>
+        !blocked
+          ? Effect.succeed("trust-recipient-no-credential-echo")
+          : reason === "busy"
+            ? Effect.fail(new CredentialAccessError({ reason: "busy" }))
+            : Effect.succeed("deny"),
+      );
 
       f.setFill(() =>
         Effect.gen(function* () {
           yield* (yield* ProtectedBrowserDispatch).mark;
           writes++;
-          f.blockObservations();
+          blocked = true;
         }),
       );
-      if (when === "before") f.blockObservations();
       expect(
         yield* handle
           .fill(ProtectedBrowserFill.make({ ref: control.ref, value: "address" }))
           .pipe(Effect.flip),
       ).toMatchObject({
-        reason: "observation-blocked",
+        reason,
         dispatch: when === "before" ? "not-dispatched" : "dispatched",
+        milestone: when === "before" ? "none" : "filled",
+        observation: when === "after" && reason !== "busy" ? "closed" : "protected",
+        cleanup: when === "after" && reason !== "busy" ? "confirmed" : "not-requested",
       });
       expect(writes).toBe(when === "before" ? 0 : 1);
-      expect(f.stats().closed).toBe(when === "before" ? 0 : 1);
+      expect(f.stats().closed).toBe(when === "after" && reason !== "busy" ? 1 : 0);
+      if (reason === "busy") {
+        blocked = false;
+        expect((yield* handle.observe).observation).toBe("approved-after-exposure");
+        expect(writes).toBe(when === "before" ? 0 : 1);
+        expect(f.stats().opens).toBe(1);
+        expect(yield* handle.close).toBe("confirmed");
+        expect(f.stats().closed).toBe(1);
+      }
     }).pipe(Effect.scoped, Effect.provide(f.layer));
   },
 );
@@ -1350,9 +1374,16 @@ it.effect.each([
   }).pipe(Effect.scoped, Effect.provide(f.layer));
 });
 
-it.effect.each(["navigate", "fill", "click"] as const)(
-  "checks current continuation authority before ordinary %s",
-  (action) => {
+it.effect.each([
+  { action: "navigate", reason: "denied" },
+  { action: "fill", reason: "denied" },
+  { action: "click", reason: "denied" },
+  { action: "navigate", reason: "busy" },
+  { action: "fill", reason: "busy" },
+  { action: "click", reason: "busy" },
+] as const)(
+  "preserves $reason continuation authority before ordinary $action",
+  ({ action, reason }) => {
     const f = fixture();
 
     const field = ProtectedBrowserControl.make({
@@ -1394,7 +1425,7 @@ it.effect.each(["navigate", "fill", "click"] as const)(
         Effect.gen(function* () {
           expect(request.exposures).toHaveLength(1);
 
-          return yield* new CredentialAccessError({ reason: "denied" });
+          return yield* new CredentialAccessError({ reason });
         }),
       );
 
@@ -1406,10 +1437,13 @@ it.effect.each(["navigate", "fill", "click"] as const)(
             : handle.click(ProtectedBrowserClick.make({ ref: button.ref }));
 
       expect(yield* operation.pipe(Effect.flip)).toMatchObject({
-        reason: "denied",
+        reason,
         dispatch: "not-dispatched",
+        milestone: "none",
+        cleanup: "not-requested",
       });
       expect(writes).toBe(0);
+      expect(f.stats().closed).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(f.layer));
   },
 );
@@ -1612,42 +1646,69 @@ it.effect.each(["allowed", "denied", "changed"] as const)(
   },
 );
 
-it.effect("rechecks caller after the final asynchronous card-submit authorization", () => {
-  const f = fixture("card");
-  let clicks = 0;
+it.effect.each([
+  { completed: 1, reason: "busy" },
+  { completed: 4, reason: "busy" },
+  { completed: 4, reason: "denied" },
+] as const)(
+  "rechecks delayed authority after $completed credential fills: $reason",
+  ({ completed, reason }) => {
+    const f = fixture("card");
+    let clicks = 0;
 
-  f.setClick(() =>
-    Effect.sync(() => {
-      clicks++;
-    }),
-  );
-
-  return Effect.gen(function* () {
-    const entered = yield* Deferred.make<void>();
-    const resume = yield* Deferred.make<void>();
-
-    f.setAuthorize(() =>
-      f.filled.length === f.fields.length
-        ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(resume)))
-        : Effect.void,
-    );
-    const handle = yield* f.open;
-    const request = yield* proposal(f, handle);
-
-    const fiber = yield* Effect.forkChild(
-      handle.useCredential(UseCredential.make({ ...request, submit: f.controls.at(-1)!.ref })),
+    f.setClick(() =>
+      Effect.sync(() => {
+        clicks++;
+      }),
     );
 
-    yield* Deferred.await(entered);
-    f.setPrincipal("mallory");
-    yield* Deferred.succeed(resume, undefined);
-    expect(yield* Fiber.join(fiber).pipe(Effect.flip)).toMatchObject({
-      reason: "denied",
-      dispatch: "dispatched",
-      milestone: "filled",
-      cleanup: "confirmed",
-    });
-    expect(f.filled).toHaveLength(f.fields.length);
-    expect(clicks).toBe(0);
-  }).pipe(Effect.scoped, Effect.provide(f.layer));
-});
+    return Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+
+      f.setAuthorize(() =>
+        f.filled.length === completed
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(resume)),
+              Effect.andThen(
+                reason === "busy" ? new CredentialAccessError({ reason }) : Effect.void,
+              ),
+            )
+          : Effect.void,
+      );
+      const handle = yield* f.open;
+      const request = yield* proposal(f, handle);
+
+      const fiber = yield* Effect.forkChild(
+        handle.useCredential(UseCredential.make({ ...request, submit: f.controls.at(-1)!.ref })),
+      );
+
+      yield* Deferred.await(entered);
+      if (reason === "denied") f.setPrincipal("mallory");
+      yield* Deferred.succeed(resume, undefined);
+      expect(yield* Fiber.join(fiber).pipe(Effect.flip)).toMatchObject({
+        reason,
+        dispatch: "dispatched",
+        milestone: completed === 1 ? "partial-fill" : "filled",
+        observation: reason === "busy" ? "protected" : "closed",
+        cleanup: reason === "busy" ? "not-requested" : "confirmed",
+      });
+
+      const expected =
+        completed === 1 ? ["Test Person"] : ["Test Person", cardNumber, "12/30", "123"];
+
+      expect(f.filled).toEqual(expected);
+      expect(clicks).toBe(0);
+      if (reason === "busy") {
+        expect(f.stats().closed).toBe(0);
+        f.setAuthorize(undefined);
+        expect((yield* handle.observe).observation).toBe("approved-after-exposure");
+        expect(f.filled).toEqual(expected);
+        expect(clicks).toBe(0);
+        expect(f.stats().opens).toBe(1);
+        expect(yield* handle.close).toBe("confirmed");
+        expect(f.stats().closed).toBe(1);
+      }
+    }).pipe(Effect.scoped, Effect.provide(f.layer));
+  },
+);

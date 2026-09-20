@@ -541,9 +541,19 @@ replacement Attempt; the application/operator must reconcile an uncertain extern
 `submission-dispatched` proves dispatch, not login success. `authentication` is always `unverified`.
 Check an approved authenticated page separately. `possibly-dispatched` can coexist with
 `partial-fill` and confirmed cleanup: closure does not undo effects. Provider defects are sanitized;
-failures after dispatch and cancellation invalidate and close the pass. Close waits for exact-session
+failures after dispatch and cancellation invalidate and close the pass, except for recoverable `busy`
+after acknowledged actions. Uncertain dispatch, interruption, provider failure, and timeout still
+close the pass. Close waits for exact-session
 termination/absence and reports `unconfirmed` when it cannot prove cleanup. Logs contain only a
 fixed cleanup warning, never provider diagnostics or secret-bearing page data.
+
+Any `BrowserCredentialAccess` hook may fail with `new CredentialAccessError({ reason: "busy" })`
+while host authority is temporarily unavailable. Return promptly when accepted input needs the
+current Tool batch to finish; waiting inside the hook would prevent that input from being applied.
+The operation stops before the next field or submit, retains known `dispatched` and
+`partial-fill`/`filled` evidence, and keeps the same pass usable once authority resumes. Check current
+intent and dispatch evidence before proposing another action; `busy` never retries an action or
+reuses a consumed credential offer.
 
 ### Durable human takeover
 
