@@ -230,15 +230,6 @@ interface CapturedBinding {
   ) => Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure>;
 }
 
-type ReportRequirements<Reports> =
-  Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>>
-    ? [Reports[number]] extends [never]
-      ? never
-      : Reports[number] extends WorkerReporting<unknown, infer R>
-        ? Exclude<R, Scope.Scope>
-        : never
-    : never;
-
 // Registrations outlive their construction span. Dependencies remain captured,
 // while every attempt/report inherits the invoking fiber's tracing state.
 const omitTraceContext = Context.omit(
@@ -352,32 +343,16 @@ const capture = <A extends ExecutableAgentBinding, Provides = never, Requires = 
  * may supply a previously computed digest triple directly.
  */
 export const DurableWorkerBinding = {
-  make: <
-    A extends ExecutableAgentBinding,
-    const Reports extends ReadonlyArray<WorkerReporting<unknown, unknown>> = readonly [],
-  >(
+  make: <A extends ExecutableAgentBinding>(
     agent: A,
     digests: DefinitionDigests,
-    reporting?: Reports,
-  ): Effect.Effect<
-    ResolvedBinding,
-    never,
-    DurableWorkerRequirements<A> | ReportRequirements<Reports>
-  > =>
+  ): Effect.Effect<ResolvedBinding, never, DurableWorkerRequirements<A>> =>
     Effect.gen(function* () {
       const binding = yield* capture(agent);
+      const reporting = yield* captureReporting(backgroundReports(agent.definition));
 
-      const reports = yield* captureReporting([
-        ...(reporting ?? []),
-        ...backgroundReports(agent.definition),
-      ]);
-
-      return { ...binding, digests, reporting: reports };
-    }) as Effect.Effect<
-      ResolvedBinding,
-      never,
-      DurableWorkerRequirements<A> | ReportRequirements<Reports>
-    >,
+      return { ...binding, digests, reporting };
+    }),
 } as const;
 
 /** INTERNAL identity-only capture retained for the legacy direct worker path. */
@@ -443,12 +418,6 @@ export type AgentRegistration<A extends ExecutableAgentBinding = ExecutableAgent
     readonly versions: ReplayVersions;
   };
   /**
-   * Source-owned reports capture services outside attemptLayer and open a fresh Scope per
-   * preparation. Version changes with this registration. Missing exact code and preparation
-   * failures become retained report refusals; durable delivery retries reuse the frozen input.
-   */
-  readonly reporting?: ReadonlyArray<WorkerReporting<unknown, unknown>>;
-  /**
    * Build fresh services for exactly one fenced Attempt, across all its Tool/model turns.
    * Finalizes on completion, suspension, failure and interruption. Never reused after eviction.
    * Resolve invocation authority from the trusted claim identity, not captured caller state.
@@ -477,12 +446,10 @@ type AttemptLayerRequirements<Requirements, AttemptLayer> = AttemptLayer extends
 // Conditional options retain every service they may consume. An absent attempt Layer
 // still needs the original worker services; only a definite Layer can remove them.
 type EntryRequirements<Entry> = Entry extends unknown
-  ?
-      | AttemptLayerRequirements<
-          EntryWorkerRequirements<Entry>,
-          "attemptLayer" extends keyof Entry ? Entry["attemptLayer"] : undefined
-        >
-      | ("reporting" extends keyof Entry ? ReportRequirements<Entry["reporting"]> : never)
+  ? AttemptLayerRequirements<
+      EntryWorkerRequirements<Entry>,
+      "attemptLayer" extends keyof Entry ? Entry["attemptLayer"] : undefined
+    >
   : never;
 
 type RegistrationRequirements<Entries extends ReadonlyArray<AgentRegistration>> = [
@@ -519,8 +486,9 @@ const registrationDefinitions = (entry: AgentRegistration): DefinitionDigestInpu
             backgroundReporting: automatic.map((report) => ({
               delegationId: report.delegationId,
               targetAgentId: report.target.id,
-              mode: report.mode ?? "custom",
-              destinationDelegationId: report.destination?.delegationId ?? null,
+              mode: "standard",
+              // Preserve the fingerprint of existing standard registrations.
+              destinationDelegationId: null,
             })),
           },
         };
@@ -579,10 +547,7 @@ const compileRegistration = <Entry extends AgentRegistration>(
           entry.attemptLayer,
         );
 
-        const reporting = yield* captureReporting([
-          ...(entry.reporting ?? []),
-          ...backgroundReports(binding.definition),
-        ]);
+        const reporting = yield* captureReporting(backgroundReports(binding.definition));
 
         return {
           ...binding,

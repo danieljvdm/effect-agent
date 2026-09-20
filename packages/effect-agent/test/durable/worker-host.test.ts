@@ -40,7 +40,9 @@ import { WorkerCompletion, WorkerError, WorkerUpdate } from "effect-agent/worker
 import { TestClock } from "effect/testing";
 import { Toolkit } from "effect/unstable/ai";
 
+import { automaticReporting } from "../../src/capabilities/internal/subagent-reporting.ts";
 import { DurableWorkerBinding } from "../../src/durable/AgentRegistration.ts";
+import { digestJson } from "../../src/durable/Digest.ts";
 import {
   DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
@@ -74,6 +76,9 @@ import {
   ThreadCreated,
   UserInputRecorded,
   WorkerInputRequested,
+  WorkerOrigin,
+  WorkerOriginRecorded,
+  WorkerReportPrepared,
   ToolCallPrepared,
   ToolCallUnknown,
   type CanonicalRecordPayload,
@@ -175,14 +180,25 @@ const request = (key: string): StartWorkerRequest => ({
   encodedGrant: SubagentGrant.make({ allowedToolNames: [], maxDepth: 1 }),
 });
 
-const reportWith = (
-  prepare: WorkerReporting<WorkerReportPreparationFailure>["prepare"],
-): WorkerReporting<WorkerReportPreparationFailure> => ({
-  delegationId: Schema.decodeSync(DelegationId)("research"),
+const reportDeclaration = Subagent.make("research", {
   target,
-  input: sourceAgent.input,
-  prepare,
+  parameters: Schema.Struct({ note: Schema.String }),
+  prepareInput: ({ note }) => Effect.succeed({ text: note }),
 });
+
+const rawReport = automaticReporting(reportDeclaration);
+
+const standardReport: WorkerReporting<WorkerReportPreparationFailure> = {
+  ...rawReport,
+  prepare: (report) =>
+    rawReport
+      .prepare(report)
+      .pipe(Effect.mapError(() => WorkerReportPreparationFailure.make({ stage: "projection" }))),
+};
+
+const reportWith = (
+  prepare: WorkerReporting<WorkerReportPreparationFailure>["prepare"] = standardReport.prepare,
+): WorkerReporting<WorkerReportPreparationFailure> => ({ ...standardReport, prepare });
 
 const harness = Effect.fn("workerHostHarness")(function* (
   options: {
@@ -664,7 +680,35 @@ const harness = Effect.fn("workerHostHarness")(function* (
   );
 
   runtime = runtimes.runtime;
-  const host = yield* runtime.acquire({ sourceThreadId: sourceId, principal });
+  const ownerId = Schema.decodeSync(SubmissionId)("report-owner");
+
+  if (options.sourceReports?.length && !options.sourceRevisions?.length)
+    submissions.set(
+      ownerId,
+      SubmissionSnapshot.make({
+        submissionId: ownerId,
+        threadId: sourceId,
+        queueSequence: Schema.decodeSync(QueueSequence)(1),
+        principal,
+        idempotencyKey: Schema.decodeSync(IdempotencyKey)("report-owner"),
+        agentId: sourceAgent.id,
+        agentDigests: definitions,
+        deploymentId: Schema.decodeSync(DeploymentId)("test"),
+        inputPayload: "original parent input",
+        inputDigest: digest,
+        receiptId: Schema.decodeSync(ReceiptId)("report-owner"),
+        state: "settled",
+        createdAt: DateTime.makeUnsafe(now),
+      }),
+    );
+
+  const host = yield* runtime.acquire({
+    sourceThreadId: sourceId,
+    principal,
+    ...(options.sourceReports?.length && !options.sourceRevisions?.length
+      ? { sourceSubmissionId: ownerId }
+      : {}),
+  });
 
   const settle = Effect.fn("workerHostHarness.settle")(function* (
     receipt: Receipt,
@@ -843,7 +887,7 @@ layer(NodeCrypto.layer)((it) => {
   it.effect("keeps terminal uncertain inputs current while allowing their native report", () =>
     Effect.gen(function* () {
       const h = yield* harness({
-        sourceReports: [reportWith(() => Effect.succeed({ encodedInput: "supplier status" }))],
+        sourceReports: [reportWith()],
       });
 
       const initial = request("uncertain-worker");
@@ -958,7 +1002,6 @@ layer(NodeCrypto.layer)((it) => {
             {
               delegationId: Schema.decodeSync(DelegationId)("research"),
               target,
-              mode: "standard",
               prepare: (report) =>
                 Schema.decodeUnknownEffect(WorkerCompletion)({
                   _tag: "WorkerCompletion",
@@ -970,7 +1013,7 @@ layer(NodeCrypto.layer)((it) => {
                     result: report.observation.encodedResult,
                   },
                 }).pipe(
-                  Effect.map((message) => ({ encodedInput: null, message })),
+                  Effect.map((message) => ({ message })),
                   Effect.mapError(() =>
                     WorkerReportPreparationFailure.make({ stage: "projection" }),
                   ),
@@ -1318,7 +1361,7 @@ layer(NodeCrypto.layer)((it) => {
           {
             definition: upgraded,
             digests: upgradedDigests,
-            reporting: [reportWith(() => Effect.succeed({ encodedInput: "upgraded findings" }))],
+            reporting: [reportWith()],
           },
         ],
       });
@@ -1364,7 +1407,7 @@ layer(NodeCrypto.layer)((it) => {
         expect.objectContaining({
           agentId: upgraded.id,
           definitions: upgradedDigests,
-          input: "upgraded findings",
+          input: "research this existing conversation",
         }),
       ]);
       expect(h.logs.get(sourceId)?.[0]?.record.payload).toEqual(
@@ -1847,7 +1890,7 @@ layer(NodeCrypto.layer)((it) => {
         createdAt: DateTime.makeUnsafe(0),
       });
 
-      const reportsA = [reportWith(() => Effect.succeed({ encodedInput: "report:A" }))];
+      const reportsA = [reportWith()];
       const legacy = yield* harness({ sourceReports: reportsA });
 
       legacy.submissions.set(ownerId, snapshot);
@@ -1869,7 +1912,7 @@ layer(NodeCrypto.layer)((it) => {
         [...legacy.deliveries.values()]
           .filter((row) => row.envelope.threadId === sourceId)
           .map((row) => row.envelope),
-      ).toEqual([expect.objectContaining({ definitions, input: "report:A" })]);
+      ).toEqual([expect.objectContaining({ definitions, input: "immutable capture" })]);
 
       // A new, verified owner must not need the code that created the conversation years ago.
       const recreated = yield* harness({
@@ -1948,12 +1991,14 @@ layer(NodeCrypto.layer)((it) => {
             definition: laterDefinition,
             digests: laterDigests,
             reporting: [
-              reportWith(() =>
-                Effect.sync(() => {
-                  reportsC++;
-
-                  return { encodedInput: "report:C" };
-                }),
+              reportWith((report) =>
+                standardReport.prepare(report).pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      reportsC++;
+                    }),
+                  ),
+                ),
               ),
             ],
           },
@@ -2029,14 +2074,14 @@ layer(NodeCrypto.layer)((it) => {
         origin,
       );
       expect(reportsC).toBe(2);
-      expect(reportOwners).toEqual([ownerId, laterOwnerId, ownerId]);
+      expect(reportOwners).toEqual([laterOwnerId]);
       expect(
         [...opted.deliveries.values()]
           .filter((row) => row.envelope.threadId === sourceId)
           .map((row) => row.envelope),
       ).toEqual([
-        expect.objectContaining({ definitions: laterDigests, input: "report:C" }),
-        expect.objectContaining({ definitions: laterDigests, input: "report:C" }),
+        expect.objectContaining({ definitions: laterDigests, input: "immutable capture" }),
+        expect.objectContaining({ definitions: laterDigests, input: "immutable capture" }),
       ]);
     }),
   );
@@ -3011,12 +3056,14 @@ layer(NodeCrypto.layer)((it) => {
 
         const h = yield* harness({
           sourceReports: [
-            reportWith(() =>
-              Effect.sync(() => {
-                calls++;
-
-                return { encodedInput: "reported" };
-              }),
+            reportWith((report) =>
+              standardReport.prepare(report).pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    calls++;
+                  }),
+                ),
+              ),
             ),
           ],
         });
@@ -3045,14 +3092,17 @@ layer(NodeCrypto.layer)((it) => {
 
         expect(rows).toHaveLength(1);
         expect(rows[0]?.envelope.threadId).toBe(sourceId);
-        expect(rows[0]?.envelope.input).toBe("reported");
+        expect(rows[0]?.envelope.input).toBe("original parent input");
+        expect(rows[0]?.envelope.messageAdmission).toMatchObject({
+          report: { outcome: "completed", result: { output: "done" } },
+        });
         expect(rows[0]?.status).toBe("pending");
         expect(calls).toBe(point === "worker:before-report-append" ? 2 : 1);
         const payload = decisions[0]?.record.payload;
 
         if (payload?._tag !== "WorkerReportPrepared") throw new Error("missing report");
         expect((yield* Schema.decodeUnknownEffect(PreparedInput)(payload.envelope)).input).toBe(
-          "reported",
+          "original parent input",
         );
       }),
     );
@@ -3069,28 +3119,44 @@ layer(NodeCrypto.layer)((it) => {
           Effect.die("Report capture must not acquire the model"),
         );
 
+        const background = Subagent.background(
+          Subagent.make("research", {
+            ...reportDeclaration,
+            success: Schema.String,
+            failure: PrivateReportFailure,
+            projectResult: () =>
+              Effect.gen(function* () {
+                yield* Effect.acquireRelease(Effect.void, () =>
+                  Effect.sync(() => {
+                    released++;
+                  }),
+                );
+                const text = yield* ReportService;
+
+                if (fail) return yield* PrivateReportFailure.make({ secret: "private failure" });
+
+                return text;
+              }),
+          }),
+          { start: true, reportToParent: true },
+        );
+
         const binding = yield* DurableWorkerBinding.make(
-          { definition: sourceAgent, model },
+          {
+            definition: Agent.make("source-agent", {
+              input: sourceAgent.input,
+              output: sourceAgent.output,
+              instructions: sourceAgent.instructions,
+              policy: sourceAgent.policy,
+              toolkit: background.toolkit,
+            }),
+            model,
+          },
           definitions,
-          [
-            {
-              ...reportWith(() => Effect.succeed({ encodedInput: "unused" })),
-              prepare: () =>
-                Effect.gen(function* () {
-                  yield* Effect.acquireRelease(Effect.void, () =>
-                    Effect.sync(() => {
-                      released++;
-                    }),
-                  );
-                  const text = yield* ReportService;
-
-                  if (fail) return yield* PrivateReportFailure.make({ secret: "private failure" });
-
-                  return { encodedInput: text };
-                }),
-            },
-          ],
-        ).pipe(Effect.provideService(ReportService, "captured-service"));
+        ).pipe(
+          Effect.provide(background.layer),
+          Effect.provideService(ReportService, "captured-service"),
+        );
 
         const h = yield* harness({ sourceReports: binding.reporting });
         const first = yield* h.host.start(request("captured"));
@@ -3099,8 +3165,8 @@ layer(NodeCrypto.layer)((it) => {
         expect(released).toBe(1);
         expect(
           [...h.deliveries.values()].find((row) => row.key.ownerThreadId === first.worker.threadId)
-            ?.envelope.input,
-        ).toBe("captured-service");
+            ?.envelope.messageAdmission,
+        ).toMatchObject({ report: { result: "captured-service" } });
 
         const second = yield* h.host.followUp({
           worker: first.worker,
@@ -3122,6 +3188,137 @@ layer(NodeCrypto.layer)((it) => {
       }),
   );
 
+  it.effect.each([false, true])(
+    "retains historical custom-report evidence (prepared: %s)",
+    (prepared) =>
+      Effect.gen(function* () {
+        const h = yield* harness({ sourceReports: [reportWith()] });
+        const started = yield* h.host.start(request("historical-custom"));
+        const receipt = started.delivery.receipt!;
+        const runId = Schema.decodeSync(RunId)(`run:${receipt.submissionId}`);
+
+        h.push(
+          started.worker.threadId,
+          ToolCallUnknown.make({
+            runId,
+            turn: 1,
+            toolName: "external-action",
+            toolCallId: Schema.decodeSync(ToolCallId)("unresolved-action"),
+            reason: "interrupted",
+          }),
+          "unknown-action",
+        );
+
+        if (prepared) {
+          h.fail("worker:after-report-append");
+          yield* h.settle(receipt).pipe(Effect.exit);
+          h.fail(undefined);
+        }
+        const snapshot = h.submissions.get(receipt.submissionId)!;
+        const admission = snapshot.workerAdmission!;
+
+        const origin = yield* Schema.decodeEffect(Schema.toType(WorkerOrigin))({
+          ...admission.origin,
+          reporting: {
+            sourceDigests: definitions,
+            destinationDelegationId: request("legacy").delegationId,
+          },
+        });
+
+        // Reconstruct predecessor records, without introducing an executable legacy registration.
+        h.submissions.set(
+          receipt.submissionId,
+          SubmissionSnapshot.make({
+            ...snapshot,
+            workerAdmission: { ...admission, origin },
+          }),
+        );
+        for (const [threadId, records] of h.logs) {
+          const restored = yield* Effect.forEach(
+            records,
+            Effect.fnUntraced(function* (entry) {
+              const payload = entry.record.payload;
+              let historical: CanonicalRecordPayload = payload;
+
+              if (
+                payload._tag === "WorkerOriginRecorded" &&
+                payload.origin.worker.threadId === started.worker.threadId
+              )
+                historical = WorkerOriginRecorded.make({ ...payload, origin });
+              if (
+                payload._tag === "WorkerInputRequested" &&
+                payload.admission.origin.worker.threadId === started.worker.threadId
+              )
+                historical = WorkerInputRequested.make({
+                  ...payload,
+                  admission: { ...payload.admission, origin },
+                });
+              if (payload._tag === "WorkerReportPrepared") {
+                const { messageAdmission: _message, ...envelope } =
+                  yield* Schema.decodeUnknownEffect(PreparedInput)(payload.envelope);
+
+                historical = WorkerReportPrepared.make({
+                  ...payload,
+                  envelope: yield* Schema.encodeEffect(PreparedInput)({
+                    ...envelope,
+                    input: "saved custom report",
+                    inputDigest: yield* digestJson("saved custom report"),
+                  }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Json))),
+                });
+              }
+
+              const encoded = yield* Schema.encodeEffect(RecordEnvelope)(
+                RecordEnvelope.make({ ...entry.record, payload: historical }),
+              );
+
+              return { ...entry, record: yield* Schema.decodeEffect(RecordEnvelope)(encoded) };
+            }),
+          );
+
+          h.logs.set(threadId, restored);
+        }
+        if (prepared) yield* h.runtime.completeInput(h.submissions.get(receipt.submissionId)!);
+        else yield* h.settle(receipt);
+        yield* h.runtime.completeInput(h.submissions.get(receipt.submissionId)!);
+
+        const records = h.logs.get(started.worker.threadId)!;
+
+        expect(
+          records.filter(({ record }) => record.payload._tag === "ToolCallUnknown"),
+        ).toHaveLength(1);
+        expect(
+          records.filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
+        ).toHaveLength(0);
+
+        const reports = records.filter(({ record }) =>
+          record.payload._tag.startsWith("WorkerReport"),
+        );
+
+        expect(reports).toHaveLength(1);
+        if (prepared) {
+          expect(reports[0]?.record.payload._tag).toBe("WorkerReportPrepared");
+
+          const deliveries = [...h.deliveries.values()].filter(
+            (row) => row.key.ownerThreadId === started.worker.threadId,
+          );
+
+          expect(deliveries).toHaveLength(1);
+          expect(deliveries[0]?.envelope.input).toBe("saved custom report");
+          expect(deliveries[0]?.envelope.messageAdmission).toBeUndefined();
+        } else {
+          expect(reports[0]?.record.payload).toMatchObject({
+            _tag: "WorkerReportRefused",
+            reason: "declaration-unavailable",
+          });
+          expect(
+            [...h.deliveries.values()].filter(
+              (row) => row.key.ownerThreadId === started.worker.threadId,
+            ),
+          ).toHaveLength(0);
+        }
+      }),
+  );
+
   it.effect("projects the actual Run once for joined Receipts using host parameters", () =>
     Effect.gen(function* () {
       const observations: Array<unknown> = [];
@@ -3129,11 +3326,13 @@ layer(NodeCrypto.layer)((it) => {
       const h = yield* harness({
         sourceReports: [
           reportWith((report) =>
-            Effect.sync(() => {
-              observations.push(report.observation);
-
-              return { encodedInput: "joined-report" };
-            }),
+            standardReport.prepare(report).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  observations.push(report.observation);
+                }),
+              ),
+            ),
           ),
         ],
       });
@@ -3164,7 +3363,15 @@ layer(NodeCrypto.layer)((it) => {
 
   for (const [reason, prepare] of [
     ["projection", () => WorkerReportPreparationFailure.make({ stage: "projection" })],
-    ["input", () => Effect.succeed({ encodedInput: 123 })],
+    [
+      "input",
+      (report: Parameters<typeof standardReport.prepare>[0]) =>
+        standardReport.prepare(report).pipe(
+          Effect.map(({ message }) => ({
+            message: { ...message, budgetExhausted: !message.budgetExhausted },
+          })),
+        ),
+    ],
     ["defect", () => Effect.die("private mapper diagnostic")],
   ] as const)
     it.effect(`retains permanent bounded report ${reason} refusal`, () =>
@@ -3173,11 +3380,11 @@ layer(NodeCrypto.layer)((it) => {
 
         const h = yield* harness({
           sourceReports: [
-            reportWith(() =>
+            reportWith((report) =>
               Effect.suspend(() => {
                 calls++;
 
-                return prepare();
+                return prepare(report);
               }),
             ),
           ],
@@ -3243,8 +3450,8 @@ layer(NodeCrypto.layer)((it) => {
 
       const h = yield* harness({
         sourceReports: [
-          reportWith(() =>
-            (block ? Effect.never : Effect.succeed({ encodedInput: "resumed" })).pipe(
+          reportWith((report) =>
+            (block ? Effect.never : standardReport.prepare(report)).pipe(
               Effect.ensuring(
                 Effect.sync(() => {
                   finalized++;
@@ -3278,7 +3485,7 @@ layer(NodeCrypto.layer)((it) => {
 
   it.effect("omits reports for run-less aborts and refuses missing exact report code", () =>
     Effect.gen(function* () {
-      const reports = [reportWith(() => Effect.succeed({ encodedInput: "reported" }))];
+      const reports = [reportWith()];
       const h = yield* harness({ sourceReports: reports });
       const first = yield* h.host.start(request("runless"));
 
@@ -3352,301 +3559,279 @@ layer(NodeCrypto.layer)((it) => {
     }),
   );
 
-  it.effect.each(["custom", "standard"] as const)(
-    "charges a %s report input to the receiving worker's original ancestor",
-    (mode) =>
-      Effect.gen(function* () {
-        const scoutId = Schema.decodeSync(DelegationId)("scout");
+  it.effect("charges a standard report input to the receiving worker's original ancestor", () =>
+    Effect.gen(function* () {
+      const scoutId = Schema.decodeSync(DelegationId)("scout");
 
-        const h = yield* harness({
-          limits: {
-            maxInputsPerWorker: 2,
-            maxUpdateInputsPerWorker: 1,
-            maxPendingUpdateInputsPerWorker: 1,
-          },
-          targetReports: [
-            {
-              delegationId: scoutId,
-              target,
-              input: target.input,
-              ...(mode === "custom"
-                ? {
-                    destination: {
-                      delegationId: Schema.decodeSync(DelegationId)("research"),
-                      target,
-                    },
-                  }
-                : { mode: "standard" as const }),
-              prepare: (report) =>
-                mode === "custom"
-                  ? Effect.succeed({
-                      encodedInput: { text: "scout-result" },
-                      encodedParameters: { note: "explicit-report-parameters" },
-                    })
-                  : Schema.decodeUnknownEffect(WorkerCompletion)({
-                      _tag: "WorkerCompletion",
-                      schemaVersion: 1,
-                      budgetExhausted: false,
-                      report: {
-                        worker: report.worker,
-                        ...report.observation,
-                        result: "scout-result",
-                      },
-                    }).pipe(
-                      Effect.map((message) => ({ encodedInput: null, message })),
-                      Effect.mapError(() =>
-                        WorkerReportPreparationFailure.make({ stage: "projection" }),
-                      ),
-                    ),
-            },
-          ],
-        });
+      const scoutReport = automaticReporting(
+        Subagent.make("scout", {
+          target,
+          parameters: reportDeclaration.parameters,
+          prepareInput: reportDeclaration.prepareInput,
+        }),
+      );
 
-        const initial = request("report-builder");
-        const grant = SubagentGrant.make({ allowedToolNames: [], maxDepth: 2 });
-
-        const builder = yield* h.host.start({
-          ...initial,
-          encodedGrant: grant,
-          budget: {
-            ...initial.budget,
-            descendantInvocations: 1,
-            caps: SubagentDelegationCaps.make({ ...initial.budget.caps, maxConcurrentChildren: 2 }),
-            allocation: SubagentReservationAmounts.make({
-              ...initial.budget.allocation,
-              turns: 3,
-              toolCalls: 3,
-              durationMillis: 1_500,
-              resultBytes: 1_280,
-            }),
-          },
-        });
-
-        const childPolicy = AgentPolicy.make({
-          ...policy,
-          maxTurns: 1,
-          maxToolCalls: 1,
-          maxDuration: "500 millis",
-          toolConcurrency: 1,
-          toolResultBounds: ToolResultBounds.make({ maxBytes: 256 }),
-        });
-
-        const nested = h.runtime.facet(
+      const h = yield* harness({
+        limits: {
+          maxInputsPerWorker: 2,
+          maxUpdateInputsPerWorker: 1,
+          maxPendingUpdateInputsPerWorker: 1,
+        },
+        targetReports: [
           {
-            source: {
-              _tag: "tool",
-              agentId: target.id,
-              threadId: builder.worker.threadId,
-              runId: Schema.decodeSync(RunId)("builder-run"),
-              toolCallId: Schema.decodeSync(ToolCallId)("scout-call"),
-            },
-            policy,
-            depth: 1,
-            grant,
+            ...scoutReport,
+            prepare: (report) =>
+              scoutReport
+                .prepare(report)
+                .pipe(
+                  Effect.mapError(() =>
+                    WorkerReportPreparationFailure.make({ stage: "projection" }),
+                  ),
+                ),
           },
-          principal,
-          builder.delivery.receipt!.submissionId,
-        );
+        ],
+      });
 
-        const scout = yield* nested.start({
-          ...request("report-scout"),
-          delegationId: scoutId,
-          policy: childPolicy,
-          encodedGrant: grant,
-          budget: {
-            caps: SubagentDelegationCaps.make({
-              maxTotalChildInvocations: 1,
-              maxConcurrentChildren: 1,
-              maxTurns: 1,
-              maxToolCalls: 1,
-              maxDurationMillis: 500,
-              maxResultBytes: 256,
-            }),
-            allocation: SubagentReservationAmounts.make({
-              turns: 1,
-              toolCalls: 1,
-              durationMillis: 500,
-              resultBytes: 256,
-              inputTokens: 0,
-              outputTokens: 0,
-              costMicrousd: 0,
-            }),
+      const initial = request("report-builder");
+      const grant = SubagentGrant.make({ allowedToolNames: [], maxDepth: 2 });
+
+      const builder = yield* h.host.start({
+        ...initial,
+        encodedGrant: grant,
+        budget: {
+          ...initial.budget,
+          descendantInvocations: 1,
+          caps: SubagentDelegationCaps.make({ ...initial.budget.caps, maxConcurrentChildren: 2 }),
+          allocation: SubagentReservationAmounts.make({
+            ...initial.budget.allocation,
+            turns: 3,
+            toolCalls: 3,
+            durationMillis: 1_500,
+            resultBytes: 1_280,
+          }),
+        },
+      });
+
+      const childPolicy = AgentPolicy.make({
+        ...policy,
+        maxTurns: 1,
+        maxToolCalls: 1,
+        maxDuration: "500 millis",
+        toolConcurrency: 1,
+        toolResultBounds: ToolResultBounds.make({ maxBytes: 256 }),
+      });
+
+      const nested = h.runtime.facet(
+        {
+          source: {
+            _tag: "tool",
+            agentId: target.id,
+            threadId: builder.worker.threadId,
+            runId: Schema.decodeSync(RunId)("builder-run"),
+            toolCallId: Schema.decodeSync(ToolCallId)("scout-call"),
           },
+          policy,
+          depth: 1,
+          grant,
+        },
+        principal,
+        builder.delivery.receipt!.submissionId,
+      );
+
+      const scout = yield* nested.start({
+        ...request("report-scout"),
+        delegationId: scoutId,
+        policy: childPolicy,
+        encodedGrant: grant,
+        budget: {
+          caps: SubagentDelegationCaps.make({
+            maxTotalChildInvocations: 1,
+            maxConcurrentChildren: 1,
+            maxTurns: 1,
+            maxToolCalls: 1,
+            maxDurationMillis: 500,
+            maxResultBytes: 256,
+          }),
+          allocation: SubagentReservationAmounts.make({
+            turns: 1,
+            toolCalls: 1,
+            durationMillis: 500,
+            resultBytes: 256,
+            inputTokens: 0,
+            outputTokens: 0,
+            costMicrousd: 0,
+          }),
+        },
+      });
+
+      {
+        const submission = h.submissions.get(scout.delivery.receipt!.submissionId)!;
+        const runId = Schema.decodeSync(RunId)(`run:${submission.submissionId}`);
+
+        h.push(
+          scout.worker.threadId,
+          RunStartedRecord.make({ runId, policyAccountingVersion: 1, maxDurationMillis: 10_000 }),
+          "scout-run",
+        );
+        yield* h.updates.emit({
+          submission,
+          runId,
+          producerEpoch: Schema.decodeSync(ProducerEpoch)(0),
+          definitions,
+          updateId: Schema.decodeSync(IdempotencyKey)("scout-finding"),
+          value: { finding: "area concern" },
         });
 
-        if (mode === "standard") {
-          const submission = h.submissions.get(scout.delivery.receipt!.submissionId)!;
-          const runId = Schema.decodeSync(RunId)(`run:${submission.submissionId}`);
-
-          h.push(
-            scout.worker.threadId,
-            RunStartedRecord.make({ runId, policyAccountingVersion: 1, maxDurationMillis: 10_000 }),
-            "scout-run",
-          );
-          yield* h.updates.emit({
-            submission,
-            runId,
-            producerEpoch: Schema.decodeSync(ProducerEpoch)(0),
-            definitions,
-            updateId: Schema.decodeSync(IdempotencyKey)("scout-finding"),
-            value: { finding: "area concern" },
-          });
-
-          const update = [...h.deliveries.values()].find((row) =>
-            Schema.is(WorkerUpdate)(row.envelope.messageAdmission),
-          )!;
-
-          const metadata = update.envelope.workerAdmission!;
-
-          expect(metadata.reportKind).toBe("update");
-
-          const options = {
-            threadId: update.envelope.threadId,
-            principal: update.envelope.deliveryPrincipal,
-            idempotencyKey: update.envelope.admissionKey,
-            definitions: update.envelope.definitions,
-            workerAdmission: metadata,
-            messageAdmission: update.envelope.messageAdmission,
-          };
-
-          expect(
-            yield* h.runtime
-              .validateAdmission(
-                metadata,
-                { ...options, messageAdmission: undefined },
-                update.envelope.agentId,
-                update.envelope.inputDigest,
-                update.envelope.input,
-              )
-              .pipe(Effect.flip),
-          ).toMatchObject({ reason: "denied" });
-          yield* h.runtime.validateAdmission(
-            metadata,
-            options,
-            update.envelope.agentId,
-            update.envelope.inputDigest,
-            update.envelope.input,
-          );
-        }
-
-        yield* h.settle(scout.delivery.receipt!);
-
-        const report = [...h.deliveries.values()].find(
-          (row) =>
-            row.key.ownerThreadId === scout.worker.threadId &&
-            !Schema.is(WorkerUpdate)(row.envelope.messageAdmission),
+        const update = [...h.deliveries.values()].find((row) =>
+          Schema.is(WorkerUpdate)(row.envelope.messageAdmission),
         )!;
 
-        expect(report.envelope.threadId).toBe(builder.worker.threadId);
-        expect(report.envelope.workerAdmission?.parameters).toEqual({
-          note: mode === "custom" ? "explicit-report-parameters" : "report-builder",
-        });
-        expect(report.envelope.workerAdmission?.origin).toEqual(
-          h.submissions.get(builder.delivery.receipt!.submissionId)?.workerAdmission?.origin,
-        );
-        expect(report.envelope.workerAdmission?.sourceSubmissionId).toBeUndefined();
-        if (mode === "standard") {
-          expect(report.envelope.input).toEqual({ text: "report-builder" });
-          expect(Schema.is(WorkerCompletion)(report.envelope.messageAdmission)).toBe(true);
-        }
-        const metadata = report.envelope.workerAdmission!;
+        const metadata = update.envelope.workerAdmission!;
+
+        expect(metadata.reportKind).toBe("update");
 
         const options = {
-          threadId: report.envelope.threadId,
-          principal: report.envelope.deliveryPrincipal,
-          idempotencyKey: report.envelope.admissionKey,
-          definitions: report.envelope.definitions,
+          threadId: update.envelope.threadId,
+          principal: update.envelope.deliveryPrincipal,
+          idempotencyKey: update.envelope.admissionKey,
+          definitions: update.envelope.definitions,
           workerAdmission: metadata,
+          messageAdmission: update.envelope.messageAdmission,
         };
 
-        if (mode === "standard") {
-          const message = yield* Schema.decodeUnknownEffect(WorkerCompletion)(
-            report.envelope.messageAdmission,
-          );
-
-          const validate = (
-            completion = message,
-            admission: Parameters<typeof h.runtime.validateCompletion>[1] = options,
-            inputDigest = report.envelope.inputDigest,
-          ) =>
-            h.runtime.validateCompletion(
-              completion,
-              admission,
-              report.envelope.agentId,
-              inputDigest,
-            );
-
-          expect(yield* validate()).toEqual(message);
-          for (const changed of [
-            { ...options, threadId: sourceId },
-            { ...options, principal: Schema.decodeSync(Principal)("other") },
-            { ...options, idempotencyKey: Schema.decodeSync(IdempotencyKey)("other") },
-            { ...options, workerAdmission: undefined },
-            {
-              ...options,
-              definitions: DefinitionDigests.make({
-                ...options.definitions,
-                agent: Schema.decodeSync(Digest)("b".repeat(64)),
-              }),
-            },
-          ])
-            expect((yield* validate(message, changed).pipe(Effect.flip)).reason).toBe("denied");
-          expect(
-            (yield* validate({ ...message, budgetExhausted: true }).pipe(Effect.flip)).reason,
-          ).toBe("denied");
-          expect(
-            (yield* validate({
-              ...message,
-              report: { ...message.report, runId: Schema.decodeSync(RunId)("unprepared-run") },
-            }).pipe(Effect.flip)).reason,
-          ).toBe("denied");
-          expect(
-            (yield* validate(message, options, Schema.decodeSync(Digest)("b".repeat(64))).pipe(
-              Effect.flip,
-            )).reason,
-          ).toBe("denied");
-          h.deny("send");
-          expect((yield* validate().pipe(Effect.flip)).reason).toBe("denied");
-          h.deny(undefined);
-        }
-
-        yield* h.runtime.validateAdmission(
-          metadata,
-          options,
-          report.envelope.agentId,
-          report.envelope.inputDigest,
-          report.envelope.input,
-        );
-        yield* h.runtime.validateAdmission(
-          metadata,
-          options,
-          report.envelope.agentId,
-          report.envelope.inputDigest,
-          report.envelope.input,
-        );
-
-        const charged = h.logs
-          .get(sourceId)!
-          .filter(({ record }) => record.payload._tag === "WorkerInputRequested");
-
-        expect(charged).toHaveLength(mode === "standard" ? 3 : 2);
-
-        const subtree = h.logs
-          .get(sourceId)!
-          .filter(({ record }) => record.payload._tag === "SubtreeBudgetReserved");
-
-        expect(subtree).toHaveLength(mode === "standard" ? 3 : 2);
-        // The initial input and report occupy the same worker slot but exhaust its pending-input cap.
         expect(
-          (yield* h.host.followUp({
-            worker: builder.worker,
-            target,
-            idempotencyKey: Schema.decodeSync(IdempotencyKey)("beyond-report"),
-            encodedInput: { text: "extra" },
-            encodedParameters: { note: "extra" },
-          })).reason,
-        ).toBe("worker-capacity");
-      }),
+          yield* h.runtime
+            .validateAdmission(
+              metadata,
+              { ...options, messageAdmission: undefined },
+              update.envelope.agentId,
+              update.envelope.inputDigest,
+              update.envelope.input,
+            )
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "denied" });
+        yield* h.runtime.validateAdmission(
+          metadata,
+          options,
+          update.envelope.agentId,
+          update.envelope.inputDigest,
+          update.envelope.input,
+        );
+      }
+
+      yield* h.settle(scout.delivery.receipt!);
+
+      const report = [...h.deliveries.values()].find(
+        (row) =>
+          row.key.ownerThreadId === scout.worker.threadId &&
+          !Schema.is(WorkerUpdate)(row.envelope.messageAdmission),
+      )!;
+
+      expect(report.envelope.threadId).toBe(builder.worker.threadId);
+      expect(report.envelope.workerAdmission?.parameters).toEqual({
+        note: "report-builder",
+      });
+      expect(report.envelope.workerAdmission?.origin).toEqual(
+        h.submissions.get(builder.delivery.receipt!.submissionId)?.workerAdmission?.origin,
+      );
+      expect(report.envelope.workerAdmission?.sourceSubmissionId).toBeUndefined();
+      {
+        expect(report.envelope.input).toEqual({ text: "report-builder" });
+        expect(Schema.is(WorkerCompletion)(report.envelope.messageAdmission)).toBe(true);
+      }
+      const metadata = report.envelope.workerAdmission!;
+
+      const options = {
+        threadId: report.envelope.threadId,
+        principal: report.envelope.deliveryPrincipal,
+        idempotencyKey: report.envelope.admissionKey,
+        definitions: report.envelope.definitions,
+        workerAdmission: metadata,
+      };
+
+      {
+        const message = yield* Schema.decodeUnknownEffect(WorkerCompletion)(
+          report.envelope.messageAdmission,
+        );
+
+        const validate = (
+          completion = message,
+          admission: Parameters<typeof h.runtime.validateCompletion>[1] = options,
+          inputDigest = report.envelope.inputDigest,
+        ) =>
+          h.runtime.validateCompletion(completion, admission, report.envelope.agentId, inputDigest);
+
+        expect(yield* validate()).toEqual(message);
+        for (const changed of [
+          { ...options, threadId: sourceId },
+          { ...options, principal: Schema.decodeSync(Principal)("other") },
+          { ...options, idempotencyKey: Schema.decodeSync(IdempotencyKey)("other") },
+          { ...options, workerAdmission: undefined },
+          {
+            ...options,
+            definitions: DefinitionDigests.make({
+              ...options.definitions,
+              agent: Schema.decodeSync(Digest)("b".repeat(64)),
+            }),
+          },
+        ])
+          expect((yield* validate(message, changed).pipe(Effect.flip)).reason).toBe("denied");
+        expect(
+          (yield* validate({ ...message, budgetExhausted: true }).pipe(Effect.flip)).reason,
+        ).toBe("denied");
+        expect(
+          (yield* validate({
+            ...message,
+            report: { ...message.report, runId: Schema.decodeSync(RunId)("unprepared-run") },
+          }).pipe(Effect.flip)).reason,
+        ).toBe("denied");
+        expect(
+          (yield* validate(message, options, Schema.decodeSync(Digest)("b".repeat(64))).pipe(
+            Effect.flip,
+          )).reason,
+        ).toBe("denied");
+        h.deny("send");
+        expect((yield* validate().pipe(Effect.flip)).reason).toBe("denied");
+        h.deny(undefined);
+      }
+
+      yield* h.runtime.validateAdmission(
+        metadata,
+        options,
+        report.envelope.agentId,
+        report.envelope.inputDigest,
+        report.envelope.input,
+      );
+      yield* h.runtime.validateAdmission(
+        metadata,
+        options,
+        report.envelope.agentId,
+        report.envelope.inputDigest,
+        report.envelope.input,
+      );
+
+      const charged = h.logs
+        .get(sourceId)!
+        .filter(({ record }) => record.payload._tag === "WorkerInputRequested");
+
+      expect(charged).toHaveLength(3);
+
+      const subtree = h.logs
+        .get(sourceId)!
+        .filter(({ record }) => record.payload._tag === "SubtreeBudgetReserved");
+
+      expect(subtree).toHaveLength(3);
+      // The initial input and report occupy the same worker slot but exhaust its pending-input cap.
+      expect(
+        (yield* h.host.followUp({
+          worker: builder.worker,
+          target,
+          idempotencyKey: Schema.decodeSync(IdempotencyKey)("beyond-report"),
+          encodedInput: { text: "extra" },
+          encodedParameters: { note: "extra" },
+        })).reason,
+      ).toBe("worker-capacity");
+    }),
   );
 
   for (const point of [

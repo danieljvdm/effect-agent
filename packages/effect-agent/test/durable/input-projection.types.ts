@@ -19,7 +19,7 @@ import {
   type DurableAgentRuntime,
   type DurableWorkerRequirements,
 } from "effect-agent/durable-agent-runtime";
-import { DelegationId, type ThreadId } from "effect-agent/identifiers";
+import { type ThreadId } from "effect-agent/identifiers";
 import { type DefinitionDigests } from "effect-agent/records";
 import { type ThreadHistory } from "effect-agent/thread-history";
 import { type ThreadStore } from "effect-agent/thread-store";
@@ -240,64 +240,19 @@ export const proveRegistrationRequirements = (
 
   const empty = compileRegistrations([]);
 
-  const withReporting = compileRegistrations([
-    {
-      agent: first,
-      definitions: DefinitionDigestInput.make({ agent: "reporting", model: "first", tools: [] }),
-      reporting: [
-        {
-          delegationId: Schema.decodeSync(DelegationId)("report"),
-          target: definition,
-          input: definition.input,
-          prepare: () => Effect.map(ReportDependency, (encodedInput) => ({ encodedInput })),
-        },
-      ],
-      // Per-Attempt services do not satisfy report preparation, which has no fenced Claim.
-      attemptLayer: () => Layer.succeed(ReportDependency)("attempt-only"),
-    },
-  ]);
-
-  const reportRequirements: Assert<
-    Equal<
-      Effect.Services<typeof withReporting>,
-      Crypto.Crypto | DurableWorkerRequirements<typeof first> | ReportDependency
-    >
-  > = true;
-
-  const reportErrors: Assert<Equal<Effect.Error<typeof withReporting>, DigestError>> = true;
-
-  void reportRequirements;
-  void reportErrors;
-
   const conditionalEntry = {
     agent: first,
     definitions: DefinitionDigestInput.make({ agent: "conditional", model: "first", tools: [] }),
   };
 
-  const reporting = [
-    {
-      delegationId: Schema.decodeSync(DelegationId)("conditional-report"),
-      target: definition,
-      input: definition.input,
-      prepare: () => Effect.map(ReportDependency, (encodedInput) => ({ encodedInput })),
-    },
-  ];
-
   const attemptLayer = () =>
     Layer.effect(InstructionContext)(Effect.map(ReportDependency, (text) => ({ text })));
-
-  const conditionalReporting = compileRegistrations([
-    { ...conditionalEntry, reporting: enabled ? reporting : undefined },
-  ]);
 
   const conditionalAttempt = compileRegistrations([
     { ...conditionalEntry, attemptLayer: enabled ? attemptLayer : undefined },
   ]);
 
-  const optionalOptions = (options: {
-    readonly reporting?: typeof reporting;
-    readonly attemptLayer?: typeof attemptLayer;
-  }) =>
+  const optionalOptions = (options: { readonly attemptLayer?: typeof attemptLayer }) =>
     compileRegistrations([
       { ...conditionalEntry, ...options },
       {
@@ -307,12 +262,6 @@ export const proveRegistrationRequirements = (
     ]);
 
   const conditionalRequirements: readonly [
-    Assert<
-      Equal<
-        Effect.Services<typeof conditionalReporting>,
-        Crypto.Crypto | DurableWorkerRequirements<typeof first> | ReportDependency
-      >
-    >,
     Assert<
       Equal<
         Effect.Services<typeof conditionalAttempt>,
@@ -328,7 +277,7 @@ export const proveRegistrationRequirements = (
         | ReportDependency
       >
     >,
-  ] = [true, true, true];
+  ] = [true, true];
 
   void conditionalRequirements;
 

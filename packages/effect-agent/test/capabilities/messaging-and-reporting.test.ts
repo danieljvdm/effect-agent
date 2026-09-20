@@ -8,6 +8,7 @@ import { IdempotencyKey, Receipt } from "effect-agent/receipt";
 import type { WorkerReportPreparationFailure, WorkerRunReport } from "effect-agent/subagent-host";
 import { type Tool, Toolkit } from "effect/unstable/ai";
 
+import { automaticReporting } from "../../src/capabilities/internal/subagent-reporting.ts";
 import * as Messaging from "../../src/capabilities/Messaging.ts";
 import * as Subagent from "../../src/capabilities/Subagent.ts";
 
@@ -15,8 +16,6 @@ type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Assert<T extends true> = T;
 class Encode extends Context.Service<Encode, string>()("message-test/Encode") {}
-class Prepare extends Context.Service<Prepare, string>()("message-test/Prepare") {}
-class DeclaredFailure extends Schema.TaggedError<DeclaredFailure>()("ReportDenied", {}) {}
 
 const text = Schema.String.pipe(
   Schema.decodeTo(Schema.String, {
@@ -38,15 +37,7 @@ const declaration = Subagent.make("research", {
   projectResult: (output, _completion, parameters) => Effect.succeed(output + parameters),
 });
 
-const report = Subagent.reporting(declaration, {
-  input: text,
-  failure: DeclaredFailure,
-  prepare: (outcome) =>
-    Effect.as(
-      Prepare,
-      outcome.outcome === "completed" ? `${outcome.result}` : outcome.failure.classification,
-    ),
-});
+const report = automaticReporting(declaration);
 
 const worker = Schema.decodeSync(Subagent.Worker(declaration))({
   schemaVersion: 1,
@@ -94,11 +85,11 @@ const key = Schema.decodeSync(IdempotencyKey)("message");
 const send = Messaging.send(peer, "question", { idempotencyKey: key });
 
 const proofs: [
-  Assert<Equal<Effect.Services<ReturnType<typeof report.prepare>>, Encode | Prepare>>,
+  Assert<Equal<Effect.Services<ReturnType<typeof report.prepare>>, never>>,
   Assert<
     Equal<
       Effect.Error<ReturnType<typeof report.prepare>>,
-      DeclaredFailure | WorkerReportPreparationFailure
+      WorkerReportPreparationFailure | Subagent.SubagentProjectionFailure
     >
   >,
   Assert<Equal<Effect.Services<typeof send>, Encode | MessagingHost>>,
@@ -106,9 +97,12 @@ const proofs: [
   Assert<Equal<Layer.Services<typeof native.layer>, Encode>>,
 ] = [true, true, true, true, true];
 
-it.effect("projects saved child output and parameters into the exact coordinator wire Schema", () =>
+it.effect("projects saved child output and parameters into a standard typed report", () =>
   Effect.gen(function* () {
-    expect(yield* report.prepare(run)).toEqual({ encodedInput: "21" });
+    expect((yield* report.prepare(run)).message.report).toMatchObject({
+      outcome: "completed",
+      result: "21",
+    });
     expect(
       yield* report.prepare({
         ...run,
@@ -118,7 +112,9 @@ it.effect("projects saved child output and parameters into the exact coordinator
           encodedResult: { private: "ignored" },
         },
       }),
-    ).toEqual({ encodedInput: "child-aborted" });
+    ).toMatchObject({
+      message: { report: { outcome: "aborted", failure: { classification: "child-aborted" } } },
+    });
     expect(
       yield* report
         .prepare({ ...run, observation: { ...run.observation, encodedResult: { invalid: true } } })
@@ -128,44 +124,7 @@ it.effect("projects saved child output and parameters into the exact coordinator
       failure: { _tag: "WorkerReportPreparationFailure", stage: "projection" },
     });
     expect(proofs.every(Boolean)).toBe(true);
-  }).pipe(Effect.provideService(Encode, "encoder"), Effect.provideService(Prepare, "mapper")),
-);
-
-it.effect(
-  "maps explicit receiving worker parameters through its declaration without replacing them",
-  () =>
-    Effect.gen(function* () {
-      const target = Agent.make("coordinator-worker", {
-        input: Schema.Struct({ value: Schema.NumberFromString }),
-        output: Schema.String,
-        instructions: "Coordinate",
-        toolkit: Toolkit.empty,
-      });
-
-      const parameters = Schema.NumberFromString;
-
-      const destination = Subagent.make("builder", {
-        target,
-        parameters,
-        prepareInput: (value) => Effect.succeed({ value: value * 2 }),
-      });
-
-      const mapper = Subagent.reportingToWorker(
-        Subagent.reporting(declaration, {
-          input: parameters,
-          prepare: (outcome) =>
-            Effect.succeed(outcome.outcome === "completed" ? outcome.result : 0),
-        }),
-        destination,
-      );
-
-      expect(yield* mapper.prepare(run)).toEqual({
-        encodedParameters: "21",
-        encodedInput: { value: "42" },
-      });
-      expect(mapper.destination?.target).toBe(target);
-      expect(() => Subagent.reportingToWorker(report, destination)).toThrow(TypeError);
-    }),
+  }),
 );
 
 it.effect(

@@ -29,7 +29,7 @@ const after = Subagent.background(HotelResearcher, { start: true, reportToParent
 
 Use `Subagent.make` when you need another name, input/result projections, grants, or budgets.
 The host registers the original Agent definition; background configuration does not derive a
-replacement Agent. Existing explicit declarations and custom completion reporting remain supported.
+replacement Agent. Explicit declarations can customize result projection; background reporting uses standard messages.
 
 ## Input and result mappings
 
@@ -497,13 +497,11 @@ Canonical `UserInputRecorded.messageAdmission` distinguishes framework completio
 provenance through the `InputMessage` Schema. Inspect `WorkerCompletion` with its Schema before
 reading a completion; use `MessageAdmission` for peer messages.
 
-For an application-specific format, pass a `Subagent.reporting(Research, { input, prepare })`
-descriptor as `reportToParent`. Its input Schema must be the parent's exact input Schema.
-The existing registration `reporting` array remains supported for stored custom-report intents;
-do not register the same descriptor twice. Projection services are captured separately from
-per-Attempt services. Declare expected mapper failures with its optional `failure` Schema.
-Change registration versions when changing projection behavior. Automatic discovery pins its
-mode and target in the registration digest; recovery never substitutes another source or target.
+Use `Subagent.WorkerReport(Research.success)` to decode a completion's report into its declared
+result type, then map it to application state on the receiving side. `Subagent.reporting`,
+`Subagent.reportingToWorker`, custom `reportToParent` descriptors, and registration `reporting`
+arrays have been removed. Projection services are captured separately from per-Attempt services.
+Change registration versions when changing result projection behavior.
 
 Application-driven starts with standard reports must acquire the host facet with the exact
 `sourceSubmissionId` whose application input supplies parent context. Model tool calls already
@@ -514,7 +512,6 @@ completion preparation use the child's own admission, execution records, and del
 they do not read the parent journal, ledger, or current authorization state. The receiving host
 verifies the canonical delivery proof and current send permission before accepting the message,
 so revocation can refuse delivery without preventing the child from durably publishing its result.
-Application-mapped reporting retains its explicit source-context contract.
 
 Workers publish effects-resolved completion receipts in their own journals. The source reads
 those exact receipts when admitting more work and copies acknowledgements into its reservation
@@ -522,9 +519,9 @@ batch under the source's fence. An unresolved external operation cannot release 
 
 Launch intent pins reporting before acceptance. Each actual child Run has one logical report,
 even when several steering Receipts join it; an input cancelled before any Run starts has no Run
-report. The declaration's result projection and optional mapper produce a frozen `PreparedInput` before
-delivery insertion. They should be deterministic and free of external side effects: a crash before
-the canonical preparation decision commits can rerun them. Delivery retries never reproject a
+report. The declaration's result projection produces a frozen `PreparedInput` before delivery insertion.
+It should be deterministic and free of external side effects: a crash before
+the canonical preparation decision commits can rerun it. Delivery retries never reproject a
 committed decision. Expected failure, defect, invalid output, or preparation timeout records a
 bounded refusal without replacing the child's outcome. Preparation has its own Scope and a
 5-second default timeout, configurable up to 30 seconds in `WorkerHostConfig`.
@@ -532,15 +529,20 @@ bounded refusal without replacing the child's outcome. Preparation has its own S
 A standard report to a parent that is itself a background worker retains that parent's
 original application input and declaration parameters. Its additional run is charged to the
 original ancestor allocation, with the same grants, lifetime, and resource ceilings. No extra
-nested-worker adapter is required. For **custom** report inputs, use
-`Subagent.reportingToWorker(report, receivingDeclaration)` to convert the receiving declaration's
-Parameters into its Agent input. A custom input cannot pretend to be the old parameters or
-obtain a fresh budget. An attached destination has no independent continuing input lifetime;
+nested-worker adapter is required. An attached destination has no independent continuing input lifetime;
 delivery to it is refused. An attached scout returns through its waiting parent's tool result.
 
 Report preparation decisions appear in authorized canonical worker history. Retained delivery
 records expose pending, accepted, processed, parked, and refused states through the host-owned
 `MessageDeliveryStore`. A child's completion and its report's processing remain separate facts.
+
+Standard registration fingerprints, worker origins, prepared envelopes and delivery/refusal records
+remain unchanged by this API removal. Historical custom-report origins remain readable without
+a storage upgrade. Already prepared envelopes and delivery/refusal evidence remain intact;
+retries reuse the saved envelope.
+Unprepared custom intents record `declaration-unavailable` instead of running a retired mapper.
+Drain custom-report work with its original release before upgrading if delivery is required.
+This does not erase canonical history or resolve unknown external-action outcomes.
 
 ## Update delivery guarantees
 

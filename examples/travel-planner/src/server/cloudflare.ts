@@ -19,6 +19,7 @@ import { TripToolsLive } from "../agent.ts";
 import type { TripSiteStore } from "../domain.ts";
 import {
   PlannerError,
+  PlannerInput,
   PlannerRpcs,
   PlannerSnapshot,
   PlannerWorkerDetail,
@@ -26,36 +27,15 @@ import {
   defaultPlannerSettings,
 } from "../domain.ts";
 import { ReadTravelPageLive } from "../research.ts";
-import { LiveConversationInput } from "../research/contracts.ts";
+import { ResearchAuthorizationLive, scoutAttemptLayer } from "../research/runtime.ts";
 import {
-  ResearchAuthorizationLive,
-  researchScoutReport,
-  conversationScoutReport,
-  scoutAttemptLayer,
-  liveScoutReport,
-  recoverableScoutReport,
-  editorReport,
-  ScoutMessagingLive,
-} from "../research/runtime.ts";
-import {
-  ExpandedResearchScoutBackground,
-  ResearchScoutBackground,
-  researchScout,
-  progressResearchScout,
-  recoverableResearchScout,
   updatingResearchScout,
   UpdatingResearchScoutBackground,
   UpdatingResearchScoutActions,
-  PreviousRecoverableResearchScoutBackground,
-  RecoverableResearchScoutBackground,
-  PreviousProgressResearchScoutBackground,
-  ProgressResearchScoutBackground,
-  PreviousResearchScoutBackground,
 } from "../research/scout.ts";
 import { AppBuildBucketLive } from "../trip-app/bindings.ts";
 import { EditorHostLive, editorAttemptLayer } from "../trip-app/editor-runtime.ts";
 import {
-  AppEditorBackground,
   ReportingAppEditorBackground,
   ReportingAppEditorActions,
   appEditor,
@@ -87,14 +67,6 @@ import {
 import { liveModel } from "./models.ts";
 import {
   planner,
-  previousVoicePlanner,
-  previousProgressPlanner,
-  previousDelegatingPlanner,
-  previousRecoverablePlanner,
-  previousTextPlanner,
-  previousBudgetPlanner,
-  previousResearchPlanner,
-  previousEditorPlanner,
   previousContinuingPlanner,
   previousAppPlanner,
   previousResponsePlanner,
@@ -324,30 +296,16 @@ export const plannerApplication = <E, R>(
   selectedModel?: Layer.Layer<Agent.ModelServices, never, PlannerAttempt>,
   sourceLayer = AppSourceLive,
 ) => {
-  const attemptLayer = (
-    context: {
-      readonly threadId: string;
-      readonly submissionId: SubmissionLookupById["submissionId"];
-      readonly attemptId: string;
-    },
-    expandedResearch: boolean | "progress" | "recoverable" | "updates" = false,
-  ) =>
+  const attemptLayer = (context: {
+    readonly threadId: string;
+    readonly submissionId: SubmissionLookupById["submissionId"];
+    readonly attemptId: string;
+  }) =>
     Layer.mergeAll(
       TripToolsLive(context.threadId),
       AppToolsLive,
-      expandedResearch === "updates" ? ReportingAppEditorActions.layer : AppEditorBackground.layer,
-      PreviousResearchScoutBackground.layer,
-      PreviousProgressResearchScoutBackground.layer,
-      PreviousRecoverableResearchScoutBackground.layer,
-      expandedResearch === "updates"
-        ? UpdatingResearchScoutActions.layer
-        : expandedResearch === "recoverable"
-          ? RecoverableResearchScoutBackground.layer
-          : expandedResearch === "progress"
-            ? ProgressResearchScoutBackground.layer
-            : expandedResearch
-              ? ExpandedResearchScoutBackground.layer
-              : ResearchScoutBackground.layer,
+      ReportingAppEditorActions.layer,
+      UpdatingResearchScoutActions.layer,
     ).pipe(
       Layer.provideMerge(
         Layer.effect(
@@ -368,9 +326,7 @@ export const plannerApplication = <E, R>(
                 Effect.flatMap((found) =>
                   Option.isNone(found) || found.value.threadId !== context.threadId
                     ? Effect.fail(unavailable())
-                    : Schema.decodeUnknownEffect(LiveConversationInput)(
-                        found.value.inputPayload,
-                      ).pipe(
+                    : Schema.decodeUnknownEffect(PlannerInput)(found.value.inputPayload).pipe(
                         Effect.map((input) => input.settings ?? defaultPlannerSettings),
                         Effect.mapError(unavailable),
                       ),
@@ -408,93 +364,6 @@ export const plannerApplication = <E, R>(
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(planner.toolkit.tools),
       }),
-      attemptLayer: (context) => attemptLayer(context, "updates"),
-    },
-    {
-      agent: previousRecoverablePlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousRecoverablePlanner.id, version: "travel-planner-v15" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousRecoverablePlanner.toolkit.tools),
-      }),
-      reporting: [recoverableScoutReport, editorReport],
-      attemptLayer: (context) => attemptLayer(context, "recoverable"),
-    },
-    {
-      agent: previousDelegatingPlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousDelegatingPlanner.id, version: "travel-planner-v14" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousDelegatingPlanner.toolkit.tools),
-      }),
-      reporting: [liveScoutReport, editorReport],
-      attemptLayer: (context) => attemptLayer(context, "progress"),
-    },
-    {
-      agent: previousProgressPlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousProgressPlanner.id, version: "travel-planner-v13" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousProgressPlanner.toolkit.tools),
-      }),
-      reporting: [liveScoutReport, editorReport],
-      attemptLayer: (context) => attemptLayer(context, "progress"),
-    },
-    {
-      agent: previousVoicePlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousVoicePlanner.id, version: "travel-planner-v12" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousVoicePlanner.toolkit.tools),
-      }),
-      reporting: [conversationScoutReport],
-      attemptLayer: (context) => attemptLayer(context, true),
-    },
-    {
-      agent: previousTextPlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousTextPlanner.id, version: "travel-planner-v11" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousTextPlanner.toolkit.tools),
-      }),
-      reporting: [researchScoutReport],
-      attemptLayer: (context) => attemptLayer(context, true),
-    },
-    {
-      agent: previousBudgetPlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousBudgetPlanner.id, version: "travel-planner-v10" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousBudgetPlanner.toolkit.tools),
-      }),
-      reporting: [researchScoutReport],
-      attemptLayer,
-    },
-    {
-      agent: previousResearchPlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousResearchPlanner.id, version: "travel-planner-v9" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousResearchPlanner.toolkit.tools),
-      }),
-      reporting: [researchScoutReport],
-      attemptLayer,
-    },
-    {
-      agent: previousEditorPlanner,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: previousEditorPlanner.id, version: "travel-planner-v8" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(previousEditorPlanner.toolkit.tools),
-      }),
       attemptLayer,
     },
     {
@@ -504,60 +373,6 @@ export const plannerApplication = <E, R>(
         agent: { id: updatingResearchScout.id, version: "travel-research-scout-v4" },
         model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
         tools: Object.keys(updatingResearchScout.toolkit.tools),
-      }),
-      attemptLayer: (context) =>
-        scoutAttemptLayer(context, true).pipe(
-          Layer.provideMerge(
-            Layer.succeed(DiagnosticContext, {
-              submissionId: context.submissionId,
-              attemptId: context.attemptId,
-            }),
-          ),
-        ),
-    },
-    {
-      agent: recoverableResearchScout,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: recoverableResearchScout.id, version: "travel-research-scout-v3" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(recoverableResearchScout.toolkit.tools),
-      }),
-      attemptLayer: (context) =>
-        scoutAttemptLayer(context, true).pipe(
-          Layer.provideMerge(
-            Layer.succeed(DiagnosticContext, {
-              submissionId: context.submissionId,
-              attemptId: context.attemptId,
-            }),
-          ),
-        ),
-    },
-    {
-      agent: progressResearchScout,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: progressResearchScout.id, version: "travel-research-scout-v2" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(progressResearchScout.toolkit.tools),
-      }),
-      attemptLayer: (context) =>
-        scoutAttemptLayer(context).pipe(
-          Layer.provideMerge(
-            Layer.succeed(DiagnosticContext, {
-              submissionId: context.submissionId,
-              attemptId: context.attemptId,
-            }),
-          ),
-        ),
-    },
-    {
-      agent: researchScout,
-      model: selectedModel ?? model,
-      definitions: DefinitionDigestInput.make({
-        agent: { id: researchScout.id, version: "travel-research-scout-v1" },
-        model: selectedModel === undefined ? modelVersion : "openai-selectable-v1",
-        tools: Object.keys(researchScout.toolkit.tools),
       }),
       attemptLayer: (context) =>
         scoutAttemptLayer(context).pipe(
@@ -655,7 +470,6 @@ export const plannerApplication = <E, R>(
     Layer.provide(EditorHostLive),
     Layer.provide(ResearchAuthorizationLive),
     Layer.provide(DiagnosticObserverLive),
-    Layer.provide(ScoutMessagingLive),
   );
 
   // Acquire the owner's SQL once, then capture the repository in the registered tools.

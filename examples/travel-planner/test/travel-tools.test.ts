@@ -20,13 +20,6 @@ import { PreviousReadTravelPage, PreviousReadTravelPageResult } from "../src/res
 import { updatingResearchScout } from "../src/research/scout.ts";
 import {
   planner,
-  previousProgressPlanner,
-  previousDelegatingPlanner,
-  previousRecoverablePlanner,
-  previousTextPlanner,
-  previousBudgetPlanner,
-  previousResearchPlanner,
-  previousEditorPlanner,
   previousAppPlanner,
   previousContinuingPlanner,
   previousCardPlanner,
@@ -112,24 +105,13 @@ it.effect("rejects unsafe nested URLs and oversize display payloads before retur
 );
 
 it.effect(
-  "requires response delivery while retaining the accepted v11/v10/v9/v8/v7/v6/v5/v4/v3/v2 contracts",
+  "requires response delivery and delegates research and editing through standard reports",
   () =>
     Effect.gen(function* () {
       expect(planner.id).toBe("travel-planner-v16");
-      expect(previousRecoverablePlanner.id).toBe("travel-planner-v15");
-      expect(previousDelegatingPlanner.id).toBe("travel-planner-v14");
-      expect(previousProgressPlanner.id).toBe("travel-planner-v13");
-      expect(previousProgressPlanner.toolkit.tools).toHaveProperty("OpenAiWebSearch");
-      expect(previousProgressPlanner.toolkit.tools).toHaveProperty("read_travel_page");
       expect(planner.toolkit.tools).not.toHaveProperty("OpenAiWebSearch");
       expect(planner.toolkit.tools).not.toHaveProperty("read_travel_page");
-      expect(previousTextPlanner.id).toBe("travel-planner-v11");
-      expect(yield* previousTextPlanner.instructions()).not.toContain("voice.messages");
       expect(yield* planner.instructions()).toContain("voice.messages");
-      expect(previousBudgetPlanner.id).toBe("travel-planner-v10");
-      expect(previousResearchPlanner.id).toBe("travel-planner-v9");
-      expect(previousEditorPlanner.id).toBe("travel-planner-v8");
-      expect(previousEditorPlanner.toolkit.tools).not.toHaveProperty("research_scout_start");
       expect(planner.toolkit.tools).toHaveProperty("research_scout_start");
       expect(planner.toolkit.tools).toHaveProperty("research_scout_follow_up");
       expect(previousContinuingPlanner.id).toBe("travel-planner-v7");

@@ -829,8 +829,8 @@ export const cancel = <
 
 /** Opt in to each model-facing operation. Waiting remains programmatic only. */
 export interface BackgroundOptions {
-  /** Deliver a standard completion, or use an optional application input mapper. */
-  readonly reportToParent?: true | WorkerReporting<unknown, unknown>;
+  /** Deliver standard completion and progress messages to the parent. */
+  readonly reportToParent?: true;
   readonly start?: true;
   readonly followUp?: true;
   readonly inspect?: true;
@@ -1062,14 +1062,7 @@ export const background = <
   declaration: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
   selected: Selected,
 ) => {
-  const report =
-    selected.reportToParent === true ? automaticReporting(declaration) : selected.reportToParent;
-
-  if (
-    report !== undefined &&
-    (report.delegationId !== declaration.delegationId || report.target !== declaration.target)
-  )
-    throw new TypeError("Background reporting must use the same subagent declaration and target");
+  const report = selected.reportToParent === true ? automaticReporting(declaration) : undefined;
 
   const reportService = Context.Service<WorkerReporting<WorkerReportPreparationFailure>>(
     `@effect-agent/capabilities/BackgroundReport/${declaration.name}/${reportingServiceId++}`,
@@ -1172,11 +1165,6 @@ export const background = <
     | Parameters["DecodingServices"]
     | Output["DecodingServices"]
     | Success["EncodingServices"];
-  type ReportServices<Report> = Report extends true
-    ? Exclude<ProjectServices, Scope.Scope>
-    : Report extends WorkerReporting<infer _E, infer R>
-      ? Exclude<R, Scope.Scope>
-      : never;
   type Services = PrepareServices | ProjectServices;
   type SelectionServices<Flag, Requirements> = Flag extends true ? Requirements : never;
 
@@ -1252,7 +1240,7 @@ export const background = <
     | SelectionServices<Selected["start"], PrepareServices>
     | SelectionServices<Selected["followUp"], PrepareServices>
     | SelectionServices<Selected["inspect"], ProjectServices>
-    | ReportServices<Selected["reportToParent"]>;
+    | SelectionServices<Selected["reportToParent"], Exclude<ProjectServices, Scope.Scope>>;
 
   // Unselected handlers are never installed. Only selected operations consume projection services.
   const reportingLayer =

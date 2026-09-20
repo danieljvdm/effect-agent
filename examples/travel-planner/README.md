@@ -16,6 +16,12 @@ It uses Cloudflare:
 The app consumes published Effect Agent packages and uses Effect Atom for client state.
 [alchemy.run.ts](alchemy.run.ts) defines the Cloudflare resources and required configuration.
 
+The current planner and scout exchange standard `WorkerUpdate` and `WorkerCompletion` messages.
+Retired planner v8–v15 and scout v1–v3 registrations and their custom report inputs are removed.
+Start fresh conversations for those demo revisions; no migration or storage reset is supplied.
+Keep their old stores and original executable release for inspection or reconciliation of unfinished
+external actions. Existing current-agent records, saved trips, accounts, and report evidence are retained.
+
 Authentication uses matching versions of `@yielded/auth` and `@yielded/auth-persistence`.
 The persistence package supplies the Drizzle adapters for the app-owned SQLite tables.
 GitHub sign-in creates flow IDs on the server; the browser retains the returned ID for the

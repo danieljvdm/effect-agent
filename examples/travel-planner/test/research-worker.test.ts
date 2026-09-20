@@ -16,16 +16,9 @@ import {
   PlannerSnapshot,
   PlannerWorkerDetail,
   Trip,
-  type PlannerSettings,
+  PlannerSettings,
 } from "../src/domain.ts";
-import {
-  previousResearchCoordinatorId,
-  researchCoordinatorId,
-  ScoutInput,
-  ScoutReportInput,
-  ScoutProgressInput,
-  ScoutProgress,
-} from "../src/research/contracts.ts";
+import { researchCoordinatorId, ScoutInput, ScoutProgress } from "../src/research/contracts.ts";
 import { fixtureOwner } from "./fixtures/identity.ts";
 
 const token = "research-worker-fixture";
@@ -196,8 +189,8 @@ const until = async <A>(read: () => Promise<A>, matches: (value: A) => boolean) 
   throw new Error(`Fixture did not settle: ${JSON.stringify(diagnostic).slice(0, 3_000)}`);
 };
 
-it("upgrades v8 trip history and v9 scouts to the current coordinator across chat and restart", async () => {
-  await fixture("seed", { thread: sourceThread }, "POST");
+it("retains research, trip edits and standard reports across chat and restart", async () => {
+  await send("Previous trip conversation");
   await until(
     () => snapshot(),
     (state) =>
@@ -225,13 +218,7 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
   const trip = Schema.decodeUnknownSync(Trip)(await seedTrip("research", "Lisbon"));
   const otherTrip = Schema.decodeUnknownSync(Trip)(await seedTrip("other-trip", "Tahoe"));
 
-  expect(
-    await fixture(
-      "seed-research",
-      { thread: sourceThread, settings: JSON.stringify(settings) },
-      "POST",
-    ),
-  ).toEqual({ accepted: true });
+  await send("start research");
 
   const active = await until(
     () => snapshot(),
@@ -368,14 +355,14 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
       journal.records.some(
         ({ record }) =>
           record.payload._tag === "WorkerOriginRecorded" &&
-          record.payload.origin.source.agentId === previousResearchCoordinatorId,
+          record.payload.origin.source.agentId === researchCoordinatorId,
       ),
     ).toBe(true);
     expect(
       journal.records.flatMap(({ record }) =>
         record.payload._tag === "WorkerOriginRecorded" ? [record.payload.origin.policy] : [],
       )[0],
-    ).toMatchObject({ maxTurns: 8, maxToolCalls: 12 });
+    ).toMatchObject({ maxTurns: 32, maxToolCalls: 64 });
   }
 
   const parent = Schema.decodeUnknownSync(ThreadExport)(
@@ -384,20 +371,18 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
 
   expect(parent.records[0]?.record.payload).toMatchObject({
     _tag: "ThreadCreated",
-    agentId: "travel-planner-v8",
+    agentId: researchCoordinatorId,
   });
 
   const reports = parent.records.flatMap(({ record }) => {
     if (record.payload._tag !== "UserInputRecorded") return [];
-    const report = Schema.decodeUnknownOption(ScoutReportInput)(record.payload.input);
 
-    return report._tag === "Some" ? [report.value] : [];
+    return Schema.is(WorkerCompletion)(record.payload.messageAdmission)
+      ? [record.payload.messageAdmission]
+      : [];
   });
 
   expect(reports.length).toBeGreaterThan(0);
-  expect(
-    reports.every((report) => JSON.stringify(report.settings) === JSON.stringify(settings)),
-  ).toBe(true);
   expect(
     parent.records.some(
       ({ record }) =>
@@ -412,169 +397,148 @@ it("upgrades v8 trip history and v9 scouts to the current coordinator across cha
   ).toBe(true);
 }, 90_000);
 
-it.each(["current", "retained", "delegating", "recoverable"])(
-  "delivers a %s sourced milestone before worker completion and accepts a correction on that active worker",
-  async (version) => {
-    const email = `progress-${version}@example.com`;
-    const thread = `${fixtureOwner(email)}--research`;
+it("delivers a sourced milestone before worker completion and accepts a correction on that active worker", async () => {
+  const email = "progress-current@example.com";
+  const thread = `${fixtureOwner(email)}--research`;
 
-    await fixture("gate", { name: "Live progress" }, "DELETE");
-    if (version !== "current")
-      await fixture(
-        "seed-progress",
-        { thread, version, settings: JSON.stringify(settings) },
-        "POST",
-      );
-    else await send("start live progress", email);
+  await fixture("gate", { name: "Live progress" }, "DELETE");
+  await send("start live progress", email);
 
-    const active = await until(
-      () => snapshot(email),
-      (state) =>
-        state.pending === 0 &&
-        state.scouts?.[0]?.state === "active" &&
-        state.messages.some(
-          (message) => message.text === "Verified milestone received while research continues.",
-        ),
-    );
-
-    const id = active.scouts?.[0]?.id;
-
-    expect(id).toBeTruthy();
-    expect(
-      (await snapshot("unrelated@example.com")).messages.some((message) =>
-        message.text.includes("milestone"),
+  const active = await until(
+    () => snapshot(email),
+    (state) =>
+      state.pending === 0 &&
+      state.scouts?.[0]?.state === "active" &&
+      state.messages.some(
+        (message) => message.text === "Verified milestone received while research continues.",
       ),
-    ).toBe(false);
-    const parent = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
+  );
 
-    const updates = parent.records.flatMap(({ record }) => {
-      if (record.payload._tag !== "UserInputRecorded") return [];
-      const message = record.payload.messageAdmission;
+  const id = active.scouts?.[0]?.id;
 
-      return Schema.is(WorkerUpdate)(message)
-        ? [
-            {
-              settings: Schema.decodeUnknownSync(ScoutProgressInput.fields.settings)(
-                Schema.decodeUnknownSync(PlannerInput)(record.payload.input).settings,
-              ),
-              finding: Schema.decodeUnknownSync(ScoutProgress)(message.update.value),
-            },
-          ]
-        : Schema.is(ScoutProgressInput)(record.payload.input)
-          ? [record.payload.input]
-          : [];
-    });
+  expect(id).toBeTruthy();
+  expect(
+    (await snapshot("unrelated@example.com")).messages.some((message) =>
+      message.text.includes("milestone"),
+    ),
+  ).toBe(false);
+  const parent = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
 
-    expect(updates).toHaveLength(1);
-    expect(updates[0]?.settings).toEqual(settings);
-    expect(updates[0]?.finding.summary).toContain("availability is unconfirmed");
-    expect(active.messages.filter(({ role }) => role === "user")).toHaveLength(1);
-    expect(active.queuedMessages).toEqual([]);
-    const requestId = active.messages.find(({ role }) => role === "user")?.requestId;
+  const updates = parent.records.flatMap(({ record }) => {
+    if (record.payload._tag !== "UserInputRecorded") return [];
+    const message = record.payload.messageAdmission;
 
-    expect(requestId).toBeTruthy();
-    expect(
-      Schema.decodeUnknownSync(VoiceWork)(
-        await rpc(
-          "GetVoiceWork",
+    return Schema.is(WorkerUpdate)(message)
+      ? [
           {
-            conversationId: "research",
-            requestId,
-          },
-          email,
-        ),
-      ),
-    ).toMatchObject({ state: "completed", superseded: false });
-    expect(active.scouts?.[0]?.progress.text.includes("availability is unconfirmed")).toBe(
-      version === "current",
-    );
-    expect(active.activity.some(({ text }) => text === "Research milestone received")).toBe(
-      version === "current",
-    );
-    // Acknowledged milestones survive reconstruction without becoming another user request.
-    await runtime.dispose();
-    runtime = makeRuntime();
-    expect((await snapshot(email)).messages.filter(({ role }) => role === "user")).toHaveLength(1);
-    await send("steer live progress 50 km", email);
-
-    const steered = await until(
-      () => snapshot(email),
-      (state) =>
-        state.pending === 0 && state.scouts?.[0]?.task.includes("Experienced at 50 km") === true,
-    );
-
-    expect(steered.scouts?.[0]?.id).toBe(id);
-    expect(steered.scouts?.[0]?.state).toBe("active");
-    await fixture("gate", { name: "Live progress" }, "POST");
-
-    const completed = await until(
-      () => snapshot(email),
-      (state) => state.pending === 0 && state.scouts?.[0]?.state === "idle",
-    );
-
-    expect(completed.scouts?.[0]?.finding?.text).toContain("Experienced at 50 km");
-    if (!id) throw new Error("Missing completed scout identity");
-    const child = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread: id }));
-
-    const failed = child.records.flatMap(({ record }) =>
-      record.payload._tag === "ToolCallSettled" &&
-      record.payload.toolName === "finish_research" &&
-      record.payload.isFailure
-        ? [record.payload]
-        : [],
-    );
-
-    expect(failed).toHaveLength(["current", "recoverable"].includes(version) ? 1 : 0);
-    expect(
-      child.records.filter(({ record }) => record.payload._tag === "RunCompleted"),
-    ).toHaveLength(1);
-
-    const completionStarted = child.records.findIndex(
-      ({ record }) =>
-        record.payload._tag === "ToolCallSettled" && record.payload.toolName === "finish_research",
-    );
-
-    // Worker settlement is visible before its completion message is admitted by
-    // the parent. Wait for that canonical message rather than racing its delivery.
-    const readParent = async () =>
-      Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
-
-    const retained =
-      version === "current"
-        ? await until(readParent, (journal) =>
-            journal.records.some(
-              ({ record }) =>
-                record.payload._tag === "UserInputRecorded" &&
-                Schema.is(WorkerCompletion)(record.payload.messageAdmission),
+            settings: Schema.decodeUnknownSync(PlannerSettings)(
+              Schema.decodeUnknownSync(PlannerInput)(record.payload.input).settings,
             ),
-          )
-        : await readParent();
+            finding: Schema.decodeUnknownSync(ScoutProgress)(message.update.value),
+          },
+        ]
+      : [];
+  });
 
-    const messages = retained.records.flatMap(({ record }) =>
-      record.payload._tag === "UserInputRecorded" ? [record.payload.messageAdmission] : [],
-    );
+  expect(updates).toHaveLength(1);
+  expect(updates[0]?.settings).toEqual(settings);
+  expect(updates[0]?.finding.summary).toContain("availability is unconfirmed");
+  expect(active.messages.filter(({ role }) => role === "user")).toHaveLength(1);
+  expect(active.queuedMessages).toEqual([]);
+  const requestId = active.messages.find(({ role }) => role === "user")?.requestId;
 
-    expect(messages.filter(Schema.is(WorkerCompletion))).toHaveLength(
-      version === "current" ? 1 : 0,
-    );
-    expect(messages.filter(Schema.is(WorkerUpdate))).toHaveLength(version === "current" ? 2 : 0);
-    expect(completed.messages.filter(({ role }) => role === "user")).toHaveLength(2);
-    expect(
-      child.records.filter(({ record }) => record.payload._tag === "AgentUpdateEmitted"),
-    ).toHaveLength(version === "current" ? 2 : 0);
-    expect(completionStarted).toBeGreaterThanOrEqual(0);
-    expect(
-      child.records
-        .slice(completionStarted)
-        .filter(
-          ({ record }) =>
-            record.payload._tag === "ToolCallSettled" &&
-            record.payload.toolName === "read_travel_page",
-        ),
-    ).toHaveLength(0);
-  },
-  90_000,
-);
+  expect(requestId).toBeTruthy();
+  expect(
+    Schema.decodeUnknownSync(VoiceWork)(
+      await rpc(
+        "GetVoiceWork",
+        {
+          conversationId: "research",
+          requestId,
+        },
+        email,
+      ),
+    ),
+  ).toMatchObject({ state: "completed", superseded: false });
+  expect(active.scouts?.[0]?.progress.text.includes("availability is unconfirmed")).toBe(true);
+  expect(active.activity.some(({ text }) => text === "Research milestone received")).toBe(true);
+  // Acknowledged milestones survive reconstruction without becoming another user request.
+  await runtime.dispose();
+  runtime = makeRuntime();
+  expect((await snapshot(email)).messages.filter(({ role }) => role === "user")).toHaveLength(1);
+  await send("steer live progress 50 km", email);
+
+  const steered = await until(
+    () => snapshot(email),
+    (state) =>
+      state.pending === 0 && state.scouts?.[0]?.task.includes("Experienced at 50 km") === true,
+  );
+
+  expect(steered.scouts?.[0]?.id).toBe(id);
+  expect(steered.scouts?.[0]?.state).toBe("active");
+  await fixture("gate", { name: "Live progress" }, "POST");
+
+  const completed = await until(
+    () => snapshot(email),
+    (state) => state.pending === 0 && state.scouts?.[0]?.state === "idle",
+  );
+
+  expect(completed.scouts?.[0]?.finding?.text).toContain("Experienced at 50 km");
+  if (!id) throw new Error("Missing completed scout identity");
+  const child = Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread: id }));
+
+  const failed = child.records.flatMap(({ record }) =>
+    record.payload._tag === "ToolCallSettled" &&
+    record.payload.toolName === "finish_research" &&
+    record.payload.isFailure
+      ? [record.payload]
+      : [],
+  );
+
+  expect(failed).toHaveLength(1);
+  expect(child.records.filter(({ record }) => record.payload._tag === "RunCompleted")).toHaveLength(
+    1,
+  );
+
+  const completionStarted = child.records.findIndex(
+    ({ record }) =>
+      record.payload._tag === "ToolCallSettled" && record.payload.toolName === "finish_research",
+  );
+
+  // Worker settlement is visible before its completion message is admitted by
+  // the parent. Wait for that canonical message rather than racing its delivery.
+  const readParent = async () =>
+    Schema.decodeUnknownSync(ThreadExport)(await fixture("journal", { thread }));
+
+  const retained = await until(readParent, (journal) =>
+    journal.records.some(
+      ({ record }) =>
+        record.payload._tag === "UserInputRecorded" &&
+        Schema.is(WorkerCompletion)(record.payload.messageAdmission),
+    ),
+  );
+
+  const messages = retained.records.flatMap(({ record }) =>
+    record.payload._tag === "UserInputRecorded" ? [record.payload.messageAdmission] : [],
+  );
+
+  expect(messages.filter(Schema.is(WorkerCompletion))).toHaveLength(1);
+  expect(messages.filter(Schema.is(WorkerUpdate))).toHaveLength(2);
+  expect(completed.messages.filter(({ role }) => role === "user")).toHaveLength(2);
+  expect(
+    child.records.filter(({ record }) => record.payload._tag === "AgentUpdateEmitted"),
+  ).toHaveLength(2);
+  expect(completionStarted).toBeGreaterThanOrEqual(0);
+  expect(
+    child.records
+      .slice(completionStarted)
+      .filter(
+        ({ record }) =>
+          record.payload._tag === "ToolCallSettled" &&
+          record.payload.toolName === "read_travel_page",
+      ),
+  ).toHaveLength(0);
+}, 90_000);
 
 it("runs six scouts and an editor beyond the old budgets, preserves them across restart, and bounds admission", async () => {
   const email = "expanded@example.com";

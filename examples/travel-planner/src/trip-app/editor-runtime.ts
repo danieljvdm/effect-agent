@@ -13,14 +13,14 @@ import { Toolkit } from "effect/unstable/ai";
 
 import { DeliverResponse } from "../agent.ts";
 import { PlannerError } from "../domain.ts";
-import { researchCoordinatorIds, expandedCoordinatorIds } from "../research/contracts.ts";
-import { ResearchScout, researchScout, researchScoutIds } from "../research/scout.ts";
+import { researchCoordinatorId } from "../research/contracts.ts";
+import { UpdatingResearchScout, updatingResearchScout } from "../research/scout.ts";
 import { activeWorkerLimit, editorPolicy, scoutPolicy } from "../server/agent-limits.ts";
 import { PlannerAttempt, ProgressStore, trackTool } from "../server/progress.ts";
 import { ownerOfThread, StorageOwner } from "../server/tenancy.ts";
 import { tripRepositoryForOwner } from "../server/trip-rpc.ts";
 import { TripRepository } from "../server/trips.ts";
-import { AppEditor, appEditor, coordinatorId, EditorInput, EditorReadTrip } from "./editor.ts";
+import { AppEditor, appEditor, EditorInput, EditorReadTrip } from "./editor.ts";
 import { appRepositoryForOwner } from "./remote.ts";
 import { AppRepository } from "./repository.ts";
 import {
@@ -71,7 +71,7 @@ export const editorAttemptLayer = (context: {
             origin.worker.threadId !== context.threadId ||
             origin.worker.targetAgentId !== appEditor.id ||
             origin.worker.delegationId !== AppEditor.delegationId ||
-            ![coordinatorId, ...researchCoordinatorIds].includes(origin.source.agentId) ||
+            origin.source.agentId !== researchCoordinatorId ||
             captured.sourceThreadId !== origin.source.threadId ||
             origin.depth !== 1
           )
@@ -193,14 +193,16 @@ export const EditorHostLive = Layer.mergeAll(
   Layer.succeed(WorkerPolicyResolver, {
     resolveSource: () => Effect.succeed(Option.none()),
     resolveTarget: (request) => {
-      if (![appEditor.id, ...researchScoutIds].includes(request.definition.id))
+      if (
+        request.definition.id !== appEditor.id &&
+        request.definition.id !== updatingResearchScout.id
+      )
         return Effect.succeed(Option.none());
       // A worker's allowance is immutable. Follow-ups and recovery retain it, including
-      // workers started by earlier coordinators; v11 and later admissions opt in.
+      // after a host policy change.
       if (request._tag === "RetainedWorker")
         return Effect.succeed(Option.some(request.origin.policy));
-      if (!expandedCoordinatorIds.includes(request.source.agentId))
-        return Effect.succeed(Option.none());
+      if (request.source.agentId !== researchCoordinatorId) return Effect.succeed(Option.none());
       if (
         request.sourceSubmission?.agentId !== request.source.agentId ||
         request.sourceSubmission.threadId !== request.source.threadId
@@ -208,7 +210,9 @@ export const EditorHostLive = Layer.mergeAll(
         return Effect.fail(WorkerError.make({ operation: "start", reason: "unavailable" }));
 
       return Effect.succeed(
-        Option.some(researchScoutIds.includes(request.definition.id) ? scoutPolicy : editorPolicy),
+        Option.some(
+          request.definition.id === updatingResearchScout.id ? scoutPolicy : editorPolicy,
+        ),
       );
     },
   }),
@@ -218,32 +222,24 @@ export const EditorHostLive = Layer.mergeAll(
       (request.worker === undefined ||
         (request.worker.delegationId === AppEditor.delegationId &&
           request.worker.targetAgentId === appEditor.id) ||
-        (request.worker.delegationId === ResearchScout.delegationId &&
-          researchScoutIds.includes(request.worker.targetAgentId)))
+        (request.worker.delegationId === UpdatingResearchScout.delegationId &&
+          request.worker.targetAgentId === updatingResearchScout.id))
         ? Effect.succeed(request.principal)
         : Effect.fail(WorkerError.make({ operation: request.operation, reason: "denied" })),
   }),
   Layer.succeed(WorkerBudgetAuthorizer, {
     authorize: (request) => {
-      const expanded = expandedCoordinatorIds.includes(request.source.agentId);
-
       const editor =
-        [coordinatorId, ...researchCoordinatorIds].includes(request.source.agentId) &&
+        request.source.agentId === researchCoordinatorId &&
         request.worker.delegationId === AppEditor.delegationId &&
         request.worker.targetAgentId === appEditor.id;
 
       const scout =
-        researchCoordinatorIds.includes(request.source.agentId) &&
-        request.worker.delegationId === ResearchScout.delegationId &&
-        researchScoutIds.includes(request.worker.targetAgentId);
+        request.source.agentId === researchCoordinatorId &&
+        request.worker.delegationId === UpdatingResearchScout.delegationId &&
+        request.worker.targetAgentId === updatingResearchScout.id;
 
-      const ceiling = editor
-        ? expanded
-          ? editorPolicy
-          : appEditor.policy
-        : expanded
-          ? scoutPolicy
-          : researchScout.policy;
+      const ceiling = editor ? editorPolicy : scoutPolicy;
 
       return sourceAllowed(request.source.threadId, request.principal) &&
         (editor || scout) &&

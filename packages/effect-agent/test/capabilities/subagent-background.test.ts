@@ -306,24 +306,6 @@ describe("Subagent background authoring", () => {
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
-  it("rejects reporting from another version of the same direct Agent identity", () => {
-    const otherVersion = Agent.make("worker-target", {
-      input: target.input,
-      output: target.output,
-      toolkit: Toolkit.empty,
-      instructions: "A different version.",
-    });
-
-    const reporting = Subagent.reporting(Subagent.make("worker-target", { target: otherVersion }), {
-      input: Schema.String,
-      prepare: () => Effect.succeed("done"),
-    });
-
-    expect(() => Subagent.background(target, { start: true, reportToParent: reporting })).toThrow(
-      "same subagent declaration and target",
-    );
-  });
-
   it.effect("isolates versioned report projections and closes their scoped resources", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -412,19 +394,6 @@ describe("Subagent background authoring", () => {
       }),
     ),
   );
-
-  it("rejects an optional mapper belonging to another declaration", () => {
-    const other = Subagent.make("other", { target });
-
-    const reporting = Subagent.reporting(other, {
-      input: Schema.String,
-      prepare: () => Effect.succeed("done"),
-    });
-
-    expect(() =>
-      Subagent.background(delegation, { start: true, reportToParent: reporting }),
-    ).toThrow("same subagent declaration and target");
-  });
 
   // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
   it.effect(
