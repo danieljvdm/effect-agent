@@ -37,9 +37,8 @@ const admin = <A, E>(effect: Effect.Effect<A, E, PgClient.PgClient>) =>
   );
 
 /**
- * Each case owns a database: selecting a schema instead needs `search_path`, which binds per
- * connection and so cannot be set for a pool through this driver. `WITH (FORCE)` ends any
- * pooled connection the case left open.
+ * Each case owns a database, including its database-scoped writer lock. `WITH (FORCE)` ends
+ * any pooled connection the case left open.
  */
 export const withTemporaryDatabase = <A, E>(
   use: (url: string) => Effect.Effect<A, E>,
@@ -78,9 +77,8 @@ export const configLayer = (url: string) =>
   layerConfig({ client: { url: Redacted.make(url) }, observationPollInterval: 1 });
 
 /**
- * The services a store Layer needs over exactly one connection. The adapter bounds the
- * writer-lock wait with a session-level `lock_timeout` on whichever pooled connection ran
- * startup, so a single connection is what makes that bound hold for the write under test.
+ * Services over exactly one connection, so a successful retry also proves the preceding
+ * failed transaction rolled back and returned a usable connection to the pool.
  */
 export const singleConnectionServices = (url: string, lockTimeout: number) =>
   Layer.mergeAll(

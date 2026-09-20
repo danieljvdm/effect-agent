@@ -1,5 +1,5 @@
+import { createStorageSchema } from "@effect-agent/storage-sql/sql-storage-schema";
 import { Effect } from "effect";
-import { createStorageSchema } from "effect-agent/sql-storage-schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 export const CurrentPostgresStorageVersion = 1;

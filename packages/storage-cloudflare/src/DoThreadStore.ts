@@ -1,3 +1,4 @@
+import { makeSelectedReads } from "@effect-agent/storage-sql/sql-thread-native-reads";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
@@ -21,7 +22,6 @@ import {
   Digest,
   ObservationOffset,
 } from "effect-agent/records";
-import { makeSelectedReads } from "effect-agent/sql-thread-native-reads";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
 import {
   AppendConflict,

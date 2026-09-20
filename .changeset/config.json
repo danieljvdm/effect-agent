@@ -17,6 +17,7 @@
       "@effect-agent/storage-cloudflare",
       "@effect-agent/storage-memory",
       "@effect-agent/storage-postgres",
+      "@effect-agent/storage-sql",
       "@effect-agent/storage-sqlite",
       "@effect-agent/testing",
       "@effect-agent/workflow",

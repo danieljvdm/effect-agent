@@ -1,10 +1,10 @@
-import { BrowserCrypto } from "@effect/platform-browser";
-import { Context, Effect, Layer, Schema } from "effect";
-import { upgradeV2Subscriptions } from "effect-agent/sql-storage-v2-upgrade";
+import { upgradeV2Subscriptions } from "@effect-agent/storage-sql/sql-storage-v2-upgrade";
 import {
   makeSqlSubscriptionStore,
   SqlSubscriptionTransaction,
-} from "effect-agent/sql-subscription-store";
+} from "@effect-agent/storage-sql/sql-subscription-store";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { Context, Effect, Layer, Schema } from "effect";
 import {
   SourcePartition,
   SubscriptionError,

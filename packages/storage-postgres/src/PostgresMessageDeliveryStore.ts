@@ -1,13 +1,13 @@
+import {
+  makeSqlMessageDeliveryStore,
+  SqlMessageDeliveryTransaction,
+} from "@effect-agent/storage-sql/sql-message-delivery-store";
 import { Effect, Layer } from "effect";
 import {
   MessageDeliveryError,
   MessageDeliveryStore,
   type MessageDeliveryStoreLimits,
 } from "effect-agent/message-delivery";
-import {
-  makeSqlMessageDeliveryStore,
-  SqlMessageDeliveryTransaction,
-} from "effect-agent/sql-message-delivery-store";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { initializePostgresJournal } from "./internal/postgres-journal.ts";

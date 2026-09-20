@@ -13,6 +13,7 @@
         "@effect-agent/sandbox-local": "workspace:*",
         "@effect-agent/storage-memory": "workspace:*",
         "@effect-agent/storage-postgres": "workspace:*",
+        "@effect-agent/storage-sql": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",
         "@effect-agent/testing": "workspace:*",
         "@effect-agent/workflow": "workspace:*",
@@ -229,6 +230,7 @@
       "name": "@effect-agent/storage-cloudflare",
       "version": "0.1.0-beta.140",
       "dependencies": {
+        "@effect-agent/storage-sql": "workspace:*",
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
         "effect-agent": "workspace:*",
@@ -268,6 +270,7 @@
       "name": "@effect-agent/storage-postgres",
       "version": "0.1.0-beta.109",
       "dependencies": {
+        "@effect-agent/storage-sql": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-pg": "catalog:",
         "effect-agent": "workspace:*",
@@ -282,10 +285,27 @@
         "effect": "^4.0.0-rc.115",
       },
     },
+    "packages/storage-sql": {
+      "name": "@effect-agent/storage-sql",
+      "version": "0.1.0-beta.124",
+      "dependencies": {
+        "effect-agent": "workspace:*",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "effect": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "^4.0.0-rc.116",
+      },
+    },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
       "version": "0.1.0-beta.140",
       "dependencies": {
+        "@effect-agent/storage-sql": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-node": "catalog:",
         "effect-agent": "workspace:*",
@@ -764,6 +784,8 @@
     "@effect-agent/storage-memory": ["@effect-agent/storage-memory@workspace:packages/storage-memory"],
 
     "@effect-agent/storage-postgres": ["@effect-agent/storage-postgres@workspace:packages/storage-postgres"],
+
+    "@effect-agent/storage-sql": ["@effect-agent/storage-sql@workspace:packages/storage-sql"],
 
     "@effect-agent/storage-sqlite": ["@effect-agent/storage-sqlite@workspace:packages/storage-sqlite"],
 

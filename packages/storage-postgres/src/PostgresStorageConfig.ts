@@ -6,7 +6,7 @@ import { PostgresStorageError } from "./PostgresStorageError.ts";
 import type { PostgresStorageFailpointHandler } from "./PostgresStorageFailpoint.ts";
 
 const ObservationPollInterval = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
-const LockTimeoutMillis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+const LockTimeoutMillis = Schema.Int.check(Schema.isGreaterThan(0));
 const OwnershipLeaseMillis = Schema.Int.check(Schema.isGreaterThan(0));
 
 const SchemaName = Schema.NonEmptyString.check(
@@ -24,7 +24,7 @@ export class PostgresStorageConfigValue extends Schema.Class<PostgresStorageConf
 )({
   observationPollInterval: ObservationPollInterval,
   /**
-   * Bounded wait on the writer lock, in milliseconds. Exceeding it fails with the retryable
+   * Positive bounded wait on the writer lock, in milliseconds. PostgreSQL zero disables the timeout. Exceeding it fails with the retryable
    * `PostgresWriteContention` rather than holding a pooled connection indefinitely.
    */
   lockTimeout: LockTimeoutMillis,
@@ -56,10 +56,9 @@ export interface PostgresStorageOptions {
   /**
    * Postgres schema holding the adapter's tables, created if absent. Defaults to `public`.
    *
-   * Selecting any other schema requires it to be the *connection's* default, because
-   * `search_path` binds per connection and this driver exposes no way to set one for a pool.
-   * Set it with `ALTER ROLE ... SET search_path` or `ALTER DATABASE ... SET search_path`; the
-   * adapter verifies the effective schema at startup and refuses to run if it disagrees.
+   * Convenience layers send this schema as every pooled connection's startup search path.
+   * When supplying services directly, build the client with `PostgresStorageClient.layer(client,
+   * schema)` and supply the same schema in `PostgresStorageConfig`.
    */
   readonly schema?: string | undefined;
   readonly observationPollInterval?: number | undefined;

@@ -73,7 +73,8 @@ Provider integrations come from upstream Effect AI Layers, including `@effect/ai
 `ai-decision` owns thread model selection and consumes Effect's native `Decision` and `DecisionModel`.
 
 ```text
-effect-agent <- storage adapters
+effect-agent <- storage-sql <- storage-sqlite / storage-postgres / storage-cloudflare
+effect-agent <- storage-memory
 effect-agent <- workflow
 effect-agent + selected adapters <- platform packages
 effect-agent <- sandbox-local
@@ -190,7 +191,7 @@ retain a cached preview after a deployment.
 
 ## Releasing to npm
 
-All eleven public packages share one Changesets fixed group and publish to `beta`
+All thirteen public packages share one Changesets fixed group and publish to `beta`
 as `X.Y.Z-beta.N`. Keep the group in `.changeset/config.json` aligned with public workspaces.
 The travel planner is a private application with no package version. It does not receive
 changesets, version bumps, changelogs, package tags, or npm releases. Private-package versioning
@@ -521,7 +522,7 @@ task fingerprints. Ordinary task results are reused only when task inputs match.
 
 ### Release metadata CI {#release-metadata-ci}
 
-`scripts/release-ci.ts` reuses static checks and all eight test-matrix gates from ordinary
+`scripts/release-ci.ts` reuses static checks and all ten test-matrix gates from ordinary
 `CI` on the exact source base, both on the version PR and after its merge. The verifier and its
 dependencies run from that base, with read-only contents, Actions and pull-request permissions.
 Candidate files are read as Git objects; the proof does not execute candidate code.

@@ -1,4 +1,4 @@
-import { createStorageSchema } from "effect-agent/sql-storage-schema";
+import { createStorageSchema } from "@effect-agent/storage-sql/sql-storage-schema";
 import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";

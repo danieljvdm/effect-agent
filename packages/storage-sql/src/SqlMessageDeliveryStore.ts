@@ -1,8 +1,5 @@
 import { Context, Effect, Schema } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
-
-import { ThreadId } from "../core/Identifiers.ts";
+import { ThreadId } from "effect-agent/identifiers";
 import {
   applyMessageDeliveryChange,
   defaultMessageDeliveryStoreLimits,
@@ -20,10 +17,72 @@ import {
   messageDeliveryCapacity,
   sameMessageDeliveryIdentity,
   validateMessageDelivery,
-} from "./MessageDelivery.ts";
-import { ScheduleInstant } from "./Schedule.ts";
-import { jsonText } from "./SqlJson.ts";
-import { IdempotencyKey } from "./SubmissionLedger.ts";
+} from "effect-agent/message-delivery";
+import { ScheduleInstant } from "effect-agent/schedule";
+import { IdempotencyKey } from "effect-agent/submission-ledger";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import type { SqlError } from "effect/unstable/sql/SqlError";
+
+import { sqliteJsonText, queryIdentifier } from "./internal/sql-json.ts";
+
+const workerPaths = {
+  delegationId: ["envelope", "workerAdmission", "origin", "worker", "delegationId"],
+  targetAgentId: ["envelope", "workerAdmission", "origin", "worker", "targetAgentId"],
+  threadId: ["envelope", "workerAdmission", "origin", "worker", "threadId"],
+} as const;
+
+const workerField = (sql: SqlClient.SqlClient, field: keyof typeof workerPaths) =>
+  sql.onDialectOrElse({
+    orElse: () => sqliteJsonText(sql, "record_json", workerPaths[field]),
+    pg: () => sql.literal(`(read_metadata ->> '${field}')`),
+  });
+
+const workerStart = (sql: SqlClient.SqlClient) =>
+  sql.onDialectOrElse({
+    orElse: () =>
+      sql`message_id = ${sqliteJsonText(sql, "record_json", ["envelope", "workerAdmission", "origin", "firstMessageId"])}`,
+    pg: () => sql`(read_metadata ->> 'workerStart') = 'true'`,
+  });
+
+const withoutReceipt = (sql: SqlClient.SqlClient) =>
+  sql.onDialectOrElse({
+    orElse: () => sql`${sqliteJsonText(sql, "record_json", ["receipt"])} IS NULL`,
+    pg: () => sql`(read_metadata ->> 'hasReceipt') = 'false'`,
+  });
+
+const encodeMetadata = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      workerUpdate: Schema.Boolean,
+      delegationId: Schema.NullOr(Schema.String),
+      targetAgentId: Schema.NullOr(Schema.String),
+      threadId: Schema.NullOr(Schema.String),
+      workerStart: Schema.Boolean,
+      hasReceipt: Schema.Boolean,
+    }),
+  ),
+);
+
+const deliveryMetadata = (record: MessageDeliveryRecord): string => {
+  const origin = record.envelope.workerAdmission?.origin;
+
+  return encodeMetadata({
+    workerUpdate: isWorkerUpdateDelivery(record),
+    delegationId: origin === undefined ? null : JSON.stringify(origin.worker.delegationId),
+    targetAgentId: origin === undefined ? null : JSON.stringify(origin.worker.targetAgentId),
+    threadId: origin === undefined ? null : JSON.stringify(origin.worker.threadId),
+    workerStart: record.key.messageId === origin?.firstMessageId,
+    hasReceipt: record.receipt !== null,
+  });
+};
+
+/** Mirrors the adapter's worker-control lookups without parsing arbitrary payload text on Postgres. */
+export const createWorkerControlIndexes = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  yield* sql`CREATE INDEX effect_agent_worker_starts ON effect_agent_message_deliveries(owner_thread_id, ${workerField(sql, "delegationId")}, ${workerField(sql, "targetAgentId")}, message_id) WHERE ${workerStart(sql)}`;
+  yield* sql`CREATE INDEX effect_agent_worker_pending ON effect_agent_message_deliveries(owner_thread_id, ${workerField(sql, "threadId")}, message_id) WHERE state IN ('pending', 'parked') AND ${withoutReceipt(sql)}`;
+});
 
 /** The adapter owns the atomic transaction and any associated native wake/alarm update. */
 export class SqlMessageDeliveryTransaction extends Context.Service<
@@ -199,7 +258,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
         const counts = yield* query(
           "count",
-          sql`SELECT COUNT(*) AS retained, COALESCE(SUM(CASE WHEN state IN ('pending', 'accepted', 'parked') THEN 1 ELSE 0 END), 0) AS pending FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.key.ownerThreadId} AND COALESCE(${jsonText(sql, "record_json", ["envelope", "messageAdmission", "_tag"])}, '') ${update ? sql`= 'WorkerUpdate'` : sql`<> 'WorkerUpdate'`}`,
+          sql`SELECT COUNT(*) AS retained, COALESCE(SUM(CASE WHEN state IN ('pending', 'accepted', 'parked') THEN 1 ELSE 0 END), 0) AS pending FROM effect_agent_message_deliveries WHERE owner_thread_id = ${input.key.ownerThreadId} AND ${sql.onDialectOrElse({ orElse: () => sql`COALESCE(${sqliteJsonText(sql, "record_json", ["envelope", "messageAdmission", "_tag"])}, '') ${update ? sql`= 'WorkerUpdate'` : sql`<> 'WorkerUpdate'`}`, pg: () => sql`(read_metadata ->> 'workerUpdate') = ${String(update)}` })}`,
         );
 
         const count = (yield* Schema.decodeUnknownEffect(Schema.Array(Count))(counts).pipe(
@@ -211,7 +270,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
           return yield* MessageDeliveryError.make({ reason: "capacity", operation: "insert" });
         yield* query(
           "insert",
-          sql`INSERT INTO effect_agent_message_deliveries (owner_thread_id, message_id, version, state, deadline_at_millis, record_json) VALUES (${input.key.ownerThreadId}, ${input.key.messageId}, ${input.version}, ${input.status}, ${messageDeliveryDeadline(input)}, ${text})`,
+          sql`INSERT INTO effect_agent_message_deliveries (owner_thread_id, message_id, version, state, deadline_at_millis, record_json ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata` })}) VALUES (${input.key.ownerThreadId}, ${input.key.messageId}, ${input.version}, ${input.status}, ${messageDeliveryDeadline(input)}, ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, ${deliveryMetadata(input)}::jsonb` })})`,
         );
 
         return input;
@@ -243,7 +302,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
         const updated = yield* query(
           "change",
-          sql`UPDATE effect_agent_message_deliveries SET version = ${next.version}, state = ${next.status}, deadline_at_millis = ${messageDeliveryDeadline(next)}, record_json = ${text} WHERE owner_thread_id = ${decodedKey.ownerThreadId} AND message_id = ${decodedKey.messageId} AND version = ${input.expectedVersion} RETURNING owner_thread_id, message_id, version, state, deadline_at_millis, record_json`,
+          sql`UPDATE effect_agent_message_deliveries SET version = ${next.version}, state = ${next.status}, deadline_at_millis = ${messageDeliveryDeadline(next)}, record_json = ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata = ${deliveryMetadata(next)}::jsonb` })} WHERE owner_thread_id = ${decodedKey.ownerThreadId} AND message_id = ${decodedKey.messageId} AND version = ${input.expectedVersion} RETURNING owner_thread_id, message_id, version, state, deadline_at_millis, record_json`,
         );
 
         const rows = yield* decodeRows(updated);
@@ -275,15 +334,15 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
         ${
           input.workerStarts === undefined
             ? sql``
-            : sql`AND json_extract(record_json, '$.envelope.workerAdmission.origin.worker.delegationId') = ${input.workerStarts.delegationId}
-          AND json_extract(record_json, '$.envelope.workerAdmission.origin.worker.targetAgentId') = ${input.workerStarts.targetAgentId}
-          AND message_id = json_extract(record_json, '$.envelope.workerAdmission.origin.firstMessageId')`
+            : sql`AND ${workerField(sql, "delegationId")} = ${queryIdentifier(sql, input.workerStarts.delegationId)}
+          AND ${workerField(sql, "targetAgentId")} = ${queryIdentifier(sql, input.workerStarts.targetAgentId)}
+          AND ${workerStart(sql)}`
         }
         ${
           input.pendingWorker === undefined
             ? sql``
-            : sql`AND json_extract(record_json, '$.envelope.workerAdmission.origin.worker.threadId') = ${input.pendingWorker}
-          AND state IN ('pending', 'parked') AND json_extract(record_json, '$.receipt') IS NULL`
+            : sql`AND ${workerField(sql, "threadId")} = ${queryIdentifier(sql, input.pendingWorker)}
+          AND state IN ('pending', 'parked') AND ${withoutReceipt(sql)}`
         }
         ORDER BY message_id LIMIT ${input.limit + 1}`,
       );

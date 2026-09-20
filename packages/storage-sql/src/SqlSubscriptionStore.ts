@@ -1,9 +1,5 @@
 import { Clock, Context, Effect, Result, Schema } from "effect";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
-
-import { Digest } from "./Records.ts";
-import { jsonIsTrue, jsonIsValid } from "./SqlJson.ts";
+import { Digest } from "effect-agent/records";
 import {
   AcceptedEvent,
   DeliveryChange,
@@ -22,7 +18,7 @@ import {
   SubscriptionScanCursors,
   SubscriptionStore,
   subscriptionDeliveryKeyString,
-} from "./Subscription.ts";
+} from "effect-agent/subscription";
 import {
   applySubscriptionDeliveryChange,
   applySubscriptionChange,
@@ -31,7 +27,11 @@ import {
   sameSourcePartition,
   subscriptionCanSelect,
   subscriptionDeliveryCanSelect,
-} from "./SubscriptionTransition.ts";
+} from "effect-agent/subscription-transition";
+import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import type { SqlError } from "effect/unstable/sql/SqlError";
+
+import { sqliteJsonIsTrue, jsonIsValid } from "./internal/sql-json.ts";
 
 const CountRow = Schema.Struct({ count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) });
 const SequenceRow = Schema.Struct({ sequence: Schema.Natural });
@@ -383,6 +383,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       sql<Record<string, unknown>>`
       UPDATE effect_agent_subscription_deliveries SET state=${delivery.state},
         next_attempt_at_millis=${delivery.retry.nextAttemptAtMillis}, record_json=${json}
+        ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, retry_parked=${delivery.retry.parked === true}, observe_settlement=${delivery.observeSettlement === true}` })}
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND owner_id=${delivery.key.subscription.ownerId} AND subscription_id=${delivery.key.subscription.subscriptionId}
         AND event_id=${delivery.key.eventId}
@@ -752,9 +753,11 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     yield* query(
       sql<Record<string, unknown>>`
       INSERT INTO effect_agent_subscription_deliveries (tenant_id, source_address, owner_id, subscription_id, event_id,
-        delivery_key, state, next_attempt_at_millis, record_json)
+        delivery_key, state, next_attempt_at_millis, record_json
+        ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, retry_parked, observe_settlement` })})
       VALUES (${partition.tenantId}, ${partition.address}, ${delivery.key.subscription.ownerId}, ${delivery.key.subscription.subscriptionId},
-        ${delivery.key.eventId}, ${subscriptionDeliveryKeyString(delivery.key)}, ${delivery.state}, ${delivery.retry.nextAttemptAtMillis}, ${json})
+        ${delivery.key.eventId}, ${subscriptionDeliveryKeyString(delivery.key)}, ${delivery.state}, ${delivery.retry.nextAttemptAtMillis}, ${json}
+        ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, ${delivery.retry.parked === true}, ${delivery.observeSettlement === true}` })})
     `,
       "insert delivery",
     );
@@ -968,7 +971,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       sql<Record<string, unknown>>`
       SELECT owner_id, subscription_id, event_id FROM effect_agent_subscription_deliveries
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN ${jsonIsValid(sql, "record_json")} THEN
-          ((state NOT IN ('delivered','refused') AND NOT ${jsonIsTrue(sql, "record_json", ["retry", "parked"])}) OR (state='delivered' AND ${jsonIsTrue(sql, "record_json", ["observeSettlement"])}))
+          ((state NOT IN ('delivered','refused') AND NOT ${sql.onDialectOrElse({ orElse: () => sqliteJsonIsTrue(sql, "record_json", ["retry", "parked"]), pg: () => sql`retry_parked` })}) OR (state='delivered' AND ${sql.onDialectOrElse({ orElse: () => sqliteJsonIsTrue(sql, "record_json", ["observeSettlement"]), pg: () => sql`observe_settlement` })}))
           ELSE state<>'refused' END
         AND next_attempt_at_millis<=${nowMillis} AND delivery_key>${after} ORDER BY delivery_key LIMIT ${limit}
     `,
@@ -1154,7 +1157,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND routing_complete=0
       UNION ALL SELECT next_attempt_at_millis FROM effect_agent_subscription_deliveries
         WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN ${jsonIsValid(sql, "record_json")} THEN
-          ((state NOT IN ('delivered','refused') AND NOT ${jsonIsTrue(sql, "record_json", ["retry", "parked"])}) OR (state='delivered' AND ${jsonIsTrue(sql, "record_json", ["observeSettlement"])}))
+          ((state NOT IN ('delivered','refused') AND NOT ${sql.onDialectOrElse({ orElse: () => sqliteJsonIsTrue(sql, "record_json", ["retry", "parked"]), pg: () => sql`retry_parked` })}) OR (state='delivered' AND ${sql.onDialectOrElse({ orElse: () => sqliteJsonIsTrue(sql, "record_json", ["observeSettlement"]), pg: () => sql`observe_settlement` })}))
           ELSE state<>'refused' END
       UNION ALL SELECT next_maintenance_at_millis FROM effect_agent_event_retention
           WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}

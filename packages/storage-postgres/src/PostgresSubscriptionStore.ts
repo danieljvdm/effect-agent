@@ -1,8 +1,8 @@
-import { Effect, Layer, Schema } from "effect";
 import {
   makeSqlSubscriptionStore,
   SqlSubscriptionTransaction,
-} from "effect-agent/sql-subscription-store";
+} from "@effect-agent/storage-sql/sql-subscription-store";
+import { Effect, Layer, Schema } from "effect";
 import { SourcePartition, SubscriptionError, SubscriptionStore } from "effect-agent/subscription";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
@@ -43,9 +43,18 @@ const makeSubscriptionStore = Effect.fn("PostgresSubscriptionStore.make")(functi
 
   yield* initializePostgresJournal();
 
-  return yield* makeSqlSubscriptionStore(partition, {
-    maxStoredJsonLength: 16 * 1024 * 1024,
-  });
+  const sql = yield* SqlClientService.SqlClient;
+  const { lockTimeout } = yield* PostgresStorageConfig;
+
+  // Its lazily created retention tables/indexes must share the same writer lock as journal DDL.
+  return yield* withWriterLockTransaction(
+    sql,
+    lockTimeout,
+  )(makeSqlSubscriptionStore(partition, { maxStoredJsonLength: 16 * 1024 * 1024 })).pipe(
+    Effect.catchTag("SqlError", () =>
+      Effect.fail(SubscriptionError.make({ reason: "storage", code: "initialize" })),
+    ),
+  );
 });
 
 export const layer = (

@@ -17,6 +17,9 @@
       "path": "./packages/storage-memory"
     },
     {
+      "path": "./packages/storage-sql"
+    },
+    {
       "path": "./packages/storage-sqlite"
     },
     {

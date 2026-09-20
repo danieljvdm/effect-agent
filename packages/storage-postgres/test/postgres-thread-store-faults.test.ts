@@ -16,8 +16,10 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   Cause,
   DateTime,
+  Deferred,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Option,
   Redacted,
@@ -33,10 +35,13 @@ import {
   CanonicalSequence,
   ProducerEpoch,
   RunCompleted,
+  ToolCallPrepared,
+  ToolCallSettled,
   UserInputRecorded,
   type CanonicalRecordPayload,
 } from "effect-agent/records";
 import {
+  type SelectedThreadRead,
   FencedAppendRequest,
   LoadCheckpointRequest,
   SaveCheckpointRequest,
@@ -49,7 +54,9 @@ import {
   type AppendResult,
 } from "effect-agent/thread-store";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import * as Statement from "effect/unstable/sql/Statement";
 
+import { WRITER_LOCK_KEY } from "../src/internal/postgres-transactions.ts";
 import {
   clientLayer,
   singleConnectionServices,
@@ -195,6 +202,239 @@ const singleConnectionStore = (url: string, lockTimeout: number) =>
   );
 
 describe("PostgresThreadStore faults", () => {
+  it.live(
+    "keeps outstanding records in the captured snapshot while another client settles them",
+    () =>
+      withTemporaryDatabase((url) =>
+        withStorage(
+          url,
+          Effect.scoped(
+            Effect.gen(function* () {
+              const store = yield* ThreadStore;
+
+              yield* store.materialize(
+                ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
+              );
+              const toolCallId = id(ToolCallPrepared.fields.toolCallId, "snapshot-call");
+
+              const prepared = canonicalRecord(
+                "snapshot-prepared",
+                ToolCallPrepared.make({
+                  runId,
+                  turnId: id(ToolCallPrepared.fields.turnId, "snapshot-turn"),
+                  turn: 1,
+                  toolCallId,
+                  toolName: "write",
+                  parameters: { original: true },
+                  parametersDigest: EMPTY_TAIL_DIGEST,
+                  executionKind: "orchestration",
+                  executionClass: "uncertain",
+                }),
+              );
+
+              const tail = yield* append(store, batch("snapshot-prepared", [prepared]));
+              const paused = yield* Deferred.make<void>();
+              const resume = yield* Deferred.make<void>();
+
+              const reader = yield* store
+                .read({
+                  threadId,
+                  page: { limit: 10 },
+                  selection: {
+                    _tag: "Outstanding",
+                    expectedTailSequence: tail.lastSequence,
+                    expectedTailDigest: tail.tailDigest,
+                  },
+                } satisfies SelectedThreadRead)
+                .pipe(
+                  Stream.runCollect,
+                  Effect.provideService(Statement.CurrentTransformer, (statement) =>
+                    statement.compile()[0].includes("AND outstanding <> 0")
+                      ? Deferred.succeed(paused, undefined).pipe(
+                          Effect.andThen(Deferred.await(resume)),
+                          Effect.as(statement),
+                        )
+                      : Effect.succeed(statement),
+                  ),
+                  Effect.forkScoped,
+                );
+
+              // Pause after tail validation but before the mutable outstanding index is queried.
+              yield* Deferred.await(paused).pipe(Effect.timeout("2 seconds"));
+
+              const settled = yield* withStorage(
+                url,
+                Effect.gen(function* () {
+                  const writer = yield* ThreadStore;
+
+                  return yield* append(
+                    writer,
+                    batch("snapshot-settled", [
+                      canonicalRecord(
+                        "snapshot-settled",
+                        ToolCallSettled.make({
+                          runId,
+                          toolCallId,
+                          toolName: "write",
+                          result: { receipt: "supplier-receipt" },
+                          isFailure: false,
+                        }),
+                      ),
+                    ]),
+                    tail,
+                  );
+                }),
+              );
+
+              yield* Deferred.succeed(resume, undefined);
+              expect((yield* Fiber.join(reader)).map((envelope) => envelope.record)).toEqual([
+                prepared,
+              ]);
+
+              const current = yield* store
+                .read({
+                  threadId,
+                  page: { limit: 10 },
+                  selection: {
+                    _tag: "Outstanding",
+                    expectedTailSequence: settled.lastSequence,
+                    expectedTailDigest: settled.tailDigest,
+                  },
+                } satisfies SelectedThreadRead)
+                .pipe(Stream.runCollect);
+
+              expect(current).toEqual([]);
+            }),
+          ),
+        ),
+      ),
+  );
+
+  it.effect(
+    "preserves arbitrary JSON strings through append, native lookup, replay and reopen",
+    () =>
+      withTemporaryDatabase((url) => {
+        const text = "nul:\u0000 lone:\ud800 slash:\\u0000 emoji:😀";
+        const unusualRunId = id(RunCompleted.fields.runId, "run-\u0000-\ud800");
+
+        const record = canonicalRecord(
+          "unicode-record",
+          UserInputRecorded.make({
+            submissionId,
+            kind: "user",
+            runId: unusualRunId,
+            input: { text },
+          }),
+        );
+
+        const canonicalBatch = batch("unicode-batch", [record]);
+
+        return Effect.gen(function* () {
+          yield* withStorage(
+            url,
+            Effect.gen(function* () {
+              const store = yield* ThreadStore;
+
+              yield* store.materialize(
+                ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
+              );
+              const appended = yield* append(store, canonicalBatch);
+
+              expect(appended.replayed).toBe(false);
+              expect((yield* append(store, canonicalBatch)).replayed).toBe(true);
+            }),
+          );
+          yield* withVerifiedStorage(
+            url,
+            Effect.gen(function* () {
+              const store = yield* ThreadStore;
+
+              const selected = yield* store
+                .read({
+                  threadId,
+                  selection: { _tag: "RunInput", runId: unusualRunId },
+                  page: { limit: 2 },
+                } satisfies SelectedThreadRead)
+                .pipe(Stream.runCollect);
+
+              expect(selected.map((envelope) => envelope.record)).toEqual([record]);
+              const exported = yield* store.export(ThreadExportRequest.make({ threadId }));
+
+              expect(exported.records.map((envelope) => envelope.record)).toEqual([record]);
+            }),
+          );
+        });
+      }),
+  );
+
+  it.live(
+    "interrupts a blocked writer before its lock timeout and reuses the rolled-back connection",
+    () =>
+      withTemporaryDatabase((url) =>
+        Effect.gen(function* () {
+          const store = yield* ThreadStore;
+          const writerSql = yield* SqlClientService.SqlClient;
+
+          yield* store.materialize(
+            ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
+          );
+          const [{ pid }] = yield* writerSql<{ pid: number }>`SELECT pg_backend_pid() AS pid`;
+          const pending = batch("cancelled-writer", [inputRecord("cancelled-record", "retry")]);
+
+          const cancellation = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const sql = yield* SqlClientService.SqlClient;
+              const blocker = yield* sql.reserve;
+
+              return yield* Effect.acquireUseRelease(
+                blocker.executeUnprepared("BEGIN", [], undefined),
+                () =>
+                  Effect.gen(function* () {
+                    yield* blocker.executeUnprepared(
+                      `SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`,
+                      [],
+                      undefined,
+                    );
+                    const writer = yield* append(store, pending).pipe(Effect.forkScoped);
+
+                    yield* Effect.gen(function* () {
+                      while (true) {
+                        const waiting = yield* blocker.executeUnprepared(
+                          "SELECT 1 FROM pg_locks WHERE pid = $1 AND locktype = 'advisory' AND NOT granted",
+                          [pid],
+                          undefined,
+                        );
+
+                        if (waiting.length > 0) break;
+                        yield* Effect.sleep("10 millis");
+                      }
+                    }).pipe(Effect.timeout("2 seconds"));
+
+                    return yield* Fiber.interrupt(writer).pipe(
+                      Effect.timeout("2 seconds"),
+                      Effect.exit,
+                    );
+                  }),
+                () => blocker.executeUnprepared("ROLLBACK", [], undefined).pipe(Effect.orDie),
+              );
+            }),
+          ).pipe(Effect.provide(clientLayer(url)));
+
+          expect(Exit.isSuccess(cancellation)).toBe(true);
+          const appended = yield* append(store, pending);
+
+          expect(appended.replayed).toBe(false);
+          expect(appended.firstSequence).toBe(1);
+        }).pipe(
+          Effect.provide(
+            PostgresThreadStore.layerWithServices.pipe(
+              Layer.provideMerge(singleConnectionServices(url, 30_000)),
+            ),
+          ),
+        ),
+      ),
+  );
+
   it.effect("supports explicit configuration and controllable failpoint services", () =>
     withTemporaryDatabase((url) =>
       Effect.gen(function* () {

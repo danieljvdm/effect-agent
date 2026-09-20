@@ -326,10 +326,18 @@ Scoped in-memory thread and submission stores for tests. The ledger is non-durab
 The independent `inMemorySemanticIndexLayer` supplies a bounded exact cosine derivative index.
 It is disposable and must be rebuilt from authoritative sources after its Scope closes.
 
+### `@effect-agent/storage-sql`
+
+Shared SQL implementations of thread history, submissions, schedules, subscriptions, message
+delivery, and activity progress. SQLite and Postgres supply connections, format initialization,
+and transaction settings. Cloudflare reuses the SQL helpers that fit Durable Objects.
+Applications normally install their database adapter; adapter authors can use these factories
+with Effect's `SqlClient`. The shared package imports no platform runtime.
+
 ### `@effect-agent/storage-sqlite`
 
 Stores thread history and pending work in one Node SQLite database.
-Rejects incompatible stored versions; no migration path is promised.
+Upgrades supported predecessor formats atomically and rejects incompatible stored versions.
 `CurrentSqliteStorageVersion` identifies the supported version.
 Test failpoints are in `@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing`.
 
@@ -350,8 +358,9 @@ share. Rejects incompatible stored versions; no migration path is promised.
 Test failpoints are in `@effect-agent/storage-postgres/testing/postgres-storage-failpoint-testing`.
 
 Writers serialize on one transaction-scoped advisory lock; a blocked writer fails with the
-retryable `PostgresWriteContention`. Tables live in the connection's own schema, so another
-schema must be the connection default; startup verifies this and refuses to run otherwise.
+retryable `PostgresWriteContention`. The `schema` option selects the schema on every pooled
+connection through Postgres startup settings. For explicit client composition, pass the same schema to
+`PostgresStorageClient.layer(client, schema)` and `PostgresStorageConfig`.
 `PostgresStorageClient.layer` supplies the client, decoding `BIGINT` to safe integers as the
 stored row schemas require. The `effect-agent/sql-memory-store` ports stay SQLite-only.
 

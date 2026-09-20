@@ -98,7 +98,8 @@ concepts succinctly: what a feature does, how it fits, and how to use it.
 
 ```text
 effect <- ai-decision (thread model selection)
-effect-agent <- storage adapters
+effect-agent <- storage-sql <- storage-sqlite / storage-postgres / storage-cloudflare
+effect-agent <- storage-memory
 effect-agent <- workflow
 effect-agent + selected adapters <- platform packages
 effect-agent <- sandbox-local

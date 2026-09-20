@@ -35,6 +35,7 @@
     "@effect-agent/sandbox-local": "workspace:*",
     "@effect-agent/storage-memory": "workspace:*",
     "@effect-agent/storage-postgres": "workspace:*",
+    "@effect-agent/storage-sql": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
     "@effect-agent/testing": "workspace:*",
     "@effect-agent/workflow": "workspace:*",

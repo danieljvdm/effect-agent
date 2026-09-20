@@ -1,7 +1,8 @@
 import { PgClient, PgTypes } from "@effect/sql-pg";
-import { Effect, Layer, Result } from "effect";
+import { Effect, Layer, Result, Schema } from "effect";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { PostgresStorageConfigValue } from "./PostgresStorageConfig.ts";
 import { PostgresStorageError } from "./PostgresStorageError.ts";
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
@@ -51,19 +52,46 @@ export type PostgresClientOptions = Omit<PgClient.PgPoolConfig, "types">;
  * The client this adapter's stores expect. Its row decoding depends on the registry above, so a
  * client built elsewhere will not decode stored values correctly. A connection that cannot be
  * established is reported in the adapter's own error vocabulary.
+ * Every physical connection receives the selected schema as its startup search path, including
+ * pool growth and replacement. The schema defaults to `public`.
  */
 export const layer = (
   config: PostgresClientOptions,
+  schema = "public",
 ): Layer.Layer<PgClient.PgClient | SqlClient.SqlClient, PostgresStorageError> =>
-  PgClient.layer({ ...config, types: makeTypeRegistry() }).pipe(
-    Layer.catchTag("SqlError", (cause) =>
-      Layer.effectContext(
-        Effect.fail(
-          PostgresStorageError.make({
-            cause,
-            operation: "connect to Postgres",
-            message: cause.message,
-          }),
+  Layer.unwrap(
+    Schema.decodeEffect(PostgresStorageConfigValue.fields.schema)(schema).pipe(
+      Effect.mapError((cause) =>
+        PostgresStorageError.make({
+          cause,
+          operation: "configure Postgres schema",
+          message: cause.message,
+        }),
+      ),
+      Effect.map((selectedSchema) =>
+        PgClient.layer({
+          ...config,
+          types: makeTypeRegistry(),
+          startupParameters: {
+            ...Object.fromEntries(
+              Object.entries(config.startupParameters ?? {}).filter(
+                ([name]) => name.toLowerCase() !== "search_path",
+              ),
+            ),
+            search_path: `"${selectedSchema}"`,
+          },
+        }).pipe(
+          Layer.catchTag("SqlError", (cause) =>
+            Layer.effectContext(
+              Effect.fail(
+                PostgresStorageError.make({
+                  cause,
+                  operation: "connect to Postgres",
+                  message: cause.message,
+                }),
+              ),
+            ),
+          ),
         ),
       ),
     ),

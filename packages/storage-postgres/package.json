@@ -1,7 +1,7 @@
 {
   "name": "@effect-agent/storage-postgres",
-  "version": "0.1.0-beta.109",
-  "description": "Postgres persistence adapters for the Effect Agent durable runtime and optional memory lifecycle.",
+  "version": "0.1.0-beta.124",
+  "description": "Postgres persistence adapters for the Effect Agent durable runtime.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -38,6 +38,7 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
+    "@effect-agent/storage-sql": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/sql-pg": "catalog:",
     "effect-agent": "workspace:*"
