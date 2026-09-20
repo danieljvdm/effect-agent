@@ -6,7 +6,11 @@ import { MessageRef, type MessageStatus } from "effect-agent/messaging";
 import { IdempotencyKey, type JoinedToHost, Receipt } from "effect-agent/receipt";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentGrant } from "effect-agent/subagent-contract";
-import type { StartWorkerRequest, SubagentHost } from "effect-agent/subagent-host";
+import type {
+  FollowUpWorkerRequest,
+  StartWorkerRequest,
+  SubagentHost,
+} from "effect-agent/subagent-host";
 import type { WorkerError } from "effect-agent/worker";
 import type { Tool } from "effect/unstable/ai";
 import { Toolkit } from "effect/unstable/ai";
@@ -203,6 +207,24 @@ const hostStartTypes = (host: SubagentHost["Service"], request: StartWorkerReque
   const prepared = host.start(request);
 
   const deferred = host.start({
+    ...request,
+    prepare: Effect.flatMap(Prepare, () => Effect.fail(new DeclaredFailure())),
+  });
+
+  const proofs: [
+    Assert<Equal<Effect.Error<typeof prepared>, WorkerError>>,
+    Assert<Equal<Effect.Services<typeof prepared>, never>>,
+    Assert<Equal<Effect.Error<typeof deferred>, WorkerError | DeclaredFailure>>,
+    Assert<Equal<Effect.Services<typeof deferred>, Prepare>>,
+  ] = [true, true, true, true];
+
+  return proofs;
+};
+
+const hostFollowUpTypes = (host: SubagentHost["Service"], request: FollowUpWorkerRequest) => {
+  const prepared = host.followUp(request);
+
+  const deferred = host.followUp({
     ...request,
     prepare: Effect.flatMap(Prepare, () => Effect.fail(new DeclaredFailure())),
   });
@@ -424,6 +446,7 @@ describe("background authoring types", () => {
   it("preserves operation errors, schema services, and selected native Tool names", () => {
     expect(typeof updateLayerProofs).toBe("function");
     expect(typeof hostStartTypes).toBe("function");
+    expect(typeof hostFollowUpTypes).toBe("function");
     expect(typeof dispositionLayerProofs).toBe("function");
     expect(proofs.every(Boolean)).toBe(true);
     expect(stopProofs.every(Boolean)).toBe(true);

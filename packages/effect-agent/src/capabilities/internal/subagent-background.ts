@@ -366,13 +366,11 @@ const operations = <
       Effect.mapError((cause) => projectionFailure("input", cause)),
     );
 
-    const encodedInput = yield* prepare(parameters, caller);
-
     const delivery = yield* validateDelivery(
       validated,
       yield* service.followUp({
         encodedParameters,
-        encodedInput,
+        prepare: prepare(parameters, caller).pipe(Effect.map((encodedInput) => ({ encodedInput }))),
         worker: validated,
         target: declaration.target,
         idempotencyKey: key,

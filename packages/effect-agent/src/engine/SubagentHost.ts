@@ -70,6 +70,18 @@ export interface FollowUpWorkerRequest {
   readonly encodedParameters: unknown;
 }
 
+/**
+ * Like deferred starts, follow-ups prepare only after current authorization and retained-command
+ * lookup. Replays compare declared parameters and reuse the original input and worker authority.
+ * Preparation must be free of external effects because concurrent first admissions can prepare.
+ */
+export interface DeferredFollowUpWorkerRequest<E = never, R = never> extends Omit<
+  FollowUpWorkerRequest,
+  "encodedInput"
+> {
+  readonly prepare: Effect.Effect<Pick<FollowUpWorkerRequest, "encodedInput">, E, R>;
+}
+
 export interface WorkerReceiptRequest {
   readonly worker: WorkerRef;
   readonly target: Agent.AnyDefinition;
@@ -157,9 +169,10 @@ export class SubagentHost extends Context.Service<
     readonly start: <E = never, R = never>(
       request: StartWorkerRequest | DeferredStartWorkerRequest<E, R>,
     ) => Effect.Effect<WorkerStarted, WorkerError | E, R>;
-    readonly followUp: (
-      request: FollowUpWorkerRequest,
-    ) => Effect.Effect<MessageStatus, WorkerError>;
+    /** Prepared callers retain strict input conflicts; deferred callers replay the saved capture. */
+    readonly followUp: <E = never, R = never>(
+      request: FollowUpWorkerRequest | DeferredFollowUpWorkerRequest<E, R>,
+    ) => Effect.Effect<MessageStatus, WorkerError | E, R>;
     readonly inspect: (
       request: WorkerReceiptRequest | WorkerMessageRequest,
     ) => Effect.Effect<WorkerObservation | MessageStatus, WorkerError>;

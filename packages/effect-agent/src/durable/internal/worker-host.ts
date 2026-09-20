@@ -15,7 +15,7 @@ import type * as Agent from "../../core/Agent.ts";
 import { AgentPolicy } from "../../core/AgentPolicy.ts";
 import { Update, UpdateError } from "../../core/AgentUpdates.ts";
 import { ThreadId, type AgentId, type SubmissionId } from "../../core/Identifiers.ts";
-import { MessageRef } from "../../core/Messaging.ts";
+import { MessageRef, type MessageStatus } from "../../core/Messaging.ts";
 import { IdempotencyKey, Receipt } from "../../core/Receipt.ts";
 import { SubagentDelegationCaps, SubagentGrant } from "../../core/SubagentContract.ts";
 import {
@@ -33,6 +33,8 @@ import {
 import {
   type SubagentHost,
   type DeferredStartWorkerRequest,
+  type DeferredFollowUpWorkerRequest,
+  type FollowUpWorkerRequest,
   type StartWorkerRequest,
   type WorkerObservation,
   type WorkerReceiptRequest,
@@ -2363,36 +2365,84 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           ),
         );
       }),
-      followUp: Effect.fn("WorkerHost.followUp")(function* (request) {
-        const principal = yield* authorize("followUp", "send", request.worker);
-        const origin = yield* findOrigin(request.worker, request.target, "followUp");
+      followUp: Effect.fn("WorkerHost.followUp")(function* <E = never, R = never>(
+        command: FollowUpWorkerRequest | DeferredFollowUpWorkerRequest<E, R>,
+      ): Effect.fn.Return<MessageStatus, WorkerError | E, R> {
+        const principal = yield* authorize("followUp", "send", command.worker);
+        const origin = yield* findOrigin(command.worker, command.target, "followUp");
 
-        yield* resolveTargetPolicy({
+        const currentPolicy = resolveTargetPolicy({
           _tag: "RetainedWorker",
-          definition: request.target,
+          definition: command.target,
           definitions: origin.targetDigests,
           source: origin.source,
           origin,
         });
 
-        yield* Schema.decodeUnknownEffect(Schema.toEncoded(request.target.input))(
-          request.encodedInput,
-        ).pipe(Effect.mapError((cause) => failure("followUp", "corrupt", cause)));
+        yield* currentPolicy;
 
         const messageId = yield* messageIdFor([
           context.source.threadId,
-          request.worker.threadId,
+          command.worker.threadId,
           "followUp",
-          request.idempotencyKey,
+          command.idempotencyKey,
         ]);
 
-        return yield* send(
-          origin,
-          messageId,
-          request.encodedInput,
-          request.encodedParameters,
-          principal,
-          "followUp",
+        if (Option.isNone(deps.deliveries)) return yield* failure("followUp", "unavailable");
+        const deliveries = deps.deliveries.value;
+
+        const retained = () =>
+          deliveries
+            .get({ ownerThreadId: context.source.threadId, messageId })
+            .pipe(Effect.mapError(storageFailure("followUp")));
+
+        const replay = (saved: MessageDeliveryRecord) =>
+          Effect.gen(function* () {
+            const replayPrincipal = yield* authorize("followUp", "send", command.worker);
+
+            yield* currentPolicy;
+
+            return yield* send(
+              origin,
+              messageId,
+              saved.envelope.input,
+              command.encodedParameters,
+              replayPrincipal,
+              "followUp",
+            );
+          });
+
+        const existing = "prepare" in command ? yield* retained() : null;
+
+        if (existing !== null) return yield* replay(existing);
+
+        return yield* Effect.gen(function* () {
+          const request =
+            "prepare" in command ? { ...(yield* command.prepare), ...command } : command;
+
+          yield* Schema.decodeUnknownEffect(Schema.toEncoded(request.target.input))(
+            request.encodedInput,
+          ).pipe(Effect.mapError((cause) => failure("followUp", "corrupt", cause)));
+
+          return yield* send(
+            origin,
+            messageId,
+            request.encodedInput,
+            request.encodedParameters,
+            principal,
+            "followUp",
+          );
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.gen(function* () {
+              if (!("prepare" in command)) return yield* Effect.fail(error);
+              // A concurrent first writer can retain the original correction during preparation.
+              // Replay rechecks current authority before reusing its immutable envelope.
+              const saved = yield* retained();
+
+              return saved === null ? yield* Effect.fail(error) : yield* replay(saved);
+            }),
+          ),
         );
       }),
       inspect: Effect.fn("WorkerHost.inspect")(function* (request) {

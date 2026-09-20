@@ -302,9 +302,9 @@ The [background guide](../guide/subagents/background) shows model-facing tools. 
 
 A programmatic start needs an **idempotency key**: a stable identifier for one intended input.
 If delivery is retried, reuse the same key and parameters so the host can recognize that input.
-Use a new key for a new input. A retained launch is reconciled before fresh input authority
-preparation, even from another source Run. Current caller authentication still applies; changed
-input, parameters, grants or budget arguments conflict. Native model tools derive their keys automatically.
+Use a new key for a new input. Retained starts and follow-ups reuse their captured input before
+fresh preparation, even from another source Run. Current caller authorization still applies;
+changed declared parameters conflict. Native model tools derive their keys automatically.
 
 ```ts twoslash
 import { Subagent } from "effect-agent";
@@ -353,14 +353,16 @@ with `WorkerError`; preserve the same key and parameters when retrying an uncert
 Authorization and input-validation failures remain typed errors. Existing delivery rows keep their
 stored format and identity.
 
-`Subagent.start` checks the retained command before running `prepareInput`. Reusing the same key
-and declared parameters/options in a later Run reuses the first captured input, including a launch
-still awaiting admission. Changed parameters, grant, or funding scope conflict. Declaration policy
-and `toolCallAllowance` stay frozen with the first capture; changing that configuration requires a
+`Subagent.start` and `Subagent.followUp` check the retained command before running `prepareInput`.
+Reusing the same key and declared parameters/options in a later Run reuses that command's first
+captured input, including a delivery still awaiting admission. Follow-ups preserve the original
+correction input and worker authority. Changed parameters, start grant, or funding scope conflict.
+Declaration policy and `toolCallAllowance` stay frozen with the first capture; changing that configuration requires a
 new command key. Current caller authorization still applies, including when preparation races
 another writer. Preparation must be free of external effects: competing first calls
 can prepare before the native outbox chooses one capture. Admission keeps its existing authority
-checks; a retained command is not permission for a fresh start.
+checks; a retained command is not permission for a fresh input. Directly prepared `SubagentHost`
+requests also compare the supplied input and reject changed captures.
 
 ```ts
 const Research = Subagent.make("research", { target: researcher });
