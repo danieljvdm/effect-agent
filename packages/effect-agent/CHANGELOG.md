@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.116
+
+### Patch Changes
+
+- [#575](https://github.com/danieljvdm/effect-agent/pull/575) [`c29c38c`](https://github.com/danieljvdm/effect-agent/commit/c29c38cc4ebaf81c700911b83a57073005c6bdfa) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reuse the original prepared input when a public worker follow-up repeats its command key and parameters across Runs. Preserve current authorization and reject changed parameters.
+
 ## 0.1.0-beta.115
 
 ### Minor Changes
