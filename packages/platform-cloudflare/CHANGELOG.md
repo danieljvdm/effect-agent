@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.121
+
+### Patch Changes
+
+- [#585](https://github.com/danieljvdm/effect-agent/pull/585) [`0459848`](https://github.com/danieljvdm/effect-agent/commit/0459848d055649855419c948371480f9f85a5e68) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reconnect retained browser pages after navigation leaves cached cross-origin frames. Preserve the host-owned browser when attachment acquisition fails, and include the browser client as a runtime dependency.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.121
+  - effect-agent@0.1.0-beta.121
+
 ## 0.1.0-beta.120
 
 ### Patch Changes
