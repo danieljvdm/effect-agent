@@ -1,8 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tsbuildinfo",
     "types": ["node", "@cloudflare/workers-types"]
   },
-  "include": ["src", "test", "worker-configuration.d.ts"]
+  "include": ["src", "test", "live", "worker-configuration.d.ts"]
 }

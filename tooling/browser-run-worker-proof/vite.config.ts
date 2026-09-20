@@ -19,5 +19,5 @@ export default defineConfig({
       },
     },
   },
-  test: { cache: false, silent: "passed-only" },
+  test: { include: ["test/**/*.test.ts"], cache: false, silent: "passed-only", maxWorkers: 1 },
 });
