@@ -16,18 +16,9 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./postgres-activity-store": "./src/PostgresActivityStore.ts",
-    "./postgres-message-delivery-store": "./src/PostgresMessageDeliveryStore.ts",
-    "./postgres-schedule-store": "./src/PostgresScheduleStore.ts",
+    "./postgres-storage": "./src/PostgresStorage.ts",
     "./postgres-storage-client": "./src/PostgresStorageClient.ts",
-    "./postgres-storage-config": "./src/PostgresStorageConfig.ts",
-    "./postgres-storage-error": "./src/PostgresStorageError.ts",
-    "./postgres-storage-failpoint": "./src/PostgresStorageFailpoint.ts",
-    "./postgres-storage-version": "./src/PostgresStorageVersion.ts",
-    "./postgres-submission-ledger": "./src/PostgresSubmissionLedger.ts",
-    "./postgres-subscription-store": "./src/PostgresSubscriptionStore.ts",
-    "./postgres-thread-store": "./src/PostgresThreadStore.ts",
-    "./testing/postgres-storage-failpoint-testing": "./src/PostgresStorageFailpointTesting.ts"
+    "./postgres-storage-error": "./src/PostgresStorageError.ts"
   },
   "publishConfig": {
     "access": "public"

@@ -1,11 +1,4 @@
-import * as PostgresStorageClient from "@effect-agent/storage-postgres/postgres-storage-client";
-import {
-  layerConfig,
-  type PostgresStorageOptions,
-} from "@effect-agent/storage-postgres/postgres-storage-config";
-import { PostgresStorageFailpoint } from "@effect-agent/storage-postgres/postgres-storage-failpoint";
-import * as PostgresSubmissionLedger from "@effect-agent/storage-postgres/postgres-submission-ledger";
-import * as PostgresThreadStore from "@effect-agent/storage-postgres/postgres-thread-store";
+import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
 import {
   CERTIFICATION_SCENARIOS,
   TIER2_UNREACHED_LOCATIONS,
@@ -61,26 +54,17 @@ const withTemporaryDatabase = <A, E>(
     (database) => admin(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`).pipe(Effect.ignore),
   );
 
-const clientLayer = (url: string) => PostgresStorageClient.layer({ url: Redacted.make(url) });
-
 const combinedAdapters = (url: string) => {
-  const options: PostgresStorageOptions = {
+  const storage = PostgresStorage.make({
     client: { url: Redacted.make(url) },
     observationPollInterval: 1,
-  };
+  });
 
   return Layer.mergeAll(
-    PostgresThreadStore.layerWithServices,
-    PostgresSubmissionLedger.layerWithServices,
-  ).pipe(
-    Layer.provideMerge(
-      Layer.mergeAll(
-        layerConfig(options),
-        PostgresStorageFailpoint.layer,
-        clientLayer(url),
-        NodeCrypto.layer,
-      ),
-    ),
+    storage.threadStore,
+    storage.submissionLedger,
+    storage.clientLayer,
+    NodeCrypto.layer,
   );
 };
 

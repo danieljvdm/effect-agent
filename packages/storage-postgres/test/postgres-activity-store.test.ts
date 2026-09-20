@@ -1,10 +1,9 @@
-import * as PostgresActivityStore from "@effect-agent/storage-postgres/postgres-activity-store";
 import { describe, expect, it } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Schema } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema } from "effect";
+import type { ActivityMutationFailpoint } from "effect-agent/activity-store";
 import {
   ActivityBusy,
   ActivityClaimRequest,
-  ActivityMutationFailpoint,
   ActivityMutationFailure,
   ActivityOwnershipLost,
   ActivityProcessorKey,
@@ -16,7 +15,7 @@ import {
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
-import { clientLayer, configLayer, withTemporaryDatabase } from "./harness.ts";
+import { clientLayer, storage, withTemporaryDatabase } from "./harness.ts";
 
 const key = Schema.decodeSync(ActivityProcessorKey)({
   processorId: "profile",
@@ -50,21 +49,10 @@ const work = (
     output,
   });
 
-const storeLayer = (url: string) =>
-  PostgresActivityStore.layer.pipe(
-    Layer.provide(Layer.mergeAll(clientLayer(url), configLayer(url))),
-  );
+const storeLayer = (url: string) => storage(url).activityStore;
 
 const failpointLayer = (url: string, handler: ActivityMutationFailpoint["Service"]["hit"]) =>
-  PostgresActivityStore.layerWithFailpoints.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        clientLayer(url),
-        configLayer(url),
-        Layer.succeed(ActivityMutationFailpoint)({ hit: handler }),
-      ),
-    ),
-  );
+  storage(url, { activityFailpoint: handler }).activityStore;
 
 const runStore = <A, E>(url: string, effect: Effect.Effect<A, E, ActivityProcessorStore>) =>
   effect.pipe(Effect.provide(storeLayer(url)));

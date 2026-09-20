@@ -1,10 +1,6 @@
+import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
 import * as PostgresStorageClient from "@effect-agent/storage-postgres/postgres-storage-client";
-import {
-  layerConfig,
-  PostgresStorageConfig,
-} from "@effect-agent/storage-postgres/postgres-storage-config";
 import { PostgresStorageError } from "@effect-agent/storage-postgres/postgres-storage-error";
-import * as PostgresThreadStore from "@effect-agent/storage-postgres/postgres-thread-store";
 import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, Redacted, Schema } from "effect";
 import { ThreadStore } from "effect-agent/thread-store";
@@ -34,7 +30,7 @@ it.effect(
 
         // A keyword schema also exercises identifier quoting during the adapter's own DDL.
         yield* Effect.asVoid(ThreadStore).pipe(
-          Effect.provide(PostgresThreadStore.layer({ client, schema: "select" })),
+          Effect.provide(PostgresStorage.make({ client, schema: "select" }).threadStore),
         );
         yield* Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
@@ -86,8 +82,8 @@ it.effect(
 
 it.effect("rejects a zero writer timeout before opening storage", () =>
   Effect.gen(function* () {
-    const opened = yield* PostgresStorageConfig.pipe(
-      Effect.provide(layerConfig({ client: {}, lockTimeout: 0 })),
+    const opened = yield* ThreadStore.pipe(
+      Effect.provide(PostgresStorage.make({ client: {}, lockTimeout: 0 }).threadStore),
       Effect.exit,
     );
 

@@ -1,15 +1,9 @@
+import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
 import * as PostgresStorageClient from "@effect-agent/storage-postgres/postgres-storage-client";
-import {
-  layerConfig,
-  PostgresStorageConfig,
-  PostgresStorageConfigValue,
-} from "@effect-agent/storage-postgres/postgres-storage-config";
-import { PostgresStorageFailpoint } from "@effect-agent/storage-postgres/postgres-storage-failpoint";
-import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
-import { Effect, Layer, Redacted } from "effect";
+import { Effect, Redacted } from "effect";
 
-import { WRITER_LOCK_KEY } from "../src/internal/postgres-transactions.ts";
+import { WRITER_LOCK_KEY } from "../src/internal/postgres-storage.ts";
 
 /**
  * A live Postgres is required: this adapter's contract is its concurrency behaviour, and no
@@ -73,32 +67,24 @@ export const withTemporaryDatabase = <A, E>(
 export const clientLayer = (url: string) =>
   PostgresStorageClient.layer({ url: Redacted.make(url) });
 
-export const configLayer = (url: string) =>
-  layerConfig({ client: { url: Redacted.make(url) }, observationPollInterval: 1 });
+/** One pool connection makes subsequent operations verify failed-transaction cleanup. */
+export const singleConnectionStorage = (url: string, lockTimeout: number) =>
+  PostgresStorage.make({
+    client: { url: Redacted.make(url), maxConnections: 1 },
+    observationPollInterval: 1,
+    lockTimeout,
+    ownershipLeaseDuration: 30_000,
+  });
 
-/**
- * Services over exactly one connection, so a successful retry also proves the preceding
- * failed transaction rolled back and returned a usable connection to the pool.
- */
-export const singleConnectionServices = (url: string, lockTimeout: number) =>
-  Layer.mergeAll(
-    Layer.succeed(PostgresStorageConfig)(
-      PostgresStorageConfigValue.make({
-        observationPollInterval: 1,
-        lockTimeout,
-        ownershipLeaseDuration: 30_000,
-        verifyOnOpen: false,
-        schema: "public",
-      }),
-    ),
-    PostgresStorageFailpoint.layer,
-    PgClient.layer({
-      url: Redacted.make(url),
-      maxConnections: 1,
-      types: PostgresStorageClient.makeTypeRegistry(),
-    }),
-    NodeCrypto.layer,
-  );
+export const storage = (
+  url: string,
+  options: Omit<PostgresStorage.PostgresStorageOptions, "client"> = {},
+) =>
+  PostgresStorage.make({
+    client: { url: Redacted.make(url) },
+    observationPollInterval: 1,
+    ...options,
+  });
 
 /**
  * Holds the adapter's writer lock from an unrelated client for the duration of `use`, as a

@@ -1,11 +1,3 @@
-import * as PostgresMessageDeliveryStore from "@effect-agent/storage-postgres/postgres-message-delivery-store";
-import * as PostgresScheduleStore from "@effect-agent/storage-postgres/postgres-schedule-store";
-import {
-  PostgresStorageConfig,
-  PostgresStorageConfigValue,
-} from "@effect-agent/storage-postgres/postgres-storage-config";
-import { PostgresStorageFailpoint } from "@effect-agent/storage-postgres/postgres-storage-failpoint";
-import * as PostgresSubscriptionStore from "@effect-agent/storage-postgres/postgres-subscription-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Result, Schema } from "effect";
@@ -30,22 +22,7 @@ import {
 } from "effect-agent/testing/subscription-store-conformance";
 import { TestClock } from "effect/testing";
 
-import { clientLayer, withTemporaryDatabase } from "./harness.ts";
-
-const storageServices = (url: string) =>
-  Layer.mergeAll(
-    Layer.succeed(PostgresStorageConfig)(
-      PostgresStorageConfigValue.make({
-        observationPollInterval: 1,
-        lockTimeout: 5_000,
-        ownershipLeaseDuration: 30_000,
-        verifyOnOpen: false,
-        schema: "public",
-      }),
-    ),
-    PostgresStorageFailpoint.layer,
-    clientLayer(url),
-  );
+import { storage, withTemporaryDatabase } from "./harness.ts";
 
 describe("PostgresScheduleStore", () => {
   it.effect("counts capacity without parsing arbitrary schedule inputs in PostgreSQL", () =>
@@ -94,23 +71,14 @@ describe("PostgresScheduleStore", () => {
         expect(Result.isFailure(full) && full.failure._tag).toBe("ScheduleCapacityError");
         yield* store.insert(later, 2);
         expect((yield* store.get(record))?.configuration.input).toEqual({ text });
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            PostgresScheduleStore.layer.pipe(Layer.provide(storageServices(url))),
-            NodeCrypto.layer,
-          ),
-        ),
-      ),
+      }).pipe(Effect.provide(Layer.mergeAll(storage(url).scheduleStore, NodeCrypto.layer))),
     ),
   );
 
   for (const conformanceCase of scheduleStoreConformanceCases) {
     it.effect(conformanceCase.name, () =>
       withTemporaryDatabase((url) =>
-        conformanceCase.run.pipe(
-          Effect.provide(PostgresScheduleStore.layer.pipe(Layer.provide(storageServices(url)))),
-        ),
+        conformanceCase.run.pipe(Effect.provide(storage(url).scheduleStore)),
       ),
     );
   }
@@ -214,9 +182,7 @@ describe("PostgresSubscriptionStore", () => {
         }).pipe(
           Effect.provide(
             Layer.mergeAll(
-              PostgresSubscriptionStore.layer(subscriptionConformancePartition).pipe(
-                Layer.provide(storageServices(url)),
-              ),
+              storage(url).subscriptionStore(subscriptionConformancePartition),
               NodeCrypto.layer,
             ),
           ),
@@ -232,13 +198,7 @@ describe("PostgresSubscriptionStore", () => {
             const store = yield* SubscriptionStore;
 
             expect(yield* store.nextDeadline).toBeNull();
-          }).pipe(
-            Effect.provide(
-              PostgresSubscriptionStore.layer(subscriptionConformancePartition).pipe(
-                Layer.provide(storageServices(url)),
-              ),
-            ),
-          ),
+          }).pipe(Effect.provide(storage(url).subscriptionStore(subscriptionConformancePartition))),
         ),
         { concurrency: 2 },
       ),
@@ -257,9 +217,7 @@ describe("PostgresSubscriptionStore", () => {
 
       const limits = { ...defaultSubscriptionLimits, retention };
 
-      const storeLayer = PostgresSubscriptionStore.layer(subscriptionConformancePartition).pipe(
-        Layer.provide(storageServices(url)),
-      );
+      const storeLayer = storage(url).subscriptionStore(subscriptionConformancePartition);
 
       return Effect.gen(function* () {
         yield* TestClock.setTime(nowMillis);
@@ -315,11 +273,7 @@ describe("PostgresSubscriptionStore", () => {
     it.effect(conformanceCase.name, () =>
       withTemporaryDatabase((url) =>
         conformanceCase.run.pipe(
-          Effect.provide(
-            PostgresSubscriptionStore.layer(subscriptionConformancePartition).pipe(
-              Layer.provide(storageServices(url)),
-            ),
-          ),
+          Effect.provide(storage(url).subscriptionStore(subscriptionConformancePartition)),
         ),
       ),
     );
@@ -343,12 +297,7 @@ describe("PostgresMessageDeliveryStore", () => {
             (yield* store.list({ ownerThreadId: first.key.ownerThreadId, limit: 10 })).items,
           ).toHaveLength(2);
         }).pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              PostgresMessageDeliveryStore.layer().pipe(Layer.provide(storageServices(url))),
-              NodeCrypto.layer,
-            ),
-          ),
+          Effect.provide(Layer.mergeAll(storage(url).messageDeliveryStore(), NodeCrypto.layer)),
         ),
       ),
   );
@@ -357,12 +306,7 @@ describe("PostgresMessageDeliveryStore", () => {
     it.effect(conformanceCase.name, () =>
       withTemporaryDatabase((url) =>
         conformanceCase.run.pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              PostgresMessageDeliveryStore.layer().pipe(Layer.provide(storageServices(url))),
-              NodeCrypto.layer,
-            ),
-          ),
+          Effect.provide(Layer.mergeAll(storage(url).messageDeliveryStore(), NodeCrypto.layer)),
         ),
       ),
     );

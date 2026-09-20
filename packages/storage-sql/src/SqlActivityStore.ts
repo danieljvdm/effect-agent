@@ -144,12 +144,108 @@ const makeClaim = (progress: ActivityProgress): ActivityClaim | null =>
 const ownershipLost = (claim: ActivityClaim) =>
   ActivityOwnershipLost.make({ key: claim.key, owner: claim.owner, epoch: claim.epoch });
 
-/** Activity transitions over adapter-initialized tables and serialized writes. */
+/**
+ * Initialize standalone activity progress and provide its transitions. The adapter supplies
+ * its transaction semantics and optional namespace setup, which runs in the initialization transaction.
+ */
 export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function* (
   withWriteTransaction: SqlWriteTransaction,
+  initializeNamespace: Effect.Effect<void, ActivityStoreError> = Effect.void,
 ) {
   const sql = yield* SqlClientService.SqlClient;
   const failpoint = yield* ActivityMutationFailpoint;
+
+  yield* failpoint.hit("activity:initialize:before");
+  yield* withWriteTransaction(
+    Effect.gen(function* () {
+      yield* initializeNamespace;
+
+      const integer = sql.literal(
+        sql.onDialectOrElse({ pg: () => "BIGINT", orElse: () => "INTEGER" }),
+      );
+
+      const real = sql.literal(
+        sql.onDialectOrElse({ pg: () => "DOUBLE PRECISION", orElse: () => "REAL" }),
+      );
+
+      yield* sql`
+        CREATE TABLE IF NOT EXISTS effect_agent_activity_metadata (
+          component TEXT PRIMARY KEY NOT NULL,
+          version ${integer} NOT NULL
+        )
+      `;
+
+      const metadataRows = yield* sql<Record<string, unknown>>`
+        SELECT version FROM effect_agent_activity_metadata
+        WHERE component = ${"activity"}
+      `;
+
+      const metadata = yield* decodeRows(
+        StoredVersionHeader,
+        metadataRows,
+        "decode activity schema version",
+      );
+
+      if (metadata.length > 1) {
+        return yield* storeError("decode activity schema version", "corrupt");
+      }
+      const currentVersion = metadata[0]?.version;
+
+      if (currentVersion !== undefined && currentVersion !== STORAGE_VERSION) {
+        return yield* storeError("initialize activity schema", "incompatible");
+      }
+      if (currentVersion === undefined) {
+        const tableRows = yield* sql.onDialectOrElse({
+          pg: () => sql<Record<string, unknown>>`
+            SELECT c.relname AS name FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'p')
+              AND c.relname = 'effect_agent_activity_processor_state_v1'
+              AND n.nspname = ANY (current_schemas(FALSE))
+          `,
+          orElse: () => sql<Record<string, unknown>>`
+            SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name = 'effect_agent_activity_processor_state_v1'
+          `,
+        });
+
+        const existing = yield* decodeRows(
+          Schema.Struct({ name: Schema.NonEmptyString }),
+          tableRows,
+          "inspect activity schema",
+        );
+
+        if (existing.length > 0) {
+          return yield* storeError("initialize activity schema", "incompatible");
+        }
+        yield* sql`
+          CREATE TABLE effect_agent_activity_processor_state_v1 (
+            processor_id TEXT NOT NULL,
+            processor_version TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            format_version ${integer} NOT NULL,
+            through_sequence ${integer} NOT NULL,
+            epoch ${integer} NOT NULL,
+            owner TEXT,
+            lease_expires_at ${real} NOT NULL,
+            progress_json TEXT NOT NULL,
+            PRIMARY KEY (processor_id, processor_version, thread_id)
+          )
+        `;
+        yield* sql`
+          INSERT INTO effect_agent_activity_metadata (component, version)
+          VALUES (${"activity"}, ${STORAGE_VERSION})
+        `;
+      }
+      yield* sql`
+        SELECT processor_id, processor_version, thread_id, format_version,
+          through_sequence, epoch, owner, lease_expires_at, progress_json
+        FROM effect_agent_activity_processor_state_v1
+        LIMIT 0
+      `;
+    }),
+  ).pipe(Effect.catchTag("SqlError", () => Effect.fail(storeError("initialize activity schema"))));
+  yield* failpoint.hit("activity:initialize:after");
 
   const readProgress = Effect.fn("SqlActivityStore.readProgress")(function* (
     key: ActivityProcessorKey,

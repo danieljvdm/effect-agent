@@ -11,9 +11,11 @@ effect-agent ports
 SQLite / Postgres adapters
 ```
 
-Applications use `@effect-agent/storage-sqlite` or `@effect-agent/storage-postgres`. Adapter
-factories supply a `SqlClient`, typed errors, failpoints, and transaction settings. Database
-connections, stored-format checks, and supported upgrades remain with each adapter.
+Applications use `@effect-agent/storage-sqlite` or `@effect-agent/storage-postgres`. Adapters
+supply a `SqlClient`, typed diagnostics, failpoints, and native transaction settings. Journal
+format checks and supported upgrades remain adapter-owned; standalone activity initialization
+is shared here.
 
-Cloudflare reuses the subscription, message-delivery, and native-read helpers with its own
-Durable Object transaction boundary. This package has no platform runtime dependency.
+Message delivery and subscriptions default to the client's transaction. Their factory options
+accept a transaction callback for Postgres writer locking or Cloudflare's atomic alarm updates.
+Cloudflare also reuses the native-read helpers. This package has no platform runtime dependency.

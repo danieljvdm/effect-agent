@@ -1,29 +1,120 @@
 import { makeSqlJournal } from "@effect-agent/storage-sql/sql-journal";
 import {
   makeRowDecoder,
+  makeSqlTransaction,
   type StorageErrorFields,
   type CorruptionErrorFields,
 } from "@effect-agent/storage-sql/sql-storage";
+import { createStorageSchema } from "@effect-agent/storage-sql/sql-storage-schema";
 import { Effect, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { isSqlError } from "effect/unstable/sql/SqlError";
+import { isSqlError, type SqlError } from "effect/unstable/sql/SqlError";
 
-import { PostgresStorageConfig } from "../PostgresStorageConfig.ts";
 import {
   PostgresStorageCompatibilityError,
   PostgresStorageCorruptionError,
   PostgresStorageError,
   PostgresWriteContention,
+  type PostgresStorageFailpointLocation,
+  type PostgresStorageFailpointError,
 } from "../PostgresStorageError.ts";
-import { PostgresStorageFailpoint } from "../PostgresStorageFailpoint.ts";
-import { CurrentPostgresStorageVersion, createPostgresStorageSchema } from "./migrations.ts";
-import { ensurePostgresSchema } from "./postgres-schema.ts";
-import {
-  classifyWriteFailure,
-  storageError,
-  withReadTransaction,
-  withWriterLockTransaction,
-} from "./postgres-transactions.ts";
+
+/**
+ * This exact FNV-1a hash, including its tag and UTF-8 encoding, is a persistent advisory-lock
+ * wire format and must never change: a different key would let an old and a new deployment write
+ * concurrently. The shape follows `SqlRunnerStorage`'s lock namespace in Effect's cluster module.
+ */
+const advisoryLockKey = (tag: string): number => {
+  const bytes = new TextEncoder().encode(`effect-agent:${tag}`);
+  let hash = 0x811c9dc5;
+
+  for (const byte of bytes) hash = Math.imul(hash ^ byte, 0x01000193);
+
+  return hash | 0;
+};
+
+/** One key serialises every writer, which is the scope SQLite's write lock had. */
+export const WRITER_LOCK_KEY = advisoryLockKey("storage/writer");
+
+const storageError = (operation: string) => (cause: SqlError) =>
+  PostgresStorageError.make({ operation, cause, message: cause.message });
+
+export const classifyWriteFailure =
+  (operation: string) =>
+  (cause: SqlError): PostgresStorageError | PostgresWriteContention =>
+    cause.reason._tag === "SerializationError" ||
+    cause.reason._tag === "DeadlockError" ||
+    cause.reason._tag === "LockTimeoutError"
+      ? PostgresWriteContention.make({
+          operation,
+          cause,
+          message: `Another producer won the Postgres write race; ${operation} is safe to retry.`,
+        })
+      : storageError(operation)(cause);
+
+/** The lock wait is interruptible; the shared transaction rolls back before releasing its connection. */
+export const withWriterLockTransaction = (sql: SqlClient.SqlClient, lockTimeout: number) =>
+  makeSqlTransaction(sql, {
+    begin: "BEGIN",
+    prelude: Effect.gen(function* () {
+      yield* sql`SELECT set_config('lock_timeout', ${`${lockTimeout}ms`}, true)`;
+      yield* sql`SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`;
+    }),
+  });
+
+/** Every page of a multi-query export observes the same snapshot without taking the writer lock. */
+const withReadTransaction = (sql: SqlClient.SqlClient) =>
+  makeSqlTransaction(sql, { begin: "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" });
+
+/** Run while holding the writer transaction, including when this schema does not yet exist. */
+export const ensurePostgresSchema = Effect.fnUntraced(function* (
+  sql: SqlClient.SqlClient,
+  schema: string,
+) {
+  yield* sql`CREATE SCHEMA IF NOT EXISTS ${sql(schema)}`.withoutTransform;
+  const rows = yield* sql`SELECT current_schema() AS name`;
+
+  const decoded = yield* Schema.decodeUnknownEffect(
+    Schema.Array(Schema.Struct({ name: Schema.NullOr(Schema.String) })),
+  )(rows).pipe(
+    Effect.mapError((cause) =>
+      PostgresStorageError.make({
+        operation: "verify storage schema",
+        cause,
+        message: cause.message,
+      }),
+    ),
+  );
+
+  if (decoded.length !== 1 || decoded[0]?.name !== schema) {
+    return yield* PostgresStorageError.make({
+      operation: "verify storage schema",
+      message: `The client must select schema ${schema} for every pooled connection. Use PostgresStorageClient.layer(client, schema).`,
+    });
+  }
+});
+
+export const CurrentPostgresStorageVersion = 1;
+
+/** Initialize empty storage with the complete current schema. */
+const createPostgresStorageSchema = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+
+  // The boolean primary key is what keeps the version marker single-row: no second value can
+  // satisfy the constraint. SQLite records its format in `PRAGMA user_version` instead.
+  yield* sql`
+    CREATE TABLE effect_agent_storage_version (
+      id BOOLEAN PRIMARY KEY NOT NULL,
+      version BIGINT NOT NULL,
+      CONSTRAINT effect_agent_storage_version_single_row CHECK (id)
+    )
+  `;
+  yield* createStorageSchema;
+  yield* sql`
+    INSERT INTO effect_agent_storage_version (id, version)
+    VALUES (TRUE, ${CurrentPostgresStorageVersion})
+  `;
+});
 
 const VERSION_TABLE = "effect_agent_storage_version";
 
@@ -79,12 +170,15 @@ const isTransactionFailure = Schema.is(
 );
 
 /** PostgreSQL owns schema/version checks; relational state transitions belong to storage-sql. */
-export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")(function* () {
+export const initializePostgresStorage = Effect.fn("PostgresStorage.initialize")(function* ({
+  lockTimeout,
+  schema,
+}: {
+  readonly lockTimeout: number;
+  readonly schema: string;
+}) {
   const sql = yield* SqlClient.SqlClient;
-  const failpoint = yield* PostgresStorageFailpoint;
-  const { lockTimeout, schema } = yield* PostgresStorageConfig;
   const write = withWriterLockTransaction(sql, lockTimeout);
-  const read = withReadTransaction(sql);
 
   yield* write(
     Effect.gen(function* () {
@@ -97,6 +191,7 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
         WHERE n.nspname = ${schema}
           AND c.relkind IN ('r', 'p')
           AND starts_with(c.relname, 'effect_agent_')
+          AND c.relname NOT IN ('effect_agent_activity_metadata', 'effect_agent_activity_processor_state_v1')
         ORDER BY c.relname
       `.pipe(Effect.mapError(storageError("inspect storage schema")));
 
@@ -180,10 +275,22 @@ export const initializePostgresJournal = Effect.fn("PostgresJournal.initialize")
       Effect.fail(classifyWriteFailure("initialize storage")(error)),
     ),
   );
+});
+
+/** Bind shared journal operations without repeating format initialization. */
+export const makePostgresJournal = Effect.fnUntraced(function* (
+  lockTimeout: number,
+  hitFailpoint: (
+    location: PostgresStorageFailpointLocation,
+  ) => Effect.Effect<void, PostgresStorageFailpointError>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const write = withWriterLockTransaction(sql, lockTimeout);
+  const read = withReadTransaction(sql);
 
   return yield* makeSqlJournal({
     errors: postgresStorageErrors,
-    hitFailpoint: failpoint.hit,
+    hitFailpoint,
     transactions: {
       withWriteTransaction:
         (operation) =>

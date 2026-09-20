@@ -1,33 +1,12 @@
-import {
-  makeSqlSubscriptionStore,
-  SqlSubscriptionTransaction,
-} from "@effect-agent/storage-sql/sql-subscription-store";
+import { makeSqlSubscriptionStore } from "@effect-agent/storage-sql/sql-subscription-store";
 import { Effect, Layer, Schema } from "effect";
 import { SourcePartition, SubscriptionError, SubscriptionStore } from "effect-agent/subscription";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import type * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { initializeSqliteJournal } from "./internal/sqlite-journal.ts";
 import type { SqliteStorageConfig } from "./SqliteStorageConfig.ts";
 import type { SqliteStorageFailpoint } from "./SqliteStorageFailpoint.ts";
 import type { SqliteStorageInitializationError } from "./SqliteThreadStore.ts";
-
-const transactionLayer = Layer.effect(
-  SqlSubscriptionTransaction,
-  Effect.gen(function* () {
-    const sql = yield* SqlClientService.SqlClient;
-
-    return SqlSubscriptionTransaction.of({
-      run: (body) =>
-        sql
-          .withTransaction(body)
-          .pipe(
-            Effect.catchTag("SqlError", () =>
-              Effect.fail(SubscriptionError.make({ reason: "storage", code: "transaction" })),
-            ),
-          ),
-    });
-  }),
-);
 
 const makeSubscriptionStore = Effect.fn("SqliteSubscriptionStore.make")(function* (
   owned: SourcePartition,
@@ -49,7 +28,4 @@ export const subscriptionStoreLayer = (
   SubscriptionStore,
   SqliteStorageInitializationError | SubscriptionError,
   SqliteStorageConfig | SqliteStorageFailpoint | SqlClientService.SqlClient
-> =>
-  Layer.effect(SubscriptionStore, makeSubscriptionStore(partition)).pipe(
-    Layer.provide(transactionLayer),
-  );
+> => Layer.effect(SubscriptionStore, makeSubscriptionStore(partition));

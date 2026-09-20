@@ -1,7 +1,4 @@
-import {
-  PostgresStorageConfig,
-  PostgresStorageConfigValue,
-} from "@effect-agent/storage-postgres/postgres-storage-config";
+import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
 import {
   PostgresStorageCompatibilityError,
   PostgresStorageCorruptionError,
@@ -9,9 +6,6 @@ import {
   type PostgresStorageFailpointLocation,
   PostgresWriteContention,
 } from "@effect-agent/storage-postgres/postgres-storage-error";
-import * as PostgresThreadStore from "@effect-agent/storage-postgres/postgres-thread-store";
-import { PostgresStorageFailpointTestControl } from "@effect-agent/storage-postgres/testing/postgres-storage-failpoint-testing";
-import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
   Cause,
@@ -56,10 +50,10 @@ import {
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import * as Statement from "effect/unstable/sql/Statement";
 
-import { WRITER_LOCK_KEY } from "../src/internal/postgres-transactions.ts";
+import { WRITER_LOCK_KEY } from "../src/internal/postgres-storage.ts";
 import {
   clientLayer,
-  singleConnectionServices,
+  singleConnectionStorage,
   whileHoldingWriterLock,
   withTemporaryDatabase,
 } from "./harness.ts";
@@ -140,17 +134,18 @@ const append = (
 const withStorage = <A, E>(url: string, effect: Effect.Effect<A, E, ThreadStore>) =>
   Effect.provide(
     effect,
-    PostgresThreadStore.layer({ client: { url: Redacted.make(url) }, observationPollInterval: 1 }),
+    PostgresStorage.make({ client: { url: Redacted.make(url) }, observationPollInterval: 1 })
+      .threadStore,
   );
 
 const withVerifiedStorage = <A, E>(url: string, effect: Effect.Effect<A, E, ThreadStore>) =>
   Effect.provide(
     effect,
-    PostgresThreadStore.layer({
+    PostgresStorage.make({
       client: { url: Redacted.make(url) },
       observationPollInterval: 1,
       verifyOnOpen: true,
-    }),
+    }).threadStore,
   );
 
 const withSql = <A, E>(url: string, effect: Effect.Effect<A, E, SqlClientService.SqlClient>) =>
@@ -176,30 +171,8 @@ const storageTables = (url: string) =>
     }),
   );
 
-const explicitTestStorageLayer = (url: string) =>
-  PostgresThreadStore.layerWithServices.pipe(
-    Layer.provideMerge(
-      Layer.mergeAll(
-        Layer.succeed(PostgresStorageConfig)(
-          PostgresStorageConfigValue.make({
-            observationPollInterval: 1,
-            lockTimeout: 5_000,
-            ownershipLeaseDuration: 30_000,
-            verifyOnOpen: false,
-            schema: "public",
-          }),
-        ),
-        PostgresStorageFailpointTestControl.layer,
-        clientLayer(url),
-        NodeCrypto.layer,
-      ),
-    ),
-  );
-
 const singleConnectionStore = (url: string, lockTimeout: number) =>
-  PostgresThreadStore.layerWithServices.pipe(
-    Layer.provide(singleConnectionServices(url, lockTimeout)),
-  );
+  singleConnectionStorage(url, lockTimeout).threadStore;
 
 describe("PostgresThreadStore faults", () => {
   it.live(
@@ -427,51 +400,49 @@ describe("PostgresThreadStore faults", () => {
           expect(appended.firstSequence).toBe(1);
         }).pipe(
           Effect.provide(
-            PostgresThreadStore.layerWithServices.pipe(
-              Layer.provideMerge(singleConnectionServices(url, 30_000)),
-            ),
+            (() => {
+              const storage = singleConnectionStorage(url, 30_000);
+
+              return Layer.mergeAll(storage.threadStore, storage.clientLayer);
+            })(),
           ),
         ),
       ),
   );
 
-  it.effect("supports explicit configuration and controllable failpoint services", () =>
+  it.effect("captures an injected failpoint handler that can change after construction", () =>
     withTemporaryDatabase((url) =>
       Effect.gen(function* () {
-        const config = yield* PostgresStorageConfig;
-        const failpoints = yield* PostgresStorageFailpointTestControl;
-        const store = yield* ThreadStore;
+        const active = yield* Ref.make(false);
 
-        expect(config).toMatchObject({
-          observationPollInterval: 1,
-          lockTimeout: 5_000,
-          verifyOnOpen: false,
+        const storage = PostgresStorage.make({
+          client: { url: Redacted.make(url) },
+          failpoint: (location) =>
+            Ref.get(active).pipe(
+              Effect.flatMap((enabled) =>
+                enabled && location === "materialize:before"
+                  ? Effect.fail(PostgresStorageFailpointError.make({ location }))
+                  : Effect.void,
+              ),
+            ),
         });
-        yield* failpoints.setHandler((location) =>
-          location === "materialize:before"
-            ? Effect.fail(PostgresStorageFailpointError.make({ location }))
-            : Effect.void,
-        );
 
-        const injected = yield* store
-          .materialize(
-            ThreadMaterialization.make({
-              threadId,
-              producerEpoch: epoch(1),
-            }),
-          )
-          .pipe(Effect.exit);
+        yield* Effect.gen(function* () {
+          const store = yield* ThreadStore;
 
-        expect(Exit.isFailure(injected)).toBe(true);
+          yield* Ref.set(active, true);
 
-        yield* failpoints.clear;
-        yield* store.materialize(
-          ThreadMaterialization.make({
-            threadId,
-            producerEpoch: epoch(1),
-          }),
-        );
-      }).pipe(Effect.provide(explicitTestStorageLayer(url))),
+          const injected = yield* store
+            .materialize(ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }))
+            .pipe(Effect.exit);
+
+          expect(Exit.isFailure(injected)).toBe(true);
+          yield* Ref.set(active, false);
+          yield* store.materialize(
+            ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
+          );
+        }).pipe(Effect.provide(storage.threadStore));
+      }),
     ),
   );
 
@@ -694,7 +665,7 @@ describe("PostgresThreadStore faults", () => {
         const withFailpoints = <A, E>(effect: Effect.Effect<A, E, ThreadStore>) =>
           Effect.provide(
             effect,
-            PostgresThreadStore.layer({
+            PostgresStorage.make({
               client: { url: Redacted.make(url) },
               observationPollInterval: 1,
               failpoint: (location) =>
@@ -705,7 +676,7 @@ describe("PostgresThreadStore faults", () => {
                       : Effect.void,
                   ),
                 ),
-            }),
+            }).threadStore,
           );
 
         const select = (location: PostgresStorageFailpointLocation | undefined) =>

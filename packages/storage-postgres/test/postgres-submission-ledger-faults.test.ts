@@ -1,9 +1,9 @@
+import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
 import {
   PostgresStorageFailpointError,
   type PostgresStorageFailpointLocation,
   PostgresWriteContention,
 } from "@effect-agent/storage-postgres/postgres-storage-error";
-import * as PostgresSubmissionLedger from "@effect-agent/storage-postgres/postgres-submission-ledger";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import type { Crypto } from "effect";
@@ -67,7 +67,7 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import {
   clientLayer,
-  singleConnectionServices,
+  singleConnectionStorage,
   whileHoldingWriterLock,
   withTemporaryDatabase,
 } from "./harness.ts";
@@ -172,17 +172,18 @@ const withLedger = <A, E>(
   effect: Effect.Effect<A, E, SubmissionLedger | Crypto.Crypto>,
 ) =>
   Effect.provide(effect, [
-    PostgresSubmissionLedger.layer({ client: { url: Redacted.make(url) } }),
+    PostgresStorage.make({ client: { url: Redacted.make(url) } }).submissionLedger,
     NodeCrypto.layer,
   ]);
 
 const withSql = <A, E>(url: string, effect: Effect.Effect<A, E, SqlClientService.SqlClient>) =>
   Effect.provide(effect, clientLayer(url));
 
-const singleConnectionLedger = (url: string, lockTimeout: number) =>
-  PostgresSubmissionLedger.layerWithServices.pipe(
-    Layer.provideMerge(singleConnectionServices(url, lockTimeout)),
-  );
+const singleConnectionLedger = (url: string, lockTimeout: number) => {
+  const storage = singleConnectionStorage(url, lockTimeout);
+
+  return Layer.mergeAll(storage.submissionLedger, storage.clientLayer, NodeCrypto.layer);
+};
 
 const expectInjectedFailure = <A>(
   exit: Exit.Exit<A, unknown>,
@@ -211,7 +212,7 @@ const makeFailpointHarness = (url: string) =>
 
     const failingLedger = <A, E>(effect: Effect.Effect<A, E, SubmissionLedger | Crypto.Crypto>) =>
       Effect.provide(effect, [
-        PostgresSubmissionLedger.layer({
+        PostgresStorage.make({
           client: { url: Redacted.make(url) },
           failpoint: (location) =>
             Ref.get(active).pipe(
@@ -221,7 +222,7 @@ const makeFailpointHarness = (url: string) =>
                   : Effect.void,
               ),
             ),
-        }),
+        }).submissionLedger,
         NodeCrypto.layer,
       ]);
 

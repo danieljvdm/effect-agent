@@ -2,8 +2,13 @@ import { PgClient, PgTypes } from "@effect/sql-pg";
 import { Effect, Layer, Result, Schema } from "effect";
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { PostgresStorageConfigValue } from "./PostgresStorageConfig.ts";
 import { PostgresStorageError } from "./PostgresStorageError.ts";
+
+/** Names accepted for the connection's selected namespace. */
+export const SchemaName = Schema.NonEmptyString.check(
+  Schema.isMaxLength(63),
+  Schema.isPattern(/^[a-z_][a-z0-9_]*$/),
+);
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const MIN_SAFE = BigInt(Number.MIN_SAFE_INTEGER);
@@ -60,7 +65,7 @@ export const layer = (
   schema = "public",
 ): Layer.Layer<PgClient.PgClient | SqlClient.SqlClient, PostgresStorageError> =>
   Layer.unwrap(
-    Schema.decodeEffect(PostgresStorageConfigValue.fields.schema)(schema).pipe(
+    Schema.decodeEffect(SchemaName)(schema).pipe(
       Effect.mapError((cause) =>
         PostgresStorageError.make({
           cause,

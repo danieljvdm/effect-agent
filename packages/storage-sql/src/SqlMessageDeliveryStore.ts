@@ -1,4 +1,4 @@
-import { Context, Effect, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { ThreadId } from "effect-agent/identifiers";
 import {
   applyMessageDeliveryChange,
@@ -84,19 +84,13 @@ export const createWorkerControlIndexes = Effect.gen(function* () {
   yield* sql`CREATE INDEX effect_agent_worker_pending ON effect_agent_message_deliveries(owner_thread_id, ${workerField(sql, "threadId")}, message_id) WHERE state IN ('pending', 'parked') AND ${withoutReceipt(sql)}`;
 });
 
-/** The adapter owns the atomic transaction and any associated native wake/alarm update. */
-export class SqlMessageDeliveryTransaction extends Context.Service<
-  SqlMessageDeliveryTransaction,
-  {
-    readonly run: <A>(
-      body: Effect.Effect<A, MessageDeliveryFailure>,
-    ) => Effect.Effect<A, MessageDeliveryFailure>;
-  }
->()("@effect-agent/thread/SqlMessageDeliveryTransaction") {}
-
 export interface SqlMessageDeliveryStoreOptions {
   /** UTF-8 bound on the complete persisted record, including a processed Settlement. */
   readonly maxStoredValueBytes?: number;
+  /** Defaults to the client's transaction; Postgres supplies its writer-lock transaction. */
+  readonly transaction?: <A>(
+    body: Effect.Effect<A, MessageDeliveryFailure>,
+  ) => Effect.Effect<A, MessageDeliveryFailure | SqlError>;
 }
 
 const Row = Schema.Struct({
@@ -157,7 +151,12 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
   );
 
   const sql = yield* SqlClient.SqlClient;
-  const transaction = yield* SqlMessageDeliveryTransaction;
+
+  const transaction = <A>(body: Effect.Effect<A, MessageDeliveryFailure>) =>
+    (options.transaction ?? sql.withTransaction)(body).pipe(
+      Effect.catchTag("SqlError", () => storage("transaction")),
+    );
+
   const failpoint = yield* MessageDeliveryFailpoint;
 
   const encode = Effect.fn("SqlMessageDeliveryStore.encode")(function* (
@@ -242,7 +241,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
       return yield* MessageDeliveryError.make({ reason: "capacity", operation: "envelope-bytes" });
     yield* failpoint.hit("message-delivery:insert:before");
 
-    const result = yield* transaction.run(
+    const result = yield* transaction(
       Effect.gen(function* () {
         const existing = yield* get(input.key);
 
@@ -291,7 +290,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
     yield* failpoint.hit(`${point}:before`);
 
-    const result = yield* transaction.run(
+    const result = yield* transaction(
       Effect.gen(function* () {
         const current = yield* get(decodedKey);
 

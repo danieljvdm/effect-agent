@@ -32,20 +32,6 @@ export class PostgresStorageError extends Schema.TaggedError<PostgresStorageErro
 ) {}
 
 /**
- * Postgres infrastructure failed while operating the Submission Ledger. Surfaces at the
- * SubmissionLedger port as the typed `LedgerError` with this error preserved as its cause,
- * so the adapter-level tag is never erased.
- */
-export class PostgresLedgerError extends Schema.TaggedError<PostgresLedgerError>()(
-  "PostgresLedgerError",
-  {
-    cause: Schema.optionalKey(Schema.Defect()),
-    message: Schema.String,
-    operation: Schema.String,
-  },
-) {}
-
-/**
  * A write transaction lost a concurrency race and was rolled back by Postgres: a
  * serialization failure (40001), a deadlock (40P01), or a lock timeout (55P03). The
  * transaction mutated no canonical state and is safe to retry.

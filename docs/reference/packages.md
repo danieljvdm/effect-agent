@@ -354,15 +354,31 @@ the Thread journal and submission ledger.
 
 Stores thread history and pending work in one Postgres database, which several Node processes may
 share. Rejects incompatible stored versions; no migration path is promised.
-`CurrentPostgresStorageVersion` identifies the supported version. Postgres 16 or newer.
-Test failpoints are in `@effect-agent/storage-postgres/testing/postgres-storage-failpoint-testing`.
+Requires Postgres 16 or newer.
+
+`PostgresStorage.make(options)` returns selectable store Layers sharing one connection pool and
+journal initialization. Merge only the stores the application needs:
+
+```ts
+import { PostgresStorage } from "@effect-agent/storage-postgres";
+import { Layer, Redacted } from "effect";
+
+const storage = PostgresStorage.make({
+  client: { url: Redacted.make("postgres://localhost/effect_agent") },
+});
+const Persistence = Layer.mergeAll(storage.threadStore, storage.submissionLedger);
+```
+
+The same instance provides `scheduleStore`, `activityStore`, `messageDeliveryStore(limits)`,
+and `subscriptionStore(partition)`. Activity progress remains independent of the journal.
+The `failpoint` and `activityFailpoint` options accept test handlers.
 
 Writers serialize on one transaction-scoped advisory lock; a blocked writer fails with the
 retryable `PostgresWriteContention`. The `schema` option selects the schema on every pooled
-connection through Postgres startup settings. For explicit client composition, pass the same schema to
-`PostgresStorageClient.layer(client, schema)` and `PostgresStorageConfig`.
-`PostgresStorageClient.layer` supplies the client, decoding `BIGINT` to safe integers as the
-stored row schemas require. The `effect-agent/sql-memory-store` ports stay SQLite-only.
+connection through Postgres startup settings. `storage.clientLayer` exposes the same client Layer for
+application SQL. `PostgresStorageClient.layer` also supports standalone client composition,
+decoding `BIGINT` to safe integers as the stored row schemas require.
+The `effect-agent/sql-memory-store` ports stay SQLite-only.
 
 ### `@effect-agent/platform-node`
 
