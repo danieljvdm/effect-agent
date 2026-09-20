@@ -15,7 +15,6 @@ import {
 import type { Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 import {
-  fillCredential,
   CredentialFillError,
   type BrowserCredentialAccess,
   type CredentialFillResult,
@@ -29,6 +28,7 @@ import {
   BrowserRunLiveViewResult,
 } from "./InteractiveBrowser.ts";
 import { BrowserRunBinding, type BrowserRunAttachment } from "./internal/browser-binding.ts";
+import { BrowserSessionPage, fillCredential } from "./internal/browser-credentials.ts";
 import { reportBrowserCause, reportedBrowserError } from "./internal/browser-failure.ts";
 import {
   BrowserRunSessionLifecycle,
@@ -107,7 +107,10 @@ export interface BrowserSession {
     authorize: Effect.Effect<void, E, R>,
     action: (page: Page) => Promise<A>,
   ) => Effect.Effect<A, E | BrowserSessionError, R>;
-  /** Resolves host-owned material under fresh credential grants. Never submits or retries a write. */
+  /**
+   * Resolves host-owned material under fresh credential grants. Never submits or retries a write.
+   * Credential timeouts retain acknowledged writes and dispatch evidence alongside cleanup.
+   */
   readonly fillCredential: (
     request: FillCredentialRequest,
   ) => Effect.Effect<
@@ -362,7 +365,9 @@ export class BrowserSessions extends Context.Service<
           );
         });
 
-        const runEffect = <A, E, R>(action: Effect.Effect<A, E, R>) =>
+        const runEffect = <A, E, R>(
+          action: (commandTimeoutMillis: number) => Effect.Effect<A, E, R>,
+        ) =>
           lock
             .withPermitsIfAvailable(1)(
               Effect.gen(function* () {
@@ -374,16 +379,7 @@ export class BrowserSessions extends Context.Service<
                   return yield* failure("expired", "not-dispatched", yield* terminate);
                 }
 
-                return yield* action.pipe(
-                  Effect.timeoutOrElse({
-                    duration: Math.min(remaining, reference.commandTimeoutMillis),
-                    orElse: () =>
-                      terminate.pipe(
-                        Effect.flatMap((closed) =>
-                          Effect.fail(failure("timeout", "possibly-dispatched", closed)),
-                        ),
-                      ),
-                  }),
+                return yield* action(Math.min(remaining, reference.commandTimeoutMillis)).pipe(
                   Effect.catchDefect((defect) =>
                     reportBrowserCause("session.command", Cause.die(defect)).pipe(
                       Effect.andThen(terminate),
@@ -406,7 +402,7 @@ export class BrowserSessions extends Context.Service<
           action: (page: Page) => Promise<A>,
           terminateOnError = false,
         ) =>
-          runEffect(
+          runEffect((commandTimeoutMillis) =>
             authorize.pipe(
               Effect.andThen(() =>
                 native("session.command", () => action(currentPage)).pipe(
@@ -421,6 +417,15 @@ export class BrowserSessions extends Context.Service<
                   ),
                 ),
               ),
+              Effect.timeoutOrElse({
+                duration: commandTimeoutMillis,
+                orElse: () =>
+                  terminate.pipe(
+                    Effect.flatMap((closed) =>
+                      Effect.fail(failure("timeout", "possibly-dispatched", closed)),
+                    ),
+                  ),
+              }),
             ),
           );
 
@@ -450,10 +455,14 @@ export class BrowserSessions extends Context.Service<
           reference,
           run,
           fillCredential: (request) =>
-            runEffect(
-              fillCredential(currentPage, request).pipe(
+            runEffect((commandTimeoutMillis) =>
+              fillCredential(request).pipe(
+                Effect.provideService(BrowserSessionPage, {
+                  page: currentPage,
+                  commandTimeoutMillis,
+                }),
                 Effect.catchIf(
-                  (error) => error.dispatch === "possibly-dispatched",
+                  (error) => error.reason === "timeout" || error.dispatch === "possibly-dispatched",
                   (error) =>
                     terminate.pipe(
                       Effect.flatMap((cleanup) =>

@@ -12,7 +12,6 @@ import {
   BrowserSessionError,
   BrowserSessionReference,
   BrowserSessions,
-  type BrowserSession,
 } from "@effect-agent/platform-cloudflare/browser-session";
 import { Effect, Option, Redacted, Schema, Stream } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -39,28 +38,19 @@ class CredentialProofFailure extends Schema.TaggedError<CredentialProofFailure>(
 const requireProof = (condition: boolean) =>
   condition ? Effect.void : Effect.fail(CredentialProofFailure.make({}));
 
-const fillUsingTool = Effect.fnUntraced(function* (
-  session: BrowserSession,
-  request: FillCredentialRequest,
-) {
-  return yield* Effect.gen(function* () {
-    const toolkit = yield* credentialTools;
-    const response = yield* toolkit.handle("fill_credential", request);
-    const last = yield* Stream.runLast(response);
+const fillUsingTool = Effect.fnUntraced(function* (request: FillCredentialRequest) {
+  const toolkit = yield* credentialTools;
+  const response = yield* toolkit.handle("fill_credential", request);
+  const last = yield* Stream.runLast(response);
 
-    if (
-      Option.isNone(last) ||
-      last.value.preliminary ||
-      !Schema.is(CredentialFillResult)(last.value.result)
-    )
-      return yield* CredentialProofFailure.make({});
+  if (
+    Option.isNone(last) ||
+    last.value.preliminary ||
+    !Schema.is(CredentialFillResult)(last.value.result)
+  )
+    return yield* CredentialProofFailure.make({});
 
-    return last.value.result;
-  }).pipe(
-    Effect.provide(
-      credentialTools.toLayer({ fill_credential: (input) => session.fillCredential(input) }),
-    ),
-  );
+  return last.value.result;
 });
 
 const ReferenceJson = Schema.fromJsonString(Schema.toCodecJson(BrowserSessionReference));
@@ -135,36 +125,37 @@ export const runCredentialProof = Effect.fn("runCredentialProof")(function* (ori
     Effect.gen(function* () {
       const session = yield* sessions.attach(owner.reference);
 
-      for (const layout of ["a", "b"]) {
-        yield* session.run(authorize, async (page) => {
-          await page.goto(`${origin}/credentials/login-${layout}`);
-        });
+      yield* Effect.gen(function* () {
+        for (const layout of ["a", "b"]) {
+          yield* session.run(authorize, async (page) => {
+            await page.goto(`${origin}/credentials/login-${layout}`);
+          });
 
-        const filled = yield* fillUsingTool(
-          session,
-          FillCredentialRequest.make({
-            credential: "dummy",
-            kind: "login",
-            fields: [
-              { selector: '[name="u"]', role: "username" },
-              { selector: '[name="p"]', role: "password" },
-            ],
-          }),
-        );
+          const filled = yield* fillUsingTool(
+            FillCredentialRequest.make({
+              credential: "dummy",
+              kind: "login",
+              fields: [
+                { selector: '[name="u"]', role: "username" },
+                { selector: '[name="p"]', role: "password" },
+              ],
+            }),
+          );
 
-        yield* requireProof(filled.filled === 2);
+          yield* requireProof(filled.filled === 2);
 
-        const authenticated = yield* session.run(authorize, async (page) => {
-          await Promise.all([
-            page.waitForNavigation({ waitUntil: "domcontentloaded" }),
-            page.click('button, input[type="submit"]'),
-          ]);
+          const authenticated = yield* session.run(authorize, async (page) => {
+            await Promise.all([
+              page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+              page.click('button, input[type="submit"]'),
+            ]);
 
-          return (await page.content()).includes("Authenticated dummy dashboard");
-        });
+            return (await page.content()).includes("Authenticated dummy dashboard");
+          });
 
-        yield* requireProof(authenticated);
-      }
+          yield* requireProof(authenticated);
+        }
+      }).pipe(Effect.provide(credentialTools.toLayer({ fill_credential: session.fillCredential })));
     }).pipe(Effect.provideService(BrowserCredentialAccess, access)),
   );
 
@@ -174,58 +165,60 @@ export const runCredentialProof = Effect.fn("runCredentialProof")(function* (ori
     Effect.gen(function* () {
       const session = yield* sessions.attach(reference);
 
-      const retainedPage = yield* session.run(authorize, async (page) =>
-        (await page.content()).includes("Authenticated dummy dashboard"),
-      );
+      yield* Effect.gen(function* () {
+        const retainedPage = yield* session.run(authorize, async (page) =>
+          (await page.content()).includes("Authenticated dummy dashboard"),
+        );
 
-      yield* requireProof(retainedPage);
-      yield* session.run(authorize, async (page) => {
-        await page.goto(`${origin}/credentials/payment`);
-      });
+        yield* requireProof(retainedPage);
+        yield* session.run(authorize, async (page) => {
+          await page.goto(`${origin}/credentials/payment`);
+        });
 
-      const request = FillCredentialRequest.make({
-        credential: "dummy",
-        kind: "card",
-        frame: ["iframe"],
-        fields: [
-          { selector: '[autocomplete="cc-name"]', role: "card-name" },
-          { selector: '[autocomplete="cc-number"]', role: "card-number" },
-          { selector: '[autocomplete="cc-exp"]', role: "card-expiry" },
-          { selector: '[autocomplete="cc-csc"]', role: "card-security-code" },
-        ],
-      });
+        const request = FillCredentialRequest.make({
+          credential: "dummy",
+          kind: "card",
+          frame: ["iframe"],
+          fields: [
+            { selector: '[autocomplete="cc-name"]', role: "card-name" },
+            { selector: '[autocomplete="cc-number"]', role: "card-number" },
+            { selector: '[autocomplete="cc-exp"]', role: "card-expiry" },
+            { selector: '[autocomplete="cc-csc"]', role: "card-security-code" },
+          ],
+        });
 
-      granted = false;
-      const denied = yield* fillUsingTool(session, request).pipe(Effect.flip);
+        granted = false;
+        const denied = yield* fillUsingTool(request).pipe(Effect.flip);
 
-      yield* requireProof(
-        Schema.is(CredentialFillError)(denied) &&
-          denied.reason === "denied" &&
-          denied.dispatch === "not-dispatched" &&
-          denied.cleanup === "not-requested" &&
-          denied.filled === 0,
-      );
-      granted = true;
-      const filled = yield* fillUsingTool(session, request);
+        yield* requireProof(
+          Schema.is(CredentialFillError)(denied) &&
+            denied.reason === "denied" &&
+            denied.dispatch === "not-dispatched" &&
+            denied.cleanup === "not-requested" &&
+            denied.filled === 0,
+        );
+        granted = true;
+        const filled = yield* fillUsingTool(request);
 
-      yield* requireProof(filled.filled === 4);
+        yield* requireProof(filled.filled === 4);
 
-      const matches = yield* session.run(authorize, async (page) => {
-        const frame = page
-          .frames()
-          .find((frame) => frame.url() === `${origin}/credentials/card-fields`);
+        const matches = yield* session.run(authorize, async (page) => {
+          const frame = page
+            .frames()
+            .find((frame) => frame.url() === `${origin}/credentials/card-fields`);
 
-        return frame === undefined
-          ? false
-          : await frame.$$eval(
-              "input",
-              (fields) =>
-                fields.map((field) => field.value).join("|") ===
-                "Dummy Only|4111111111111111|12/30|123",
-            );
-      });
+          return frame === undefined
+            ? false
+            : await frame.$$eval(
+                "input",
+                (fields) =>
+                  fields.map((field) => field.value).join("|") ===
+                  "Dummy Only|4111111111111111|12/30|123",
+              );
+        });
 
-      yield* requireProof(matches);
+        yield* requireProof(matches);
+      }).pipe(Effect.provide(credentialTools.toLayer({ fill_credential: session.fillCredential })));
     }).pipe(Effect.provideService(BrowserCredentialAccess, access)),
   );
   yield* owner.close;

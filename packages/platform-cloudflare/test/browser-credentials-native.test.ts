@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { Config, Effect, Option, Redacted, Schema } from "effect";
+import { Config, Effect, Layer, Option, Redacted, Schema } from "effect";
 import nativePuppeteer from "puppeteer-core";
 import browserPuppeteer, {
   type Page,
@@ -14,8 +14,8 @@ import {
   CredentialFillResult,
   FillCredentialRequest,
   LoginCredential,
-  fillCredential,
 } from "../src/BrowserCredentials.ts";
+import { BrowserSessionPage, fillCredential } from "../src/internal/browser-credentials.ts";
 
 const secret = "dummy-credential-secret-sentinel";
 
@@ -110,7 +110,7 @@ const fixture = Effect.fnUntraced(function* (test: TestContext) {
   });
   yield* Effect.promise(() => page.goto("https://merchant.test/login"));
 
-  return page;
+  return BrowserSessionPage.of({ page, commandTimeoutMillis: 30_000 });
 });
 
 const read = (page: Page) =>
@@ -134,7 +134,11 @@ const read = (page: Page) =>
 
 it("keeps invocation authority and typed failures visible", () => {
   expectTypeOf<ReturnType<typeof fillCredential>>().toEqualTypeOf<
-    Effect.Effect<CredentialFillResult, CredentialFillError, BrowserCredentialAccess>
+    Effect.Effect<
+      CredentialFillResult,
+      CredentialFillError,
+      BrowserCredentialAccess | BrowserSessionPage
+    >
   >();
 });
 
@@ -142,9 +146,9 @@ it.live(
   "fills login and a payment frame on the ordinary native page without discovery or submission",
   (test) =>
     Effect.gen(function* () {
-      const page = yield* fixture(test);
+      const { page } = yield* BrowserSessionPage;
 
-      const result = yield* fillCredential(page, loginRequest).pipe(
+      const result = yield* fillCredential(loginRequest).pipe(
         Effect.provideService(BrowserCredentialAccess, access()),
       );
 
@@ -165,7 +169,7 @@ it.live(
       yield* Effect.promise(() => page.click("button"));
       expect((yield* read(page)).text).toBe("Signed in");
       expect(
-        yield* fillCredential(page, cardRequest).pipe(
+        yield* fillCredential(cardRequest).pipe(
           Effect.provideService(BrowserCredentialAccess, access()),
         ),
       ).toMatchObject({ filled: 2 });
@@ -178,7 +182,7 @@ it.live(
           ),
         ),
       ).toEqual({ number: "4111111111111111", month: "09", writes: ["number", "month"] });
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.provide(Layer.effect(BrowserSessionPage, fixture(test)))),
   { timeout: 30_000 },
 );
 
@@ -187,7 +191,7 @@ for (const mode of ["merchant", "port", "frame", "recipient", "credential-url"] 
     `denies the actual ${mode} before resolving credential material`,
     (test) =>
       Effect.gen(function* () {
-        const page = yield* fixture(test);
+        const { page } = yield* BrowserSessionPage;
 
         if (mode === "merchant" || mode === "port")
           yield* Effect.promise(() =>
@@ -221,7 +225,7 @@ for (const mode of ["merchant", "port", "frame", "recipient", "credential-url"] 
 
         const request = mode === "frame" ? cardRequest : loginRequest;
 
-        const error = yield* fillCredential(page, request).pipe(
+        const error = yield* fillCredential(request).pipe(
           Effect.provideService(BrowserCredentialAccess, authority),
           Effect.flip,
         );
@@ -229,7 +233,7 @@ for (const mode of ["merchant", "port", "frame", "recipient", "credential-url"] 
         expect(error).toMatchObject({ reason: "denied", dispatch: "not-dispatched", filled: 0 });
         expect(resolved).toBe(0);
         expect((yield* read(page)).writes).toEqual([]);
-      }).pipe(Effect.scoped),
+      }).pipe(Effect.provide(Layer.effect(BrowserSessionPage, fixture(test)))),
     { timeout: 30_000 },
   );
 }
@@ -239,7 +243,7 @@ for (const mode of ["revoked", "replaced", "form-action"] as const) {
     `rechecks ${mode} authority or targets after resolution before writing`,
     (test) =>
       Effect.gen(function* () {
-        const page = yield* fixture(test);
+        const { page } = yield* BrowserSessionPage;
         let allowed = true;
 
         const authority = access({
@@ -262,7 +266,7 @@ for (const mode of ["revoked", "replaced", "form-action"] as const) {
         });
 
         expect(
-          yield* fillCredential(page, loginRequest).pipe(
+          yield* fillCredential(loginRequest).pipe(
             Effect.provideService(BrowserCredentialAccess, authority),
             Effect.flip,
           ),
@@ -272,7 +276,7 @@ for (const mode of ["revoked", "replaced", "form-action"] as const) {
           filled: 0,
         });
         expect((yield* read(page)).writes).toEqual([]);
-      }).pipe(Effect.scoped),
+      }).pipe(Effect.provide(Layer.effect(BrowserSessionPage, fixture(test)))),
     { timeout: 30_000 },
   );
 }
@@ -281,7 +285,7 @@ it.live(
   "retains acknowledged partial fill when authority becomes busy before the next field",
   (test) =>
     Effect.gen(function* () {
-      const page = yield* fixture(test);
+      const { page } = yield* BrowserSessionPage;
 
       const authority = access({
         authorize: () =>
@@ -293,7 +297,7 @@ it.live(
       });
 
       expect(
-        yield* fillCredential(page, loginRequest).pipe(
+        yield* fillCredential(loginRequest).pipe(
           Effect.provideService(BrowserCredentialAccess, authority),
           Effect.flip,
         ),
@@ -304,7 +308,7 @@ it.live(
         text: "Login",
       });
       expect(page.isClosed()).toBe(false);
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.provide(Layer.effect(BrowserSessionPage, fixture(test)))),
   { timeout: 30_000 },
 );
 
@@ -312,7 +316,7 @@ it.live(
   "rejects ambiguous nodes, duplicate mappings and material-kind mismatches before resolving",
   (test) =>
     Effect.gen(function* () {
-      const page = yield* fixture(test);
+      const { page } = yield* BrowserSessionPage;
       let resolved = 0;
 
       const authority = access({
@@ -345,7 +349,7 @@ it.live(
 
       for (const request of requests) {
         expect(
-          yield* fillCredential(page, FillCredentialRequest.make(request)).pipe(
+          yield* fillCredential(FillCredentialRequest.make(request)).pipe(
             Effect.provideService(BrowserCredentialAccess, authority),
             Effect.flip,
           ),
@@ -353,7 +357,7 @@ it.live(
       }
       expect(resolved).toBe(0);
       expect((yield* read(page)).writes).toEqual([]);
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.provide(Layer.effect(BrowserSessionPage, fixture(test)))),
   { timeout: 30_000 },
 );
 
@@ -361,7 +365,7 @@ it.live(
   "distinguishes a refused native select from a write rejected after assignment",
   (test) =>
     Effect.gen(function* () {
-      const page = yield* fixture(test);
+      const { page } = yield* BrowserSessionPage;
       const frame = page.frames().find((frame) => frame.url() === "https://processor.test/fields")!;
 
       yield* Effect.promise(() =>
@@ -369,7 +373,7 @@ it.live(
       );
       const authority = access();
 
-      const refused = yield* fillCredential(page, cardRequest).pipe(
+      const refused = yield* fillCredential(cardRequest).pipe(
         Effect.provideService(BrowserCredentialAccess, authority),
         Effect.flip,
       );
@@ -382,7 +386,6 @@ it.live(
       );
 
       const rejected = yield* fillCredential(
-        page,
         FillCredentialRequest.make({
           ...cardRequest,
           fields: [{ selector: "#number", role: "card-name" }],
@@ -397,7 +400,7 @@ it.live(
       expect(
         yield* Effect.promise(() => frame.evaluate("document.querySelector('#number').value")),
       ).toBe("");
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.provide(Layer.effect(BrowserSessionPage, fixture(test)))),
   { timeout: 30_000 },
 );
 
@@ -405,9 +408,9 @@ it.live(
   "sanitizes a vault defect and a lost SDK reply without replaying the write",
   (test) =>
     Effect.gen(function* () {
-      const page = yield* fixture(test);
+      const { page } = yield* BrowserSessionPage;
 
-      const defect = yield* fillCredential(page, loginRequest).pipe(
+      const defect = yield* fillCredential(loginRequest).pipe(
         Effect.provideService(
           BrowserCredentialAccess,
           access({ resolve: () => Effect.die(new Error(secret)) }),
@@ -430,7 +433,7 @@ it.live(
 
       yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
 
-      const unknown = yield* fillCredential(page, loginRequest).pipe(
+      const unknown = yield* fillCredential(loginRequest).pipe(
         Effect.provideService(BrowserCredentialAccess, access()),
         Effect.flip,
       );
@@ -442,6 +445,6 @@ it.live(
       });
       expect(JSON.stringify(unknown)).not.toContain(secret);
       expect((yield* read(page)).writes).toEqual(["username"]);
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.provide(Layer.effect(BrowserSessionPage, fixture(test)))),
   { timeout: 30_000 },
 );

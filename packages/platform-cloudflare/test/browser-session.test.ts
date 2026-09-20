@@ -30,7 +30,10 @@ import {
   type BrowserSession,
 } from "../src/BrowserSession.ts";
 import { BrowserRunBinding } from "../src/internal/browser-binding.ts";
-import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
+import {
+  BrowserRunCleanupError,
+  BrowserRunSessionLifecycle,
+} from "../src/internal/browser-session-lifecycle.ts";
 import { browserResponse } from "./browser-response.ts";
 
 const provider = vi.hoisted(() => ({
@@ -41,7 +44,10 @@ const provider = vi.hoisted(() => ({
   pageFailure: false,
   malformedHandoff: false,
   lostWriteReply: false,
+  writeReply: undefined as ((count: number) => Promise<void>) | undefined,
   credentialWrites: 0,
+  disposedFields: 0,
+  cleanupPending: false,
   acquired: 0,
   closed: [] as string[],
   retirements: 0,
@@ -68,7 +74,7 @@ vi.mock("puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js", () => ({
           provider.credentialWrites++;
           if (provider.lostWriteReply) throw new Error("private-write-reply");
 
-          return "filled";
+          return provider.writeReply?.(provider.credentialWrites).then(() => "filled") ?? "filled";
         },
       };
 
@@ -79,7 +85,9 @@ vi.mock("puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js", () => ({
           evaluateHandle: async () => ({
             evaluate: async (callback: (...args: unknown[]) => unknown, ...args: unknown[]) =>
               callback(fields, ...args),
-            dispose: async () => {},
+            dispose: async () => {
+              provider.disposedFields++;
+            },
           }),
         }),
       };
@@ -156,8 +164,10 @@ const layer = BrowserSessions.layerNoDeps.pipe(
   Layer.provide(
     Layer.succeed(BrowserRunSessionLifecycle, {
       close: (sessionId) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           provider.closed.push(Redacted.value(sessionId));
+          if (provider.cleanupPending)
+            return yield* new BrowserRunCleanupError({ reason: "pending" });
           provider.alive = false;
         }),
     }),
@@ -179,7 +189,10 @@ beforeEach(() =>
     pageFailure: false,
     malformedHandoff: false,
     lostWriteReply: false,
+    writeReply: undefined,
     credentialWrites: 0,
+    disposedFields: 0,
+    cleanupPending: false,
     acquired: 0,
     closed: [],
     retirements: 0,
@@ -497,6 +510,125 @@ it.effect.each(["partial-busy", "lost-reply"] as const)(
       expect(provider.closed).toEqual(mode === "lost-reply" ? [id] : []);
       if (mode === "partial-busy")
         expect(yield* session.run(Effect.void, (page) => page.title())).toBe("Checkout");
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+);
+
+it.effect.each([
+  {
+    stage: "initial authorization",
+    writes: 0,
+    dispatch: "not-dispatched",
+    filled: 0,
+    cleanup: "confirmed",
+    budget: 1_000,
+  },
+  {
+    stage: "next authorization",
+    writes: 1,
+    dispatch: "dispatched",
+    filled: 1,
+    cleanup: "confirmed",
+    budget: 1_000,
+  },
+  {
+    stage: "write reply",
+    writes: 2,
+    dispatch: "possibly-dispatched",
+    filled: 1,
+    cleanup: "confirmed",
+    budget: 1_000,
+  },
+  {
+    stage: "write reply",
+    writes: 2,
+    dispatch: "possibly-dispatched",
+    filled: 1,
+    cleanup: "unconfirmed",
+    budget: 1_000,
+  },
+  {
+    stage: "next authorization",
+    writes: 1,
+    dispatch: "dispatched",
+    filled: 1,
+    cleanup: "confirmed",
+    budget: 250,
+  },
+] as const)(
+  "retains credential progress on timeout at $stage ($cleanup cleanup, $budget ms)",
+  ({ stage, writes, dispatch, filled, cleanup, budget }) =>
+    Effect.gen(function* () {
+      const host = yield* BrowserSessions;
+      const reference = yield* host.create(options, () => Effect.void);
+      const session = yield* host.attach(reference);
+      const waiting = yield* Deferred.make<void>();
+      const reply = yield* Deferred.make<void>();
+      const replied = yield* Deferred.make<void>();
+      const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+
+      provider.cleanupPending = cleanup === "unconfirmed";
+      if (budget < reference.commandTimeoutMillis) yield* TestClock.adjust(60_000 - budget);
+      if (stage === "write reply")
+        provider.writeReply = async (count) => {
+          if (count !== 2) return;
+          await runPromise(Deferred.succeed(waiting, undefined));
+          await runPromise(Deferred.await(reply));
+          await runPromise(Deferred.succeed(replied, undefined));
+        };
+
+      const fiber = yield* session
+        .fillCredential(
+          FillCredentialRequest.make({
+            credential: "login-1",
+            kind: "login",
+            fields: [
+              { selector: "#username", role: "username" },
+              { selector: "#password", role: "password" },
+            ],
+          }),
+        )
+        .pipe(
+          Effect.provideService(BrowserCredentialAccess, {
+            authorize: () =>
+              stage !== "write reply" && provider.credentialWrites === writes
+                ? Deferred.succeed(waiting, undefined).pipe(Effect.andThen(Effect.never))
+                : Effect.void,
+            resolve: () =>
+              Effect.succeed(
+                LoginCredential.make({
+                  username: Redacted.make("user"),
+                  password: Redacted.make("dummy-password"),
+                }),
+              ),
+          }),
+          Effect.flip,
+          Effect.forkChild,
+        );
+
+      yield* Deferred.await(waiting);
+      yield* TestClock.adjust(budget);
+      const error = yield* Fiber.join(fiber);
+
+      expect(error).toMatchObject({
+        _tag: "CredentialFillError",
+        reason: "timeout",
+        dispatch,
+        filled,
+        cleanup,
+      });
+      expect(provider.closed).toEqual([id]);
+      expect(provider.retirements).toBe(2);
+      expect(provider.disposedFields).toBe(1);
+      expect(
+        yield* session.run(Effect.void, (page) => page.title()).pipe(Effect.flip),
+      ).toMatchObject({ reason: "closed" });
+      if (stage === "write reply") {
+        yield* Deferred.succeed(reply, undefined);
+        yield* Deferred.await(replied);
+      }
+      expect(provider.credentialWrites).toBe(writes);
+      expect(error).toMatchObject({ dispatch, filled, cleanup });
+      expect(JSON.stringify(error)).not.toContain("dummy-password");
     }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 

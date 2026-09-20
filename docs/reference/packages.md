@@ -430,6 +430,9 @@ an optional `frame` path selects at most eight nested iframes. The service autho
 origins and resolves host-only material. The helper fills without submitting and returns only
 dispatch evidence and the number of acknowledged writes. Ordinary browser observations remain
 available after filling.
+If a fill times out, `CredentialFillError` reports `reason: "timeout"`, the acknowledged
+`filled` count, dispatch evidence, and whether browser cleanup was confirmed. A pending write
+reply remains `possibly-dispatched`; its assignment is not included in `filled`.
 
 ### `@effect-agent/pr-review`
 
