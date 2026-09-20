@@ -1466,9 +1466,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       )
         return refused("input");
 
-      const validated = yield* Schema.decodeUnknownEffect(PersistedJson)(source.input).pipe(
-        Effect.option,
-      );
+      const validated = yield* Schema.decodeEffect(PersistedJson)(source.input).pipe(Effect.option);
 
       if (Option.isNone(validated)) return refused("input");
       const input = validated.value;
@@ -1485,9 +1483,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
         if (retained === undefined) return refused("destination");
 
-        const parameters = yield* Schema.decodeUnknownEffect(PersistedJson)(
-          retained.parameters,
-        ).pipe(Effect.option);
+        const parameters = yield* Schema.decodeEffect(PersistedJson)(retained.parameters).pipe(
+          Effect.option,
+        );
 
         if (Option.isNone(parameters)) return refused("destination");
         workerAdmission = {

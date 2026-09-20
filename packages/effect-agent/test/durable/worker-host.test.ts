@@ -3217,7 +3217,7 @@ layer(NodeCrypto.layer)((it) => {
         const snapshot = h.submissions.get(receipt.submissionId)!;
         const admission = snapshot.workerAdmission!;
 
-        const origin = yield* Schema.decodeUnknownEffect(Schema.toType(WorkerOrigin))({
+        const origin = yield* Schema.decodeEffect(Schema.toType(WorkerOrigin))({
           ...admission.origin,
           reporting: {
             sourceDigests: definitions,
