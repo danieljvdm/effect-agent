@@ -143,9 +143,19 @@ are outside this fixture.
 ## CI policy
 
 Ordinary PR CI runs deterministic state tests, lifecycle failure/interruption tests, and the local
-workerd receiver checks without credentials or deployment. The hosted command is a deliberate
-operator-run acceptance gate for browser/payment changes, not a PR, push or scheduled job. Run it
-on a trusted revision with dedicated credentials, retain failed reports, and confirm cleanup.
-Use at least two repetitions when collecting completion evidence. Keep automated and operator
-profiles distinct; only an explicit operator run establishes human takeover coverage.
-Share `report.json` only; never upload `.alchemy` or `live-view.txt` as CI artifacts.
+workerd receiver checks without credentials or deployment. After a Changesets version PR merges
+and its exact revision passes CI, `release:checked-publish` runs the hosted matrix before publishing.
+It skips paid work when every public version is already on npm. Adding a changeset or opening a PR
+does not trigger a hosted run. Checkout or cleanup failure blocks publication.
+
+For an on-demand run, select **Manual hosted checkout** in GitHub Actions and choose a trusted
+branch or tag. It checks out that dispatch's exact commit. Both workflows use `gpt-5.6-luna`, two
+repetitions (12 cases), concurrency four, one-second admission spacing, and `CHECKOUT_HUMAN=false`.
+Only an explicit local operator run establishes human takeover coverage.
+
+Configure the `OPENAI_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and narrow
+`BROWSER_RENDERING_API_TOKEN` repository secrets, plus the `CLOUDFLARE_WORKERS_SUBDOMAIN` variable.
+Each attempt generates a fresh run ID and masked control token. Both workflows retry recorded
+cleanup after failure or cancellation and retain `report.json`, including failed results, for 30 days.
+Never upload `.alchemy` or `live-view.txt` as CI artifacts. Hard runner termination can still prevent
+cleanup; use the recorded run ID to inspect remaining Workers and their browser-owner alarms.

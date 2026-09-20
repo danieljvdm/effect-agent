@@ -1,0 +1,86 @@
+name: Manual hosted checkout
+
+# Paid acceptance evidence for the selected revision; ordinary PRs use local tests.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-hosted-checkout
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: "true"
+      VP_GIT_HOOKS: "0"
+      CHECKOUT_MODEL: gpt-5.6-luna
+      CHECKOUT_REPETITIONS: "2"
+      CHECKOUT_CONCURRENCY: "4"
+      CHECKOUT_START_INTERVAL_MS: "1000"
+      CHECKOUT_HUMAN: "false"
+    steps:
+      - name: Check out the exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+      - name: Install dependencies
+        run: bunx --package vite-plus@0.3.2 vp install --frozen-lockfile --ignore-scripts
+      - name: Patch Effect TypeScript-Go
+        run: ./node_modules/.bin/vp run patch:tsgo
+      - name: Prepare isolated checkout attempt
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHECKOUT_TOKEN="$(openssl rand -hex 32)"
+          echo "::add-mask::$CHECKOUT_TOKEN"
+          echo "CHECKOUT_TOKEN=$CHECKOUT_TOKEN" >> "$GITHUB_ENV"
+          echo "CHECKOUT_RUN_ID=checkout-$(openssl rand -hex 6)" >> "$GITHUB_ENV"
+      - name: Run the hosted checkout gate
+        timeout-minutes: 25
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
+          BROWSER_RENDERING_API_TOKEN: ${{ secrets.BROWSER_RENDERING_API_TOKEN }}
+        run: ./node_modules/.bin/vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
+      - name: Retry recorded checkout cleanup
+        if: ${{ always() && env.CHECKOUT_RUN_ID != '' }}
+        timeout-minutes: 10
+        shell: bash
+        env:
+          CHECKOUT_CLEANUP: "true"
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
+          BROWSER_RENDERING_API_TOKEN: ${{ secrets.BROWSER_RENDERING_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          report="tooling/browser-run-worker-proof/.checkout-proof/$CHECKOUT_RUN_ID/report.json"
+          if [[ -f "$report" && "$(jq -r '.cleanup' "$report")" != confirmed ]]; then
+            ./node_modules/.bin/vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
+          fi
+      - name: Preserve checkout gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: checkout-manual-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tooling/browser-run-worker-proof/.checkout-proof/${{ env.CHECKOUT_RUN_ID }}/report.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30

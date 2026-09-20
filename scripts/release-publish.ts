@@ -143,7 +143,7 @@ export const withUnpublishedRelease = <E, R>(
 
     if (!pending.some(Boolean)) {
       yield* Console.log(
-        "All public versions are already published; skipping the live gate and publication.",
+        "All public versions are already published; skipping the live gates and publication.",
       );
 
       return;
@@ -360,6 +360,98 @@ const runCommand = Effect.fn("releasePublish.runCommand")(function* (
   }
 }, Effect.scoped);
 
+export const publishRelease = Effect.fn("releasePublish.publishRelease")(function* (
+  root: string,
+  {
+    dryRun,
+    otp,
+    checkContinuity,
+    checkCheckout,
+  }: {
+    readonly dryRun: boolean;
+    readonly otp: Option.Option<string>;
+    readonly checkContinuity: boolean;
+    readonly checkCheckout: boolean;
+  },
+) {
+  const path = yield* Path.Path;
+
+  const publish = Effect.gen(function* () {
+    const buildRun = yield* Config.option(Config.Number("RELEASE_BUILD_RUN"));
+
+    const verifyBuild = Effect.gen(function* () {
+      if (Option.isNone(buildRun)) return;
+      yield* verifyMainBuild(
+        (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
+        buildRun.value,
+        yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
+        yield* Config.String("RELEASE_BUILD_TOKEN"),
+      );
+    });
+
+    if (Option.isSome(buildRun)) {
+      yield* verifyBuild;
+      yield* downloadReleaseBuild(
+        root,
+        buildRun.value,
+        yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
+        (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
+        yield* Config.String("RELEASE_BUILD_TOKEN"),
+      );
+      yield* restoreReleaseBuild(root, path.join(root, ".release-build", "build.json"), {
+        runId: buildRun.value,
+        runAttempt: yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
+        commit: (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
+      });
+      yield* runCommand(root, "vp", ["run", "ci:release-packages"]);
+    } else yield* runCommand(root, "vp", ["run", "build"]);
+    if (checkContinuity && !dryRun)
+      yield* runCommand(root, "vp", [
+        "run",
+        "--no-cache",
+        "context-continuity-eval",
+        "--require-clean",
+        "--profile",
+        "explicit-rollover-sqlite-v1",
+        "--max-cost-usd",
+        "10",
+      ]);
+    if (checkCheckout && !dryRun)
+      yield* runCommand(root, "vp", [
+        "run",
+        "--no-cache",
+        "-F",
+        "@effect-agent/example-browser-run-worker-proof",
+        "prove:live",
+      ]);
+    yield* verifyBuild;
+    yield* withPublishManifests(root, (directories) =>
+      dryRun
+        ? Effect.forEach(
+            directories,
+            (directory) => runCommand(directory, "npm", ["pack", "--dry-run", "--ignore-scripts"]),
+            { discard: true },
+          )
+        : runCommand(root, path.join(root, "node_modules", ".bin", "changeset"), [
+            "publish",
+            "--tag",
+            "beta",
+            ...(Option.isSome(otp) ? ["--otp", otp.value] : []),
+          ]),
+    );
+  });
+
+  if ((checkContinuity || checkCheckout) && !dryRun) {
+    const packages = yield* readWorkspacePackages(root);
+
+    yield* withUnpublishedRelease(
+      packages.map((pkg) => pkg.manifest),
+      publish,
+    );
+  } else yield* publish;
+  if (dryRun) yield* Console.log("Dry run complete. Nothing published or tagged.");
+});
+
 export const command = CliCommand.make(
   "release-publish",
   {
@@ -373,12 +465,18 @@ export const command = CliCommand.make(
       ),
       Flag.withDefault(false),
     ),
+    checkCheckout: Flag.Boolean("check-checkout").pipe(
+      Flag.withDescription(
+        "Run the hosted checkout gate only when a public version needs publishing.",
+      ),
+      Flag.withDefault(false),
+    ),
     otp: Flag.String("otp").pipe(
       Flag.optional,
       Flag.withDescription("npm one-time password for an authenticated manual release."),
     ),
   },
-  Effect.fn("releasePublish.command")(function* ({ dryRun, otp, checkContinuity }) {
+  Effect.fn("releasePublish.command")(function* (options) {
     const path = yield* Path.Path;
 
     const root = path.resolve(
@@ -386,73 +484,7 @@ export const command = CliCommand.make(
       "..",
     );
 
-    const publish = Effect.gen(function* () {
-      const buildRun = yield* Config.option(Config.Number("RELEASE_BUILD_RUN"));
-
-      const verifyBuild = Effect.gen(function* () {
-        if (Option.isNone(buildRun)) return;
-        yield* verifyMainBuild(
-          (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
-          buildRun.value,
-          yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
-          yield* Config.String("RELEASE_BUILD_TOKEN"),
-        );
-      });
-
-      if (Option.isSome(buildRun)) {
-        yield* verifyBuild;
-        yield* downloadReleaseBuild(
-          root,
-          buildRun.value,
-          yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
-          (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
-          yield* Config.String("RELEASE_BUILD_TOKEN"),
-        );
-        yield* restoreReleaseBuild(root, path.join(root, ".release-build", "build.json"), {
-          runId: buildRun.value,
-          runAttempt: yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
-          commit: (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
-        });
-        yield* runCommand(root, "vp", ["run", "ci:release-packages"]);
-      } else yield* runCommand(root, "vp", ["run", "build"]);
-      if (checkContinuity && !dryRun)
-        yield* runCommand(root, "vp", [
-          "run",
-          "--no-cache",
-          "context-continuity-eval",
-          "--require-clean",
-          "--profile",
-          "explicit-rollover-sqlite-v1",
-          "--max-cost-usd",
-          "10",
-        ]);
-      yield* verifyBuild;
-      yield* withPublishManifests(root, (directories) =>
-        dryRun
-          ? Effect.forEach(
-              directories,
-              (directory) =>
-                runCommand(directory, "npm", ["pack", "--dry-run", "--ignore-scripts"]),
-              { discard: true },
-            )
-          : runCommand(root, path.join(root, "node_modules", ".bin", "changeset"), [
-              "publish",
-              "--tag",
-              "beta",
-              ...(Option.isSome(otp) ? ["--otp", otp.value] : []),
-            ]),
-      );
-    });
-
-    if (checkContinuity && !dryRun) {
-      const packages = yield* readWorkspacePackages(root);
-
-      yield* withUnpublishedRelease(
-        packages.map((pkg) => pkg.manifest),
-        publish,
-      );
-    } else yield* publish;
-    if (dryRun) yield* Console.log("Dry run complete. Nothing published or tagged.");
+    yield* publishRelease(root, options);
   }),
 ).pipe(
   CliCommand.withDescription(
