@@ -1,5 +1,13 @@
 # effect-agent
 
+## 0.1.0-beta.119
+
+### Patch Changes
+
+- [#581](https://github.com/danieljvdm/effect-agent/pull/581) [`5c11bea`](https://github.com/danieljvdm/effect-agent/commit/5c11bea7ec185136b3453d317a0fea20f015a3a8) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose visible choices and selection state for ordinary protected selects, and preserve prior dispatch evidence after acknowledged no-write refusals.
+
+  BEHAVIOR CHANGE: Fill ordinary selects with the exact observed option label; raw option values are no longer a fallback, while credential selects continue to use private values.
+
 ## 0.1.0-beta.118
 
 ### Patch Changes

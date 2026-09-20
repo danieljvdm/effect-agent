@@ -192,6 +192,7 @@
     "protected-browser-human-handoff",
     "protected-browser-ordinary-controls",
     "protected-browser-return-origin",
+    "protected-browser-select-labels",
     "protected-browser-workflow-pauses",
     "provider-call-accounting",
     "pure-session-boundaries",
