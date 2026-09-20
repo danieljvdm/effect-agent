@@ -51,7 +51,8 @@ export const inspectFrame = `(() => {
         if (type === 'password' && form) role = 'password';
       } else if (['text','email','tel','number','month','search','url','date','time','week','datetime-local','textarea',''].includes(type) || el instanceof HTMLSelectElement) {
         if (cardRoles[autocomplete]) { if (form) role = cardRoles[autocomplete]; }
-        else if (autocomplete === 'username' || autocomplete === 'email') { if (form) role = 'username'; }
+        // Email autocomplete alone is contact data; explicit usernames and password forms identify login fields.
+        else if (autocomplete === 'username') { if (form) role = 'username'; }
         else if (['text','email'].includes(type) && form && form.querySelector('input[type="password"]')) role = 'username';
         else if (el instanceof HTMLSelectElement) { if (!el.multiple) role = 'select'; }
         else role = 'text';
