@@ -38,6 +38,7 @@ import {
   AbortCommand,
   WorkerStopCommand,
   WorkerLedgerState,
+  workerTerminalFromRecord,
   AdmissionAdmitted,
   AdmissionConflict,
   AdmissionPolicyError,
@@ -239,7 +240,7 @@ interface LedgerState {
   readonly mintCounter: number;
   readonly latestByThread: ReadonlyMap<ThreadId, SubmissionId>;
   readonly activeByThread: ReadonlyMap<ThreadId, ReadonlySet<SubmissionId>>;
-  readonly stoppedWorkers: ReadonlySet<ThreadId>;
+  readonly stoppedWorkers: ReadonlyMap<ThreadId, WorkerLedgerState["terminal"]>;
 }
 
 type Decision<A, E> =
@@ -445,7 +446,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       lanes: new Map(),
       childReservations: new Map(),
       mintCounter: 0,
-      stoppedWorkers: new Set(),
+      stoppedWorkers: new Map(),
       latestByThread: new Map(),
       activeByThread: new Map(),
     });
@@ -1235,7 +1236,60 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             }
 
-            const next = withSubmission(current, {
+            const terminal =
+              stored.row.workerAdmissionJson === undefined
+                ? undefined
+                : workerTerminalFromRecord(toSnapshot(stored.row), reservation.record);
+
+            const latestId = current.latestByThread.get(stored.row.threadId);
+            const latest = latestId === undefined ? undefined : current.submissions.get(latestId);
+
+            const pendingNewer =
+              terminal === "completed" &&
+              latest !== undefined &&
+              latest.row.queueSequence > stored.row.queueSequence &&
+              !(
+                latest.joinedHostSubmissionId === stored.row.submissionId &&
+                latest.inputApplied !== undefined
+              );
+
+            let sealed = current;
+
+            if (
+              terminal !== undefined &&
+              !pendingNewer &&
+              !current.stoppedWorkers.has(stored.row.threadId)
+            ) {
+              const submissions = new Map(current.submissions);
+
+              for (const id of current.activeByThread.get(stored.row.threadId) ?? []) {
+                const other = submissions.get(id);
+
+                if (other === undefined) continue;
+                if (
+                  id !== stored.row.submissionId &&
+                  other.joinedHostSubmissionId !== stored.row.submissionId &&
+                  other.abortIntent === undefined
+                ) {
+                  submissions.set(id, {
+                    ...other,
+                    abortIntent: AbortIntent.make({
+                      submissionId: id,
+                      author: stored.row.principal,
+                      reason: `Worker assignment ${terminal}`,
+                      requestedAt: utc(nowMillis),
+                    }),
+                  });
+                }
+              }
+              sealed = {
+                ...current,
+                submissions,
+                stoppedWorkers: new Map(current.stoppedWorkers).set(stored.row.threadId, terminal),
+              };
+            }
+
+            const next = withSubmission(sealed, {
               ...stored,
               row: { ...stored.row, state: "settled", settledOutcome: reservation.outcome },
               ownership: undefined,
@@ -1279,10 +1333,13 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
         })
         .sort((a, b) => a.row.queueSequence - b.row.queueSequence)[0];
 
+      const terminal = current.stoppedWorkers.get(threadId);
+
       return WorkerLedgerState.make({
         latest: latest === undefined ? null : toSnapshot(latest.row),
         active: active === undefined ? null : toSnapshot(active.row),
         stopped: current.stoppedWorkers.has(threadId),
+        ...(terminal === undefined ? {} : { terminal }),
       });
     });
 
@@ -1318,7 +1375,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
           {
             ...current,
             submissions,
-            stoppedWorkers: new Set([...current.stoppedWorkers, request.threadId]),
+            stoppedWorkers: current.stoppedWorkers.has(request.threadId)
+              ? current.stoppedWorkers
+              : new Map(current.stoppedWorkers).set(request.threadId, undefined),
           },
         ] as const;
       });

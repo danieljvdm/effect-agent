@@ -3100,6 +3100,33 @@ layer(testLayer)("RUN-001 Phase 1 AgentRuntime", (it) => {
     );
   });
 
+  it.effect.each(["unsupported", undefined])(
+    "rejects invalid assignment disposition %s",
+    (selected) => {
+      const definition = Agent.make("assignment-disposition", {
+        input: Schema.String,
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer as JSON.",
+        toolkit: Toolkit.empty,
+        runDisposition: {
+          workerLifecycle: "assignment",
+          schema: Schema.UndefinedOr(Schema.String),
+          fromOutput: () => selected,
+        },
+      });
+
+      return Effect.gen(function* () {
+        const agent = Agent.withModel(definition, modelFromParts(finalParts('{"answer":"done"}')));
+        const failure = yield* AgentRuntime.run(agent, "task").pipe(Effect.flip);
+
+        expect(failure).toMatchObject({
+          _tag: "AgentRunDispositionError",
+          message: "Assignment disposition must encode completed or waiting",
+        });
+      });
+    },
+  );
+
   it.effect("RUN-029 validates and exposes an application run disposition", () => {
     const RunDisposition = Schema.String.check(
       Schema.makeFilter((value) =>

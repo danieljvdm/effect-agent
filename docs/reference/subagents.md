@@ -440,9 +440,8 @@ produces `stopping` or `stopped`; an ordinary Receipt abort does not. These stat
 distinguish an intentional stop from a recoverable failure, even when a completion report says
 `aborted`. `stopping` retains unsettled obligations behind the permanent fence; `stopped` has none.
 Follow-up after either state is refused with `reason: "worker-stopped"`, including after restart.
-`idle` and a completed Run do **not** mean the assignment is finished. Interpret the Definition's
-`runDisposition`, and require the relevant accepted instructions to be canonically applied before
-using an older result as completion.
+For reusable workers, `idle` and a completed Run do **not** mean the assignment is finished.
+Use the opt-in below when the library must enforce assignment completion.
 
 `Subagent.list(Research, { limit, after })` returns an indexed, bounded page of retained starts,
 including those not yet admitted. Read canonical history with
@@ -456,6 +455,35 @@ coordinator Runs (defaults: 32 workers, 64 inputs, 8 pending, 24 hours). Started
 not refunded. Execution concurrency is a separate host setting; waiting attached parents release
 their permits. Configure sufficient host capacity for conversational work and the chosen child
 concurrency. Idle workers own no execution resources.
+
+### Terminal assignments
+
+Set `runDisposition.workerLifecycle: "assignment"` on the target Agent definition and select
+`Worker.AssignmentDisposition` (`completed` or `waiting`) from decoded output. The selector is
+pure; the existing canonical completion retains its encoded decision. This is an opt-in for new
+workers, supported by the native memory, SQLite and Cloudflare storage adapters.
+
+| Run result                                       | Assignment state                                                 |
+| ------------------------------------------------ | ---------------------------------------------------------------- |
+| `waiting`                                        | Open for steering and another run.                               |
+| `completed`, with latest accepted input applied  | Permanently `completed`.                                         |
+| `completed`, with newer unapplied accepted input | Open; the newer input can run.                                   |
+| Failed or budget-exhausted run                   | Permanently `failed`; queued inputs are aborted.                 |
+| Aborted active run                               | Permanently `cancelled`; queued inputs are aborted.              |
+| Receipt cancelled before starting a run          | Open; receipt cancellation alone does not finish the assignment. |
+
+Settlement installs the destination seal atomically before releasing ownership. Admission racing
+completion either wins and prevents stale completion, or is refused by the seal. The latest
+accepted input must belong to the completing run's applied inputs; a completed model turn, tool
+side effect, or application note is insufficient. A lost attempt or suspended/unknown tool outcome
+is not a terminal run failure. Recovery retains unresolved external-effect evidence and never
+replays an ordinary tool blindly.
+
+`completed`, `failed` and `cancelled` summary states cannot reopen after restart. New starts on
+that destination and later follow-ups return `worker-stopped`; identical admitted command replays
+still return their original receipt and outcome. `Subagent.stop` remains permanent and retains its
+`stopping`/`stopped` states; a later stop never replaces an existing assignment outcome. Stop from
+the owning caller, not inside the active child's completion handler.
 
 ## Completion report guarantees
 

@@ -685,7 +685,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
               ),
             );
             yield* createWorkerStops;
-            yield* sql`UPDATE effect_agent_meta SET value='8' WHERE key='storage_version'`;
+            yield* sql`UPDATE effect_agent_meta SET value='9' WHERE key='storage_version'`;
             yield* failpoint("upgrade:after-version");
           }),
         )
@@ -721,11 +721,11 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
               value: string;
             }>`SELECT value FROM effect_agent_meta WHERE key = 'storage_version'`;
 
-            if (current[0]?.value === "8") return;
+            if (current[0]?.value === "9") return;
             if (current[0]?.value !== "6")
               return yield* DoStorageCompatibilityError.make({
                 actualVersion: -1,
-                supportedVersion: 8,
+                supportedVersion: 9,
                 message: "Storage version changed during native index upgrade",
               });
             yield* checkPredecessorLayout(5);
@@ -736,7 +736,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             if (requiredIndex.length !== 1)
               return yield* DoStorageCompatibilityError.make({
                 actualVersion: 6,
-                supportedVersion: 8,
+                supportedVersion: 9,
                 message: "Predecessor storage is missing its required nonterminal index",
               });
             yield* failpoint("upgrade:before-mutation");
@@ -754,7 +754,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             yield* failpoint("upgrade:after-mutation");
             yield* failpoint("upgrade:before-version");
             yield* createWorkerStops;
-            yield* sql`UPDATE effect_agent_meta SET value='8' WHERE key='storage_version'`;
+            yield* sql`UPDATE effect_agent_meta SET value='9' WHERE key='storage_version'`;
             yield* failpoint("upgrade:after-version");
           }),
         )
@@ -775,11 +775,11 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
               value: string;
             }>`SELECT value FROM effect_agent_meta WHERE key = 'storage_version'`;
 
-            if (current[0]?.value === "8") return;
+            if (current[0]?.value === "9") return;
             if (current[0]?.value !== "7")
               return yield* DoStorageCompatibilityError.make({
                 actualVersion: -1,
-                supportedVersion: 8,
+                supportedVersion: 9,
                 message: "Storage version changed during worker stop upgrade",
               });
             yield* checkPredecessorLayout(7);
@@ -788,7 +788,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             yield* createWorkerStops;
             yield* failpoint("upgrade:after-mutation");
             yield* failpoint("upgrade:before-version");
-            yield* sql`UPDATE effect_agent_meta SET value='8' WHERE key='storage_version'`;
+            yield* sql`UPDATE effect_agent_meta SET value='9' WHERE key='storage_version'`;
             yield* failpoint("upgrade:after-version");
           }),
         )
@@ -797,6 +797,62 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             DoStorageError.make({
               operation: "upgrade worker stop",
               message: "Worker stop upgrade failed",
+              cause,
+            }),
+          ),
+        );
+    } else if (version.value === "8") {
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const current = yield* sql<{
+              value: string;
+            }>`SELECT value FROM effect_agent_meta WHERE key = 'storage_version'`;
+
+            if (current[0]?.value === "9") return;
+            if (current[0]?.value !== "8")
+              return yield* DoStorageCompatibilityError.make({
+                actualVersion: -1,
+                supportedVersion: 9,
+                message: "Storage version changed during assignment seal upgrade",
+              });
+            yield* checkPredecessorLayout(7);
+            yield* verifyWorkerPredecessor(true);
+            const columns = yield* sql`PRAGMA table_info(effect_agent_worker_stops)`;
+
+            yield* Schema.decodeUnknownEffect(
+              Schema.Tuple([
+                Schema.Struct({
+                  cid: Schema.Literal(0),
+                  name: Schema.Literal("thread_id"),
+                  type: Schema.Literal("TEXT"),
+                  notnull: Schema.Literal(1),
+                  dflt_value: Schema.Null,
+                  pk: Schema.Literal(1),
+                }),
+              ]),
+            )(columns).pipe(
+              Effect.mapError(() =>
+                DoStorageCompatibilityError.make({
+                  actualVersion: 8,
+                  supportedVersion: 9,
+                  message: "Unsupported worker seal layout; no upgrade was committed",
+                }),
+              ),
+            );
+            yield* failpoint("upgrade:before-mutation");
+            yield* sql`ALTER TABLE effect_agent_worker_stops ADD COLUMN terminal TEXT`;
+            yield* failpoint("upgrade:after-mutation");
+            yield* failpoint("upgrade:before-version");
+            yield* sql`UPDATE effect_agent_meta SET value='9' WHERE key='storage_version'`;
+            yield* failpoint("upgrade:after-version");
+          }),
+        )
+        .pipe(
+          Effect.mapError((cause) =>
+            DoStorageError.make({
+              operation: "upgrade assignment seals",
+              message: "Assignment seal upgrade failed",
               cause,
             }),
           ),
@@ -810,7 +866,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
         message:
           `The Durable Object uses unsupported storage version ${version.value}; ` +
           `this build supports exactly version ${CurrentDoStorageVersion}. ` +
-          "Only supported v2, v3, v4, v5, v6 and v7 can be upgraded automatically. Keep the original store and use a compatible library version.",
+          "Only supported v2, v3, v4, v5, v6, v7 and v8 can be upgraded automatically. Keep the original store and use a compatible library version.",
       });
     }
   }

@@ -121,7 +121,11 @@ import {
   sumRunTotals,
   type UsageCompleteness,
 } from "../../core/Usage.ts";
-import { FrameworkMessage, type WorkerBudgetScope } from "../../core/Worker.ts";
+import {
+  AssignmentDisposition,
+  FrameworkMessage,
+  type WorkerBudgetScope,
+} from "../../core/Worker.ts";
 import { MessagingHost } from "../MessagingHost.ts";
 import { SubagentHost } from "../SubagentHost.ts";
 import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
@@ -5205,7 +5209,7 @@ const encodeRunDispositionCandidate = Effect.fn("AgentRuntime.encodeRunDispositi
       }),
   });
 
-  if (selected === undefined) return undefined;
+  if (selected === undefined && declaration.workerLifecycle === undefined) return undefined;
 
   const encoded = yield* Schema.encodeUnknownEffect(declaration.schema)(selected).pipe(
     Effect.mapError((cause) =>
@@ -5215,6 +5219,17 @@ const encodeRunDispositionCandidate = Effect.fn("AgentRuntime.encodeRunDispositi
       }),
     ),
   );
+
+  if (declaration.workerLifecycle === "assignment") {
+    return yield* Schema.decodeUnknownEffect(AssignmentDisposition)(encoded).pipe(
+      Effect.mapError((cause) =>
+        AgentRunDispositionError.make({
+          cause,
+          message: "Assignment disposition must encode completed or waiting",
+        }),
+      ),
+    );
+  }
 
   return yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
     Effect.mapError((cause) =>

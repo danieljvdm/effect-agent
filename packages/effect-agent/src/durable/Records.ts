@@ -831,6 +831,8 @@ export const WorkerOrigin = Schema.Struct({
   source: WorkerSource,
   /** Omitted retains source-subtree funding; worker-run renews only for a new native Run. */
   budgetScope: Schema.optionalKey(WorkerBudgetScope),
+  /** Frozen at worker creation; older origins remain reusable. */
+  lifecycle: Schema.optionalKey(Schema.Literal("assignment")),
   targetDigests: DefinitionDigests,
   policy: Schema.toCodecJson(AgentPolicy),
   budget: SubagentBudgetReservation,

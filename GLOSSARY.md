@@ -221,6 +221,12 @@ identifies the Thread. Each retained input has a MessageRef; destination accepta
 Receipt, and canonical settlement records its outcome. Ownership, grants,
 reservations, and reporting persist independently of the launching Run.
 
+**Worker Assignment**
+A Background Worker whose Definition opts into one retained task. Typed output distinguishes
+waiting from completion. Settlement seals completion only after the latest accepted input is
+applied; terminal failure or active-run cancellation also seals the destination. A sealed
+assignment cannot admit new work, while original command receipts remain readable.
+
 **Agent Update**
 An intentional Schema-defined intermediate finding emitted by an Agent, independent of its final
 output. Durable acceptance retains its identity and encoded value before acknowledgement.
