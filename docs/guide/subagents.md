@@ -22,13 +22,15 @@ This defines the agents. Choose how to run them below.
 
 ## Choose a setup
 
-| Kind                                                 | Parent behavior                                              | Use it when                                                    |
-| ---------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------- |
-| [In-memory attached](./subagents/in-memory-attached) | Waits for a tool result; child shares its Scope              | Restarting the task after a process crash is acceptable        |
-| [Durable attached](./subagents/durable-attached)     | Suspends, then resumes with the child's result               | The parent needs the answer and progress must survive restarts |
-| [Durable background](./subagents/background)         | Continues; receives declared updates and a completion report | The user should keep chatting while work runs                  |
+| Kind                                                                                 | Parent behavior                                              | Use it when                                                              |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| [In-memory attached](./subagents/in-memory-attached)                                 | Waits for a tool result; child shares its Scope              | Restarting the task after a process crash is acceptable                  |
+| [Durable attached](./subagents/durable-attached)                                     | Suspends, then resumes with the child's result               | The parent needs the answer and progress must survive restarts           |
+| [Ephemeral helper on a durable host](./subagents/durable-attached#ephemeral-helpers) | Waits for a scoped tool result                               | The parent needs the answer, but the child needs no independent recovery |
+| [Durable background](./subagents/background)                                         | Continues; receives declared updates and a completion report | The user should keep chatting while work runs                            |
 
-Both attached forms use `Summarize.tool`. Durable execution comes from the host you run them on.
+Attached forms use `Summarize.tool`. Durable execution comes from the host by default;
+`execution: "ephemeral"` opts into a scoped helper.
 For background work, expose start and follow-up tools instead:
 
 ```ts twoslash
@@ -48,13 +50,14 @@ Give the parent `background.toolkit` and provide `background.layer` for its hand
 ## Lifecycle and limits
 
 Attached children can run concurrently, but the parent's next model call waits for the batch to
-settle. A durable parent releases its execution slot while waiting and recovers the same child
-after a restart. Aborting the parent propagates cancellation to attached children.
+settle. With a durable child, the parent releases its execution slot while waiting and recovers the
+same child after a restart. Ephemeral helpers stay inside the active parent Scope. Aborting the
+parent propagates cancellation to attached children.
 
 Background workers keep running after the parent finishes or aborts. Follow-ups continue the
 same child thread. Durable hosts recover their accepted work and pending report delivery.
 
-All three forms enforce permissions and budgets. Parent tools are not inherited. See the
+All forms enforce permissions and budgets. Parent tools are not inherited. See the
 [subagent reference](../reference/subagents) for projections, nested delegation, and limits, or
 [durability](../concepts/durability) for recovery of uncertain external actions.
 

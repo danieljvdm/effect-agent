@@ -138,7 +138,10 @@ const toolTurn = (
 ];
 
 /** Scripted model whose call counter and captured prompts survive Layer rebuilds across Attempts. */
-const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.StreamPartEncoded>) =>
+const makeScriptedModel = (
+  script: (call: number) => ReadonlyArray<Response.StreamPartEncoded>,
+  beforeResponse: Effect.Effect<void> = Effect.void,
+) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts: Array<Prompt.Prompt> = [];
@@ -153,6 +156,7 @@ const makeScriptedModel = (script: (call: number) => ReadonlyArray<Response.Stre
           streamText: (request) =>
             Stream.unwrap(
               Ref.getAndUpdate(calls, (call) => call + 1).pipe(
+                Effect.tap(() => beforeResponse),
                 Effect.map((call) => {
                   prompts.push(request.prompt);
 
@@ -376,21 +380,66 @@ const submitParentWith =
  * from registration without repeating durable setup in its handler Layer.
  */
 const makeHarness = (options?: {
+  readonly execution?: "ephemeral";
+  readonly replay?: "readonly" | "idempotent" | "uncertain";
+  readonly maxChildren?: number;
+  readonly calls?: number;
+  readonly maxConcurrency?: number;
+  readonly beforeChildResponse?: Effect.Effect<void>;
   readonly registration?: "missing" | "ambiguous" | "different-definition";
   readonly declaredDigests?: DefinitionDigests;
 }) =>
   Effect.gen(function* () {
-    const { childScripted, childBinding } = yield* makeChildFixture;
+    const childScripted = yield* makeScriptedModel(
+      () => finalParts('{"answer":"child-answer"}'),
+      options?.beforeChildResponse,
+    );
+
+    const childBinding = Agent.withModel(childDefinition, childScripted.model);
+
+    const delegation = Subagent.define("delegate_research", {
+      ...researchDelegation,
+      ...(options?.execution === undefined ? {} : { execution: options.execution }),
+      ...(options?.maxChildren === undefined
+        ? {}
+        : {
+            policy: SubagentPolicy.make({
+              ...researchDelegation.policy!,
+              maxChildren: options.maxChildren,
+              maxConcurrency: options.maxConcurrency ?? researchDelegation.policy!.maxConcurrency,
+            }),
+          }),
+    });
+
+    const definition = Agent.make(coordinatorDefinition.id, {
+      input: coordinatorDefinition.input,
+      output: coordinatorDefinition.output,
+      instructions: coordinatorDefinition.instructions,
+      policy: {
+        ...coordinatorDefinition.policy,
+        maxToolCalls: Math.max(2, options?.calls ?? 1),
+        toolConcurrency: options?.calls ?? 2,
+      },
+      toolkit: Toolkit.make(
+        options?.replay === undefined
+          ? delegation.tool
+          : delegation.tool.annotate(ToolExecutionClass, options.replay),
+      ),
+    });
 
     const parentScripted = yield* makeScriptedModel((call) =>
       call === 0
-        ? toolTurn(toolCall("delegate-1", "delegate_research", { topic: "paris" }))
+        ? toolTurn(
+            ...Array.from({ length: options?.calls ?? 1 }, (_, index) =>
+              toolCall(`delegate-${index + 1}`, "delegate_research", { topic: "paris" }),
+            ),
+          )
         : finalParts('{"report":"done"}'),
     );
 
-    const parentBinding = Agent.withModel(coordinatorDefinition, parentScripted.model);
+    const parentBinding = Agent.withModel(definition, parentScripted.model);
 
-    const delegationLayer = Subagent.layer(researchDelegation, childBinding, {
+    const delegationLayer = Subagent.layer(delegation, childBinding, {
       mapChildFailure,
       ...(options?.declaredDigests === undefined
         ? {}
@@ -594,6 +643,398 @@ const payloadsOf = <Tag extends string>(
   records.filter((envelope) => envelope.record.payload._tag === tag);
 
 layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
+  it.effect(
+    "bounds concurrent ephemeral helpers independently of the total execution allowance",
+    () =>
+      Effect.gen(function* () {
+        const active = yield* Ref.make(0);
+        const maximum = yield* Ref.make(0);
+        const twoStarted = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+
+        const harness = yield* makeHarness({
+          execution: "ephemeral",
+          replay: "readonly",
+          maxChildren: 4,
+          calls: 4,
+          maxConcurrency: 2,
+          beforeChildResponse: Effect.acquireUseRelease(
+            Effect.gen(function* () {
+              const count = yield* Ref.updateAndGet(active, (value) => value + 1);
+
+              yield* Ref.update(maximum, (value) => Math.max(value, count));
+              if (count === 2) yield* Deferred.succeed(twoStarted, undefined);
+            }),
+            () => Deferred.await(release),
+            () => Ref.update(active, (value) => value - 1),
+          ),
+        });
+
+        const parent = yield* harness.submitParent("ephemeral-parallel", "ephemeral-parallel");
+        const fiber = yield* drive(harness)(parent.threadId).pipe(Effect.forkChild);
+
+        yield* Deferred.await(twoStarted);
+        expect(yield* harness.childInvocations).toBe(2);
+        yield* Deferred.succeed(release, undefined);
+        expect((yield* Fiber.join(fiber)).map((value) => value.outcome)).toEqual(["completed"]);
+        expect(yield* Ref.get(maximum)).toBe(2);
+        expect(yield* harness.childInvocations).toBe(4);
+        expect(payloadsOf(yield* readLog(parent.threadId), "ToolCallSettled")).toHaveLength(4);
+      }),
+  );
+
+  it.effect(
+    "retains an ephemeral sibling while joining a durable child from the same allowance",
+    () =>
+      Effect.gen(function* () {
+        const { childScripted, childBinding } = yield* makeChildFixture;
+        const ephemeral = Subagent.make("scout", { ...researchDelegation, execution: "ephemeral" });
+
+        const definition = Agent.make("mixed-lifetimes", {
+          input: coordinatorDefinition.input,
+          output: coordinatorDefinition.output,
+          instructions: "Delegate twice, then answer.",
+          policy: coordinatorDefinition.policy,
+          toolkit: Toolkit.make(
+            ephemeral.tool.annotate(ToolExecutionClass, "readonly"),
+            researchDelegation.tool,
+          ),
+        });
+
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? toolTurn(
+                toolCall("ephemeral", "scout", { topic: "a" }),
+                toolCall("durable", "delegate_research", { topic: "b" }),
+              )
+            : finalParts('{"report":"done"}'),
+        );
+
+        const parentBinding = yield* DurableWorkerBinding.make(
+          Agent.withModel(definition, scripted.model),
+          PARENT_DIGESTS,
+        ).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Subagent.layer(ephemeral, childBinding),
+              Subagent.layer(researchDelegation, childBinding),
+            ).pipe(Layer.provide(delegationSupport)),
+          ),
+        );
+
+        const childResolved = yield* DurableWorkerBinding.make(childBinding, CHILD_DIGESTS);
+
+        const runtime = yield* DurableAgentRuntime.pipe(
+          Effect.provide(
+            DurableAgentRuntime.layerWithBindings([parentBinding, childResolved]).pipe(
+              Layer.provide(RunToolAuthorization.allowAll),
+            ),
+          ),
+        );
+
+        const receipt = yield* runtime.submit(
+          { definition },
+          { mission: "m" },
+          submitOptions("mixed-ephemeral", "mixed-ephemeral"),
+        );
+
+        yield* runtime.processThreadResolved(receipt.threadId);
+        expect(yield* childScripted.calls).toBe(1);
+        const pending = yield* readLog(receipt.threadId);
+
+        expect(payloadsOf(pending, "EphemeralSubagentReserved")).toHaveLength(1);
+        expect(payloadsOf(pending, "SubagentRequested")).toHaveLength(1);
+        expect(payloadsOf(pending, "ToolCallSettled")).toHaveLength(1);
+        yield* runtime.processThreadResolved(
+          childThreadIdFor(receipt.submissionId, decodeToolCallId("durable")),
+        );
+        expect(
+          (yield* runtime.processThreadResolved(receipt.threadId)).map((value) => value.outcome),
+        ).toEqual(["completed"]);
+        expect(yield* childScripted.calls).toBe(2);
+        expect(payloadsOf(yield* readLog(receipt.threadId), "ToolCallSettled")).toHaveLength(2);
+      }),
+  );
+
+  it.effect("times out an ephemeral helper and preserves its typed failure and cleanup", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const released = yield* Deferred.make<void>();
+
+      const harness = yield* makeHarness({
+        execution: "ephemeral",
+        beforeChildResponse: Effect.acquireUseRelease(
+          Deferred.succeed(started, undefined),
+          () => Effect.never,
+          () => Deferred.succeed(released, undefined),
+        ),
+      });
+
+      const parent = yield* harness.submitParent("ephemeral-timeout", "ephemeral-timeout");
+      const fiber = yield* drive(harness)(parent.threadId).pipe(Effect.forkChild);
+
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("10 seconds");
+      yield* Deferred.await(released);
+      const settled = yield* Fiber.join(fiber);
+
+      expect(settled.map((value) => value.outcome)).toEqual(["failed"]);
+
+      expect(["SubagentBudgetExhausted", "ResearchDelegationFailed"]).toContain(
+        settled[0]?.failure?.errorTag,
+      );
+    }),
+  );
+
+  it.effect("releases the concurrent slot after a contained ephemeral timeout", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const attempts = yield* Ref.make(0);
+
+      const child = yield* makeScriptedModel(
+        () => finalParts('{"answer":"child-answer"}'),
+        Ref.getAndUpdate(attempts, (value) => value + 1).pipe(
+          Effect.flatMap((attempt) =>
+            attempt === 0
+              ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+              : Effect.void,
+          ),
+        ),
+      );
+
+      const delegation = Subagent.make("delegate_research", {
+        ...researchDelegation,
+        execution: "ephemeral",
+        failureMode: "return",
+        policy: SubagentPolicy.make({ ...researchDelegation.policy!, maxConcurrency: 1 }),
+      });
+
+      const definition = Agent.make("timeout-slot-parent", {
+        input: coordinatorDefinition.input,
+        output: coordinatorDefinition.output,
+        instructions: "Delegate twice, then answer.",
+        policy: coordinatorDefinition.policy,
+        toolkit: Toolkit.make(delegation.tool),
+      });
+
+      const parentModel = yield* makeScriptedModel((call) =>
+        call === 0
+          ? toolTurn(
+              toolCall("first", delegation.name, { topic: "a" }),
+              toolCall("second", delegation.name, { topic: "b" }),
+            )
+          : finalParts('{"report":"done"}'),
+      );
+
+      const binding = yield* DurableWorkerBinding.make(
+        Agent.withModel(definition, parentModel.model),
+        PARENT_DIGESTS,
+      ).pipe(
+        Effect.provide(
+          Subagent.layer(delegation, Agent.withModel(childDefinition, child.model), {
+            mapChildFailure,
+          }).pipe(Layer.provide(delegationSupport)),
+        ),
+      );
+
+      const runtime = yield* DurableAgentRuntime.pipe(
+        Effect.provide(
+          DurableAgentRuntime.layerWithBindings([binding]).pipe(
+            Layer.provide(RunToolAuthorization.allowAll),
+          ),
+        ),
+      );
+
+      const parent = yield* runtime.submit(
+        { definition },
+        { mission: "m" },
+        submitOptions("ephemeral-timeout-slot", "ephemeral-timeout-slot"),
+      );
+
+      const fiber = yield* runtime.processThreadResolved(parent.threadId).pipe(Effect.forkChild);
+
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("10 seconds");
+      expect((yield* Fiber.join(fiber)).map((value) => value.outcome)).toEqual(["completed"]);
+      expect(yield* child.calls).toBe(2);
+      const results = payloadsOf(yield* readLog(parent.threadId), "ToolCallSettled");
+
+      expect(results).toHaveLength(2);
+      expect(results[1]?.record.payload).toMatchObject({
+        result: { summary: "finding:child-answer" },
+      });
+    }),
+  );
+
+  it.effect("preserves ephemeral child defects and still closes child resources", () =>
+    Effect.gen(function* () {
+      const released = yield* Ref.make(false);
+
+      const harness = yield* makeHarness({
+        execution: "ephemeral",
+        beforeChildResponse: Effect.acquireUseRelease(
+          Effect.void,
+          () => Effect.die("ephemeral defect"),
+          () => Ref.set(released, true),
+        ),
+      });
+
+      const parent = yield* harness.submitParent("ephemeral-defect", "ephemeral-defect");
+      const exit = yield* Effect.exit(drive(harness)(parent.threadId));
+
+      expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true);
+      expect(yield* Ref.get(released)).toBe(true);
+      expect(payloadsOf(yield* readLog(parent.threadId), "ToolCallSettled")).toHaveLength(0);
+    }),
+  );
+
+  it.effect("runs ephemeral attached children without durable child admission", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        execution: "ephemeral",
+        replay: "readonly",
+        registration: "missing",
+      });
+
+      const parent = yield* harness.submitParent("ephemeral-basic", "ephemeral-basic");
+      const settled = yield* drive(harness)(parent.threadId);
+
+      expect(settled.map((value) => value.outcome)).toEqual(["completed"]);
+      expect(yield* harness.childInvocations).toBe(1);
+      const log = yield* readLog(parent.threadId);
+
+      expect(payloadsOf(log, "SubagentRequested")).toHaveLength(0);
+      expect(payloadsOf(log, "EphemeralSubagentReserved")).toHaveLength(1);
+      expect(payloadsOf(log, "EphemeralSubagentUsageRecorded")).toHaveLength(1);
+      const child = payloadsOf(log, "EphemeralSubagentReserved")[0]!.record.payload;
+
+      if (child._tag !== "EphemeralSubagentReserved") throw new Error("Missing child reservation");
+      expect(child.childThreadId).not.toBe(parent.threadId);
+      expect(child.childRunId).not.toBe(runIdForSubmission(parent.submissionId));
+      expect(payloadsOf(log, "ToolCallSettled")[0]!.record.payload).toMatchObject({
+        result: { summary: "finding:child-answer" },
+      });
+    }),
+  );
+
+  it.effect(
+    "retains committed ephemeral results and charges every unfinished execution across recovery",
+    () =>
+      Effect.gen(function* () {
+        const cases = [
+          { location: "subagent:before-ephemeral-reserve", reservations: 1, executions: 1 },
+          { location: "subagent:after-ephemeral-reserve", reservations: 2, executions: 1 },
+          { location: "subagent:before-ephemeral-usage", reservations: 2, executions: 2 },
+          { location: "subagent:after-ephemeral-usage", reservations: 2, executions: 2 },
+          { location: "turn:after-results-append", reservations: 1, executions: 1 },
+        ] as const;
+
+        for (const scenario of cases) {
+          yield* clearFailpoint;
+          const harness = yield* makeHarness({ execution: "ephemeral", replay: "readonly" });
+
+          const parent = yield* harness.submitParent(
+            `ephemeral-${scenario.location}`,
+            `ephemeral-${scenario.location}`,
+          );
+
+          yield* armFailpoint(scenario.location);
+          expect(failureTag(yield* Effect.exit(drive(harness)(parent.threadId)))).toBe(
+            "DurableRuntimeFailpointError",
+          );
+          yield* clearFailpoint;
+          expect((yield* drive(harness)(parent.threadId)).map((value) => value.outcome)).toEqual([
+            "completed",
+          ]);
+          expect(yield* harness.childInvocations).toBe(scenario.executions);
+          const log = yield* readLog(parent.threadId);
+
+          expect(payloadsOf(log, "EphemeralSubagentReserved")).toHaveLength(scenario.reservations);
+          expect(payloadsOf(log, "ToolCallSettled")).toHaveLength(1);
+        }
+      }),
+  );
+
+  it.effect(
+    "does not replenish ephemeral allowance or retry uncertain helpers after ownership loss",
+    () =>
+      Effect.gen(function* () {
+        for (const replay of ["readonly", "uncertain"] as const) {
+          const harness = yield* makeHarness({ execution: "ephemeral", replay, maxChildren: 1 });
+
+          const parent = yield* harness.submitParent(
+            `ephemeral-limit-${replay}`,
+            `ephemeral-limit-${replay}`,
+          );
+
+          yield* armFailpoint("subagent:after-ephemeral-reserve");
+          expect(failureTag(yield* Effect.exit(drive(harness)(parent.threadId)))).toBe(
+            "DurableRuntimeFailpointError",
+          );
+          yield* clearFailpoint;
+          yield* drive(harness)(parent.threadId);
+          expect(yield* harness.childInvocations).toBe(0);
+          expect(
+            payloadsOf(yield* readLog(parent.threadId), "EphemeralSubagentReserved"),
+          ).toHaveLength(1);
+          expect((yield* parentState(parent.submissionId)).state).toBe(
+            replay === "uncertain" ? "unknown" : "settled",
+          );
+        }
+      }),
+  );
+
+  it.effect("closes ephemeral child resources on parent interruption or ownership loss", () =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      for (const stop of ["interrupt", "ownership-loss"] as const) {
+        const started = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+        const loseOwnership = yield* Ref.make(false);
+
+        const harness = yield* makeHarness({
+          execution: "ephemeral",
+          replay: "readonly",
+          beforeChildResponse: Effect.acquireUseRelease(
+            Deferred.succeed(started, undefined),
+            () => Effect.never,
+            () => Deferred.succeed(released, undefined),
+          ),
+        }).pipe(
+          Effect.provideService(SubmissionLedger, {
+            ...ledger,
+            renewOwnership: (request) =>
+              Effect.gen(function* () {
+                if (yield* Ref.get(loseOwnership))
+                  yield* ledger.releaseOwnership(ReleaseOwnershipRequest.make(request));
+
+                return yield* ledger.renewOwnership(request);
+              }),
+          }),
+        );
+
+        const parent = yield* harness.submitParent(`ephemeral-${stop}`, `ephemeral-${stop}`);
+        const fiber = yield* drive(harness)(parent.threadId).pipe(Effect.forkChild);
+
+        yield* Deferred.await(started);
+        if (stop === "interrupt") yield* Fiber.interrupt(fiber);
+        else {
+          yield* Ref.set(loseOwnership, true);
+          yield* TestClock.adjust("5 seconds");
+          expect(failureTag(yield* Fiber.await(fiber))).toBe("OwnershipLost");
+        }
+        yield* Deferred.await(released);
+        expect(yield* harness.childInvocations).toBe(1);
+        const log = yield* readLog(parent.threadId);
+
+        expect(payloadsOf(log, "SubagentRequested")).toHaveLength(0);
+        expect(payloadsOf(log, "EphemeralSubagentUsageRecorded")).toHaveLength(0);
+        expect(payloadsOf(log, "ToolCallSettled")).toHaveLength(0);
+      }
+    }),
+  );
+
   it.effect(
     "refuses missing, ambiguous or different target registrations before reserving work",
     () =>

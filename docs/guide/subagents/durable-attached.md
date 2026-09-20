@@ -1,6 +1,6 @@
 ---
 title: Durable attached subagents
-description: Run attached children on a durable host and recover the same child after a restart.
+description: Choose resumable attached children or scoped helpers inside a durable run.
 ---
 
 # Durable attached subagents
@@ -21,8 +21,8 @@ Save this as `durable-delegation-host.ts`. It reuses the
 
 <<< @/snippets/travel-planner/delegation.ts{ts twoslash}
 
-The declaration is the same for ephemeral and durable attached execution. Put `Research.tool`
-in the parent's toolkit. The host supplies durability; no different subagent constructor is needed.
+Put `Research.tool` in the parent's toolkit. By default, the host supplies durability; no different
+subagent constructor is needed.
 
 ## Start the host
 
@@ -53,3 +53,34 @@ Cancellation cannot undo external effects. See [recovery details](../../concepts
 and [failure handling](../../reference/subagents#handle-failures).
 
 To keep the parent responding while its child runs, use [durable background subagents](./background).
+
+## Ephemeral helpers
+
+For short work that needs no independent recovery, set `execution: "ephemeral"`:
+
+```ts twoslash
+import { Subagent } from "effect-agent";
+import { ToolExecutionClass } from "effect-agent/durable-step";
+import { Toolkit } from "effect/unstable/ai";
+import { Summarize } from "./subagent-basics.ts";
+// ---cut---
+const helper = Subagent.make("summarize", {
+  target: Summarize.target,
+  execution: "ephemeral",
+});
+const toolkit = Toolkit.make(helper.tool.annotate(ToolExecutionClass, "readonly"));
+```
+
+Provide `Subagent.layer(helper)` with the child's model as usual. Only the parent needs a durable
+registration. The child runs in the parent's active Scope, including when the parent is a
+background worker. It occupies that parent's execution slot until it returns; cancellation or
+ownership loss interrupts it. It has no separate Submission or resumable child lifecycle.
+
+Once committed to the parent's tool history, its result is reused after a restart. Before that
+commit, ordinary tool recovery rules apply: `readonly` and `idempotent` helpers may run again;
+the default `uncertain` helper waits for resolution. The annotation covers the entire helper,
+including its tools and projections. Model usage still costs money on every attempt.
+
+Helpers share the parent's delegation permissions, concurrency limits, and total allowances with
+durable children. Each physical attempt reserves its full allowance, including retries. See
+[budget accounting](../../reference/subagents#bound-child-work) for the recovery tradeoff.

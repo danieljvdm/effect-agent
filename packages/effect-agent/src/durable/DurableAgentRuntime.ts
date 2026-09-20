@@ -60,6 +60,7 @@ import {
   DelegationDepth,
   getToolExecutionKind,
   SubagentParentLink,
+  EphemeralSubagentTool,
 } from "../core/SubagentContract.ts";
 import { Selection, Snapshot } from "../core/ToolExposure.ts";
 import type { ToolParameterRejection } from "../core/ToolResult.ts";
@@ -101,6 +102,7 @@ import {
   RunContextPreparationPassthrough,
   type RunContextPreparationError,
   type ChildEstablishStatus,
+  type ChildEstablishDenied,
   type RunApprovalHook,
   type RunContextHook,
   type RunCostEstimator,
@@ -111,6 +113,7 @@ import {
   type RunSubagentEstablishRequest,
   type RunSubagentHook,
   type RunSubagentJoinRequest,
+  type RunEphemeralSubagentRequest,
   type RunToolAuthorizationHook,
   type RunToolAuthorizationRequest,
 } from "../engine/RunOptions.ts";
@@ -197,6 +200,8 @@ import {
   SubtreeBudgetReserved,
   SubagentRequested,
   SubagentStarted,
+  EphemeralSubagentReserved,
+  EphemeralSubagentUsageRecorded,
   SubmissionSettled,
   SubmissionSettledRecord,
   ToolApprovalDecided,
@@ -472,8 +477,10 @@ const ORPHAN_ZERO_CONSUMED_ACCOUNTING = Schema.decodeSync(PersistedJson)({
   basis: "orphan-zero-consumed",
 });
 
-/** The four parent-log/child-log subagent records of one Run, indexed per Tool Call. */
+/** Parent-owned delegation evidence for one Run, indexed by logical call or physical execution. */
 interface SubagentCallRecords {
+  readonly ephemeral: Map<RunId, EphemeralSubagentReserved>;
+  readonly ephemeralUsage: Map<RunId, RunUsageReport>;
   readonly requested: Map<ToolCallId, SubagentRequested>;
   readonly started: Map<ToolCallId, SubagentStarted>;
   readonly joined: Map<ToolCallId, SubagentJoined>;
@@ -490,11 +497,21 @@ const subagentRecordsOf = (
   const started = new Map<ToolCallId, SubagentStarted>();
   const joined = new Map<ToolCallId, SubagentJoined>();
   const preparedNames = new Map<ToolCallId, string>();
+  const ephemeral = new Map<RunId, EphemeralSubagentReserved>();
+  const ephemeralUsage = new Map<RunId, RunUsageReport>();
 
   for (const envelope of records) {
     const payload = envelope.record.payload;
 
     switch (payload._tag) {
+      case "EphemeralSubagentReserved": {
+        if (payload.runId === runId) ephemeral.set(payload.childRunId, payload);
+        break;
+      }
+      case "EphemeralSubagentUsageRecorded": {
+        if (payload.runId === runId) ephemeralUsage.set(payload.childRunId, payload.report);
+        break;
+      }
       case "SubagentRequested": {
         if (payload.runId === runId) requested.set(payload.toolCallId, payload);
         break;
@@ -517,12 +534,12 @@ const subagentRecordsOf = (
     }
   }
 
-  return { requested, started, joined, preparedNames };
+  return { requested, started, joined, preparedNames, ephemeral, ephemeralUsage };
 };
 
 /** Joined reports are canonical snapshots, keyed by child Run so replay cannot double charge. */
-const childUsageReportsOf = (state: SubagentCallRecords): ReadonlyArray<ChildRunUsage> =>
-  [...state.started.entries()].map(([toolCallId, child]) => {
+const childUsageReportsOf = (state: SubagentCallRecords): ReadonlyArray<ChildRunUsage> => [
+  ...[...state.started.entries()].map(([toolCallId, child]) => {
     const joined = state.joined.get(toolCallId);
 
     return ChildRunUsage.make({
@@ -532,7 +549,19 @@ const childUsageReportsOf = (state: SubagentCallRecords): ReadonlyArray<ChildRun
         delegatedUsage: joined?.delegatedUsage ?? unknownRunTotals(),
       }),
     });
-  });
+  }),
+  ...[...state.ephemeral.keys()].map((runId) =>
+    ChildRunUsage.make({
+      runId,
+      report:
+        state.ephemeralUsage.get(runId) ??
+        RunUsageReport.make({
+          usage: unknownRunTotals(),
+          delegatedUsage: unknownRunTotals(),
+        }),
+    }),
+  ),
+];
 
 /** Deterministic batch identity of one Thread's initial `ThreadCreated` append. */
 export const threadCreatedBatchId = (threadId: ThreadId): BatchId =>
@@ -6408,6 +6437,104 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
        * handler channel while the Attempt aborts with the original infrastructure failure.
        */
       const establishmentGate = yield* Semaphore.make(1);
+      const activeEphemeral = new Set<RunId>();
+      const ephemeralIds = yield* IdGenerator;
+
+      const deniedBudget = (message: string): ChildEstablishDenied => ({
+        _tag: "denied",
+        errorTag: "SubagentBudgetExhausted",
+        message,
+      });
+
+      const budgetDenial = (
+        budget: SubagentBudgetReservation,
+      ): ChildEstablishDenied | undefined => {
+        const { caps, allocation } = budget;
+        const durable = [...subagentState.requested.values()];
+        const ephemeral = [...subagentState.ephemeral.values()];
+        const prior = [...durable, ...ephemeral];
+
+        if (
+          prior.some(
+            (entry) => entry.budget === undefined || !Equal.equals(entry.budget.caps, caps),
+          )
+        )
+          return {
+            _tag: "denied",
+            errorTag: "SubagentParentBudgetConflict",
+            message: "Delegations in one parent Run must share the same caps",
+          };
+
+        const invocations = prior.reduce(
+          (sum, entry) => sum + 1 + (entry.budget?.descendantInvocations ?? 0),
+          1 + (budget.descendantInvocations ?? 0),
+        );
+
+        if (
+          caps.maxTotalChildInvocations !== undefined &&
+          invocations > caps.maxTotalChildInvocations
+        )
+          return deniedBudget("The parent Run exhausted its child invocation budget");
+
+        const active =
+          durable.filter((entry) => !subagentState.joined.has(entry.toolCallId)).length +
+          activeEphemeral.size;
+
+        if (caps.maxConcurrentChildren !== undefined && active >= caps.maxConcurrentChildren)
+          return deniedBudget("The parent Run exhausted its concurrent child budget");
+
+        const dimensions = [
+          ["turns", "maxTurns"],
+          ["toolCalls", "maxToolCalls"],
+          ["durationMillis", "maxDurationMillis"],
+          ["inputTokens", "maxInputTokens"],
+          ["outputTokens", "maxOutputTokens"],
+          ["costMicrousd", "maxCostMicrousd"],
+          ["resultBytes", "maxResultBytes"],
+        ] as const;
+
+        const accounting = Schema.Struct({ consumed: SubagentReservationAmounts });
+
+        for (const [amount, cap] of dimensions) {
+          const limit = caps[cap];
+
+          if (limit === undefined) continue;
+          let consumed = allocation[amount];
+
+          for (const entry of durable) {
+            const joined = subagentState.joined.get(entry.toolCallId);
+
+            const observed =
+              joined === undefined
+                ? Option.none()
+                : Schema.decodeUnknownOption(accounting)(joined.finalAccounting);
+
+            consumed += Option.isSome(observed)
+              ? observed.value.consumed[amount]
+              : (entry.budget?.allocation[amount] ?? limit);
+          }
+          for (const entry of ephemeral) {
+            const report = subagentState.ephemeralUsage.get(entry.childRunId);
+
+            const measured =
+              report === undefined
+                ? 0
+                : amount === "turns"
+                  ? report.usage.modelCalls + report.delegatedUsage.modelCalls
+                  : amount === "inputTokens" ||
+                      amount === "outputTokens" ||
+                      amount === "costMicrousd"
+                    ? report.usage[amount] + report.delegatedUsage[amount]
+                    : 0;
+
+            consumed += Math.max(entry.budget.allocation[amount], measured);
+          }
+          if (consumed > limit)
+            return deniedBudget(`The parent Run exhausted its shared ${amount} budget`);
+        }
+
+        return undefined;
+      };
 
       const establishSubagent = (
         request: RunSubagentEstablishRequest,
@@ -6550,80 +6677,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                     "The reserved allocation differs from its budget declaration",
                   );
                 }
-                const { caps, allocation: requested } = request.budget;
-                const prior = [...subagentState.requested.values()];
+                const denial = budgetDenial(request.budget);
 
-                if (
-                  prior.some(
-                    (entry) => entry.budget === undefined || !Equal.equals(entry.budget.caps, caps),
-                  )
-                ) {
-                  return denied(
-                    "SubagentParentBudgetConflict",
-                    "Delegations in one parent Run must share the same caps",
-                  );
-                }
-                if (
-                  caps.maxTotalChildInvocations !== undefined &&
-                  prior.reduce(
-                    (sum, entry) => sum + 1 + (entry.budget?.descendantInvocations ?? 0),
-                    1 + (request.budget.descendantInvocations ?? 0),
-                  ) > caps.maxTotalChildInvocations
-                ) {
-                  return denied(
-                    "SubagentBudgetExhausted",
-                    "The parent Run exhausted its child invocation budget",
-                  );
-                }
-                const active = prior.filter((entry) => !subagentState.joined.has(entry.toolCallId));
-
-                if (
-                  caps.maxConcurrentChildren !== undefined &&
-                  active.length >= caps.maxConcurrentChildren
-                ) {
-                  return denied(
-                    "SubagentBudgetExhausted",
-                    "The parent Run exhausted its concurrent child budget",
-                  );
-                }
-
-                const dimensions = [
-                  ["turns", "maxTurns"],
-                  ["toolCalls", "maxToolCalls"],
-                  ["durationMillis", "maxDurationMillis"],
-                  ["inputTokens", "maxInputTokens"],
-                  ["outputTokens", "maxOutputTokens"],
-                  ["costMicrousd", "maxCostMicrousd"],
-                  ["resultBytes", "maxResultBytes"],
-                ] as const;
-
-                const accounting = Schema.Struct({ consumed: SubagentReservationAmounts });
-
-                for (const [amount, cap] of dimensions) {
-                  const limit = caps[cap];
-
-                  if (limit === undefined) continue;
-                  let consumed = requested[amount];
-
-                  for (const entry of prior) {
-                    const joined = subagentState.joined.get(entry.toolCallId);
-
-                    const observed =
-                      joined === undefined
-                        ? Option.none()
-                        : Schema.decodeUnknownOption(accounting)(joined.finalAccounting);
-
-                    consumed += Option.isSome(observed)
-                      ? observed.value.consumed[amount]
-                      : (entry.budget?.allocation[amount] ?? limit);
-                  }
-                  if (consumed > limit) {
-                    return denied(
-                      "SubagentBudgetExhausted",
-                      `The parent Run exhausted its shared ${amount} budget`,
-                    );
-                  }
-                }
+                if (denial !== undefined) return denial;
               }
               const childInputDigest = yield* withCrypto(digestJson(childInput.value));
               const grantDigest = yield* withCrypto(digestJson(grant.value));
@@ -6971,7 +7027,131 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           }),
         );
 
+      const reserveEphemeral = (request: RunEphemeralSubagentRequest) =>
+        recordHalt(
+          Effect.gen(function* () {
+            const toolName = declaredNamesByCallId.get(request.toolCallId);
+
+            const tool =
+              toolName === undefined ? undefined : agent.definition.toolkit.tools[toolName];
+
+            if (
+              currentToolTurn === undefined ||
+              tool === undefined ||
+              !Context.get(tool.annotations, EphemeralSubagentTool)
+            )
+              return yield* RunJournalError.make({
+                message: "Ephemeral child has no active declared delegation",
+              });
+            if (request.depth !== delegationDepth + 1)
+              return {
+                _tag: "denied" as const,
+                errorTag: "SubagentDepthUnsupported",
+                message: `The child depth must be exactly one greater than its source depth ${delegationDepth}`,
+              };
+            const payload = EphemeralSubagentReserved.make({ runId, ...request });
+
+            if (!Schema.is(EphemeralSubagentReserved)(payload))
+              return yield* RunJournalError.make({
+                message: "Invalid ephemeral child reservation",
+              });
+            const denial = budgetDenial(request.budget);
+
+            if (denial !== undefined) return denial;
+            if (subagentState.ephemeral.has(request.childRunId))
+              return yield* RunJournalError.make({
+                message: "Ephemeral child identity was reused",
+              });
+            const reservationId = `ephemeral:${yield* withCrypto(digestJson([runId, request.toolCallId, request.childRunId]))}`;
+
+            if (delegationDepth > 0) {
+              const reserved = yield* workerRuntime
+                .reserveSubtree(
+                  submission.threadId,
+                  SubtreeBudgetReserved.make({
+                    reservationId,
+                    sourceSubmissionId: submissionId,
+                    childThreadId: request.childThreadId,
+                    lifetime: "attached",
+                    depth: payload.depth,
+                    policy: request.policy,
+                    grant: request.grant,
+                    budget: request.budget,
+                  }),
+                )
+                .pipe(Effect.result);
+
+              if (reserved._tag === "Failure") {
+                if (reserved.failure.reason === "storage")
+                  return yield* LedgerError.make({
+                    operation: "reserve-subtree",
+                    message: "Subtree reservation is unavailable",
+                  });
+
+                return deniedBudget(
+                  `The subtree reservation was refused: ${reserved.failure.reason}`,
+                );
+              }
+            }
+            const recordId = decodeRecordIdSync(reservationId);
+
+            yield* hit("subagent:before-ephemeral-reserve");
+            yield* appendBatch(
+              ctx,
+              CanonicalBatch.make({
+                batchId: decodeBatchIdSync(recordId),
+                producerId: config.producerId,
+                records: [yield* makeEnvelope(recordId, payload)],
+              }),
+            );
+            knownIds.add(recordId);
+            subagentState.ephemeral.set(request.childRunId, payload);
+            activeEphemeral.add(request.childRunId);
+            yield* hit("subagent:after-ephemeral-reserve");
+
+            return undefined;
+          }).pipe(establishmentGate.withPermits(1)),
+        );
+
+      const finishEphemeral = (childRunId: RunId, report: RunUsageReport | undefined) =>
+        recordHalt(
+          Effect.gen(function* () {
+            if (!subagentState.ephemeral.has(childRunId))
+              return yield* RunJournalError.make({ message: "Ephemeral usage has no reservation" });
+            activeEphemeral.delete(childRunId);
+            if (report === undefined) return;
+
+            const recordId = decodeRecordIdSync(
+              `ephemeral-usage:${yield* withCrypto(digestJson([runId, childRunId]))}`,
+            );
+
+            if (knownIds.has(recordId)) return;
+            yield* hit("subagent:before-ephemeral-usage");
+            yield* appendBatch(
+              ctx,
+              CanonicalBatch.make({
+                batchId: decodeBatchIdSync(recordId),
+                producerId: config.producerId,
+                records: [
+                  yield* makeEnvelope(
+                    recordId,
+                    EphemeralSubagentUsageRecorded.make({ runId, childRunId, report }),
+                  ),
+                ],
+              }),
+            );
+            knownIds.add(recordId);
+            subagentState.ephemeralUsage.set(childRunId, report);
+            yield* hit("subagent:after-ephemeral-usage");
+          }),
+        );
+
       const subagent: RunSubagentHook<CoordinatorHalt, never> = {
+        ephemeral: {
+          ids: ephemeralIds,
+          reserve: reserveEphemeral,
+          finish: finishEphemeral,
+        },
         establish: establishSubagent,
         join: joinSubagent,
       };

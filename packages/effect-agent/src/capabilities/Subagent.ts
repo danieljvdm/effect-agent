@@ -15,6 +15,7 @@ import { utf8ByteLength } from "../core/internal/utf8.ts";
 import type { SubagentDelegationCaps } from "../core/SubagentContract.ts";
 import {
   DelegationTool,
+  EphemeralSubagentTool,
   narrowSubagentGrant,
   SubagentBudgetReservation,
   SubagentGrant,
@@ -265,6 +266,12 @@ export interface SubagentDefineOptions<
   Mode extends SubagentFailureMode = "error",
 > {
   /**
+   * Omitted follows the host. `ephemeral` runs within the active parent Scope, even on a
+   * durable host. Its Tool retains the ordinary uncertain replay default; annotate the Tool
+   * with ToolExecutionClass only when the whole helper, including projections, is retry-safe.
+   */
+  readonly execution?: "ephemeral";
+  /**
    * Expected-failure resolution (SUB-033): `"error"` (default) fails the
    * parent Tool batch; `"return"` contains the declared failure and the
    * framework failure family as model-visible result data while
@@ -511,6 +518,7 @@ const makeExplicit = <
   // boundary (the schemas above are constructed per mode, never reinterpreted).
   const tool = (failureMode === "return" ? returnModeTool : errorModeTool)
     .annotate(DelegationTool, true)
+    .annotate(EphemeralSubagentTool, options.execution === "ephemeral")
     .addDependency(AgentSpawner)
     .addDependency(RunEventSink)
     .addDependency(SubagentDurability)
@@ -1661,9 +1669,11 @@ export function layer<
       const spawner = yield* AgentSpawner;
       const resolved = resolvePolicy(spawner);
       const { policy, childPolicy, allocation } = resolved;
+      const durability = yield* SubagentDurability;
+      const durableParent = durability.mode === "durable";
 
       const caps =
-        spawner.budget === undefined
+        spawner.budget === undefined || durableParent
           ? resolved.caps
           : residualSubagentCaps(
               resolved.caps,
@@ -1723,6 +1733,9 @@ export function layer<
 
       const parentRunId = spawner.parent.runId;
 
+      const reservationId = makeBudgetReservationId(parentRunId, toolCallId);
+      const startedAt = yield* Ref.make<number | undefined>(undefined);
+
       yield* reservations
         .registerParent(parentRunId, caps)
         .pipe(
@@ -1736,41 +1749,40 @@ export function layer<
           ),
         );
 
-      const reservationId = makeBudgetReservationId(parentRunId, toolCallId);
-      const startedAt = yield* Ref.make<number | undefined>(undefined);
-
-      // Reservation settlement is finalizer-driven from this point on: every
-      // exit path — success, declared failure, interruption, defect — settles
-      // accounting exactly once when the handler scope closes.
-      yield* Effect.acquireRelease(
-        reservations
-          .reserve(
-            SubagentReservationRequest.make({
-              parentRunId,
-              parentToolCallId: toolCallId,
-              allocation,
-              ...(policy.descendantInvocations === undefined
-                ? {}
-                : { descendantInvocations: policy.descendantInvocations }),
-            }),
-          )
-          .pipe(
-            // A same-key conflict or unregistered parent after a successful
-            // registerParent is a ledger invariant violation, not an expected
-            // delegation failure.
-            Effect.catchTags({
-              SubagentReservationConflict: (conflict) => Effect.die(conflict),
-              SubagentParentBudgetUnknown: (unknown) => Effect.die(unknown),
-            }),
-          ),
-        () =>
-          settleReservation(
-            reservations,
-            reservationId,
-            startedAt,
-            (policy.descendantInvocations ?? 0) > 0 ? { parentRunId, allocation } : undefined,
-          ),
-      );
+      if (!durableParent) {
+        // Reservation settlement is finalizer-driven from this point on: every
+        // exit path — success, declared failure, interruption, defect — settles
+        // accounting exactly once when the handler scope closes.
+        yield* Effect.acquireRelease(
+          reservations
+            .reserve(
+              SubagentReservationRequest.make({
+                parentRunId,
+                parentToolCallId: toolCallId,
+                allocation,
+                ...(policy.descendantInvocations === undefined
+                  ? {}
+                  : { descendantInvocations: policy.descendantInvocations }),
+              }),
+            )
+            .pipe(
+              // A same-key conflict or unregistered parent after a successful
+              // registerParent is a ledger invariant violation, not an expected
+              // delegation failure.
+              Effect.catchTags({
+                SubagentReservationConflict: (conflict) => Effect.die(conflict),
+                SubagentParentBudgetUnknown: (unknown) => Effect.die(unknown),
+              }),
+            ),
+          () =>
+            settleReservation(
+              reservations,
+              reservationId,
+              startedAt,
+              (policy.descendantInvocations ?? 0) > 0 ? { parentRunId, allocation } : undefined,
+            ),
+        );
+      }
       // Scope-owned concurrency permit: interruption while queued frees the
       // slot, and the settlement finalizer above releases the reservation.
       yield* reservations
@@ -1784,14 +1796,13 @@ export function layer<
         guard:
           seededBudget === undefined ? (effect) => effect : (effect) => seededBudget.guard(effect),
         consume: (delta) =>
-          reservations
-            .observe(reservationId, observedUsageFromDelta(delta))
-            .pipe(
-              Effect.orDie,
-              Effect.andThen(
-                seededBudget === undefined ? Effect.void : seededBudget.consume(delta),
-              ),
-            ),
+          (durableParent
+            ? Effect.void
+            : reservations.observe(reservationId, observedUsageFromDelta(delta))
+          ).pipe(
+            Effect.orDie,
+            Effect.andThen(seededBudget === undefined ? Effect.void : seededBudget.consume(delta)),
+          ),
       };
 
       const toolCallAllowance = childToolCallAllowance(parameters, policy, childPolicy);
@@ -1832,14 +1843,24 @@ export function layer<
           InstructionRequirements,
           RunDispositionValue,
           InputPromptValue,
-          UpdatesSchema
+          UpdatesSchema,
+          typeof delegation.execution
         >(
           { ...childBinding, definition: { ...childBinding.definition, policy: childPolicy } },
           encodedInput,
-          { delegationId: delegation.delegationId, parentToolCallId: toolCallId },
+          {
+            delegationId: delegation.delegationId,
+            parentToolCallId: toolCallId,
+            ...(delegation.execution === undefined ? {} : { execution: delegation.execution }),
+          },
           childOptions,
         )
-        .pipe(Scope.provide(childScope));
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof SubagentDurabilityError ? wrapEngineSignal(error) : error,
+          ),
+          Scope.provide(childScope),
+        );
 
       const payload: SubagentEventBasePayload = {
         toolCallId,
@@ -1959,9 +1980,11 @@ export function layer<
 
         const resultBytes = utf8ByteLength(JSON.stringify(encodedResult) ?? "");
 
-        yield* reservations
-          .observe(reservationId, SubagentObservedUsage.make({ resultBytes }))
-          .pipe(Effect.orDie);
+        if (!durableParent) {
+          yield* reservations
+            .observe(reservationId, SubagentObservedUsage.make({ resultBytes }))
+            .pipe(Effect.orDie);
+        }
         if (policy.maxResultBytes !== undefined && resultBytes > policy.maxResultBytes) {
           yield* emit({
             _tag: "SubagentFailed",
@@ -2327,7 +2350,7 @@ export function layer<
         // Service-mode dispatch (S2 plan §2): the engine states ephemeral
         // mode explicitly when no durable coordinator supplied the hook, so
         // absence keeps the S1 in-process spawn semantics honestly.
-        if (durability.mode === "durable") {
+        if (durability.mode === "durable" && delegation.execution !== "ephemeral") {
           const durable = invokeDurable(parameters, handlerContext, durability).pipe(
             Effect.scoped,
             Effect.provideService(AgentSpawner, spawner),
