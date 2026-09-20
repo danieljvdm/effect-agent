@@ -60,12 +60,26 @@ export const inspectFrame = `(() => {
     } else if (el instanceof HTMLButtonElement || (el instanceof HTMLInputElement && ['submit','button'].includes(type))) {
       if (!el.matches(':disabled')) role = type === 'submit' && form ? 'submit' : type === 'button' ? 'button' : 'unsupported';
     } else if (el instanceof HTMLAnchorElement) role = 'link';
+    const options = [];
+    let truncated = false;
+    if (role === 'select') {
+      for (let index = 0; index < el.options.length; index++) {
+        if (index === 256) { truncated = true; break; }
+        const option = el.options[index];
+        const label = option.label.trim();
+        // Never publish a shortened label as an exact fill choice.
+        if (label.length > 200) { truncated = true; continue; }
+        options.push({label, selected: option.selected, disabled: option.matches(':disabled')});
+      }
+    }
     const fingerprint = JSON.stringify([role, action, method, enctype, name, completion, type, choiceValue]);
     return { role, formIndex, action, fingerprint, ...(isChoice(el) ? {checked: el.checked} : {}),
+      ...(role === 'select' ? {options, truncated} : {}),
       label: (labelText(el) ?? (nativeField ? '' : el.textContent) ?? '').slice(0,200) };
   };
-  const expose = ({role, formIndex, action, label, checked}) =>
-    ({role, formIndex, action, label, ...(checked === undefined ? {} : {checked})});
+  const expose = ({role, formIndex, action, label, checked, options, truncated}) =>
+    ({role, formIndex, action, label, ...(checked === undefined ? {} : {checked}),
+      ...(options === undefined ? {} : {options, truncated})});
   const original = elements.map(describe);
   const validate = (index) => {
     const current = describe(elements[index]);
@@ -95,13 +109,13 @@ export const inspectFrame = `(() => {
       const current = validate(index);
       if (!current || current.role !== role) return false;
       const el = elements[index];
-      if (role === 'select') {
+      if (el instanceof HTMLSelectElement) {
         const options = [...el.options].filter(option => !option.matches(':disabled'));
-        const values = options.filter(option => option.value === value);
-        const matches = values.length > 0 ? values : options.filter(option => option.textContent?.trim() === value);
-        if (matches.length !== 1) return 'unsupported';
+        // Ordinary fills name the visible choice; credential material stays a private value.
+        const matches = options.filter(option => (role === 'select' ? option.label.trim() : option.value) === value);
+        if (matches.length !== 1) return 'unsupported-before-write';
         value = matches[0].value;
-        if ([...el.options].filter(option => option.value === value).length !== 1) return 'unsupported';
+        if ([...el.options].filter(option => option.value === value).length !== 1) return 'unsupported-before-write';
       }
       let prototype = Object.getPrototypeOf(el);
       let setter;

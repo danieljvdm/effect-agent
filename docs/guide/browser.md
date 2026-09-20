@@ -425,10 +425,16 @@ The runtime protocol needs no site-specific selectors:
 4. Continue with `observe`, `navigate`, `fill`, or `click` under the post-exposure observation grant.
 
 `fill(ProtectedBrowserFill.make({ ref, value }))` accepts up to 8,192 characters of non-secret text
-for a discovered `text` or `select` control. Empty text clears a field. Native single selects match
-a unique enabled option value first, then a unique exact trimmed label; ambiguous, disabled, or
-missing options are unsupported. Ordinary inputs and textareas need no form. Credential roles,
-including username, remain exclusive to `useCredential`; never supply secrets to ordinary fill.
+for a discovered `text` or `select` control. Empty text clears a text field. Ordinary selects expose
+`options` with visible `label`, `selected`, and `disabled` state; raw option values remain private.
+Fill with one enabled option's exact observed label. Ambiguous, disabled, or missing labels are
+unsupported; raw values and approximate labels are not a fallback. The first 256 choices are
+inspected, and labels longer than 200 characters are omitted rather than shortened. Omitted choices
+set the observation's `truncated` flag. A confirmed refusal before assignment performs no write and
+keeps the same pass available; a lost reply or failure after assignment retains conservative cleanup.
+Ordinary inputs and textareas need no form. Credential roles, including username, remain exclusive
+to `useCredential`; never supply secrets to ordinary fill. Credential selects match private values
+and expose neither choices nor selection.
 `click` also accepts native `radio` and `checkbox` controls, whose observations include `checked`.
 Native submit clicks require the host's optional `BrowserCredentialAccess.authorizeAction` hook.
 When present, this hook runs before **every** ordinary navigation, fill, and click, with

@@ -60,6 +60,15 @@ export class ProtectedBrowserControl extends Schema.Class<ProtectedBrowserContro
   label: Label,
   /** Current native radio/checkbox state; field values are never included. */
   checked: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Ordinary select choices only; credential choices and raw option values remain private.
+   * Omitted choices or labels beyond the bounds set the observation's truncated flag.
+   */
+  options: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({ label: Label, selected: Schema.Boolean, disabled: Schema.Boolean }),
+    ).check(Schema.isMaxLength(256)),
+  ),
   /** Resolved HTTPS destination for a native link; target.recipientOrigin is its origin. */
   url: Schema.optionalKey(LinkUrl),
 }) {}
@@ -132,7 +141,7 @@ export class ProtectedBrowserClick extends Schema.Class<ProtectedBrowserClick>(
 /**
  * Non-secret text for an ordinary text control or native single select in the current observation.
  * Never pass credential material. Credential roles, including username, require useCredential.
- * Selects match a unique enabled option value, then a unique exact trimmed label. Empty text clears.
+ * Selects match one enabled option's exact observed label. Empty text clears text controls.
  */
 export class ProtectedBrowserFill extends Schema.Class<ProtectedBrowserFill>(
   "ProtectedBrowserFill",

@@ -29,6 +29,8 @@ import {
   BrowserRunProtectedTransport,
   browserRunProtectedLayer,
   ProtectedBrowserDispatch,
+  ProtectedTransportError,
+  type ProtectedBrowserTransport,
 } from "../src/protected-browser/policy.ts";
 
 class ProbeError extends Schema.TaggedError<ProbeError>()("ProtectedNativeProbeError", {}) {}
@@ -45,6 +47,260 @@ const policy = InteractiveBrowserPolicy.make({
   maxElapsedMillis: 60_000,
   maxReturnedBytes: 16384,
 });
+
+for (const mode of ["refused", "normalized", "reply-lost", "credential-refused"] as const) {
+  it.live(
+    `preserves native fill evidence and cleanup for ${mode}`,
+    (test) =>
+      Effect.gen(function* () {
+        const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
+
+        if (Option.isNone(executable)) return test.skip();
+
+        const browser = yield* Effect.acquireRelease(
+          native(() =>
+            nativePuppeteer.launch({ executablePath: executable.value, headless: true }),
+          ),
+          (browser) => Effect.promise(() => browser.close()),
+        );
+
+        const page = yield* native(() => browser.newPage());
+
+        yield* native(() => page.setRequestInterception(true));
+        page.on("request", (request) => {
+          void request
+            .respond({
+              contentType: "text/html",
+              body: `<form onsubmit="event.preventDefault();window.submits++">
+              <label>Bag size<select name="size"><option value="250">250 g</option><option value="500" label="500 g">private-option-text</option><option value="500 g">Other size</option></select></label>
+              <label>Quantity<input name="quantity" type="number" value="1"></label>
+              <button>Add to cart</button></form>
+              <form><label>Cardholder<input name="cardholder" autocomplete="cc-name"></label>
+              <label>Expiry month<select name="month" autocomplete="cc-exp-month"><option value="01" label="09">private-expiry-label</option></select></label></form>
+              <script>window.writes=[];window.submits=0;document.addEventListener('input',e=>writes.push(e.target.name));</script>`,
+            })
+            .catch(() => {});
+        });
+
+        const state = native(() =>
+          page.evaluate(`({
+          size: document.querySelector('[name=size]').value,
+          quantity: document.querySelector('[name=quantity]').value,
+          month: document.querySelector('[name=month]').value,
+          writes: window.writes, submits: window.submits
+        })`),
+        );
+
+        let closedState: unknown;
+        let beforeMark: unknown;
+        let allowed = true;
+
+        const access = BrowserCredentialAccess.of({
+          caller: Effect.succeed(Redacted.make("native-select-test")),
+          list: () =>
+            Effect.succeed([
+              {
+                key: Redacted.make("dummy-card-key"),
+                metadata: CredentialOfferMetadata.make({ label: "Dummy card" }),
+              },
+            ]),
+          authorize: () => Effect.void,
+          resolve: () =>
+            Effect.succeed(
+              CardCredential.make({
+                name: Redacted.make("Dummy Shopper"),
+                number: Redacted.make("4111111111111111"),
+                expiry: Redacted.make("09/2030"),
+                expiryMonth: Redacted.make("09"),
+                expiryYear: Redacted.make("2030"),
+              }),
+            ),
+          authorizeAction: () =>
+            allowed ? Effect.void : Effect.fail(new CredentialAccessError({ reason: "denied" })),
+          observation: () => Effect.succeed("trust-recipient-no-credential-echo"),
+        });
+
+        const driver = yield* makeProtectedNativeTransport(policy).pipe(
+          Effect.provideService(ProtectedNativeSession, {
+            browser: browser as unknown as Browser,
+            page: page as unknown as Page,
+            close: Effect.gen(function* () {
+              closedState = yield* state.pipe(Effect.orDie);
+
+              return yield* native(() => browser.close()).pipe(
+                Effect.as("confirmed" as const),
+                Effect.catch(() => Effect.succeed("unconfirmed" as const)),
+              );
+            }),
+          }),
+        );
+
+        const transport: ProtectedBrowserTransport = {
+          ...driver,
+          fill: (ref, role, value) =>
+            mode !== "reply-lost"
+              ? driver.fill(ref, role, value)
+              : Effect.gen(function* () {
+                  const dispatch = yield* ProtectedBrowserDispatch;
+
+                  // Lose the native completion at the transport boundary. Also record the DOM at
+                  // dispatch marking, so moving that mark after native evaluation cannot pass.
+                  yield* driver.fill(ref, role, value).pipe(
+                    Effect.provideService(ProtectedBrowserDispatch, {
+                      ...dispatch,
+                      mark: Effect.gen(function* () {
+                        beforeMark = yield* state.pipe(Effect.orDie);
+                        yield* dispatch.mark;
+                      }),
+                    }),
+                  );
+
+                  return yield* new ProtectedTransportError({ reason: "provider" });
+                }),
+        };
+
+        const layer = browserRunProtectedLayer().pipe(
+          Layer.provide(
+            Layer.succeed(BrowserRunProtectedTransport, {
+              open: () => Effect.succeed(transport),
+            }),
+          ),
+          Layer.provideMerge(Layer.succeed(BrowserCredentialAccess, access)),
+        );
+
+        yield* Effect.gen(function* () {
+          const session = yield* ProtectedBrowserSession;
+          const handle = yield* session.get;
+
+          yield* handle.navigate(
+            ProtectedBrowserNavigate.make({ url: "https://alpha.test/product" }),
+          );
+          const initial = yield* handle.observe;
+          const bag = initial.controls.find((control) => control.label === "Bag size")!;
+
+          if (mode === "credential-refused") {
+            const cardholder = initial.controls.find((control) => control.role === "card-name")!;
+            const month = initial.controls.find((control) => control.role === "card-expiry-month")!;
+
+            const offers = yield* handle.listCredentialOffers(
+              ListCredentialOffers.make({ kind: "card", target: cardholder.ref }),
+            );
+
+            expect(month.options).toBeUndefined();
+            expect(JSON.stringify(initial)).not.toContain("private-expiry-label");
+            expect(
+              yield* handle
+                .useCredential(
+                  UseCredential.make({
+                    offer: offers[0]!.ref,
+                    fields: [
+                      { ref: cardholder.ref, role: "card-name" },
+                      { ref: month.ref, role: "card-expiry-month" },
+                    ],
+                  }),
+                )
+                .pipe(Effect.flip),
+            ).toMatchObject({
+              reason: "unsupported",
+              dispatch: "dispatched",
+              milestone: "partial-fill",
+              observation: "closed",
+              cleanup: "confirmed",
+            });
+            expect(closedState).toEqual({
+              size: "250",
+              quantity: "1",
+              month: "01",
+              writes: ["cardholder"],
+              submits: 0,
+            });
+          } else {
+            const quantity = initial.controls.find((control) => control.label === "Quantity")!;
+
+            const failure = yield* handle
+              .fill(
+                ProtectedBrowserFill.make({
+                  ref: mode === "normalized" ? quantity.ref : bag.ref,
+                  value:
+                    mode === "normalized" ? "not-a-number" : mode === "refused" ? "250g" : "250 g",
+                }),
+              )
+              .pipe(Effect.flip);
+
+            expect(failure).toMatchObject({
+              reason: mode === "reply-lost" ? "outcome-unknown" : "unsupported",
+              dispatch: mode === "refused" ? "not-dispatched" : "possibly-dispatched",
+              milestone: "none",
+              observation: mode === "refused" ? "before-exposure" : "closed",
+              cleanup: mode === "refused" ? "not-requested" : "confirmed",
+            });
+            if (mode === "refused") {
+              expect(yield* state).toEqual({
+                size: "250",
+                quantity: "1",
+                month: "01",
+                writes: [],
+                submits: 0,
+              });
+              expect(yield* session.get).toBe(handle);
+              const current = yield* handle.observe;
+              const selected = current.controls.find((control) => control.label === "Bag size")!;
+
+              expect(current.document).toBe(initial.document);
+              expect(selected.options).toEqual([
+                { label: "250 g", selected: true, disabled: false },
+                { label: "500 g", selected: false, disabled: false },
+                { label: "Other size", selected: false, disabled: false },
+              ]);
+              expect(JSON.stringify(current)).not.toContain("private-option-text");
+              yield* handle.fill(
+                ProtectedBrowserFill.make({
+                  ref: selected.ref,
+                  value: selected.options![1]!.label,
+                }),
+              );
+              allowed = false;
+              expect(
+                yield* handle
+                  .fill(
+                    ProtectedBrowserFill.make({
+                      ref: selected.ref,
+                      value: "250",
+                    }),
+                  )
+                  .pipe(Effect.flip),
+              ).toMatchObject({ reason: "denied", dispatch: "not-dispatched" });
+              expect(yield* state).toEqual({
+                size: "500",
+                quantity: "1",
+                month: "01",
+                writes: ["size"],
+                submits: 0,
+              });
+              expect(page.isClosed()).toBe(false);
+              expect(yield* handle.close).toBe("confirmed");
+            } else {
+              expect(closedState).toEqual({
+                size: "250",
+                quantity: mode === "normalized" ? "" : "1",
+                month: "01",
+                writes: mode === "reply-lost" ? ["size"] : [],
+                submits: 0,
+              });
+              if (mode === "reply-lost") expect(beforeMark).toMatchObject({ writes: [] });
+            }
+          }
+          expect(browser.isConnected()).toBe(false);
+          expect(yield* handle.observe.pipe(Effect.flip)).toMatchObject({ reason: "closed" });
+        }).pipe(
+          Effect.provide(ProtectedBrowserSession.layer(policy)),
+          Effect.scoped,
+          Effect.provide(layer),
+        );
+      }).pipe(Effect.scoped, Effect.provide(BrowserCrypto.layer)),
+    { timeout: 30_000 },
+  );
+}
 
 for (const { before, writes, milestone } of [
   { before: "next field", writes: ["username"], milestone: "partial-fill" },
@@ -728,7 +984,7 @@ it.live(
         <fieldset disabled><label>Disabled<input></label></fieldset>
         <input aria-label="OTP" autocomplete="one-time-code">
         <input aria-label="Password hint" autocomplete="new-password">
-        <form><input aria-label="Password" type="password"><input aria-label="Card" autocomplete="cc-number"></form>
+        <form><input aria-label="Password" type="password"><input aria-label="Card" autocomplete="cc-number"><select aria-label="Card month" autocomplete="cc-exp-month"><option value="01">private-expiry-label</option></select></form>
         <iframe src="about:blank"></iframe>
         <iframe src="data:text/html,opaque-child"></iframe>
         <script>window.events=[];document.addEventListener('input', e=>events.push(e.type));document.addEventListener('change', e=>events.push(e.type));</script>
@@ -757,6 +1013,7 @@ it.live(
         "hidden-text",
         "transparent-text",
         "private-default-text",
+        "private-expiry-label",
         "opaque-child",
       ])
         expect(JSON.stringify(initial)).not.toContain(hidden);
@@ -772,18 +1029,41 @@ it.live(
       expect(address.role).toBe("text");
       expect(notes.role).toBe("text");
       expect(region.role).toBe("select");
+      expect(region.options).toEqual(
+        expect.arrayContaining([
+          { label: "Choose", selected: true, disabled: false },
+          { label: "California", selected: false, disabled: false },
+          { label: "Disabled group", selected: false, disabled: true },
+        ]),
+      );
+      expect(JSON.stringify(initial)).not.toContain('"CA"');
+      expect(
+        initial.controls.find((control) => control.label === "Card month")!.options,
+      ).toBeUndefined();
       for (const label of ["Disabled", "OTP", "Password hint"])
         expect(initial.controls.find((control) => control.label === label)!.role).toBe(
           "unsupported",
         );
       yield* driver.fill(address.ref, "text", Redacted.make("123 Example Street"));
       yield* driver.fill(notes.ref, "text", Redacted.make("Leave at reception"));
-      yield* driver.fill(region.ref, "select", Redacted.make("California"));
+      yield* driver.fill(
+        region.ref,
+        "select",
+        Redacted.make(region.options!.find((option) => option.label === "California")!.label),
+      );
       expect(yield* native(() => page.evaluate("document.querySelector('select').value"))).toBe(
         "CA",
       );
-      yield* driver.fill(region.ref, "select", Redacted.make("NY"));
-      for (const value of ["XX", "YY", "Duplicate", "same", "Second", "Missing"])
+      yield* driver.fill(region.ref, "select", Redacted.make("New York"));
+      for (const value of [
+        "Disabled",
+        "Disabled group",
+        "Duplicate",
+        "same",
+        "Second",
+        "Missing",
+        "NY",
+      ])
         expect(
           yield* driver.fill(region.ref, "select", Redacted.make(value)).pipe(Effect.flip),
         ).toMatchObject({ reason: "unsupported" });
@@ -816,6 +1096,13 @@ it.live(
       expect(current.controls.find((control) => control.label === "Pickup")!.checked).toBe(true);
       expect(current.controls.find((control) => control.label === "Agree")!.checked).toBe(true);
       expect(
+        current.controls.find((control) => control.label === "Region")!.options,
+      ).toContainEqual({
+        label: "New York",
+        selected: true,
+        disabled: false,
+      });
+      expect(
         yield* driver.fill(address.ref, "text", Redacted.make("old")).pipe(Effect.flip),
       ).toMatchObject({ reason: "stale-reference" });
       const currentAddress = current.controls.find((control) => control.label === "Address")!;
@@ -838,7 +1125,7 @@ it.live(
       expect(
         yield* driver.fill(currentNotes.ref, "text", Redacted.make("replaced")).pipe(Effect.flip),
       ).toMatchObject({ reason: "stale-reference" });
-      for (const label of ["Password", "Card"])
+      for (const label of ["Password", "Card", "Card month"])
         expect(
           yield* driver
             .fill(
@@ -848,10 +1135,34 @@ it.live(
             )
             .pipe(Effect.flip),
         ).toMatchObject({ reason: "stale-reference" });
+      // The observation budget counts native choices, and never turns a shortened label
+      // into a fill argument. Keep this fixture one choice beyond the public 256 limit.
+      yield* native(() =>
+        page.evaluate(`
+        document.body.innerHTML = '<select aria-label="Many choices"></select>';
+        for (let index = 0; index < 257; index++) {
+          const option = document.createElement('option');
+          option.label = index === 0 ? 'x'.repeat(201) : 'Choice ' + index;
+          option.value = 'private-option-' + index;
+          document.querySelector('select').append(option);
+        }
+      `),
+      );
+      const bounded = yield* driver.discover;
+      const choices = bounded.controls[0]!.options!;
+
+      expect(bounded.truncated).toBe(true);
+      expect(choices).toHaveLength(255);
+      expect(choices[0]!.label).toBe("Choice 1");
+      expect(choices.at(-1)!.label).toBe("Choice 255");
+      expect(JSON.stringify(bounded)).not.toContain("private-option-");
     }).pipe(
       Effect.scoped,
       Effect.provide(BrowserCrypto.layer),
-      Effect.provideService(ProtectedBrowserDispatch, { mark: Effect.void }),
+      Effect.provideService(ProtectedBrowserDispatch, {
+        mark: Effect.void,
+        confirmNoWrite: Effect.void,
+      }),
     ),
   { timeout: 30_000 },
 );
