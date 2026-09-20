@@ -1,6 +1,16 @@
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
+  run: {
+    tasks: {
+      test: {
+        // Live database state is not a cache input. Disabling task caching also
+        // passes the configured EFFECT_AGENT_TEST_POSTGRES_URL to the test process.
+        cache: false,
+        command: "vp test --passWithNoTests",
+      },
+    },
+  },
   pack: {
     entry: [
       "src/index.ts",
