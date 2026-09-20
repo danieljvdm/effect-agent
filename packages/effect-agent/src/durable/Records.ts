@@ -32,7 +32,7 @@ import {
 import { Selection, Snapshot } from "../core/ToolExposure.ts";
 import { ToolParameterRejection } from "../core/ToolResult.ts";
 import { ModelCallUsage, RunUsageSummary, RunTotals } from "../core/Usage.ts";
-import { WorkerBudgetScope, WorkerRef, WorkerSource } from "../core/Worker.ts";
+import { WorkerBudgetScope, WorkerRef, WorkerSource, WorkerStop } from "../core/Worker.ts";
 import { ContextHandoff } from "../engine/ContextWindow.ts";
 
 const identifier = <const Name extends string>(name: Name) =>
@@ -862,6 +862,12 @@ export const WorkerAdmission = Schema.Struct({
 
 export type WorkerAdmission = typeof WorkerAdmission.Type;
 
+/** Owner command retained before the destination inbox is sealed. */
+export class WorkerStopRequested extends Schema.TaggedClass<WorkerStopRequested>()(
+  "WorkerStopRequested",
+  { command: WorkerStop },
+) {}
+
 /** Source-log capacity reservation, retained independently of the source Run's settlement. */
 export class WorkerInputRequested extends Schema.TaggedClass<WorkerInputRequested>()(
   "WorkerInputRequested",
@@ -1009,6 +1015,7 @@ export const CanonicalRecordPayload = Schema.Union([
   SubagentJoined,
   SubagentLineageRecorded,
   WorkerInputRequested,
+  WorkerStopRequested,
   WorkerOriginRecorded,
   WorkerInputCompleted,
   WorkerReportPrepared,

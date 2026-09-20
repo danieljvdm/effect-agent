@@ -32,7 +32,12 @@ import {
   type DoStorageFailpointLocation,
 } from "../DoStorageError.ts";
 import { createMessageDeliveryTables } from "./message-delivery-schema.ts";
-import { CurrentDoStorageVersion, createNonterminalIndex, doMigrations } from "./migrations.ts";
+import {
+  CurrentDoStorageVersion,
+  createNonterminalIndex,
+  createWorkerStops,
+  doMigrations,
+} from "./migrations.ts";
 import { createRecoveryCheckpointTable } from "./recovery-checkpoint-schema.ts";
 
 /**
@@ -376,7 +381,7 @@ const predecessorColumns = {
 } as const;
 
 const checkPredecessorLayout = Effect.fn("DoJournal.checkPredecessorLayout")(function* (
-  version: 3 | 4 | 5,
+  version: 3 | 4 | 5 | 7,
 ) {
   const sql = yield* SqlClient.SqlClient;
 
@@ -402,7 +407,15 @@ const checkPredecessorLayout = Effect.fn("DoJournal.checkPredecessorLayout")(fun
 
   const expectedColumns = {
     ...messageColumns,
-    ...(version === 5
+    ...(version === 7
+      ? {
+          effect_agent_canonical_records: [
+            ...predecessorColumns.effect_agent_canonical_records,
+            "outstanding",
+          ],
+        }
+      : {}),
+    ...(version >= 5
       ? {
           effect_agent_recovery_checkpoints: [
             "thread_id",
@@ -462,6 +475,34 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
   failpoint: DoJournalFailpoint = noFailpoint,
   maxStoredValueBytes: number,
 ) {
+  const verifyWorkerPredecessor = Effect.fnUntraced(function* (workerContract: boolean) {
+    const requiredRows = yield* sql<Record<string, unknown>>`
+    SELECT name
+    FROM sqlite_master
+    WHERE (type = 'table'
+      AND name IN ${sql.in([...REQUIRED_TABLES, "effect_agent_message_deliveries", "effect_agent_recovery_checkpoints"])}
+    ) OR (type = 'index' AND name IN ('effect_agent_submissions_nonterminal', 'effect_agent_records_subtree', 'effect_agent_message_deliveries_pending', 'effect_agent_records_outstanding', 'effect_agent_records_call', 'effect_agent_records_run_input', 'effect_agent_records_worker_input'))
+    OR (${workerContract ? 1 : 0} = 1 AND name IN ('effect_agent_worker_stops', 'effect_agent_worker_starts', 'effect_agent_worker_pending', 'effect_agent_worker_execution'))
+    ORDER BY name
+  `.pipe(Effect.mapError(storageError("verify storage tables")));
+
+    const required = yield* decodeRows(
+      Schema.Array(DoNameRow),
+      "sqlite_master",
+      "required_tables",
+      requiredRows,
+    );
+
+    if (required.length !== REQUIRED_TABLES.length + 9 + (workerContract ? 4 : 0)) {
+      return yield* DoStorageCompatibilityError.make({
+        actualVersion: CurrentDoStorageVersion,
+        supportedVersion: CurrentDoStorageVersion,
+        message:
+          "The Durable Object claims the current format but is missing required tables or its nonterminal index. Retain the original store for inspection.",
+      });
+    }
+  });
+
   const metaTableRows = yield* sql<Record<string, unknown>>`
     SELECT name
     FROM sqlite_master
@@ -643,7 +684,8 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
                 }),
               ),
             );
-            yield* sql`UPDATE effect_agent_meta SET value='7' WHERE key='storage_version'`;
+            yield* createWorkerStops;
+            yield* sql`UPDATE effect_agent_meta SET value='8' WHERE key='storage_version'`;
             yield* failpoint("upgrade:after-version");
           }),
         )
@@ -679,11 +721,11 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
               value: string;
             }>`SELECT value FROM effect_agent_meta WHERE key = 'storage_version'`;
 
-            if (current[0]?.value === "7") return;
+            if (current[0]?.value === "8") return;
             if (current[0]?.value !== "6")
               return yield* DoStorageCompatibilityError.make({
                 actualVersion: -1,
-                supportedVersion: 7,
+                supportedVersion: 8,
                 message: "Storage version changed during native index upgrade",
               });
             yield* checkPredecessorLayout(5);
@@ -694,7 +736,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             if (requiredIndex.length !== 1)
               return yield* DoStorageCompatibilityError.make({
                 actualVersion: 6,
-                supportedVersion: 7,
+                supportedVersion: 8,
                 message: "Predecessor storage is missing its required nonterminal index",
               });
             yield* failpoint("upgrade:before-mutation");
@@ -711,7 +753,8 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             );
             yield* failpoint("upgrade:after-mutation");
             yield* failpoint("upgrade:before-version");
-            yield* sql`UPDATE effect_agent_meta SET value='7' WHERE key='storage_version'`;
+            yield* createWorkerStops;
+            yield* sql`UPDATE effect_agent_meta SET value='8' WHERE key='storage_version'`;
             yield* failpoint("upgrade:after-version");
           }),
         )
@@ -724,6 +767,40 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             }),
           ),
         );
+    } else if (version.value === "7") {
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const current = yield* sql<{
+              value: string;
+            }>`SELECT value FROM effect_agent_meta WHERE key = 'storage_version'`;
+
+            if (current[0]?.value === "8") return;
+            if (current[0]?.value !== "7")
+              return yield* DoStorageCompatibilityError.make({
+                actualVersion: -1,
+                supportedVersion: 8,
+                message: "Storage version changed during worker stop upgrade",
+              });
+            yield* checkPredecessorLayout(7);
+            yield* verifyWorkerPredecessor(false);
+            yield* failpoint("upgrade:before-mutation");
+            yield* createWorkerStops;
+            yield* failpoint("upgrade:after-mutation");
+            yield* failpoint("upgrade:before-version");
+            yield* sql`UPDATE effect_agent_meta SET value='8' WHERE key='storage_version'`;
+            yield* failpoint("upgrade:after-version");
+          }),
+        )
+        .pipe(
+          Effect.mapError((cause) =>
+            DoStorageError.make({
+              operation: "upgrade worker stop",
+              message: "Worker stop upgrade failed",
+              cause,
+            }),
+          ),
+        );
     } else if (version.value !== String(CurrentDoStorageVersion)) {
       const actualVersion = Number.parseInt(version.value, 10);
 
@@ -733,35 +810,12 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
         message:
           `The Durable Object uses unsupported storage version ${version.value}; ` +
           `this build supports exactly version ${CurrentDoStorageVersion}. ` +
-          "Only supported v2, v3, v4, v5 and v6 can be upgraded automatically. Keep the original store and use a compatible library version.",
+          "Only supported v2, v3, v4, v5, v6 and v7 can be upgraded automatically. Keep the original store and use a compatible library version.",
       });
     }
   }
 
-  const requiredRows = yield* sql<Record<string, unknown>>`
-    SELECT name
-    FROM sqlite_master
-    WHERE (type = 'table'
-      AND name IN ${sql.in([...REQUIRED_TABLES, "effect_agent_message_deliveries", "effect_agent_recovery_checkpoints"])}
-    ) OR (type = 'index' AND name IN ('effect_agent_submissions_nonterminal', 'effect_agent_records_subtree', 'effect_agent_message_deliveries_pending', 'effect_agent_records_outstanding', 'effect_agent_records_call', 'effect_agent_records_run_input', 'effect_agent_records_worker_input'))
-    ORDER BY name
-  `.pipe(Effect.mapError(storageError("verify storage tables")));
-
-  const required = yield* decodeRows(
-    Schema.Array(DoNameRow),
-    "sqlite_master",
-    "required_tables",
-    requiredRows,
-  );
-
-  if (required.length !== REQUIRED_TABLES.length + 9) {
-    return yield* DoStorageCompatibilityError.make({
-      actualVersion: CurrentDoStorageVersion,
-      supportedVersion: CurrentDoStorageVersion,
-      message:
-        "The Durable Object claims the current format but is missing required tables or its nonterminal index. Retain the original store for inspection.",
-    });
-  }
+  yield* verifyWorkerPredecessor(true);
 
   return makeJournal(sql, failpoint, maxStoredValueBytes);
 });

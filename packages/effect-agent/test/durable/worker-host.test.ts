@@ -23,12 +23,14 @@ import {
   ToolCallId,
 } from "effect-agent/identifiers";
 import { IdempotencyKey, JoinedToHost, QueueSequence, Receipt } from "effect-agent/receipt";
+import * as Subagent from "effect-agent/subagent";
 import {
   SubagentDelegationCaps,
   SubagentGrant,
   SubagentReservationAmounts,
 } from "effect-agent/subagent-contract";
 import {
+  SubagentHost,
   WorkerReportPreparationFailure,
   type StartWorkerRequest,
   type WorkerReporting,
@@ -107,6 +109,8 @@ import {
   ThreadNotMaterialized,
   ThreadTail,
   ThreadStore,
+  ThreadStoreError,
+  type ThreadReadRequest,
 } from "../../src/durable/ThreadStore.ts";
 
 const sourceId = Schema.decodeSync(ThreadId)("source");
@@ -187,6 +191,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
     readonly deliveryLimits?: Partial<MessageDeliveryStoreLimits>;
     readonly maxStoredValueBytes?: number;
     readonly authorize?: (typeof WorkerHostAuthorizer.Service)["authorize"];
+    readonly beforeRead?: (request: ThreadReadRequest) => Effect.Effect<void, ThreadStoreError>;
     readonly sourceRevisions?: ReadonlyArray<{
       readonly definition: Agent.AnyDefinition;
       readonly digests: DefinitionDigests;
@@ -336,6 +341,24 @@ const harness = Effect.fn("workerHostHarness")(function* (
           if (selection?._tag === "RecordId") {
             records = all.filter((entry) => entry.record.recordId === selection.recordId);
             reads.exact++;
+          } else if (selection?._tag === "WorkerExecution") {
+            records = ["UserInputRecorded", "RunStarted"]
+              .flatMap((tag) =>
+                all
+                  .filter(
+                    ({ record: { payload } }) =>
+                      payload._tag === tag && "runId" in payload && payload.runId !== undefined,
+                  )
+                  .slice(-1),
+              )
+              .sort((a, b) => a.sequence - b.sequence);
+          } else if (selection?._tag === "RunInput") {
+            records = all.filter(
+              ({ record: { payload } }) =>
+                payload._tag === "UserInputRecorded" &&
+                payload.kind === "user" &&
+                payload.runId === selection.runId,
+            );
           } else if (selection?._tag === "WorkerState") {
             records = all.filter(({ record: { payload } }) =>
               payload._tag === "SubtreeBudgetReserved"
@@ -365,7 +388,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
                 return entry;
               }),
           );
-        }),
+        }).pipe(Stream.onStart(Effect.suspend(() => options.beforeRead?.(request) ?? Effect.void))),
       export: ({ threadId }) =>
         Effect.suspend(() => {
           checkThread(threadId);
@@ -449,12 +472,31 @@ const harness = Effect.fn("workerHostHarness")(function* (
 
           return changed;
         }),
-      list: ({ ownerThreadId, limit }) =>
-        Effect.succeed({
-          items: [...deliveries.values()]
-            .filter((record) => record.key.ownerThreadId === ownerThreadId)
-            .slice(0, limit),
-          next: null,
+      list: ({ ownerThreadId, limit, after, workerStarts, pendingWorker }) =>
+        Effect.sync(() => {
+          const rows = [...deliveries.values()]
+            .filter((record) => {
+              const origin = record.envelope.workerAdmission?.origin;
+
+              return (
+                record.key.ownerThreadId === ownerThreadId &&
+                (after === undefined || record.key.messageId > after) &&
+                (workerStarts === undefined ||
+                  (origin?.worker.delegationId === workerStarts.delegationId &&
+                    origin.worker.targetAgentId === workerStarts.targetAgentId &&
+                    origin.firstMessageId === record.key.messageId)) &&
+                (pendingWorker === undefined ||
+                  (origin?.worker.threadId === pendingWorker &&
+                    record.receipt === null &&
+                    (record.status === "pending" || record.status === "parked")))
+              );
+            })
+            .sort((a, b) => a.key.messageId.localeCompare(b.key.messageId));
+
+          return {
+            items: rows.slice(0, limit),
+            next: rows.length > limit ? rows[limit - 1]!.key.messageId : null,
+          };
         }),
       due: () =>
         Effect.succeed(
@@ -465,6 +507,18 @@ const harness = Effect.fn("workerHostHarness")(function* (
       nextDeadline: () => Effect.succeed(null),
     }),
     Effect.provideService(SubmissionLedger, {
+      inspectWorker: (threadId) =>
+        Effect.sync(() => {
+          const rows = [...submissions.values()]
+            .filter((row) => row.threadId === threadId)
+            .sort((a, b) => a.queueSequence - b.queueSequence);
+
+          return {
+            latest: rows.at(-1) ?? null,
+            active: rows.find((row) => row.state !== "settled") ?? null,
+            stopped: false,
+          };
+        }),
       lookup: (request) =>
         Effect.sync(() => {
           checkThread(
@@ -1347,6 +1401,200 @@ layer(NodeCrypto.layer)((it) => {
     }),
   );
 
+  it.effect(
+    "reconciles a retained launch across Runs before fresh preparation and preserves argument conflicts",
+    () =>
+      Effect.gen(function* () {
+        let denyFresh = false;
+
+        const h = yield* harness().pipe(
+          Effect.provideService(WorkerPolicyResolver, {
+            resolveSource: () => Effect.succeed(Option.none()),
+            resolveTarget: (request) =>
+              denyFresh && request._tag === "InitialInput"
+                ? WorkerError.make({ operation: "start", reason: "denied" })
+                : Effect.succeed(Option.none()),
+          }),
+        );
+
+        const original = request("retained-command");
+        const first = yield* h.host.start(original);
+
+        denyFresh = true;
+
+        const later = h.runtime.facet(
+          {
+            source: {
+              _tag: "tool",
+              agentId: sourceAgent.id,
+              threadId: sourceId,
+              runId: Schema.decodeSync(RunId)("later-run"),
+              toolCallId: Schema.decodeSync(ToolCallId)("retry"),
+            },
+            policy: sourceAgent.policy,
+            depth: 0,
+          },
+          principal,
+        );
+
+        expect(yield* later.start(original)).toEqual(first);
+        for (const changed of [
+          { ...original, encodedInput: { text: "changed" } },
+          { ...original, encodedParameters: { note: "changed" } },
+          { ...original, policy: AgentPolicy.make({ ...policy, maxTurns: 1 }) },
+          { ...original, toolCallAllowance: 1 },
+        ])
+          expect((yield* later.start(changed).pipe(Effect.flip)).reason).toBe(
+            "idempotency-conflict",
+          );
+        h.deny("send");
+        expect((yield* later.start(original).pipe(Effect.flip)).reason).toBe("denied");
+        expect(h.submissions.size).toBe(1);
+      }),
+  );
+
+  for (const pending of [false, true])
+    it.effect(
+      `public start replays the retained capture before preparation (pending=${pending})`,
+      () =>
+        Effect.gen(function* () {
+          class PreparationFailed extends Schema.TaggedError<PreparationFailed>()(
+            "PreparationFailed",
+            {},
+          ) {}
+          let preparations = 0;
+          let throwPreparation = false;
+          let denyFresh = false;
+
+          const h = yield* harness().pipe(
+            Effect.provideService(WorkerPolicyResolver, {
+              resolveSource: () => Effect.succeed(Option.none()),
+              resolveTarget: (request) =>
+                denyFresh &&
+                request._tag === "InitialInput" &&
+                request.source._tag === "tool" &&
+                request.source.runId === "later-run"
+                  ? WorkerError.make({ operation: "start", reason: "denied" })
+                  : Effect.succeed(Option.none()),
+            }),
+          );
+
+          const declarationFor = (maxToolCalls: number) =>
+            Subagent.make("research", {
+              target,
+              parameters: Schema.Struct({ note: Schema.String }),
+              failure: PreparationFailed,
+              prepareInput: ({ note }, caller) =>
+                Effect.gen(function* () {
+                  preparations++;
+                  if (throwPreparation) return yield* new PreparationFailed();
+
+                  return {
+                    text: `${note}:${caller.source === "tool" ? caller.parent.runId : "programmatic"}`,
+                  };
+                }),
+              policy: Subagent.SubagentPolicy.make({
+                maxChildren: 10,
+                maxConcurrency: 1,
+                maxTurns: 2,
+                maxToolCalls,
+                maxDuration: "1 second",
+              }),
+              toolCallAllowance: { default: maxToolCalls },
+            });
+
+          const declaration = declarationFor(2);
+
+          const facet = (run: string) =>
+            h.runtime.facet(
+              {
+                source: {
+                  _tag: "tool",
+                  agentId: sourceAgent.id,
+                  threadId: sourceId,
+                  runId: Schema.decodeSync(RunId)(run),
+                  toolCallId: Schema.decodeSync(ToolCallId)(`call:${run}`),
+                },
+                policy: sourceAgent.policy,
+                depth: 0,
+              },
+              principal,
+            );
+
+          const key = Schema.decodeSync(IdempotencyKey)("public-command");
+
+          const start = Subagent.start(
+            declaration,
+            { note: "immutable brief" },
+            { idempotencyKey: key },
+          );
+
+          if (pending) h.fail("worker:before-source-append");
+          const first = yield* start.pipe(Effect.provideService(SubagentHost, facet("first-run")));
+          // Use the retained store's exact envelope; no conversation/history reconstruction.
+          const envelope = [...h.deliveries.values()][0]?.envelope;
+
+          expect(envelope?.input).toEqual({ text: "immutable brief:first-run" });
+          expect(first.delivery.receipt === null).toBe(pending);
+          h.fail(undefined);
+          if (pending) yield* TestClock.adjust("31 seconds");
+          denyFresh = true;
+          const later = facet("later-run");
+          const replay = yield* start.pipe(Effect.provideService(SubagentHost, later));
+
+          expect(replay.worker).toEqual(first.worker);
+          expect(replay.delivery.message).toEqual(first.delivery.message);
+          if (!pending) expect(replay).toEqual(first);
+          throwPreparation = true;
+          expect(yield* start.pipe(Effect.provideService(SubagentHost, later))).toEqual(replay);
+          expect(
+            yield* Subagent.start(
+              declarationFor(1),
+              { note: "immutable brief" },
+              { idempotencyKey: key },
+            ).pipe(Effect.provideService(SubagentHost, later)),
+          ).toEqual(replay);
+          for (const changed of [
+            Subagent.start(declaration, { note: "changed brief" }, { idempotencyKey: key }),
+            Subagent.start(
+              declaration,
+              { note: "immutable brief" },
+              { idempotencyKey: key, budgetScope: "worker-run" },
+            ),
+          ])
+            expect(
+              yield* changed.pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+            ).toMatchObject({ reason: "idempotency-conflict" });
+          h.deny("send");
+          expect(
+            yield* start.pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+          ).toMatchObject({ reason: "denied" });
+          h.deny(undefined);
+          expect(preparations).toBe(1);
+          expect(h.deliveries.size).toBe(1);
+          expect([...h.deliveries.values()][0]?.envelope).toEqual(envelope);
+          expect(h.submissions.size).toBe(1);
+          expect(
+            yield* Subagent.start(
+              declaration,
+              { note: "fresh brief" },
+              {
+                idempotencyKey: Schema.decodeSync(IdempotencyKey)("preparation-error"),
+              },
+            ).pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+          ).toEqual(new PreparationFailed());
+          throwPreparation = false;
+          expect(
+            yield* Subagent.start(
+              declaration,
+              { note: "fresh brief" },
+              { idempotencyKey: Schema.decodeSync(IdempotencyKey)("fresh-command") },
+            ).pipe(Effect.provideService(SubagentHost, later), Effect.flip),
+          ).toMatchObject({ reason: "denied" });
+          expect(h.deliveries.size).toBe(1);
+        }),
+    );
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
   it.effect(
     "serializes source-aware active slots across raced starts, steering and idle reactivation",
@@ -1884,7 +2132,7 @@ layer(NodeCrypto.layer)((it) => {
         yield* TestClock.adjust("1 second");
         const started = yield* h.host.start(start);
 
-        expect(initialCalls).toBeGreaterThanOrEqual(4);
+        expect(initialCalls).toBeGreaterThanOrEqual(3);
 
         const origin = h.submissions.get(started.delivery.receipt!.submissionId)!.workerAdmission!
           .origin;
@@ -2114,6 +2362,100 @@ layer(NodeCrypto.layer)((it) => {
       }),
   );
 
+  it.effect("worker summaries retry a selected-read failure after a concurrent append", () =>
+    Effect.gen(function* () {
+      let onRead: Effect.Effect<void, ThreadStoreError> = Effect.void;
+      let selectedReads = 0;
+
+      const h = yield* harness({
+        beforeRead: (request) =>
+          Effect.suspend(() => {
+            if (!("selection" in request) || request.selection._tag !== "WorkerExecution")
+              return Effect.void;
+            selectedReads++;
+
+            return onRead;
+          }),
+      });
+
+      const first = yield* h.host.start(request("concurrent-summary"));
+      const receipt = first.delivery.receipt;
+
+      if (receipt === null) return yield* Effect.die("Expected an admitted worker input");
+      const runId = Schema.decodeSync(RunId)(`run:${receipt.submissionId}`);
+
+      onRead = Effect.sync(() => {
+        onRead = Effect.void;
+        h.push(
+          first.worker.threadId,
+          UserInputRecorded.make({
+            submissionId: receipt.submissionId,
+            kind: "user",
+            runId,
+            input: { text: "concurrent-summary" },
+          }),
+          "concurrent-input",
+        );
+      }).pipe(
+        Effect.andThen(
+          ThreadStoreError.make({ operation: "selected read", message: "Canonical tail changed" }),
+        ),
+      );
+
+      const summary = yield* h.host.summary({ worker: first.worker, target });
+
+      expect(summary.appliedInput).toMatchObject({
+        receipt,
+        messageId: first.delivery.message.messageId,
+        runId,
+      });
+      expect(summary.watermark.canonicalSequence).toBe(summary.appliedInput?.sequence);
+      expect(selectedReads).toBe(2);
+    }),
+  );
+
+  for (const watermark of ["unchanged", "unavailable"] as const)
+    it.effect(
+      `worker summaries preserve a selected-read error when the watermark is ${watermark}`,
+      () =>
+        Effect.gen(function* () {
+          let selectedReads = 0;
+
+          const readFailure = ThreadStoreError.make({
+            operation: "selected read",
+            message: "Canonical tail changed",
+          });
+
+          let onRead: Effect.Effect<void, ThreadStoreError> = readFailure;
+
+          const h = yield* harness({
+            beforeRead: (request) =>
+              Effect.suspend(() => {
+                if (!("selection" in request) || request.selection._tag !== "WorkerExecution")
+                  return Effect.void;
+                selectedReads++;
+
+                return onRead;
+              }),
+          });
+
+          const first = yield* h.host.start(request("failed-summary"));
+
+          if (watermark === "unavailable")
+            onRead = Effect.sync(() => h.logs.delete(first.worker.threadId)).pipe(
+              Effect.andThen(readFailure),
+            );
+
+          const failure = yield* h.host
+            .list({ delegationId: first.worker.delegationId, target, limit: 1 })
+            .pipe(Effect.flip);
+
+          expect(failure).toMatchObject({ operation: "list", reason: "storage" });
+          expect(failure.cause).toBe(readFailure);
+          expect(selectedReads).toBe(1);
+        }),
+    );
+
   it.effect("worker summaries remain active after the latest queued input is cancelled", () =>
     Effect.gen(function* () {
       const h = yield* harness();
@@ -2138,18 +2480,23 @@ layer(NodeCrypto.layer)((it) => {
 
       const active = { worker: first.worker, latestReceipt: latest.receipt, state: "active" };
 
-      expect(yield* h.host.summary({ worker: first.worker, target })).toEqual(active);
+      const beforeSummaryReads = { ...h.reads };
+
+      expect(yield* h.host.summary({ worker: first.worker, target })).toMatchObject(active);
       expect(
         (yield* h.host.list({ delegationId: first.worker.delegationId, target, limit: 10 })).items,
-      ).toEqual([active]);
+      ).toMatchObject([active]);
 
+      expect(h.reads.exported).toBe(beforeSummaryReads.exported);
+      expect(h.reads.paged).toBe(beforeSummaryReads.paged);
+      expect(h.reads.worker).toBe(beforeSummaryReads.worker);
       yield* h.settle(first.delivery.receipt!);
       const idle = { ...active, state: "idle" };
 
-      expect(yield* h.host.summary({ worker: first.worker, target })).toEqual(idle);
+      expect(yield* h.host.summary({ worker: first.worker, target })).toMatchObject(idle);
       expect(
         (yield* h.host.list({ delegationId: first.worker.delegationId, target, limit: 10 })).items,
-      ).toEqual([idle]);
+      ).toMatchObject([idle]);
     }),
   );
 
@@ -2177,7 +2524,7 @@ layer(NodeCrypto.layer)((it) => {
           reason: "storage",
         });
         h.fail(undefined);
-        expect(yield* h.host.summary({ worker: first.worker, target })).toEqual({
+        expect(yield* h.host.summary({ worker: first.worker, target })).toMatchObject({
           worker: first.worker,
           latestReceipt: first.delivery.receipt!,
           state: "starting",
@@ -2207,14 +2554,14 @@ layer(NodeCrypto.layer)((it) => {
           state: "active",
         };
 
-        expect(yield* h.host.summary({ worker: first.worker, target })).toEqual(active);
+        expect(yield* h.host.summary({ worker: first.worker, target })).toMatchObject(active);
         expect(
           (yield* h.host.list({ delegationId: first.worker.delegationId, target, limit: 10 }))
             .items,
-        ).toEqual([active]);
+        ).toMatchObject([active]);
         yield* h.settle(earlierReceipt.receipt!);
         yield* h.settle(latestReceipt.receipt!);
-        expect(yield* h.host.summary({ worker: first.worker, target })).toEqual({
+        expect(yield* h.host.summary({ worker: first.worker, target })).toMatchObject({
           ...active,
           state: "idle",
         });

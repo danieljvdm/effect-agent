@@ -40,6 +40,10 @@ import {
   LedgerRecordChildSettledCall,
   LedgerRecordChildSettledResult,
   LedgerRequestAbortCall,
+  LedgerStopWorkerCall,
+  LedgerInspectWorkerCall,
+  LedgerInspectWorkerResult,
+  LedgerStopWorkerResult,
   LedgerRequestAbortResult,
   LedgerResolveAdmissionCall,
   LedgerResolveAdmissionResult,
@@ -533,6 +537,39 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
       options.ownsThread(request.threadId)
         ? local.resolveAdmission(request)
         : resolveForeignAdmission(request.threadId, request),
+
+    inspectWorker: (threadId) =>
+      options.ownsThread(threadId)
+        ? local.inspectWorker === undefined
+          ? Effect.fail(
+              LedgerError.make({
+                operation: "inspectWorker",
+                message: "Worker inspection unavailable",
+              }),
+            )
+          : local.inspectWorker(threadId)
+        : foreignLedgerCall(
+            "inspect worker",
+            threadId,
+            LedgerInspectWorkerCall.make({ request: { threadId } }),
+            LedgerInspectWorkerResult,
+            NoAdditionalPortFailure,
+          ).pipe(Effect.map((reply) => reply.state)),
+
+    stopWorker: (request) =>
+      options.ownsThread(request.threadId)
+        ? local.stopWorker === undefined
+          ? Effect.fail(
+              LedgerError.make({ operation: "stopWorker", message: "Worker stop unavailable" }),
+            )
+          : local.stopWorker(request)
+        : foreignLedgerCall(
+            "ledger stop worker",
+            request.threadId,
+            LedgerStopWorkerCall.make({ request }),
+            LedgerStopWorkerResult,
+            NoAdditionalPortFailure,
+          ).pipe(Effect.map((reply) => reply.owned)),
 
     requestAbort: (request) =>
       submissionTarget("ledger request abort", request.submissionId).pipe(
@@ -1063,6 +1100,35 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
         ledger
           .resolveAdmission(request.request)
           .pipe(Effect.map((resolution) => LedgerResolveAdmissionResult.make({ resolution }))),
+      );
+    }
+    case "LedgerInspectWorker": {
+      const ledger = yield* SubmissionLedger;
+
+      return yield* capture(
+        ledger.inspectWorker === undefined
+          ? Effect.fail(
+              LedgerError.make({
+                operation: "inspectWorker",
+                message: "Worker inspection unavailable",
+              }),
+            )
+          : ledger
+              .inspectWorker(request.request.threadId)
+              .pipe(Effect.map((state) => LedgerInspectWorkerResult.make({ state }))),
+      );
+    }
+    case "LedgerStopWorker": {
+      const ledger = yield* SubmissionLedger;
+
+      return yield* capture(
+        ledger.stopWorker === undefined
+          ? Effect.fail(
+              LedgerError.make({ operation: "stopWorker", message: "Worker stop unavailable" }),
+            )
+          : ledger
+              .stopWorker(request.request)
+              .pipe(Effect.map((owned) => LedgerStopWorkerResult.make({ owned }))),
       );
     }
     case "LedgerRequestAbort": {

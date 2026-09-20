@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { ThreadId } from "effect-agent/identifiers";
 import {
   MessageDeliveryError,
   MessageDeliveryPageRequest,
@@ -7,6 +8,8 @@ import {
 import { CanonicalRecordEnvelope } from "effect-agent/records";
 import {
   AbortCommand,
+  WorkerStopCommand,
+  WorkerLedgerState,
   AbortIntent,
   AdmissionConflict,
   AdmissionPolicyError,
@@ -123,6 +126,26 @@ export class LedgerResolveAdmissionCall extends Schema.TaggedClass<LedgerResolve
   request: SubmissionLookupByKey,
 }) {}
 
+export class LedgerInspectWorkerCall extends Schema.TaggedClass<LedgerInspectWorkerCall>()(
+  "LedgerInspectWorker",
+  { request: Schema.Struct({ threadId: ThreadId }) },
+) {}
+
+export class LedgerInspectWorkerResult extends Schema.TaggedClass<LedgerInspectWorkerResult>()(
+  "LedgerInspectWorkerResult",
+  { state: WorkerLedgerState },
+) {}
+
+export class LedgerStopWorkerCall extends Schema.TaggedClass<LedgerStopWorkerCall>()(
+  "LedgerStopWorker",
+  { request: WorkerStopCommand },
+) {}
+
+export class LedgerStopWorkerResult extends Schema.TaggedClass<LedgerStopWorkerResult>()(
+  "LedgerStopWorkerResult",
+  { owned: Schema.Natural },
+) {}
+
 /** Routed `SubmissionLedger.requestAbort` — abort propagation across Objects. */
 export class LedgerRequestAbortCall extends Schema.TaggedClass<LedgerRequestAbortCall>(
   "@effect-agent/storage-cloudflare/LedgerRequestAbortCall",
@@ -190,6 +213,8 @@ export const PortRequest = Schema.Union([
   LedgerLookupCall,
   LedgerResolveAdmissionCall,
   LedgerRequestAbortCall,
+  LedgerStopWorkerCall,
+  LedgerInspectWorkerCall,
   LedgerRecordChildSettledCall,
   StoreMaterializeCall,
   StoreAppendCall,
@@ -290,6 +315,8 @@ export const PortResult = Schema.Union([
   LedgerLookupResult,
   LedgerResolveAdmissionResult,
   LedgerRequestAbortResult,
+  LedgerStopWorkerResult,
+  LedgerInspectWorkerResult,
   LedgerRecordChildSettledResult,
   StoreMaterializeResult,
   StoreAppendResult,

@@ -426,6 +426,11 @@ const makeThreadStore = Effect.gen(function* () {
               const payload = entry.record.payload;
 
               if (payload._tag === "PeerMessagePrepared") peerCount++;
+              if (
+                (payload._tag === "UserInputRecorded" || payload._tag === "RunStarted") &&
+                payload.runId !== undefined
+              )
+                workerRecords.set(`execution:${payload._tag}`, [entry]);
 
               const workerKey =
                 payload._tag === "SubtreeBudgetReserved"
@@ -570,6 +575,11 @@ const makeThreadStore = Effect.gen(function* () {
               if (thread.unverifiedWorkerInputs.size > 0)
                 return yield* storeError("selected read", "Unverified worker acknowledgement");
               records = [...thread.outstanding.values()].flat();
+              break;
+            case "WorkerExecution":
+              records = ["UserInputRecorded", "RunStarted"].flatMap(
+                (tag) => thread.workerRecords.get(`execution:${tag}`) ?? [],
+              );
               break;
             case "WorkerState":
               records = [

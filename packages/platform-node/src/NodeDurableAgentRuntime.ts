@@ -336,19 +336,7 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
       yield* Effect.addFinalizer(() => releaseTrackedOwnership(ledger, registry));
 
       return SubmissionLedger.of({
-        capabilities: ledger.capabilities,
-        admit: ledger.admit,
-        markReady: ledger.markReady,
-        lookup: ledger.lookup,
-        // The S2 subagent ops forward untouched: none of them grants an ownership period, so
-        // the drain has nothing to track for them (`suspend` below already stops tracking the
-        // waitingForChild ownership period the moment it ends).
-        resolveAdmission: ledger.resolveAdmission,
-        recordChildSettled: ledger.recordChildSettled,
-        reserveChildBudget: ledger.reserveChildBudget,
-        attachChildToReservation: ledger.attachChildToReservation,
-        beginChildBudgetRelease: ledger.beginChildBudgetRelease,
-        releaseChildBudget: ledger.releaseChildBudget,
+        ...ledger,
         claim: (request) =>
           ledger
             .claim(request)
@@ -373,22 +361,11 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
               error._tag === "OwnershipLost" ? untrack(request.submissionId) : Effect.void,
             ),
           ),
-        markInputApplied: ledger.markInputApplied,
-        reserveSettlement: ledger.reserveSettlement,
         finalizeSettlement: (request) =>
           ledger.finalizeSettlement(request).pipe(Effect.tap(() => untrack(request.submissionId))),
-        requestAbort: ledger.requestAbort,
-        readAbortIntent: ledger.readAbortIntent,
-        claimJoining: ledger.claimJoining,
-        markJoined: ledger.markJoined,
-        revertJoining: ledger.revertJoining,
         // Suspension ends the ownership period by contract, so the drain stops tracking it.
         suspend: (request) =>
           ledger.suspend(request).pipe(Effect.tap(() => untrack(request.submissionId))),
-        recordApprovalDecision: ledger.recordApprovalDecision,
-        markUnknown: ledger.markUnknown,
-        recordUnknownResolution: ledger.recordUnknownResolution,
-        scanNonterminal: ledger.scanNonterminal,
         loadRecoverySnapshot: ledger.loadRecoverySnapshot,
       });
     }),

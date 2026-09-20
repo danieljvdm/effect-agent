@@ -10,6 +10,8 @@ import { type IdempotencyKey, type JoinedToHost, type Receipt } from "../core/Re
 import type { SubagentBudgetReservation } from "../core/SubagentContract.ts";
 import {
   WorkerError,
+  type WorkerStop,
+  type WorkerStopped,
   type WorkerCompletion,
   type WorkerHistoryEntry,
   type WorkerContext,
@@ -34,6 +36,30 @@ export interface StartWorkerRequest {
   readonly toolCallAllowance?: number;
   /** Author-owned request; the durable host must separately authorize worker-run funding. */
   readonly budgetScope?: WorkerBudgetScope;
+}
+
+/**
+ * First-admission preparation stays lazy until the owner authorizes the caller and checks the
+ * retained command. Replays compare declared parameters/options and reuse the original capture.
+ * Prepared policy, budget, and allowance are frozen first-admission configuration, not replay
+ * arguments; changing them requires a new command key. Current caller authorization still applies.
+ * Preparation must be free of external effects: concurrent first admissions can prepare before
+ * the retained delivery chooses its first writer.
+ */
+export interface DeferredStartWorkerRequest<E = never, R = never> extends Pick<
+  StartWorkerRequest,
+  | "delegationId"
+  | "target"
+  | "idempotencyKey"
+  | "encodedParameters"
+  | "encodedGrant"
+  | "budgetScope"
+> {
+  readonly prepare: Effect.Effect<
+    Pick<StartWorkerRequest, "encodedInput" | "policy" | "budget" | "toolCallAllowance">,
+    E,
+    R
+  >;
 }
 
 export interface FollowUpWorkerRequest {
@@ -137,7 +163,10 @@ export class SubagentHost extends Context.Service<
       readonly target: Agent.AnyDefinition;
       readonly encodedInput: unknown;
     }) => Effect.Effect<Option.Option<AgentPolicy>, WorkerError>;
-    readonly start: (request: StartWorkerRequest) => Effect.Effect<WorkerStarted, WorkerError>;
+    /** Prepared callers retain strict input/policy conflicts; deferred callers replay the saved capture. */
+    readonly start: <E = never, R = never>(
+      request: StartWorkerRequest | DeferredStartWorkerRequest<E, R>,
+    ) => Effect.Effect<WorkerStarted, WorkerError | E, R>;
     readonly followUp: (
       request: FollowUpWorkerRequest,
     ) => Effect.Effect<MessageStatus, WorkerError>;
@@ -165,6 +194,10 @@ export class SubagentHost extends Context.Service<
       readonly limit: number;
       readonly after?: ThreadId;
     }) => Effect.Effect<WorkerPage, WorkerError>;
+    /** Seal the whole worker; retries reconcile the same command, including a lost acknowledgement. */
+    readonly stop: (
+      request: WorkerStop & { readonly target: Agent.AnyDefinition },
+    ) => Effect.Effect<WorkerStopped, WorkerError>;
     /** Cancel exactly this Receipt; preserve JoinedToHost without broadening its target. */
     readonly cancel: (
       request: WorkerReceiptRequest,
@@ -181,6 +214,7 @@ export class SubagentHost extends Context.Service<
     observe: () => Stream.fail(WorkerError.make({ operation: "observe", reason: "unavailable" })),
     await: () => WorkerError.make({ operation: "await", reason: "unavailable" }),
     list: () => WorkerError.make({ operation: "list", reason: "unavailable" }),
+    stop: () => WorkerError.make({ operation: "stop", reason: "unavailable" }),
     cancel: () => WorkerError.make({ operation: "cancel", reason: "unavailable" }),
   };
 

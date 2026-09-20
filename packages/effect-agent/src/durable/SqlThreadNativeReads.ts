@@ -178,6 +178,20 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
               rows =
                 yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json, outstanding FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND outstanding <> 0 AND sequence > ${after} ORDER BY sequence LIMIT ${request.page.limit}`;
               break;
+            case "WorkerExecution":
+              rows = (yield* Effect.forEach(
+                ["UserInputRecorded", "RunStarted"],
+                (tag) =>
+                  sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
+                  WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = ${tag}
+                    AND json_extract(record_json, '$.payload.runId') IS NOT NULL
+                  ORDER BY sequence DESC LIMIT 1`,
+              ))
+                .flat()
+                .filter((row) => Number(row.sequence) > after)
+                .sort((a, b) => Number(a.sequence) - Number(b.sequence))
+                .slice(0, request.page.limit);
+              break;
             case "WorkerState": {
               const runId =
                 selection.sourceSubmissionId === undefined

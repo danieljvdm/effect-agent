@@ -699,11 +699,19 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                     ),
                   );
 
+                const stopWorker = ledger.stopWorker;
+
                 return Context.make(ThreadStore, observedStore).pipe(
                   Context.add(SubmissionLedger, {
                     ...ledger,
                     recordApprovalDecision: (request) =>
                       observeIntent(ledger.recordApprovalDecision(request)),
+                    ...(stopWorker === undefined
+                      ? {}
+                      : {
+                          stopWorker: (request: Parameters<NonNullable<typeof stopWorker>>[0]) =>
+                            observeIntent(stopWorker(request)),
+                        }),
                     requestAbort: (request) => observeIntent(ledger.requestAbort(request)),
                     recordUnknownResolution: (request) =>
                       observeIntent(ledger.recordUnknownResolution(request)),

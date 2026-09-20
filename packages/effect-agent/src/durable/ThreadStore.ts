@@ -325,6 +325,11 @@ export const ThreadSelection = Schema.Union([
     expectedTailDigest: Digest,
   }),
   Schema.Struct({
+    _tag: Schema.Literal("WorkerExecution"),
+    expectedTailSequence: CanonicalSequence,
+    expectedTailDigest: Digest,
+  }),
+  Schema.Struct({
     _tag: Schema.Literal("WorkerState"),
     expectedTailSequence: CanonicalSequence,
     expectedTailDigest: Digest,

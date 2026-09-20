@@ -6965,6 +6965,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         history: pending === undefined ? journal.historyBefore : resumeProjection.historyBefore,
         onHistory,
         input,
+        // Worker corrections drain together at safe seams, bounded by MAX_JOIN_DRAIN.
+        commandDrainPolicy: submission.workerAdmission === undefined ? "one" : "all",
         ...(journal.committedTurns > 0 || Schema.is(FrameworkMessage)(submission.messageAdmission)
           ? { retainedInput: submission.inputPayload }
           : {}),

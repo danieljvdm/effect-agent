@@ -36,6 +36,8 @@ import {
 import {
   type ParentLinkage,
   AbortCommand,
+  WorkerStopCommand,
+  WorkerLedgerState,
   AdmissionAdmitted,
   AdmissionConflict,
   AdmissionPolicyError,
@@ -235,6 +237,9 @@ interface LedgerState {
   readonly lanes: ReadonlyMap<ThreadId, LaneState>;
   readonly childReservations: ReadonlyMap<ChildReservationId, StoredChildReservation>;
   readonly mintCounter: number;
+  readonly latestByThread: ReadonlyMap<ThreadId, SubmissionId>;
+  readonly activeByThread: ReadonlyMap<ThreadId, ReadonlySet<SubmissionId>>;
+  readonly stoppedWorkers: ReadonlySet<ThreadId>;
 }
 
 type Decision<A, E> =
@@ -361,10 +366,18 @@ const ownsLane = (
   stored.ownership.ownershipToken === ownershipToken &&
   stored.ownership.producerEpoch === laneEpoch(state, stored.row.threadId);
 
-const withSubmission = (state: LedgerState, stored: StoredSubmission): LedgerState => ({
-  ...state,
-  submissions: new Map(state.submissions).set(stored.row.submissionId, stored),
-});
+const withSubmission = (state: LedgerState, stored: StoredSubmission): LedgerState => {
+  const active = new Set(state.activeByThread.get(stored.row.threadId));
+
+  if (stored.row.state === "settled") active.delete(stored.row.submissionId);
+  else active.add(stored.row.submissionId);
+
+  return {
+    ...state,
+    submissions: new Map(state.submissions).set(stored.row.submissionId, stored),
+    activeByThread: new Map(state.activeByThread).set(stored.row.threadId, active),
+  };
+};
 
 const withChildReservation = (
   state: LedgerState,
@@ -432,6 +445,9 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       lanes: new Map(),
       childReservations: new Map(),
       mintCounter: 0,
+      stoppedWorkers: new Set(),
+      latestByThread: new Map(),
+      activeByThread: new Map(),
     });
 
     const admissionFence = yield* SubmissionAdmissionFence;
@@ -544,6 +560,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   current,
                 ];
               }
+
+              if (current.stoppedWorkers.has(request.threadId))
+                return [
+                  failure(AdmissionPolicyError.make({ reason: "refused", code: "worker-stopped" })),
+                  current,
+                ];
 
               // A Thread's first admission fixes its worker origin before canonical materialization.
               const first = [...current.submissions.values()].find(
@@ -669,7 +691,24 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                     replayed: false,
                   }),
                 ),
-                { ...current, submissions, admissionIndex, lanes, mintCounter },
+                {
+                  ...current,
+                  submissions,
+                  admissionIndex,
+                  lanes,
+                  mintCounter,
+                  latestByThread: new Map(current.latestByThread).set(
+                    request.threadId,
+                    row.submissionId,
+                  ),
+                  activeByThread: new Map(current.activeByThread).set(
+                    request.threadId,
+                    new Set([
+                      ...(current.activeByThread.get(request.threadId) ?? []),
+                      row.submissionId,
+                    ]),
+                  ),
+                },
               ];
             },
           );
@@ -1225,6 +1264,66 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       }),
     );
 
+    const inspectWorker = Effect.fn("MemorySubmissionLedger.inspectWorker")(function* (
+      threadId: ThreadId,
+    ) {
+      const current = yield* Ref.get(state);
+      const latestId = current.latestByThread.get(threadId);
+      const latest = latestId === undefined ? undefined : current.submissions.get(latestId);
+
+      const active = [...(current.activeByThread.get(threadId) ?? [])]
+        .flatMap((id) => {
+          const row = current.submissions.get(id);
+
+          return row === undefined ? [] : [row];
+        })
+        .sort((a, b) => a.row.queueSequence - b.row.queueSequence)[0];
+
+      return WorkerLedgerState.make({
+        latest: latest === undefined ? null : toSnapshot(latest.row),
+        active: active === undefined ? null : toSnapshot(active.row),
+        stopped: current.stoppedWorkers.has(threadId),
+      });
+    });
+
+    const stopWorker = Effect.fn("MemorySubmissionLedger.stopWorker")(function* (
+      unvalidated: WorkerStopCommand,
+    ) {
+      const request = yield* validate(WorkerStopCommand, "stopWorker", unvalidated);
+      const now = yield* Clock.currentTimeMillis;
+
+      return yield* Ref.modify(state, (current) => {
+        const submissions = new Map(current.submissions);
+        let owned = 0;
+
+        for (const id of current.activeByThread.get(request.threadId) ?? []) {
+          const stored = submissions.get(id);
+
+          if (stored === undefined) continue;
+          if (stored.ownership !== undefined) owned++;
+          if (stored.abortIntent === undefined)
+            submissions.set(id, {
+              ...stored,
+              abortIntent: AbortIntent.make({
+                submissionId: id,
+                author: request.author,
+                reason: "Worker owner stopped the worker",
+                requestedAt: utc(now),
+              }),
+            });
+        }
+
+        return [
+          owned,
+          {
+            ...current,
+            submissions,
+            stoppedWorkers: new Set([...current.stoppedWorkers, request.threadId]),
+          },
+        ] as const;
+      });
+    });
+
     const requestAbort: SubmissionLedger["Service"]["requestAbort"] = Effect.fn(
       "MemorySubmissionLedger.requestAbort",
     )((unvalidated) =>
@@ -1330,6 +1429,8 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             Decision<ReadonlyArray<JoiningClaim>, OwnershipLost | LedgerError>,
             LedgerState,
           ] => {
+            if (current.stoppedWorkers.has(request.threadId)) return [success([]), current];
+
             const host = current.submissions.get(request.hostSubmissionId);
 
             if (host === undefined) {
@@ -2602,6 +2703,8 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       reserveSettlement,
       finalizeSettlement,
       requestAbort,
+      stopWorker,
+      inspectWorker,
       claimJoining,
       markJoined,
       revertJoining,

@@ -17,7 +17,8 @@ import {
 } from "effect";
 import * as Agent from "effect-agent/agent";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
-import { ThreadId } from "effect-agent/identifiers";
+import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
+import { ThreadId, ToolCallId } from "effect-agent/identifiers";
 import {
   MessageDeliveryFailpoint,
   MessageDeliveryFailpointError,
@@ -25,14 +26,15 @@ import {
 } from "effect-agent/message-delivery";
 import type { Receipt } from "effect-agent/receipt";
 import { DefinitionDigestInput } from "effect-agent/records";
+import { RunToolAuthorization } from "effect-agent/run-options";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentHost } from "effect-agent/subagent-host";
-import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { WorkerError } from "effect-agent/worker";
+import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent/submission-ledger";
+import { readOutstanding, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
+import { WorkerError, type WorkerSummary } from "effect-agent/worker";
 import { WorkerConcurrencyResolver, WorkerHostAuthorizer } from "effect-agent/worker-host";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const principal = Schema.decodeSync(Principal)("worker-owner");
 const sourceThreadId = Schema.decodeSync(ThreadId)("background-source");
@@ -46,12 +48,13 @@ const parts: ReadonlyArray<Response.StreamPartEncoded> = [
   { type: "finish", reason: "stop", usage: { inputTokens: {}, outputTokens: {} } },
 ];
 
-const agent = (id: string, beforeReply: Effect.Effect<void> = Effect.void) =>
+const agent = (id: string, beforeReply: Effect.Effect<void> = Effect.void, disposition?: string) =>
   Agent.withModel(
     Agent.make(id, {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Answer as JSON.",
+      runDisposition: { schema: Schema.String, fromOutput: () => disposition },
       toolkit: Toolkit.empty,
       policy: { maxTurns: 20, maxToolCalls: 20, maxDuration: "1 minute", toolConcurrency: 2 },
     }),
@@ -174,8 +177,8 @@ for (const completion of ["released", "interrupted"] as const) {
                       if (point !== "message-delivery:claim:after") return;
                       claims++;
                       if (claims !== 1) return;
-                      yield* Deferred.succeed(claimed, undefined);
-                      yield* Deferred.await(release).pipe(
+                      yield* Deferred.succeed(claimed, undefined).pipe(
+                        Effect.andThen(Deferred.await(release)),
                         Effect.ensuring(
                           Effect.sync(() => {
                             finalized++;
@@ -618,7 +621,7 @@ it.effect(
 
         expect(secondResult).toMatchObject({ outcome: "completed", result: { answer: "done" } });
         expect(secondResult.runId).not.toBe(firstResult.runId);
-        expect(yield* withFacet(owner, Subagent.list(declaration))).toEqual({
+        expect(yield* withFacet(owner, Subagent.list(declaration))).toMatchObject({
           items: [{ worker: started.worker, latestReceipt: nextReceipt.receipt, state: "idle" }],
           next: null,
         });
@@ -655,6 +658,858 @@ it.effect(
             .workerHost({ sourceThreadId, principal: Schema.decodeSync(Principal)("stranger") })
             .pipe(Effect.result),
         ).toMatchObject({ _tag: "Failure", failure: { reason: "denied" } });
+      }),
+    ).pipe(Effect.provide(NodeFileSystem.layer)),
+  15_000,
+);
+
+it.effect(
+  "stops an active worker and queued steering, preserves external-action evidence and replays after a real SQLite owner restart",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-stop-" });
+        const entered = yield* Deferred.make<void>();
+        const pay = yield* Deferred.make<void>();
+        let payments = 0;
+        let finalized = 0;
+        let loseAck = false;
+        const output = Schema.Struct({ answer: Schema.String });
+
+        const toolkit = Toolkit.make(
+          Tool.make("pay", { parameters: Schema.Struct({}), success: output }),
+        );
+
+        const child = Agent.withModel(
+          Agent.make("payment-worker", {
+            input: target.definition.input,
+            output,
+            instructions: "Complete the purchase",
+            toolkit,
+            completion: { tool: "pay", required: true, project: ({ result }) => result },
+            policy: { maxTurns: 4, maxToolCalls: 4, maxDuration: "1 minute" },
+          }),
+          Model.make(
+            "scripted",
+            "payment",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: () =>
+                  Stream.fromIterable([
+                    { type: "tool-call", id: "payment", name: "pay", params: {} },
+                    {
+                      type: "finish",
+                      reason: "tool-calls",
+                      usage: { inputTokens: {}, outputTokens: {} },
+                    },
+                  ]),
+              }),
+            ),
+          ),
+        );
+
+        const handlers = toolkit.toLayer({
+          pay: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(pay);
+              payments++;
+
+              return { answer: "paid" };
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  finalized++;
+                }),
+              ),
+            ),
+        });
+
+        const research = Subagent.make("research", {
+          target: child.definition,
+          policy: declaration.policy,
+        });
+
+        const registrations = [
+          { agent: source, definitions },
+          { agent: child, definitions: { ...definitions, tools: [{ name: "pay", version: "1" }] } },
+        ];
+
+        const options = {
+          filename: `${directory}/runtime.sqlite`,
+          deploymentId: "stop-v1",
+          producerId: "stop-node",
+          settlementPollInterval: 1,
+          abortPollInterval: 1,
+        };
+
+        const firstScope = yield* Scope.make();
+
+        yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void));
+
+        const first = yield* Layer.build(
+          NodeHost.NodeDurableHost.layerRegistered(registrations, {
+            ...options,
+            runtimeFailpoint: (location) =>
+              loseAck && location === "worker:after-stop-seal"
+                ? DurableRuntimeFailpointError.make({ location })
+                : Effect.void,
+          }).pipe(Layer.provide([authority, handlers])),
+        ).pipe(Scope.provide(firstScope));
+
+        const runtime = Context.get(first, DurableAgentRuntime);
+
+        yield* runtime.submitRegistered(
+          source,
+          { question: "buy coffee" },
+          { threadId: sourceThreadId, principal, idempotencyKey: key("source") },
+        );
+        const owner = yield* runtime.workerHost({ sourceThreadId, principal });
+
+        const start = yield* withFacet(
+          owner,
+          Subagent.start(research, { question: "coffee" }, { idempotencyKey: key("purchase") }),
+        );
+
+        const running = yield* runtime
+          .processThreadResolved(start.worker.threadId)
+          .pipe(Effect.forkChild);
+
+        yield* Deferred.await(entered);
+
+        const steering = yield* withFacet(
+          owner,
+          Subagent.followUp(
+            research,
+            start.worker,
+            { question: "latest email" },
+            { idempotencyKey: key("email") },
+          ),
+        );
+
+        const before = yield* withFacet(owner, Subagent.inspect(research, start.worker));
+
+        expect(before.acceptedInput?.messageId).toBe(steering.message.messageId);
+        expect(before.appliedInput?.messageId).toBe(start.delivery.message.messageId);
+        expect(before.run?.hostReceipt).toEqual(start.delivery.receipt);
+        expect(before.run?.outcome).toBeNull();
+        loseAck = true;
+        expect(
+          yield* withFacet(
+            owner,
+            Subagent.stop(research, start.worker, { idempotencyKey: key("stop") }),
+          ).pipe(Effect.flip),
+        ).toMatchObject({ reason: "storage" });
+        loseAck = false;
+        yield* TestClock.adjust(10);
+        yield* Fiber.join(running);
+
+        const stopped = yield* withFacet(
+          owner,
+          Subagent.stop(research, start.worker, { idempotencyKey: key("stop") }),
+        );
+
+        expect(stopped).toEqual({ worker: start.worker, idempotencyKey: key("stop") });
+        expect(finalized).toBe(1);
+        yield* Deferred.succeed(pay, undefined);
+        expect(payments).toBe(0);
+
+        const outstanding = yield* readOutstanding({
+          threadId: start.worker.threadId,
+          limit: 10,
+        }).pipe(Effect.provide(first));
+
+        expect(outstanding.operations).toHaveLength(1);
+        yield* Scope.close(firstScope, Exit.void);
+
+        const second = yield* Layer.build(
+          NodeHost.NodeDurableHost.layerRegistered(registrations, options).pipe(
+            Layer.provide([authority, handlers]),
+          ),
+        );
+
+        const reopened = Context.get(second, DurableAgentRuntime);
+        const nextOwner = yield* reopened.workerHost({ sourceThreadId, principal });
+
+        expect(
+          yield* withFacet(
+            nextOwner,
+            Subagent.stop(research, start.worker, { idempotencyKey: key("stop") }),
+          ),
+        ).toEqual(stopped);
+        yield* reopened.runRecovery({ threadId: start.worker.threadId });
+        yield* reopened.processThreadResolved(start.worker.threadId);
+        const after = yield* withFacet(nextOwner, Subagent.inspect(research, start.worker));
+
+        expect(after.state).toBe("stopped");
+        expect(after.run?.outcome).toBe("aborted");
+        expect(after.appliedInput?.messageId).toBe(start.delivery.message.messageId);
+        expect(
+          yield* withFacet(
+            nextOwner,
+            Subagent.followUp(
+              research,
+              start.worker,
+              { question: "automatic continuation" },
+              { idempotencyKey: key("continue") },
+            ),
+          ),
+        ).toMatchObject({ status: "refused", reason: "worker-stopped" });
+        expect(payments).toBe(0);
+        expect(
+          (yield* readOutstanding({ threadId: start.worker.threadId, limit: 10 }).pipe(
+            Effect.provide(second),
+          )).operations,
+        ).toHaveLength(1);
+
+        // The Main lane remains independently usable.
+        const main = yield* reopened.submitRegistered(
+          source,
+          { question: "hello" },
+          { threadId: sourceThreadId, principal, idempotencyKey: key("main-next") },
+        );
+
+        yield* reopened.processThreadResolved(sourceThreadId);
+        expect((yield* reopened.awaitSettlement(main)).outcome).toBe("completed");
+      }),
+    ).pipe(Effect.provide(NodeFileSystem.layer)),
+  15_000,
+);
+
+for (const stopPoint of [
+  "worker:before-stop-append",
+  "worker:after-stop-append",
+  "worker:before-stop-seal",
+  "worker:after-stop-seal",
+] as const)
+  it.effect(
+    `stops a retained start racing admission and replays after ${stopPoint} and restart`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+
+          const directory = yield* fs.makeTempDirectoryScoped({
+            prefix: "unadmitted-worker-stop-",
+          });
+
+          const retained = yield* Deferred.make<void>();
+          const admit = yield* Deferred.make<void>();
+          let hold = true;
+          let fault = true;
+          let calls = 0;
+
+          const child = agent(
+            "unadmitted-worker",
+            Effect.sync(() => {
+              calls++;
+            }),
+          );
+
+          const research = Subagent.make("research", {
+            target: child.definition,
+            policy: declaration.policy,
+          });
+
+          const registrations = [
+            { agent: source, definitions },
+            { agent: child, definitions },
+          ];
+
+          const options = {
+            filename: `${directory}/runtime.sqlite`,
+            deploymentId: "stop-v1",
+            producerId: "stop-node",
+            settlementPollInterval: 1,
+          };
+
+          const scope = yield* Scope.make();
+
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+
+          const first = yield* Layer.build(
+            NodeHost.NodeDurableHost.layerRegistered(registrations, {
+              ...options,
+              runtimeFailpoint: (location) =>
+                hold && location === "worker:before-source-append"
+                  ? Deferred.succeed(retained, undefined).pipe(
+                      Effect.andThen(Deferred.await(admit)),
+                    )
+                  : fault && location === stopPoint
+                    ? DurableRuntimeFailpointError.make({ location })
+                    : Effect.void,
+            }).pipe(Layer.provide(authority)),
+          ).pipe(Scope.provide(scope));
+
+          const runtime = Context.get(first, DurableAgentRuntime);
+
+          yield* runtime.submitRegistered(
+            source,
+            { question: "launch" },
+            { threadId: sourceThreadId, principal, idempotencyKey: key("source") },
+          );
+          const owner = yield* runtime.workerHost({ sourceThreadId, principal });
+
+          const launching = yield* withFacet(
+            owner,
+            Subagent.start(
+              research,
+              { question: "never execute" },
+              { idempotencyKey: key("pending") },
+            ),
+          ).pipe(Effect.forkChild);
+
+          yield* Deferred.await(retained);
+          const inventory = yield* withFacet(owner, Subagent.list(research, { limit: 1 }));
+
+          expect(inventory.items).toHaveLength(1);
+          const pending = inventory.items[0]!;
+
+          expect(pending.acceptedInput).toBeNull();
+          expect(pending.appliedInput).toBeNull();
+          expect(pending.pendingDelivery).toMatchObject({ status: "pending", receipt: null });
+
+          expect(
+            yield* withFacet(
+              owner,
+              Subagent.stop(research, pending.worker, { idempotencyKey: key("stop") }),
+            ).pipe(Effect.flip),
+          ).toMatchObject({ reason: "storage" });
+          fault = false;
+
+          const stopped = yield* withFacet(
+            owner,
+            Subagent.stop(research, pending.worker, { idempotencyKey: key("stop") }),
+          );
+
+          hold = false;
+          yield* Deferred.succeed(admit, undefined);
+          expect((yield* Fiber.join(launching)).delivery).toMatchObject({
+            status: "refused",
+            reason: "worker-stopped",
+          });
+
+          const other = yield* withFacet(
+            owner,
+            Subagent.start(
+              research,
+              { question: "other assignment" },
+              { idempotencyKey: key("other") },
+            ),
+          );
+
+          expect(
+            yield* withFacet(
+              owner,
+              Subagent.stop(research, other.worker, { idempotencyKey: key("stop") }),
+            ).pipe(Effect.flip),
+          ).toMatchObject({ reason: "idempotency-conflict" });
+          yield* Scope.close(scope, Exit.void);
+
+          const second = yield* Layer.build(
+            NodeHost.NodeDurableHost.layerRegistered(registrations, options).pipe(
+              Layer.provide(authority),
+            ),
+          );
+
+          const reopened = Context.get(second, DurableAgentRuntime);
+          const next = yield* reopened.workerHost({ sourceThreadId, principal });
+
+          expect(
+            yield* withFacet(
+              next,
+              Subagent.stop(research, pending.worker, { idempotencyKey: key("stop") }),
+            ),
+          ).toEqual(stopped);
+          expect(
+            (yield* withFacet(
+              next,
+              Subagent.start(
+                research,
+                { question: "never execute" },
+                { idempotencyKey: key("pending") },
+              ),
+            )).delivery.status,
+          ).toBe("refused");
+          yield* reopened.processThreadResolved(pending.worker.threadId);
+          expect(calls).toBe(0);
+        }),
+      ).pipe(Effect.provide(NodeFileSystem.layer)),
+    15_000,
+  );
+
+it.effect(
+  "exposes steering acceptance before canonical application to the same host Run",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-steering-" });
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let turns = 0;
+
+        const child = agent(
+          "steering-worker",
+          Effect.suspend(() =>
+            ++turns === 1
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Effect.void,
+          ),
+          "assignment-complete",
+        );
+
+        const research = Subagent.make("research", {
+          target: child.definition,
+          policy: Subagent.SubagentPolicy.make({
+            maxTurns: 3,
+            maxChildren: 4,
+            maxConcurrency: 2,
+            maxToolCalls: 1,
+            maxDuration: "1 second",
+          }),
+        });
+
+        const context = yield* Layer.build(
+          NodeHost.NodeDurableHost.layerRegistered(
+            [
+              { agent: source, definitions },
+              { agent: child, definitions },
+            ],
+            {
+              filename: `${directory}/runtime.sqlite`,
+              deploymentId: "steering-v1",
+              producerId: "steering-node",
+            },
+          ).pipe(Layer.provide(authority)),
+        );
+
+        const runtime = Context.get(context, DurableAgentRuntime);
+
+        yield* runtime.submitRegistered(
+          source,
+          { question: "launch" },
+          { threadId: sourceThreadId, principal, idempotencyKey: key("source") },
+        );
+        const owner = yield* runtime.workerHost({ sourceThreadId, principal });
+
+        const start = yield* withFacet(
+          owner,
+          Subagent.start(research, { question: "original" }, { idempotencyKey: key("first") }),
+        );
+
+        const running = yield* runtime
+          .processThreadResolved(start.worker.threadId)
+          .pipe(Effect.forkChild);
+
+        yield* Deferred.await(entered);
+
+        const update = yield* withFacet(
+          owner,
+          Subagent.followUp(
+            research,
+            start.worker,
+            { question: "corrected" },
+            { idempotencyKey: key("correction") },
+          ),
+        );
+
+        const before = yield* withFacet(owner, Subagent.inspect(research, start.worker));
+
+        expect(before.acceptedInput).toEqual({
+          receipt: update.receipt,
+          messageId: update.message.messageId,
+        });
+        expect(before.appliedInput?.messageId).toBe(start.delivery.message.messageId);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(running);
+        const after = yield* withFacet(owner, Subagent.inspect(research, start.worker));
+
+        expect(after.appliedInput).toMatchObject({
+          receipt: update.receipt,
+          messageId: update.message.messageId,
+          runId: before.run?.runId,
+        });
+        expect(after.watermark.canonicalSequence).toBeGreaterThan(
+          before.watermark.canonicalSequence,
+        );
+        expect(after.run).toMatchObject({
+          hostReceipt: start.delivery.receipt,
+          outcome: "completed",
+          disposition: "assignment-complete",
+        });
+        expect(after.state).toBe("idle");
+      }),
+    ).pipe(Effect.provide(NodeFileSystem.layer)),
+  15_000,
+);
+
+it.effect.each([false, true])(
+  "drains approval-held worker corrections before the next model request and fences newer input (late=%s)",
+  (late) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-approval-input-" });
+        const nextModel = yield* Deferred.make<void>();
+        const releaseModel = yield* Deferred.make<void>();
+        const prompts: Array<ReadonlyArray<string>> = [];
+        const consentCalls: Array<string> = [];
+        let dispatches = 0;
+        let latest: Effect.Effect<WorkerSummary> = Effect.die("Worker not started");
+        const corrections = ["clarification", "first email", "corrected email"];
+        const consentId = Schema.decodeSync(ToolCallId)("consent-1");
+
+        const toolkit = Toolkit.make(
+          Tool.make("consent", {
+            parameters: Schema.Struct({ purpose: Schema.String }),
+            success: Schema.String,
+            needsApproval: true,
+          }),
+          Tool.make("navigate", { parameters: Schema.Struct({}), success: Schema.String }),
+        );
+
+        const child = Agent.withModel(
+          Agent.make("approval-input-worker", {
+            input: target.definition.input,
+            inputPrompt: ({ question }) => Effect.succeed(question),
+            output: target.definition.output,
+            instructions: "Request consent, then navigate using the latest instructions.",
+            toolkit,
+            policy: { maxTurns: 5, maxToolCalls: 3, maxDuration: "1 minute", toolConcurrency: 1 },
+          }),
+          Model.make(
+            "scripted",
+            "approval-input",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: ({ prompt }) =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      const turn = prompts.length;
+
+                      prompts.push(
+                        prompt.content.flatMap((message) =>
+                          message.role === "user"
+                            ? message.content.flatMap((part) =>
+                                part.type === "text" ? [part.text] : [],
+                              )
+                            : [],
+                        ),
+                      );
+                      if (turn === 1) {
+                        yield* Deferred.succeed(nextModel, undefined);
+                        yield* Deferred.await(releaseModel);
+                      }
+
+                      return Stream.fromIterable<Response.StreamPartEncoded>(
+                        turn < 2
+                          ? [
+                              {
+                                type: "tool-call",
+                                id: turn === 0 ? consentId : "navigate-1",
+                                name: turn === 0 ? "consent" : "navigate",
+                                params: turn === 0 ? { purpose: "original request" } : {},
+                                providerExecuted: false,
+                              },
+                              {
+                                type: "finish",
+                                reason: "tool-calls",
+                                usage: { inputTokens: {}, outputTokens: {} },
+                              },
+                            ]
+                          : parts,
+                      );
+                    }),
+                  ),
+              }),
+            ),
+          ),
+        );
+
+        const handlers = toolkit.toLayer({
+          consent: ({ purpose }) =>
+            Effect.sync(() => {
+              consentCalls.push(purpose);
+
+              return "approved";
+            }),
+          navigate: () =>
+            Effect.sync(() => {
+              dispatches++;
+
+              return "navigated";
+            }),
+        });
+
+        const research = Subagent.make("research", {
+          target: child.definition,
+          policy: Subagent.SubagentPolicy.make({
+            maxChildren: 5,
+            maxConcurrency: 2,
+            maxTurns: 3,
+            maxToolCalls: 3,
+            maxDuration: "10 seconds",
+          }),
+        });
+
+        const context = yield* Layer.build(
+          NodeHost.NodeDurableHost.layerRegistered(
+            [
+              { agent: source, definitions },
+              { agent: child, definitions },
+            ],
+            {
+              filename: `${directory}/runtime.sqlite`,
+              deploymentId: "approval-input-v1",
+              producerId: "approval-input-node",
+              toolAuthorization: Layer.succeed(RunToolAuthorization, {
+                authorize: ({ call }) =>
+                  Effect.gen(function* () {
+                    if (call.toolName === "consent") return { _tag: "allowed" as const };
+                    const snapshot = yield* latest;
+
+                    return snapshot.acceptedInput?.messageId === snapshot.appliedInput?.messageId
+                      ? { _tag: "allowed" as const }
+                      : { _tag: "denied" as const, reason: "Newer worker input is pending" };
+                  }),
+              }),
+            },
+          ).pipe(Layer.provide([authority, handlers])),
+        );
+
+        const runtime = Context.get(context, DurableAgentRuntime);
+        const history = Context.get(context, ThreadStore);
+
+        yield* runtime.submitRegistered(
+          source,
+          { question: "launch" },
+          { threadId: sourceThreadId, principal, idempotencyKey: key("source") },
+        );
+        yield* runtime.processThreadResolved(sourceThreadId);
+        const owner = yield* runtime.workerHost({ sourceThreadId, principal });
+
+        const start = yield* withFacet(
+          owner,
+          Subagent.start(research, { question: "original" }, { idempotencyKey: key("first") }),
+        );
+
+        latest = withFacet(owner, Subagent.inspect(research, start.worker)).pipe(Effect.orDie);
+        const receipt = start.delivery.receipt;
+
+        if (receipt === null) return yield* Effect.die("Expected an admitted worker");
+        yield* runtime.processThreadResolved(start.worker.threadId);
+        expect(prompts).toEqual([["original"]]);
+        expect(consentCalls).toEqual([]);
+
+        const followUp = (question: string) =>
+          withFacet(
+            owner,
+            Subagent.followUp(
+              research,
+              start.worker,
+              { question },
+              { idempotencyKey: key(question) },
+            ),
+          );
+
+        const updates = yield* Effect.forEach(corrections, followUp);
+        const held = yield* latest;
+
+        expect(updates.every((update) => update.receipt !== null)).toBe(true);
+        expect(held.acceptedInput?.messageId).toBe(updates[2]?.message.messageId);
+        expect(held.appliedInput?.messageId).toBe(start.delivery.message.messageId);
+        yield* runtime.resolveApproval(
+          ApprovalDecisionCommand.make({
+            submissionId: receipt.submissionId,
+            toolCallId: consentId,
+            decision: "approved",
+            resolver: "operator",
+            reason: "Approve the original consent request",
+          }),
+        );
+
+        const resumed = yield* runtime
+          .processThreadResolved(start.worker.threadId)
+          .pipe(Effect.forkChild);
+
+        yield* Deferred.await(nextModel);
+        expect(prompts).toEqual([["original"], ["original", ...corrections]]);
+        expect(consentCalls).toEqual(["original request"]);
+        const drained = yield* latest;
+
+        expect(drained.appliedInput?.messageId).toBe(updates[2]?.message.messageId);
+        expect(drained.run?.runId).toBe(held.run?.runId);
+        if (late) {
+          const newer = yield* followUp("arrived after drain");
+          const pending = yield* latest;
+
+          expect(pending.acceptedInput?.messageId).toBe(newer.message.messageId);
+          expect(pending.appliedInput).toEqual(drained.appliedInput);
+        }
+        yield* Deferred.succeed(releaseModel, undefined);
+        yield* Fiber.join(resumed);
+        expect(dispatches).toBe(late ? 0 : 1);
+        expect(consentCalls).toEqual(["original request"]);
+
+        const log = yield* history.export(
+          ThreadExportRequest.make({ threadId: start.worker.threadId }),
+        );
+
+        const payloads = log.records.map(({ record }) => record.payload);
+        const inputs = payloads.filter((payload) => payload._tag === "UserInputRecorded");
+
+        expect(inputs).toHaveLength(late ? 5 : 4);
+        expect(inputs.slice(0, 4).map((input) => input.submissionId)).toEqual([
+          receipt.submissionId,
+          ...updates.map((update) => update.receipt?.submissionId),
+        ]);
+        expect(inputs.slice(0, 4).every((input) => input.runId === held.run?.runId)).toBe(true);
+        expect(payloads.filter((payload) => payload._tag === "ToolApprovalRequested")).toHaveLength(
+          1,
+        );
+        expect(payloads.filter((payload) => payload._tag === "ToolApprovalDecided")).toMatchObject([
+          { toolCallId: consentId, decision: "approved" },
+        ]);
+        expect(
+          payloads.findIndex((payload) => payload._tag === "ToolApprovalDecided"),
+        ).toBeLessThan(
+          payloads.findIndex(
+            (payload) =>
+              payload._tag === "UserInputRecorded" &&
+              payload.submissionId === updates[0]?.receipt?.submissionId,
+          ),
+        );
+        expect(
+          payloads.filter(
+            (payload) => payload._tag === "ToolCallPrepared" && payload.toolCallId === consentId,
+          ),
+        ).toHaveLength(1);
+        expect(payloads.filter((payload) => payload._tag === "RunStarted")).toHaveLength(
+          late ? 2 : 1,
+        );
+
+        const sourceLog = yield* history.export(
+          ThreadExportRequest.make({ threadId: sourceThreadId }),
+        );
+
+        expect(
+          sourceLog.records.flatMap(({ record }) =>
+            record.payload._tag === "UserInputRecorded" ? [record.payload.input] : [],
+          ),
+        ).toEqual([{ question: "launch" }]);
+      }),
+    ).pipe(Effect.provide(NodeFileSystem.layer)),
+  15_000,
+);
+
+it.effect.each(["same", "changed", "revoked"] as const)(
+  "retains the first public start capture when preparation races (%s)",
+  (replay) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-capture-race-" });
+        const preparing = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let preparations = 0;
+        let denied = false;
+
+        const currentAuthority = Layer.succeed(WorkerHostAuthorizer)({
+          authorize: (request) =>
+            !denied && request.principal === principal && request.sourceThreadId === sourceThreadId
+              ? Effect.succeed(principal)
+              : WorkerError.make({ operation: request.operation, reason: "denied" }),
+        });
+
+        const research = Subagent.make("research", {
+          target: target.definition,
+          policy: declaration.policy,
+          prepareInput: ({ question }) =>
+            Effect.gen(function* () {
+              const capture = ++preparations;
+
+              if (capture === 1) {
+                yield* Deferred.succeed(preparing, undefined);
+                yield* Deferred.await(release);
+              }
+
+              return { question: `${question}:${capture}` };
+            }),
+        });
+
+        const context = yield* Layer.build(
+          NodeHost.NodeDurableHost.layerRegistered(
+            [
+              { agent: source, definitions },
+              { agent: target, definitions },
+            ],
+            {
+              filename: `${directory}/runtime.sqlite`,
+              deploymentId: "capture-v1",
+              producerId: "capture-node",
+            },
+          ).pipe(Layer.provide(currentAuthority)),
+        );
+
+        const runtime = Context.get(context, DurableAgentRuntime);
+
+        yield* runtime.submitRegistered(
+          source,
+          { question: "launch" },
+          {
+            threadId: sourceThreadId,
+            principal,
+            idempotencyKey: key("source"),
+          },
+        );
+        const owner = yield* runtime.workerHost({ sourceThreadId, principal });
+
+        const start = (question: string) =>
+          withFacet(
+            owner,
+            Subagent.start(research, { question }, { idempotencyKey: key("same-command") }),
+          );
+
+        const first = yield* start(replay === "changed" ? "different brief" : "brief").pipe(
+          Effect.result,
+          Effect.forkChild,
+        );
+
+        yield* Deferred.await(preparing);
+        const winner = yield* start("brief");
+
+        denied = replay === "revoked";
+        yield* Deferred.succeed(release, undefined);
+        const loser = yield* Fiber.join(first);
+
+        expect(loser).toMatchObject(
+          replay !== "same"
+            ? {
+                _tag: "Failure",
+                failure: { reason: replay === "revoked" ? "denied" : "idempotency-conflict" },
+              }
+            : { _tag: "Success", success: winner },
+        );
+        denied = false;
+        expect(yield* start("brief")).toEqual(winner);
+        expect(preparations).toBe(2);
+
+        const retained = yield* Context.get(context, MessageDeliveryStore).list({
+          ownerThreadId: sourceThreadId,
+          limit: 10,
+        });
+
+        expect(retained.items).toHaveLength(1);
+        expect(retained.items[0]?.envelope.input).toEqual({ question: "brief:2" });
+        expect(retained.items[0]?.envelope.workerAdmission?.parameters).toEqual({
+          question: "brief",
+        });
       }),
     ).pipe(Effect.provide(NodeFileSystem.layer)),
   15_000,

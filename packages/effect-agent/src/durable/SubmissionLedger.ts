@@ -241,6 +241,15 @@ export class SubmissionSnapshot extends Schema.Class<SubmissionSnapshot>(
   messageAdmission: Schema.optionalKey(InputMessage),
 }) {}
 
+/** Bounded native control facts. Canonical input/Run records remain ThreadStore-owned. */
+export const WorkerLedgerState = Schema.Struct({
+  latest: Schema.NullOr(SubmissionSnapshot),
+  active: Schema.NullOr(SubmissionSnapshot),
+  stopped: Schema.Boolean,
+});
+
+export type WorkerLedgerState = typeof WorkerLedgerState.Type;
+
 /** The authoritative store proves the scoped idempotency key was never admitted (SUB-031). */
 export class AdmissionNotAdmitted extends Schema.TaggedClass<AdmissionNotAdmitted>(
   "@effect-agent/thread/AdmissionNotAdmitted",
@@ -417,6 +426,14 @@ export const settlementFailureFromRecord = (
     ? payload.result
     : undefined;
 };
+
+/** Destination-owned permanent inbox seal; recorded atomically with all outstanding abort intents. */
+export const WorkerStopCommand = Schema.Struct({
+  threadId: ThreadId,
+  author: Principal,
+});
+
+export type WorkerStopCommand = typeof WorkerStopCommand.Type;
 
 /**
  * A durable abort command (durability §13). Field bounds are exactly those of the canonical
@@ -1100,6 +1117,9 @@ export class SubmissionLedger extends Context.Service<
     readonly finalizeSettlement: (
       request: SettlementFinalization,
     ) => Effect.Effect<Settlement, SettlementConflict | LedgerError>;
+    /** Optional for third-party adapters. Remaining ownership must reach zero before stop acknowledgement. */
+    readonly inspectWorker?: (threadId: ThreadId) => Effect.Effect<WorkerLedgerState, LedgerError>;
+    readonly stopWorker?: (request: WorkerStopCommand) => Effect.Effect<number, LedgerError>;
     readonly requestAbort: (
       request: AbortCommand,
     ) => Effect.Effect<AbortIntent, SettlementConflict | JoinedToHost | LedgerError>;

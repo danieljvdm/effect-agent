@@ -22,6 +22,8 @@ import {
   WorkerPage,
   WorkerRef,
   WorkerStarted,
+  WorkerStop,
+  WorkerStopped,
   WorkerSummary,
 } from "../../core/Worker.ts";
 import {
@@ -221,10 +223,6 @@ const operations = <
     parameters: Parameters["Type"],
     caller: WorkerContext,
   ) {
-    const encodedParameters = yield* Schema.encodeEffect(declaration.parameters)(parameters).pipe(
-      Effect.mapError((cause) => projectionFailure("input", cause)),
-    );
-
     const source = caller.source;
 
     const preparation: SubagentPrepareContext =
@@ -247,7 +245,7 @@ const operations = <
       Effect.mapError((cause) => projectionFailure("input", cause)),
     );
 
-    return { encodedParameters, encodedInput };
+    return encodedInput;
   });
 
   const validateKey = (key: IdempotencyKey, operation: "start" | "followUp") =>
@@ -284,23 +282,8 @@ const operations = <
       });
     }
 
-    const prepared = yield* prepare(parameters, caller);
-
-    const effectiveTarget = yield* service.resolveTargetPolicy({
-      target: declaration.target,
-      encodedInput: prepared.encodedInput,
-    });
-
-    const resolvedTarget = Option.getOrUndefined(effectiveTarget);
-
-    const resolved = resolveSubagentPolicy(
-      declaration,
-      options.budgetScope === "worker-run"
-        ? (resolvedTarget ?? declaration.target.policy)
-        : caller.policy,
-      undefined,
-      options.budgetScope === "worker-run" ? "root-attached" : "conserved",
-      resolvedTarget,
+    const encodedParameters = yield* Schema.encodeEffect(declaration.parameters)(parameters).pipe(
+      Effect.mapError((cause) => projectionFailure("input", cause)),
     );
 
     const encodedGrant = yield* Schema.encodeEffect(SubagentGrant)(grant).pipe(
@@ -308,26 +291,50 @@ const operations = <
     );
 
     const started = yield* service.start({
-      ...prepared,
       delegationId: declaration.delegationId,
       target: declaration.target,
       idempotencyKey: key,
-      ...(options.budgetScope === undefined ? {} : { budgetScope: options.budgetScope }),
+      encodedParameters,
       encodedGrant,
-      policy: resolved.childPolicy,
-      budget: SubagentBudgetReservation.make({
-        caps: resolved.caps,
-        allocation: resolved.allocation,
-        ...(resolved.policy.descendantInvocations === undefined
-          ? {}
-          : { descendantInvocations: resolved.policy.descendantInvocations }),
+      ...(options.budgetScope === undefined ? {} : { budgetScope: options.budgetScope }),
+      prepare: Effect.gen(function* () {
+        const encodedInput = yield* prepare(parameters, caller);
+
+        const effectiveTarget = yield* service.resolveTargetPolicy({
+          target: declaration.target,
+          encodedInput,
+        });
+
+        const resolvedTarget = Option.getOrUndefined(effectiveTarget);
+
+        const resolved = resolveSubagentPolicy(
+          declaration,
+          options.budgetScope === "worker-run"
+            ? (resolvedTarget ?? declaration.target.policy)
+            : caller.policy,
+          undefined,
+          options.budgetScope === "worker-run" ? "root-attached" : "conserved",
+          resolvedTarget,
+        );
+
+        return {
+          encodedInput,
+          policy: resolved.childPolicy,
+          budget: SubagentBudgetReservation.make({
+            caps: resolved.caps,
+            allocation: resolved.allocation,
+            ...(resolved.policy.descendantInvocations === undefined
+              ? {}
+              : { descendantInvocations: resolved.policy.descendantInvocations }),
+          }),
+          toolCallAllowance: resolveToolCallAllowance(
+            declaration.toolCallAllowance,
+            parameters,
+            resolved.policy,
+            resolved.childPolicy,
+          ),
+        };
       }),
-      toolCallAllowance: resolveToolCallAllowance(
-        declaration.toolCallAllowance,
-        parameters,
-        resolved.policy,
-        resolved.childPolicy,
-      ),
     });
 
     const validated = yield* Schema.decodeEffect(WorkerStarted)(started).pipe(
@@ -354,12 +361,18 @@ const operations = <
     const validated = yield* validateWorker(worker, "followUp");
     const caller = yield* context;
     const key = yield* validateKey(options.idempotencyKey, "followUp");
-    const prepared = yield* prepare(parameters, caller);
+
+    const encodedParameters = yield* Schema.encodeEffect(declaration.parameters)(parameters).pipe(
+      Effect.mapError((cause) => projectionFailure("input", cause)),
+    );
+
+    const encodedInput = yield* prepare(parameters, caller);
 
     const delivery = yield* validateDelivery(
       validated,
       yield* service.followUp({
-        ...prepared,
+        encodedParameters,
+        encodedInput,
         worker: validated,
         target: declaration.target,
         idempotencyKey: key,
@@ -738,6 +751,35 @@ export const observe = <const Name extends string>(
     }),
   );
 
+/** Seal a continuing worker, retaining a stable command identity across retries and Runs. */
+export const stop = <const Name extends string>(
+  declaration: WorkerDeclaration<Name> & { readonly target: AnyDefinition },
+  worker: Worker<Name>,
+  options: { readonly idempotencyKey: IdempotencyKey },
+) =>
+  Effect.gen(function* () {
+    const service = yield* host;
+
+    const command = yield* Schema.decodeEffect(WorkerStop)({ worker, ...options }).pipe(
+      Effect.mapError((cause) => WorkerError.make({ operation: "stop", reason: "corrupt", cause })),
+    );
+
+    if (
+      worker.delegationId !== declaration.delegationId ||
+      worker.targetAgentId !== declaration.target.id
+    )
+      return yield* WorkerError.make({ operation: "stop", reason: "worker-mismatch" });
+
+    return yield* service.stop({ ...command, target: declaration.target }).pipe(
+      Effect.flatMap(Schema.decodeEffect(WorkerStopped)),
+      Effect.mapError((cause) =>
+        Schema.is(WorkerError)(cause)
+          ? cause
+          : WorkerError.make({ operation: "stop", reason: "corrupt", cause }),
+      ),
+    );
+  });
+
 /** Wait for the exact Receipt. Interrupting this Effect never cancels accepted work. */
 export const awaitWorker = <
   const Name extends string,
@@ -832,9 +874,8 @@ const WorkerParameters = <Name extends string>(declaration: WorkerDeclaration<Na
 
 const Summary = <Name extends string>(declaration: WorkerDeclaration<Name>) =>
   Schema.Struct({
+    ...WorkerSummary.fields,
     worker: Worker(declaration),
-    latestReceipt: Schema.NullOr(Receipt),
-    state: Schema.Literals(["starting", "active", "idle"]),
   });
 
 const FollowUpParameters = <Name extends string, Parameters extends Schema.Top>(
