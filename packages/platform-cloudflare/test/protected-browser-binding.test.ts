@@ -9,9 +9,17 @@ import {
   BrowserRunProtectedBinding,
   browserRunProtectedBindingLayer,
 } from "../src/protected-browser/binding.ts";
+import { browserResponse } from "./browser-response.ts";
 
 const provider = vi.hoisted(() => {
-  const counters = { acquired: 0, contexts: 0, pages: 0, disconnected: 0, intercepted: 0 };
+  const counters = {
+    acquired: 0,
+    connected: 0,
+    contexts: 0,
+    pages: 0,
+    disconnected: 0,
+    intercepted: 0,
+  };
 
   const page = {
     createCDPSession: async () => ({
@@ -52,12 +60,17 @@ const provider = vi.hoisted(() => {
     off: () => {},
   };
 
-  return { counters, browser };
+  return { counters, browser, connectFailure: false };
 });
 
-vi.mock("@cloudflare/puppeteer", () => ({
+vi.mock("puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js", () => ({
   default: {
-    connect: async () => provider.browser,
+    connect: async () => {
+      provider.counters.connected++;
+      if (provider.connectFailure) throw new Error("private-provider-connect-failure");
+
+      return provider.browser;
+    },
     acquire: async () => {
       provider.counters.acquired++;
 
@@ -86,7 +99,9 @@ it.effect(
     const before = { ...provider.counters };
 
     const layer = browserRunProtectedBindingLayer({
-      browser: { fetch: async () => new Response(null, { status: 503 }) },
+      browser: {
+        fetch: async (_input, init) => browserResponse(init, Redacted.value(identity.sessionId)),
+      },
     }).pipe(
       Layer.provide(BrowserCrypto.layer),
       Layer.provide(
@@ -120,13 +135,15 @@ it.effect(
 );
 
 it.effect(
-  "terminates the exact saved session when its page is missing instead of creating a replacement",
+  "does not terminate or replace the host-owned session when its saved page cannot be attached",
   () => {
     const closed: Array<string> = [];
     const before = { ...provider.counters };
 
     const layer = browserRunProtectedBindingLayer({
-      browser: { fetch: async () => new Response(null, { status: 503 }) },
+      browser: {
+        fetch: async (_input, init) => browserResponse(init, Redacted.value(identity.sessionId)),
+      },
     }).pipe(
       Layer.provide(BrowserCrypto.layer),
       Layer.provide(
@@ -144,11 +161,68 @@ it.effect(
         .open(policy, { ...identity, targetId: Redacted.make("missing-page") })
         .pipe(Effect.scoped, Effect.flip);
 
-      expect(error.cleanup).toBe("confirmed");
-      expect(closed).toEqual([Redacted.value(identity.sessionId)]);
+      expect(error).toMatchObject({
+        reason: "provider",
+        dispatch: "not-dispatched",
+        cleanup: "not-requested",
+      });
+      expect(closed).toEqual([]);
       expect(provider.counters.acquired).toBe(before.acquired);
       expect(provider.counters.contexts).toBe(before.contexts);
       expect(provider.counters.pages).toBe(before.pages);
     }).pipe(Effect.provide(layer));
   },
+);
+
+it.effect.each(["new", "resume"] as const)(
+  "cleans only a newly allocated provider after a failed connection (%s)",
+  (mode) =>
+    Effect.gen(function* () {
+      const closed: string[] = [];
+      let allocations = 0;
+      const before = provider.counters.connected;
+
+      provider.connectFailure = true;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          provider.connectFailure = false;
+        }),
+      );
+
+      const layer = browserRunProtectedBindingLayer({
+        browser: {
+          fetch: async (_input, init) => {
+            if (init?.method === "POST") allocations++;
+
+            return browserResponse(init, Redacted.value(identity.sessionId));
+          },
+        },
+      }).pipe(
+        Layer.provide(BrowserCrypto.layer),
+        Layer.provide(
+          Layer.succeed(BrowserRunSessionLifecycle, {
+            close: (id) =>
+              Effect.sync(() => {
+                closed.push(Redacted.value(id));
+              }),
+          }),
+        ),
+      );
+
+      const error = yield* Effect.gen(function* () {
+        return yield* (yield* BrowserRunProtectedBinding)
+          .open(policy, mode === "resume" ? identity : undefined)
+          .pipe(Effect.flip);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+
+      expect(error).toMatchObject({
+        reason: "provider",
+        dispatch: "not-dispatched",
+        milestone: "none",
+        cleanup: mode === "new" ? "confirmed" : "not-requested",
+      });
+      expect(closed).toEqual(mode === "new" ? [Redacted.value(identity.sessionId)] : []);
+      expect(allocations).toBe(mode === "new" ? 1 : 0);
+      expect(provider.counters.connected - before).toBe(1);
+    }).pipe(Effect.scoped),
 );

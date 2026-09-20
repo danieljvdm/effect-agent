@@ -1,5 +1,5 @@
 /// <reference types="@cloudflare/workers-types" />
-import type { Browser, Frame, JSHandle, Page } from "@cloudflare/puppeteer";
+
 import { Cause, Clock, Context, Crypto, Effect, Redacted, Schema, type Scope } from "effect";
 import { type InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import {
@@ -7,6 +7,12 @@ import {
   CredentialTarget,
   ProtectedBrowserControl,
 } from "effect-agent/protected-browser";
+import type {
+  Browser,
+  Frame,
+  JSHandle,
+  Page,
+} from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 import {
   browserFailure,
@@ -21,14 +27,6 @@ import {
   ProtectedPageContext,
   type ProtectedBrowserTransport,
 } from "./policy.ts";
-
-// The pinned SDK implements this method but strips its internal declaration from lib/types.d.ts.
-// Keep the declaration narrow and refuse runtimes without it. No main-world fallback is safe.
-declare module "@cloudflare/puppeteer" {
-  interface Frame {
-    isolatedRealm(): { evaluateHandle(source: string): Promise<JSHandle<unknown>> };
-  }
-}
 
 const Description = Schema.Struct({
   role: ProtectedBrowserControl.fields.role,

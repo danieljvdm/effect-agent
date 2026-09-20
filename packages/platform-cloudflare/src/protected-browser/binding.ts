@@ -1,8 +1,13 @@
 /// <reference types="@cloudflare/workers-types" />
-import { type Browser, type Page, type CDPSession } from "@cloudflare/puppeteer";
+
 import { Cause, Context, Crypto, Effect, Layer, Redacted, Schema, type Scope } from "effect";
 import { type InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { ProtectedBrowserError } from "effect-agent/protected-browser";
+import {
+  type Browser,
+  type Page,
+  type CDPSession,
+} from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 import { BrowserRunBinding } from "../internal/browser-binding.ts";
 import {
@@ -89,23 +94,29 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
           driver?.invalidate();
           if (sessionId === undefined) return "unconfirmed" as const;
 
-          const cleanup = yield* lifecycle.close(sessionId).pipe(
-            Effect.as("confirmed" as const),
-            Effect.catchCause((cause) =>
-              reportBrowserCause("protected.close", cause).pipe(Effect.as("unconfirmed" as const)),
-            ),
-            Effect.interruptible,
-            Effect.timeoutOrElse({
-              duration: "10 seconds",
-              orElse: () =>
-                reportBrowserCause(
-                  "protected.close",
-                  Cause.fail(
-                    new BrowserRunFailure({ operation: "protected.close", reason: "timeout" }),
+          // A failed resume has not acquired the host's retained provider. Release only
+          // this connection; successful attachments and new allocations own termination.
+          const cleanup = yield* identity !== undefined && driver === undefined
+            ? Effect.succeed("unconfirmed" as const)
+            : lifecycle.close(sessionId).pipe(
+                Effect.as("confirmed" as const),
+                Effect.catchCause((cause) =>
+                  reportBrowserCause("protected.close", cause).pipe(
+                    Effect.as("unconfirmed" as const),
                   ),
-                ).pipe(Effect.as("unconfirmed" as const)),
-            }),
-          );
+                ),
+                Effect.interruptible,
+                Effect.timeoutOrElse({
+                  duration: "10 seconds",
+                  orElse: () =>
+                    reportBrowserCause(
+                      "protected.close",
+                      Cause.fail(
+                        new BrowserRunFailure({ operation: "protected.close", reason: "timeout" }),
+                      ),
+                    ).pipe(Effect.as("unconfirmed" as const)),
+                }),
+              );
 
           // Local disconnect is not remote-closure evidence. Do it even when confirmation fails.
           const connected = browser;
@@ -155,7 +166,7 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
               }
               // Resume only a host-persisted exact page. Never open a replacement page or context.
               stage = "protected.connect";
-              browser = await binding.connect(Redacted.value(sessionId), stage);
+              browser = await binding.connect(Redacted.value(sessionId), stage, signal);
               if (signal.aborted || invalid) {
                 await runCleanup(terminate);
                 throw new ProtectedTransportError({ reason: "stale-reference" });
@@ -262,7 +273,8 @@ const protectedBindingLayer = (options: { readonly browser: Pick<BrowserRun, "fe
                     new ProtectedBrowserError({
                       ...failure(),
                       reason: error.reason === "timeout" ? "timeout" : "provider",
-                      cleanup,
+                      cleanup:
+                        identity !== undefined && driver === undefined ? "not-requested" : cleanup,
                     }),
                   ),
                 ),
