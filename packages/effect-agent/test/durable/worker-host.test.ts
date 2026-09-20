@@ -1766,14 +1766,17 @@ layer(NodeCrypto.layer)((it) => {
         }),
     );
 
-  for (const outcome of [
-    "prepared",
-    "preparation-failed",
-    "caller-denied",
-    "policy-denied",
+  // Equal-input regression: https://github.com/danieljvdm/effect-agent/commit/3ab9045fc293d09a22801c7d881c4d89e562461a
+  for (const [preparation, denied] of [
+    ["changed", undefined],
+    ["failed", undefined],
+    ["failed", "caller"],
+    ["failed", "policy"],
+    ["equal", "caller"],
+    ["equal", "policy"],
   ] as const)
     it.effect(
-      `public follow-up reconciles concurrent retention with current authority (${outcome})`,
+      `public follow-up reconciles concurrent retention with current authority (${preparation}, denied=${denied ?? "none"})`,
       () =>
         Effect.gen(function* () {
           class PreparationFailed extends Schema.TaggedError<PreparationFailed>()(
@@ -1813,9 +1816,12 @@ layer(NodeCrypto.layer)((it) => {
                 Effect.gen(function* () {
                   yield* Deferred.succeed(preparing, undefined);
                   yield* Deferred.await(resume);
-                  if (outcome !== "prepared") return yield* new PreparationFailed();
+                  if (preparation === "failed") return yield* new PreparationFailed();
 
-                  return { text: "later correction capture" };
+                  return {
+                    text:
+                      preparation === "equal" ? "original correction" : "later correction capture",
+                  };
                 }),
             },
             worker,
@@ -1836,12 +1842,12 @@ layer(NodeCrypto.layer)((it) => {
 
           const envelope = structuredClone(h.deliveries.get(winner.message.messageId)!.envelope);
 
-          if (outcome === "caller-denied") h.deny("send");
-          if (outcome === "policy-denied") denyPolicy = true;
+          if (denied === "caller") h.deny("send");
+          if (denied === "policy") denyPolicy = true;
           yield* Deferred.succeed(resume, undefined);
           const result = yield* Fiber.join(loser);
 
-          if (outcome === "caller-denied" || outcome === "policy-denied")
+          if (denied !== undefined)
             expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "denied" } });
           else expect(result).toMatchObject({ _tag: "Success", success: winner });
           expect(h.deliveries.get(winner.message.messageId)!.envelope).toEqual(envelope);

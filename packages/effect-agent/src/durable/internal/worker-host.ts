@@ -2424,12 +2424,20 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
             request.encodedInput,
           ).pipe(Effect.mapError((cause) => failure("followUp", "corrupt", cause)));
 
+          let sendPrincipal = principal;
+
+          if ("prepare" in command) {
+            // Preparation can yield while authority changes, even when another writer saves equal input.
+            sendPrincipal = yield* authorize("followUp", "send", command.worker);
+            yield* currentPolicy;
+          }
+
           return yield* send(
             origin,
             messageId,
             request.encodedInput,
             request.encodedParameters,
-            principal,
+            sendPrincipal,
             "followUp",
           );
         }).pipe(
