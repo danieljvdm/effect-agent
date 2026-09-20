@@ -446,7 +446,14 @@ describe("DC alarm semantics", () => {
 
     await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
     await submitTo(plannerDefinition, thread, `${thread}-follower`);
-    await drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread)) === null);
+    // Regression: https://github.com/danieljvdm/effect-agent/pull/570
+    // Delivery clears the alarm before its pass finishes. Await acknowledgement too.
+    await drainAlarmsUntil(thread, async () => {
+      if ((await scheduledAlarm(thread)) !== null) return false;
+      const generation = await maintenanceGeneration(thread);
+
+      return generation.dirty === generation.processed;
+    });
 
     const suspendedFingerprint = await canonicalFingerprint(thread);
 
