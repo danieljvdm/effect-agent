@@ -12,7 +12,11 @@ import {
   Semaphore,
   Scope,
 } from "effect";
-import type { Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
+import type {
+  Frame,
+  JSHandle,
+  Page,
+} from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 import {
   CredentialFillError,
@@ -96,6 +100,16 @@ export class BrowserSessionError extends Schema.TaggedError<BrowserSessionError>
  * fences old attempts, authorizes human access, and calls BrowserSessions.close on expiry/stop.
  * Native callbacks are trusted host code: never retain SDK handles or start unawaited work.
  */
+/**
+ * Trusted host callback creating an isolated-realm predicate, scoped to one credential fill.
+ * The predicate runs synchronously beside each native write, receiving its actual field and index.
+ * Return false to reject a stale observation. Never construct this program from model/page text.
+ * The session disposes the returned handle, including on failure or interruption.
+ */
+export type CredentialTargetGuard = (
+  frame: Frame,
+) => Promise<JSHandle<(field: unknown, index: number) => boolean>>;
+
 export interface BrowserSession {
   readonly reference: BrowserSessionReference;
   /**
@@ -113,6 +127,7 @@ export interface BrowserSession {
    */
   readonly fillCredential: (
     request: FillCredentialRequest,
+    guard?: CredentialTargetGuard,
   ) => Effect.Effect<
     CredentialFillResult,
     CredentialFillError | BrowserSessionError,
@@ -454,9 +469,9 @@ export class BrowserSessions extends Context.Service<
         const session: BrowserSession = {
           reference,
           run,
-          fillCredential: (request) =>
+          fillCredential: (request, guard) =>
             runEffect((commandTimeoutMillis) =>
-              fillCredential(request).pipe(
+              fillCredential(request, guard).pipe(
                 Effect.provideService(BrowserSessionPage, {
                   page: currentPage,
                   commandTimeoutMillis,

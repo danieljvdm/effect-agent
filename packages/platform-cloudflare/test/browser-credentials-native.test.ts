@@ -448,3 +448,73 @@ it.live(
     }).pipe(Effect.provide(Layer.effect(BrowserSessionPage, fixture(test)))),
   { timeout: 30_000 },
 );
+
+it.live(
+  "checks the trusted isolated predicate at each credential write and releases its handle",
+  (test) =>
+    Effect.gen(function* () {
+      const context = yield* fixture(test);
+
+      if (!context) return;
+      let disposed = 0;
+
+      const result = yield* fillCredential(loginRequest, async (frame) => {
+        const handle = await frame.isolatedRealm().evaluateHandle(() => {
+          const original = Reflect.get(globalThis, "document").getElementById("username");
+
+          return (field: unknown, index: number) => index === 0 && field === original;
+        });
+
+        const release = handle.dispose.bind(handle);
+
+        handle.dispose = async () => {
+          disposed++;
+          await release();
+        };
+
+        return handle;
+      }).pipe(
+        Effect.provideService(BrowserSessionPage, context),
+        Effect.provideService(BrowserCredentialAccess, access()),
+        Effect.flip,
+      );
+
+      expect(result.reason).toBe("stale-target");
+      expect(result.dispatch).toBe("dispatched");
+      expect(result.filled).toBe(1);
+      expect(disposed).toBe(1);
+      expect((yield* read(context.page)).values).toEqual(["dummy@example.test", ""]);
+    }).pipe(Effect.scoped),
+);
+
+it.live("releases a credential guard when authority resolution is interrupted", (test) =>
+  Effect.gen(function* () {
+    const context = yield* fixture(test);
+
+    if (!context) return;
+    let disposed = 0;
+
+    const result = yield* fillCredential(loginRequest, async (frame) => {
+      const handle = await frame
+        .isolatedRealm()
+        .evaluateHandle(() => (_field: unknown, _index: number) => true);
+
+      const release = handle.dispose.bind(handle);
+
+      handle.dispose = async () => {
+        disposed++;
+        await release();
+      };
+
+      return handle;
+    }).pipe(
+      Effect.provideService(BrowserSessionPage, context),
+      Effect.provideService(BrowserCredentialAccess, access({ resolve: () => Effect.interrupt })),
+      Effect.exit,
+    );
+
+    expect(result._tag).toBe("Failure");
+    expect(disposed).toBe(1);
+    expect((yield* read(context.page)).writes).toEqual([]);
+  }).pipe(Effect.scoped),
+);

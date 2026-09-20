@@ -103,6 +103,7 @@ it.effect("the tool layer scopes its saved browser attachment across success and
           CheckoutOwner.of({
             authorize: unused(),
             observe: unused,
+            observeIndexed: unused,
             record: unused,
             approval: unused(),
             human: unused(),
@@ -504,6 +505,25 @@ it.live(
       assert.strictEqual(evidence.shop.cart?.quantity, 2);
       yield* control("other", "seed", { key: "other", flow: "accelerated", scenario: "success" });
       assert.strictEqual((yield* dispatch("/s/other/cart", cart, cookie)).status, 401);
+
+      for (const side of ["before", "after"]) {
+        const key = `span-${side}`;
+
+        yield* control(key, "seed", { key, flow: "accelerated", scenario: "success" });
+        yield* control(key, "fault", { location: `${side}:spans` });
+        assert.strictEqual((yield* control(key, "run", { message: "Buy the shirt" })).status, 500);
+        assert.strictEqual((yield* control(key, "run", { message: "Try again" })).status, 500);
+        const response = yield* control(key, "evidence");
+
+        const value = yield* Effect.promise(() => response.json()).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(RunEvidence)),
+        );
+
+        assert.strictEqual(value.control.controller, "failed");
+        assert.strictEqual(value.control.requests, 0);
+        assert.deepStrictEqual(value.shop.attempts, []);
+        assert.strictEqual((yield* control(key, "close", {})).status, 200);
+      }
 
       // A fault after the durable dispatch fence cannot admit a second agent request.
       yield* control("other", "fault", { location: "after:control" });

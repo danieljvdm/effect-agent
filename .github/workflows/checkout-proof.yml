@@ -11,6 +11,8 @@ on:
         options:
           - baseline
           - action-observations
+          - indexed-luna
+          - indexed-jev
 
 permissions:
   contents: read
@@ -62,6 +64,7 @@ jobs:
         timeout-minutes: 25
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TYPESAFEAI_API_KEY: ${{ secrets.TYPESAFEAI_API_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
@@ -74,6 +77,7 @@ jobs:
         env:
           CHECKOUT_CLEANUP: "true"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TYPESAFEAI_API_KEY: ${{ secrets.TYPESAFEAI_API_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}

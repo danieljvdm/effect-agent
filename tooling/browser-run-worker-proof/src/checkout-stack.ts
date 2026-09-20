@@ -35,6 +35,9 @@ export const checkoutStack = Alchemy.Stack(
       Config.withDefault("baseline"),
     );
 
+    const typesafeKey =
+      controller === "indexed-jev" ? yield* Config.Redacted("TYPESAFEAI_API_KEY") : undefined;
+
     const bindingName = `ea-checkout-${run}-binding`;
 
     const binding = yield* Cloudflare.Worker("BindingProof", {
@@ -69,6 +72,7 @@ export const checkoutStack = Alchemy.Stack(
         OPENAI_API_KEY: openaiKey,
         CHECKOUT_MODEL: model,
         CHECKOUT_CONTROLLER: controller,
+        ...(typesafeKey === undefined ? {} : { TYPESAFEAI_API_KEY: typesafeKey }),
         PROCESSOR_ORIGIN: Output.map(payment.url, (url) => url ?? "https://unavailable.invalid"),
         CLOUDFLARE_ACCOUNT_ID: accountId,
         BROWSER_RENDERING_API_TOKEN: browserToken,

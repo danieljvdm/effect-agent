@@ -26,6 +26,7 @@ import {
   policy,
   type RunEvidence,
 } from "./checkout-contract.ts";
+import type { IndexedObservation } from "./checkout-indexed-contract.ts";
 import { measured } from "./checkout-telemetry.ts";
 
 const Selector = Schema.NonEmptyString.check(Schema.isMaxLength(2_048));
@@ -205,6 +206,9 @@ export class CheckoutOwner extends Context.Service<
   CheckoutOwner,
   {
     readonly authorize: Effect.Effect<void, CheckoutError>;
+    readonly observeIndexed: (
+      value: typeof IndexedObservation.Type,
+    ) => Effect.Effect<void, CheckoutError>;
     readonly observe: (value: typeof BrowserObservation.Type) => Effect.Effect<void, CheckoutError>;
     readonly record: (
       value: (typeof RunEvidence.Type.toolCalls)[number],
@@ -213,6 +217,49 @@ export class CheckoutOwner extends Context.Service<
     readonly human: Effect.Effect<string, CheckoutError>;
   }
 >()("checkout/CheckoutOwner") {}
+
+export const credentialAccess = (
+  options: { readonly shopOrigin: string; readonly processorOrigin: string },
+  authorize: Effect.Effect<void, CheckoutError>,
+) =>
+  BrowserCredentialAccess.of({
+    authorize: (request) =>
+      authorize.pipe(
+        Effect.mapError(() => CredentialAccessError.make({ reason: "denied" })),
+        Effect.andThen(
+          Effect.suspend(() =>
+            [options.shopOrigin, options.processorOrigin].includes(request.target.topOrigin) &&
+            [options.shopOrigin, options.processorOrigin].includes(request.target.frameOrigin) &&
+            [options.shopOrigin, options.processorOrigin].includes(
+              request.target.recipientOrigin,
+            ) &&
+            (request.kind === "login"
+              ? request.credential === "account"
+              : ["primary", "backup"].includes(request.credential))
+              ? Effect.void
+              : CredentialAccessError.make({ reason: "denied" }),
+          ),
+        ),
+      ),
+    resolve: (request) =>
+      Effect.succeed(
+        request.kind === "login"
+          ? LoginCredential.make({
+              username: Redacted.make("alex@example.test"),
+              password: Redacted.make("dummy-checkout-password"),
+            })
+          : CardCredential.make({
+              name: Redacted.make("Alex Example"),
+              number: Redacted.make(
+                request.credential === "backup" ? "5555555555554444" : "4242424242424242",
+              ),
+              expiry: Redacted.make("12/30"),
+              expiryMonth: Redacted.make("12"),
+              expiryYear: Redacted.make("2030"),
+              securityCode: Redacted.make("123"),
+            }),
+      ),
+  });
 
 /** Acquire one scoped attachment and durable authority through the Layer's requirements. */
 export const buyerTools = (options: {
@@ -268,46 +315,7 @@ export const buyerTools = (options: {
           ),
         );
 
-      const access = BrowserCredentialAccess.of({
-        authorize: (request) =>
-          authorize.pipe(
-            Effect.mapError(() => CredentialAccessError.make({ reason: "denied" })),
-            Effect.andThen(
-              Effect.suspend(() =>
-                [options.shopOrigin, options.processorOrigin].includes(request.target.topOrigin) &&
-                [options.shopOrigin, options.processorOrigin].includes(
-                  request.target.frameOrigin,
-                ) &&
-                [options.shopOrigin, options.processorOrigin].includes(
-                  request.target.recipientOrigin,
-                ) &&
-                (request.kind === "login"
-                  ? request.credential === "account"
-                  : ["primary", "backup"].includes(request.credential))
-                  ? Effect.void
-                  : CredentialAccessError.make({ reason: "denied" }),
-              ),
-            ),
-          ),
-        resolve: (request) =>
-          Effect.succeed(
-            request.kind === "login"
-              ? LoginCredential.make({
-                  username: Redacted.make("alex@example.test"),
-                  password: Redacted.make("dummy-checkout-password"),
-                })
-              : CardCredential.make({
-                  name: Redacted.make("Alex Example"),
-                  number: Redacted.make(
-                    request.credential === "backup" ? "5555555555554444" : "4242424242424242",
-                  ),
-                  expiry: Redacted.make("12/30"),
-                  expiryMonth: Redacted.make("12"),
-                  expiryYear: Redacted.make("2030"),
-                  securityCode: Redacted.make("123"),
-                }),
-          ),
-      });
+      const access = credentialAccess(options, authorize);
 
       const observe = () =>
         native(

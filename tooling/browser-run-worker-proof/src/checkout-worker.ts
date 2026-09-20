@@ -3,8 +3,9 @@ import {
   BrowserSessionReference,
 } from "@effect-agent/platform-cloudflare/browser-session";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { TypeSafeClient, TypeSafeDecisionModel } from "@effect/ai-typesafe";
 import { DurableObject } from "cloudflare:workers";
-import { Cause, Effect, Exit, Layer, Redacted, Schema, Struct } from "effect";
+import { Cause, Config, Effect, Exit, Layer, Redacted, Schema, Struct } from "effect";
 import { AgentRuntime, InMemory } from "effect-agent";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -24,6 +25,8 @@ import {
   ShopState,
   Start,
 } from "./checkout-contract.ts";
+import { IndexedObservation } from "./checkout-indexed-contract.ts";
+import { runIndexed } from "./checkout-indexed.ts";
 import { shopPage } from "./checkout-pages.ts";
 import {
   makeShop,
@@ -38,6 +41,7 @@ import {
   makeTelemetry,
   measured,
   instrumentModels,
+  typeSafeTelemetry,
 } from "./checkout-telemetry.ts";
 
 export interface CheckoutEnv {
@@ -47,6 +51,7 @@ export interface CheckoutEnv {
   OPENAI_API_KEY: string;
   CHECKOUT_MODEL: string;
   CHECKOUT_CONTROLLER?: string;
+  TYPESAFEAI_API_KEY?: string;
   PROCESSOR_ORIGIN: string;
   CLOUDFLARE_ACCOUNT_ID: string;
   BROWSER_RENDERING_API_TOKEN: string;
@@ -67,6 +72,7 @@ const rpc = <A>(action: () => Promise<A>) =>
 
 const Reference = Schema.toCodecJson(BrowserSessionReference);
 const Observations = Schema.Array(BrowserObservation).check(Schema.isMaxLength(150));
+const IndexedObservations = Schema.Array(IndexedObservation).check(Schema.isMaxLength(150));
 const Outputs = Schema.Array(AgentOutput).check(Schema.isMaxLength(8));
 const Runs = Schema.Array(AgentRun).check(Schema.isMaxLength(8));
 const Calls = RunEvidence.fields.toolCalls;
@@ -143,6 +149,9 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
         this.exists("reference") &&
         this.read("identity", Schema.String) ===
           this.read("reference", Reference).targetId.pipe(Redacted.value),
+      ...(this.exists("indexedObservations")
+        ? { indexedObservations: this.read("indexedObservations", IndexedObservations) }
+        : {}),
       observations: this.read("observations", Observations),
       outputs: this.read("outputs", Outputs),
       runs: this.read("runs", Runs),
@@ -198,6 +207,15 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
           ? Effect.void
           : failure("authority", "Browser control is paused"),
       ),
+      observeIndexed: (value) =>
+        Effect.sync(() =>
+          this.write("indexedObservations", IndexedObservations, [
+            ...(this.exists("indexedObservations")
+              ? this.read("indexedObservations", IndexedObservations)
+              : []),
+            value,
+          ]),
+        ),
       observe: (value) =>
         Effect.sync(() =>
           this.write("observations", Observations, [
@@ -244,26 +262,55 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
 
     const returnObservations = controller === "action-observations";
 
-    const result = yield* instrumentModels(
-      AgentRuntime.run(makeBuyer(returnObservations), message).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            InMemory.layer,
-            buyerTools({
-              reference: this.read("reference", Reference),
-              shopOrigin: origin,
-              processorOrigin: this.env.PROCESSOR_ORIGIN,
-              returnObservations,
-            }).pipe(Layer.provide(owner)),
-            OpenAiLanguageModel.model(this.env.CHECKOUT_MODEL, { max_output_tokens: 4_096 }).pipe(
-              Layer.provide(
-                OpenAiClient.layer({ apiKey: Redacted.make(this.env.OPENAI_API_KEY) }).pipe(
-                  Layer.provide(FetchHttpClient.layer),
-                ),
-              ),
-            ),
+    const languageModel = OpenAiLanguageModel.model(this.env.CHECKOUT_MODEL, {
+      max_output_tokens: 4_096,
+    }).pipe(
+      Layer.provide(
+        OpenAiClient.layer({ apiKey: Redacted.make(this.env.OPENAI_API_KEY) }).pipe(
+          Layer.provide(FetchHttpClient.layer),
+        ),
+      ),
+    );
+
+    const decisionModel = TypeSafeDecisionModel.model("jev-1.13.0").pipe(
+      Layer.provide(
+        typeSafeTelemetry.pipe(
+          Layer.provide(
+            TypeSafeClient.layerConfig({
+              apiKey: Config.succeed(Redacted.make(this.env.TYPESAFEAI_API_KEY ?? "unused")),
+            }).pipe(Layer.provide(FetchHttpClient.layer)),
           ),
         ),
+      ),
+    );
+
+    const result = yield* instrumentModels(
+      Effect.gen(
+        function* (this: CheckoutRun) {
+          return yield* controller === "indexed-luna" || controller === "indexed-jev"
+            ? runIndexed({
+                reference: this.read("reference", Reference),
+                shopOrigin: origin,
+                processorOrigin: this.env.PROCESSOR_ORIGIN,
+                goal: message,
+                approvalGranted: sameQuote(quote(this.shop), this.shop.approval),
+                provider: controller === "indexed-jev" ? "jev" : "luna",
+              }).pipe(Effect.provide(Layer.mergeAll(owner, languageModel, decisionModel)))
+            : AgentRuntime.run(makeBuyer(returnObservations), message).pipe(
+                Effect.provide(
+                  Layer.mergeAll(
+                    InMemory.layer,
+                    buyerTools({
+                      reference: this.read("reference", Reference),
+                      shopOrigin: origin,
+                      processorOrigin: this.env.PROCESSOR_ORIGIN,
+                      returnObservations,
+                    }).pipe(Layer.provide(owner)),
+                    languageModel,
+                  ),
+                ),
+              );
+        }.bind(this),
       ),
       this.env.CHECKOUT_MODEL,
     );
@@ -318,6 +365,7 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
           failure: null,
         });
         this.write("observations", Observations, []);
+        this.write("indexedObservations", IndexedObservations, []);
         this.write("outputs", Outputs, []);
         this.write("runs", Runs, []);
         this.write("calls", Calls, []);

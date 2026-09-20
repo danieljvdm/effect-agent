@@ -1,6 +1,8 @@
 import { Schema, Struct } from "effect";
 import { RunTotals } from "effect-agent/usage";
 
+import { IndexedObservation } from "./checkout-indexed-contract.ts";
+
 export const CheckoutFlow = Schema.Literals(["embedded-card", "accelerated"]);
 export const CheckoutScenario = Schema.Literals(["success", "correction", "ambiguous", "handoff"]);
 export const RunKey = Schema.String.check(Schema.isPattern(/^[a-z0-9-]{1,80}$/));
@@ -166,6 +168,9 @@ export const RunEvidence = Schema.Struct({
   shop: ShopState,
   control: Schema.Struct(Struct.omit(Control.fields, ["handoffId"])),
   browserIdentityUnchanged: Schema.Boolean,
+  indexedObservations: Schema.optionalKey(
+    Schema.Array(IndexedObservation).check(Schema.isMaxLength(150)),
+  ),
   observations: Schema.Array(BrowserObservation).check(Schema.isMaxLength(150)),
   outputs: Schema.Array(AgentOutput).check(Schema.isMaxLength(8)),
   runs: Schema.optionalKey(Schema.Array(AgentRun).check(Schema.isMaxLength(8))),

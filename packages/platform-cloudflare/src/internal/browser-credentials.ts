@@ -15,6 +15,7 @@ import {
   LoginCredential,
   type CredentialAccessRequest,
 } from "../BrowserCredentials.ts";
+import type { CredentialTargetGuard } from "../BrowserSession.ts";
 
 /** Supplied only under the attachment lock, with the remaining command/session budget. */
 export class BrowserSessionPage extends Context.Service<
@@ -71,9 +72,13 @@ const prepareFields = `(() => {
       return {action: form.action};
     },
     target() { return validate() ? {action: form.action} : {reason: 'stale-target'}; },
-    fill(index, value) {
+    fill(index, value, guard) {
       if (!validate()) return 'stale-target';
       const el = fields[index];
+      if (guard) {
+        try { if (!guard(el, index)) return 'stale-target'; }
+        catch { return 'stale-target'; }
+      }
       if (el instanceof HTMLSelectElement) {
         const options = [...el.options].filter(option => option.value === value);
         if (options.length !== 1 || options[0].matches(':disabled')) return 'unsupported-before-write';
@@ -124,6 +129,7 @@ const secretFor = (material: BrowserCredentialMaterial, role: typeof CredentialF
  */
 export const fillCredential = Effect.fnUntraced(function* (
   input: FillCredentialRequest,
+  guard?: CredentialTargetGuard,
 ): Effect.fn.Return<
   CredentialFillResult,
   CredentialFillError,
@@ -219,6 +225,9 @@ export const fillCredential = Effect.fnUntraced(function* (
       await frame.isolatedRealm().evaluateHandle(prepareFields),
     ]);
 
+    const guarded =
+      guard === undefined ? undefined : (yield* acquire(async () => [await guard(frame)]))[0];
+
     const held = handles[0];
 
     if (held === undefined) return yield* fail("provider");
@@ -304,13 +313,14 @@ export const fillCredential = Effect.fnUntraced(function* (
         dispatch = "possibly-dispatched";
 
         return held.evaluate(
-          (state, field, secret) => {
+          (state, field, secret, predicate) => {
             if (typeof state !== "object" || state === null) return "stale-target";
 
-            return Reflect.apply(Reflect.get(state, "fill"), state, [field, secret]);
+            return Reflect.apply(Reflect.get(state, "fill"), state, [field, secret, predicate]);
           },
           index,
           Redacted.value(value),
+          guarded,
         );
       }).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(WriteReply)),

@@ -155,7 +155,13 @@ export const runCredentialProof = Effect.fn("runCredentialProof")(function* (ori
 
           yield* requireProof(authenticated);
         }
-      }).pipe(Effect.provide(credentialTools.toLayer({ fill_credential: session.fillCredential })));
+      }).pipe(
+        Effect.provide(
+          credentialTools.toLayer({
+            fill_credential: (request) => session.fillCredential(request),
+          }),
+        ),
+      );
     }).pipe(Effect.provideService(BrowserCredentialAccess, access)),
   );
 
@@ -218,7 +224,13 @@ export const runCredentialProof = Effect.fn("runCredentialProof")(function* (ori
         });
 
         yield* requireProof(matches);
-      }).pipe(Effect.provide(credentialTools.toLayer({ fill_credential: session.fillCredential })));
+      }).pipe(
+        Effect.provide(
+          credentialTools.toLayer({
+            fill_credential: (request) => session.fillCredential(request),
+          }),
+        ),
+      );
     }).pipe(Effect.provideService(BrowserCredentialAccess, access)),
   );
   yield* owner.close;
