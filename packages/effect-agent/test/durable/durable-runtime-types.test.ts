@@ -4,7 +4,9 @@ import type { AgentPolicy } from "effect-agent/agent-policy";
 import { type DurableBindingFailure } from "effect-agent/agent-registration";
 import type { UpdateError } from "effect-agent/agent-updates";
 import {
+  type ApprovalSuspensionError,
   type DurableAgentRuntime,
+  type DurableApprovalSuspension,
   type DurableAwaitFailure,
   type DurableWorkerFailure,
   type RecoveryReport,
@@ -74,6 +76,12 @@ const sourceConcurrencyLayer = Layer.effect(
 );
 
 it("keeps bounded worker operations and status reads typed without hidden requirements", () => {
+  expectTypeOf<Exclude<typeof DurableApprovalSuspension.Service, undefined>>().toEqualTypeOf<
+    Effect.Effect<void, ApprovalSuspensionError>
+  >();
+  expectTypeOf<
+    Extract<DurableWorkerFailure, ApprovalSuspensionError>
+  >().toEqualTypeOf<ApprovalSuspensionError>();
   expectTypeOf<RecoverySweep>().toEqualTypeOf<
     Effect.Effect<RecoverySweepResult, DurableWorkerFailure>
   >();

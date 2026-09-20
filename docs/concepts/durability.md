@@ -145,6 +145,24 @@ Interrupting an observer or settlement waiter detaches it. Abort and resolution 
 durable runtime's authorization and intent protocol. Native Workflow interruption is not the
 agent cancellation API. Each Attempt releases its ownership and resources before suspension.
 
+## Retain resources while awaiting approval
+
+`AgentRegistration.attemptLayer` owns services for one fenced Attempt. Its resources finalize
+when the Attempt completes, suspends, fails, or is interrupted. A replacement Attempt builds
+fresh services around any externally retained resource.
+
+When an approval wait must retain a resource, provide `DurableApprovalSuspension` from that same
+Layer. This optional `Effect<void, ApprovalSuspensionError>` captures the live services and finishes
+the host's checkpoint and handoff before returning. Import both names from
+`effect-agent/durable-agent-runtime`. Wrap typed failures in `ApprovalSuspensionError.make({ cause })`
+using `Effect.catchCause` and `Cause.map` to preserve accompanying defects and interruptions.
+
+The runtime calls it after recording the approval request, while claim renewal and abort observation
+remain active. Failure preserves its cause and leaves accepted work owed; interruption runs normal
+cleanup. If approval arrives during retention, the old services and claim finalize before a fresh
+Attempt resumes the same Run's pending tool batch. Completed tools are not repeated, and unresolved
+ordinary effects still require reconciliation.
+
 ## Admission and recovery
 
 The runtime returns a Receipt after durable ledger admission, thread materialization, and

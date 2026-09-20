@@ -536,6 +536,10 @@ completion, suspension, failure, or interruption. A replacement Attempt builds f
 Keep fallible browser acquisition in `session.get`, not Layer construction. No additional browser
 Durable Object or persisted browser-session record is needed.
 
+For approval waits that retain the same page, provide
+[`DurableApprovalSuspension`](../concepts/durability#retain-resources-while-awaiting-approval) from
+the same attempt Layer, using the host's existing checkpoint and handoff operation.
+
 Credential Tools are ordinary effectful Tools. Do not mark them readonly or idempotent. Host
 resource authorization still applies to brokered calls. The existing prepared/settled journal
 governs recovery; Code Mode treats the entire generated program as uncertain:

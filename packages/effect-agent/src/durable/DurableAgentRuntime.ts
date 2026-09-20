@@ -802,8 +802,15 @@ export type DurableSubmitFailure =
   | FenceRejected
   | DurableRuntimeFailpointError;
 
+/** Attempt resources could not be retained before deliberate approval suspension. */
+export class ApprovalSuspensionError extends Schema.TaggedError<ApprovalSuspensionError>()(
+  "ApprovalSuspensionError",
+  { cause: Schema.Defect() },
+) {}
+
 export type DurableWorkerFailure =
   | AdmissionPolicyError
+  | ApprovalSuspensionError
   | DigestError
   | LedgerError
   | OwnershipLost
@@ -893,6 +900,23 @@ export const DurableApprovalResolver: Context.Reference<RunApprovalHook<never, n
     "@effect-agent/thread/DurableApprovalResolver",
     { defaultValue: () => undefined },
   );
+
+/**
+ * Optional attempt-local retention before an unresolved approval releases ownership. Supply
+ * this from the Attempt's Layer, capturing its live resources. The canonical approval request
+ * already exists; claim renewal and abort observation remain active while this operation runs.
+ * Return only after retention is confirmed. Failure leaves the accepted work owed and preserves
+ * its cause; interruption keeps normal resource cleanup. No approval-gated Tool runs here.
+ *
+ * A decision racing with successful retention resumes the pending batch in a fresh Attempt,
+ * after the old services and claim finalize. The default leaves existing suspension unchanged.
+ */
+export const DurableApprovalSuspension: Context.Reference<
+  Effect.Effect<void, ApprovalSuspensionError> | undefined
+> = Context.Reference<Effect.Effect<void, ApprovalSuspensionError> | undefined>(
+  "@effect-agent/thread/DurableApprovalSuspension",
+  { defaultValue: () => undefined },
+);
 
 /**
  * Services a durable worker needs beyond the runtime's own Layer: the Agent Binding's inferred
@@ -1024,6 +1048,13 @@ class CoordinatorHalt {
   constructor(readonly failure: DurableWorkerFailure) {}
 }
 
+const isCoordinatorHaltCause = (
+  cause: Cause.Cause<unknown>,
+): cause is Cause.Cause<CoordinatorHalt> =>
+  cause.reasons.every(
+    (reason) => reason._tag !== "Fail" || reason.error instanceof CoordinatorHalt,
+  );
+
 const PolicyFailure = Schema.TaggedStruct("AgentPolicyError", {
   limit: PolicyLimit,
 });
@@ -1038,10 +1069,20 @@ const decodePolicyFailureSafely = (error: unknown) => {
   }
 };
 
-const agentApprovalPendingOption = (error: unknown): Option.Option<AgentApprovalPending> => {
+const agentApprovalPendingOption = (
+  cause: Cause.Cause<unknown>,
+): Option.Option<AgentApprovalPending> => {
   try {
     // Suspension authority is nominal. Schema.is/decode would accept a forged tagged object.
-    return error instanceof AgentApprovalPending ? Option.some(error) : Option.none();
+    const first = cause.reasons.find(Cause.isFailReason);
+
+    return first !== undefined &&
+      first.error instanceof AgentApprovalPending &&
+      cause.reasons.every(
+        (reason) => reason._tag !== "Fail" || reason.error instanceof AgentApprovalPending,
+      )
+      ? Option.some(first.error)
+      : Option.none();
   } catch {
     return Option.none();
   }
@@ -4457,7 +4498,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const halt = <A, R>(
     effect: Effect.Effect<A, DurableWorkerFailure, R>,
   ): Effect.Effect<A, CoordinatorHalt, R> =>
-    Effect.mapError(effect, (failure) => new CoordinatorHalt(failure));
+    Effect.catchCause(effect, (cause) =>
+      Effect.failCause(Cause.map(cause, (failure) => new CoordinatorHalt(failure))),
+    );
 
   /**
    * Superseding-Attempt interruption audit (durability §9): appended at most once per superseded
@@ -5411,7 +5454,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       ): Effect.Effect<A, CoordinatorHalt, R> =>
         effect.pipe(
           Effect.tapError((failure) => Ref.set(haltRef, failure)),
-          Effect.mapError((failure) => new CoordinatorHalt(failure)),
+          halt,
         );
 
       interface RunState {
@@ -7523,7 +7566,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               yield* handleEvent(event);
             }),
           ),
-      ).pipe(Effect.as({ _tag: "run" as const }));
+      ).pipe(
+        // Retain while the Attempt's services, claim renewal and abort watcher are still live.
+        // A failed retention halts the coordinator; it is not a failed Tool or a safe suspension.
+        Effect.tapCause((cause) =>
+          Option.isSome(agentApprovalPendingOption(cause)) &&
+          cause.reasons.every(Cause.isFailReason)
+            ? Effect.flatMap(DurableApprovalSuspension, (retain) =>
+                retain === undefined ? Effect.void : halt(retain),
+              )
+            : Effect.void,
+        ),
+        Effect.as({ _tag: "run" as const }),
+      );
 
       // Durable §13: the abort command becomes canonical (serialized on the append gate) BEFORE
       // the Run fiber is interrupted by losing the race.
@@ -7586,12 +7641,22 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               },
             DurableWorkerFailure
           > => {
-            if (error instanceof CoordinatorHalt) {
-              return Effect.fail(error.failure);
+            if (isCoordinatorHaltCause(cause)) {
+              return Effect.failCause(Cause.map(cause, (halt) => halt.failure));
             }
-            const approvalPending = agentApprovalPendingOption(error);
+            const approvalPending = agentApprovalPendingOption(cause);
 
             if (Option.isSome(approvalPending)) {
+              // The canonical request preserves the pending control marker. A coexisting defect
+              // or interruption must escape intact, without retention or a safe suspension.
+              const residual = Cause.fromReasons<never>(
+                cause.reasons.filter(
+                  (reason): reason is Cause.Die | Cause.Interrupt => reason._tag !== "Fail",
+                ),
+              );
+
+              if (residual.reasons.length > 0) return Effect.failCause(residual);
+
               // Durable approval suspension (plan §2.6): the approval hook already made the
               // request canonical; `runAttempt` owns the ledger transition. The engine decoded
               // the declared call id before raising the suspension, so a failure is a defect.
@@ -7763,6 +7828,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     threadId: ThreadId,
     claim: Claim,
     tokenRef: Ref.Ref<OwnershipToken>,
+    resumeAfterRetention: () => void,
     yieldAfter?: DateTime.Utc,
   ) =>
     Effect.gen(function* () {
@@ -8250,8 +8316,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           // Durable approval suspension (plan §2.6): the ledger transition ends the ownership
           // period WITHOUT settling — the accepted-work obligation stays owed while the lane
           // consumes no worker permit. A decision that raced ahead of the suspend transaction
-          // returns `resume-immediately`: the declared batch replays under this same claim with
-          // the fresh decision intents (no model re-invocation — the response is canonical).
+          // returns `resume-immediately`. Retained resources require a fresh Attempt; otherwise
+          // the declared batch replays under this claim with the fresh decision intents.
           const ownershipToken = yield* Ref.get(tokenRef);
 
           const suspension = yield* ledger.suspend(
@@ -8264,6 +8330,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
           yield* hit("approval:after-suspend");
           if (suspension === "suspended") {
+            return Option.none<Settlement>();
+          }
+          if ((yield* DurableApprovalSuspension) !== undefined) {
+            // Retention completed inside runModel. Leave both the service and claim scopes
+            // before reacquiring: a transferred attachment cannot execute the approved batch.
+            resumeAfterRetention();
+
             return Option.none<Settlement>();
           }
           approvalDecisionIntents = (yield* ledger.loadRecoverySnapshot(
@@ -8394,91 +8467,112 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     threadId: ThreadId,
     options?: { readonly yieldAfter?: DateTime.Utc },
   ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const claimed = yield* acquireClaim(threadId);
+    Effect.gen(function* () {
+      let resumeAfterRetention = false;
 
-        if (Option.isNone(claimed)) return Option.none();
-        const { claim, tokenRef } = claimed.value;
+      const attempt = Effect.scoped(
+        Effect.gen(function* () {
+          const claimed = yield* acquireClaim(threadId);
 
-        const attributes = {
-          threadId,
-          submissionId: claim.submissionId,
-          attemptId: claim.attemptId,
-        };
+          if (Option.isNone(claimed)) return Option.none();
+          const { claim, tokenRef } = claimed.value;
 
-        yield* Effect.annotateCurrentSpan(attributes);
-        yield* Effect.annotateLogsScoped(attributes);
-        yield* hit("claim:after-claim");
+          const attributes = {
+            threadId,
+            submissionId: claim.submissionId,
+            attemptId: claim.attemptId,
+          };
 
-        const found = yield* ledger.lookup(
-          SubmissionLookupById.make({ submissionId: claim.submissionId }),
-        );
+          yield* Effect.annotateCurrentSpan(attributes);
+          yield* Effect.annotateLogsScoped(attributes);
+          yield* hit("claim:after-claim");
 
-        if (Option.isNone(found)) {
-          return yield* LedgerError.make({
-            operation: "processThreadHead",
-            message: `Claimed unknown Submission ${claim.submissionId}`,
-          });
-        }
-        const submission = found.value;
-
-        // The claim head rule legally grants an `admitted` head, so the worker path
-        // enforces the same AwaitParentEstablishment discipline as the recovery classifier —
-        // a parent-linked child whose Thread lacks its canonical lineage record is not
-        // runnable yet (the parent's idempotent establishment appends lineage BEFORE
-        // readiness, SUB-016).
-        // Release the claim, nudge the parent lane, and leave the child to establishment.
-        if (submission.parentLinkage !== undefined && submission.state === "admitted") {
-          const read = yield* readAllTolerant(threadId, []);
-
-          const lineageRecorded = read.records.some(
-            (envelope) => envelope.record.payload._tag === "SubagentLineageRecorded",
+          const found = yield* ledger.lookup(
+            SubmissionLookupById.make({ submissionId: claim.submissionId }),
           );
 
-          if (!lineageRecorded) {
-            yield* ledger
-              .releaseOwnership(
-                ReleaseOwnershipRequest.make({
-                  submissionId: claim.submissionId,
-                  ownershipToken: claim.ownershipToken,
-                }),
-              )
-              .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+          if (Option.isNone(found)) {
+            return yield* LedgerError.make({
+              operation: "processThreadHead",
+              message: `Claimed unknown Submission ${claim.submissionId}`,
+            });
+          }
+          const submission = found.value;
 
-            const parent = yield* ledger.lookup(
-              SubmissionLookupById.make({
-                submissionId: submission.parentLinkage.parentSubmissionId,
-              }),
+          // The claim head rule legally grants an `admitted` head, so the worker path
+          // enforces the same AwaitParentEstablishment discipline as the recovery classifier —
+          // a parent-linked child whose Thread lacks its canonical lineage record is not
+          // runnable yet (the parent's idempotent establishment appends lineage BEFORE
+          // readiness, SUB-016).
+          // Release the claim, nudge the parent lane, and leave the child to establishment.
+          if (submission.parentLinkage !== undefined && submission.state === "admitted") {
+            const read = yield* readAllTolerant(threadId, []);
+
+            const lineageRecorded = read.records.some(
+              (envelope) => envelope.record.payload._tag === "SubagentLineageRecorded",
             );
 
-            if (Option.isSome(parent)) {
-              yield* wake.notify(parent.value.threadId);
+            if (!lineageRecorded) {
+              yield* ledger
+                .releaseOwnership(
+                  ReleaseOwnershipRequest.make({
+                    submissionId: claim.submissionId,
+                    ownershipToken: claim.ownershipToken,
+                  }),
+                )
+                .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+
+              const parent = yield* ledger.lookup(
+                SubmissionLookupById.make({
+                  submissionId: submission.parentLinkage.parentSubmissionId,
+                }),
+              );
+
+              if (Option.isSome(parent)) {
+                yield* wake.notify(parent.value.threadId);
+              }
+
+              return Option.none();
             }
-
-            return Option.none();
           }
-        }
 
-        const resolution = yield* resolve(submission).pipe(
-          Effect.map((binding) => ({ _tag: "resolved" as const, binding })),
-          Effect.catchTags({
-            BindingUnavailable: (failure) => Effect.succeed({ _tag: "refused" as const, failure }),
-          }),
-        );
+          const resolution = yield* resolve(submission).pipe(
+            Effect.map((binding) => ({ _tag: "resolved" as const, binding })),
+            Effect.catchTags({
+              BindingUnavailable: (failure) =>
+                Effect.succeed({ _tag: "refused" as const, failure }),
+            }),
+          );
 
-        if (resolution._tag === "refused") {
-          return yield* resolution.failure;
-        }
+          if (resolution._tag === "refused") {
+            return yield* resolution.failure;
+          }
 
-        return yield* resolution.binding.attempt(
-          (agent, attemptThreadId, attemptClaim) =>
-            runAttempt(agent, attemptThreadId, attemptClaim, tokenRef, options?.yieldAfter),
-          threadId,
-          claim,
-        );
-      }),
-    ).pipe(withThreadHeadSpan);
+          return yield* resolution.binding.attempt(
+            (agent, attemptThreadId, attemptClaim) =>
+              runAttempt(
+                agent,
+                attemptThreadId,
+                attemptClaim,
+                tokenRef,
+                () => {
+                  resumeAfterRetention = true;
+                },
+                options?.yieldAfter,
+              ),
+            threadId,
+            claim,
+          );
+        }),
+      );
+
+      while (true) {
+        resumeAfterRetention = false;
+        const settlement = yield* attempt;
+
+        if (!resumeAfterRetention) return settlement;
+      }
+    }).pipe(withThreadHeadSpan);
 
   const eligibleThreadHead = (threadId: ThreadId) =>
     Stream.runHead(
@@ -11049,7 +11143,7 @@ export class DurableAgentRuntime extends Context.Service<
       threadId: ThreadId,
     ) => Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>;
     /**
-     * Advance at most one FIFO-head Attempt, closing its resources before returning. A vacant,
+     * Advance the FIFO head, closing its Attempt resources before returning. A vacant,
      * owned, unknown, or suspended head returns None and leaves accepted work pending.
      * Ready input may join this Run through the existing Turn seams and settle with its head.
      * Interruption ends only this Attempt; ownership cleanup uses its latest renewed token.

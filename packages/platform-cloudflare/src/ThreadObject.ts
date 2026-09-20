@@ -19,6 +19,7 @@ import {
 } from "effect-agent/admin";
 import { DigestError } from "effect-agent/digest";
 import {
+  ApprovalSuspensionError,
   DurableAgentRuntime,
   DurableRuntimeConfig,
   RecoveryReport,
@@ -676,6 +677,7 @@ export class AdminVerifyRequest extends Schema.Class<AdminVerifyRequest>(
 /** Every typed failure of the four admin entry points, plus the protocol's own errors. */
 export const AdminFailure = Schema.Union([
   AdmissionPolicyError,
+  ApprovalSuspensionError,
   OperationDenied,
   RetryRefused,
   LedgerError,
