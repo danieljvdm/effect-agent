@@ -169,7 +169,17 @@ const endpoint = Effect.fnUntraced(function* (
     },
   };
 
-  return { browser, socket: pair[0], started, versionStarted, closed, methods, requests, viewport };
+  return {
+    browser,
+    socket: pair[0],
+    peer: pair[1],
+    started,
+    versionStarted,
+    closed,
+    methods,
+    requests,
+    viewport,
+  };
 });
 
 const keepAliveHost = (browser: Pick<BrowserRun, "fetch">) =>
@@ -389,6 +399,36 @@ it.effect("attaches a retained page without replacing its host-owned viewport", 
 
     expect(pages.map((page) => page.url())).toEqual(["https://fixture.test/"]);
     expect(fixture.viewport).toEqual({ width: 624, height: 980 });
+  }).pipe(Effect.scoped),
+);
+
+// https://github.com/danieljvdm/effect-agent/actions/runs/35650674026
+it.effect("acknowledges peer-initiated closure before retiring the attachment", () =>
+  Effect.gen(function* () {
+    const fixture = yield* endpoint("success");
+
+    const binding = yield* BrowserRunBinding.pipe(
+      Effect.provide(BrowserRunBinding.layer(fixture.browser)),
+    );
+
+    const attachment = binding.connect(Redacted.value(identity.sessionId), "session.connect");
+    const browser = yield* native(() => attachment.browser);
+
+    const notified = yield* Deferred.make<void>();
+
+    fixture.socket.addEventListener(
+      "close",
+      () => Effect.runSync(Deferred.succeed(notified, undefined)),
+      {
+        once: true,
+      },
+    );
+    fixture.peer.close(1000);
+    yield* Deferred.await(notified);
+    expect(browser.connected).toBe(false);
+    expect(fixture.socket.readyState).toBe(WebSocket.CLOSED);
+    yield* attachment.retire;
+    expect(fixture.methods).not.toContain("Browser.close");
   }).pipe(Effect.scoped),
 );
 
