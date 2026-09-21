@@ -199,6 +199,7 @@ describe("Browser Run viewport boundary", () => {
           "DELETE /client/v4/accounts/1234567890abcdef1234567890abcdef/browser-rendering/devtools/browser/c8b9c4b1-d1bf-4663-b4d8-a0b009cc8b99",
         ]);
         expect(sdk.connect).toHaveBeenCalledExactlyOnceWith({
+          defaultViewport: null,
           transport: expect.objectContaining({
             send: expect.any(Function),
             close: expect.any(Function),
