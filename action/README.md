@@ -60,6 +60,12 @@ the workflow upgrade refreshes the PR's workflow job; later manual reviews updat
 
 ## Review behavior
 
+Symlink changes are reviewed as committed target text with Git mode metadata,
+including additions, deletions, retargeting, renames, and conversions to or from
+regular files. Targets are never followed. Binary filename extensions do not hide
+symlink changes; explicit ignore rules still apply. Source tools remain limited
+to regular files, and submodules remain unsupported.
+
 The reviewer automatically ignores known binary asset formats, including raster images,
 fonts, audio/video, archives, PDFs, and compiled binaries, before fetching their contents.
 Other bounded blobs containing NUL bytes are also ignored. These files count as ignored,

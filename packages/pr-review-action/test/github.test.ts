@@ -4,6 +4,7 @@ import { Deferred, Effect, Encoding, Exit, Fiber, Logger, Redacted, Ref, Schema 
 import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
+import { GeneratedFileClassification, hydrateExactChanges } from "../src/action.ts";
 import { makeGitHubClient, type RepositorySnapshot } from "../src/github.ts";
 import { renderFindingBody, renderReviewBody } from "../src/presentation.ts";
 import { reviewMarker, type ReviewHistoryItem } from "../src/selection.ts";
@@ -309,6 +310,182 @@ const entry = (
   mode: "100644" | "100755" | "120000" | "040000" | "160000" = "100644",
   type: "blob" | "tree" | "commit" = "blob",
 ) => ({ path, sha, mode, type, ...(type === "blob" ? { size: 1 } : {}) });
+
+// Regression: deleting a symlink was excluded as unsupported and left review coverage incomplete.
+describe("symlink review input", () => {
+  it.effect.each([
+    {
+      name: "deletion",
+      before: "AGENTS.md",
+      after: undefined,
+      beforeMode: "120000",
+      afterMode: "120000",
+      expected: ["deleted file mode 120000", "-AGENTS.md"],
+    },
+    {
+      name: "addition",
+      before: undefined,
+      after: "../../outside",
+      beforeMode: "120000",
+      afterMode: "120000",
+      expected: ["new file mode 120000", "+../../outside"],
+    },
+    {
+      name: "retarget",
+      before: "AGENTS.md",
+      after: "/private/secret",
+      beforeMode: "120000",
+      afterMode: "120000",
+      expected: [" 120000", "-AGENTS.md", "+/private/secret"],
+    },
+    {
+      name: "rename",
+      before: "AGENTS.md",
+      after: "AGENTS.md",
+      beforeMode: "120000",
+      afterMode: "120000",
+      expected: ["rename from CLAUDE.md", "rename to renamed.md", " 120000"],
+    },
+    {
+      name: "file to link",
+      before: "old instructions\n",
+      after: "AGENTS.md",
+      beforeMode: "100644",
+      afterMode: "120000",
+      expected: ["old mode 100644", "new mode 120000", "-old instructions", "+AGENTS.md"],
+    },
+    {
+      name: "link to file",
+      before: "AGENTS.md",
+      after: "new instructions\n",
+      beforeMode: "120000",
+      afterMode: "100644",
+      expected: ["old mode 120000", "new mode 100644", "-AGENTS.md", "+new instructions"],
+    },
+    {
+      name: "mode only",
+      before: "AGENTS.md",
+      after: "AGENTS.md",
+      beforeMode: "100644",
+      afterMode: "120000",
+      expected: ["old mode 100644", "new mode 120000"],
+    },
+    {
+      name: "binary suffix",
+      before: undefined,
+      after: "assets/logo.png",
+      beforeMode: "120000",
+      afterMode: "120000",
+      expected: ["new file mode 120000", "+assets/logo.png"],
+    },
+  ] as const)("reviews $name using only immutable link blobs", (scenario) =>
+    Effect.gen(function* () {
+      const basePath = scenario.name === "binary suffix" ? "logo.png" : "CLAUDE.md";
+      const path = scenario.name === "rename" ? "renamed.md" : basePath;
+      const beforeSha = "a".repeat(40);
+      const afterSha = "b".repeat(40);
+
+      const responses = new Map<string, unknown>([
+        [`/git/commits/${baseRevision}`, { sha: baseRevision, tree: { sha: baseTree } }],
+        [`/git/commits/${headRevision}`, { sha: headRevision, tree: { sha: headTree } }],
+        [
+          `/git/trees/${baseTree}`,
+          {
+            sha: baseTree,
+            truncated: false,
+            tree:
+              scenario.before === undefined
+                ? []
+                : [entry(basePath, beforeSha, scenario.beforeMode)],
+          },
+        ],
+        [
+          `/git/trees/${headTree}`,
+          {
+            sha: headTree,
+            truncated: false,
+            tree: scenario.after === undefined ? [] : [entry(path, afterSha, scenario.afterMode)],
+          },
+        ],
+      ]);
+
+      const expectedReads: Array<string> = [];
+
+      for (const [sha, content] of [
+        [beforeSha, scenario.before],
+        [afterSha, scenario.after],
+      ] as const) {
+        if (content !== undefined) {
+          const endpoint = `/git/blobs/${sha}`;
+
+          expectedReads.push(endpoint);
+          responses.set(endpoint, {
+            sha,
+            size: content.length,
+            encoding: "base64",
+            content: Encoding.encodeBase64(content),
+          });
+        }
+      }
+      const reads: Array<string> = [];
+
+      const client = HttpClient.make((request, url) => {
+        const endpoint = url.pathname.replace(`/repos/${repository}`, "");
+
+        // No contents API or target lookup is allowed, including absolute/dangling links.
+        expect(responses.has(endpoint)).toBe(true);
+        if (endpoint.startsWith("/git/blobs/")) reads.push(endpoint);
+
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            new globalThis.Response(JSON.stringify(responses.get(endpoint)), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+          ),
+        );
+      });
+
+      const github = yield* makeGitHubClient({
+        repository,
+        pullRequest: 12,
+        token: Redacted.make("github-token"),
+        apiUrl: "https://api.github.test",
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+
+      const comparison = yield* github.compareTrees(baseRevision, headRevision);
+
+      const surface = yield* hydrateExactChanges({
+        ...comparison,
+        files: [
+          {
+            path,
+            previousPath: path === basePath ? undefined : basePath,
+            status: path === basePath ? "modified" : "renamed",
+            additions: 0,
+            deletions: 0,
+            patch: undefined,
+          },
+        ],
+        ignore: [],
+      }).pipe(
+        Effect.provideService(GeneratedFileClassification, {
+          isGenerated: () =>
+            Effect.die("symlinks and type changes must not be classified as generated"),
+        }),
+      );
+
+      expect(surface.exclusions).toEqual([]);
+      expect(surface.unreviewedPaths).toEqual([]);
+      expect(surface.ignoredPaths).toEqual([]);
+      expect(surface.changes).toHaveLength(1);
+      expect(surface.changes[0]?.path).toBe(path);
+      for (const text of scenario.expected) expect(surface.changes[0]?.patch).toContain(text);
+      expect(reads.sort()).toEqual(expectedReads.sort());
+    }),
+  );
+});
 
 describe("GitHub read recovery", () => {
   it.effect.each([
