@@ -278,8 +278,9 @@ describe("Thread Object message maintenance", () => {
       expect(await scheduledAlarm(source)).toBeNull();
     }));
 
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/f90854ee893134df8022043a97544946ca4f1e25
   // Wake-driven overlap is required while the source still owns its native budget.
-  it("delivers new wakes during source work and leaves retry deadlines to future alarms", () =>
+  it("delivers new wakes during source work, never polls early, and retains polls after retirement", () =>
     withThreads(async (source, destination, now, advance) => {
       await submit(source, "initial");
       await drainAlarmsUntil(source, allSettled(source));
@@ -287,6 +288,7 @@ describe("Thread Object message maintenance", () => {
       const release = latch();
       const deliveryEntered = latch();
       const deliveryRelease = latch();
+      const before: Array<Awaited<ReturnType<typeof read>>> = [];
 
       alarmAttemptHolds.set(source, {
         location: "claim:after-claim",
@@ -319,9 +321,14 @@ describe("Thread Object message maintenance", () => {
         expect((await read(source))?.status).toBe("accepted");
         expect((await read(source, "late-8"))?.status).toBe("accepted");
         expect(await laneRows(destination)).toHaveLength(9);
-        const before = [await read(source), await read(source, "late-8")];
+        before.push(await read(source), await read(source, "late-8"));
+        expect(before.map((record) => record?.retry.nextAttemptAtMillis)).toEqual([
+          now + 20,
+          now + 20,
+        ]);
 
-        await advance(200);
+        // Active native work may overlap a due delivery wave; it must never poll early.
+        await advance(19);
         expect([await read(source), await read(source, "late-8")]).toEqual(before);
         expect(await allSettled(source)()).toBe(false);
       } finally {
@@ -332,7 +339,26 @@ describe("Thread Object message maintenance", () => {
         alarmAttemptHolds.delete(source);
       }
       expect(await allSettled(source)()).toBe(true);
-      expect(await scheduledAlarm(source)).not.toBeNull();
+      expect([await read(source), await read(source, "late-8")]).toEqual(before);
+      const alarm = await scheduledAlarm(source);
+
+      expect(alarm).not.toBeNull();
+      expect(alarm).toBeGreaterThanOrEqual(now + 20);
+      // The physical alarm may apply its minimum scheduling delay without changing the due index.
+      await advance(alarm! - (now + 19));
+      await runDurableObjectAlarm(stubFor(source));
+      const polled = [await read(source), await read(source, "late-8")];
+
+      expect(polled.map((record) => record?.receipt)).toEqual(
+        before.map((record) => record?.receipt),
+      );
+      for (const record of polled)
+        expect(record).toMatchObject({
+          status: "accepted",
+          leaseUntilMillis: null,
+          retry: { attempts: 2, lastAttemptAtMillis: alarm, nextAttemptAtMillis: alarm! + 20 },
+        });
+      expect(await laneRows(destination)).toHaveLength(9);
     }));
 
   it("defers a late five-minute wave that cannot fit the physical event without claiming it", () =>

@@ -275,8 +275,10 @@ changing the resolver alone does not move their durable records.
 Own one `SqlClient`, `ThreadMutationGate` and alarm slot per physical Object. Native migrations use
 their own migration history, leaving the application's migration rows intact. Call
 `ThreadMaintenance.ensureAlarm` in the local constructor gate and one bounded
-`ThreadMaintenance.pass` from `alarm()`. Each native opportunity recovers local lanes and serves
-one eligible FIFO head, with a durable cursor rotating between Threads. Remaining work retains the alarm.
+`ThreadMaintenance.pass` from `alarm()`. The event runs at most two independent Thread Attempts
+concurrently, with one active FIFO head per Thread and a durable cursor rotating between Threads.
+A free slot admits newly ready Threads while another Attempt is busy. Remaining work retains the
+alarm; generation acknowledgement waits for admitted Attempts to finish.
 
 An unresolved tool effect stays parked as an Unknown Outcome while later input in the same Thread
 can run. The unknown record and settlement obligation remain intact across eviction, and the effect
