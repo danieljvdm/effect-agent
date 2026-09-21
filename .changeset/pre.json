@@ -208,6 +208,7 @@
     "quiet-browsers-explain",
     "quiet-browsers-read",
     "quiet-browsers-reconnect",
+    "quiet-browsers-wait",
     "quiet-hosted-completion",
     "quiet-model-parameter-rejections",
     "quiet-model-threads",
