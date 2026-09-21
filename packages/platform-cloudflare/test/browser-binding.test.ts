@@ -39,7 +39,19 @@ const native = <A>(run: () => Promise<A>) =>
   Effect.tryPromise({ try: run, catch: (cause) => browserFailure("test.connect", cause) });
 
 const packet = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ id: Schema.Int, method: Schema.String })),
+  Schema.fromJsonString(
+    Schema.Struct({
+      id: Schema.Int,
+      method: Schema.String,
+      sessionId: Schema.optionalKey(Schema.String),
+      params: Schema.optionalKey(
+        Schema.Struct({
+          width: Schema.optionalKey(Schema.Int),
+          height: Schema.optionalKey(Schema.Int),
+        }),
+      ),
+    }),
+  ),
 );
 
 // Real Workers WebSockets and the published browser client. Only the remote CDP
@@ -53,6 +65,7 @@ const endpoint = Effect.fnUntraced(function* (
     | "wrong-id"
     | "malformed"
     | "disconnect",
+  withRetainedPage = false,
 ) {
   const pair = yield* Effect.acquireRelease(
     Effect.sync(() => new WebSocketPair()),
@@ -68,6 +81,16 @@ const endpoint = Effect.fnUntraced(function* (
   const closed = yield* Deferred.make<void>();
   const methods: string[] = [];
   const requests: Array<{ method: string; path: string }> = [];
+  const viewport = { width: 624, height: 980 };
+  const targetInfo = {
+    targetId: "retained-page",
+    type: "page",
+    title: "Viewport fixture",
+    url: "https://fixture.test/",
+    attached: true,
+    canAccessOpener: false,
+    browserContextId: "retained-context",
+  };
 
   pair[1].accept();
   pair[1].addEventListener("close", () => pair[1].close());
@@ -92,18 +115,44 @@ const endpoint = Effect.fnUntraced(function* (
 
       return;
     }
+    if (withRetainedPage && message.sessionId === undefined) {
+      if (message.method === "Target.setDiscoverTargets")
+        pair[1].send(JSON.stringify({ method: "Target.targetCreated", params: { targetInfo } }));
+      if (message.method === "Target.setAutoAttach")
+        pair[1].send(
+          JSON.stringify({
+            method: "Target.attachedToTarget",
+            params: { sessionId: "retained-session", targetInfo, waitingForDebugger: false },
+          }),
+        );
+    }
+    if (message.method === "Emulation.setDeviceMetricsOverride") {
+      viewport.width = message.params?.width ?? viewport.width;
+      viewport.height = message.params?.height ?? viewport.height;
+    }
     pair[1].send(
       JSON.stringify(
         mode === "reject"
           ? { id: message.id, error: { code: -32000, message: "private-provider-detail" } }
           : {
               id: mode === "wrong-id" ? message.id + 1 : message.id,
+              ...(message.sessionId === undefined ? {} : { sessionId: message.sessionId }),
               result:
                 message.method === "Target.getBrowserContexts"
                   ? { browserContextIds: ["retained-context"] }
                   : message.method === "Browser.getVersion"
                     ? { product: "Fixture Chromium", protocolVersion: "1.3" }
-                    : {},
+                    : message.method === "Page.getFrameTree"
+                      ? {
+                          frameTree: {
+                            frame: {
+                              id: "retained-frame",
+                              loaderId: "retained-loader",
+                              url: targetInfo.url,
+                            },
+                          },
+                        }
+                      : {},
             },
       ),
     );
@@ -119,7 +168,7 @@ const endpoint = Effect.fnUntraced(function* (
     },
   };
 
-  return { browser, socket: pair[0], started, versionStarted, closed, methods, requests };
+  return { browser, socket: pair[0], started, versionStarted, closed, methods, requests, viewport };
 });
 
 const keepAliveHost = (browser: Pick<BrowserRun, "fetch">) =>
@@ -319,6 +368,24 @@ it.effect("connects through a Workers upgrade and releases only the attachment",
     expect(fixture.requests).toEqual([
       { method: "GET", path: `/v1/devtools/browser/${Redacted.value(identity.sessionId)}` },
     ]);
+  }).pipe(Effect.scoped),
+);
+
+// Regression: https://github.com/danieljvdm/effect-agent/commit/83fb83078a95a5fb60fffa0ea818dca98d4e88bd
+it.effect("attaches a retained page without replacing its host-owned viewport", () =>
+  Effect.gen(function* () {
+    const fixture = yield* endpoint("success", true);
+    const binding = yield* BrowserRunBinding.pipe(
+      Effect.provide(BrowserRunBinding.layer(fixture.browser)),
+    );
+    const attachment = binding.connect(Redacted.value(identity.sessionId), "session.connect");
+
+    yield* Effect.addFinalizer(() => attachment.retire.pipe(Effect.orDie));
+    const browser = yield* native(() => attachment.browser);
+    const pages = yield* native(() => browser.pages());
+
+    expect(pages.map((page) => page.url())).toEqual(["https://fixture.test/"]);
+    expect(fixture.viewport).toEqual({ width: 624, height: 980 });
   }).pipe(Effect.scoped),
 );
 

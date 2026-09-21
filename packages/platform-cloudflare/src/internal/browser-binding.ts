@@ -191,7 +191,8 @@ export class BrowserRunBinding extends Context.Service<
               { once: true },
             );
 
-            return await puppeteer.connect({ transport });
+            // Attaching must not replace the viewport owned by the host or another viewer.
+            return await puppeteer.connect({ transport, defaultViewport: null });
           } catch (cause) {
             try {
               retireNow();
