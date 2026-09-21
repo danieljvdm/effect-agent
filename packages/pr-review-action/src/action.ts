@@ -450,9 +450,14 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       Number(documentationPath(left.file.path)) - Number(documentationPath(right.file.path)) ||
       (left.file.path < right.file.path ? -1 : left.file.path > right.file.path ? 1 : 0),
   )) {
+    const beforeEntry = input.base.entry(basePath);
+    const afterEntry = input.head.entry(file.path);
+    const hasSymlink = beforeEntry?.mode === "120000" || afterEntry?.mode === "120000";
+
     const ignored = [file.path, ...(basePath === file.path ? [] : [basePath])].some(
       (path) =>
-        isBinaryAssetPath(path) || input.ignore.some((pattern) => matchesIgnore(path, pattern)),
+        (!hasSymlink && isBinaryAssetPath(path)) ||
+        input.ignore.some((pattern) => matchesIgnore(path, pattern)),
     );
 
     if (ignored) {
@@ -468,19 +473,16 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       );
       continue;
     }
-    const beforeEntry = input.base.entry(basePath);
-    const afterEntry = input.head.entry(file.path);
-
     if (
-      (beforeEntry !== undefined &&
-        (beforeEntry.type !== "blob" || beforeEntry.mode === "120000")) ||
-      (afterEntry !== undefined && (afterEntry.type !== "blob" || afterEntry.mode === "120000"))
+      (beforeEntry !== undefined && beforeEntry.type !== "blob") ||
+      (afterEntry !== undefined && afterEntry.type !== "blob")
     ) {
       exclude(unreviewedPaths, file, basePath, "unsupported-entry");
       continue;
     }
     if (
       basePath === file.path &&
+      !hasSymlink &&
       beforeEntry !== undefined &&
       (afterEntry === undefined || beforeEntry.mode === afterEntry.mode) &&
       classificationAttempts < MAX_GENERATED_CLASSIFICATIONS
@@ -568,19 +570,31 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
       continue;
     }
 
-    const patch =
-      basePath === file.path &&
+    // Snapshot reads fetch the committed blob by SHA. For a symlink this is
+    // its target text, never the contents of the target path.
+    const modeChanged =
       !beforeBinary &&
       !afterBinary &&
-      before === after &&
       beforeEntry !== undefined &&
       afterEntry !== undefined &&
-      beforeEntry.mode !== afterEntry.mode
-        ? [
-            `diff --git a/${file.path} b/${file.path}`,
-            `old mode ${beforeEntry.mode}`,
-            `new mode ${afterEntry.mode}`,
-          ].join("\n")
+      beforeEntry.mode !== afterEntry.mode;
+
+    const headers: Array<string> = [];
+
+    if (modeChanged) {
+      headers.push(`old mode ${beforeEntry.mode}`, `new mode ${afterEntry.mode}`);
+    } else if (hasSymlink) {
+      if (beforeEntry === undefined || beforeBinary) headers.push("new file mode 120000");
+      else if (afterEntry === undefined || afterBinary) headers.push("deleted file mode 120000");
+      else headers.push(`index ${beforeEntry.sha}..${afterEntry.sha} 120000`);
+    }
+    if (basePath !== file.path && !beforeBinary && !afterBinary) {
+      headers.push(`rename from ${basePath}`, `rename to ${file.path}`);
+    }
+
+    const patch =
+      modeChanged && before === after
+        ? ""
         : makeExactPatch({
             path,
             basePath: beforeBinary || afterBinary ? path : basePath,
@@ -592,12 +606,11 @@ export const hydrateExactChanges = Effect.fn("hydrateExactChanges")(function* (i
           });
 
     const originalPatch =
-      patch !== undefined && basePath !== file.path && !beforeBinary && !afterBinary
+      patch !== undefined && headers.length > 0
         ? [
-            `diff --git a/${basePath} b/${file.path}`,
-            `rename from ${basePath}`,
-            `rename to ${file.path}`,
-            patch,
+            `diff --git a/${beforeBinary || afterBinary ? path : basePath} b/${path}`,
+            ...headers,
+            ...(patch === "" ? [] : [patch]),
           ].join("\n")
         : patch;
 

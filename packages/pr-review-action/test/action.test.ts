@@ -2190,7 +2190,11 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
 
   it.effect("keeps usable file slots after unsupported candidates", () =>
     Effect.gen(function* () {
-      const unsupported = Array.from({ length: 1_000 }, (_, index) => `links/${String(index)}.ts`);
+      const unsupported = Array.from(
+        { length: 1_000 },
+        (_, index) => `submodules/${String(index)}`,
+      );
+
       const path = "src/valid.ts";
       const head = treeSnapshot("head", { [path]: "export const valid = true;\n" });
 
@@ -2201,8 +2205,8 @@ layer(noGeneratedFiles)("exact review delta", (it) => {
         head: {
           ...head,
           entry: (candidate) =>
-            candidate.startsWith("links/")
-              ? { sha: candidate, mode: "120000", type: "blob", size: 0 }
+            candidate.startsWith("submodules/")
+              ? { sha: candidate, mode: "160000", type: "commit" }
               : head.entry(candidate),
         },
         ignore: [],
