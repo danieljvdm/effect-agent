@@ -712,7 +712,13 @@ describe("live Thread projection and alarm backfill", () => {
         // Readiness is durable even if the concurrently running scheduler already claimed it.
         value: { readyAt: expect.anything() },
       });
-      for (let count = 0; count < 5 && controls.published.length === 0; count++) await advance(100);
+      // Independent Threads can publish before the aborted model finishes releasing.
+      for (
+        let count = 0;
+        count < 5 && (controls.published.length === 0 || controls.oldActive !== 0);
+        count++
+      )
+        await advance(100);
       expect({
         aborted: controls.abort !== undefined,
         model: controls.freshEntered,

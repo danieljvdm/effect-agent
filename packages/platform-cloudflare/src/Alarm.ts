@@ -89,9 +89,9 @@ const alarmFailure =
 const makeStorageEffect = Effect.map(
   SqlClient,
   (sql) =>
-    <A, E, R>(operation: string, execute: Effect.Effect<A, E, R>) =>
+    <A, R>(operation: string, execute: Effect.Effect<A, DurableAlarmError, R>) =>
       Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) => {
-        const body = Effect.uninterruptible(execute.pipe(Effect.mapError(alarmFailure(operation))));
+        const body = Effect.uninterruptible(execute);
 
         return current._tag === "Some"
           ? body
@@ -105,7 +105,7 @@ const makeStorageOperation = Effect.map(
   makeStorageEffect,
   (run) =>
     <A>(operation: string, execute: () => Promise<A>) =>
-      run(operation, Effect.tryPromise({ try: execute, catch: (cause) => cause })),
+      run(operation, Effect.tryPromise({ try: execute, catch: alarmFailure(operation) })),
 );
 
 /** `ctx.storage` alarm slot as an Effect service; storage is truth, never a memory field. */
@@ -1078,30 +1078,32 @@ export class ThreadMaintenance extends Context.Service<
           yield* failpoint.hit("maintenance:binding-retry:before");
           yield* runStorage(
             "record submission binding retry",
-            storage.transaction((transaction) =>
-              Effect.gen(function* () {
-                const encoded = yield* transaction.get(MAINTENANCE_STATE_KEY);
+            storage
+              .transaction((transaction) =>
+                Effect.gen(function* () {
+                  const encoded = yield* transaction.get(MAINTENANCE_STATE_KEY);
 
-                const state =
-                  encoded === undefined
-                    ? initialMaintenanceState()
-                    : yield* Schema.decodeUnknownEffect(ThreadMaintenanceState)(encoded);
+                  const state =
+                    encoded === undefined
+                      ? initialMaintenanceState()
+                      : yield* Schema.decodeUnknownEffect(ThreadMaintenanceState)(encoded);
 
-                const bindingRetries = [
-                  ...(state.bindingRetries ?? []).filter(
-                    (entry) => entry.submissionId !== selected.submissionId,
-                  ),
-                  ...(retry === undefined ? [] : [retry]),
-                ];
+                  const bindingRetries = [
+                    ...(state.bindingRetries ?? []).filter(
+                      (entry) => entry.submissionId !== selected.submissionId,
+                    ),
+                    ...(retry === undefined ? [] : [retry]),
+                  ];
 
-                yield* transaction.put(
-                  MAINTENANCE_STATE_KEY,
-                  yield* Schema.encodeEffect(ThreadMaintenanceState)(
-                    ThreadMaintenanceState.make({ ...state, bindingRetries }),
-                  ),
-                );
-              }),
-            ),
+                  yield* transaction.put(
+                    MAINTENANCE_STATE_KEY,
+                    yield* Schema.encodeEffect(ThreadMaintenanceState)(
+                      ThreadMaintenanceState.make({ ...state, bindingRetries }),
+                    ),
+                  );
+                }),
+              )
+              .pipe(Effect.mapError(alarmFailure("record submission binding retry"))),
           );
           yield* failpoint.hit("maintenance:binding-retry:after");
         }
