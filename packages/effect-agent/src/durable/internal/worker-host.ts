@@ -1247,6 +1247,8 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       );
 
       if (now >= deadlineAtMillis) return yield* failure("followUp", "denied");
+      if (reports[0].reportUpdate !== undefined && !reports[0].reportUpdate(update))
+        return undefined;
       const input = destination.input;
 
       let workerAdmission: WorkerAdmission | undefined;

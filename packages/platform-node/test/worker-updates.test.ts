@@ -58,9 +58,9 @@ const finish = (answer: string): ReadonlyArray<Response.StreamPartEncoded> => [
 const calls = (
   ...tools: ReadonlyArray<{ name: string; params: unknown }>
 ): ReadonlyArray<Response.StreamPartEncoded> => [
-  ...tools.map(({ name, params }) => ({
+  ...tools.map(({ name, params }, index) => ({
     type: "tool-call" as const,
-    id: `${name}-call`,
+    id: `${name}-${index}-call`,
     name,
     params,
     providerExecuted: false,
@@ -126,6 +126,8 @@ it.live(
           start: true,
           followUp: true,
           reportToParent: true,
+          reportUpdate: (update) =>
+            Schema.decodeUnknownSync(areaConcern)(update.value).area !== "Routine",
         });
 
         const outings = Subagent.background(activities, {
@@ -160,7 +162,10 @@ it.live(
 
                 if (call === 0)
                   return Stream.fromIterable(
-                    calls({ name: "emit_update", params: { value: concern } }),
+                    calls(
+                      { name: "emit_update", params: { value: { ...concern, area: "Routine" } } },
+                      { name: "emit_update", params: { value: concern } },
+                    ),
                   );
                 if (call === 1) {
                   yield* Deferred.succeed(hotelEntered, undefined);
@@ -387,6 +392,16 @@ it.live(
             : [],
         );
 
+        const childUpdates = (yield* read(hotelWorker.threadId)).records.flatMap(({ record }) =>
+          record.payload._tag === "AgentUpdateEmitted" ? [record.payload] : [],
+        );
+
+        expect(childUpdates).toHaveLength(2);
+        expect(childUpdates[0]?.delivery).toBeUndefined();
+        expect(childUpdates[1]?.delivery).toBeDefined();
+        expect(
+          admissions.filter((admission) => Schema.is(WorkerUpdate)(admission.messageAdmission)),
+        ).toHaveLength(1);
         expect(completions).toHaveLength(2);
         expect(completions.map((message) => message.report.worker.threadId).sort()).toEqual(
           launched.map((worker) => worker.threadId).sort(),
@@ -505,12 +520,13 @@ it.live(
   15_000,
 );
 
-for (const [parentState, failpoint] of [
-  ["completed", "update:after-canonical-append"],
-  ["aborted", "update:after-delivery-insert"],
+for (const [parentState, failpoint, notifyParent] of [
+  ["completed", "update:after-canonical-append", true],
+  ["aborted", "update:after-delivery-insert", true],
+  ["completed", "update:after-canonical-append", false],
 ] as const) {
   it.live(
-    `retains the update after lost acknowledgement at ${failpoint}, a Node restart, and a ${parentState} parent`,
+    `retains ${notifyParent ? "delivered" : "observer-only"} updates after lost acknowledgement at ${failpoint}, restart, and a ${parentState} parent`,
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -529,7 +545,18 @@ for (const [parentState, failpoint] of [
           });
 
           const declaration = Subagent.make("restart-hotel", { target: child });
-          const background = Subagent.background(child, { start: true, reportToParent: true });
+          let selected = notifyParent;
+          let selections = 0;
+
+          const background = Subagent.background(child, {
+            start: true,
+            reportToParent: true,
+            reportUpdate: () => {
+              selections++;
+
+              return selected;
+            },
+          });
 
           const source = Agent.withModel(
             Agent.make("restart-parent", {
@@ -636,6 +663,7 @@ for (const [parentState, failpoint] of [
             before.records.filter(({ record }) => record.payload._tag === "ToolCallSettled"),
           ).toHaveLength(0);
           yield* Scope.close(firstScope, Exit.void);
+          selected = !notifyParent;
 
           const second = yield* Layer.build(
             NodeHost.layer(registrations, options).pipe(
@@ -655,6 +683,11 @@ for (const [parentState, failpoint] of [
                 limit: 100,
               });
 
+              if (!notifyParent) {
+                expect(rows.items).toHaveLength(0);
+
+                return;
+              }
               if (
                 rows.items.length === 1 &&
                 rows.items[0]?.receipt !== null &&
@@ -676,8 +709,10 @@ for (const [parentState, failpoint] of [
               : [],
           );
 
-          expect(messages).toHaveLength(1);
-          expect(messages[0]).toMatchObject({ worker: started.worker, update: accepted[0] });
+          expect(messages).toHaveLength(Number(notifyParent));
+          if (notifyParent)
+            expect(messages[0]).toMatchObject({ worker: started.worker, update: accepted[0] });
+          expect(selections).toBe(1);
           const blocked = yield* read(started.worker.threadId);
 
           expect(
@@ -707,7 +742,10 @@ for (const [parentState, failpoint] of [
                 limit: 100,
               });
 
-              if (rows.items.length === 2 && rows.items.every((row) => row.receipt !== null)) {
+              if (
+                rows.items.length === 1 + Number(notifyParent) &&
+                rows.items.every((row) => row.receipt !== null)
+              ) {
                 for (const row of rows.items)
                   if (row.receipt !== null) yield* reopened.awaitSettlement(row.receipt);
 
