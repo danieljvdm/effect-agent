@@ -251,6 +251,7 @@
     "scheduling-management-recovery",
     "scoped-browser-crawl",
     "scoped-interactive-browser",
+    "selective-worker-progress",
     "semantic-recall-authority",
     "semantic-source-identity-budget",
     "semantic-vector-capacity",
