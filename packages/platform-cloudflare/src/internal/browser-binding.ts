@@ -148,7 +148,8 @@ export class BrowserRunBinding extends Context.Service<
             retirementFailure ??= browserFailure(disconnectOperation, cause);
           }
           try {
-            if (socket !== undefined && socket.readyState < WebSocket.CLOSING) socket.close();
+            // Manual-close runtimes also require a reply when the peer leaves us CLOSING.
+            if (socket !== undefined && socket.readyState < WebSocket.CLOSED) socket.close();
           } catch (cause) {
             retirementFailure ??= browserFailure(disconnectOperation, cause);
           }
@@ -183,7 +184,7 @@ export class BrowserRunBinding extends Context.Service<
               "close",
               () => {
                 try {
-                  fence();
+                  retireNow();
                 } catch (cause) {
                   retirementFailure ??= browserFailure(disconnectOperation, cause);
                 }
