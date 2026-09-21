@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.124
+
+### Patch Changes
+
+- [#593](https://github.com/danieljvdm/effect-agent/pull/593) [`d8bd6db`](https://github.com/danieljvdm/effect-agent/commit/d8bd6db4d21dbb0ae53132d52db7fa3fa6ef9f76) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow Code Mode tools with strict empty-object parameter and result schemas.
+
 ## 0.1.0-beta.123
 
 ### Minor Changes

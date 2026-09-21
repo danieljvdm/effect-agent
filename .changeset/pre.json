@@ -77,6 +77,7 @@
     "cloudflare-layer-from-bindings",
     "cloudflare-shared-memory",
     "code-mode-drop-allow-experimental",
+    "code-mode-empty-object",
     "code-mode-parallel-writes",
     "code-mode-pass-scope",
     "committed-memory-processing",

@@ -107,8 +107,11 @@ report or model history. Automated runs never wait for an operator and do not es
 The ignored `tooling/browser-run-worker-proof/.checkout-proof/<run>/report.json` records model,
 source commit/dirty state, policy, selected profile, completion rate, failures, observations, tool
 outcomes, model usage and finish reasons, server orders, attempt ledger and cleanup result.
-Failed credential calls also retain the requested alias, frame path and field selectors/roles,
-without resolved credential material.
+Click and credential-fill outcomes include the requested frame selectors, target selectors and
+credential field roles. Pseudo-selector text arguments become `[redacted]`; attribute literals are
+retained only for source-owned fixture names, types, titles and autocomplete tokens. URL/value
+attributes, URL schemes, escaped/encoded selectors and other literal-bearing selectors become `null`.
+These target records omit credential identifiers, material, session capabilities and raw exceptions.
 
 Instrumented reports retain request-local monotonic spans for model calls, browser dispatch,
 observations, waits, attachment, approval/resume and exact closure. Each browser span identifies

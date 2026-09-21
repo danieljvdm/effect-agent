@@ -377,6 +377,15 @@ const renderJsonSchemaType = (
       if (isJsonSchemaRecord(schema.additionalProperties)) {
         return `Record<string, ${renderJsonSchemaType(schema.additionalProperties, defs, depth + 1, indent)}>`;
       }
+      // Schema.Record(Schema.String, Schema.Never) accepts only an empty object.
+      if (
+        type === "object" &&
+        !("properties" in schema) &&
+        !("patternProperties" in schema) &&
+        schema.additionalProperties === false
+      ) {
+        return "Record<string, never>";
+      }
       // A bare `{ "type": "object" }` states "any JSON object" (Schema.Json's
       // object member derives to exactly this); rendering it as an
       // unconstrained record is faithful, not a deriver degradation.

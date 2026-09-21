@@ -21,6 +21,7 @@ import {
   AgentOutput,
   BrowserObservation,
   CheckoutError,
+  evidenceSelector,
   failure,
   policy,
   type RunEvidence,
@@ -183,6 +184,7 @@ export const buyerTools = (options: {
       const native = <A>(
         name: string,
         action: (page: Page) => Promise<A>,
+        evidence: Pick<(typeof RunEvidence.Type.toolCalls)[number], "target"> = {},
         resultDetails?: (value: A) => { observationBytes: number },
       ) =>
         measured(
@@ -192,10 +194,11 @@ export const buyerTools = (options: {
           {},
           resultDetails,
         ).pipe(
-          Effect.tap(() => host.record({ name, outcome: "completed" })),
+          Effect.tap(() => host.record({ name, outcome: "completed", ...evidence })),
           Effect.tapError((error) =>
             host.record({
               name,
+              ...evidence,
               outcome:
                 error._tag === "BrowserSessionError"
                   ? `${error.reason}:${error.dispatch}:${error.cleanup}`
@@ -344,6 +347,7 @@ export const buyerTools = (options: {
 
                 return { url: page.url(), frames };
               },
+              {},
               (value) => ({
                 observationBytes: new TextEncoder().encode(
                   Schema.encodeSync(Schema.fromJsonString(BrowserObservation))(value),
@@ -357,9 +361,18 @@ export const buyerTools = (options: {
                 })
               : failure("network", "URL is outside the fixture"),
           click: ({ frame, selector }) =>
-            native("click", async (page) => {
-              await (await inFrame(page, frame)).click(selector);
-            }),
+            native(
+              "click",
+              async (page) => {
+                await (await inFrame(page, frame)).click(selector);
+              },
+              {
+                target: {
+                  frame: frame.map(evidenceSelector),
+                  selector: evidenceSelector(selector),
+                },
+              },
+            ),
           type: ({ frame, selector, value }) =>
             native("type", async (page) => {
               const target = await inFrame(page, frame);
@@ -374,23 +387,34 @@ export const buyerTools = (options: {
             }),
           wait: () =>
             measured("wait", "wait", authorize.pipe(Effect.andThen(Effect.sleep("700 millis")))),
-          fill_credential: ({ request }) =>
-            authorize.pipe(
+          fill_credential: ({ request }) => {
+            const target = {
+              frame: (request.frame ?? []).map(evidenceSelector),
+              fields: request.fields.map(({ selector, role }) => ({
+                selector: evidenceSelector(selector),
+                role,
+              })),
+            };
+
+            return authorize.pipe(
               Effect.andThen(
                 measured("browser", "fill_credential", session.fillCredential(request)),
               ),
-              Effect.tap(() => host.record({ name: "fill_credential", outcome: request.kind })),
+              Effect.tap(() =>
+                host.record({ name: "fill_credential", outcome: request.kind, target }),
+              ),
               Effect.tapError((error) =>
                 host.record({
                   name: "fill_credential",
-                  credentialRequest: request,
+                  target,
                   outcome:
                     error._tag === "CheckoutError"
                       ? error.stage
                       : `${error.reason}:${error.dispatch}:${error.cleanup}${error._tag === "CredentialFillError" ? `:filled=${error.filled}` : ""}`,
                 }),
               ),
-            ),
+            );
+          },
           request_approval: () =>
             measured("approval", "request_approval", authorize.pipe(Effect.andThen(host.approval))),
           request_human: () => authorize.pipe(Effect.andThen(host.human)),
