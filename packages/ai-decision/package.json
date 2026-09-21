@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/ai-decision",
-  "version": "0.1.0-beta.128",
+  "version": "0.1.0-beta.129",
   "description": "Thread-owned automatic model selection using native Effect decisions.",
   "license": "MIT",
   "repository": {

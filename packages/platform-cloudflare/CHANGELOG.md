@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.129
+
+### Patch Changes
+
+- [#613](https://github.com/danieljvdm/effect-agent/pull/613) [`23e08c3`](https://github.com/danieljvdm/effect-agent/commit/23e08c33abaec27925b5856310e7cd94cdb58339) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Complete peer-initiated browser connection closure on Workers runtimes that require an explicit close reply. Preserve local attachment cleanup without closing the remote browser session.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.129
+  - effect-agent@0.1.0-beta.129
+
 ## 0.1.0-beta.128
 
 ### Patch Changes

@@ -1,5 +1,12 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.129
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.129
+
 ## 0.1.0-beta.128
 
 ### Patch Changes

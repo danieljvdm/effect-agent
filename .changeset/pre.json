@@ -279,6 +279,7 @@
     "thin-browser-sessions",
     "thread-in-main",
     "tidy-alarm-isolation",
+    "tidy-browsers-reply",
     "tidy-browsers-roam",
     "tidy-clouds-listen",
     "tidy-memory-accounting",
