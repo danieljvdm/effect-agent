@@ -46,6 +46,7 @@ import {
   type ThreadProjectionError,
 } from "effect-agent/thread-projection-maintenance";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
+import { DurableObjectStorage } from "effect-cf";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { DurableObjectContext } from "./CloudflareBindings.ts";
@@ -85,14 +86,12 @@ const alarmFailure =
 
 // SQL and raw KV/alarm operations share one physical SQLite transaction. Reserve its
 // connection for each short storage operation, never around a mutation or snapshot body.
-const makeStorageOperation = Effect.map(
+const makeStorageEffect = Effect.map(
   SqlClient,
   (sql) =>
-    <A>(operation: string, execute: () => Promise<A>) =>
+    <A, E, R>(operation: string, execute: Effect.Effect<A, E, R>) =>
       Effect.flatMap(Effect.serviceOption(sql.transactionService), (current) => {
-        const body = Effect.uninterruptible(
-          Effect.tryPromise({ try: execute, catch: alarmFailure(operation) }),
-        );
+        const body = Effect.uninterruptible(execute.pipe(Effect.mapError(alarmFailure(operation))));
 
         return current._tag === "Some"
           ? body
@@ -100,6 +99,13 @@ const makeStorageOperation = Effect.map(
               Effect.andThen(sql.reserve.pipe(Effect.mapError(alarmFailure(operation))), body),
             );
       }),
+);
+
+const makeStorageOperation = Effect.map(
+  makeStorageEffect,
+  (run) =>
+    <A>(operation: string, execute: () => Promise<A>) =>
+      run(operation, Effect.tryPromise({ try: execute, catch: (cause) => cause })),
 );
 
 /** `ctx.storage` alarm slot as an Effect service; storage is truth, never a memory field. */
@@ -703,6 +709,8 @@ export class ThreadMaintenance extends Context.Service<
       const alarm = yield* DurableAlarmService;
       const config = yield* CloudflareDurableRuntimeConfig;
       const { ctx } = yield* DurableObjectContext;
+      const storage = DurableObjectStorage.fromDurableObjectStorage(ctx.storage);
+      const runStorage = yield* makeStorageEffect;
       const failpoint = yield* ThreadMaintenanceFailpoint;
 
       const mutations = yield* ThreadMutationGate;
@@ -1068,22 +1076,32 @@ export class ThreadMaintenance extends Context.Service<
           // before joining fallible auxiliary work. This local fact neither acknowledges
           // a generation nor changes the shared alarm.
           yield* failpoint.hit("maintenance:binding-retry:before");
-          yield* runTransaction("record submission binding retry", () =>
-            ctx.storage.transaction(async (transaction) => {
-              const { state } = await readMaintenanceState(transaction);
+          yield* runStorage(
+            "record submission binding retry",
+            storage.transaction((transaction) =>
+              Effect.gen(function* () {
+                const encoded = yield* transaction.get(MAINTENANCE_STATE_KEY);
 
-              const bindingRetries = [
-                ...(state.bindingRetries ?? []).filter(
-                  (entry) => entry.submissionId !== selected.submissionId,
-                ),
-                ...(retry === undefined ? [] : [retry]),
-              ];
+                const state =
+                  encoded === undefined
+                    ? initialMaintenanceState()
+                    : yield* Schema.decodeUnknownEffect(ThreadMaintenanceState)(encoded);
 
-              await transaction.put(
-                MAINTENANCE_STATE_KEY,
-                encodeMaintenanceState(ThreadMaintenanceState.make({ ...state, bindingRetries })),
-              );
-            }),
+                const bindingRetries = [
+                  ...(state.bindingRetries ?? []).filter(
+                    (entry) => entry.submissionId !== selected.submissionId,
+                  ),
+                  ...(retry === undefined ? [] : [retry]),
+                ];
+
+                yield* transaction.put(
+                  MAINTENANCE_STATE_KEY,
+                  yield* Schema.encodeEffect(ThreadMaintenanceState)(
+                    ThreadMaintenanceState.make({ ...state, bindingRetries }),
+                  ),
+                );
+              }),
+            ),
           );
           yield* failpoint.hit("maintenance:binding-retry:after");
         }
