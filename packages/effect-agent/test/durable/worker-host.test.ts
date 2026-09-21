@@ -225,7 +225,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
   const submissions = new Map<SubmissionId, SubmissionSnapshot>();
   const settlements = new Map<SubmissionId, Settlement>();
   let failpoint: DurableRuntimeFailpointLocation | undefined;
-  let denied: "read" | "send" | "control" | undefined;
+  let denied: "read" | "send" | "report" | "control" | undefined;
   let joined: SubmissionId | undefined;
   let admissionFailure = false;
   let isolatedThread: ThreadId | undefined;
@@ -1085,7 +1085,7 @@ layer(NodeCrypto.layer)((it) => {
           const sourceLength = h.logs.get(sourceId)!.length;
 
           h.isolate(started.worker.threadId);
-          h.deny("send");
+          h.deny("report");
           yield* h.updates.emit(emission);
           yield* h.settle(started.delivery.receipt!);
           h.isolate(undefined);
@@ -1129,7 +1129,7 @@ layer(NodeCrypto.layer)((it) => {
                 row.envelope.inputDigest,
               ),
             ).toEqual(message);
-            h.deny("send");
+            h.deny("report");
           }
           h.deny(undefined);
 
@@ -1201,7 +1201,7 @@ layer(NodeCrypto.layer)((it) => {
             )
             .pipe(Effect.flip),
         ).toMatchObject({ reason: "denied" });
-        h.deny("send");
+        h.deny("report");
         expect(
           yield* h.runtime
             .validateCompletion(message, options, row.envelope.agentId, row.envelope.inputDigest)
@@ -4009,7 +4009,7 @@ layer(NodeCrypto.layer)((it) => {
             Effect.flip,
           )).reason,
         ).toBe("denied");
-        h.deny("send");
+        h.deny("report");
         expect((yield* validate().pipe(Effect.flip)).reason).toBe("denied");
         h.deny(undefined);
       }
