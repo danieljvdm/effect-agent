@@ -58,6 +58,7 @@ import {
   lostBookReplies,
   maintenanceClocks,
   makeTestBindings,
+  modelRequestHolds,
   plannerDefinition,
   submitOptions,
   supplierCountsFor,
@@ -75,6 +76,7 @@ const localRun =
     reads: Array<string>,
     options: {
       readonly hit?: ThreadMaintenanceFailpointHandler;
+      readonly withoutBinding?: string;
       readonly authorizer?: OperationAuthorizerService;
       readonly readFailureDefect?: Error;
       readonly readAbortIntent?: (
@@ -147,7 +149,11 @@ const localRun =
             );
 
             const services = Layer.fresh(ThreadMaintenance.layer).pipe(
-              Layer.provideMerge(DurableAgentRuntime.layerWithBindings(bindings)),
+              Layer.provideMerge(
+                DurableAgentRuntime.layerWithBindings(
+                  bindings.filter((binding) => binding.agentId !== options.withoutBinding),
+                ),
+              ),
               Layer.provideMerge(ports),
               Layer.provide(WakeScheduler.layerNoop),
               Layer.provide(
@@ -224,6 +230,319 @@ const restoreHistory = (owner: string, thread: string, original: string, sequenc
       sequence,
     );
   });
+
+// Regression: https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22
+it(
+  "starts a later independent Thread with two slots and retains same-Thread FIFO work",
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const owner = `native-concurrent-${crypto.randomUUID()}`;
+        const first = `${owner}-a`;
+        const second = `${owner}-b`;
+        const third = `${owner}-c`;
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(owner, yield* Clock.Clock);
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            maintenanceClocks.delete(owner);
+            for (const thread of [first, second, third]) modelRequestHolds.delete(thread);
+          }),
+        );
+        const run = localRun(owner, []);
+
+        yield* run(
+          Effect.gen(function* () {
+            const firstEntered = yield* Deferred.make<void>();
+            const secondEntered = yield* Deferred.make<void>();
+            const thirdEntered = yield* Deferred.make<void>();
+            const releaseFirst = yield* Deferred.make<void>();
+            const releaseSecond = yield* Deferred.make<void>();
+
+            modelRequestHolds.set(
+              first,
+              Deferred.succeed(firstEntered, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseFirst)),
+              ),
+            );
+            modelRequestHolds.set(
+              second,
+              Deferred.succeed(secondEntered, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseSecond)),
+              ),
+            );
+            modelRequestHolds.set(
+              third,
+              Deferred.succeed(thirdEntered, undefined).pipe(Effect.asVoid),
+            );
+            const firstReceipt = yield* submit(first, "first");
+            const running = yield* pass.pipe(Effect.forkChild);
+
+            yield* Deferred.await(firstEntered);
+            yield* clock.adjust(60);
+            const later = yield* submit(first, "follower");
+            const admissionEntered = yield* Deferred.make<void>();
+            const releaseAdmission = yield* Deferred.make<void>();
+
+            const preparing = yield* ThreadMaintenance.use((maintenance) =>
+              maintenance.withMutation(
+                Deferred.succeed(admissionEntered, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseAdmission)),
+                  Effect.andThen(
+                    DurableAgentRuntime.use((runtime) =>
+                      runtime.submitRegistered(
+                        { definition: plannerDefinition },
+                        { question: "late ready input", ref: second },
+                        submitOptions(second, "later-independent"),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ).pipe(Effect.forkChild);
+
+            yield* Deferred.await(admissionEntered);
+            // The generation is already dirty while B is still absent from the ledger.
+            yield* clock.adjust(1_000);
+            yield* Deferred.succeed(releaseAdmission, undefined);
+            const secondReceipt = yield* Fiber.join(preparing);
+
+            yield* clock.adjust(1_000);
+            const secondStarted = yield* Deferred.isDone(secondEntered);
+
+            yield* submit(third, "third-independent");
+            yield* clock.adjust(1_000);
+            const thirdStartedAtCapacity = yield* Deferred.isDone(thirdEntered);
+
+            yield* Deferred.succeed(releaseSecond, undefined);
+            yield* clock.adjust(1_000);
+            const thirdStartedAfterSlotRelease = yield* Deferred.isDone(thirdEntered);
+            const ledger = yield* SubmissionLedger;
+
+            const queued = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: later.submissionId }),
+            );
+
+            expect(queued.submission.state).toBe("ready");
+            expect(queued.ownership).toBeUndefined();
+            yield* Deferred.succeed(releaseFirst, undefined);
+            yield* Fiber.join(running);
+            expect(secondStarted).toBe(true);
+            expect(thirdStartedAtCapacity).toBe(false);
+            expect(thirdStartedAfterSlotRelease).toBe(true);
+
+            const secondSnapshot = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: secondReceipt.submissionId }),
+            );
+
+            const followerSnapshot = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: later.submissionId }),
+            );
+
+            expect(secondSnapshot.submission.state).toBe("settled");
+            expect(followerSnapshot.submission.state).toBe("settled");
+            expect(followerSnapshot.ownership).toBeUndefined();
+
+            const records = yield* ThreadStore.use((store) =>
+              Stream.runCollect(
+                store.read(ThreadRead.make({ threadId: decodeThreadId(first), limit: 100 })),
+              ),
+            );
+
+            expect(
+              records.flatMap((record) =>
+                record.record.payload._tag === "UserInputRecorded"
+                  ? [record.record.payload.submissionId]
+                  : [],
+              ),
+            ).toEqual([firstReceipt.submissionId, later.submissionId]);
+          }),
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ),
+  20_000,
+);
+
+// Regression: https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22
+it(
+  "releases both native claims on interruption and resumes their original receipts",
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const owner = `native-interrupt-${crypto.randomUUID()}`;
+        const threads = [`${owner}-a`, `${owner}-b`];
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(owner, yield* Clock.Clock);
+        const clock = yield* TestClock.testClockWith(Effect.succeed);
+
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            maintenanceClocks.delete(owner);
+            for (const thread of threads) modelRequestHolds.delete(thread);
+          }),
+        );
+        const run = localRun(owner, []);
+
+        const receipts = yield* run(
+          Effect.gen(function* () {
+            const entered = yield* Effect.forEach(threads, () => Deferred.make<void>());
+            const finalized = yield* Effect.forEach(threads, () => Deferred.make<void>());
+
+            for (let index = 0; index < threads.length; index++) {
+              modelRequestHolds.set(
+                threads[index]!,
+                Effect.acquireUseRelease(
+                  Deferred.succeed(entered[index]!, undefined),
+                  () => Effect.never,
+                  () => Deferred.succeed(finalized[index]!, undefined),
+                ),
+              );
+            }
+            const accepted = yield* Effect.forEach(threads, (thread) => submit(thread, thread));
+            const running = yield* pass.pipe(Effect.forkChild);
+
+            yield* Deferred.await(entered[0]!);
+            yield* clock.adjust(1_000);
+            expect(yield* Deferred.isDone(entered[1]!)).toBe(true);
+            yield* Fiber.interrupt(running);
+            const ledger = yield* SubmissionLedger;
+
+            for (let index = 0; index < accepted.length; index++) {
+              expect(yield* Deferred.isDone(finalized[index]!)).toBe(true);
+
+              const snapshot = yield* ledger.loadRecoverySnapshot(
+                RecoverySnapshotRequest.make({ submissionId: accepted[index]!.submissionId }),
+              );
+
+              expect(snapshot.ownership).toBeUndefined();
+              expect(snapshot.submission.state).not.toBe("settled");
+            }
+
+            return accepted;
+          }),
+        );
+
+        expect(yield* storage(owner, (state) => state.storage.getAlarm())).not.toBeNull();
+        for (const thread of threads) modelRequestHolds.delete(thread);
+        yield* clock.adjust(1_000);
+        for (let event = 0; event < threads.length; event++) {
+          yield* clock.adjust(1_000);
+          yield* run(pass);
+        }
+        yield* run(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const store = yield* ThreadStore;
+
+            for (const receipt of receipts) {
+              const snapshot = yield* ledger.loadRecoverySnapshot(
+                RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+              );
+
+              expect(snapshot.submission.state).toBe("settled");
+
+              const records = yield* Stream.runCollect(
+                store.read(
+                  ThreadRead.make({
+                    threadId: snapshot.submission.threadId,
+                    limit: 100,
+                  }),
+                ),
+              );
+
+              expect(
+                records.filter((record) => record.record.payload._tag === "UserInputRecorded"),
+              ).toHaveLength(1);
+              expect(
+                records.filter((record) => record.record.payload._tag === "SubmissionSettled"),
+              ).toHaveLength(1);
+            }
+          }),
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ),
+  20_000,
+);
+
+// Regression: https://github.com/danieljvdm/effect-agent/commit/e6407479ae233527685928bead040dbfe5153a22
+it(
+  "retains a missing binding retry while an independent Thread settles",
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const owner = `native-binding-${crypto.randomUUID()}`;
+        const first = `${owner}-a`;
+        const second = `${owner}-b`;
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(owner, yield* Clock.Clock);
+        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(owner)));
+
+        const [blocked, healthy] = yield* localRun(
+          owner,
+          [],
+        )(
+          Effect.gen(function* () {
+            const blocked = yield* submit(first, "blocked");
+
+            const healthy = yield* ThreadMaintenance.use((maintenance) =>
+              maintenance.withMutation(
+                DurableAgentRuntime.use((runtime) =>
+                  runtime.submitRegistered(
+                    { definition: bookDefinition },
+                    { question: "independent input", ref: second },
+                    submitOptions(second, "healthy"),
+                  ),
+                ),
+              ),
+            );
+
+            return [blocked, healthy] as const;
+          }),
+        );
+
+        yield* localRun(owner, [], { withoutBinding: plannerDefinition.id })(pass);
+        yield* localRun(
+          owner,
+          [],
+        )(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+
+            const blockedSnapshot = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: blocked.submissionId }),
+            );
+
+            const healthySnapshot = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: healthy.submissionId }),
+            );
+
+            expect(blockedSnapshot.submission.state).not.toBe("settled");
+            expect(blockedSnapshot.ownership).toBeUndefined();
+            expect(healthySnapshot.submission.state).toBe("settled");
+          }),
+        );
+
+        const retry = yield* storage(owner, async (state) =>
+          Schema.decodeUnknownSync(
+            Schema.Struct({
+              bindingRetries: Schema.Array(
+                Schema.Struct({ submissionId: Schema.String, attempts: Schema.Number }),
+              ),
+            }),
+          )(await state.storage.get("effect-agent:thread-maintenance:v1")),
+        );
+
+        expect(retry.bindingRetries).toEqual([{ submissionId: blocked.submissionId, attempts: 1 }]);
+        expect(yield* storage(owner, (state) => state.storage.getAlarm())).not.toBeNull();
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ),
+  20_000,
+);
 
 describe("recovery faults independent of execution history", () => {
   // Incident: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-AA
