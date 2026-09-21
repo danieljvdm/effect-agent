@@ -3065,7 +3065,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
       principal: options.principal,
       operation: "followUp",
-      access: "send",
+      access: "report",
       worker: receiving?.origin.worker ?? origin.worker,
     });
 

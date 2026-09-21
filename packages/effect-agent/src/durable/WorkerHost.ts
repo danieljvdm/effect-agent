@@ -141,7 +141,8 @@ export interface WorkerHostAuthorizationRequest {
   readonly sourceSubmissionId?: SubmissionId;
   readonly principal: Principal;
   readonly operation: WorkerError["operation"];
-  readonly access: "context" | "read" | "send" | "control";
+  /** Report access follows native frozen-message proof and preserves the destination principal. */
+  readonly access: "context" | "read" | "send" | "control" | "report";
   readonly worker?: WorkerRef;
   /** Native-verified successful predecessor, never a caller-supplied authorization grant. */
   readonly continuationOf?: WorkerContinuation;

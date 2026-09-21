@@ -496,6 +496,9 @@ match the predecessor, and its absolute expiry is never extended. Current author
 and concurrency checks still apply; verified `continuationOf` evidence reaches each host hook.
 The current source run remains the caller. Applications must authorize the continuation's scope
 and derive its captured task configuration from the predecessor, not from untrusted new input.
+Native update/completion admission uses authorizer `access: "report"` after verifying the frozen
+framework message. It must return that destination's principal; worker `followUp` keeps `access:
+"send"` and may select its execution principal separately.
 
 ## Completion report guarantees
 
