@@ -38,6 +38,10 @@ An accidental second submission fails the proof even though the receiver refuses
 The generic browser tools expose observations, navigation, clicks, text entry, selections and
 credential filling. The buyer receives no selectors, click sequence or purchase API. Its owner
 allows only the two fixture origins and supplies dummy credentials through the native fill helper.
+Navigation, clicks, credential fills and waits return a page observation in the same tool result.
+If that read fails, the result retains the completed action and requests read-only recovery;
+it does not authorize repeating the input. Typing and option selection keep explicit observations
+so several fields can be edited before rereading the form.
 Observations include visible frames and current control values, so collapsed payment sections must
 be opened before their fields become observable. Each frame includes its ordered CSS iframe path;
 copy that path into browser and credential tools, with field selectors relative to the selected

@@ -13,7 +13,7 @@ import { buyerTools, CheckoutOwner, tools } from "../src/checkout-agent.ts";
 import type { BrowserObservation } from "../src/checkout-contract.ts";
 
 it.live(
-  "copies observed frame paths into browser tools after opening a collapsed payment section",
+  "returns the opened payment frame in the click result and copies its path into browser tools",
   (test) =>
     Effect.gen(function* () {
       const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
@@ -96,13 +96,19 @@ it.live(
           observations[0]?.frames.map((frame) => frame.frame),
           [[]],
         );
-        yield* handlers
+
+        const clicked = yield* handlers
           .handle("click", { frame: [], selector: "summary" })
-          .pipe(Effect.flatMap(Stream.runDrain));
-        yield* handlers.handle("observe", {}).pipe(Effect.flatMap(Stream.runDrain));
+          .pipe(Effect.flatMap(Stream.runCollect));
+
         const observed = observations[1];
         const card = observed?.frames.find((frame) => frame.url === "https://pay.test/card");
 
+        assert.deepStrictEqual(clicked.at(-1)?.result, {
+          execution: "completed",
+          observation: observed,
+          readFailure: null,
+        });
         assert.strictEqual(observed?.frames.length, 3);
         if (card?.frame === undefined) return yield* Effect.die("Missing observed card frame path");
         assert.strictEqual(card.frame.length, 2);
@@ -127,6 +133,10 @@ it.live(
           yield* Effect.promise(() => page.$eval("input", (input) => input.value)),
           "merchant",
         );
+        yield* handlers.handle("observe", {}).pipe(Effect.flatMap(Stream.runDrain));
+        const refreshed = observations.at(-1)?.frames.find((item) => item.url === frame.url());
+
+        assert.include(refreshed?.html ?? "", 'value="targeted-card"');
       }).pipe(
         Effect.provide(
           buyerTools({

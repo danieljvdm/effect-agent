@@ -116,6 +116,13 @@ export const BrowserObservation = Schema.Struct({
   ),
 });
 
+/** A failed follow-up read never changes an acknowledged action into a failed action. */
+export const ActionObservation = Schema.Struct({
+  execution: Schema.Literal("completed"),
+  observation: Schema.NullOr(BrowserObservation),
+  readFailure: Schema.NullOr(Text),
+});
+
 export const AgentRun = Schema.Struct({
   turns: Schema.Natural,
   finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
