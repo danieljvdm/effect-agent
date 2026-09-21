@@ -51,6 +51,8 @@ const provider = vi.hoisted(() => ({
   acquired: 0,
   closed: [] as string[],
   retirements: 0,
+  delayRetirement: undefined as (() => void) | undefined,
+  acknowledgeRetirement: undefined as (() => void) | undefined,
   requests: [] as string[],
 }));
 
@@ -157,7 +159,30 @@ const layer = BrowserSessions.layerNoDeps.pipe(
           provider.acquired++;
         }
 
-        return browserResponse(init, id);
+        const response = browserResponse(init, id);
+
+        if (init?.method !== "POST" && provider.delayRetirement !== undefined) {
+          const socket = response.webSocket!;
+          const close = socket.close.bind(socket);
+          let state = WebSocket.OPEN;
+
+          Object.defineProperty(socket, "readyState", {
+            get: () => state,
+            configurable: true,
+          });
+          Object.defineProperty(socket, "close", {
+            value: () => {
+              state = WebSocket.CLOSING;
+              provider.acknowledgeRetirement = () => {
+                state = WebSocket.CLOSED;
+                close();
+              };
+              provider.delayRetirement?.();
+            },
+          });
+        }
+
+        return response;
       },
     }),
   ),
@@ -196,6 +221,8 @@ beforeEach(() =>
     acquired: 0,
     closed: [],
     retirements: 0,
+    delayRetirement: undefined,
+    acknowledgeRetirement: undefined,
     requests: [],
   }),
 );
@@ -678,4 +705,38 @@ it.effect("preserves the host authority and credential error/requirement channel
       >
     >();
   }).pipe(Effect.scoped, Effect.provide(layer)),
+);
+
+it.effect("preserves a completed command while a delayed disconnect acknowledgment arrives", () =>
+  Effect.gen(function* () {
+    const host = yield* BrowserSessions;
+    const reference = yield* host.create(options, () => Effect.void);
+    const closing = yield* Deferred.make<void>();
+
+    provider.delayRetirement = () => Effect.runSync(Deferred.succeed(closing, undefined));
+    let completed = false;
+
+    const attempt = yield* Effect.gen(function* () {
+      const session = yield* host.attach(reference);
+
+      return yield* session.run(Effect.void, (page) => page.title());
+    }).pipe(
+      Effect.scoped,
+      Effect.tap(() =>
+        Effect.sync(() => {
+          completed = true;
+        }),
+      ),
+      Effect.forkChild,
+    );
+
+    yield* Deferred.await(closing);
+    yield* TestClock.adjust(1_500);
+    expect(completed).toBe(false);
+    expect(provider.retirements).toBe(2);
+    provider.acknowledgeRetirement?.();
+    expect(yield* Fiber.join(attempt)).toBe("Checkout");
+    expect(provider.closed).toEqual([]);
+    expect(provider.retirements).toBe(2);
+  }).pipe(Effect.provide(layer)),
 );

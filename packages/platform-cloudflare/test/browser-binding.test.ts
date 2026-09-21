@@ -581,7 +581,7 @@ it.effect.each(["throws", "unacknowledged"] as const)(
 
       yield* Deferred.await(fixture.started);
       yield* TestClock.adjust(30_000);
-      yield* TestClock.adjust(1_000);
+      yield* TestClock.adjust(10_000);
       const exit = yield* Fiber.await(attempt);
 
       expect(exit._tag).toBe("Failure");

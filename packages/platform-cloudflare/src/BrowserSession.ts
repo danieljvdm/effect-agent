@@ -242,8 +242,10 @@ export class BrowserSessions extends Context.Service<
           attachment === undefined
             ? Effect.void
             : attachment.retire.pipe(
+                // Dispatch is already fenced; give the socket close handshake the same
+                // bounded window as keepalive instead of failing a settled command after 1s.
                 Effect.timeoutOrElse({
-                  duration: "1 second",
+                  duration: "10 seconds",
                   orElse: () => Effect.fail(failure("cleanup")),
                 }),
                 Effect.catchCause((cause) =>
