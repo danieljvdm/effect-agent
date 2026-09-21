@@ -1,5 +1,13 @@
 # effect-agent
 
+## 0.1.0-beta.126
+
+### Patch Changes
+
+- [#603](https://github.com/danieljvdm/effect-agent/pull/603) [`bf955bb`](https://github.com/danieljvdm/effect-agent/commit/bf955bbf275901e560d93cf0a054cfbf51aa9420) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow an authorized `Subagent.start` with `continuationOf` to create a new worker from a successfully completed assignment while preserving its seal, lineage and policy bounds. Retain explicit worker stops in native worker-state reads.
+
+- [#604](https://github.com/danieljvdm/effect-agent/pull/604) [`81a78cd`](https://github.com/danieljvdm/effect-agent/commit/81a78cd2bbd932b939b942eedea53c8e2894480e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow background workers to filter automatic completion reports while retaining durable decisions and independent final reports.
+
 ## 0.1.0-beta.125
 
 ### Patch Changes
