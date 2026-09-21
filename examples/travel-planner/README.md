@@ -37,12 +37,34 @@ Direct Alchemy deployments leave traces disabled because its SDK does not yet ex
 Manual dispatch of **Deploy travel planner** deploys the selected branch to production, so it
 requires deployment authorization even for a PR branch. Automatic deployments remain on `main`.
 
-From the repository root:
+For the full application, configure the values in [.env.example](.env.example) for
+your development environment and use the Alchemy dev entry point from the repository root:
 
 ```sh
 vp install
 vp run -F @effect-agent/example-travel-planner dev
 ```
+
+Alchemy supplies the Worker bindings declared in [alchemy.run.ts](alchemy.run.ts),
+including the `AUTH` SQLite Durable Object and `AUTH_EMAIL` delivery binding.
+Authentication requires a canonical HTTPS `AUTH_ORIGIN`, a matching GitHub OAuth
+callback at `AUTH_ORIGIN/auth/github/callback`, a verified email sender, and three
+independent persistent base64url-encoded 32-byte auth keys. Use development-owned
+credentials and resources; the stack also requires Cloudflare access and the other
+configuration listed in `.env.example`.
+
+A standalone `vp preview` after a build runs the compiled Worker but does not
+execute the Alchemy stack or supply its bindings. It can render `/login` and its
+assets, but `GET /auth/getSession` returns HTTP 503 when `AUTH` is absent. Adding
+environment variables alone does not create that binding. A configured signed-out
+session lookup returns HTTP 200 with `{ "_tag": "Success", "value": null }`;
+access to protected planner routes still requires sign-in. Treat a standalone
+login-page preview as a limited UI check, not an authenticated planner smoke test.
+
+For an isolated auth check without provider credentials, run
+`vp test test/auth.test.ts` from `examples/travel-planner`. That suite exercises the
+Worker routing and auth host with local Miniflare SQLite storage and fixture email
+and GitHub responses; it does not verify deployed bindings or real providers.
 
 The conversation loads in stages. `GetPlanner` returns messages, trips, and the latest
 source-record overview for up to eight scouts and the trip's editor without reading child
