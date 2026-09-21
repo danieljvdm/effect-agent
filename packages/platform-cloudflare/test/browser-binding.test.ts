@@ -82,6 +82,7 @@ const endpoint = Effect.fnUntraced(function* (
   const methods: string[] = [];
   const requests: Array<{ method: string; path: string }> = [];
   const viewport = { width: 624, height: 980 };
+
   const targetInfo = {
     targetId: "retained-page",
     type: "page",
@@ -375,9 +376,11 @@ it.effect("connects through a Workers upgrade and releases only the attachment",
 it.effect("attaches a retained page without replacing its host-owned viewport", () =>
   Effect.gen(function* () {
     const fixture = yield* endpoint("success", true);
+
     const binding = yield* BrowserRunBinding.pipe(
       Effect.provide(BrowserRunBinding.layer(fixture.browser)),
     );
+
     const attachment = binding.connect(Redacted.value(identity.sessionId), "session.connect");
 
     yield* Effect.addFinalizer(() => attachment.retire.pipe(Effect.orDie));
