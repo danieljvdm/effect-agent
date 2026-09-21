@@ -71,6 +71,7 @@ import {
   WorkerInputRequested,
   WorkerStopRequested,
   WorkerOrigin,
+  WorkerContinuation,
   WorkerOriginRecorded,
   WorkerInputCompleted,
   WorkerReportPrepared,
@@ -292,6 +293,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     origin: WorkerOrigin,
     principal: Principal,
   ) {
+    yield* verifyContinuation(origin);
     if (origin.budgetScope !== "worker-run") return;
     // Independence changes accounting ownership, never delegation generations.
     if (origin.depth !== 1) return yield* failure("start", "denied");
@@ -300,6 +302,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       source: origin.source,
       principal,
       worker: origin.worker,
+      ...(origin.continuationOf === undefined ? {} : { continuationOf: origin.continuationOf }),
       policy: origin.policy,
       budget: origin.budget,
     });
@@ -319,6 +322,170 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       Effect.provideService(ThreadStore, deps.store),
       Effect.mapError(storageFailure(operation)),
     );
+  });
+
+  const completedContinuation = Effect.fn("WorkerHost.completedContinuation")(function* (
+    source: WorkerContext["source"],
+    worker: WorkerRef,
+    targetAgentId: AgentId,
+    delegationId: WorkerRef["delegationId"],
+    expected?: WorkerContinuation,
+  ) {
+    const selected = yield* decode(WorkerRef, worker, "start");
+
+    if (
+      selected.targetAgentId !== targetAgentId ||
+      selected.delegationId !== delegationId ||
+      selected.threadId === source.threadId ||
+      deps.ledger.inspectWorker === undefined
+    )
+      return yield* failure("start", "worker-mismatch");
+    const sourceState = yield* readWorkerState(source.threadId, "start");
+
+    if (
+      sourceState.records.some(
+        ({ record }) =>
+          record.payload._tag === "WorkerStopRequested" &&
+          record.payload.command.worker.threadId === selected.threadId,
+      )
+    )
+      return yield* failure("start", "denied");
+
+    const first = sourceState.records.find(
+      ({ record }) => record.recordId === firstWorkerInputRecordId(selected),
+    )?.record.payload;
+
+    const origin = first?._tag === "WorkerInputRequested" ? first.admission.origin : undefined;
+
+    if (
+      origin === undefined ||
+      origin.lifecycle !== "assignment" ||
+      !Schema.toEquivalence(WorkerRef)(origin.worker, selected) ||
+      origin.source.threadId !== source.threadId ||
+      origin.source.agentId !== source.agentId ||
+      first?._tag !== "WorkerInputRequested" ||
+      first.admission.messageId !== origin.firstMessageId
+    )
+      return yield* failure("start", "worker-mismatch");
+
+    const recorded = Option.getOrUndefined(
+      yield* exactRecord(selected.threadId, workerOriginRecordId(selected.threadId), "start"),
+    )?.record.payload;
+
+    if (recorded?._tag !== "WorkerOriginRecorded" || !sameOrigin(recorded.origin, origin))
+      return yield* failure("start", "worker-mismatch");
+
+    const control = yield* deps.ledger
+      .inspectWorker(selected.threadId)
+      .pipe(Effect.mapError(storageFailure("start")));
+
+    if (control.terminal !== "completed" || !control.stopped || control.active !== null)
+      return yield* failure("start", "denied");
+
+    const tail = yield* deps.store
+      .inspectTail(ThreadTailRequest.make({ threadId: selected.threadId }))
+      .pipe(Effect.mapError(storageFailure("start")));
+
+    const execution = yield* deps.store
+      .read({
+        threadId: selected.threadId,
+        selection: {
+          _tag: "WorkerExecution",
+          expectedTailSequence: tail.tailSequence,
+          expectedTailDigest: tail.tailDigest,
+        },
+        page: { limit: 2 },
+      })
+      .pipe(Stream.runCollect, Effect.mapError(storageFailure("start")));
+
+    const run = execution.find(({ record }) => record.payload._tag === "RunStarted")?.record
+      .payload;
+
+    if (run?._tag !== "RunStarted") return yield* failure("start", "corrupt");
+
+    const input = Option.getOrUndefined(
+      yield* getRunInput({ threadId: selected.threadId, runId: run.runId }).pipe(
+        Effect.provideService(ThreadStore, deps.store),
+        Effect.mapError(storageFailure("start")),
+      ),
+    )?.record.payload;
+
+    if (input?._tag !== "UserInputRecorded" || input.submissionId === undefined)
+      return yield* failure("start", "corrupt");
+
+    const found = yield* deps.ledger
+      .lookup(SubmissionLookupById.make({ submissionId: input.submissionId }))
+      .pipe(Effect.mapError(storageFailure("start")));
+
+    const row = Option.getOrUndefined(found);
+
+    const settlement = Option.getOrUndefined(
+      yield* exactRecord(
+        selected.threadId,
+        submissionSettlementRecordId(input.submissionId),
+        "start",
+      ),
+    )?.record.payload;
+
+    if (
+      row === undefined ||
+      row.threadId !== selected.threadId ||
+      row.state !== "settled" ||
+      row.settledOutcome !== "completed" ||
+      row.workerAdmission === undefined ||
+      !sameOrigin(row.workerAdmission.origin, origin) ||
+      settlement?._tag !== "SubmissionSettled" ||
+      settlement.outcome !== "completed" ||
+      settlement.runDisposition !== "completed" ||
+      settlement.finishReason !== undefined ||
+      settlement.runId !== run.runId ||
+      settlement.submissionId !== row.submissionId ||
+      settlement.receiptId !== row.receiptId
+    )
+      return yield* failure("start", "denied");
+
+    const evidence = WorkerContinuation.make({
+      worker: selected,
+      receipt: Receipt.make({
+        threadId: row.threadId,
+        submissionId: row.submissionId,
+        receiptId: row.receiptId,
+        queueSequence: row.queueSequence,
+      }),
+      settlementId: settlement.settlementId,
+    });
+
+    if (expected !== undefined && !Schema.toEquivalence(WorkerContinuation)(expected, evidence))
+      return yield* failure("start", "worker-mismatch");
+
+    return { evidence, origin };
+  });
+
+  const verifyContinuation = Effect.fn("WorkerHost.verifyContinuation")(function* (
+    origin: WorkerOrigin,
+  ) {
+    if (origin.continuationOf === undefined) return;
+
+    const previous = yield* completedContinuation(
+      origin.source,
+      origin.continuationOf.worker,
+      origin.worker.targetAgentId,
+      origin.worker.delegationId,
+      origin.continuationOf,
+    );
+
+    if (
+      origin.worker.threadId === previous.origin.worker.threadId ||
+      origin.lifecycle !== "assignment" ||
+      !samePolicy(origin.policy, previous.origin.policy) ||
+      !Schema.toEquivalence(WorkerOrigin.fields.budget)(origin.budget, previous.origin.budget) ||
+      !Schema.toEquivalence(SubagentGrant)(origin.grant, previous.origin.grant) ||
+      origin.budgetScope !== previous.origin.budgetScope ||
+      origin.depth !== previous.origin.depth ||
+      origin.toolCallAllowance !== previous.origin.toolCallAllowance ||
+      origin.expiresAtMillis > previous.origin.expiresAtMillis
+    )
+      return yield* failure("start", "denied");
   });
 
   const readIdentity = Effect.fn("WorkerHost.readIdentity")(function* (
@@ -885,6 +1052,8 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     retainedFrameworkInput: boolean,
   ): Effect.fn.Return<void, WorkerError> {
     const origin = admission.origin;
+
+    yield* verifyContinuation(origin);
     const id = workerInputRecordId(admission.messageId);
 
     for (let attempt = 0; attempt < 16; attempt++) {
@@ -895,6 +1064,16 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       );
 
       const current = source.current;
+
+      if (
+        origin.continuationOf !== undefined &&
+        current.records.some(
+          ({ record }) =>
+            record.payload._tag === "WorkerStopRequested" &&
+            record.payload.command.worker.threadId === origin.continuationOf?.worker.threadId,
+        )
+      )
+        return yield* failure("start", "denied");
       const rows = requests(current.records);
       const existing = current.records.find(({ record }) => record.recordId === id)?.record.payload;
 
@@ -955,6 +1134,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           ? {
               ...targetRequest,
               _tag: "InitialInput",
+              ...(origin.continuationOf === undefined
+                ? {}
+                : { continuationOf: origin.continuationOf }),
               input,
               inputDigest,
               ...(source.submission === undefined ? {} : { sourceSubmission: source.submission }),
@@ -1057,6 +1239,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       const selectedConcurrency = yield* deps.concurrencyResolver.resolve({
         source: origin.source,
         worker: origin.worker,
+        ...(origin.continuationOf === undefined ? {} : { continuationOf: origin.continuationOf }),
         principal,
         ...(source.submission === undefined ? {} : { sourceSubmission: source.submission }),
       });
@@ -1168,6 +1351,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       yield* validateCompletion(options.messageAdmission, options, agentId, inputDigest);
     }
 
+    yield* verifyContinuation(admission.origin);
     yield* deps.authorizer.authorize({
       sourceThreadId: admission.origin.source.threadId,
       ...(admission.sourceSubmissionId === undefined
@@ -1177,6 +1361,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       operation: "start",
       access: "send",
       worker: admission.origin.worker,
+      ...(admission.origin.continuationOf === undefined
+        ? {}
+        : { continuationOf: admission.origin.continuationOf }),
     });
     yield* authorizeBudget(admission.origin, options.principal);
     if (
@@ -1678,6 +1865,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       operation: WorkerError["operation"],
       access: "context" | "read" | "send" | "control",
       worker?: WorkerRef,
+      continuationOf?: WorkerContinuation,
     ) =>
       deps.authorizer.authorize({
         sourceThreadId: context.source.threadId,
@@ -1686,6 +1874,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         operation,
         access,
         ...(worker === undefined ? {} : { worker }),
+        ...(continuationOf === undefined ? {} : { continuationOf }),
       });
 
     const binding = (target: Agent.AnyDefinition, operation: WorkerError["operation"]) =>
@@ -1699,6 +1888,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     const preparedTarget = Effect.fn("WorkerHost.preparedTarget")(function* (
       target: Agent.AnyDefinition,
       encodedInput: unknown,
+      continuationOf?: WorkerContinuation,
     ) {
       const resolved = yield* binding(target, "start");
 
@@ -1715,6 +1905,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
       const policy = yield* resolveTargetPolicy({
         _tag: "InitialInput",
+        ...(continuationOf === undefined ? {} : { continuationOf }),
         definition: resolved.definition,
         definitions: resolved.digests,
         source: context.source,
@@ -2187,14 +2378,35 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         };
       }),
       resolveTargetPolicy: Effect.fn("WorkerHost.resolvePreparedTargetPolicy")(function* (request) {
-        yield* authorize("start", "send");
+        const previous =
+          request.continuationOf === undefined
+            ? undefined
+            : yield* completedContinuation(
+                context.source,
+                request.continuationOf,
+                request.target.id,
+                request.continuationOf.delegationId,
+              );
 
-        return (yield* preparedTarget(request.target, request.encodedInput)).policy;
+        yield* authorize("start", "send", undefined, previous?.evidence);
+
+        return (yield* preparedTarget(request.target, request.encodedInput, previous?.evidence))
+          .policy;
       }),
       start: Effect.fn("WorkerHost.start")(function* <E = never, R = never>(
         command: StartWorkerRequest | DeferredStartWorkerRequest<E, R>,
       ): Effect.fn.Return<WorkerStarted, WorkerError | E, R> {
-        const principal = yield* authorize("start", "send");
+        const previous =
+          command.continuationOf === undefined
+            ? undefined
+            : yield* completedContinuation(
+                context.source,
+                command.continuationOf,
+                command.target.id,
+                command.delegationId,
+              );
+
+        const principal = yield* authorize("start", "send", undefined, previous?.evidence);
 
         if (context.depth !== 0 && sourceSubmissionId === undefined)
           return yield* failure("start", "denied");
@@ -2221,7 +2433,23 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
 
         const replay = (saved: MessageDeliveryRecord) =>
           Effect.gen(function* () {
-            const replayPrincipal = yield* authorize("start", "send");
+            const currentPrevious =
+              command.continuationOf === undefined
+                ? undefined
+                : yield* completedContinuation(
+                    context.source,
+                    command.continuationOf,
+                    command.target.id,
+                    command.delegationId,
+                    previous?.evidence,
+                  );
+
+            const replayPrincipal = yield* authorize(
+              "start",
+              "send",
+              undefined,
+              currentPrevious?.evidence,
+            );
 
             yield* binding(command.target, "start");
             const metadata = saved.envelope.workerAdmission;
@@ -2230,6 +2458,10 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
             const origin = metadata.origin;
 
             if (
+              !Schema.toEquivalence(Schema.UndefinedOr(WorkerContinuation))(
+                origin.continuationOf,
+                currentPrevious?.evidence,
+              ) ||
               origin.firstMessageId !== messageId ||
               metadata.messageId !== messageId ||
               origin.source.threadId !== context.source.threadId ||
@@ -2248,6 +2480,8 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                   origin.toolCallAllowance !== command.toolCallAllowance))
             )
               return yield* failure("start", "idempotency-conflict");
+
+            yield* verifyContinuation(origin);
 
             return {
               worker: origin.worker,
@@ -2270,7 +2504,34 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
           const request =
             "prepare" in command ? { ...(yield* command.prepare), ...command } : command;
 
-          const prepared = yield* preparedTarget(request.target, request.encodedInput);
+          const currentPrevious =
+            command.continuationOf === undefined
+              ? undefined
+              : yield* completedContinuation(
+                  context.source,
+                  command.continuationOf,
+                  command.target.id,
+                  command.delegationId,
+                  previous?.evidence,
+                );
+
+          if (currentPrevious !== undefined) {
+            const preparedPrincipal = yield* authorize(
+              "start",
+              "send",
+              undefined,
+              currentPrevious.evidence,
+            );
+
+            if (preparedPrincipal !== principal) return yield* failure("start", "denied");
+          }
+
+          const prepared = yield* preparedTarget(
+            request.target,
+            request.encodedInput,
+            currentPrevious?.evidence,
+          );
+
           const resolved = prepared.resolved;
 
           const sourcePolicy = Option.getOrElse(
@@ -2304,6 +2565,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
                 threadId: Schema.decodeSync(ThreadId)(messageId),
               },
               source: context.source,
+              ...(currentPrevious === undefined
+                ? {}
+                : { continuationOf: currentPrevious.evidence }),
               ...(resolved.definition.runDisposition?.workerLifecycle === "assignment"
                 ? { lifecycle: "assignment" }
                 : {}),
@@ -2315,7 +2579,10 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
               depth: context.depth + 1,
               firstMessageId: messageId,
               createdAtMillis: now,
-              expiresAtMillis: now + deps.limits.lifetimeMillis,
+              expiresAtMillis: Math.min(
+                now + deps.limits.lifetimeMillis,
+                currentPrevious?.origin.expiresAtMillis ?? Infinity,
+              ),
               ...(reporting === undefined ? {} : { reporting }),
               ...(request.toolCallAllowance === undefined
                 ? {}
@@ -2798,7 +3065,7 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       ...(sourceSubmissionId === undefined ? {} : { sourceSubmissionId }),
       principal: options.principal,
       operation: "followUp",
-      access: "send",
+      access: "report",
       worker: receiving?.origin.worker ?? origin.worker,
     });
 

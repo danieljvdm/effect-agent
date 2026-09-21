@@ -405,3 +405,194 @@ for (const parentState of ["active", "completed", "aborted"] as const) {
     );
   }
 }
+
+// Regression: https://github.com/danieljvdm/effect-agent/blob/36a411fc3f468fa87d4dd91234988a716d4ebbc5/packages/effect-agent/src/durable/internal/worker-host.ts#L3058-L3075
+it.effect(
+  "authorizes successor completion reports as the current source principal",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "successor-report-" });
+        const peer = Schema.decodeSync(Principal)("current-peer");
+
+        const child = Agent.withModel(
+          Agent.make("successor-report-child", {
+            input,
+            output,
+            instructions: "Complete assignment",
+            toolkit: Toolkit.empty,
+            runDisposition: {
+              workerLifecycle: "assignment",
+              schema: Schema.Literals(["completed", "waiting"]),
+              fromOutput: () => "completed" as const,
+            },
+            policy: { maxTurns: 2, maxToolCalls: 1, maxDuration: "10 seconds" },
+          }),
+          model("child", () => Stream.fromIterable(finish("done"))),
+        );
+
+        const declaration = Subagent.make("research", { target: child.definition });
+
+        const background = Subagent.background(declaration, {
+          start: true,
+          followUp: true,
+          reportToParent: true,
+        });
+
+        const parent = Agent.withModel(
+          Agent.make("successor-report-parent", {
+            input,
+            output,
+            instructions: "Coordinate",
+            toolkit: background.toolkit,
+            policy: {
+              maxTurns: 10,
+              maxToolCalls: 10,
+              maxDuration: "30 seconds",
+              toolConcurrency: 2,
+            },
+          }),
+          model("parent", () => Stream.fromIterable(finish("acknowledged"))),
+        );
+
+        const access: Array<string> = [];
+
+        const context = yield* Layer.build(
+          NodeHost.NodeDurableHost.layerRegistered(
+            [
+              {
+                agent: parent,
+                definitions: DefinitionDigestInput.make({
+                  agent: "parent",
+                  model: "v1",
+                  tools: ["research_start", "research_follow_up"],
+                }),
+              },
+              {
+                agent: child,
+                definitions: DefinitionDigestInput.make({ agent: "child", model: "v1", tools: [] }),
+              },
+            ],
+            {
+              filename: `${directory}/runtime.sqlite`,
+              deploymentId: "successor-report",
+              producerId: "node",
+            },
+          ).pipe(
+            Layer.provide(background.layer),
+            Layer.provide(
+              Layer.succeed(WorkerHostAuthorizer)({
+                authorize: (request) => {
+                  access.push(request.access);
+
+                  // Worker execution keeps the original human; proven framework delivery keeps its destination principal.
+                  return Effect.succeed(
+                    request.access === "context" ||
+                      request.access === "report" ||
+                      request.access === "read"
+                      ? request.principal
+                      : principal,
+                  );
+                },
+              }),
+            ),
+          ),
+        );
+
+        const runtime = Context.get(context, DurableAgentRuntime);
+
+        const humanInput = yield* runtime.submitRegistered(
+          parent,
+          { question: "original human task" },
+          { threadId, principal, idempotencyKey: key("human") },
+        );
+
+        const owner = yield* runtime.workerHost({
+          sourceThreadId: threadId,
+          sourceSubmissionId: humanInput.submissionId,
+          principal,
+        });
+
+        const first = yield* Subagent.start(
+          declaration,
+          { question: "original" },
+          { idempotencyKey: key("first") },
+        ).pipe(Effect.provideService(SubagentHost, owner));
+
+        yield* runtime.processThreadResolved(first.worker.threadId);
+
+        const peerInput = yield* runtime.submitRegistered(
+          parent,
+          { question: "current peer correction" },
+          { threadId, principal: peer, idempotencyKey: key("peer") },
+        );
+
+        const current = yield* runtime.workerHost({
+          sourceThreadId: threadId,
+          sourceSubmissionId: peerInput.submissionId,
+          principal: peer,
+        });
+
+        const successor = yield* Subagent.start(
+          declaration,
+          { question: "apply correction" },
+          { idempotencyKey: key("successor"), continuationOf: first.worker },
+        ).pipe(Effect.provideService(SubagentHost, current));
+
+        yield* runtime.processThreadResolved(successor.worker.threadId);
+
+        const deliveries = yield* Context.get(context, MessageDeliveryStore).list({
+          ownerThreadId: successor.worker.threadId,
+          limit: 10,
+        });
+
+        expect(deliveries.items).toHaveLength(1);
+        const report = deliveries.items[0]?.envelope;
+
+        if (report === undefined || report.messageAdmission === undefined)
+          return yield* Effect.die("Missing frozen completion report");
+        expect(report.deliveryPrincipal).toBe(peer);
+        expect(report.input).toEqual({ question: "current peer correction" });
+
+        expect(
+          yield* runtime
+            .submitRegistered(
+              parent,
+              { question: "forged correction" },
+              {
+                threadId,
+                principal: peer,
+                idempotencyKey: report.admissionKey,
+                messageAdmission: report.messageAdmission,
+              },
+            )
+            .pipe(Effect.flip),
+        ).toMatchObject({ _tag: "AdmissionPolicyError", reason: "refused" });
+        expect(access).not.toContain("report");
+
+        const receipt = yield* runtime.submitRegistered(
+          parent,
+          { question: "current peer correction" },
+          {
+            threadId,
+            principal: peer,
+            idempotencyKey: report.admissionKey,
+            messageAdmission: report.messageAdmission,
+          },
+        );
+
+        expect(receipt.threadId).toBe(threadId);
+        expect(access).toContain("report");
+        expect(
+          yield* Subagent.followUp(
+            declaration,
+            successor.worker,
+            { question: "reopen" },
+            { idempotencyKey: key("reopen") },
+          ).pipe(Effect.provideService(SubagentHost, current)),
+        ).toMatchObject({ status: "refused", reason: "worker-stopped" });
+      }),
+    ).pipe(Effect.provide(NodeFileSystem.layer)),
+  15_000,
+);

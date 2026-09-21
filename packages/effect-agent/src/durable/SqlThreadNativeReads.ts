@@ -200,7 +200,7 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
 
               rows = yield* sql`
             SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
-            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND json_extract(record_json, '$.payload._tag') IN ('ThreadCreated', 'WorkerOriginRecorded', 'SubagentLineageRecorded', 'WorkerInputRequested', 'WorkerInputCompleted')
+            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND json_extract(record_json, '$.payload._tag') IN ('ThreadCreated', 'WorkerOriginRecorded', 'SubagentLineageRecorded', 'WorkerInputRequested', 'WorkerInputCompleted', 'WorkerStopRequested')
             UNION ALL
             SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
             WHERE thread_id = ${request.threadId} AND sequence > ${after} AND json_extract(record_json, '$.payload._tag') = 'SubtreeBudgetReserved' AND json_extract(record_json, '$.payload.sourceSubmissionId') IS ${selection.sourceSubmissionId ?? null}

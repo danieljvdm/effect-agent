@@ -36,6 +36,7 @@ import {
   ToolCallSettled,
   WorkerInputRequested,
   WorkerInputCompleted,
+  WorkerStopRequested,
   SubtreeBudgetReserved,
   PeerMessagePrepared,
 } from "./Records.ts";
@@ -1129,6 +1130,33 @@ const nativeWorkerAccounting = conformanceCase(
       yield* ensure(
         accounting.tailSequence === tail.lastSequence && accounting.tailDigest === tail.tailDigest,
         "The accounting snapshot carries the full canonical CAS tail",
+      );
+      // Regression: https://github.com/danieljvdm/effect-agent/blob/c721a292205e06185f0136c3ed05dcf53e29ca66/packages/effect-agent/src/durable/SqlThreadNativeReads.ts#L195-L214
+      yield* append(
+        threadId,
+        batch("stop-worker", [
+          envelope(
+            "stop-worker",
+            WorkerStopRequested.make({
+              command: {
+                worker: origin.worker,
+                idempotencyKey: Schema.decodeSync(IdempotencyKey)("stop-worker"),
+              },
+            }),
+          ),
+        ]),
+        tail,
+      );
+
+      const stopped = yield* readWorkerState({
+        threadId,
+        sourceSubmissionId: CONFORMANCE_SUBMISSION,
+        limit: 5,
+      });
+
+      yield* ensure(
+        stopped.records.some(({ record }) => record.payload._tag === "WorkerStopRequested"),
+        "Native worker state retains explicit stop intent after assignment completion",
       );
     }),
 );

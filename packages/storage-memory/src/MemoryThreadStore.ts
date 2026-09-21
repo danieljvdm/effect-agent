@@ -443,6 +443,7 @@ const makeThreadStore = Effect.gen(function* () {
                           "SubagentLineageRecorded",
                           "WorkerInputRequested",
                           "WorkerInputCompleted",
+                          "WorkerStopRequested",
                         ].includes(payload._tag)
                       ? "worker"
                       : undefined;
