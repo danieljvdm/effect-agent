@@ -3,6 +3,7 @@ import { Context, Crypto, Effect, Encoding, Layer, Option, Schema, Stream } from
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import type { AnyDefinition } from "../../core/Agent.ts";
+import type { Update } from "../../core/AgentUpdates.ts";
 import * as FailureDiagnostic from "../../core/FailureDiagnostic.ts";
 import { RunId, SettlementId, ThreadId } from "../../core/Identifiers.ts";
 import { utf8ByteLength } from "../../core/internal/utf8.ts";
@@ -829,6 +830,13 @@ export const cancel = <
 export interface BackgroundOptions {
   /** Deliver standard completion and progress messages to the parent. */
   readonly reportToParent?: true;
+  /**
+   * With reportToParent, select which canonical updates also notify the parent. Defaults to all.
+   * This pure predicate receives the encoded update; decode value with the child's update Schema.
+   * False retains the update for observers without starting a parent Run. Completion is unaffected.
+   * The first accepted emission freezes the decision; replay does not reevaluate it.
+   */
+  readonly reportUpdate?: (update: Update) => boolean;
   readonly start?: true;
   readonly followUp?: true;
   readonly inspect?: true;
@@ -839,7 +847,10 @@ export interface BackgroundOptions {
   readonly budgetScope?: WorkerBudgetScope;
 }
 
-type Operation = Exclude<keyof BackgroundOptions, "budgetScope" | "reportToParent">;
+type Operation = Exclude<
+  keyof BackgroundOptions,
+  "budgetScope" | "reportToParent" | "reportUpdate"
+>;
 type Suffix = {
   start: "start";
   followUp: "follow_up";
@@ -1071,6 +1082,7 @@ export const background = <
       ? undefined
       : {
           ...report,
+          ...(selected.reportUpdate === undefined ? {} : { reportUpdate: selected.reportUpdate }),
           prepare: (value) =>
             Effect.flatMap(Effect.serviceOption(reportService), (service) =>
               Option.isSome(service)

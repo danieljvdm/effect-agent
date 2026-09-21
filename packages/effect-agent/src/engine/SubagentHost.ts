@@ -3,6 +3,7 @@ import { Context, Schema, Stream } from "effect";
 
 import type * as Agent from "../core/Agent.ts";
 import type { AgentPolicy } from "../core/AgentPolicy.ts";
+import type { Update } from "../core/AgentUpdates.ts";
 import type * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import type { DelegationId, RunId, SettlementId, ThreadId } from "../core/Identifiers.ts";
 import type { MessageRef, MessageStatus } from "../core/Messaging.ts";
@@ -137,6 +138,8 @@ export class WorkerReportPreparationFailure extends Schema.TaggedError<WorkerRep
 export interface WorkerReporting<E = never, R = never> {
   readonly delegationId: DelegationId;
   readonly target: Agent.AnyDefinition;
+  /** Pure first-emission selection. False retains the canonical update without parent delivery. */
+  readonly reportUpdate?: (update: Update) => boolean;
   readonly prepare: (report: WorkerRunReport) => Effect.Effect<
     {
       readonly message: WorkerCompletion;

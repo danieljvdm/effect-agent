@@ -572,6 +572,12 @@ payloads into application types. Durable canonical history retains `AgentUpdateE
 including the exact source definition versions. Authorized `Subagent.observe` readers can decode
 those records and their updates with the same APIs.
 
+Use `reportUpdate: (update) => boolean` alongside `reportToParent` to select which updates
+notify the parent. Decode `update.value` with the child's update Schema. The predicate must be
+pure: its decision is frozen at first acceptance and never reevaluated on replay. Returning
+`false` keeps the update available to observers without parent delivery or a parent model run.
+Completion reports are unaffected. Omit the predicate to deliver every update.
+
 With `reportToParent: true`, acceptance commits the finding and a frozen parent delivery envelope
 before acknowledging it. The child continues without waiting for destination admission, parent
 processing, or a user decision. The parent receives a `WorkerUpdate` as untrusted user-message
