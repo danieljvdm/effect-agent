@@ -951,6 +951,7 @@ export class WorkerReportRefused extends Schema.TaggedClass<WorkerReportRefused>
     runId: RunId,
     messageId: IdempotencyKey,
     reason: Schema.Literals([
+      "filtered",
       "declaration-unavailable",
       "destination",
       "projection",

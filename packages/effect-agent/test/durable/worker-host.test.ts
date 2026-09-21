@@ -3538,6 +3538,136 @@ layer(NodeCrypto.layer)((it) => {
       }),
   );
 
+  // Regression: https://linear.app/reve-ai/issue/KOM-269
+  it.effect.each(["worker:before-report-append", "worker:after-report-append"] as const)(
+    "filters a waiting completion through registration and recovers after %s",
+    (point) =>
+      Effect.gen(function* () {
+        let selections = 0;
+        let projections = 0;
+
+        const background = Subagent.background(
+          Subagent.make("research", {
+            ...reportDeclaration,
+            success: Schema.String,
+            projectResult: (output) => {
+              projections++;
+
+              return Effect.succeed(output);
+            },
+          }),
+          {
+            start: true,
+            reportToParent: true,
+            reportCompletion: (report) => {
+              selections++;
+
+              return (
+                report.observation.outcome !== "completed" ||
+                report.observation.encodedResult !== "waiting"
+              );
+            },
+          },
+        );
+
+        const binding = yield* DurableWorkerBinding.make(
+          {
+            definition: Agent.make("source-agent", {
+              input: sourceAgent.input,
+              output: sourceAgent.output,
+              instructions: sourceAgent.instructions,
+              policy: sourceAgent.policy,
+              toolkit: background.toolkit,
+            }),
+            model: Layer.effectContext<Agent.ModelServices, never, never>(
+              Effect.die("Report capture must not acquire the model"),
+            ),
+          },
+          definitions,
+        ).pipe(Effect.provide(background.layer));
+
+        const h = yield* harness({ sourceReports: binding.reporting });
+        const first = yield* h.host.start(request("waiting"));
+
+        h.fail(point);
+        expect((yield* h.settle(first.delivery.receipt!, "waiting").pipe(Effect.exit))._tag).toBe(
+          "Failure",
+        );
+        h.fail(undefined);
+        yield* h.runtime.completeInput(h.submissions.get(first.delivery.receipt!.submissionId)!);
+        yield* h.runtime.completeInput(h.submissions.get(first.delivery.receipt!.submissionId)!);
+        expect(projections).toBe(0);
+        expect(selections).toBe(point === "worker:before-report-append" ? 2 : 1);
+        expect(
+          h.logs
+            .get(first.worker.threadId)!
+            .filter(({ record }) => record.payload._tag === "WorkerReportRefused")
+            .map(({ record }) => record.payload),
+        ).toEqual([expect.objectContaining({ reason: "filtered" })]);
+        expect(
+          [...h.deliveries.values()].filter(
+            (row) => row.key.ownerThreadId === first.worker.threadId,
+          ),
+        ).toHaveLength(0);
+
+        const final = yield* h.host.followUp({
+          worker: first.worker,
+          target,
+          idempotencyKey: Schema.decodeSync(IdempotencyKey)("final"),
+          encodedInput: { text: "final" },
+          encodedParameters: { note: "final" },
+        });
+
+        yield* h.settle(final.receipt!, "insurer and policy");
+        yield* h.runtime.completeInput(h.submissions.get(final.receipt!.submissionId)!);
+        expect(projections).toBe(1);
+
+        const delivered = [...h.deliveries.values()].filter(
+          (row) => row.key.ownerThreadId === first.worker.threadId,
+        );
+
+        expect(delivered).toHaveLength(1);
+        expect(delivered[0]?.envelope.messageAdmission).toMatchObject({
+          report: { outcome: "completed", result: "insurer and policy" },
+        });
+      }),
+  );
+
+  it.effect("retains a bounded refusal when the completion filter throws", () =>
+    Effect.gen(function* () {
+      let selections = 0;
+
+      const h = yield* harness({
+        sourceReports: [
+          {
+            ...standardReport,
+            reportCompletion: () => {
+              selections++;
+              throw new Error("private filter diagnostic");
+            },
+          },
+        ],
+      });
+
+      const first = yield* h.host.start(request("filter-defect"));
+
+      yield* h.settle(first.delivery.receipt!);
+      yield* h.runtime.completeInput(h.submissions.get(first.delivery.receipt!.submissionId)!);
+      expect(selections).toBe(1);
+
+      const refusals = h.logs
+        .get(first.worker.threadId)!
+        .filter(({ record }) => record.payload._tag === "WorkerReportRefused");
+
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0]?.record.payload).toMatchObject({ reason: "defect" });
+      expect(JSON.stringify(refusals)).not.toContain("private filter diagnostic");
+      expect(
+        [...h.deliveries.values()].filter((row) => row.key.ownerThreadId === first.worker.threadId),
+      ).toHaveLength(0);
+    }),
+  );
+
   it.effect("projects the actual Run once for joined Receipts using host parameters", () =>
     Effect.gen(function* () {
       const observations: Array<unknown> = [];

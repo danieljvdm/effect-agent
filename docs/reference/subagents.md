@@ -518,6 +518,18 @@ result type, then map it to application state on the receiving side. `Subagent.r
 arrays have been removed. Projection services are captured separately from per-Attempt services.
 Change registration versions when changing result projection behavior.
 
+Use `reportCompletion: (report) => boolean` alongside `reportToParent` to omit intermediate
+Run outcomes, such as a worker waiting for an external operation. The predicate receives the
+canonical outcome and encoded result before result projection; decode successful output with
+the child's output Schema. Return `true` for failure or cancellation outcomes when the parent
+must handle them. Omit the predicate to report every Run.
+
+Returning `false` retains a `WorkerReportRefused` decision with reason `filtered` without
+preparing or delivering a parent message. It does not alter the child settlement, suppress
+explicit updates, or prevent a later Run from reporting its final result. The predicate must
+be pure: recovery reuses the committed decision, but a crash before that commit can reevaluate
+it. A thrown predicate records the same bounded `defect` refusal as a throwing projection.
+
 Application-driven starts with standard reports must acquire the host facet with the exact
 `sourceSubmissionId` whose application input supplies parent context. Model tool calls already
 carry that identity. No current or latest input is guessed for a programmatic caller.
