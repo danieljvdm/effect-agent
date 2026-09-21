@@ -37,6 +37,11 @@ export default defineConfig({
   },
   run: {
     tasks: {
+      preview: {
+        command: "node --experimental-transform-types preview/main.ts",
+        dependsOn: ["build"],
+        cache: false,
+      },
       deploy: {
         cache: false,
         command: "vp exec alchemy deploy alchemy.run.ts --stage production",
@@ -76,6 +81,7 @@ export default defineConfig({
           { auto: true },
           "src/**",
           "test/**",
+          "preview/**",
           "tsconfig.json",
           "alchemy.run.ts",
           "!*.tsbuildinfo",

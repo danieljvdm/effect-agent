@@ -37,34 +37,32 @@ Direct Alchemy deployments leave traces disabled because its SDK does not yet ex
 Manual dispatch of **Deploy travel planner** deploys the selected branch to production, so it
 requires deployment authorization even for a PR branch. Automatic deployments remain on `main`.
 
-For the full application, configure the values in [.env.example](.env.example) for
-your development environment and use the Alchemy dev entry point from the repository root:
+For a local UI preview without cloud accounts or provider credentials, run:
 
 ```sh
 vp install
-vp run -F @effect-agent/example-travel-planner dev
+vp run -F @effect-agent/example-travel-planner preview
 ```
 
-Alchemy supplies the Worker bindings declared in [alchemy.run.ts](alchemy.run.ts),
-including the `AUTH` SQLite Durable Object and `AUTH_EMAIL` delivery binding.
-Authentication requires a canonical HTTPS `AUTH_ORIGIN`, a matching GitHub OAuth
-callback at `AUTH_ORIGIN/auth/github/callback`, a verified email sender, and three
-independent persistent base64url-encoded 32-byte auth keys. Use development-owned
-credentials and resources; the stack also requires Cloudflare access and the other
-configuration listed in `.env.example`.
+Open `https://127.0.0.1:4173` and accept the local certificate. Create an email account;
+the terminal prints the file paths of locally delivered verification emails. After
+registration, sign in with a fresh email code. Connect the synthetic key
+`sk-preview-local` in Settings and send `complete travel cards fixture` to display
+sample travel cards. Set `PREVIEW_PORT` to use another port.
 
-A standalone `vp preview` after a build runs the compiled Worker but does not
-execute the Alchemy stack or supply its bindings. It can render `/login` and its
-assets, but `GET /auth/getSession` returns HTTP 503 when `AUTH` is absent. Adding
-environment variables alone does not create that binding. A configured signed-out
-session lookup returns HTTP 200 with `{ "_tag": "Success", "value": null }`;
-access to protected planner routes still requires sign-in. Treat a standalone
-login-page preview as a limited UI check, not an authenticated planner smoke test.
+This command builds the UI and supplies local SQLite auth and planner bindings.
+It uses the real email authentication and session checks, an offline planner, and
+fresh state that is removed when stopped. Outbound provider requests are blocked;
+GitHub sign-in, live research, voice, and published trip sites require the full app.
+A raw `vp preview` does not provision these bindings and its session endpoint returns
+503 when `AUTH` is missing.
 
-For an isolated auth check without provider credentials, run
-`vp test test/auth.test.ts` from `examples/travel-planner`. That suite exercises the
-Worker routing and auth host with local Miniflare SQLite storage and fixture email
-and GitHub responses; it does not verify deployed bindings or real providers.
+For the full application, configure [.env.example](.env.example) with development-owned
+credentials and use `vp run -F @effect-agent/example-travel-planner dev` from the repository
+root. Alchemy supplies the resources declared in [alchemy.run.ts](alchemy.run.ts), including
+`AUTH` and `AUTH_EMAIL`. Authentication requires a canonical HTTPS `AUTH_ORIGIN`, a matching
+GitHub OAuth callback at `AUTH_ORIGIN/auth/github/callback`, a verified email sender, and
+three independent persistent base64url-encoded 32-byte auth keys.
 
 The conversation loads in stages. `GetPlanner` returns messages, trips, and the latest
 source-record overview for up to eight scouts and the trip's editor without reading child
