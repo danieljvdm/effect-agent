@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.127
+
+### Patch Changes
+
+- [#608](https://github.com/danieljvdm/effect-agent/pull/608) [`7f0724f`](https://github.com/danieljvdm/effect-agent/commit/7f0724f4a58cd3ced56b77f811391831781212c2) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow retained browser attachments up to ten seconds to acknowledge disconnection, preserving completed commands when the close handshake takes longer than one second. Continue fencing dispatch immediately and fail cleanup when closure remains unconfirmed.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.127
+  - effect-agent@0.1.0-beta.127
+
 ## 0.1.0-beta.126
 
 ### Patch Changes
