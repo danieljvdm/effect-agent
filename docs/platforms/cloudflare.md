@@ -358,7 +358,9 @@ const maintenance = Context.make(ThreadHostMaintenance, {
 The alarm owns the scheduling loop. Each lane selects and joins one finite wave;
 it receives an initial opportunity even on a caught-up alarm. The alarm checks idle lanes
 on completion, native progress, `WakeScheduler` hints and its existing bounded scan.
-Independent lanes remain available while another lane waits on external work. Compose hosts
+Independent lanes remain available while another lane waits on external work or fails. Failed
+auxiliary work is reported after healthy work finishes within the event's existing allowances.
+Compose hosts
 by concatenating their `lanes`; do not join independent operations into one `run`.
 
 `run` returns `Effect<void, DurableAlarmError, Scope>` and its Scope closes after each wave.

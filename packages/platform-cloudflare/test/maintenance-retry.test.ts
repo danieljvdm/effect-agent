@@ -25,6 +25,7 @@ import {
   DurableAlarmError,
   ThreadHostMaintenance,
   ThreadMaintenance,
+  ThreadMutationGate,
   ThreadMaintenanceFailpoint,
   type ThreadMaintenanceFailpointLocation,
 } from "../src/Alarm.ts";
@@ -46,6 +47,158 @@ const Generation = Schema.Struct({
 });
 
 describe("maintenance retry deadlines", () => {
+  // Regression: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-C9
+  it.each(["typed", "defect", "interruption", "timeout"] as const)(
+    "keeps admission and native dispatch available after an independent %s failure",
+    (failure) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const thread = `maintenance-isolation-${crypto.randomUUID()}`;
+
+          yield* TestClock.setTime(Date.now() + 86_400_000);
+          maintenanceClocks.set(thread, yield* Clock.Clock);
+          yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
+          yield* Effect.promise(() =>
+            runInDurableObject(stubFor(thread), (instance, state) =>
+              instance[DurableObject.RunSymbol](
+                Effect.gen(function* () {
+                  yield* TestClock.setTime(Date.now() + 86_400_000);
+                  const clock = yield* TestClock.testClockWith(Effect.succeed);
+                  const bindings = yield* makeTestBindings;
+                  const config = yield* CloudflareDurableRuntimeConfig;
+                  const entered = yield* Deferred.make<void>();
+                  const admit = yield* Deferred.make<void>();
+                  const finish = yield* Deferred.make<void>();
+                  let completed = false;
+                  let active = false;
+                  let failedAttempts = 0;
+
+                  const ports = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
+                    Layer.provide(
+                      storageConfigLayer({
+                        storage: state.storage,
+                        ownershipLeaseDuration: config.ownershipLeaseDuration,
+                      }),
+                    ),
+                    Layer.provide(DoStorageFailpoint.layer),
+                  );
+
+                  const services = DurableAgentRuntime.layerWithBindings(bindings).pipe(
+                    Layer.provideMerge(ports),
+                    Layer.provide(WakeScheduler.layerNoop),
+                  );
+
+                  yield* Effect.gen(function* () {
+                    const runtime = yield* DurableAgentRuntime;
+                    const ledger = yield* SubmissionLedger;
+                    const gate = yield* ThreadMutationGate;
+
+                    const submitted =
+                      yield* Deferred.make<
+                        Effect.Success<ReturnType<typeof runtime.submitRegistered>>
+                      >();
+
+                    const host = ThreadHostMaintenance.of({
+                      lanes: [
+                        {
+                          dispatchTimeoutMillis: 1_000,
+                          pendingDeadline: Effect.succeed(Option.some(0)),
+                          run: Effect.gen(function* () {
+                            failedAttempts++;
+                            yield* Deferred.await(entered);
+                            switch (failure) {
+                              case "typed":
+                                return yield* DurableAlarmError.make({
+                                  operation: "browser cleanup",
+                                  message: "Cleanup remains pending",
+                                });
+                              case "defect":
+                                return yield* Effect.die("cleanup defect");
+                              case "interruption":
+                                return yield* Effect.interrupt;
+                              case "timeout":
+                                return yield* Effect.never;
+                            }
+                          }),
+                        },
+                        {
+                          dispatchTimeoutMillis: 5_000,
+                          pendingDeadline: Effect.sync(() =>
+                            completed ? Option.none() : Option.some(0),
+                          ),
+                          run: Effect.gen(function* () {
+                            yield* Effect.acquireRelease(
+                              Effect.sync(() => {
+                                active = true;
+                              }),
+                              () =>
+                                Effect.sync(() => {
+                                  active = false;
+                                }),
+                            );
+                            yield* Deferred.succeed(entered, undefined);
+                            yield* Deferred.await(admit);
+
+                            const receipt = yield* gate
+                              .withMutation(
+                                runtime.submitRegistered(
+                                  { definition: plannerDefinition },
+                                  { question: "admitted after cleanup failed", ref: thread },
+                                  submitOptions(thread, thread),
+                                ),
+                              )
+                              .pipe(Effect.orDie);
+
+                            yield* Deferred.succeed(submitted, receipt);
+                            yield* Deferred.await(finish);
+                            completed = true;
+                          }),
+                        },
+                      ],
+                    });
+
+                    yield* Effect.gen(function* () {
+                      const maintenance = yield* ThreadMaintenance;
+                      const running = yield* Effect.forkChild(maintenance.pass);
+
+                      yield* Deferred.await(entered);
+                      yield* clock.adjust(1_001);
+                      expect(running.pollUnsafe()).toBeUndefined();
+                      expect(active).toBe(true);
+                      yield* Deferred.succeed(admit, undefined);
+                      const receipt = yield* Deferred.await(submitted);
+
+                      for (let elapsed = 0; elapsed < 500; elapsed += 100) {
+                        yield* clock.adjust(100);
+                        if ((yield* Stream.runCollect(ledger.scanNonterminal)).length === 0) break;
+                      }
+
+                      const row = yield* ledger.lookup(
+                        SubmissionLookupById.make({ submissionId: receipt.submissionId }),
+                      );
+
+                      expect(Option.isSome(row) ? row.value.state : "missing").toBe("settled");
+                      yield* Deferred.succeed(finish, undefined);
+                      expect(Exit.isFailure(yield* Fiber.await(running))).toBe(true);
+                      expect({ completed, active, failedAttempts }).toEqual({
+                        completed: true,
+                        active: false,
+                        failedAttempts: 1,
+                      });
+                      expect(yield* Effect.promise(() => state.storage.getAlarm())).not.toBeNull();
+                    }).pipe(
+                      Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
+                      Effect.provideService(ThreadHostMaintenance, host),
+                    );
+                  }).pipe(Effect.provide(services));
+                }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+              ),
+            ),
+          );
+        }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+      ),
+  );
+
   // Regression: https://github.com/danieljvdm/effect-agent/commit/0fe79ac5
   it("executes already-ready lanes while one delivery completes, even without wake hints", () =>
     Effect.runPromise(

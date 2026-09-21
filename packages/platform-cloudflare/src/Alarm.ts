@@ -1523,7 +1523,7 @@ export class ThreadMaintenance extends Context.Service<
 
         let messageExhausted = false;
         let delivery: Fiber.Fiber<void, DurableAlarmError> | undefined;
-        let failure: Cause.Cause<DurableAlarmError | ThreadProjectionError> | undefined;
+        let failure: Cause.Cause<MaintenancePassFailure> | undefined;
 
         const recovery: NativeRecovery = {
           queue: yield* Deferred.make<ReadonlyArray<ThreadId>>(),
@@ -1666,9 +1666,8 @@ export class ThreadMaintenance extends Context.Service<
             }
           }
 
-          // Preserve the initial native opportunity even when auxiliary setup fails.
-          if (failure !== undefined && native === undefined && dispatch.active.size === 0)
-            return yield* Effect.failCause(failure);
+          // A failed auxiliary lane is exhausted for this event. Its error must not
+          // retire healthy admission, delivery or native work that still has an allowance.
           const now = yield* Clock.currentTimeMillis;
 
           if (now >= until) break;
@@ -1800,9 +1799,7 @@ export class ThreadMaintenance extends Context.Service<
                   observed,
                   recovery,
                   dispatch,
-                  failure === undefined &&
-                    !nativeCheckpoint &&
-                    (!checkpoint || dispatch.settled === 0),
+                  !nativeCheckpoint && (!checkpoint || dispatch.settled === 0),
                   reserved,
                 );
               }),
@@ -1857,12 +1854,18 @@ export class ThreadMaintenance extends Context.Service<
         }
         dispatch.active.clear();
         observed.nativeOnly = false;
-        yield* Fiber.joinAll([
+        for (const fiber of [
           recoveryFiber,
           backfill,
           ...(delivery === undefined ? [] : [delivery]),
           ...lanes.flatMap((lane) => (lane.fiber === undefined ? [] : [lane.fiber])),
-        ]);
+        ]) {
+          // Await exits without failing fast: every admitted wave owns its original
+          // bounded allowance and cleanup even if another wave has already failed.
+          const exit = yield* Fiber.await<unknown, MaintenancePassFailure>(fiber);
+
+          if (Exit.isFailure(exit)) failure ??= exit.cause;
+        }
         if (failure !== undefined) return yield* Effect.failCause(failure);
         if (recovery.needsCheckpoint || dispatch.dispatched > 0) {
           result = yield* advance(started, yieldAfter, observed, recovery, dispatch, false);
