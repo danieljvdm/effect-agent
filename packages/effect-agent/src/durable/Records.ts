@@ -19,7 +19,7 @@ import {
   TurnId,
 } from "../core/Identifiers.ts";
 import { utf8ByteLength } from "../core/internal/utf8.ts";
-import { IdempotencyKey, Principal } from "../core/Receipt.ts";
+import { IdempotencyKey, Principal, Receipt } from "../core/Receipt.ts";
 import { ExhaustedLimit } from "../core/RunEvent.ts";
 import { RunPolicyUsage } from "../core/RunPolicyUsage.ts";
 import {
@@ -826,10 +826,21 @@ export const WorkerReportingIntent = Schema.Struct({
   Schema.makeFilter((value) => (value.mode === "standard") === (value.returnAddress !== undefined)),
 );
 
+/** Exact successful predecessor evidence; a locator alone grants no authority. */
+export const WorkerContinuation = Schema.Struct({
+  worker: WorkerRef,
+  receipt: Receipt,
+  settlementId: SettlementId,
+}).check(Schema.makeFilter((value) => value.worker.threadId === value.receipt.threadId));
+
+export type WorkerContinuation = typeof WorkerContinuation.Type;
+
 /** Immutable worker Thread origin. Each input has its own digest and parameters separately. */
 export const WorkerOrigin = Schema.Struct({
   worker: WorkerRef,
   source: WorkerSource,
+  /** A new assignment may continue this completed, immutable predecessor. */
+  continuationOf: Schema.optionalKey(WorkerContinuation),
   /** Omitted retains source-subtree funding; worker-run renews only for a new native Run. */
   budgetScope: Schema.optionalKey(WorkerBudgetScope),
   /** Frozen at worker creation; older origins remain reusable. */

@@ -258,7 +258,11 @@ const operations = <
 
   const start = Effect.fn("Subagent.start")(function* (
     parameters: Parameters["Type"],
-    options: { readonly idempotencyKey: IdempotencyKey; readonly budgetScope?: WorkerBudgetScope },
+    options: {
+      readonly idempotencyKey: IdempotencyKey;
+      readonly budgetScope?: WorkerBudgetScope;
+      readonly continuationOf?: WorkerRef;
+    },
   ) {
     const service = yield* host;
     const caller = yield* context;
@@ -297,6 +301,7 @@ const operations = <
       idempotencyKey: key,
       encodedParameters,
       encodedGrant,
+      ...(options.continuationOf === undefined ? {} : { continuationOf: options.continuationOf }),
       ...(options.budgetScope === undefined ? {} : { budgetScope: options.budgetScope }),
       prepare: Effect.gen(function* () {
         const encodedInput = yield* prepare(parameters, caller);
@@ -304,6 +309,9 @@ const operations = <
         const effectiveTarget = yield* service.resolveTargetPolicy({
           target: declaration.target,
           encodedInput,
+          ...(options.continuationOf === undefined
+            ? {}
+            : { continuationOf: options.continuationOf }),
         });
 
         const resolvedTarget = Option.getOrUndefined(effectiveTarget);
@@ -600,7 +608,11 @@ export const start = <
 >(
   declaration: Declaration<Name, Input, Output, Parameters, Success, Failure, Prepare, Project>,
   parameters: Parameters["Type"],
-  options: { readonly idempotencyKey: IdempotencyKey; readonly budgetScope?: WorkerBudgetScope },
+  options: {
+    readonly idempotencyKey: IdempotencyKey;
+    readonly budgetScope?: WorkerBudgetScope;
+    readonly continuationOf?: WorkerRef;
+  },
 ) => operations(declaration).start(parameters, options);
 
 /** Retain typed follow-up parameters for the same worker Thread; inspect its MessageRef for delivery. */

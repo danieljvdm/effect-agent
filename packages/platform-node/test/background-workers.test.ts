@@ -33,7 +33,12 @@ import { SubagentHost } from "effect-agent/subagent-host";
 import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { readOutstanding, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { AssignmentDisposition, WorkerError, type WorkerSummary } from "effect-agent/worker";
-import { WorkerConcurrencyResolver, WorkerHostAuthorizer } from "effect-agent/worker-host";
+import {
+  WorkerBudgetAuthorizer,
+  WorkerConcurrencyResolver,
+  WorkerHostAuthorizer,
+  WorkerPolicyResolver,
+} from "effect-agent/worker-host";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
@@ -1840,3 +1845,533 @@ it.effect(
     ).pipe(Effect.provide(NodeFileSystem.layer)),
   15_000,
 );
+
+// Regression: https://github.com/danieljvdm/effect-agent/blob/c721a292205e06185f0136c3ed05dcf53e29ca66/packages/effect-agent/src/durable/internal/worker-host.ts#L2189-L2210
+it.effect(
+  "starts an authorized successor without reopening its completed assignment",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "assignment-successor-" });
+        const child = assignment(() => Stream.fromIterable(parts));
+
+        const research = Subagent.make("assignment", {
+          target: child.definition,
+          policy: declaration.policy,
+        });
+
+        const otherSource = Schema.decodeSync(ThreadId)("another-source");
+        let successorOnly = false;
+        let denied = false;
+        const observed: Array<unknown> = [];
+
+        const hooks: Record<"policy" | "budget" | "concurrency", Array<unknown>> = {
+          policy: [],
+          budget: [],
+          concurrency: [],
+        };
+
+        const policy = Layer.succeed(WorkerPolicyResolver)({
+          resolveSource: () => Effect.succeed(Option.none()),
+          resolveTarget: (request) =>
+            Effect.sync(() => {
+              if (request._tag === "InitialInput") hooks.policy.push(request.continuationOf);
+
+              return Option.none();
+            }),
+        });
+
+        const funding = Layer.succeed(WorkerBudgetAuthorizer)({
+          authorize: (request) =>
+            Effect.sync(() => {
+              hooks.budget.push(request.continuationOf);
+            }),
+        });
+
+        const concurrency = Layer.succeed(WorkerConcurrencyResolver)({
+          resolve: (request) =>
+            Effect.sync(() => {
+              hooks.concurrency.push(request.continuationOf);
+
+              return Option.none();
+            }),
+        });
+
+        const guarded = Layer.succeed(WorkerHostAuthorizer)({
+          authorize: (request) => {
+            if (request.operation === "start") observed.push(request);
+
+            return request.principal !== principal ||
+              (request.sourceThreadId !== sourceThreadId &&
+                request.sourceThreadId !== otherSource) ||
+              denied ||
+              (successorOnly && request.operation === "start" && !("continuationOf" in request))
+              ? WorkerError.make({ operation: request.operation, reason: "denied" })
+              : Effect.succeed(principal);
+          },
+        });
+
+        const context = yield* Layer.build(
+          NodeHost.NodeDurableHost.layerRegistered(
+            [
+              { agent: source, definitions },
+              { agent: child, definitions },
+            ],
+            {
+              filename: `${directory}/runtime.sqlite`,
+              deploymentId: "successor-v1",
+              producerId: "successor-node",
+            },
+          ).pipe(Layer.provide([guarded, policy, funding, concurrency])),
+        );
+
+        const runtime = Context.get(context, DurableAgentRuntime);
+
+        yield* runtime.submitRegistered(
+          source,
+          { question: "launch" },
+          {
+            threadId: sourceThreadId,
+            principal,
+            idempotencyKey: key("source"),
+          },
+        );
+        const owner = yield* runtime.workerHost({ sourceThreadId, principal });
+
+        const first = yield* withFacet(
+          owner,
+          Subagent.start(
+            research,
+            { question: "original" },
+            { idempotencyKey: key("first"), budgetScope: "worker-run" },
+          ),
+        );
+
+        expect(
+          yield* withFacet(
+            owner,
+            Subagent.start(
+              research,
+              { question: "too early" },
+              {
+                idempotencyKey: key("pending-predecessor"),
+                continuationOf: first.worker,
+              },
+            ),
+          ).pipe(Effect.flip),
+        ).toMatchObject({ reason: "denied" });
+        yield* runtime.processThreadResolved(first.worker.threadId);
+        const before = yield* withFacet(owner, Subagent.inspect(research, first.worker));
+
+        expect(before.state).toBe("completed");
+        yield* runtime.submitRegistered(
+          source,
+          { question: "another task" },
+          { threadId: otherSource, principal, idempotencyKey: key("other-source") },
+        );
+        const unrelated = yield* runtime.workerHost({ sourceThreadId: otherSource, principal });
+
+        expect(
+          yield* withFacet(
+            unrelated,
+            Subagent.start(
+              research,
+              { question: "cross source" },
+              { idempotencyKey: key("cross-source"), continuationOf: first.worker },
+            ),
+          ).pipe(Effect.flip),
+        ).toMatchObject({ reason: "worker-mismatch" });
+
+        const otherDeclaration = Subagent.make("other-declaration", {
+          target: child.definition,
+          policy: declaration.policy,
+        });
+
+        expect(
+          yield* withFacet(
+            owner,
+            Subagent.start(
+              otherDeclaration,
+              { question: "cross declaration" },
+              { idempotencyKey: key("cross-declaration"), continuationOf: first.worker },
+            ),
+          ).pipe(Effect.flip),
+        ).toMatchObject({ reason: "worker-mismatch" });
+        successorOnly = true;
+        expect(
+          yield* withFacet(
+            owner,
+            Subagent.start(research, { question: "fresh" }, { idempotencyKey: key("fresh") }),
+          ).pipe(Effect.flip),
+        ).toMatchObject({ reason: "denied" });
+        yield* TestClock.adjust("1 second");
+
+        const options = {
+          idempotencyKey: key("successor"),
+          continuationOf: first.worker,
+          budgetScope: "worker-run" as const,
+        };
+
+        const start = Subagent.start(research, { question: "late correction" }, options);
+        const second = yield* withFacet(owner, start);
+
+        expect(second.worker.threadId).not.toBe(first.worker.threadId);
+        expect(second.delivery.status).toBe("accepted");
+        expect(yield* withFacet(owner, start)).toEqual(second);
+
+        const changed = {
+          ...options,
+          continuationOf: { ...first.worker, threadId: sourceThreadId },
+        };
+
+        expect(
+          yield* withFacet(
+            owner,
+            Subagent.start(research, { question: "late correction" }, changed),
+          ).pipe(Effect.flip),
+        ).toBeDefined();
+        denied = true;
+        expect(yield* withFacet(owner, start).pipe(Effect.flip)).toMatchObject({
+          reason: "denied",
+        });
+        denied = false;
+        yield* runtime.processThreadResolved(second.worker.threadId);
+        expect((yield* withFacet(owner, Subagent.inspect(research, second.worker))).state).toBe(
+          "completed",
+        );
+        expect(yield* withFacet(owner, Subagent.inspect(research, first.worker))).toEqual(before);
+        successorOnly = false;
+        expect(
+          yield* withFacet(
+            owner,
+            Subagent.followUp(
+              research,
+              first.worker,
+              { question: "reopen" },
+              { idempotencyKey: key("reopen") },
+            ),
+          ),
+        ).toMatchObject({ status: "refused", reason: "worker-stopped" });
+        const store = Context.get(context, MessageDeliveryStore);
+        const retained = yield* store.get(second.delivery.message);
+        const original = yield* store.get(first.delivery.message);
+        const origin = original?.envelope.workerAdmission?.origin;
+
+        expect(retained?.envelope.workerAdmission?.origin).toMatchObject({
+          policy: origin?.policy,
+          budget: origin?.budget,
+          grant: origin?.grant,
+          depth: origin?.depth,
+          budgetScope: origin?.budgetScope,
+          expiresAtMillis: origin?.expiresAtMillis,
+        });
+        for (const values of Object.values(hooks))
+          expect(values).toContainEqual(
+            expect.objectContaining({ worker: first.worker, receipt: before.run?.hostReceipt }),
+          );
+
+        const enlarged = Subagent.make("assignment", {
+          target: child.definition,
+          policy: Subagent.SubagentPolicy.make({
+            maxChildren: 8,
+            maxConcurrency: 2,
+            maxTurns: 2,
+            maxToolCalls: 1,
+            maxDuration: "1 second",
+          }),
+        });
+
+        expect(
+          yield* withFacet(
+            owner,
+            Subagent.start(
+              enlarged,
+              { question: "larger budget" },
+              { ...options, idempotencyKey: key("enlarged") },
+            ),
+          ).pipe(Effect.flip),
+        ).toMatchObject({ reason: "denied" });
+        expect(retained?.envelope.workerAdmission?.origin).toMatchObject({
+          continuationOf: { worker: first.worker, receipt: before.run?.hostReceipt },
+        });
+        expect(observed).toContainEqual(
+          expect.objectContaining({
+            continuationOf: expect.objectContaining({ worker: first.worker }),
+          }),
+        );
+        yield* withFacet(
+          owner,
+          Subagent.stop(research, first.worker, { idempotencyKey: key("stop-completed") }),
+        );
+        expect(yield* withFacet(owner, start).pipe(Effect.flip)).toMatchObject({
+          reason: "denied",
+        });
+      }),
+    ).pipe(Effect.provide(NodeFileSystem.layer)),
+  15_000,
+);
+
+// Regression: https://github.com/danieljvdm/effect-agent/blob/c721a292205e06185f0136c3ed05dcf53e29ca66/packages/effect-agent/src/durable/internal/worker-host.ts#L2189-L2210
+for (const point of [
+  "worker:before-source-append",
+  "worker:after-source-append",
+  "worker:before-origin-append",
+  "worker:after-origin-append",
+] as const) {
+  it.effect(
+    `recovers a successor after interruption at ${point}`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "successor-restart-" });
+          let calls = 0;
+
+          const child = assignment(() => {
+            calls++;
+
+            return Stream.fromIterable(parts);
+          });
+
+          const research = Subagent.make("assignment", {
+            target: child.definition,
+            policy: declaration.policy,
+          });
+
+          const registrations = [
+            { agent: source, definitions },
+            { agent: child, definitions },
+          ];
+
+          const options = {
+            filename: `${directory}/runtime.sqlite`,
+            deploymentId: "successor-restart",
+            producerId: "successor-node",
+          };
+
+          const entered = yield* Deferred.make<void>();
+          let armed = false;
+          let finalized = 0;
+          let revoked = false;
+
+          const guarded = Layer.succeed(WorkerHostAuthorizer)({
+            authorize: (request) =>
+              revoked && request.operation === "start"
+                ? WorkerError.make({ operation: request.operation, reason: "denied" })
+                : Effect.succeed(principal),
+          });
+
+          const firstScope = yield* Scope.make();
+
+          yield* Effect.addFinalizer(() => Scope.close(firstScope, Exit.void));
+
+          const first = yield* Layer.build(
+            NodeHost.NodeDurableHost.layerRegistered(registrations, {
+              ...options,
+              runtimeFailpoint: (location) =>
+                armed && location === point
+                  ? Deferred.succeed(entered, undefined).pipe(
+                      Effect.andThen(Effect.never),
+                      Effect.ensuring(
+                        Effect.sync(() => {
+                          finalized++;
+                        }),
+                      ),
+                    )
+                  : Effect.void,
+            }).pipe(Layer.provide(guarded)),
+          ).pipe(Scope.provide(firstScope));
+
+          const runtime = Context.get(first, DurableAgentRuntime);
+
+          yield* runtime.submitRegistered(
+            source,
+            { question: "launch" },
+            { threadId: sourceThreadId, principal, idempotencyKey: key("source") },
+          );
+          const owner = yield* runtime.workerHost({ sourceThreadId, principal });
+
+          const original = yield* withFacet(
+            owner,
+            Subagent.start(research, { question: "original" }, { idempotencyKey: key("original") }),
+          );
+
+          yield* runtime.processThreadResolved(original.worker.threadId);
+          const sealed = yield* withFacet(owner, Subagent.inspect(research, original.worker));
+
+          expect(sealed.state).toBe("completed");
+
+          const command = Subagent.start(
+            research,
+            { question: "correction" },
+            { idempotencyKey: key("successor"), continuationOf: original.worker },
+          );
+
+          armed = true;
+          const interrupted = yield* withFacet(owner, command).pipe(Effect.forkChild);
+
+          yield* Deferred.await(entered);
+          yield* Fiber.interrupt(interrupted);
+          expect(Exit.hasInterrupts(yield* Fiber.await(interrupted))).toBe(true);
+          expect(finalized).toBe(1);
+          expect(calls).toBe(1);
+
+          const retained = yield* Context.get(first, MessageDeliveryStore).list({
+            ownerThreadId: sourceThreadId,
+            limit: 10,
+          });
+
+          expect(retained.items).toHaveLength(2);
+
+          const saved = retained.items.find(
+            (row) => row.envelope.workerAdmission?.origin.continuationOf !== undefined,
+          );
+
+          expect(saved?.envelope.workerAdmission?.origin.continuationOf?.receipt).toEqual(
+            sealed.run?.hostReceipt,
+          );
+          yield* Scope.close(firstScope, Exit.void);
+
+          const second = yield* Layer.build(
+            NodeHost.NodeDurableHost.layerRegistered(registrations, options).pipe(
+              Layer.provide(guarded),
+            ),
+          );
+
+          const reopened = Context.get(second, DurableAgentRuntime);
+          const next = yield* reopened.workerHost({ sourceThreadId, principal });
+
+          yield* TestClock.adjust("31 seconds");
+          revoked = true;
+          expect(yield* withFacet(next, command).pipe(Effect.flip)).toMatchObject({
+            reason: "denied",
+          });
+          revoked = false;
+          const successor = yield* withFacet(next, command);
+
+          expect(successor.worker).toEqual(saved?.envelope.workerAdmission?.origin.worker);
+          expect(successor.delivery.status).toBe("accepted");
+          expect(
+            (yield* Context.get(second, MessageDeliveryStore).list({
+              ownerThreadId: sourceThreadId,
+              limit: 10,
+            })).items,
+          ).toHaveLength(2);
+          yield* reopened.processThreadResolved(successor.worker.threadId);
+          expect(calls).toBe(2);
+          expect((yield* withFacet(next, Subagent.inspect(research, successor.worker))).state).toBe(
+            "completed",
+          );
+          expect(yield* withFacet(next, Subagent.inspect(research, original.worker))).toEqual(
+            sealed,
+          );
+        }),
+      ).pipe(Effect.provide(NodeFileSystem.layer)),
+    15_000,
+  );
+}
+
+// Regression: https://github.com/danieljvdm/effect-agent/blob/c721a292205e06185f0136c3ed05dcf53e29ca66/packages/effect-agent/src/durable/internal/worker-host.ts#L2189-L2210
+for (const state of ["failed", "cancelled", "waiting"] as const) {
+  it.effect(
+    `rejects a ${state} assignment as a successor predecessor`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "successor-rejected-" });
+          const entered = yield* Deferred.make<void>();
+
+          const child = assignment(() =>
+            state === "cancelled"
+              ? Stream.unwrap(
+                  Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+                )
+              : Stream.fromIterable(
+                  parts.map((part) =>
+                    part.type === "text-delta"
+                      ? {
+                          ...part,
+                          delta: state === "failed" ? '{"answer":123}' : '{"answer":"question"}',
+                        }
+                      : part,
+                  ),
+                ),
+          );
+
+          const research = Subagent.make("assignment", {
+            target: child.definition,
+            policy: declaration.policy,
+          });
+
+          const context = yield* Layer.build(
+            NodeHost.NodeDurableHost.layerRegistered(
+              [
+                { agent: source, definitions },
+                { agent: child, definitions },
+              ],
+              {
+                filename: `${directory}/runtime.sqlite`,
+                deploymentId: "successor-rejected",
+                producerId: "successor-node",
+                abortPollInterval: 1,
+              },
+            ).pipe(Layer.provide(authority)),
+          );
+
+          const runtime = Context.get(context, DurableAgentRuntime);
+
+          yield* runtime.submitRegistered(
+            source,
+            { question: "launch" },
+            { threadId: sourceThreadId, principal, idempotencyKey: key("source") },
+          );
+          const owner = yield* runtime.workerHost({ sourceThreadId, principal });
+
+          const first = yield* withFacet(
+            owner,
+            Subagent.start(research, { question: "original" }, { idempotencyKey: key("first") }),
+          );
+
+          if (state === "cancelled") {
+            const running = yield* runtime
+              .processThreadResolved(first.worker.threadId)
+              .pipe(Effect.forkChild);
+
+            yield* Deferred.await(entered);
+            if (first.delivery.receipt === null)
+              return yield* Effect.die("Missing assignment receipt");
+            yield* withFacet(
+              owner,
+              Subagent.cancel(research, first.worker, first.delivery.receipt),
+            );
+            yield* TestClock.adjust(10);
+            yield* Fiber.join(running);
+          } else yield* runtime.processThreadResolved(first.worker.threadId);
+          const before = yield* withFacet(owner, Subagent.inspect(research, first.worker));
+
+          if (state === "waiting") expect(before.run?.disposition).toBe("waiting");
+          else expect(before.state).toBe(state);
+          expect(
+            yield* withFacet(
+              owner,
+              Subagent.start(
+                research,
+                { question: "continue" },
+                { idempotencyKey: key("successor"), continuationOf: first.worker },
+              ),
+            ).pipe(Effect.flip),
+          ).toMatchObject({ reason: "denied" });
+          expect(
+            (yield* Context.get(context, MessageDeliveryStore).list({
+              ownerThreadId: sourceThreadId,
+              limit: 10,
+            })).items,
+          ).toHaveLength(1);
+          expect(yield* withFacet(owner, Subagent.inspect(research, first.worker))).toEqual(before);
+        }),
+      ).pipe(Effect.provide(NodeFileSystem.layer)),
+    15_000,
+  );
+}

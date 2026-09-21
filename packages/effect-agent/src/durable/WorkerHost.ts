@@ -5,7 +5,13 @@ import type { AgentPolicy } from "../core/AgentPolicy.ts";
 import type { SubmissionId, ThreadId } from "../core/Identifiers.ts";
 import type { SubagentBudgetReservation } from "../core/SubagentContract.ts";
 import { WorkerError, type WorkerRef, type WorkerSource } from "../core/Worker.ts";
-import type { DefinitionDigests, Digest, PersistedJson, WorkerOrigin } from "./Records.ts";
+import type {
+  DefinitionDigests,
+  Digest,
+  PersistedJson,
+  WorkerOrigin,
+  WorkerContinuation,
+} from "./Records.ts";
 import type { Principal, SubmissionSnapshot } from "./SubmissionLedger.ts";
 
 /** Host-verified source input; absence never means the latest input in the Thread. */
@@ -24,6 +30,7 @@ export type WorkerPolicyTarget = {
 } & (
   | {
       readonly _tag: "InitialInput";
+      readonly continuationOf?: WorkerContinuation;
       readonly sourceSubmission?: SubmissionSnapshot;
       readonly input: PersistedJson;
       readonly inputDigest: Digest;
@@ -83,6 +90,7 @@ export const WorkerConcurrencyResolver = Context.Reference<{
     readonly source: WorkerSource;
     readonly sourceSubmission?: SubmissionSnapshot;
     readonly worker: WorkerRef;
+    readonly continuationOf?: WorkerContinuation;
     readonly principal: Principal;
   }) => Effect.Effect<Option.Option<WorkerConcurrencyLimit>, WorkerError>;
 }>("@effect-agent/thread/WorkerConcurrencyResolver", {
@@ -135,6 +143,8 @@ export interface WorkerHostAuthorizationRequest {
   readonly operation: WorkerError["operation"];
   readonly access: "context" | "read" | "send" | "control";
   readonly worker?: WorkerRef;
+  /** Native-verified successful predecessor, never a caller-supplied authorization grant. */
+  readonly continuationOf?: WorkerContinuation;
 }
 
 export const WorkerHostAuthorizer = Context.Reference<{
@@ -161,6 +171,7 @@ export const WorkerBudgetAuthorizer = Context.Reference<{
     readonly source: WorkerSource;
     readonly principal: Principal;
     readonly worker: WorkerRef;
+    readonly continuationOf?: WorkerContinuation;
     readonly policy: AgentPolicy;
     readonly budget: SubagentBudgetReservation;
   }) => Effect.Effect<void, WorkerError>;

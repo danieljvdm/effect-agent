@@ -487,6 +487,16 @@ still return their original receipt and outcome. `Subagent.stop` remains permane
 `stopping`/`stopped` states; a later stop never replaces an existing assignment outcome. Stop from
 the owning caller, not inside the active child's completion handler.
 
+To continue a successfully completed assignment, pass `continuationOf: previous.worker` and a
+new idempotency key to `Subagent.start`. This creates a distinct worker and leaves the predecessor
+sealed. The host verifies its exact completed receipt and settlement before authorization and again
+on retained admission/replay. Pending, failed, cancelled, explicitly stopped, cross-source and
+cross-declaration predecessors are rejected. Policy, grant, budget, accounting scope and depth must
+match the predecessor, and its absolute expiry is never extended. Current authorization, funding
+and concurrency checks still apply; verified `continuationOf` evidence reaches each host hook.
+The current source run remains the caller. Applications must authorize the continuation's scope
+and derive its captured task configuration from the predecessor, not from untrusted new input.
+
 ## Completion report guarantees
 
 Use `Subagent.background(Research, { start: true, reportToParent: true })` for a standard

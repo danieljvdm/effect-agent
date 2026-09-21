@@ -27,6 +27,8 @@ import {
 /** Prepared values cross this port only to be Schema-decoded before durable storage. */
 export interface StartWorkerRequest {
   readonly delegationId: DelegationId;
+  /** Start a distinct assignment using verified completed predecessor authority. */
+  readonly continuationOf?: WorkerRef;
   readonly target: Agent.AnyDefinition;
   readonly idempotencyKey: IdempotencyKey;
   readonly encodedInput: unknown;
@@ -50,6 +52,7 @@ export interface StartWorkerRequest {
 export interface DeferredStartWorkerRequest<E = never, R = never> extends Pick<
   StartWorkerRequest,
   | "delegationId"
+  | "continuationOf"
   | "target"
   | "idempotencyKey"
   | "encodedParameters"
@@ -165,6 +168,7 @@ export class SubagentHost extends Context.Service<
     readonly context: Effect.Effect<WorkerContext, WorkerError>;
     /** Resolve prepared input through host authority; None retains legacy target inheritance. */
     readonly resolveTargetPolicy: (request: {
+      readonly continuationOf?: WorkerRef;
       readonly target: Agent.AnyDefinition;
       readonly encodedInput: unknown;
     }) => Effect.Effect<Option.Option<AgentPolicy>, WorkerError>;
