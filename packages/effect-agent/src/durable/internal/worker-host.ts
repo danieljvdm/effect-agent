@@ -1440,7 +1440,11 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         },
       };
 
-      const projection = yield* Effect.suspend(() => descriptor.prepare(report)).pipe(
+      const projection = yield* Effect.suspend(() =>
+        descriptor.reportCompletion?.(report) === false
+          ? Effect.succeed(undefined)
+          : descriptor.prepare(report),
+      ).pipe(
         Effect.timeout(
           Math.min(deps.limits.reportPreparationTimeoutMillis ?? 5_000, deadlineAtMillis - now),
         ),
@@ -1456,6 +1460,8 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
       );
 
       if (projection._tag === "WorkerReportRefused") return projection;
+
+      if (projection.value === undefined) return refused("filtered");
 
       const message = projection.value.message;
 

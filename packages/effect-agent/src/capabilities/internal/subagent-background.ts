@@ -837,6 +837,13 @@ export interface BackgroundOptions {
    * The first accepted emission freezes the decision; replay does not reevaluate it.
    */
   readonly reportUpdate?: (update: Update) => boolean;
+  /**
+   * With reportToParent, select which settled Runs notify the parent before result projection.
+   * The pure predicate sees canonical encoded output and outcome. False retains a filtered
+   * report decision without parent delivery; later Runs and explicit updates are independent.
+   * Recovery reuses a committed decision, but may reevaluate before that decision commits.
+   */
+  readonly reportCompletion?: WorkerReporting["reportCompletion"];
   readonly start?: true;
   readonly followUp?: true;
   readonly inspect?: true;
@@ -849,7 +856,7 @@ export interface BackgroundOptions {
 
 type Operation = Exclude<
   keyof BackgroundOptions,
-  "budgetScope" | "reportToParent" | "reportUpdate"
+  "budgetScope" | "reportToParent" | "reportUpdate" | "reportCompletion"
 >;
 type Suffix = {
   start: "start";
@@ -1083,6 +1090,9 @@ export const background = <
       : {
           ...report,
           ...(selected.reportUpdate === undefined ? {} : { reportUpdate: selected.reportUpdate }),
+          ...(selected.reportCompletion === undefined
+            ? {}
+            : { reportCompletion: selected.reportCompletion }),
           prepare: (value) =>
             Effect.flatMap(Effect.serviceOption(reportService), (service) =>
               Option.isSome(service)

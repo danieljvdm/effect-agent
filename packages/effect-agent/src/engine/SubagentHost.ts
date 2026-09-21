@@ -140,6 +140,8 @@ export interface WorkerReporting<E = never, R = never> {
   readonly target: Agent.AnyDefinition;
   /** Pure first-emission selection. False retains the canonical update without parent delivery. */
   readonly reportUpdate?: (update: Update) => boolean;
+  /** False retains a filtered report receipt without waking the parent. */
+  readonly reportCompletion?: (report: WorkerRunReport) => boolean;
   readonly prepare: (report: WorkerRunReport) => Effect.Effect<
     {
       readonly message: WorkerCompletion;
