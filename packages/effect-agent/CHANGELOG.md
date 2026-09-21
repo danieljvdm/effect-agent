@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.125
+
+### Patch Changes
+
+- [#600](https://github.com/danieljvdm/effect-agent/pull/600) [`34d7c5f`](https://github.com/danieljvdm/effect-agent/commit/34d7c5ff9392fd6fb1db348257fd22dea58a337c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add `reportUpdate` to background reporting so applications can retain routine progress for observers without starting a parent run. Selected updates and completion reports keep their existing durable delivery guarantees.
+
 ## 0.1.0-beta.124
 
 ### Patch Changes
