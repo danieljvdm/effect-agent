@@ -444,6 +444,18 @@ it.live(
         409,
       );
 
+      const beforeRejected = yield* control("run", "evidence");
+      const beforeRejectedEvidence = yield* Effect.promise(() => beforeRejected.json());
+
+      assert.strictEqual((yield* dispatch("/_control/run/approve", {})).status, 401);
+      assert.strictEqual((yield* control("run", "approve")).status, 405);
+      const afterRejected = yield* control("run", "evidence");
+
+      assert.deepStrictEqual(
+        yield* Effect.promise(() => afterRejected.json()),
+        beforeRejectedEvidence,
+      );
+
       const login = yield* dispatch("/s/run/login", {
         email: "alex@example.test",
         password: "dummy-checkout-password",
@@ -504,6 +516,25 @@ it.live(
       assert.strictEqual(evidence.shop.cart?.quantity, 2);
       yield* control("other", "seed", { key: "other", flow: "accelerated", scenario: "success" });
       assert.strictEqual((yield* dispatch("/s/other/cart", cart, cookie)).status, 401);
+
+      for (const side of ["before", "after"]) {
+        const key = `span-${side}`;
+
+        yield* control(key, "seed", { key, flow: "accelerated", scenario: "success" });
+        yield* control(key, "fault", { location: `${side}:spans` });
+        assert.strictEqual((yield* control(key, "run", { message: "Buy the shirt" })).status, 500);
+        assert.strictEqual((yield* control(key, "run", { message: "Try again" })).status, 500);
+        const response = yield* control(key, "evidence");
+
+        const value = yield* Effect.promise(() => response.json()).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(RunEvidence)),
+        );
+
+        assert.strictEqual(value.control.controller, "failed");
+        assert.strictEqual(value.control.requests, 0);
+        assert.deepStrictEqual(value.shop.attempts, []);
+        assert.strictEqual((yield* control(key, "close", {})).status, 200);
+      }
 
       // A fault after the durable dispatch fence cannot admit a second agent request.
       yield* control("other", "fault", { location: "after:control" });

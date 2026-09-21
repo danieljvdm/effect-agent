@@ -64,12 +64,15 @@ const measure = Effect.fnUntraced(function* <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ) {
   if ((yield* config).cleanupOnly) return yield* effect;
-  const start = yield* Clock.currentTimeMillis;
+  const start = yield* Clock.monotonicTimeNanos;
 
   return yield* effect.pipe(
     Effect.ensuring(
       Effect.gen(function* () {
-        const elapsed = Math.max(0, (yield* Clock.currentTimeMillis) - start);
+        const elapsed = Math.max(
+          0,
+          Math.round(Number((yield* Clock.monotonicTimeNanos) - start) / 1_000_000),
+        );
 
         yield* updateReport((report) => ({
           ...report,
@@ -178,6 +181,15 @@ const initialize = Effect.gen(function* () {
       startIntervalMillis: settings.startIntervalMillis,
     },
     timings: {},
+    measurement: {
+      version: 1,
+      clock: "monotonic-per-request",
+      queue: "excluded-from-case-included-in-matrix",
+      caseBoundary: "before-seed-through-exact-browser-closure",
+      browserProtocolCalls: "unavailable",
+      cost: "unpriced",
+      maxOutputTokens: 4_096,
+    },
     bindingProof: false,
     suiteFailure: null,
     configuration: policy,
@@ -354,7 +366,7 @@ const proof = Effect.gen(function* () {
     ...item
   }: (typeof scheduled)[number]) {
     const key = `${run}-${item.flow}-${item.scenario}-${repetition}`;
-    const start = yield* Clock.currentTimeMillis;
+    const start = yield* Clock.monotonicTimeNanos;
 
     yield* Console.log(`Checkout ${key}`);
     // Persist the denominator before dispatch: interruption cannot erase an unsuccessful attempt.
@@ -373,43 +385,54 @@ const proof = Effect.gen(function* () {
       attempted: report.attempted + 1,
       completionRate: report.completed / (report.attempted + 1),
     }));
-    const result = yield* scenario(key, item.flow, item.scenario).pipe(Effect.exit);
-    const closed = yield* call(key, "close", Schema.NullOr(RunEvidence), {}).pipe(Effect.exit);
+    yield* scenario(key, item.flow, item.scenario).pipe(
+      Effect.onExit((result) =>
+        Effect.gen(function* () {
+          const closed = yield* call(key, "close", Schema.NullOr(RunEvidence), {}).pipe(
+            Effect.exit,
+          );
 
-    const evidence = Exit.isSuccess(closed)
-      ? closed.value
-      : yield* call(key, "evidence", RunEvidence).pipe(Effect.orElseSucceed(() => null));
+          const evidence = Exit.isSuccess(closed)
+            ? closed.value
+            : yield* call(key, "evidence", RunEvidence).pipe(Effect.orElseSucceed(() => null));
 
-    const passed =
-      Exit.isSuccess(result) &&
-      Exit.isSuccess(closed) &&
-      closed.value !== null &&
-      closed.value.control.closed;
+          const passed =
+            Exit.isSuccess(result) &&
+            Exit.isSuccess(closed) &&
+            closed.value !== null &&
+            closed.value.control.closed;
 
-    const elapsedMillis = Math.max(0, (yield* Clock.currentTimeMillis) - start);
+          const elapsedMillis = Math.max(
+            0,
+            Math.round(Number((yield* Clock.monotonicTimeNanos) - start) / 1_000_000),
+          );
 
-    yield* updateReport((report) => ({
-      ...report,
-      results: report.results.map((previous) =>
-        previous.key !== key
-          ? previous
-          : {
-              key,
-              ...item,
-              passed,
-              failure: Exit.isFailure(result)
-                ? Cause.pretty(result.cause)
-                : Exit.isFailure(closed)
-                  ? "Browser cleanup failed"
-                  : null,
-              evidence,
-              elapsedMillis,
-            },
+          yield* updateReport((report) => ({
+            ...report,
+            results: report.results.map((previous) =>
+              previous.key !== key
+                ? previous
+                : {
+                    key,
+                    ...item,
+                    passed,
+                    failure: Exit.isFailure(result)
+                      ? Cause.pretty(result.cause)
+                      : Exit.isFailure(closed)
+                        ? "Browser cleanup failed"
+                        : null,
+                    evidence,
+                    elapsedMillis,
+                  },
+            ),
+            completed: report.completed + Number(passed),
+            completionRate: (report.completed + Number(passed)) / report.attempted,
+          }));
+          yield* Console.log(`${key}: ${passed ? "passed" : "FAILED"} (${elapsedMillis}ms)`);
+        }).pipe(Effect.orDie),
       ),
-      completed: report.completed + Number(passed),
-      completionRate: (report.completed + Number(passed)) / report.attempted,
-    }));
-    yield* Console.log(`${key}: ${passed ? "passed" : "FAILED"} (${elapsedMillis}ms)`);
+      Effect.exit,
+    );
   });
 
   // Operator takeover is opt-in and stays outside the automated concurrent batch.

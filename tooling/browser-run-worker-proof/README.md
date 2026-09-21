@@ -39,7 +39,9 @@ The generic browser tools expose observations, navigation, clicks, text entry, s
 credential filling. The buyer receives no selectors, click sequence or purchase API. Its owner
 allows only the two fixture origins and supplies dummy credentials through the native fill helper.
 Observations include visible frames and current control values, so collapsed payment sections must
-be opened before their fields become observable. Dummy field values can be visible; this is not a
+be opened before their fields become observable. Each frame includes its ordered CSS iframe path;
+copy that path into browser and credential tools, with field selectors relative to the selected
+frame. A frame URL is not a selector. Dummy field values can be visible; this is not a
 credential-secrecy proof.
 
 Approval belongs to the owner. The agent can request a pause but cannot grant approval. The runner
@@ -110,11 +112,24 @@ credential field roles. Pseudo-selector text arguments become `[redacted]`; attr
 retained only for source-owned fixture names, types, titles and autocomplete tokens. URL/value
 attributes, URL schemes, escaped/encoded selectors and other literal-bearing selectors become `null`.
 These target records omit credential identifiers, material, session capabilities and raw exceptions.
-It also records concurrency, admission spacing, each case's elapsed time (including browser closure),
-and deployment, readiness, binding-proof, matrix, retirement and total durations. Concurrent case
-durations overlap and must not be summed as wall time. These timers do not separate model latency
-from browser latency. Each request has a five-minute duration,
-60-turn, 120-tool-call and 500,000-token budget; each scenario permits at most six continuations.
+
+Instrumented reports retain request-local monotonic spans for model calls, browser dispatch,
+observations, waits, attachment, approval/resume and exact closure. Each browser span identifies
+the model turn that requested it; model spans retain requested/resolved model IDs, tool names
+and reported tokens. An observation-only turn can therefore be counted independently from an
+observation tool call. Observation sizes are UTF-8 bytes. Missing usage and browser protocol
+counts remain unavailable; provider costs are unpriced, not zero.
+
+Case elapsed time starts before seeding and ends after exact browser closure, including approval
+requests and cleanup. Admission queueing is excluded from cases and included in matrix time.
+Deployment, readiness, the binding proof and retirement have separate totals. Spans may nest or
+overlap: do not add their durations to estimate wall time. Timing adds two synchronous SQLite
+writes per span and native response metadata collection; hosted comparisons must use the same
+instrumentation. Worker clocks may coarsen synchronous work; zero-duration spans do not imply
+zero cost. Running spans survive process loss; interruption retains finalizer outcomes.
+
+Each request has a five-minute duration, 60-turn, 120-tool-call and 500,000-token budget; each
+scenario permits at most six continuations.
 Provider/model work costs money. Repetitions use fresh stores and browsers; failed attempts are
 retained without automatic model or purchase retries. Deterministic fixtures do not make model
 actions deterministic.
