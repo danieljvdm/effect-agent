@@ -16,5 +16,6 @@ Accept the local HTTPS certificate, then create an email account.
 Verification emails are saved locally; their file paths appear in this terminal.
 Use sk-preview-local for the offline planner and send: complete travel cards fixture
 This preview uses test data, makes no provider calls, and resets when stopped.`);
-  yield* Effect.never;
+
+  return yield* Effect.never;
 }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), NodeRuntime.runMain);
