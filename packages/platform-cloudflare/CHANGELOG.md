@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.126
+
+### Patch Changes
+
+- [#602](https://github.com/danieljvdm/effect-agent/pull/602) [`8fe0316`](https://github.com/danieljvdm/effect-agent/commit/8fe03169c5eef38f1cb01bfe8be363436b094ea2) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Dispatch up to two independent Threads concurrently in a Cloudflare maintenance event so newly ready input can start while another Thread is busy. Preserve per-Thread FIFO, scoped claim cleanup, and durable alarm recovery.
+
+- Updated dependencies [[`bf955bb`](https://github.com/danieljvdm/effect-agent/commit/bf955bbf275901e560d93cf0a054cfbf51aa9420), [`81a78cd`](https://github.com/danieljvdm/effect-agent/commit/81a78cd2bbd932b939b942eedea53c8e2894480e)]:
+  - effect-agent@0.1.0-beta.126
+  - @effect-agent/storage-cloudflare@0.1.0-beta.126
+
 ## 0.1.0-beta.125
 
 ### Patch Changes
