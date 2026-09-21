@@ -1,15 +1,18 @@
 import { fileURLToPath } from "node:url";
 
-import { BrowserCredentialAccess } from "@effect-agent/platform-cloudflare/browser-credentials";
 import {
+  BrowserCredentialAccess,
+  CredentialFillResult,
+} from "@effect-agent/platform-cloudflare/browser-credentials";
+import {
+  BrowserSessionError,
   BrowserSessionReference,
   BrowserSessions,
   type BrowserSession,
-  type BrowserSessionError,
 } from "@effect-agent/platform-cloudflare/browser-session";
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { assert, expectTypeOf, it } from "@effect/vitest";
-import { Effect, Layer, Redacted, Schema } from "effect";
+import { Cause, Effect, Exit, Layer, Redacted, Schema, Stream } from "effect";
 import { AgentRuntime, InMemory, type Agent } from "effect-agent";
 import type { Tool } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -40,6 +43,122 @@ expectTypeOf<Layer.Services<ReturnType<typeof buyerTools>>>().toEqualTypeOf<
 >();
 expectTypeOf<Layer.Error<ReturnType<typeof buyerTools>>>().toEqualTypeOf<BrowserSessionError>();
 expectTypeOf<Effect.Error<ReturnType<typeof transition>>>().toEqualTypeOf<CheckoutError>();
+
+it.effect("preserves credential acknowledgement through read failure without retrying input", () =>
+  Effect.gen(function* () {
+    for (const outcome of ["provider", "timeout", "defect", "interruption"] as const) {
+      let fills = 0;
+      let reads = 0;
+      let released = 0;
+
+      const reference = BrowserSessionReference.make({
+        version: 1,
+        sessionId: Redacted.make("00000000-0000-4000-8000-000000000001"),
+        contextId: Redacted.make("saved-context"),
+        targetId: Redacted.make("saved-page"),
+        expiresAt: 1_900_000_000_000,
+        commandTimeoutMillis: 1_000,
+      });
+
+      const fill = CredentialFillResult.make({ dispatch: "dispatched", filled: 2 });
+      const unused = () => Effect.die("Only acknowledgement and post-action reading are exercised");
+
+      const session: BrowserSession = {
+        reference,
+        fillCredential: () =>
+          Effect.sync(() => {
+            fills++;
+
+            return fill;
+          }),
+        run: () =>
+          Effect.suspend(() => {
+            reads++;
+            if (outcome === "defect") return Effect.die("read defect");
+            if (outcome === "interruption") return Effect.interrupt;
+
+            return Effect.fail(
+              BrowserSessionError.make({
+                reason: outcome,
+                dispatch: "possibly-dispatched",
+                cleanup: "not-requested",
+              }),
+            );
+          }),
+        handoff: unused,
+        getLiveView: unused,
+        getHandoffState: unused,
+      };
+
+      const exit = yield* Effect.gen(function* () {
+        const handlers = yield* tools;
+
+        return yield* handlers
+          .handle("fill_credential", {
+            request: {
+              credential: "account",
+              kind: "login",
+              fields: [
+                { selector: "input[name=email]", role: "username" },
+                { selector: "input[name=password]", role: "password" },
+              ],
+            },
+          })
+          .pipe(Effect.flatMap(Stream.runCollect));
+      }).pipe(
+        Effect.provide(
+          buyerTools({
+            reference,
+            shopOrigin: "https://shop.test",
+            processorOrigin: "https://pay.test",
+          }),
+        ),
+        Effect.provideService(
+          BrowserSessions,
+          BrowserSessions.of({
+            create: unused,
+            attach: () =>
+              Effect.acquireRelease(Effect.succeed(session), () => Effect.sync(() => released++)),
+            keepAlive: unused,
+            close: unused,
+          }),
+        ),
+        Effect.provideService(
+          CheckoutOwner,
+          CheckoutOwner.of({
+            authorize: Effect.void,
+            observe: unused,
+            record: () => Effect.void,
+            approval: unused(),
+            human: unused(),
+          }),
+        ),
+        Effect.exit,
+      );
+
+      assert.strictEqual(fills, 1);
+      assert.strictEqual(reads, 1);
+      assert.strictEqual(released, 1);
+      if (outcome === "provider" || outcome === "timeout") {
+        assert.isTrue(Exit.isSuccess(exit));
+        if (Exit.isFailure(exit)) return yield* Effect.die("Expected acknowledged input");
+        assert.isFalse(exit.value.at(-1)?.isFailure);
+        assert.deepStrictEqual(exit.value.at(-1)?.result, {
+          execution: "completed",
+          observation: null,
+          readFailure:
+            "The action completed but its observation failed. Use observe; do not repeat the action.",
+          fill,
+        });
+      } else {
+        assert.isTrue(Exit.isFailure(exit));
+        if (Exit.isSuccess(exit))
+          return yield* Effect.die("A defect or interruption must not become success");
+        assert.strictEqual(Cause.hasInterrupts(exit.cause), outcome === "interruption");
+      }
+    }
+  }),
+);
 
 it.effect("the tool layer scopes its saved browser attachment across success and failure", () =>
   Effect.gen(function* () {
