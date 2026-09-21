@@ -319,7 +319,11 @@ export const buyerTools = (options: {
               }
               if (!visible) continue;
 
-              const html = await frame.$eval("body", (body) => {
+              // Read in one protocol call instead of acquiring and releasing a body handle.
+              const html = await frame.evaluate(() => {
+                const body = document.querySelector("body");
+
+                if (body === null) throw new Error("Missing document body");
                 const snapshot = body.cloneNode(true);
 
                 if (!(snapshot instanceof HTMLElement)) throw new Error("Missing document body");

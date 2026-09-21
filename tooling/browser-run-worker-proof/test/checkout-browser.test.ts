@@ -133,6 +133,10 @@ it.live(
           yield* Effect.promise(() => page.$eval("input", (input) => input.value)),
           "merchant",
         );
+        yield* handlers.handle("observe", {}).pipe(Effect.flatMap(Stream.runDrain));
+        const refreshed = observations.at(-1)?.frames.find((item) => item.url === frame.url());
+
+        assert.include(refreshed?.html ?? "", 'value="targeted-card"');
       }).pipe(
         Effect.provide(
           buyerTools({
