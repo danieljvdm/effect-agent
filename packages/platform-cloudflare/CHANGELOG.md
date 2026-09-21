@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.128
+
+### Patch Changes
+
+- [#611](https://github.com/danieljvdm/effect-agent/pull/611) [`82b35f9`](https://github.com/danieljvdm/effect-agent/commit/82b35f99b45df6d9dd53edde26f54b50f2a6de8e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve the host's browser viewport when attaching to an existing session.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.128
+  - effect-agent@0.1.0-beta.128
+
 ## 0.1.0-beta.127
 
 ### Patch Changes
