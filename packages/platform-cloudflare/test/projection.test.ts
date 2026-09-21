@@ -454,7 +454,7 @@ describe("live Thread projection and alarm backfill", () => {
       }
     }));
 
-  it("preserves a completed interruption while a sibling dispatch remains blocked", () =>
+  it("preserves a completed interruption until an independent dispatch retires", () =>
     withThread(async (thread, _now, advance) => {
       projectionControls.set(thread, { skipLive: true });
       await submit(thread, plannerDefinition);
@@ -464,20 +464,40 @@ describe("live Thread projection and alarm backfill", () => {
         failure: "interruption",
       });
       let release!: () => void;
+      let enter!: () => void;
+      let retired = false;
 
       const held = new Promise<void>((resolve) => {
         release = resolve;
       });
 
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+
       hostMaintenanceControls.set(thread, [
         {
           dispatchTimeoutMillis: 1_000,
-          run: Effect.promise(() => held),
-          pendingDeadline: Effect.succeed(Option.some(0)),
+          run: Effect.sync(enter).pipe(Effect.andThen(Effect.promise(() => held))),
+          pendingDeadline: Effect.succeed(Option.none()),
         },
       ]);
+
+      const running = alarm(thread)
+        .then(
+          () => ({ failed: false }),
+          () => ({ failed: true }),
+        )
+        .finally(() => {
+          retired = true;
+        });
+
       try {
-        await expect(alarm(thread)).rejects.toBeDefined();
+        await entered;
+        await advance(100);
+        expect(retired).toBe(false);
+        release();
+        expect(await running).toEqual({ failed: true });
         expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
         const resources = projectionResources.get(thread);
 
@@ -486,6 +506,7 @@ describe("live Thread projection and alarm backfill", () => {
         hostMaintenanceControls.delete(thread);
         projectionControls.delete(thread);
         release();
+        await running;
       }
       await advance(100);
       await quiesce(thread);
