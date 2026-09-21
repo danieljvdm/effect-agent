@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.130
+
+### Patch Changes
+
+- [#615](https://github.com/danieljvdm/effect-agent/pull/615) [`31da959`](https://github.com/danieljvdm/effect-agent/commit/31da95903d8e943161e429e18311555717203505) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep healthy admission, delivery, and native execution running when an independent maintenance lane fails. Join bounded auxiliary waves before reporting their failure and retaining recovery.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.130
+  - effect-agent@0.1.0-beta.130
+
 ## 0.1.0-beta.129
 
 ### Patch Changes
