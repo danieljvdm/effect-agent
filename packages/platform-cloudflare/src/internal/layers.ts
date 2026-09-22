@@ -17,6 +17,7 @@ import {
 } from "@effect-agent/storage-cloudflare/port-protocol";
 import {
   executePortRequest,
+  makeLocalSubmissionLookup,
   routedMessageDeliveryStoreLayer,
   routedThreadStoreLayer,
   routedSubmissionLedgerLayer,
@@ -71,7 +72,6 @@ import {
 import {
   LedgerError,
   SubmissionLedger,
-  SubmissionLookupById,
   type SubmissionSnapshot,
 } from "effect-agent/submission-ledger";
 import { ThreadProjectionMaintenance } from "effect-agent/thread-projection-maintenance";
@@ -228,7 +228,10 @@ export class ThreadObjectPorts extends Context.Service<
   ThreadObjectPorts,
   {
     readonly handle: (request: PortRequest) => Effect.Effect<PortResponse>;
-    /** Local-only identity check before a bound RPC can read or mutate a Submission. */
+    /**
+     * Local-only lookup: encoded identities and returned rows must belong to this physical
+     * owner. Addressed RPCs additionally validate the exact logical Thread.
+     */
     readonly lookupSubmission: (
       submissionId: SubmissionId,
     ) => Effect.Effect<Option.Option<SubmissionSnapshot>, LedgerError>;
@@ -726,12 +729,12 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
             SubmissionLedger | ThreadStore | MessageDeliveryStore
           >();
 
-          const ledger = Context.get(local, SubmissionLedger);
+          const lookupSubmission = makeLocalSubmissionLookup({ ownsThread });
 
           return ThreadObjectPorts.of({
             handle: (request) => executePortRequest(request).pipe(Effect.provide(local)),
             lookupSubmission: (submissionId) =>
-              ledger.lookup(SubmissionLookupById.make({ submissionId })),
+              lookupSubmission(submissionId).pipe(Effect.provide(local)),
           });
         }),
       ).pipe(Layer.provide(localPorts), Layer.provide(messageStore));
