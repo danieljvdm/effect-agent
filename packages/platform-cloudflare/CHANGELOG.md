@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.132
+
+### Patch Changes
+
+- [#619](https://github.com/danieljvdm/effect-agent/pull/619) [`b548e6f`](https://github.com/danieljvdm/effect-agent/commit/b548e6f747f216a092703231440b73dd972c592e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Acknowledge fresh empty native maintenance snapshots while independent host work remains active, avoiding repeated empty ledger scans without losing overlapping admissions.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.132
+  - effect-agent@0.1.0-beta.132
+
 ## 0.1.0-beta.131
 
 ### Patch Changes
