@@ -25,6 +25,7 @@ import {
   DurableWorkerBinding,
   type ResolvedBinding,
 } from "effect-agent/agent-registration";
+import * as AgentUpdates from "effect-agent/agent-updates";
 import {
   COMPACTION_SUMMARY_PREFIX,
   CONTEXT_ROLLOVER_PREFIX,
@@ -792,6 +793,100 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 };
 
 layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/eab5b7c0e
+  it.effect("wakes for an observer-only update before the emitting tool completes", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const control = yield* ProgressWaitTestControl;
+      const entered = yield* Deferred.make<void>();
+      const emit = yield* Deferred.make<void>();
+      const emitted = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+
+      const tools = Toolkit.make(
+        Tool.make("progress_job", {
+          parameters: Schema.Struct({}),
+          success: Schema.Void,
+          failure: AgentUpdates.UpdateError,
+          dependencies: [AgentUpdates.Emitter],
+        }),
+      );
+
+      const definition = Agent.make("progress-update-wait", {
+        input: Schema.String,
+        output: Schema.String,
+        updates: Schema.Struct({ kind: Schema.Literal("progress") }),
+        instructions: "Report progress while working, then finish.",
+        toolkit: tools,
+        policy: { maxTurns: 2, maxToolCalls: 1, maxDuration: "30 seconds" },
+      });
+
+      const handlers = tools.toLayer({
+        progress_job: () =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(emit);
+            yield* AgentUpdates.emit(
+              definition,
+              { kind: "progress" },
+              {
+                idempotencyKey: decodeIdempotencyKey("in-flight-progress"),
+              },
+            );
+            yield* Deferred.succeed(emitted, undefined);
+            yield* Deferred.await(release);
+          }),
+      });
+
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0
+          ? [
+              {
+                type: "tool-call",
+                id: "progress-job",
+                name: "progress_job",
+                params: {},
+                providerExecuted: false,
+              },
+              { type: "finish", reason: "tool-calls", usage },
+            ]
+          : finalParts('"done"'),
+      );
+
+      const agent = Agent.withModel(definition, scripted.model);
+      const threadId = decodeThreadId("thread-progress-update");
+
+      yield* runtime.submit(agent, "go", submitOptions(threadId, "progress-update"));
+
+      const processing = yield* Effect.forkChild(
+        runtime.processThread(agent, threadId).pipe(Effect.provide(handlers)),
+      );
+
+      yield* Deferred.await(entered);
+      const cursor = (yield* readLog(threadId)).at(-1)!.sequence;
+      const parking = yield* Ref.get(control.parking);
+      const waiting = yield* Effect.forkChild(runtime.awaitProgress(threadId, cursor));
+      const canceled = yield* Effect.forkChild(runtime.awaitProgress(threadId, cursor));
+
+      yield* waitForAtLeast(control.parking, parking + 2);
+      yield* Fiber.interrupt(canceled);
+      expect(yield* Ref.get(control.active)).toBe(1);
+      yield* Deferred.succeed(emit, undefined);
+      yield* Deferred.await(emitted);
+      yield* Effect.yieldNow;
+      const records = yield* readLog(threadId);
+      const updates = records.filter(({ record }) => record.payload._tag === "AgentUpdateEmitted");
+
+      expect(updates).toHaveLength(1);
+      expect(records.at(-1)?.record.payload._tag).toBe("AgentUpdateEmitted");
+      expect(processing.pollUnsafe()).toBeUndefined();
+      expect(waiting.pollUnsafe()?._tag).toBe("Success");
+      expect(yield* Ref.get(control.active)).toBe(0);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(processing);
+    }),
+  );
+
   it.effect("wakes promptly when the terminal settlement append commits", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;

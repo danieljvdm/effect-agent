@@ -98,6 +98,7 @@ import {
 } from "../../src/durable/SubmissionLedger.ts";
 import { PendingSubmission, SettledSubmission } from "../../src/durable/SubmissionStatus.ts";
 import { PreparedInput } from "../../src/durable/Subscription.ts";
+import { WakeScheduler } from "../../src/durable/WakeScheduler.ts";
 import {
   WorkerBudgetAuthorizer,
   WorkerConcurrencyResolver,
@@ -318,6 +319,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
         producerId: Schema.decodeSync(ProducerId)("test"),
       }).pipe(
         Effect.provideService(WorkerRuntime, runtime),
+        Effect.provide(WakeScheduler.layerNoop),
         Effect.map((updates) => ({ runtime, updates })),
       ),
     ),

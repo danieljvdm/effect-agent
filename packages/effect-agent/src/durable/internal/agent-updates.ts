@@ -34,6 +34,7 @@ import {
   ThreadStore,
   ThreadTailRequest,
 } from "../ThreadStore.ts";
+import { WakeScheduler } from "../WakeScheduler.ts";
 import { WorkerRuntime } from "./worker-runtime.ts";
 
 export const lastWorkerReportMessageId = (records: ReadonlyArray<CanonicalRecordEnvelope>) => {
@@ -62,6 +63,7 @@ export const makeAgentUpdateRuntime = Effect.fn("AgentUpdates.makeDurable")(func
 }) {
   const store = yield* ThreadStore;
   const workers = yield* WorkerRuntime;
+  const wake = yield* WakeScheduler;
   const deliveries = yield* Effect.serviceOption(MessageDeliveryStore);
   const crypto = yield* Crypto.Crypto;
   const failpoint = yield* DurableRuntimeFailpoint;
@@ -290,6 +292,8 @@ export const makeAgentUpdateRuntime = Effect.fn("AgentUpdates.makeDurable")(func
 
       if (!appended) continue;
       yield* failpoint.hit("update:after-canonical-append");
+      // Canonical progress is observable even when no parent report is selected.
+      yield* wake.notify(request.submission.threadId);
       yield* insert(payload);
 
       return update;
