@@ -1483,6 +1483,9 @@ export class ThreadMaintenance extends Context.Service<
         );
 
         yield* failpoint.hit("maintenance:checkpoint:after");
+        // Once this empty recovery wave is checkpointed, its producer overlap must not
+        // prevent a later fresh snapshot from acknowledging native quiescence.
+        if (remaining.length === 0 && recovery.pending.size === 0) delete recovery.observation;
         native.deferred.clear();
         native.progressed = false;
         native.needsCheckpoint = false;

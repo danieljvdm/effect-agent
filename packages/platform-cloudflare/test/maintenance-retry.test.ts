@@ -270,9 +270,31 @@ describe("maintenance retry deadlines", () => {
                       query.includes("WHERE state <> 'settled'"),
                     ).length;
 
+                  const producerEntered = yield* Deferred.make<void>();
+                  const releaseProducer = yield* Deferred.make<void>();
+                  const overlapId = `${thread}-overlapping-producer`;
+
+                  const producer = yield* Effect.forkChild(
+                    maintenance.withMutation(
+                      Effect.gen(function* () {
+                        yield* Deferred.succeed(producerEntered, undefined);
+                        yield* Deferred.await(releaseProducer);
+
+                        return yield* runtime.submitRegistered(
+                          { definition: plannerDefinition },
+                          { question: "admission overlaps first snapshot", ref: overlapId },
+                          submitOptions(overlapId, overlapId),
+                        );
+                      }),
+                    ),
+                  );
+
+                  yield* Deferred.await(producerEntered);
                   const running = yield* Effect.forkChild(maintenance.pass);
 
                   yield* Deferred.await(entered);
+                  yield* Deferred.succeed(releaseProducer, undefined);
+                  receipts.push(yield* Fiber.join(producer));
                   for (let elapsed = 0; elapsed < 500; elapsed += 100) {
                     yield* clock.adjust(100);
                     if ((yield* Stream.runCollect(ledger.scanNonterminal)).length === 0) break;
@@ -327,7 +349,7 @@ describe("maintenance retry deadlines", () => {
                     idleScanCounts.push(scanCount() - scansBeforeIdle);
                   }
                   yield* Deferred.succeed(release, undefined);
-                  expect((yield* Fiber.join(running)).settled).toBe(4);
+                  expect((yield* Fiber.join(running)).settled).toBe(5);
                   expect(idleScanCounts).toEqual([0, 0]);
                   expect({ attempts, completed, active }).toEqual({
                     attempts: 1,
