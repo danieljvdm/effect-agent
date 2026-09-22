@@ -3,7 +3,7 @@
 @source "../node_modules/streamdown/dist/*.js";
 
 @theme inline {
-  --color-background: #fcfcf9;
+  --color-background: #eef7f0;
   --color-foreground: #283d37;
   --color-card: #ffffff;
   --color-card-foreground: #283d37;
@@ -19,7 +19,7 @@
   :root {
     font-family: "DM Sans", sans-serif;
     color: #283d37;
-    background: #fcfcf9;
+    background: #eef7f0;
     font-synthesis: none;
   }
   * {
