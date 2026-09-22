@@ -37,7 +37,7 @@ import {
 import { reviewMarker, reviewPauseMarker } from "../src/selection.ts";
 
 // Exercise tight admission independently of the configurable production default.
-const tightCostLimitMicrousd = 999_999;
+const tightCostLimitMicrousd = 499_999;
 
 expectTypeOf<
   Effect.Services<ReturnType<typeof makeReviewOpenAi>>
@@ -128,7 +128,7 @@ const rawUsage = (input: number, output: number, read = 0, write = input - read)
   total_tokens: input + output,
 });
 
-const response = (usage: unknown, model = "gpt-5.6-sol", serviceTier = "default") => ({
+const response = (usage: unknown, model = "gpt-6-sol", serviceTier = "default") => ({
   id: "resp_fixture",
   object: "response",
   model,
@@ -206,7 +206,7 @@ const makeNative = (http: HttpClient.HttpClient) =>
     Effect.provideService(HttpClient.HttpClient, http),
   );
 
-const model = OpenAiLanguageModel.model("gpt-5.6-sol", {
+const model = OpenAiLanguageModel.model("gpt-6-sol", {
   max_output_tokens: 32_000,
   service_tier: "default",
   store: false,
@@ -215,7 +215,7 @@ const model = OpenAiLanguageModel.model("gpt-5.6-sol", {
 });
 
 const payload: OpenAiSchema.CreateResponse = {
-  model: "gpt-5.6-sol",
+  model: "gpt-6-sol",
   input: [{ role: "user", content: "fixture" }],
   max_output_tokens: 32_000,
   service_tier: "default",
@@ -246,11 +246,11 @@ describe("review provider boundary", () => {
               Effect.provideService(
                 ConfigProvider.ConfigProvider,
                 ConfigProvider.fromEnv({
-                  env: { PR_REVIEW_MODEL: "gpt-5.6-terra", PR_REVIEW_EFFORT: effort },
+                  env: { PR_REVIEW_MODEL: "gpt-6-sol", PR_REVIEW_EFFORT: effort },
                 }),
               ),
             ),
-          ).toEqual({ model: "gpt-5.6-terra", effort });
+          ).toEqual({ model: "gpt-6-sol", effort });
         }
         for (const effort of ["none", "minimal", "ultra"]) {
           yield* reviewReasoningEffort.pipe(
@@ -267,10 +267,8 @@ describe("review provider boundary", () => {
   it.effect.each(
     [
       { model: "gpt-6-astra", expected: 109_500 },
-      { model: "gpt-5.6", expected: 43_800 },
-      { model: "gpt-5.6-sol", expected: 43_800 },
-      { model: "gpt-5.6-terra", expected: 22_900 },
-      { model: "gpt-5.6-luna", expected: 2_290 },
+      { model: "gpt-6-sol", expected: 21_900 },
+      { model: "gpt-6-luna", expected: 1_095 },
     ].flatMap((entry) => [
       { ...entry, fast: false },
       { ...entry, fast: true, expected: entry.expected * 2 },
@@ -469,7 +467,7 @@ describe("review provider boundary", () => {
       }),
   );
 
-  it.effect.each(["gpt-6-astra-pro", "gpt-6-astra-2026-09-05", "gpt-5.6-sol"])(
+  it.effect.each(["gpt-6-astra-pro", "gpt-6-astra-2026-09-05", "gpt-6-sol"])(
     "retains Astra's reservation when the provider returns unverified model %s",
     (model) =>
       Effect.gen(function* () {
@@ -554,12 +552,15 @@ describe("review provider boundary", () => {
         );
 
         const provider = yield* makeReviewOpenAi({
-          model: "gpt-5.6-sol",
+          model: "gpt-6-sol",
           cacheKey: "configured-budget",
           costLimitMicrousd,
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
-        for (let attempt = 0; attempt < 10; attempt++) {
+        // A full Sol request costs $0.495; allow one final admission refusal.
+        const attempts = Math.ceil(costLimitMicrousd / 495_000) + 1;
+
+        for (let attempt = 0; attempt < attempts; attempt++) {
           const exit = yield* provider.client.createResponse(payload).pipe(Effect.exit);
 
           if (Exit.isFailure(exit)) break;
@@ -575,7 +576,7 @@ describe("review provider boundary", () => {
         expect(snapshot.stopped).toBe(true);
         expect(snapshot.usage.reservedCostMicrousd).toBe(0);
         expect(snapshot.usage.estimatedCostMicrousd).toBeLessThanOrEqual(costLimitMicrousd);
-        expect(snapshot.usage.estimatedCostMicrousd).toBeGreaterThan(costLimitMicrousd - 350_320);
+        expect(snapshot.usage.estimatedCostMicrousd).toBeGreaterThan(costLimitMicrousd - 175_160);
         if (costLimitMicrousd >= 1_500_000) {
           expect(sent.length).toBeGreaterThan(1);
           expect(snapshot.usage.estimatedCostMicrousd).toBeGreaterThan(1_000_000);
@@ -745,7 +746,7 @@ describe("review provider boundary", () => {
 
       const provider = yield* makeReviewOpenAi({
         costLimitMicrousd: tightCostLimitMicrousd,
-        model: "gpt-5.6-sol",
+        model: "gpt-6-sol",
         cacheKey: "pr-291-turns",
       }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -809,7 +810,7 @@ describe("review provider boundary", () => {
 
       const provider = yield* makeReviewOpenAi({
         costLimitMicrousd: tightCostLimitMicrousd,
-        model: "gpt-5.6-sol",
+        model: "gpt-6-sol",
         cacheKey: "affordable-research",
       }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -828,13 +829,13 @@ describe("review provider boundary", () => {
 
       expect(sent).toHaveLength(3);
       expect(sent.map((wire) => wire.max_output_tokens)).toEqual([32_000, 26_762, 19_174]);
-      expect(JSON.stringify(sent[0]?.input.at(-1))).toContain("$0.999999");
-      expect(JSON.stringify(sent[1]?.input.at(-1))).toContain("$0.793920");
+      expect(JSON.stringify(sent[0]?.input.at(-1))).toContain("$0.499999");
+      expect(JSON.stringify(sent[1]?.input.at(-1))).toContain("$0.396959");
       expect(JSON.stringify(sent[1]?.input.at(-1))).toContain("full cache-miss rate");
       expect(JSON.stringify(sent[1]?.input.at(-1))).not.toContain("prompt_cache_breakpoint");
       expect(JSON.stringify(sent[1]?.input)).not.toContain("turn 1/8");
       for (const wire of sent) {
-        expect(wire.model).toBe("gpt-5.6-sol");
+        expect(wire.model).toBe("gpt-6-sol");
         expect(wire.reasoning).toEqual({ effort: "xhigh" });
         expect(wire.tools).toEqual(sent[0]?.tools);
         expect(wire.tool_choice).toEqual(sent[0]?.tool_choice);
@@ -842,7 +843,7 @@ describe("review provider boundary", () => {
       expect(result.exhausted).toBeUndefined();
       expect(result.incomplete).toBeUndefined();
       expect(result.report.findings.map((item) => item.title)).toEqual([finding.title]);
-      expect(result.usage.estimatedCostMicrousd).toBe(399_106);
+      expect(result.usage.estimatedCostMicrousd).toBe(199_554);
       expect(result.usage.reservedCostMicrousd).toBe(0);
     }),
   );
@@ -899,7 +900,7 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           costLimitMicrousd: tightCostLimitMicrousd,
-          model: "gpt-5.6-sol",
+          model: "gpt-6-sol",
           cacheKey: "cached-research",
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -915,13 +916,13 @@ describe("review provider boundary", () => {
         for (const wire of sent) {
           expect(wire.tools).toEqual(sent[0]?.tools);
           expect(wire.tool_choice).toBe("required");
-          expect(wire.model).toBe("gpt-5.6-sol");
+          expect(wire.model).toBe("gpt-6-sol");
           expect(wire.reasoning).toEqual({ effort: "xhigh" });
         }
         expect(result.report.findings.map((item) => item.title)).toEqual([finding.title]);
         expect(result.exhausted).toBe(cache === "hit" ? undefined : "cost");
         expect(result.incomplete).toBe(cache === "hit" ? undefined : true);
-        expect(result.usage.estimatedCostMicrousd).toBe(cache === "hit" ? 630_783 : 916_150);
+        expect(result.usage.estimatedCostMicrousd).toBe(cache === "hit" ? 315_394 : 458_077);
         expect(result.usage.reservedCostMicrousd).toBe(0);
         if (cache === "miss")
           expect(result.report.summary).toContain("remaining change has not been verified");
@@ -981,7 +982,7 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           costLimitMicrousd: tightCostLimitMicrousd,
-          model: "gpt-5.6-sol",
+          model: "gpt-6-sol",
           cacheKey: "large-review",
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -1044,7 +1045,7 @@ describe("review provider boundary", () => {
 
       const provider = yield* makeReviewOpenAi({
         costLimitMicrousd: tightCostLimitMicrousd,
-        model: "gpt-5.6-sol",
+        model: "gpt-6-sol",
         cacheKey: "completion-prefix",
       }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -1438,7 +1439,7 @@ describe("review provider boundary", () => {
                 ]);
 
               expect(decodeWire(httpRequest)).toMatchObject({
-                model: fast ? "gpt-6-astra" : "gpt-5.6-sol",
+                model: fast ? "gpt-6-astra" : "gpt-6-sol",
                 reasoning: { effort: "medium" },
                 service_tier: fast ? "fast" : "default",
               });
@@ -1589,8 +1590,8 @@ describe("review provider boundary", () => {
                 GITHUB_API_URL: "https://api.github.test",
                 OPENAI_API_KEY: "openai-fixture",
                 PR_REVIEW_PULL_REQUEST: "12",
-                PR_REVIEW_MAX_COST_USD: "0.99",
-                PR_REVIEW_MODEL: fast ? "gpt-6-astra" : "gpt-5.6-sol",
+                PR_REVIEW_MAX_COST_USD: fast ? "0.99" : "0.495",
+                PR_REVIEW_MODEL: fast ? "gpt-6-astra" : "gpt-6-sol",
                 PR_REVIEW_PRIORITY: fast ? "fast" : "default",
                 ...(checkEnabled ? { PR_REVIEW_CHECK_NAME: "Effect Agent review" } : {}),
               },
@@ -1644,13 +1645,15 @@ describe("review provider boundary", () => {
           expect(published[0]?.body).not.toContain("**No actionable findings.**");
           expect(published[0]?.body).toContain("1 supplied");
         }
-        expect(published[0]?.body).toContain("$0.990000 spending ceiling");
+        expect(published[0]?.body).toContain(
+          fast ? "$0.990000 spending ceiling" : "$0.495000 spending ceiling",
+        );
         if (fast) expect(published[0]?.body).toContain("$0.2600");
         if (protocolFailure) {
           expect(published[0]?.body).toContain("model protocol error");
           expect(published[0]?.body).toContain("4 model calls");
           expect(published[0]?.body).toContain("14,000 input");
-          expect(published[0]?.body).toContain("$0.0550");
+          expect(published[0]?.body).toContain("$0.0275");
           expect(published[0]?.body).not.toContain("✅");
           expect(logs).toContainEqual([
             "Review model usage",
@@ -1711,7 +1714,7 @@ describe("review provider boundary", () => {
 
           const provider = yield* makeReviewOpenAi({
             costLimitMicrousd: tightCostLimitMicrousd,
-            model: "gpt-5.6-sol",
+            model: "gpt-6-sol",
             cacheKey: "review-fixture",
           }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -1781,7 +1784,7 @@ describe("review provider boundary", () => {
               cacheWriteInputTokens: 21_400,
               uncachedInputTokens: 600,
               outputTokens: 3_000,
-              estimatedCostMicrousd: 185_800,
+              estimatedCostMicrousd: 92_900,
               reservedCostMicrousd: 0,
             });
             expect(JSON.stringify(logs)).toContain("cacheHitRatio");
@@ -1824,7 +1827,7 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           costLimitMicrousd: tightCostLimitMicrousd,
-          model: "gpt-5.6-sol",
+          model: "gpt-6-sol",
           cacheKey: "misses",
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -1844,7 +1847,7 @@ describe("review provider boundary", () => {
         expect(result.exhausted).toBe("cost");
         expect(result.report.findings).toHaveLength(recorded ? 1 : 0);
         expect(result.report.summary).toContain("remaining change has not been verified");
-        expect(result.usage.estimatedCostMicrousd).toBe(990_000);
+        expect(result.usage.estimatedCostMicrousd).toBe(495_000);
         expect(
           reviewPublicationFailure({
             blockingFindings: 0,
@@ -1890,7 +1893,7 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           costLimitMicrousd: tightCostLimitMicrousd,
-          model: "gpt-5.6-sol",
+          model: "gpt-6-sol",
           cacheKey: "final",
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -1929,61 +1932,59 @@ describe("review provider boundary", () => {
         else expect(failure).toMatchObject({ _tag: "ReviewAttemptIncomplete" });
         expect(result.report.findings).toHaveLength(1);
         expect(reads).toBe(completion === "research" ? 2 : 1);
-        expect(result.usage.estimatedCostMicrousd).toBe(999_980);
+        expect(result.usage.estimatedCostMicrousd).toBe(499_990);
         expect(result.usage.estimatedCostMicrousd).toBeLessThan(1_000_000);
         yield* provider.client.createResponse(payload).pipe(Effect.flip);
         expect(sent).toHaveLength(2);
       }),
   );
 
-  it.effect.each(["gpt-5.6", "gpt-5.6-sol"])(
-    "settles nonstreaming and streaming calls in one ledger when the alias resolves to %s",
-    (responseModel) =>
-      Effect.gen(function* () {
-        let calls = 0;
+  it.effect("settles nonstreaming and streaming calls in one ledger", () =>
+    Effect.gen(function* () {
+      let calls = 0;
 
-        const native = yield* makeNative(
-          HttpClient.make((httpRequest, url) =>
-            Effect.sync(() => {
-              if (url.pathname.endsWith("/input_tokens"))
-                return json(httpRequest, { object: "response.input_tokens", input_tokens: 20_000 });
-              calls += 1;
-              const usage = rawUsage(20_000, 1_000);
+      const native = yield* makeNative(
+        HttpClient.make((httpRequest, url) =>
+          Effect.sync(() => {
+            if (url.pathname.endsWith("/input_tokens"))
+              return json(httpRequest, { object: "response.input_tokens", input_tokens: 20_000 });
+            calls += 1;
+            const usage = rawUsage(20_000, 1_000);
 
-              return decodeWire(httpRequest).stream === true
-                ? sse(httpRequest, calls, [submit], usage)
-                : json(httpRequest, { ...response(usage), model: responseModel });
-            }),
-          ),
-        );
+            return decodeWire(httpRequest).stream === true
+              ? sse(httpRequest, calls, [submit], usage)
+              : json(httpRequest, { ...response(usage), model: "gpt-6-sol" });
+          }),
+        ),
+      );
 
-        const provider = yield* makeReviewOpenAi({
-          costLimitMicrousd: tightCostLimitMicrousd,
-          model: "gpt-5.6",
-          cacheKey: "alias",
-        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
+      const provider = yield* makeReviewOpenAi({
+        costLimitMicrousd: tightCostLimitMicrousd,
+        model: "gpt-6-sol",
+        cacheKey: "shared-ledger",
+      }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
-        const aliasPayload = { ...payload, model: "gpt-5.6" };
+      const ledgerPayload = { ...payload, model: "gpt-6-sol" };
 
-        yield* provider.client.createResponse(aliasPayload);
-        const [, stream] = yield* provider.client.createResponseStream(aliasPayload);
+      yield* provider.client.createResponse(ledgerPayload);
+      const [, stream] = yield* provider.client.createResponseStream(ledgerPayload);
 
-        yield* Stream.runDrain(stream);
-        const snapshot = yield* provider.costControl.snapshot;
+      yield* Stream.runDrain(stream);
+      const snapshot = yield* provider.costControl.snapshot;
 
-        expect(calls).toBe(2);
-        expect(snapshot).toMatchObject({
-          stopped: false,
-          modelCalls: 2,
-          usage: {
-            inputTokens: 40_000,
-            cacheWriteInputTokens: 40_000,
-            outputTokens: 2_000,
-            estimatedCostMicrousd: 240_000,
-            reservedCostMicrousd: 0,
-          },
-        });
-      }),
+      expect(calls).toBe(2);
+      expect(snapshot).toMatchObject({
+        stopped: false,
+        modelCalls: 2,
+        usage: {
+          inputTokens: 40_000,
+          cacheWriteInputTokens: 40_000,
+          outputTokens: 2_000,
+          estimatedCostMicrousd: 120_000,
+          reservedCostMicrousd: 0,
+        },
+      });
+    }),
   );
 
   it.effect.each([503, 429, "transport", "persistent-503", 400, 401, 501, "malformed"] as const)(
@@ -2028,7 +2029,7 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           costLimitMicrousd: tightCostLimitMicrousd,
-          model: "gpt-5.6-sol",
+          model: "gpt-6-sol",
           cacheKey: "preflight-retry",
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -2054,7 +2055,7 @@ describe("review provider boundary", () => {
         }
         expect(yield* provider.costControl.snapshot).toMatchObject({
           modelCalls: recoverable ? 1 : 0,
-          usage: { estimatedCostMicrousd: recoverable ? 120_000 : 0, reservedCostMicrousd: 0 },
+          usage: { estimatedCostMicrousd: recoverable ? 60_000 : 0, reservedCostMicrousd: 0 },
         });
         const diagnostic = JSON.stringify(logs);
 
@@ -2124,7 +2125,7 @@ describe("review provider boundary", () => {
 
       const provider = yield* makeReviewOpenAi({
         costLimitMicrousd: tightCostLimitMicrousd,
-        model: "gpt-5.6-sol",
+        model: "gpt-6-sol",
         cacheKey: "failure-diagnostics",
       }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -2232,7 +2233,7 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           costLimitMicrousd: tightCostLimitMicrousd,
-          model: "gpt-5.6-sol",
+          model: "gpt-6-sol",
           cacheKey: "preflight-timeout",
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -2259,7 +2260,7 @@ describe("review provider boundary", () => {
         expect(yield* provider.costControl.snapshot).toMatchObject({
           modelCalls: mode === "recover" ? 1 : 0,
           usage: {
-            estimatedCostMicrousd: mode === "recover" ? 120_000 : 0,
+            estimatedCostMicrousd: mode === "recover" ? 60_000 : 0,
             reservedCostMicrousd: 0,
           },
         });
@@ -2312,7 +2313,7 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           costLimitMicrousd: tightCostLimitMicrousd,
-          model: "gpt-5.6-sol",
+          model: "gpt-6-sol",
           cacheKey: "input-token-limit",
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -2335,7 +2336,7 @@ describe("review provider boundary", () => {
           exhausted: "tokens",
           turns: sends,
           pendingPaths: [finding.path, "src/later.ts"],
-          usage: { estimatedCostMicrousd: recorded ? 520_000 : 0, reservedCostMicrousd: 0 },
+          usage: { estimatedCostMicrousd: recorded ? 260_000 : 0, reservedCostMicrousd: 0 },
         });
         expect(result.report.findings.map(({ title }) => title)).toEqual(
           recorded ? [finding.title] : [],
@@ -2386,7 +2387,7 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           costLimitMicrousd: tightCostLimitMicrousd,
-          model: "gpt-5.6-sol",
+          model: "gpt-6-sol",
           cacheKey: "unmetered-review",
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -2413,7 +2414,7 @@ describe("review provider boundary", () => {
             incomplete: true,
             turns: 1,
             report: { findings: [] },
-            usage: { estimatedCostMicrousd: 0, reservedCostMicrousd: 990_000 },
+            usage: { estimatedCostMicrousd: 0, reservedCostMicrousd: 495_000 },
           });
           expect(
             reviewPublicationFailure({
@@ -2466,7 +2467,7 @@ describe("review provider boundary", () => {
 
         const provider = yield* makeReviewOpenAi({
           costLimitMicrousd: tightCostLimitMicrousd,
-          model: "gpt-5.6-sol",
+          model: "gpt-6-sol",
           cacheKey: "failed",
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -2483,7 +2484,7 @@ describe("review provider boundary", () => {
         expect(snapshot.modelCalls).toBe(failure === "malformed-count" ? 0 : 1);
         expect(snapshot.usage.estimatedCostMicrousd).toBe(0);
         expect(snapshot.usage.reservedCostMicrousd).toBe(
-          failure === "malformed-count" ? 0 : 999_980,
+          failure === "malformed-count" ? 0 : 499_990,
         );
         yield* provider.client.createResponse(payload).pipe(Effect.flip);
         expect(sends).toBe(failure === "malformed-count" ? 0 : 1);
@@ -2509,7 +2510,7 @@ describe("review provider boundary", () => {
 
       const provider = yield* makeReviewOpenAi({
         costLimitMicrousd: tightCostLimitMicrousd,
-        model: "gpt-5.6-sol",
+        model: "gpt-6-sol",
         cacheKey: "concurrent",
       }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
@@ -2521,79 +2522,74 @@ describe("review provider boundary", () => {
       const snapshot = yield* provider.costControl.snapshot;
 
       expect(sends).toBe(1);
-      expect(snapshot.usage.reservedCostMicrousd).toBe(990_000);
+      expect(snapshot.usage.reservedCostMicrousd).toBe(495_000);
       expect(
         (snapshot.usage.estimatedCostMicrousd ?? 0) + (snapshot.usage.reservedCostMicrousd ?? 0),
       ).toBeLessThanOrEqual(tightCostLimitMicrousd);
     }),
   );
 
-  it.effect(
-    "refuses unknown models, service tiers, provider tools, and stale pricing before inference",
-    () =>
-      Effect.gen(function* () {
-        let calls = 0;
+  it.effect("refuses unknown models, service tiers, and provider tools before inference", () =>
+    Effect.gen(function* () {
+      let calls = 0;
 
-        const native = yield* makeNative(
-          HttpClient.make(() => {
-            calls += 1;
+      const native = yield* makeNative(
+        HttpClient.make(() => {
+          calls += 1;
 
-            return Effect.die("Must not dispatch");
-          }),
-        );
+          return Effect.die("Must not dispatch");
+        }),
+      );
 
-        for (const name of ["custom-model", "toString", "__proto__"]) {
-          yield* makeReviewOpenAi({
-            costLimitMicrousd: tightCostLimitMicrousd,
-            model: name,
-            cacheKey: "config",
-          }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native), Effect.flip);
-        }
-        for (const costLimitMicrousd of [
-          0,
-          -1,
-          0.5,
-          Number.NaN,
-          Number.POSITIVE_INFINITY,
-          100_000_001,
-        ]) {
-          yield* makeReviewOpenAi({
-            model: "gpt-5.6-sol",
-            cacheKey: "invalid-budget",
-            costLimitMicrousd,
-          }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native), Effect.flip);
-        }
-        for (const change of [
-          { service_tier: "priority" },
-          { store: true },
-          { max_output_tokens: 0 },
-          { tools: [{ type: "web_search" as const }] },
-        ]) {
-          const provider = yield* makeReviewOpenAi({
-            costLimitMicrousd: tightCostLimitMicrousd,
-            model: "gpt-5.6-sol",
-            cacheKey: "config",
-          }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
+      for (const name of [
+        "custom-model",
+        "toString",
+        "__proto__",
+        "gpt-5.6",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+      ]) {
+        yield* makeReviewOpenAi({
+          costLimitMicrousd: tightCostLimitMicrousd,
+          model: name,
+          cacheKey: "config",
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native), Effect.flip);
+      }
+      for (const costLimitMicrousd of [
+        0,
+        -1,
+        0.5,
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+        100_000_001,
+      ]) {
+        yield* makeReviewOpenAi({
+          model: "gpt-6-sol",
+          cacheKey: "invalid-budget",
+          costLimitMicrousd,
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native), Effect.flip);
+      }
+      for (const change of [
+        { service_tier: "priority" },
+        { store: true },
+        { max_output_tokens: 0 },
+        { tools: [{ type: "web_search" as const }] },
+      ]) {
+        const provider = yield* makeReviewOpenAi({
+          costLimitMicrousd: tightCostLimitMicrousd,
+          model: "gpt-6-sol",
+          cacheKey: "config",
+        }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
 
-          yield* provider.client.createResponse({ ...payload, ...change }).pipe(Effect.flip);
-        }
-        yield* TestClock.setTime(1_795_305_600_000);
-
-        for (const model of ["gpt-5.6", "gpt-5.6-sol"]) {
-          const provider = yield* makeReviewOpenAi({
-            costLimitMicrousd: tightCostLimitMicrousd,
-            model,
-            cacheKey: "expired",
-          }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
-
-          yield* provider.client.createResponse({ ...payload, model }).pipe(Effect.flip);
-        }
-        expect(calls).toBe(0);
-      }),
+        yield* provider.client.createResponse({ ...payload, ...change }).pipe(Effect.flip);
+      }
+      expect(calls).toBe(0);
+    }),
   );
 
-  it.effect.each(["gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna"])(
-    "keeps %s available after Sol's promotional pricing expires",
+  it.effect.each(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"])(
+    "admits %s without the previous generation's promotional deadline",
     (model) =>
       Effect.gen(function* () {
         yield* TestClock.setTime(1_795_305_600_000);

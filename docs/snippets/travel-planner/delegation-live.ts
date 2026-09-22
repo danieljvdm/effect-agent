@@ -7,7 +7,7 @@ import { Coordinator } from "./coordinator.ts";
 import { Research } from "./delegation.ts";
 import { TravelToolsLive } from "./tools.ts";
 
-const ModelLive = OpenAiLanguageModel.model("gpt-4.1-mini");
+const ModelLive = OpenAiLanguageModel.model("gpt-6-luna");
 
 const ProviderLive = OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") }).pipe(
   Layer.provide(FetchHttpClient.layer),

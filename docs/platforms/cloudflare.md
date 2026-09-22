@@ -14,8 +14,8 @@ SQLite-backed Durable Object. RPC calls and alarms drive execution and recovery.
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Also install `effect@4.0.0-rc.116`, `effect-cf@^0.44.1`, `effect-agent@beta`,
-`@effect/ai-openai@4.0.0-rc.116` for the examples below.
+Also install `effect@4.0.0-rc.117`, `effect-cf@^0.44.1`, `effect-agent@beta`,
+`@effect/ai-openai@4.0.0-rc.117` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
 ## AI Gateway {#ai-gateway}
@@ -28,10 +28,10 @@ compaction models, [WebSearch](../guide/tools#web-search), or embeddings support
 
 Two endpoint families have different credentials and model names:
 
-| Helper                                                           | Authentication                                             | Model names                                       |
-| ---------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------- |
-| `Gateway.rest({ accountId, gatewayId, apiToken, protocol })`     | Cloudflare API token with Workers AI Read permission       | Provider-qualified, such as `openai/gpt-4.1-mini` |
-| `Gateway.provider({ accountId, gatewayId, provider, apiToken })` | `cf-aig-authorization`; optionally a separate provider key | Native provider name, such as `gpt-4.1-mini`      |
+| Helper                                                           | Authentication                                             | Model names                                     |
+| ---------------------------------------------------------------- | ---------------------------------------------------------- | ----------------------------------------------- |
+| `Gateway.rest({ accountId, gatewayId, apiToken, protocol })`     | Cloudflare API token with Workers AI Read permission       | Provider-qualified, such as `openai/gpt-6-luna` |
+| `Gateway.provider({ accountId, gatewayId, provider, apiToken })` | `cf-aig-authorization`; optionally a separate provider key | Native provider name, such as `gpt-6-luna`      |
 
 For provider-native routing with stored keys or Unified Billing, pass the upstream client's
 `layer` factory and your resolved gateway configuration:
@@ -48,7 +48,7 @@ const gateway = {
   apiToken: Redacted.make("your-cloudflare-token"),
 };
 
-const ModelLive = OpenAiLanguageModel.model("gpt-4.1-mini").pipe(
+const ModelLive = OpenAiLanguageModel.model("gpt-6-luna").pipe(
   Gateway.provide(OpenAiClient.layer, {
     ...gateway,
     provider: "openai",
@@ -121,7 +121,7 @@ const TravelPlanner = Agent.make("travel-planner", {
   },
 });
 
-const modelName = "gpt-4.1-mini";
+const modelName = "gpt-6-luna";
 
 export const travelDefinitions = DefinitionDigestInput.make({
   agent: { id: TravelPlanner.id, revision: 1 },

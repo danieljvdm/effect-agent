@@ -87,7 +87,7 @@ jobs:
     env:
       CI: "true"
       VP_GIT_HOOKS: "0"
-      CHECKOUT_MODEL: gpt-5.6-luna
+      CHECKOUT_MODEL: gpt-6-luna
       CHECKOUT_REPETITIONS: "2"
       CHECKOUT_CONCURRENCY: "4"
       CHECKOUT_START_INTERVAL_MS: "1000"

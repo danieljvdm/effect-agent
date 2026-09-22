@@ -31,8 +31,8 @@ In your application, install Code Mode and the Cloudflare executor:
 bun add effect-agent@beta @effect-agent/platform-cloudflare@beta
 ```
 
-Requires `effect@^4.0.0-rc.116` and `effect-cf@^0.44.1`. For the example below, also install
-`@effect/ai-openai@4.0.0-rc.116`.
+Requires `effect@^4.0.0-rc.117` and `effect-cf@^0.44.1`. For the example below, also install
+`@effect/ai-openai@4.0.0-rc.117`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 
 This smaller example uses fixed invoice rows so the complete Tool and handler are visible.
@@ -104,7 +104,7 @@ const AnalystLive = Layer.unwrap(
       loader: env.LOADER,
       handlers: InvoiceHandlers,
     });
-    const ModelLive = OpenAiLanguageModel.model("gpt-4.1-mini").pipe(
+    const ModelLive = OpenAiLanguageModel.model("gpt-6-luna").pipe(
       Layer.provide(
         OpenAiClient.layer({ apiKey: Redacted.make(env.OPENAI_API_KEY) }).pipe(
           Layer.provide(FetchHttpClient.layer),

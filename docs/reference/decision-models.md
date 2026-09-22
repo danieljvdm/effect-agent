@@ -60,7 +60,7 @@ and distribution sums within `1e-6` of 1. Classification may return a label that
 highest probability. Ratings must lie within the scale; the core derives their labels from the
 distribution. Application acceptance policies remain explicit.
 
-Effect rc.116 does not accept the former adapter's rounded totals of `0.99` or `1.01`.
+Effect rc.117 does not accept the former adapter's rounded totals of `0.99` or `1.01`.
 Reported probabilities are preserved without normalization; those totals fail with
 `AiError.InvalidOutputError`.
 

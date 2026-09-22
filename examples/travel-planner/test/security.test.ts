@@ -93,7 +93,7 @@ it("assembles read-only planner access without a deployment OpenAI key", async (
   const configured = (values: Record<string, string>) =>
     liveModel.pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(values))));
 
-  expect((await Effect.runPromise(configured({}))).label).toBe("gpt-5.6-luna");
+  expect((await Effect.runPromise(configured({}))).label).toBe("gpt-6-luna");
   expect(
     (
       await Effect.runPromise(

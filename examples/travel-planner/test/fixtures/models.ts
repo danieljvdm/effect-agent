@@ -1,7 +1,7 @@
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Prompt, type Response } from "effect/unstable/ai";
 
-import { PlannerInput, Trip, SaveTripRequest, PlannerSettings } from "../../src/domain.ts";
+import { PlannerInput, Trip, SaveTripRequest, AdmittedPlannerSettings } from "../../src/domain.ts";
 import { PlannerAttempt, trackTool } from "../../src/server/progress.ts";
 import { requestsPublication } from "../../src/server/security.ts";
 import { TravelContent } from "../../src/travel-content.ts";
@@ -166,7 +166,7 @@ export const fixtureScript = (prompt: Prompt.Prompt): ReadonlyArray<Response.Str
   });
 };
 
-let observedSettings: PlannerSettings | null = null;
+let observedSettings: AdmittedPlannerSettings | null = null;
 let progressStage = 0;
 let completedProgressModels = 0;
 let finalizedProgressModels = 0;
@@ -192,7 +192,7 @@ const streamingFixture = Stream.fromEffect(
 
     if (Option.isNone(attempt))
       return yield* Effect.die("Fixture needs the real planner attempt writer");
-    observedSettings = Schema.encodeSync(PlannerSettings)(
+    observedSettings = Schema.encodeSync(AdmittedPlannerSettings)(
       yield* attempt.value.settings.pipe(Effect.orDie),
     );
     const writer = attempt.value.progress;

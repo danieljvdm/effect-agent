@@ -133,7 +133,7 @@ afterEach(() => {
 });
 
 it("waits for account hydration before applying an early edit without persisting presentation defaults", async () => {
-  const stored: PlannerSettings = { model: "gpt-5.6-luna", reasoningEffort: "none", fast: true };
+  const stored: PlannerSettings = { model: "gpt-6-luna", reasoningEffort: "none", fast: true };
   const fixture = setup(stored);
   const device = fixture.createDevice();
 

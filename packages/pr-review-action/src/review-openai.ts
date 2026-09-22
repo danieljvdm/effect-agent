@@ -5,7 +5,7 @@ import {
   ReviewUsage,
 } from "@effect-agent/pr-review/review";
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
-import { Clock, Config, Effect, Exit, Option, Ref, Schema, Semaphore, Stream } from "effect";
+import { Config, Effect, Exit, Option, Ref, Schema, Semaphore, Stream } from "effect";
 import { AiError } from "effect/unstable/ai";
 import { HttpBody, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
@@ -56,7 +56,7 @@ export const reviewCostLimitMicrousd = (
 
 const MAX_INPUT_TOKENS = 128_000;
 const MAX_OUTPUT_TOKENS = 32_000;
-const PRICING_VERSION = "openai-2026-09-05";
+const PRICING_VERSION = "openai-2026-09-22";
 
 interface Pricing {
   readonly label: string;
@@ -65,22 +65,10 @@ interface Pricing {
   readonly read: number;
   readonly write: number;
   readonly output: number;
-  readonly validUntil?: number;
 }
 
 // Hundredths of a microdollar per token. Direct OpenAI, standard tier, <=128k input.
 // https://developers.openai.com/api/docs/pricing
-const sol: Pricing = {
-  label: "GPT-5.6 Sol",
-  url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
-  input: 400,
-  read: 40,
-  write: 500,
-  output: 2_000,
-  // Refresh Sol's card before its guaranteed promotional window ends.
-  validUntil: 1_795_305_600_000, // 2026-11-22T00:00:00Z
-};
-
 const modelPricing: Readonly<Record<string, Pricing>> = {
   "gpt-6-astra": {
     label: "GPT-6 Astra",
@@ -90,23 +78,21 @@ const modelPricing: Readonly<Record<string, Pricing>> = {
     write: 1_250,
     output: 5_000,
   },
-  "gpt-5.6": sol,
-  "gpt-5.6-sol": sol,
-  "gpt-5.6-terra": {
-    label: "GPT-5.6 Terra",
-    url: "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+  "gpt-6-sol": {
+    label: "GPT-6 Sol",
+    url: "https://developers.openai.com/api/docs/models/gpt-6-sol",
     input: 200,
     read: 20,
     write: 250,
-    output: 1_200,
+    output: 1_000,
   },
-  "gpt-5.6-luna": {
-    label: "GPT-5.6 Luna",
-    url: "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
-    input: 20,
-    read: 2,
-    write: 25,
-    output: 120,
+  "gpt-6-luna": {
+    label: "GPT-6 Luna",
+    url: "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    input: 10,
+    read: 1,
+    write: 12.5,
+    output: 50,
   },
 };
 
@@ -370,10 +356,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
   });
 
   const admit = Effect.fn("ReviewOpenAi.admit")(function* (original: Payload) {
-    const now = yield* Clock.currentTimeMillis;
-
     if (
-      (pricing.validUntil !== undefined && now >= pricing.validUntil) ||
       original.model !== options.model ||
       original.service_tier !== serviceTier ||
       original.store !== false ||
@@ -400,7 +383,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     const spendingStatus = [
       "<run-status>",
       `Review balance before this request: $${(balance / 1_000_000).toFixed(6)} of the $${(costLimitMicrousd / 1_000_000).toFixed(6)} ceiling. Estimated charges: $${(before.cost / 1_000_000).toFixed(6)}. Outstanding reservations: $${(reservedCost(before) / 1_000_000).toFixed(6)}.`,
-      `This request must first reserve its entire input at the full cache-miss rate of $${(pricing.write / 100).toFixed(2)} per million tokens; only the remainder can fund reasoning and output at $${(pricing.output / 100).toFixed(2)} per million tokens. Cache hits reduce the settled charge, not the required reservation.`,
+      `This request must first reserve its entire input at the full cache-miss rate of $${(pricing.write / 100).toFixed(Number.isInteger(pricing.write) ? 2 : 3)} per million tokens; only the remainder can fund reasoning and output at $${(pricing.output / 100).toFixed(2)} per million tokens. Cache hits reduce the settled charge, not the required reservation.`,
       "</run-status>",
     ].join("\n");
 
@@ -505,8 +488,6 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       ),
     );
 
-    const canonicalModel = options.model === "gpt-5.6" ? "gpt-5.6-sol" : options.model;
-
     // Fast can return its priority alias or fall back to Standard processing.
     // Settle at the reported tier; keep the more expensive pre-dispatch reservation.
     const chargedPricing =
@@ -517,12 +498,7 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
           : undefined;
 
     if (
-      !(
-        response.model === options.model ||
-        response.model === canonicalModel ||
-        // Astra currently documents only its canonical identifier.
-        (canonicalModel !== "gpt-6-astra" && response.model.startsWith(`${canonicalModel}-`))
-      ) ||
+      response.model !== options.model ||
       chargedPricing === undefined ||
       usage.input_tokens > reservation.inputTokens ||
       usage.output_tokens > reservation.outputTokens

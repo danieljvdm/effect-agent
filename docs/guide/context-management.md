@@ -1097,7 +1097,7 @@ import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Layer } from "effect";
 
 export const CompactorLive = ContextCompactor.layerWithModel(
-  OpenAiLanguageModel.model("gpt-4.1-mini"),
+  OpenAiLanguageModel.model("gpt-6-luna"),
 );
 
 export const RuntimeLive = HostLive.pipe(Layer.provide(CompactorLive));

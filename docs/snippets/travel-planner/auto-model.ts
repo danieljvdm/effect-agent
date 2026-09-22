@@ -12,7 +12,7 @@ export const ThreadModels = AutoModel.make({
   version: "profiles-v1",
   models: {
     routine: {
-      model: OpenAiLanguageModel.model("gpt-5.6-luna", { reasoning: { effort: "medium" } }),
+      model: OpenAiLanguageModel.model("gpt-6-luna", { reasoning: { effort: "medium" } }),
       description: "Low cost. Extraction, summaries, and well-specified tasks with clear steps.",
     },
     complex: {

@@ -3640,7 +3640,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
             const response = {
               id: "response-schema",
               object: "response",
-              model: "gpt-5.6-terra",
+              model: "gpt-6-sol",
               created_at: 0,
               output: [message],
             };
@@ -3684,7 +3684,7 @@ layer(testLayer)("context economics — bounding, tracking, status, exhaustion",
           Effect.provideService(HttpClient.HttpClient, client),
         );
 
-        const model = OpenAiLanguageModel.model("gpt-5.6-terra").pipe(
+        const model = OpenAiLanguageModel.model("gpt-6-sol").pipe(
           Layer.provide(Layer.succeed(OpenAiClient.OpenAiClient, provider)),
         );
 

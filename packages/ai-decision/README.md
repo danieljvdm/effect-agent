@@ -13,7 +13,7 @@ const ThreadModels = AutoModel.make({
   models: {
     routine: {
       description: "Low cost; routine tasks",
-      model: OpenAiLanguageModel.model("gpt-5.6-luna"),
+      model: OpenAiLanguageModel.model("gpt-6-luna"),
     },
     complex: {
       description: "Difficult reasoning and ambiguous requirements",

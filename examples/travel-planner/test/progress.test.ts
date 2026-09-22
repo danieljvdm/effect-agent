@@ -126,7 +126,7 @@ it.effect(
       };
 
       const [, stream] = yield* observeOpenAi(client, writer).createResponseStream({
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         input: [],
       });
 

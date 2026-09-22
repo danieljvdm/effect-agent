@@ -226,7 +226,7 @@ describe("context window tools", () => {
                 id: "response-context-tools",
                 object: "response",
                 created_at: 0,
-                model: "gpt-5.6-terra",
+                model: "gpt-6-sol",
                 output: [
                   {
                     type: "function_call",
@@ -269,7 +269,7 @@ describe("context window tools", () => {
               read_notes: () =>
                 Effect.succeed(MemoryNotes.NotesSnapshot.make({ revision: null, text: "" })),
             }),
-            OpenAiLanguageModel.model("gpt-5.6-terra"),
+            OpenAiLanguageModel.model("gpt-6-sol"),
           ),
         ),
         Effect.provideService(OpenAiClient.OpenAiClient, openai),

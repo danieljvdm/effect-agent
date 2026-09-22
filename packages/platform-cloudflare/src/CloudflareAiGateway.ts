@@ -139,7 +139,7 @@ export const provider = (options: ProviderOptions): ClientOptions =>
 
 /**
  * Cloudflare's account REST API (not the deprecated /compat API). Use provider-qualified
- * model names, e.g. openai/gpt-4.1 or anthropic/claude-haiku-4.5, and omit provider apiKey.
+ * model names, e.g. openai/gpt-6-sol or anthropic/claude-haiku-4.5, and omit provider apiKey.
  * OpenAI clients append /responses or /chat/completions; Anthropic appends /v1/messages.
  * Compatibility remains the responsibility of the selected upstream client and model.
  */

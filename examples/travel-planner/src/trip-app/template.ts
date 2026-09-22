@@ -78,7 +78,7 @@ export default defineConfig({
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.116"
+    "effect": "4.0.0-rc.117"
   }
 }
 `,
@@ -88,7 +88,7 @@ export default defineConfig({
   "type": "module",
   "dependencies": {
     "@trip/contracts": "workspace:*",
-    "effect": "4.0.0-rc.116",
+    "effect": "4.0.0-rc.117",
     "effect-cf": "0.43.0"
   }
 }
@@ -98,10 +98,10 @@ export default defineConfig({
   "private": true,
   "type": "module",
   "dependencies": {
-    "@effect/atom-react": "4.0.0-rc.116",
+    "@effect/atom-react": "4.0.0-rc.117",
     "@trip/contracts": "workspace:*",
     "@types/leaflet": "1.9.21",
-    "effect": "4.0.0-rc.116",
+    "effect": "4.0.0-rc.117",
     "leaflet": "1.9.4",
     "react": "19.2.8",
     "react-dom": "19.2.8"

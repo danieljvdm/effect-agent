@@ -563,7 +563,7 @@ const SearchLive = WebSearch.layer({
   maxOutputBytes: 32 * 1024,
 }).pipe(
   Layer.provide(
-    OpenAiLanguageModel.model("openai/gpt-4.1-mini", {
+    OpenAiLanguageModel.model("openai/gpt-6-luna", {
       max_output_tokens: 2_048,
       store: false,
     }),
