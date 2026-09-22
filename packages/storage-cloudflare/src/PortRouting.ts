@@ -213,6 +213,41 @@ const routableSubmissionTarget = (
     );
   });
 
+/**
+ * Read a Submission only from this physical owner. Encoded foreign identities fail before
+ * storage access; opaque identities still use local lookup. A returned row must also belong
+ * to an owned Thread. This is placement validation, not caller authorization.
+ */
+export const makeLocalSubmissionLookup = (
+  local: SubmissionLedger["Service"],
+  options: RoutedPortOptions,
+): ((
+  submissionId: SubmissionId,
+) => Effect.Effect<Option.Option<SubmissionSnapshot>, LedgerError>) => {
+  const submissionTarget = routableSubmissionTarget(options.ownsThread);
+
+  return Effect.fn("DoPortRouting.lookupLocalSubmission")(function* (submissionId: SubmissionId) {
+    const operation = "local Submission lookup";
+    const target = yield* submissionTarget(operation, submissionId);
+
+    if (target._tag === "foreign")
+      return yield* LedgerError.make({
+        operation,
+        message: "The Submission belongs to another Thread Object",
+      });
+
+    const submission = yield* local.lookup(SubmissionLookupById.make({ submissionId }));
+
+    if (Option.isSome(submission) && !options.ownsThread(submission.value.threadId))
+      return yield* LedgerError.make({
+        operation,
+        message: "The stored Submission belongs to another Thread Object",
+      });
+
+    return submission;
+  });
+};
+
 const NoAdditionalPortFailure = Schema.Never;
 const AbortPortFailure = Schema.Union([SettlementConflict, JoinedToHost]);
 const AppendPortFailure = Schema.Union([ThreadNotMaterialized, AppendConflict, FenceRejected]);
