@@ -349,18 +349,22 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
     }),
   );
 
-  const queuedMessages = pending.flatMap((submission) => {
-    if (
-      recordedInputs.has(submission.submissionId) ||
-      Schema.is(FrameworkMessage)(submission.messageAdmission)
-    )
-      return [];
-    const input = Schema.decodeUnknownOption(PlannerInput)(submission.inputPayload);
+  const queuedMessages = yield* Effect.forEach(
+    pending.filter((submission) => !recordedInputs.has(submission.submissionId)),
+    Effect.fn("queuedPlannerMessage")(function* ({ submissionId }) {
+      const submission = yield* ledger
+        .lookup(SubmissionLookupById.make({ submissionId }))
+        .pipe(Effect.mapError(unavailable));
 
-    return Option.isSome(input) && !input.value.voice?.input
-      ? [{ requestId: submission.idempotencyKey, text: input.value.message }]
-      : [];
-  });
+      if (Option.isNone(submission)) return yield* unavailable();
+      if (Schema.is(FrameworkMessage)(submission.value.messageAdmission)) return [];
+      const input = Schema.decodeUnknownOption(PlannerInput)(submission.value.inputPayload);
+
+      return Option.isSome(input) && !input.value.voice?.input
+        ? [{ requestId: submission.value.idempotencyKey, text: input.value.message }]
+        : [];
+    }),
+  );
 
   return {
     conversationId,
@@ -376,7 +380,7 @@ export const plannerSnapshot = Effect.fn("plannerSnapshot")(function* (
     activity: plannerActivity(source?.records ?? [], yield* readDiagnostics),
     pending: pending.length,
     pendingSubmissionIds: pending.map((submission) => submission.submissionId),
-    queuedMessages,
+    queuedMessages: queuedMessages.flat(),
     usage: {
       model: usedModel,
       inputTokens: usageComplete ? inputTokens : null,
@@ -415,6 +419,19 @@ export const voiceWork = Effect.fn("voiceWork")(function* (request: typeof Voice
   const records = history?.records ?? [];
 
   const pending = yield* ledger.scanNonterminal.pipe(
+    Stream.filter(
+      (next) =>
+        next.threadId === submission.threadId && next.queueSequence > submission.queueSequence,
+    ),
+    Stream.mapEffect(
+      Effect.fn("pendingPlannerInput")(function* ({ submissionId }) {
+        const next = yield* ledger.lookup(SubmissionLookupById.make({ submissionId }));
+
+        if (Option.isNone(next)) return yield* unavailable();
+
+        return next.value;
+      }),
+    ),
     Stream.runCollect,
     Effect.mapError(unavailable),
   );
@@ -428,8 +445,6 @@ export const voiceWork = Effect.fn("voiceWork")(function* (request: typeof Voice
   const superseded =
     pending.some(
       (next) =>
-        next.threadId === submission.threadId &&
-        next.queueSequence > submission.queueSequence &&
         !Schema.is(FrameworkMessage)(next.messageAdmission) &&
         Schema.is(PlannerInput)(next.inputPayload),
     ) ||

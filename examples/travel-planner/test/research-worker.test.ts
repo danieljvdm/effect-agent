@@ -589,15 +589,18 @@ it("runs six scouts and an editor beyond the old budgets, preserves them across 
     await fixture("journal", { thread: expandedThread }),
   );
 
-  const failure = rejected.records
+  const refusedStart = rejected.records
     .flatMap(({ record }) =>
-      record.payload._tag === "SubmissionSettled" && record.payload.outcome === "failed"
+      record.payload._tag === "ToolCallSettled" &&
+      record.payload.toolName === "research_scout_start"
         ? [record.payload.result]
         : [],
     )
     .at(-1);
 
-  expect(failure).toMatchObject({ errorTag: "WorkerError" });
+  expect(refusedStart).toMatchObject({
+    delivery: { status: "refused", reason: "worker-capacity", receipt: null },
+  });
   expect((await snapshot(email)).scouts?.filter((scout) => scout.state === "active")).toHaveLength(
     6,
   );
