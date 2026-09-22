@@ -11,6 +11,7 @@ import {
   type Scope,
 } from "effect";
 import { TestClock } from "effect/testing";
+import { FetchHttpClient } from "effect/unstable/http";
 import { beforeEach, vi } from "vite-plus/test";
 
 import {
@@ -24,12 +25,14 @@ import {
 import {
   type BrowserSessionError,
   BrowserRunHandoffRequest,
+  BrowserRunLiveViewRequest,
   BrowserSessionOptions,
   BrowserSessionReference,
   BrowserSessions,
   type BrowserSession,
 } from "../src/BrowserSession.ts";
 import { BrowserRunBinding } from "../src/internal/browser-binding.ts";
+import { BrowserRunReadonlyLiveView } from "../src/internal/browser-readonly-live-view.ts";
 import {
   BrowserRunCleanupError,
   BrowserRunSessionLifecycle,
@@ -151,6 +154,12 @@ const options = BrowserSessionOptions.make({
 
 const layer = BrowserSessions.layerNoDeps.pipe(
   Layer.provide(
+    BrowserRunReadonlyLiveView.layer({
+      accountId: "1234567890abcdef1234567890abcdef",
+      apiToken: Redacted.make("fixture-token"),
+    }).pipe(Layer.provide(FetchHttpClient.layer)),
+  ),
+  Layer.provide(
     BrowserRunBinding.layer({
       fetch: async (input, init) => {
         provider.requests.push(String(input));
@@ -204,6 +213,86 @@ class Authority extends Context.Service<
   Authority,
   { readonly allow: Effect.Effect<void, AuthorityError> }
 >()("test/BrowserAuthority") {}
+
+// An interactive viewer URL grants input outside the host UI, bypassing spectator restrictions.
+it.effect(
+  "mints read-only views for the retained page and fails closed without provider confirmation",
+  () =>
+    Effect.gen(function* () {
+      const host = yield* BrowserSessions;
+      const reference = yield* host.create(options, () => Effect.void);
+      const session = yield* host.attach(reference);
+      const request = BrowserRunLiveViewRequest.make({ mode: "tab", expiresInMs: 60_000 });
+
+      const url =
+        "https://live.browser.run/ui/view?mode=tab&wss=live.browser.run/api/devtools/browser/private-capability";
+
+      let calls = 0;
+      let status = 200;
+
+      let reply: unknown = {
+        id: "owner-page",
+        options: { mode: "tab", guardrails: { mode: "readonly" } },
+        devtoolsFrontendUrl: url,
+      };
+
+      const fetch: typeof globalThis.fetch = async (input, init) => {
+        calls++;
+        const outgoing = new Request(input, init);
+
+        expect(outgoing.url).toBe(
+          `https://api.cloudflare.com/client/v4/accounts/1234567890abcdef1234567890abcdef/browser-rendering/devtools/browser/${id}/live_view`,
+        );
+        expect(outgoing.method).toBe("POST");
+        expect(outgoing.redirect).toBe("manual");
+        expect(outgoing.headers.get("authorization")).toBe("Bearer fixture-token");
+        expect(await outgoing.json()).toEqual({
+          mode: "tab",
+          expiresInMs: 60_000,
+          targetId: "owner-page",
+          guardrails: { mode: "readonly" },
+        });
+
+        return Response.json(reply, { status });
+      };
+
+      const view = yield* session
+        .getReadOnlyLiveView(Effect.void, request)
+        .pipe(Effect.provideService(FetchHttpClient.Fetch, fetch));
+
+      expect(Redacted.value(view.devtoolsFrontendUrl)).toBe(url);
+      expect(calls).toBe(1);
+      expect(
+        (yield* session
+          .getReadOnlyLiveView(Effect.fail(new AuthorityError()), request)
+          .pipe(Effect.result))._tag,
+      ).toBe("Failure");
+      expect(calls).toBe(1);
+      for (const invalid of [
+        { id: "owner-page", options: { mode: "tab" }, devtoolsFrontendUrl: url },
+        {
+          id: "another-page",
+          options: { mode: "tab", guardrails: { mode: "readonly" } },
+          devtoolsFrontendUrl: url,
+        },
+      ]) {
+        reply = invalid;
+        expect(
+          (yield* session
+            .getReadOnlyLiveView(Effect.void, request)
+            .pipe(Effect.provideService(FetchHttpClient.Fetch, fetch), Effect.result))._tag,
+        ).toBe("Failure");
+      }
+      status = 302;
+      expect(
+        (yield* session
+          .getReadOnlyLiveView(Effect.void, request)
+          .pipe(Effect.provideService(FetchHttpClient.Fetch, fetch), Effect.result))._tag,
+      ).toBe("Failure");
+      expect(provider.closed).toEqual([]);
+      expect(provider.human).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+);
 
 beforeEach(() =>
   Object.assign(provider, {
@@ -332,6 +421,12 @@ it.effect("closes a late allocation reply without retaining or connecting it", (
     let retained = false;
 
     const lateLayer = BrowserSessions.layerNoDeps.pipe(
+      Layer.provide(
+        BrowserRunReadonlyLiveView.layer({
+          accountId: "1234567890abcdef1234567890abcdef",
+          apiToken: Redacted.make("fixture-token"),
+        }).pipe(Layer.provide(FetchHttpClient.layer)),
+      ),
       Layer.provide(
         BrowserRunBinding.layer({
           fetch: async (_input, init) => {

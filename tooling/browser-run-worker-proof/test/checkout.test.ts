@@ -87,6 +87,7 @@ it.effect("preserves credential acknowledgement through read failure without ret
           }),
         handoff: unused,
         getLiveView: unused,
+        getReadOnlyLiveView: unused,
         getHandoffState: unused,
       };
 
@@ -183,6 +184,7 @@ it.effect("the tool layer scopes its saved browser attachment across success and
         fillCredential: unused,
         handoff: unused,
         getLiveView: unused,
+        getReadOnlyLiveView: unused,
         getHandoffState: unused,
       };
 
