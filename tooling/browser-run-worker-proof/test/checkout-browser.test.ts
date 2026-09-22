@@ -85,6 +85,7 @@ it.live(
         fillCredential: unused,
         handoff: unused,
         getLiveView: unused,
+        getReadOnlyLiveView: unused,
         getHandoffState: unused,
       };
 

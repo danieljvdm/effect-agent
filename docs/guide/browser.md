@@ -458,6 +458,12 @@ and reconcile the page before deciding what to do next; never automatically repl
 Unfinished commands interrupted by timeout or cancellation, uncertain credential writes, and
 uncertain handoffs fence and terminate the session. Confirmed cleanup does not undo website effects.
 
+For spectators, use `session.getReadOnlyLiveView(authorize, { mode: "tab", expiresInMs: 60_000 })`.
+It uses the REST credential to mint a connection that blocks input, navigation, and JavaScript,
+and fails unless Cloudflare confirms the read-only guardrail for the retained target. UI input
+suppression does not secure an interactive URL. Expiry limits when a connection can start;
+established connections last until the browser closes. Read-only viewers can still see page data.
+
 For human control, fence agent dispatch in the owner, then use the attachment's `handoff`,
 `getLiveView`, and `getHandoffState` methods with current operator authorization. Keep Live View
 URLs private to the authorized recipient. Before returning to agent control, verify the recorded

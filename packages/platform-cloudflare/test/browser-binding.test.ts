@@ -12,6 +12,7 @@ import {
 } from "effect";
 import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
 import { TestClock } from "effect/testing";
+import { FetchHttpClient } from "effect/unstable/http";
 
 import {
   BrowserSessionError,
@@ -27,6 +28,7 @@ import {
 } from "../src/InteractiveBrowser.ts";
 import { BrowserRunBinding } from "../src/internal/browser-binding.ts";
 import { browserFailure } from "../src/internal/browser-failure.ts";
+import { BrowserRunReadonlyLiveView } from "../src/internal/browser-readonly-live-view.ts";
 import { BrowserRunSessionLifecycle } from "../src/internal/browser-session-lifecycle.ts";
 
 const identity = {
@@ -184,6 +186,12 @@ const endpoint = Effect.fnUntraced(function* (
 
 const keepAliveHost = (browser: Pick<BrowserRun, "fetch">) =>
   BrowserSessions.layerNoDeps.pipe(
+    Layer.provide(
+      BrowserRunReadonlyLiveView.layer({
+        accountId: "1234567890abcdef1234567890abcdef",
+        apiToken: Redacted.make("fixture-token"),
+      }).pipe(Layer.provide(FetchHttpClient.layer)),
+    ),
     Layer.provide(BrowserRunBinding.layer(browser)),
     Layer.provide(
       Layer.succeed(BrowserRunSessionLifecycle, {
@@ -511,6 +519,12 @@ it.effect.each(["refusal", "defect", "upgrade", "close-failure"] as const)(
 
       const layer = BrowserSessions.layerNoDeps.pipe(
         Layer.provide(
+          BrowserRunReadonlyLiveView.layer({
+            accountId: "1234567890abcdef1234567890abcdef",
+            apiToken: Redacted.make("fixture-token"),
+          }).pipe(Layer.provide(FetchHttpClient.layer)),
+        ),
+        Layer.provide(
           BrowserRunBinding.layer({
             fetch: async (input, init) => {
               Effect.runSync(Deferred.succeed(started, undefined));
@@ -587,6 +601,12 @@ it.effect.each(["timeout", "interruption"] as const)(
       let terminations = 0;
 
       const layer = BrowserSessions.layerNoDeps.pipe(
+        Layer.provide(
+          BrowserRunReadonlyLiveView.layer({
+            accountId: "1234567890abcdef1234567890abcdef",
+            apiToken: Redacted.make("fixture-token"),
+          }).pipe(Layer.provide(FetchHttpClient.layer)),
+        ),
         Layer.provide(BrowserRunBinding.layer(fixture.browser)),
         Layer.provide(
           Layer.succeed(BrowserRunSessionLifecycle, {
@@ -663,6 +683,12 @@ it.effect.each(["throws", "unacknowledged"] as const)(
       });
 
       const layer = BrowserSessions.layerNoDeps.pipe(
+        Layer.provide(
+          BrowserRunReadonlyLiveView.layer({
+            accountId: "1234567890abcdef1234567890abcdef",
+            apiToken: Redacted.make("fixture-token"),
+          }).pipe(Layer.provide(FetchHttpClient.layer)),
+        ),
         Layer.provide(BrowserRunBinding.layer(fixture.browser)),
         Layer.provide(
           Layer.succeed(BrowserRunSessionLifecycle, {

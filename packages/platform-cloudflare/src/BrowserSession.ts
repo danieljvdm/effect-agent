@@ -30,6 +30,7 @@ import {
 import { BrowserRunBinding, type BrowserRunAttachment } from "./internal/browser-binding.ts";
 import { BrowserSessionPage, fillCredential } from "./internal/browser-credentials.ts";
 import { reportBrowserCause, reportedBrowserError } from "./internal/browser-failure.ts";
+import { BrowserRunReadonlyLiveView } from "./internal/browser-readonly-live-view.ts";
 import {
   BrowserRunSessionLifecycle,
   type BrowserRunLifecycleOptions,
@@ -126,6 +127,15 @@ export interface BrowserSession {
     authorize: Effect.Effect<void, E, R>,
     request: BrowserRunLiveViewRequest,
   ) => Effect.Effect<BrowserRunLiveViewResult, E | BrowserSessionError, R>;
+  /**
+   * Mint a provider-enforced read-only connection to this exact page. Requires REST credentials;
+   * missing read-only confirmation fails closed, never falling back to an interactive URL.
+   * Expiry limits new connections, not established connections or access to visible page data.
+   */
+  readonly getReadOnlyLiveView: <E, R>(
+    authorize: Effect.Effect<void, E, R>,
+    request: BrowserRunLiveViewRequest,
+  ) => Effect.Effect<BrowserRunLiveViewResult, E | BrowserSessionError, R>;
   readonly getHandoffState: <E, R>(
     authorize: Effect.Effect<void, E, R>,
   ) => Effect.Effect<BrowserRunHandoffState, E | BrowserSessionError, R>;
@@ -217,6 +227,7 @@ export class BrowserSessions extends Context.Service<
     Effect.gen(function* () {
       const binding = yield* BrowserRunBinding;
       const lifecycle = yield* BrowserRunSessionLifecycle;
+      const readonlyLiveView = yield* BrowserRunReadonlyLiveView;
 
       const close = (sessionId: Redacted.Redacted<string>) =>
         decode(SessionId, sessionId).pipe(
@@ -506,6 +517,27 @@ export class BrowserSessions extends Context.Service<
                 }),
               ),
             ),
+          getReadOnlyLiveView: (authorize, request) =>
+            decode(BrowserRunLiveViewRequest, request).pipe(
+              Effect.flatMap((value) =>
+                runEffect((commandTimeoutMillis) =>
+                  authorize.pipe(
+                    Effect.andThen(() =>
+                      readonlyLiveView.mint(reference.sessionId, reference.targetId, value).pipe(
+                        Effect.tapCause((cause) =>
+                          reportBrowserCause("session.readonlyLiveView", cause),
+                        ),
+                        Effect.mapError(() => reportedBrowserError(failure("provider"))),
+                      ),
+                    ),
+                    Effect.timeoutOrElse({
+                      duration: commandTimeoutMillis,
+                      orElse: () => Effect.fail(failure("timeout")),
+                    }),
+                  ),
+                ),
+              ),
+            ),
           getHandoffState: (authorize) =>
             command(
               authorize,
@@ -586,6 +618,7 @@ export class BrowserSessions extends Context.Service<
     return this.layerNoDeps.pipe(
       Layer.provide(BrowserRunBinding.layer(options.browser)),
       Layer.provide(BrowserRunSessionLifecycle.layer(options)),
+      Layer.provide(BrowserRunReadonlyLiveView.layer(options)),
     );
   }
 }
