@@ -178,8 +178,30 @@ function PlannerContent({ signOut }: { readonly signOut: () => void }) {
     const input = composerInput.current;
 
     if (!input) return;
-    input.style.height = "0px";
-    input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+
+    const resize = () => {
+      input.style.overflowY = "hidden";
+      input.style.height = "0px";
+      // scrollHeight rounds fractional line heights to whole pixels.
+      input.style.height = `${Math.min(input.scrollHeight + 1, 120)}px`;
+      input.style.overflowY = input.scrollHeight > input.clientHeight ? "auto" : "hidden";
+    };
+
+    resize();
+
+    let width = input.getBoundingClientRect().width;
+
+    const observer = new ResizeObserver(() => {
+      const nextWidth = input.getBoundingClientRect().width;
+
+      if (nextWidth === width) return;
+      width = nextWidth;
+      resize();
+    });
+
+    observer.observe(input);
+
+    return () => observer.disconnect();
   }, [draft]);
 
   useEffect(() => {

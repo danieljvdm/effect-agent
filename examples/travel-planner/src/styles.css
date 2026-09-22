@@ -515,12 +515,12 @@
   }
   .input-wrap {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: 10px;
     background: #fff;
     border: 1px solid #dfe5d6;
     border-radius: 12px;
-    padding: 15px 14px 13px 20px;
+    padding: 14px 14px 14px 20px;
     box-shadow: 0 5px 24px #36442c05;
   }
   .input-wrap:focus-within {
@@ -529,6 +529,7 @@
   .input-wrap textarea {
     flex: 1;
     resize: none;
+    overflow-y: hidden;
     border: 0;
     outline: none;
     padding: 2px 0;
@@ -544,6 +545,7 @@
   .send {
     display: grid;
     place-items: center;
+    align-self: flex-end;
     flex-shrink: 0;
     border: none;
     border-radius: 8px;
@@ -1156,7 +1158,6 @@
     .input-wrap textarea {
       line-height: 1.5;
       max-height: 120px;
-      overflow-y: auto;
     }
     .send {
       width: 44px;
