@@ -17,7 +17,7 @@ import {
   type VoiceWork,
   PlannerError,
   PlannerInput,
-  PlannerSettings,
+  AdmittedPlannerSettings,
   type VoiceWorkRequest,
   defaultPlannerSettings,
   type PlannerSnapshot,
@@ -63,7 +63,7 @@ export const sendMessage = Effect.fn("sendMessage")(function* (request: SendMess
   const repository = yield* TripRepository;
   const identity = yield* ThreadObjectIdentity;
 
-  const settings = yield* Schema.decodeEffect(PlannerSettings)(
+  const settings = yield* Schema.decodeEffect(AdmittedPlannerSettings)(
     request.settings ?? defaultPlannerSettings,
   ).pipe(
     Effect.mapError(

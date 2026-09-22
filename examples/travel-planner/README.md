@@ -16,6 +16,12 @@ It uses Cloudflare:
 The app consumes published Effect Agent packages and uses Effect Atom for client state.
 [alchemy.run.ts](alchemy.run.ts) defines the Cloudflare resources and required configuration.
 
+Choose GPT-6 Astra or GPT-6 Luna in Settings. Astra remains the default; Luna also supports
+turning reasoning off. Saved preferences for the previous Luna model select GPT-6 Luna on
+the next message, preserving reasoning effort and processing speed. Already accepted work
+retains its admitted model settings. Retained voice requests keep their original settings
+when reconnecting or retrying.
+
 The current planner and scout exchange standard `WorkerUpdate` and `WorkerCompletion` messages.
 Retired planner v8–v15 and scout v1–v3 registrations and their custom report inputs are removed.
 Start fresh conversations for those demo revisions; no migration or storage reset is supplied.

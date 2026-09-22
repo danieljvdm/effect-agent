@@ -9,7 +9,7 @@ import {
   HttpClientRequest,
 } from "effect/unstable/http";
 
-import { type PlannerError, type PlannerSettings } from "../domain.ts";
+import { type PlannerError, type AdmittedPlannerSettings } from "../domain.ts";
 import type { CredentialSource } from "./credentials.ts";
 import { credentialForOwner } from "./credentials.ts";
 import { recordDiagnostic } from "./diagnostics.ts";
@@ -116,7 +116,7 @@ export const observeOpenAi = (
     }),
 });
 
-export const selectedModelConfig = (settings: PlannerSettings) =>
+export const selectedModelConfig = (settings: AdmittedPlannerSettings) =>
   ({
     store: false,
     max_output_tokens: 16_384,
@@ -236,9 +236,7 @@ export const liveModel: Effect.Effect<
     return yield* credentialForOwner(owner);
   });
 
-  const name = yield* Config.NonEmptyString("OPENAI_MODEL").pipe(
-    Config.withDefault("gpt-5.6-luna"),
-  );
+  const name = yield* Config.NonEmptyString("OPENAI_MODEL").pipe(Config.withDefault("gpt-6-luna"));
 
   const config = {
     store: false,

@@ -7,7 +7,7 @@ import { SubagentGrant } from "effect-agent/subagent-contract";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { DeliverResponse } from "../agent.ts";
-import { PlannerError, PlannerSettings, Text, Trip, TripId } from "../domain.ts";
+import { AdmittedPlannerSettings, PlannerError, Text, Trip, TripId } from "../domain.ts";
 import { ReadTravelPage } from "../research.ts";
 import { PlannerAttempt } from "../server/progress.ts";
 import { TripRepository } from "../server/trips.ts";
@@ -19,7 +19,7 @@ export const EditorRequest = Schema.Struct({ tripId: TripId, message: Text });
 export const EditorInput = Schema.Struct({
   ...EditorRequest.fields,
   sourceThreadId: ThreadId,
-  settings: PlannerSettings,
+  settings: AdmittedPlannerSettings,
 });
 
 export type EditorInput = typeof EditorInput.Type;

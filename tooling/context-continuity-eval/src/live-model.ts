@@ -1,5 +1,5 @@
 import { OpenAiClient, OpenAiSchema } from "@effect/ai-openai";
-import { Clock, Effect, Ref, Schema, Semaphore, Stream } from "effect";
+import { Effect, Ref, Schema, Semaphore, Stream } from "effect";
 import { AiError } from "effect/unstable/ai";
 import { HttpBody, HttpClientResponse } from "effect/unstable/http";
 
@@ -7,27 +7,19 @@ import { type ModelUsage } from "./contracts.ts";
 import { MAX_COST_MICROUSD } from "./profiles.ts";
 import { RequestAuditSink, type RequestAudit } from "./request-audit.ts";
 
-export const MODEL_IDS = [
-  "gpt-6-astra",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-5.4-mini",
-] as const;
+export const MODEL_IDS = ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"] as const;
 
 export const ModelId = Schema.Literals(MODEL_IDS);
 export type ModelId = typeof ModelId.Type;
 export const ReasoningEffort = Schema.Literals(["low", "medium", "high"]);
 
 // USD per million tokens = microdollars per token. Standard, short-context pricing,
-// checked 2026-09-08: https://developers.openai.com/api/docs/pricing
+// checked 2026-09-22: https://developers.openai.com/api/docs/pricing
 // Charge uncached input at the higher cache-write rate for a conservative estimate.
 const prices: Readonly<Record<ModelId, { input: number; cached: number; output: number }>> = {
   "gpt-6-astra": { input: 12.5, cached: 1, output: 50 },
-  "gpt-5.6-sol": { input: 5, cached: 0.4, output: 20 },
-  "gpt-5.6-terra": { input: 2.5, cached: 0.2, output: 12 },
-  "gpt-5.6-luna": { input: 0.25, cached: 0.02, output: 1.2 },
-  "gpt-5.4-mini": { input: 0.75, cached: 0.075, output: 4.5 },
+  "gpt-6-sol": { input: 2.5, cached: 0.2, output: 10 },
+  "gpt-6-luna": { input: 0.125, cached: 0.01, output: 0.5 },
 };
 
 export const MAX_OUTPUT_TOKENS = 4_096;
@@ -146,8 +138,6 @@ export const makeLiveClient = Effect.fn("ContextContinuity.makeLiveClient")(func
   const admit = Effect.fn("ContextContinuity.admit")(function* (original: Payload) {
     if (options.maxCostMicrousd > MAX_COST_MICROUSD || options.maxCostMicrousd <= 0)
       return yield* refuse("Evaluation spending ceiling must be positive and no greater than $10");
-    if (options.model === "gpt-5.6-sol" && (yield* Clock.currentTimeMillis) >= 1_795_305_600_000)
-      return yield* refuse("Refresh the Sol pricing card after its guaranteed promotional period");
     if (
       original.model !== options.model ||
       original.store !== false ||

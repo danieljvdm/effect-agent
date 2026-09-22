@@ -656,7 +656,7 @@ function ModelControls() {
             value={settings.model}
             onChange={(event) => change({ kind: "model", value: event.target.value })}
           >
-            <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+            <option value="gpt-6-luna">GPT-6 Luna</option>
             <option value="gpt-6-astra">GPT-6 Astra</option>
           </select>
           <label htmlFor="planner-reasoning">Reasoning</label>
@@ -666,7 +666,7 @@ function ModelControls() {
             value={settings.reasoningEffort}
             onChange={(event) => change({ kind: "reasoning", value: event.target.value })}
           >
-            {settings.model === "gpt-5.6-luna" && <option value="none">None</option>}
+            {settings.model === "gpt-6-luna" && <option value="none">None</option>}
             <option value="low">Low</option>
             <option value="medium">Medium</option>
             <option value="high">High</option>

@@ -1,7 +1,8 @@
-import { Effect, Fiber } from "effect";
+import { Effect, Exit, Fiber, Scope, Stream } from "effect";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
 import { connectBrowserVoice } from "../src/voice/browser.ts";
+import { type LiveEvent, VoiceError } from "../src/voice/protocol.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -105,3 +106,69 @@ it("stops a microphone grant that arrives after call interruption", async () => 
   expect(test.stop).toHaveBeenCalledTimes(1);
   expect(test.close).toHaveBeenCalledTimes(1);
 });
+
+it.each(["close", "error", "non-text message", "oversized message", "overflow", "scope exit"])(
+  "discards pending voice events and retains the disconnection error after %s",
+  async (termination) => {
+    const test = setup();
+    const observed: LiveEvent[] = [];
+
+    const event: LiveEvent = {
+      type: "session.delegation.created",
+      event_id: "pending-delegation",
+      offset_ms: 100,
+      delegation: { id: "delegation", target: "client" },
+    };
+
+    const emit = (data: unknown) =>
+      test.channel.dispatchEvent(new MessageEvent("message", { data }));
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const callScope = yield* Scope.make();
+
+        yield* Effect.addFinalizer((exit) => Scope.close(callScope, exit));
+
+        const connection = yield* connectBrowserVoice(
+          [],
+          test.audio,
+          "00000000-0000-0000-0000-000000000001",
+        ).pipe(Effect.provideService(Scope.Scope, callScope));
+
+        emit(JSON.stringify(event));
+        switch (termination) {
+          case "close":
+          case "error":
+            test.channel.dispatchEvent(new Event(termination));
+            break;
+          case "non-text message":
+            emit(new Uint8Array([1]));
+            break;
+          case "oversized message":
+            emit("x".repeat(32 * 1024 + 1));
+            break;
+          case "overflow":
+            // One pending event plus 128 arrivals exceeds the declared queue capacity.
+            for (let index = 0; index < 128; index++) emit(JSON.stringify(event));
+            break;
+          case "scope exit":
+            yield* Scope.close(callScope, Exit.void);
+            break;
+        }
+
+        const error = yield* connection.events.pipe(
+          Stream.runForEach((received) => Effect.sync(() => observed.push(received))),
+          Effect.flip,
+        );
+
+        expect(error).toEqual(
+          new VoiceError({ message: "Voice disconnected. Reconnect to check existing work." }),
+        );
+        expect(observed).toEqual([]);
+      }).pipe(Effect.scoped),
+    );
+    expect(test.stop).toHaveBeenCalledTimes(1);
+    expect(test.close).toHaveBeenCalledTimes(1);
+    expect(test.channel.close).toHaveBeenCalledTimes(1);
+  },
+);

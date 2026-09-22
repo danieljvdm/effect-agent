@@ -227,10 +227,8 @@ requests are not retried at another tier; the selected model and effort stay unc
 **BEHAVIOR CHANGE:** Add an explicit `model`. Replace `fast: "true"` with `priority: fast`;
 use `priority: default` to retain explicitly Standard processing.
 
-It accepts only the priced model IDs listed in `action.yml`. The rate card was verified on
-2026-09-05. Sol and its `gpt-5.6` alias refuse new paid requests on or after 2026-11-22 UTC
-until their promotional rate card is refreshed. This deadline does not apply to Astra, Terra,
-or Luna. See [OpenAI pricing](https://developers.openai.com/api/docs/pricing).
+It accepts GPT-6 Astra, Sol, and Luna. The Standard and Fast rate cards were verified on
+2026-09-22. See [OpenAI pricing](https://developers.openai.com/api/docs/pricing).
 
 Before each research, compaction, or completion request, the Action uses OpenAI's
 [input-token counting endpoint](https://developers.openai.com/api/docs/guides/token-counting) on the
@@ -314,7 +312,7 @@ The Action uses explicit-only caching with a 30-minute TTL and a stable head-bas
 It marks reusable instructions, the diff, and completed tool batches before the ephemeral run-status
 message, retaining earlier boundaries as history grows. Cache fields are added only at the native
 Effect OpenAI client boundary; canonical history and provider encoding remain unchanged. This works
-with the pinned Effect `4.0.0-rc.116` client, which serializes the additional request fields unchanged.
+with the pinned Effect `4.0.0-rc.117` client, which serializes the additional request fields unchanged.
 Required finalization selects `submit_review` through the native exact-tool choice, preserving
 the research tool definitions and their order in the encoded request.
 Compaction can change prefixes, and routing and cache availability still affect hits. See

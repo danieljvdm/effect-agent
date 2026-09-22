@@ -55,20 +55,23 @@ export const connectBrowserVoice = Effect.fn("connectBrowserVoice")(function* (
     (events) => Effect.sync(() => events.close()),
   );
 
+  const failEvents = () => {
+    // Failed calls must not deliver buffered transcripts or delegation requests.
+    Queue.failCauseUnsafe(queue, Cause.fail(failed()));
+    Queue.shutdownUnsafe(queue);
+  };
+
   const onMessage = (message: MessageEvent) => {
     if (typeof message.data !== "string" || message.data.length > 32 * 1024) {
-      Queue.failCauseUnsafe(queue, Cause.fail(failed()));
+      failEvents();
 
       return;
     }
     const event = Schema.decodeOption(Schema.fromJsonString(LiveEvent))(message.data);
 
     // Forward-compatible events are ignored; never interpreted as task instructions.
-    if (event._tag === "Some" && !Queue.offerUnsafe(queue, event.value))
-      Queue.failCauseUnsafe(queue, Cause.fail(failed()));
+    if (event._tag === "Some" && !Queue.offerUnsafe(queue, event.value)) failEvents();
   };
-
-  const onClose = () => Queue.failCauseUnsafe(queue, Cause.fail(failed()));
 
   const onTrack = (event: RTCTrackEvent) => {
     audio.srcObject = new MediaStream([event.track]);
@@ -81,18 +84,18 @@ export const connectBrowserVoice = Effect.fn("connectBrowserVoice")(function* (
   yield* Effect.acquireRelease(
     Effect.sync(() => {
       channel.addEventListener("message", onMessage);
-      channel.addEventListener("close", onClose);
-      channel.addEventListener("error", onClose);
+      channel.addEventListener("close", failEvents);
+      channel.addEventListener("error", failEvents);
       peer.addEventListener("track", onTrack);
       for (const track of microphone.getAudioTracks()) peer.addTrack(track, microphone);
     }),
     () =>
       Effect.sync(() => {
         channel.removeEventListener("message", onMessage);
-        channel.removeEventListener("close", onClose);
-        channel.removeEventListener("error", onClose);
+        channel.removeEventListener("close", failEvents);
+        channel.removeEventListener("error", failEvents);
         peer.removeEventListener("track", onTrack);
-        Queue.failCauseUnsafe(queue, Cause.fail(failed()));
+        failEvents();
       }),
   );
   yield* Effect.tryPromise({

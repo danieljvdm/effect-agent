@@ -16,7 +16,7 @@ on:
         description: Real provider model
         type: choice
         default: gpt-6-astra
-        options: [gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4-mini]
+        options: [gpt-6-astra, gpt-6-sol, gpt-6-luna]
       samples:
         description: Threads per target; each reserves at most $2 (maximum $12 with both targets)
         type: choice

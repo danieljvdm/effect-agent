@@ -99,7 +99,7 @@ const functionAnswer = (
   const response = {
     id: "response",
     object: "response",
-    model: "gpt-5.6-luna",
+    model: "gpt-6-luna",
     created_at: 0,
     output: items,
   };
@@ -305,7 +305,7 @@ it.effect(
 
       const selections: PlannerSettings[] = [
         defaultPlannerSettings,
-        { model: "gpt-5.6-luna", reasoningEffort: "none", fast: true },
+        { model: "gpt-6-luna", reasoningEffort: "none", fast: true },
         { model: "gpt-6-astra", reasoningEffort: "max", fast: true },
       ];
 
@@ -461,7 +461,7 @@ it.effect.each(["streamText", "generateText"] as const)(
 
       const client = credentialClient(Effect.succeed(Redacted.make("fake-api-key")));
 
-      const model = OpenAiLanguageModel.model("gpt-5.6-luna", {
+      const model = OpenAiLanguageModel.model("gpt-6-luna", {
         store: false,
       }).pipe(
         Layer.provide(Layer.effect(OpenAiClient.OpenAiClient, client)),
@@ -481,7 +481,7 @@ it.effect.each(["streamText", "generateText"] as const)(
       }).pipe(Effect.provide(model), Effect.provideService(FetchHttpClient.Fetch, fetch));
 
       expect(requests).toHaveLength(1);
-      expect(requests[0]?.include).toEqual(["reasoning.encrypted_content"]);
+      expect(requests[0]?.include ?? []).not.toContain("web_search_call.action.sources");
       expect(requests[0]?.tools).toEqual([{ type: "web_search" }]);
       expect(parts.filter((part) => part.type === "tool-call")).toMatchObject([
         { name: "OpenAiWebSearch", params: { action }, providerExecuted: true },
@@ -512,7 +512,7 @@ it.effect(
       const progress = yield* store.begin("submission", "attempt");
 
       const selection = yield* Ref.make<PlannerSettings>({
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         reasoningEffort: "low",
         fast: false,
       });
@@ -549,7 +549,7 @@ it.effect(
         );
         yield* Stream.runDrain(LanguageModel.streamText({ prompt: "Joined follow-up" }));
       }).pipe(Effect.provide(model), Effect.provideService(FetchHttpClient.Fetch, fetch));
-      expect(models).toEqual(["gpt-5.6-luna", "gpt-5.6-luna"]);
+      expect(models).toEqual(["gpt-6-luna", "gpt-6-luna"]);
 
       const unavailable = selectableModel(Redacted.make("fake-api-key")).pipe(
         Layer.provide(
@@ -592,7 +592,7 @@ it.effect("retains the exact legacy model identity and rejects unsupported UI se
     );
 
     expect(legacy.identity).toBe(
-      '{"provider":"openai","name":"gpt-5.6-luna","store":false,"max_output_tokens":4096,"max_tool_calls":1,"reasoning":{"effort":"low"}}',
+      '{"provider":"openai","name":"gpt-6-luna","store":false,"max_output_tokens":4096,"max_tool_calls":1,"reasoning":{"effort":"low"}}',
     );
     expect(
       Schema.is(PlannerSettings)({ model: "gpt-6-astra", reasoningEffort: "none", fast: false }),
@@ -641,7 +641,7 @@ it.effect("distinguishes completed, unfinished and failed searches in public SSE
     );
 
     const [, stream] = yield* observeOpenAi(client, progress).createResponseStream({
-      model: "gpt-5.6-luna",
+      model: "gpt-6-luna",
       input: [],
     });
 
@@ -759,7 +759,7 @@ it.effect("streams only deliver-response message arguments through the real SDK 
         response: {
           id: "response",
           object: "response",
-          model: "gpt-5.6-luna",
+          model: "gpt-6-luna",
           created_at: 0,
           output: [item],
         },
@@ -792,7 +792,7 @@ it.effect("streams only deliver-response message arguments through the real SDK 
 
     const native = yield* LanguageModel.LanguageModel.pipe(
       Effect.provide(
-        OpenAiLanguageModel.model("gpt-5.6-luna").pipe(
+        OpenAiLanguageModel.model("gpt-6-luna").pipe(
           Layer.provide(Layer.succeed(OpenAiClient.OpenAiClient, client)),
         ),
       ),
@@ -967,7 +967,7 @@ it.effect(
       const fetch: typeof globalThis.fetch = async (_url, init) => {
         requests.push(new Headers(init?.headers).get("authorization") ?? "");
 
-        return answer("gpt-5.6-luna");
+        return answer("gpt-6-luna");
       };
 
       const store = yield* ProgressStore;

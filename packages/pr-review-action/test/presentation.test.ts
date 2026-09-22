@@ -62,8 +62,8 @@ describe("review presentation", () => {
       outputTokens: 678,
       estimatedCost: {
         microusd: 62_940,
-        label: "GPT-5.6 Sol",
-        url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+        label: "GPT-6 Sol",
+        url: "https://developers.openai.com/api/docs/models/gpt-6-sol",
       },
       headRevision,
     });
@@ -97,7 +97,7 @@ No inline anchor.
 The new route accepts requests without checking the caller.
 \`\`\``);
     expect(body).toContain(
-      '<sub>5 model calls · 12,345 input (10,000 uncached · 2,000 cached · 345 cache write; 16.2% cache reads) / 678 output tokens · ≈ $0.0629 at <a href="https://developers.openai.com/api/docs/models/gpt-5.6-sol">GPT-5.6 Sol rates</a> · inspected at <code>abcdef0</code> · 2 automatic reviews remain</sub>',
+      '<sub>5 model calls · 12,345 input (10,000 uncached · 2,000 cached · 345 cache write; 16.2% cache reads) / 678 output tokens · ≈ $0.0629 at <a href="https://developers.openai.com/api/docs/models/gpt-6-sol">GPT-6 Sol rates</a> · inspected at <code>abcdef0</code> · 2 automatic reviews remain</sub>',
     );
   });
 
@@ -123,8 +123,8 @@ The new route accepts requests without checking the caller.
         outputTokens: 456,
         estimatedCost: {
           microusd: 18_188,
-          label: "GPT-5.6 Sol",
-          url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+          label: "GPT-6 Sol",
+          url: "https://developers.openai.com/api/docs/models/gpt-6-sol",
         },
         headRevision,
       }),
@@ -149,7 +149,7 @@ The new route accepts requests without checking the caller.
 
       No actionable defects found in the supplied diff.
 
-      <sub>3 model calls · 2,267 input (2,000 uncached · 200 cached · 67 cache write; 8.8% cache reads) / 456 output tokens · ≈ $0.0182 at <a href="https://developers.openai.com/api/docs/models/gpt-5.6-sol">GPT-5.6 Sol rates</a> · inspected at <code>abcdef0</code></sub>
+      <sub>3 model calls · 2,267 input (2,000 uncached · 200 cached · 67 cache write; 8.8% cache reads) / 456 output tokens · ≈ $0.0182 at <a href="https://developers.openai.com/api/docs/models/gpt-6-sol">GPT-6 Sol rates</a> · inspected at <code>abcdef0</code></sub>
 
       <!-- effect-agent-review:v3 automatic=true completed=true -->"
     `);

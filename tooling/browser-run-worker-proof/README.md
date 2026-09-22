@@ -87,7 +87,7 @@ From the repository root, after injecting credentials:
 ```sh
 export CHECKOUT_RUN_ID="checkout-$(openssl rand -hex 6)"
 export CHECKOUT_TOKEN="$(openssl rand -hex 32)"
-export CHECKOUT_MODEL=gpt-5.6-luna
+export CHECKOUT_MODEL=gpt-6-luna
 export CHECKOUT_REPETITIONS=2
 export CHECKOUT_CONCURRENCY=4
 export CHECKOUT_HUMAN=false
@@ -173,7 +173,7 @@ It skips paid work when every public version is already on npm. Adding a changes
 does not trigger a hosted run. Checkout or cleanup failure blocks publication.
 
 For an on-demand run, select **Manual hosted checkout** in GitHub Actions and choose a trusted
-branch or tag. It checks out that dispatch's exact commit. Both workflows use `gpt-5.6-luna`, two
+branch or tag. It checks out that dispatch's exact commit. Both workflows use `gpt-6-luna`, two
 repetitions (12 cases), concurrency four, one-second admission spacing, and `CHECKOUT_HUMAN=false`.
 Only an explicit local operator run establishes human takeover coverage.
 

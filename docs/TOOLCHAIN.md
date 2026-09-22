@@ -18,20 +18,20 @@ Commit the Bun lockfile; CI installs with `--frozen-lockfile`.
 | Bun                                                     | `1.4.2`                                             |
 | Vite+                                                   | `0.3.2`                                             |
 | Alchemy and its Cloudflare runtime                      | `2.0.0-beta.77` with upstream compatibility patches |
-| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.116`                                      |
+| Effect and its provider/platform/SQL/Atom/test packages | `4.0.0-rc.117`                                      |
 | `effect-cf`                                             | `0.44.1`                                            |
 | TypeScript                                              | `7.0.2`                                             |
 | `@effect/tsgo`                                          | `0.45.0`                                            |
 | Node.js                                                 | `22.18+` or `24.11+`                                |
 
-Public packages require `effect@^4.0.0-rc.116` as a peer. The exact catalog pin supplies the
+Public packages require `effect@^4.0.0-rc.117` as a peer. The exact catalog pin supplies the
 development version. Raise the peer minimum when code needs a newer API.
 Private examples declare Effect as a regular dependency. Adapters depend on the platform and
 SQL implementations they use.
 
-`platform-cloudflare` requires `effect-cf@^0.44.1` and `effect@^4.0.0-rc.116` as host peers
+`platform-cloudflare` requires `effect-cf@^0.44.1` and `effect@^4.0.0-rc.117` as host peers
 and uses the exact catalog versions for development. Supply Effect SQL packages compatible with
-rc.116 for `effect-cf`. Consumers provide the shared runtime.
+rc.117 for `effect-cf`. Consumers provide the shared runtime.
 
 Root overrides keep Effect, its Node/browser platforms, shared SQL adapters, and test packages
 on the catalog versions, including dependencies of published consumers.
@@ -223,7 +223,7 @@ documented continuity scenario; it does not certify large-history startup or Clo
 performance.
 
 The [hosted checkout gate](../tooling/browser-run-worker-proof/README.md#ci-policy) runs 12 automated
-cases with `gpt-5.6-luna`, four concurrently, before npm publication. Checkout or cleanup failure
+cases with `gpt-6-luna`, four concurrently, before npm publication. Checkout or cleanup failure
 blocks the release. Configure the `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` and narrow
 `BROWSER_RENDERING_API_TOKEN` repository secrets and the `CLOUDFLARE_WORKERS_SUBDOMAIN` variable;
 it reuses `OPENAI_API_KEY`. Its report is retained for 30 days and recorded cleanup is retried after

@@ -9,13 +9,18 @@ import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
 
 import type { PlannerError } from "../src/domain.ts";
-import { PlannerSettings, PlannerSnapshot, defaultPlannerSettings } from "../src/domain.ts";
+import {
+  PlannerInput,
+  PlannerSettings,
+  PlannerSnapshot,
+  defaultPlannerSettings,
+} from "../src/domain.ts";
 import type { PlannerSettingsStore } from "../src/server/settings.ts";
 import { ownerEmail } from "./fixtures/identity.ts";
 
 const token = "preference-test-token";
 const astra: PlannerSettings = { model: "gpt-6-astra", reasoningEffort: "high", fast: true };
-const luna: PlannerSettings = { model: "gpt-5.6-luna", reasoningEffort: "none", fast: false };
+const luna: PlannerSettings = { model: "gpt-6-luna", reasoningEffort: "none", fast: false };
 
 const RpcExit = Schema.Struct({
   _tag: Schema.Literal("Exit"),
@@ -163,6 +168,30 @@ it("persists one private account preference across devices and restarts without 
   // A later device's completed update becomes the account preference everywhere.
   await save(luna);
   expect(await get()).toEqual(luna);
+}, 30_000);
+
+it("upgrades a saved Luna preference while preserving admitted work and the stored row until save", async () => {
+  const email = "legacy-luna@example.com";
+  const legacy = { ...luna, model: "gpt-5.6-luna" };
+  const value = JSON.stringify({ version: 1, settings: legacy });
+
+  await get(email);
+  await raw(email, value);
+  expect(await get(email)).toEqual(luna);
+  expect(await raw(email)).toEqual([{ value }]);
+
+  const input = {
+    message: "Plan a trip",
+    selectedTripId: null,
+    publication: null,
+    settings: legacy,
+  };
+
+  expect(Schema.decodeUnknownSync(PlannerInput)(input)).toEqual(input);
+  expect((await rpcExit("SavePlannerSettings", legacy, email))._tag).toBe("Failure");
+  expect(await raw(email)).toEqual([{ value }]);
+  await save(luna, email);
+  expect(await raw(email)).toEqual([{ value: JSON.stringify({ version: 1, settings: luna }) }]);
 }, 30_000);
 
 it("retains the old row before failed writes and reveals committed writes after a lost reply", async () => {

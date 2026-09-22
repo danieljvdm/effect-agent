@@ -94,7 +94,7 @@ export default Alchemy.Stack(
         }),
         ARTIFACTS_GIT_BASE: `https://${accountId}.artifacts.cloudflare.net/git/${artifacts.namespace}`,
         BROWSER: Cloudflare.Browser(),
-        OPENAI_MODEL: Config.String("OPENAI_MODEL").pipe(Config.withDefault("gpt-5.6-luna")),
+        OPENAI_MODEL: Config.String("OPENAI_MODEL").pipe(Config.withDefault("gpt-6-luna")),
         BYOK_ENCRYPTION_KEY: Config.schema(
           Schema.Redacted(Schema.NonEmptyString),
           "BYOK_ENCRYPTION_KEY",

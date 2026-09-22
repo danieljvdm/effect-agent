@@ -129,7 +129,7 @@ const hostedChild = () => {
         status: "completed",
       };
 
-      const response = { id: "response-1", model: "gpt-5.6-sol", created_at: 1, output: [] };
+      const response = { id: "response-1", model: "gpt-6-sol", created_at: 1, output: [] };
 
       const events = [
         { type: "response.created", response },
@@ -178,7 +178,7 @@ const hostedChild = () => {
     }),
   );
 
-  const model = OpenAiLanguageModel.model("gpt-5.6-sol", { store: false }).pipe(
+  const model = OpenAiLanguageModel.model("gpt-6-sol", { store: false }).pipe(
     Layer.provide(
       OpenAiClient.layer({ apiKey: Redacted.make("fixture-key") }).pipe(
         Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),

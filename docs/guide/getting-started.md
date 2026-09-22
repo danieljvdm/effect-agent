@@ -15,8 +15,8 @@ In a TypeScript project with [Bun](https://bun.sh):
 bun add effect-agent@beta
 ```
 
-Requires `effect@^4.0.0-rc.116` and an Effect AI provider.
-For the example below, also install `@effect/ai-openai@4.0.0-rc.116` and `@effect/platform-bun@4.0.0-rc.116`.
+Requires `effect@^4.0.0-rc.117` and an Effect AI provider.
+For the example below, also install `@effect/ai-openai@4.0.0-rc.117` and `@effect/platform-bun@4.0.0-rc.117`.
 
 ## Create an agent
 
@@ -47,7 +47,7 @@ const triage = Agent.make("triage", {
 
 const program = AgentRuntime.run(triage, "All users get a 500 error when signing in.").pipe(
   Effect.tap((result) => Console.log(result.output)),
-  Effect.provide(OpenAiLanguageModel.model("gpt-4.1-mini")),
+  Effect.provide(OpenAiLanguageModel.model("gpt-6-luna")),
   Effect.provide(OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") })),
   Effect.provide(FetchHttpClient.layer),
   Effect.provide(InMemory.layer),

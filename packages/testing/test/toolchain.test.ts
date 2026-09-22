@@ -1364,7 +1364,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           [release, "release"],
         ] as const) {
           expect(workflow.jobs[job]?.env).toMatchObject({
-            CHECKOUT_MODEL: "gpt-5.6-luna",
+            CHECKOUT_MODEL: "gpt-6-luna",
             CHECKOUT_REPETITIONS: "2",
             CHECKOUT_CONCURRENCY: "4",
             CHECKOUT_START_INTERVAL_MS: "1000",
@@ -1957,7 +1957,7 @@ esac
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
 
-          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.116");
+          expect(manifest.peerDependencies?.effect).toBe("^4.0.0-rc.117");
           expect(manifest.devDependencies?.effect).toBe("catalog:");
           expect(manifest.dependencies?.effect).toBeUndefined();
           expect(manifest.optionalDependencies?.effect).toBeUndefined();

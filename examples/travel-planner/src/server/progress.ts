@@ -1,6 +1,10 @@
 import { Clock, Context, Effect, Exit, Layer, Option, Ref } from "effect";
 
-import { type PlannerProgress, type PlannerSettings, type PlannerError } from "../domain.ts";
+import {
+  type PlannerProgress,
+  type AdmittedPlannerSettings,
+  type PlannerError,
+} from "../domain.ts";
 import { recordDiagnostic } from "./diagnostics.ts";
 
 export const emptyProgress: PlannerProgress = {
@@ -28,7 +32,7 @@ export class PlannerAttempt extends Context.Service<
   {
     /** Derived from the host's canonical admission/lineage, never a tool argument. */
     readonly billingOwner: Effect.Effect<string, PlannerError>;
-    readonly settings: Effect.Effect<PlannerSettings, PlannerError>;
+    readonly settings: Effect.Effect<AdmittedPlannerSettings, PlannerError>;
     readonly progress: ProgressWriter;
   }
 >()("travel-planner/PlannerAttempt") {}

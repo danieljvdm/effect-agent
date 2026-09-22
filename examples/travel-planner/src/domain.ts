@@ -205,7 +205,7 @@ const ReasoningEffort = Schema.Literals(["low", "medium", "high", "xhigh", "max"
 
 export const PlannerSettings = Schema.Union([
   Schema.Struct({
-    model: Schema.Literal("gpt-5.6-luna"),
+    model: Schema.Literal("gpt-6-luna"),
     reasoningEffort: Schema.Literals(["none", "low", "medium", "high", "xhigh", "max"]),
     fast: Schema.Boolean,
   }),
@@ -217,6 +217,18 @@ export const PlannerSettings = Schema.Union([
 ]);
 
 export type PlannerSettings = typeof PlannerSettings.Type;
+
+/** Preserve the model choice of frozen requests and work admitted before the GPT-6 upgrade. */
+export const AdmittedPlannerSettings = Schema.Union([
+  PlannerSettings,
+  Schema.Struct({
+    model: Schema.Literal("gpt-5.6-luna"),
+    reasoningEffort: Schema.Literals(["none", "low", "medium", "high", "xhigh", "max"]),
+    fast: Schema.Boolean,
+  }),
+]);
+
+export type AdmittedPlannerSettings = typeof AdmittedPlannerSettings.Type;
 
 export const defaultPlannerSettings: PlannerSettings = {
   model: "gpt-6-astra",
@@ -244,7 +256,8 @@ export const SendMessageRequest = Schema.Struct({
   requestId: TripId,
   selectedTripId: Schema.NullOr(TripId),
   conversationId: ConversationId,
-  settings: Schema.optionalKey(PlannerSettings),
+  // Retained voice requests must survive decoding and retries without changing their input.
+  settings: Schema.optionalKey(AdmittedPlannerSettings),
   voice: Schema.optionalKey(VoiceContext),
 });
 
@@ -272,7 +285,7 @@ export const TextPlannerInput = Schema.Struct({
   message: SendMessageRequest.fields.message,
   selectedTripId: Schema.NullOr(TripId),
   publication: Schema.NullOr(PublishTripRequest),
-  settings: Schema.optionalKey(PlannerSettings),
+  settings: Schema.optionalKey(AdmittedPlannerSettings),
   previousMessages: Schema.optionalKey(
     Schema.Array(Schema.Struct({ role: Schema.Literals(["user", "assistant"]), text: Text })),
   ),
