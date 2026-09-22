@@ -1,0 +1,23 @@
+/* Keep the app backdrop saturated while preserving readable light surfaces. */
+:root {
+  background: #dc2626;
+}
+
+body,
+.app-shell,
+.workspace,
+.content,
+.login-page,
+.empty {
+  background: #dc2626;
+}
+
+.topbar {
+  background: #f8fafc;
+  color: #334155;
+}
+
+.conversation {
+  background: #fcfcf9;
+  color: #283d37;
+}
