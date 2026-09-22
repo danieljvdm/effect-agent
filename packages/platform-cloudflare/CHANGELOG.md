@@ -1,5 +1,21 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.133
+
+### Patch Changes
+
+- [#623](https://github.com/danieljvdm/effect-agent/pull/623) [`62665f5`](https://github.com/danieljvdm/effect-agent/commit/62665f5f6b9b55aa9d1bdf057e8fbb4b2f93dab6) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Propagate opt-in native RPC trace context across routed Thread port calls. Preserve the encoded request and existing behavior when tracing is disabled.
+
+- [#625](https://github.com/danieljvdm/effect-agent/pull/625) [`9420943`](https://github.com/danieljvdm/effect-agent/commit/942094390475ef980d2edba50ed50c6e26af000d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reject foreign submission identities and misplaced stored rows in local-only Thread Object lookups while preserving colocated threads and local absence.
+
+- [#622](https://github.com/danieljvdm/effect-agent/pull/622) [`2eb83ea`](https://github.com/danieljvdm/effect-agent/commit/2eb83eab3bb2a609ed497dc9099e95a97a1ea62f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Stop repeated empty native-maintenance scans after an overlapping admission completes while an unrelated host lane remains active.
+
+- [#624](https://github.com/danieljvdm/effect-agent/pull/624) [`c5a487b`](https://github.com/danieljvdm/effect-agent/commit/c5a487beef98a5dfa6adb9a3e2edf542fccea90a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Read canonical worker identity and its producer fence in one bounded owner snapshot instead of four serial remote reads. Custom ThreadStore adapters must implement `readIdentity`; deploy matching Cloudflare client and owner packages for the new read-only operation.
+
+- Updated dependencies [[`9420943`](https://github.com/danieljvdm/effect-agent/commit/942094390475ef980d2edba50ed50c6e26af000d), [`450bac0`](https://github.com/danieljvdm/effect-agent/commit/450bac01e8e4fa937961e53f2231cfaa525167a4), [`c5a487b`](https://github.com/danieljvdm/effect-agent/commit/c5a487beef98a5dfa6adb9a3e2edf542fccea90a), [`e336239`](https://github.com/danieljvdm/effect-agent/commit/e336239226540001e6e4876c6f5dffc57b785769)]:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.133
+  - effect-agent@0.1.0-beta.133
+
 ## 0.1.0-beta.132
 
 ### Patch Changes

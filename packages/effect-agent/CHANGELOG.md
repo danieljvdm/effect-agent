@@ -1,5 +1,15 @@
 # effect-agent
 
+## 0.1.0-beta.133
+
+### Patch Changes
+
+- [#629](https://github.com/danieljvdm/effect-agent/pull/629) [`450bac0`](https://github.com/danieljvdm/effect-agent/commit/450bac01e8e4fa937961e53f2231cfaa525167a4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Wake progress observers when a durable update is accepted, including updates omitted from parent reports.
+
+- [#624](https://github.com/danieljvdm/effect-agent/pull/624) [`c5a487b`](https://github.com/danieljvdm/effect-agent/commit/c5a487beef98a5dfa6adb9a3e2edf542fccea90a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Read canonical worker identity and its producer fence in one bounded owner snapshot instead of four serial remote reads. Custom ThreadStore adapters must implement `readIdentity`; deploy matching Cloudflare client and owner packages for the new read-only operation.
+
+- [#621](https://github.com/danieljvdm/effect-agent/pull/621) [`e336239`](https://github.com/danieljvdm/effect-agent/commit/e336239226540001e6e4876c6f5dffc57b785769) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Reduce worker origin and stop-request latency without weakening producer or history fencing.
+
 ## 0.1.0-beta.132
 
 ## 0.1.0-beta.131

@@ -165,6 +165,7 @@
     "native-effect-decisions",
     "native-empty-context-tools",
     "native-outstanding-reads",
+    "native-port-tracing",
     "native-scheduling-during-delivery",
     "native-subscription-alarm-services",
     "native-tool-observability",
@@ -214,9 +215,12 @@
     "quiet-browsers-watch",
     "quiet-host-maintenance",
     "quiet-hosted-completion",
+    "quiet-local-submission",
     "quiet-model-parameter-rejections",
     "quiet-model-threads",
+    "quiet-native-recovery",
     "quiet-owls-retain",
+    "quiet-progress-wake",
     "quiet-recovery-notices",
     "quiet-retained-prompts",
     "quiet-runs-own-scope",
@@ -280,6 +284,7 @@
     "terminal-tool-history",
     "terminal-worker-assignments",
     "thin-browser-sessions",
+    "thread-identity-snapshot",
     "thread-in-main",
     "tidy-alarm-isolation",
     "tidy-browsers-reply",
@@ -296,6 +301,7 @@
     "typed-run-disposition",
     "unknown-abort-recovery",
     "verified-pr-review",
+    "worker-known-tail",
     "workflow-durable-host"
   ]
 }
