@@ -8,6 +8,7 @@ import {
   PageCaptureRateLimitedError,
   PageCaptureResult,
   PageMarkdownCaptured,
+  PageScrapeCaptured,
   type PageCaptureCapture,
 } from "effect-agent/page-capture";
 import { SandboxImplementation } from "effect-agent/sandbox";
@@ -63,6 +64,12 @@ it.effect("keeps deep amenity evidence from a large page within the encoded resu
     const capture: PageCaptureCapture = (request) =>
       Effect.gen(function* () {
         yield* Ref.update(calls, (count) => count + 1);
+        if (request.action._tag === "CapturePageScrape")
+          return PageCaptureResult.make({
+            implementation,
+            output: PageScrapeCaptured.make({ groups: [] }),
+            resourceUse: {},
+          });
         expect(request.limits.maxOutputBytes).toBe(512 * 1_024);
         expect(request.navigation).toMatchObject({
           waitUntil: "networkidle2",
@@ -106,7 +113,7 @@ it.effect("keeps deep amenity evidence from a large page within the encoded resu
       12 * 1_024,
     );
     expect(second.result).toEqual(first.result);
-    expect(yield* Ref.get(calls)).toBe(2);
+    expect(yield* Ref.get(calls)).toBe(4);
   }),
 );
 
@@ -484,6 +491,125 @@ it.effect(
           Effect.provide(diagnostics),
         );
         expect((yield* Ref.get(captured)).at(-1)?.operation).toBe(`read_travel_page: ${category}`);
+      }
+    }),
+);
+
+it.effect("uses bounded, public metadata photos through the published Browser Run adapter", () =>
+  Effect.gen(function* () {
+    const browser: BrowserRun = {
+      fetch: () => Promise.reject(new Error("Unexpected fetch")),
+      quickAction: (action, options) => {
+        if (action === "markdown")
+          return Promise.resolve(
+            Response.json({
+              success: true,
+              result: "# Forest Cabin\nTwo bedrooms and a private hot tub.",
+            }),
+          );
+        expect(action).toBe("scrape");
+        expect(options).toMatchObject({
+          url: parameters.url,
+          gotoOptions: { waitUntil: "domcontentloaded", timeout: 5_000 },
+          rejectResourceTypes: ["image", "media", "font"],
+        });
+
+        const request = Schema.decodeUnknownSync(
+          Schema.Struct({
+            elements: Schema.Array(Schema.Struct({ selector: Schema.String })),
+          }),
+        )(options);
+
+        return Promise.resolve(
+          Response.json({
+            success: true,
+            result: request.elements.map(({ selector }) => ({
+              selector,
+              results: [
+                "",
+                "http://127.0.0.1/private.jpg",
+                "https://name:secret@images.example.com/private.jpg",
+                "data:image/png;base64,aaaa",
+                "https://images.example.com/avatar/host.jpg",
+                "https://images.example.com/cabin.jpg?width=1200&crop=(1,2)",
+                "https://images.example.com/cabin.jpg?width=1200&crop=(1,2)",
+                "/photos/forest.jpg",
+                "https://images.example.com/room.jpg",
+                "https://images.example.com/deck.jpg",
+                "https://images.example.com/extra.jpg",
+              ].map((value) => ({
+                text: "",
+                html: "",
+                left: 0,
+                top: 0,
+                width: 0,
+                height: 0,
+                attributes: [{ name: "content", value }],
+              })),
+            })),
+          }),
+        );
+      },
+    };
+
+    const result = yield* read().pipe(
+      Effect.provide(CloudflareBrowser.layer({ handlers: ReadTravelPageLive }, { browser })),
+    );
+
+    const inspected = yield* Schema.decodeUnknownEffect(ReadTravelPageResult)(result.result);
+
+    expect(inspected.photos.map((photo) => photo.url)).toEqual([
+      "https://images.example.com/cabin.jpg?width=1200&crop=(1,2)",
+      "https://www.tahoegetaways.com/photos/forest.jpg",
+      "https://images.example.com/room.jpg",
+      "https://images.example.com/deck.jpg",
+    ]);
+    expect(inspected.excerpts.join("\n")).toContain("Two bedrooms and a private hot tub.");
+  }),
+);
+
+it.effect(
+  "keeps inspected text when optional metadata fails or exhausts the remaining deadline",
+  () =>
+    Effect.gen(function* () {
+      for (const mode of ["failure", "timeout", "defect", "interrupt"] as const) {
+        const entered = yield* Deferred.make<void>();
+        const closed = yield* Ref.make(false);
+
+        const capture: PageCaptureCapture = (request) => {
+          if (request.action._tag === "CapturePageMarkdown")
+            return Effect.sleep("23 seconds").pipe(Effect.as(page("# Cabin\nTwo bedrooms.")));
+
+          expect(request.navigation?.timeoutMillis).toBe(2_000);
+
+          return Effect.acquireUseRelease(
+            Deferred.succeed(entered, undefined),
+            () =>
+              mode === "failure"
+                ? Effect.fail(
+                    PageCaptureNavigationError.make({ implementation, message: "HTTP 403" }),
+                  )
+                : mode === "defect"
+                  ? Effect.die("metadata defect")
+                  : Effect.never,
+            () => Ref.set(closed, true),
+          );
+        };
+
+        const fiber = yield* read().pipe(provideCapture(capture), Effect.forkChild);
+
+        yield* TestClock.adjust("23 seconds");
+        yield* Deferred.await(entered);
+        if (mode === "timeout") yield* TestClock.adjust("2 seconds");
+        if (mode === "interrupt") yield* Fiber.interrupt(fiber);
+        else if (mode === "defect")
+          expect(Exit.isFailure(yield* Effect.exit(Fiber.join(fiber)))).toBe(true);
+        else
+          expect(yield* Fiber.join(fiber)).toMatchObject({
+            isFailure: false,
+            result: { title: "Cabin", photos: [], excerpts: ["# Cabin\nTwo bedrooms."] },
+          });
+        expect(yield* Ref.get(closed)).toBe(true);
       }
     }),
 );

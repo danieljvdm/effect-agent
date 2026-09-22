@@ -426,7 +426,7 @@
     overflow: hidden;
   }
   .conversation {
-    max-width: 850px;
+    max-width: 1400px;
     margin: 0 auto;
     width: 100%;
     display: flex;
@@ -573,7 +573,12 @@
     overflow-y: auto;
     overscroll-behavior-y: contain;
     scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #b3bea9 transparent;
     padding: 36px 0;
+  }
+  .messages:hover {
+    scrollbar-color: #849577 transparent;
   }
   .message {
     padding-bottom: 28px;
@@ -1222,6 +1227,7 @@
     max-width: 100%;
   }
   .message-markdown {
+    max-width: 85ch;
     font-size: 13px;
     line-height: 1.85;
     margin-top: 9px;
@@ -1317,7 +1323,7 @@
   }
   .travel-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
     gap: 14px;
   }
   .travel-grid > section {

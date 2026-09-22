@@ -2,6 +2,7 @@ import { Clock, Effect, Option, Schema } from "effect";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import {
   CapturePageMarkdown,
+  CapturePageScrape,
   PageCapture,
   PageCaptureLimits,
   PageCaptureRequest,
@@ -10,6 +11,7 @@ import {
   PageSelectorWait,
   PageUrlTarget,
   type PageCaptureError,
+  type PageScrapeCaptured,
 } from "effect-agent/page-capture";
 import { WebCaptureFailure } from "effect-agent/web-capture";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -75,7 +77,7 @@ export const ReadTravelPageResult = Schema.Struct({
 );
 
 export const ReadTravelPage = Tool.make("read_travel_page", {
-  description: `${PreviousReadTravelPage.description} Includes up to four image references from the inspected page when available. These are untrusted source photo candidates, not proof of amenities; use only images relevant to this listing. A successful read contains excerpts, not a complete amenity inventory. Missing amenities remain unverified, and titles or photos alone do not establish them.`,
+  description: `${PreviousReadTravelPage.description} Includes up to four image references from the inspected page when available, using its social-preview metadata when no gallery photos are found. These are untrusted source photo candidates, not proof of amenities; use only images relevant to this listing. A successful read contains excerpts, not a complete amenity inventory. Missing amenities remain unverified, and titles or photos alone do not establish them.`,
   parameters: ReadTravelPageParameters,
   success: ReadTravelPageResult,
   failure: WebCaptureFailure,
@@ -121,37 +123,16 @@ const BlockedPage = Schema.String.check(
 );
 
 /** Read source image references only; never fetch an image or infer its contents. */
-const photosFor = (markdown: string, pageUrl: string): TravelPhoto[] => {
-  const heading = /^#{1,2}\s+[^\n]+/m.exec(markdown);
-
-  if (heading === null) return [];
-  const content = markdown.slice(heading.index + heading[0].length);
-
-  const footer =
-    /^#{1,3}\s+(?:meet your host|hosted by|reviews|similar (?:properties|listings)|you may also like|footer)\b/im.exec(
-      content,
-    );
-
-  const gallery = footer === null ? content : content.slice(0, footer.index);
+const sourcePhotos = (
+  references: Iterable<{ readonly reference: string; readonly caption: string }>,
+  pageUrl: string,
+): TravelPhoto[] => {
   const photos: TravelPhoto[] = [];
   const seen = new Set<string>();
 
-  // Angle destinations support parentheses in CDN query strings without guessing URL endings.
-  const images =
-    /!\[((?:\\.|[^\]\\]){0,500})\]\(\s*(?:<([^<>\r\n]{1,4096})>|((?:\\.|[^\s()\\]){1,4096}))(?:\s+["'][^"'\r\n]{0,500}["'])?\s*\)/g;
-
-  for (const match of gallery.matchAll(images)) {
-    const caption = (match[1] ?? "")
-      .replace(/\\([\\`*{}[\]()#+\-.!_>])/g, "$1")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 240);
-
-    const reference = (match[2] ?? match[3] ?? "")
-      .replace(/\\([\\()])/g, "$1")
-      .replaceAll("&amp;", "&");
-
+  for (const { reference, caption } of references) {
     if (
+      reference.trim() === "" ||
       /\b(?:logo|avatar|profile|icon|badge)\b/i.test(caption) ||
       !URL.canParse(reference, pageUrl)
     )
@@ -179,6 +160,52 @@ const photosFor = (markdown: string, pageUrl: string): TravelPhoto[] => {
 
   return photos;
 };
+
+const photosFor = (markdown: string, pageUrl: string): TravelPhoto[] => {
+  const heading = /^#{1,2}\s+[^\n]+/m.exec(markdown);
+
+  if (heading === null) return [];
+  const content = markdown.slice(heading.index + heading[0].length);
+
+  const footer =
+    /^#{1,3}\s+(?:meet your host|hosted by|reviews|similar (?:properties|listings)|you may also like|footer)\b/im.exec(
+      content,
+    );
+
+  const gallery = footer === null ? content : content.slice(0, footer.index);
+
+  // Angle destinations support parentheses in CDN query strings without guessing URL endings.
+  const images =
+    /!\[((?:\\.|[^\]\\]){0,500})\]\(\s*(?:<([^<>\r\n]{1,4096})>|((?:\\.|[^\s()\\]){1,4096}))(?:\s+["'][^"'\r\n]{0,500}["'])?\s*\)/g;
+
+  return sourcePhotos(
+    Array.from(gallery.matchAll(images), (match) => ({
+      caption: (match[1] ?? "")
+        .replace(/\\([\\`*{}[\]()#+\-.!_>])/g, "$1")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 240),
+      reference: (match[2] ?? match[3] ?? "").replace(/\\([\\()])/g, "$1").replaceAll("&amp;", "&"),
+    })),
+    pageUrl,
+  );
+};
+
+const photoMetadataSelector =
+  'meta[property="og:image"], meta[property="og:image:url"], meta[property="og:image:secure_url"], meta[name="twitter:image"], meta[property="twitter:image"], meta[name="twitter:image:src"]';
+
+const metadataPhotos = (output: PageScrapeCaptured, pageUrl: string) =>
+  sourcePhotos(
+    output.groups
+      .filter((group) => group.selector === photoMetadataSelector)
+      .flatMap((group) => group.results)
+      .map((element) => ({
+        reference:
+          element.attributes.find((attribute) => attribute.name === "content")?.value ?? "",
+        caption: "Listing preview photo",
+      })),
+    pageUrl,
+  );
 
 /** Preserve source slices, rank matches deterministically, then restore document order. */
 const excerptsFor = (markdown: string, focus: string) => {
@@ -367,7 +394,45 @@ const inspect = Effect.fn("TravelResearch.inspect")(function* (
     .replace(/^#{1,2}\s+/, "")
     .slice(0, 256);
 
-  const photos = photosFor(markdown, url);
+  let photos = photosFor(markdown, url);
+
+  // Optional metadata shares the original 25-second budget and never replaces source text.
+  const metadataBudget = Math.min(5_000, 25_000 - ((yield* Clock.currentTimeMillis) - started));
+
+  if (photos.length === 0 && metadataBudget > 0) {
+    photos = yield* capture
+      .capture(
+        PageCaptureRequest.make({
+          target: PageUrlTarget.make({ url }),
+          action: CapturePageScrape.make({ selectors: [photoMetadataSelector] }),
+          engine: "chromium",
+          limits: PageCaptureLimits.make({ maxOutputBytes: 32 * 1_024 }),
+          navigation: PageNavigationOptions.make({
+            waitUntil: "domcontentloaded",
+            timeoutMillis: metadataBudget,
+          }),
+          resourcePolicy,
+        }),
+      )
+      .pipe(
+        Effect.map((metadata) =>
+          metadata.output._tag === "PageScrapeCaptured" ? metadataPhotos(metadata.output, url) : [],
+        ),
+        Effect.catch((error) =>
+          recordDiagnostic("read_travel_page: photo-metadata-unavailable", { url, error }).pipe(
+            Effect.as([]),
+          ),
+        ),
+        Effect.timeoutOrElse({
+          duration: metadataBudget,
+          orElse: () =>
+            recordDiagnostic("read_travel_page: photo-metadata-timeout", {
+              url,
+              timeoutMs: metadataBudget,
+            }).pipe(Effect.as([])),
+        }),
+      );
+  }
 
   const selected: Array<{ start: number; text: string }> = [];
 
