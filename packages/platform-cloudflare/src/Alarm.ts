@@ -1433,12 +1433,19 @@ export class ThreadMaintenance extends Context.Service<
               const mutationOverlap =
                 observation.activeAtStart > 0 || started.activeAtStart > 0 || active > 0;
 
+              // An empty control scan needs no older recovery report. Certify its fresh
+              // snapshot only when no producer overlapped it or advanced the generation.
+              const generation =
+                remaining.length === 0 && !mutationOverlap && state.dirty === started.generation
+                  ? started.generation
+                  : observation.generation;
+
               const processed =
                 autonomous || mutationOverlap
                   ? state.processed
-                  : state.processed > observation.generation
+                  : state.processed > generation
                     ? state.processed
-                    : observation.generation;
+                    : generation;
 
               // Enrollment precedes the mutation body. A retry from an overlapping snapshot
               // must not defer work that becomes ready later in that same generation.

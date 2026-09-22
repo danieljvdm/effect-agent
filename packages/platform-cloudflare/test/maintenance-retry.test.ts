@@ -19,7 +19,7 @@ import { ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   DurableAlarmError,
@@ -200,6 +200,7 @@ describe("maintenance retry deadlines", () => {
   );
 
   // Regression: https://github.com/danieljvdm/effect-agent/commit/0fe79ac5
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/ab5030d98
   it("executes already-ready lanes while one delivery completes, even without wake hints", () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -260,6 +261,15 @@ describe("maintenance retry deadlines", () => {
                   expect(
                     (yield* Stream.runCollect(ledger.scanNonterminal)).map((row) => row.state),
                   ).toEqual(["ready", "ready"]);
+                  const queries = vi.spyOn(state.storage.sql, "exec");
+
+                  yield* Effect.addFinalizer(() => Effect.sync(() => queries.mockRestore()));
+
+                  const scanCount = () =>
+                    queries.mock.calls.filter(([query]) =>
+                      query.includes("WHERE state <> 'settled'"),
+                    ).length;
+
                   const running = yield* Effect.forkChild(maintenance.pass);
 
                   yield* Deferred.await(entered);
@@ -282,8 +292,43 @@ describe("maintenance retry deadlines", () => {
                     completed: false,
                     active: true,
                   });
+                  const idleScanCounts: number[] = [];
+
+                  for (const suffix of ["late", "after-idle-acknowledgement"]) {
+                    const lateId = `${thread}-${suffix}`;
+
+                    const lateReceipt = yield* maintenance.withMutation(
+                      runtime.submitRegistered(
+                        { definition: plannerDefinition },
+                        { question: "admitted while the host wave is active", ref: lateId },
+                        submitOptions(lateId, lateId),
+                      ),
+                    );
+
+                    let lateState: string | undefined;
+
+                    for (let elapsed = 0; elapsed < 1_500; elapsed += 50) {
+                      yield* clock.adjust(50);
+
+                      const late = yield* ledger.lookup(
+                        SubmissionLookupById.make({ submissionId: lateReceipt.submissionId }),
+                      );
+
+                      lateState = Option.isSome(late) ? late.value.state : "missing";
+                      if (lateState === "settled") break;
+                    }
+                    expect(lateState).toBe("settled");
+                    // Once native work is settled, a held unrelated host wave must not
+                    // turn the crash-prearm deadline into repeated empty ledger scans.
+                    yield* clock.adjust(100);
+                    const scansBeforeIdle = scanCount();
+
+                    for (let elapsed = 0; elapsed < 500; elapsed += 50) yield* clock.adjust(50);
+                    idleScanCounts.push(scanCount() - scansBeforeIdle);
+                  }
                   yield* Deferred.succeed(release, undefined);
-                  expect((yield* Fiber.join(running)).settled).toBe(2);
+                  expect((yield* Fiber.join(running)).settled).toBe(4);
+                  expect(idleScanCounts).toEqual([0, 0]);
                   expect({ attempts, completed, active }).toEqual({
                     attempts: 1,
                     completed: true,
@@ -291,10 +336,15 @@ describe("maintenance retry deadlines", () => {
                   });
                 }).pipe(
                   Effect.provide(services),
+                  Effect.provideService(CloudflareDurableRuntimeConfig, {
+                    ...config,
+                    alarmBackoffBase: 100,
+                    wakeScanInterval: 1_000,
+                  }),
                   Effect.provideService(ThreadHostMaintenance, {
                     lanes: [
                       {
-                        dispatchTimeoutMillis: 1_000,
+                        dispatchTimeoutMillis: 5_000,
                         pendingDeadline: Effect.sync(() =>
                           completed ? Option.none() : Option.some(0),
                         ),
