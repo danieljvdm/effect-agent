@@ -117,6 +117,7 @@ import {
   type ThreadExport,
   MAX_THREAD_EXPORT_RECORDS,
   ThreadRead,
+  type ThreadTail,
   ThreadTailRequest,
 } from "../ThreadStore.ts";
 import {
@@ -536,23 +537,30 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
         | WorkerReportPrepared
         | WorkerReportRefused
         | SubtreeBudgetReserved,
-      current: Pick<ThreadExport, "tailSequence" | "tailDigest" | "records">,
+      current: Pick<ThreadExport, "tailSequence" | "tailDigest" | "records"> &
+        Partial<Pick<ThreadTail, "producerEpoch">>,
       phase: "source" | "origin" | "completion" | "subtree" | "report" | "stop",
       acknowledgements: ReadonlyArray<WorkerInputCompleted> = [],
     ) {
       const operation = "start";
-      const tail = yield* deps.store.inspectTail(ThreadTailRequest.make({ threadId }));
+      let producerEpoch = current.producerEpoch;
 
-      // Never append against a tail newer than the prefix whose capacity was checked.
-      if (tail.tailSequence !== current.tailSequence || tail.tailDigest !== current.tailDigest)
-        return false;
+      if (producerEpoch === undefined) {
+        const tail = yield* deps.store.inspectTail(ThreadTailRequest.make({ threadId }));
+
+        if (tail.tailSequence !== current.tailSequence || tail.tailDigest !== current.tailDigest)
+          return false;
+        producerEpoch = tail.producerEpoch;
+      }
+
+      // The store atomically fences the validated prefix and its producer epoch.
       yield* hit(`worker:before-${phase}-append`, operation);
 
       const result = yield* deps.store
         .append(
           FencedAppendRequest.make({
             threadId,
-            producerEpoch: tail.producerEpoch,
+            producerEpoch,
             expectedTailSequence: current.tailSequence,
             expectedTailDigest: current.tailDigest,
             batch: CanonicalBatch.make({
