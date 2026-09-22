@@ -58,6 +58,8 @@ import {
   StoreExportResult,
   StoreInspectTailCall,
   StoreInspectTailResult,
+  StoreReadIdentityCall,
+  StoreReadIdentityResult,
   StoreMaterializeCall,
   StoreMaterializeResult,
   StoreReadPageCall,
@@ -893,6 +895,28 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
             ThreadNotMaterialized,
           ).pipe(Effect.map((reply) => reply.tail)),
 
+    readIdentity: (request) =>
+      options.ownsThread(request.threadId)
+        ? local.readIdentity(request)
+        : foreignStoreCall(
+            "thread read identity",
+            request.threadId,
+            StoreReadIdentityCall.make({ request }),
+            StoreReadIdentityResult,
+            ThreadNotMaterialized,
+          ).pipe(
+            Effect.flatMap((reply) =>
+              reply.identity.threadId === request.threadId
+                ? Effect.succeed(reply.identity)
+                : Effect.fail(
+                    ThreadStoreError.make({
+                      operation: "thread read identity",
+                      message: "The identity snapshot belongs to another Thread.",
+                    }),
+                  ),
+            ),
+          ),
+
     export: (request) =>
       options.ownsThread(request.threadId)
         ? local.export(request)
@@ -905,7 +929,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
           ).pipe(Effect.map((reply) => reply.export)),
 
     // Observation and checkpoints are lane-local: the closed route-capable store subset
-    // is materialize/append/read/inspectTail/export. Recovery cache misses can fall back
+    // is materialize/append/read/readIdentity/inspectTail/export. Recovery cache misses can fall back
     // to those canonical reads, including when the cache belongs to a foreign Object.
     observe: (request) =>
       options.ownsThread(request.threadId)
@@ -1182,6 +1206,15 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
         store
           .inspectTail(request.request)
           .pipe(Effect.map((tail) => StoreInspectTailResult.make({ tail }))),
+      );
+    }
+    case "StoreReadIdentity": {
+      const store = yield* ThreadStore;
+
+      return yield* capture(
+        store
+          .readIdentity(request.request)
+          .pipe(Effect.map((identity) => StoreReadIdentityResult.make({ identity }))),
       );
     }
     case "StoreExport": {

@@ -13,7 +13,12 @@ import {
   ProducerEpoch,
   RecordId,
 } from "./Records.ts";
-import { runIdForSubmission, toolCallPreparedRecordId } from "./RunJournal.ts";
+import {
+  runIdForSubmission,
+  subagentLineageRecordId,
+  toolCallPreparedRecordId,
+  workerOriginRecordId,
+} from "./RunJournal.ts";
 import { SubmissionLedger, SubmissionLookupById } from "./SubmissionLedger.ts";
 
 export const MAX_THREAD_EXPORT_RECORDS = 131_072;
@@ -383,6 +388,60 @@ export class ThreadTail extends Schema.Class<ThreadTail>("@effect-agent/thread/T
   producerEpoch: ProducerEpoch,
 }) {}
 
+export class ThreadIdentityRequest extends Schema.Class<ThreadIdentityRequest>(
+  "@effect-agent/thread/ThreadIdentityRequest",
+)({ threadId: ThreadId }) {}
+
+/**
+ * One consistent canonical snapshot: tail/epoch, first record, exact worker origin,
+ * then exact subagent lineage. A row selected twice appears only once. Missing
+ * identity records remain absent; the snapshot itself grants no execution authority.
+ */
+export class ThreadIdentity extends Schema.Class<ThreadIdentity>(
+  "@effect-agent/thread/ThreadIdentity",
+)(
+  Schema.Struct({
+    ...ThreadTail.fields,
+    records: Schema.Array(CanonicalRecordEnvelope).check(Schema.isMaxLength(3)),
+  }).check(
+    Schema.makeFilter((snapshot) => {
+      if (snapshot.tailSequence === 0) return snapshot.records.length === 0;
+      if (snapshot.records[0]?.sequence !== 1) return false;
+      const origin = workerOriginRecordId(snapshot.threadId);
+      const lineage = subagentLineageRecordId(snapshot.threadId);
+      const ids = new Set<RecordId>();
+      const sequences = new Set<CanonicalSequence>();
+      let previous = -1;
+
+      for (const entry of snapshot.records) {
+        const rank =
+          entry.sequence === 1
+            ? 0
+            : entry.record.recordId === origin
+              ? 1
+              : entry.record.recordId === lineage
+                ? 2
+                : -1;
+
+        if (
+          entry.threadId !== snapshot.threadId ||
+          entry.sequence < 1 ||
+          entry.sequence > snapshot.tailSequence ||
+          rank <= previous ||
+          ids.has(entry.record.recordId) ||
+          sequences.has(entry.sequence)
+        )
+          return false;
+        ids.add(entry.record.recordId);
+        sequences.add(entry.sequence);
+        previous = rank;
+      }
+
+      return true;
+    }),
+  ),
+) {}
+
 /** Maximum canonical records represented by one Thread export. */
 
 export class ThreadExport extends Schema.Class<ThreadExport>("@effect-agent/thread/ThreadExport")({
@@ -560,6 +619,9 @@ export class ThreadStore extends Context.Service<
     readonly inspectTail: (
       request: ThreadTailRequest,
     ) => Effect.Effect<ThreadTail, ThreadStoreError | ThreadNotMaterialized>;
+    readonly readIdentity: (
+      request: ThreadIdentityRequest,
+    ) => Effect.Effect<ThreadIdentity, ThreadStoreError | ThreadNotMaterialized>;
     /** Absent when this adapter does not support disposable checkpoints. */
     readonly checkpoints?: ThreadCheckpoints | undefined;
     readonly recoveryCheckpoints?: ThreadRecoveryCheckpoints | undefined;

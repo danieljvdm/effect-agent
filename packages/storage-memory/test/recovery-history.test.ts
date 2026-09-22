@@ -70,6 +70,7 @@ const countingThreadStoreLayer = Layer.effectContext(
     const failingAfter = yield* Ref.make<Option.Option<CanonicalSequence>>(Option.none());
 
     const counted = ThreadStore.of({
+      readIdentity: store.readIdentity,
       materialize: store.materialize,
       append: store.append,
       read: (request) =>

@@ -62,6 +62,7 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope>) => {
   const state = { records: [...initial], pages: [] as Array<number> };
 
   const store = ThreadStore.of({
+    readIdentity: () => Effect.die("History lookup must not read worker identity"),
     materialize: () => Effect.die("History lookup cannot materialize Threads"),
     append: () => Effect.die("History lookup cannot append records"),
     observe: () => Stream.die("History lookup cannot observe unbounded history"),

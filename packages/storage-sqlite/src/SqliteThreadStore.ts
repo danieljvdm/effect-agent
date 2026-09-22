@@ -924,6 +924,7 @@ const makeServices = Effect.fn("SqliteThreadStore.makeServices")(function* () {
 
   const threadStore = ThreadStore.of({
     countPeerMessages: selectedReads.countPeerMessages,
+    readIdentity: selectedReads.readIdentity,
     append,
     export: exportThread,
     inspectTail,

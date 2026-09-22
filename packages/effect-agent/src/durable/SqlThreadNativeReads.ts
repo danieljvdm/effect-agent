@@ -6,13 +6,16 @@ import {
   CanonicalRecordEnvelope,
   CanonicalSequence,
   Digest,
+  ProducerEpoch,
   RecordId,
 } from "./Records.ts";
-import { runIdForSubmission } from "./RunJournal.ts";
+import { runIdForSubmission, subagentLineageRecordId, workerOriginRecordId } from "./RunJournal.ts";
 import type { ThreadStore } from "./ThreadStore.ts";
 import {
   SelectedThreadRead,
   ThreadPeerCountRequest,
+  ThreadIdentity,
+  ThreadIdentityRequest,
   ThreadNotMaterialized,
   ThreadStoreError,
 } from "./ThreadStore.ts";
@@ -248,6 +251,76 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
     ),
   );
 
+  const readIdentity: ThreadStore["Service"]["readIdentity"] = Effect.fnUntraced(
+    function* (request) {
+      yield* Schema.decodeEffect(Schema.toType(ThreadIdentityRequest))(request);
+
+      return yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const tails = yield* sql`SELECT tail_sequence, tail_digest, producer_epoch
+            FROM effect_agent_threads WHERE thread_id = ${request.threadId}`;
+
+          if (tails.length === 0)
+            return yield* ThreadNotMaterialized.make({ threadId: request.threadId });
+
+          const decoded = yield* Schema.decodeUnknownEffect(
+            Schema.Array(
+              Schema.Struct({
+                tail_sequence: CanonicalSequence,
+                tail_digest: Digest,
+                producer_epoch: ProducerEpoch,
+              }),
+            ),
+          )(tails);
+
+          const tail = decoded[0];
+
+          if (decoded.length !== 1 || tail === undefined) return yield* failure("identity tail");
+          const origin = workerOriginRecordId(request.threadId);
+          const lineage = subagentLineageRecordId(request.threadId);
+
+          const rows =
+            yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM (
+            SELECT thread_id, sequence, record_id, batch_id, record_json, 0 AS identity_order
+            FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND sequence = 1
+            UNION ALL
+            SELECT thread_id, sequence, record_id, batch_id, record_json, 1 AS identity_order
+            FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND record_id = ${origin} AND sequence <> 1
+            UNION ALL
+            SELECT thread_id, sequence, record_id, batch_id, record_json, 2 AS identity_order
+            FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND record_id = ${lineage} AND sequence <> 1
+          ) ORDER BY identity_order`;
+
+          const records = yield* Schema.decodeUnknownEffect(Schema.Array(Row))(rows).pipe(
+            Effect.flatMap(
+              Effect.forEach((row) =>
+                envelope(row).pipe(
+                  Effect.filterOrFail(
+                    (value) => value.record.recordId === row.record_id,
+                    () => failure("identity record locator"),
+                  ),
+                ),
+              ),
+            ),
+          );
+
+          return yield* ThreadIdentity.makeEffect({
+            threadId: request.threadId,
+            tailSequence: tail.tail_sequence,
+            tailDigest: tail.tail_digest,
+            producerEpoch: tail.producer_epoch,
+            records,
+          });
+        }),
+      );
+    },
+    Effect.mapError((cause) =>
+      cause._tag === "ThreadNotMaterialized" || cause._tag === "ThreadStoreError"
+        ? cause
+        : failure("readIdentity", cause),
+    ),
+  );
+
   const countPeerMessages: NonNullable<ThreadStore["Service"]["countPeerMessages"]> =
     Effect.fnUntraced(
       function* (request) {
@@ -266,5 +339,5 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
       ),
     );
 
-  return { read, countPeerMessages };
+  return { read, countPeerMessages, readIdentity };
 });

@@ -981,6 +981,7 @@ const makeServices = Effect.fn("DoThreadStore.makeServices")(function* () {
   const selectedReads = yield* makeSelectedReads(decodeEnvelope);
 
   const threadStore = ThreadStore.of({
+    readIdentity: selectedReads.readIdentity,
     countPeerMessages: selectedReads.countPeerMessages,
     append,
     export: exportThread,

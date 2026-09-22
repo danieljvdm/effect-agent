@@ -78,6 +78,11 @@ excluding joined inputs, and rejects ambiguous original inputs. Both return an o
 envelope and require only `ThreadStore`. Authorize the owner and locator before reading and
 verify the returned payload; absence alone does not prove an admission was never accepted.
 
+Native stores provide `readIdentity({ threadId })` for the first canonical record and exact worker
+origin/lineage records with their captured tail and producer epoch. It is one bounded, consistent
+read, not an authorization grant. Custom ThreadStore adapters must implement this operation;
+deploy matching Cloudflare client and owner packages for its read-only port protocol.
+
 Use the existing `submissionInputRecordId` / `submissionSettlementRecordId` exports from
 `effect-agent/submission-ledger`, or these `effect-agent/run-journal` locators:
 

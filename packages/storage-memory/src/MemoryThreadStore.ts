@@ -21,10 +21,16 @@ import {
   type BatchId,
   type Digest,
 } from "effect-agent/records";
-import { runIdForSubmission } from "effect-agent/run-journal";
+import {
+  runIdForSubmission,
+  subagentLineageRecordId,
+  workerOriginRecordId,
+} from "effect-agent/run-journal";
 import {
   type ThreadCheckpoint,
   ThreadPeerCountRequest,
+  ThreadIdentity,
+  ThreadIdentityRequest,
   AppendConflict,
   AppendResult,
   CheckpointRejected,
@@ -684,6 +690,35 @@ const makeThreadStore = Effect.gen(function* () {
     }),
   );
 
+  const readIdentity: ThreadStore["Service"]["readIdentity"] = Effect.fn(
+    "MemoryThreadStore.readIdentity",
+  )(function* (unvalidated) {
+    const request = yield* validate(ThreadIdentityRequest, "readIdentity", unvalidated);
+
+    const thread = yield* Ref.get(state).pipe(
+      Effect.flatMap((current) => findThread(current, request.threadId)),
+    );
+
+    const selected = [
+      thread.records[0],
+      thread.byId.get(workerOriginRecordId(request.threadId)),
+      thread.byId.get(subagentLineageRecordId(request.threadId)),
+    ].filter((entry) => entry !== undefined);
+
+    return yield* ThreadIdentity.makeEffect({
+      threadId: request.threadId,
+      tailSequence: thread.tailSequence,
+      tailDigest: thread.tailDigest,
+      producerEpoch: thread.producerEpoch,
+      records: selected.filter(
+        (entry, index) =>
+          selected.findIndex((other) => other.record.recordId === entry.record.recordId) === index,
+      ),
+    }).pipe(
+      Effect.mapError((cause) => storeError("readIdentity", "Invalid canonical identity", cause)),
+    );
+  });
+
   const saveCheckpoint: ThreadCheckpoints["save"] = Effect.fn("MemoryThreadStore.saveCheckpoint")(
     (unvalidated) =>
       Effect.gen(function* () {
@@ -896,6 +931,7 @@ const makeThreadStore = Effect.gen(function* () {
   });
 
   return ThreadStore.of({
+    readIdentity,
     countPeerMessages,
     materialize,
     append,
