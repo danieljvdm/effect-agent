@@ -35,5 +35,3 @@ oxlint/plugin-exports.d.ts
 .performance-report/
 .release-build/
 .checkout-proof/
-# Local secret-manager project selection
-.infisical.json
