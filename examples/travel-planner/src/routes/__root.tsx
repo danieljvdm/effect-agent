@@ -4,6 +4,7 @@ import { createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
 import { sessionObservation } from "../auth/client";
 
 import appCss from "../styles.css?url";
+import backdropCss from "../backdrop-overrides.css?url";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -19,6 +20,7 @@ export const Route = createRootRoute({
     ],
     links: [
       { rel: "stylesheet", href: appCss },
+      { rel: "stylesheet", href: backdropCss },
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
     ],
   }),
