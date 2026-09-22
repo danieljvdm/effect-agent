@@ -27,7 +27,7 @@ export class CloudflareBindingError extends Schema.TaggedError<CloudflareBinding
  * points, `@effect-agent/storage-cloudflare` port envelopes for `portCall`), so the RPC
  * boundary carries only structured-cloneable JSON. The optional trailing trace context is
  * transient native RPC metadata, stripped by an opted-in effect-cf receiver before decoding
- * the host envelope. It never enters durable state.
+ * the host or port envelope. It never enters durable state.
  */
 export interface ThreadObjectRpc extends Rpc.DurableObjectBranded {
   /** Admission-limits gate + `DurableAgentRuntime.submit`; answers a `SubmitResponse`. */
@@ -48,7 +48,7 @@ export interface ThreadObjectRpc extends Rpc.DurableObjectBranded {
   /** Authorized DUR-017 Unknown-Outcome resolution; answers a `ResolveUnknownResponse`. */
   resolveUnknownEncoded(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Owner-side cross-Object port endpoint (WP2 envelopes, executed on LOCAL facets). */
-  portCall(encoded: unknown): Promise<unknown>;
+  portCall(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   /** Droppable liveness hint from another Object: arms an immediate alarm. */
   wake(): Promise<void>;
 }

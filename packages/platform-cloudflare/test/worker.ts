@@ -660,12 +660,12 @@ const faultableStub = <RpcService extends ThreadObjectRpc>(
   new Proxy(stub, {
     get(target, property, receiver) {
       if (property === "portCall") {
-        return (encoded: unknown): Promise<unknown> => {
+        return (...args: Parameters<ThreadObjectRpc["portCall"]>): Promise<unknown> => {
           const reason = transportFaultReason(name);
 
           if (reason !== undefined) throw new Error(reason);
 
-          return target.portCall(encoded);
+          return target.portCall(...args);
         };
       }
       if (property === "wake") {

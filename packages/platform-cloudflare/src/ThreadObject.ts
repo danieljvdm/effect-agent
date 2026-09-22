@@ -1074,7 +1074,7 @@ export interface Instance<EventServices = never> extends InstanceType<
   verifyEncoded(encoded: unknown): Promise<unknown>;
   retryEncoded(encoded: unknown): Promise<unknown>;
   obligationsEncoded(encoded: unknown): Promise<unknown>;
-  portCall(encoded: unknown): Promise<unknown>;
+  portCall(encoded: unknown, traceContext?: unknown): Promise<unknown>;
   wake(): Promise<void>;
   alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> | void;
 }
