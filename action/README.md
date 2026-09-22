@@ -45,6 +45,25 @@ workflow and then the published review. Manual retries replace the displayed res
 same name; completion updates only that attempt's ID. Keep the per-PR workflow concurrency group.
 `@effect-agent review full` starts a new attempt even when automatic reviews are paused.
 
+Put the command on the first nonblank line of a new PR comment. Case, spaces, and tabs
+between words are ignored; explanation can follow on later lines:
+
+```text
+@effect-agent review full
+
+The production bootstrap finding is now resolved.
+```
+
+Later lines do not change the review mode or supply instructions to the reviewer. Quoted
+commands, fenced examples, and commands embedded in prose do not start reviews. The workflow
+listens for newly created comments, so editing an existing comment does not start another review.
+
+Consumer workflows must admit these comments before the Action can parse them. Keep the PR
+and owner/member/collaborator checks, but replace whole-comment equality or a fixed command
+prefix with `contains(github.event.comment.body, '@effect-agent')`. Pass the raw body through
+`command` and its ID through `comment-id`, as in the [repository workflow](../.github/workflows/pr-review.yml).
+The Action skips unsupported mentions before making GitHub or model requests.
+
 Complete reviews without unresolved blockers pass. Blockers and incomplete coverage fail;
 a paused, unreviewed commit requires action. Skipped events preserve an existing check or
 report trusted review history when no check exists. Published review outcomes no longer fail

@@ -1,8 +1,15 @@
 export type ReviewMode = "auto" | "incremental" | "full";
 
-/** Parse a trusted collaborator command without admitting prefixes or trailing prose. */
+/** Read the first nonblank line of a trusted comment; later lines may contain explanation. */
 export const reviewModeFromCommand = (command: string): "incremental" | "full" | undefined => {
-  switch (command.trim()) {
+  const firstLine = command.trimStart().split(/[\r\n]/, 1)[0];
+
+  switch (
+    firstLine
+      ?.trim()
+      .replace(/[ \t]+/g, " ")
+      .toLowerCase()
+  ) {
     case "@effect-agent review":
       return "incremental";
     case "@effect-agent review full":

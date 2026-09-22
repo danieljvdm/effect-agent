@@ -29,7 +29,7 @@ inputs:
     required: false
     default: "auto"
   command:
-    description: "Optional raw collaborator command. Accepts @effect-agent review or @effect-agent review full, with surrounding whitespace ignored."
+    description: "Optional raw collaborator comment. Put @effect-agent review or @effect-agent review full on the first nonblank line; case and spacing are ignored, and explanation may follow on later lines."
     required: false
   comment-id:
     description: "Issue comment ID for a manual command. Required when command is set so the action can acknowledge it with an eyes reaction."
