@@ -21,11 +21,13 @@ requirements. Include only data the provider should receive.
 | ---------------------- | ------------------------------------------------------------- | --------------------------------------------------------- |
 | `Decision.classify`    | `criteria`: at least two labels mapped to string descriptions | `label`, `probabilities`, optional `confidence`           |
 | `Decision.rate`        | `criteria`: at least two distinct ordered string levels       | `rating`, `label`, `probabilities`, optional `confidence` |
-| `Decision.probability` | `criteria`: descriptions of both `false` and `true`           | `probability`                                             |
+| `Decision.probability` | None; optional `criteria` describes both `false` and `true`   | `probability`                                             |
 
 Classification labels and rating levels infer literal unions. Ratings can be fractional,
 from zero to the last level's index; their probability keys are the level strings. The rating
 label is the most probable level, choosing the first on ties. Probability answers are in [0, 1].
+Probability criteria are optional; when supplied, describe both outcomes. Code inspecting a
+`Decision.Probability` must check whether `criteria` is present before reading it.
 Constructors throw for empty decision sets or invalid criteria counts; define valid static
 assessments before executing them.
 
@@ -38,7 +40,6 @@ const Urgency = Decision.make({
   decisions: {
     urgent: Decision.probability({
       instructions: "Does this need immediate attention?",
-      criteria: { false: "Can wait", true: "Needs action now" },
     }),
   },
 });
@@ -196,17 +197,17 @@ HTTP error text may include submitted content; the host controls tracing and log
 
 ## Migrating from the local packages
 
-| Former API                                             | Native API                                             |
-| ------------------------------------------------------ | ------------------------------------------------------ |
-| `DecisionSet.make({ input, questions })`               | `Decision.make({ input, decisions })`                  |
-| `DecisionQuery.choice({ options })`                    | `Decision.classify({ criteria })`                      |
-| `DecisionQuery.score({ levels })`                      | `Decision.rate({ criteria })`                          |
-| `DecisionQuery.probability`                            | `Decision.probability`, with both outcome descriptions |
-| `model.evaluate(set, input)`                           | `DecisionModel.decide(definition, { input })`          |
-| Choice `.choice` / score `.score`                      | Classification `.label` / rating `.rating`             |
-| `@effect-agent/ai-typesafe`                            | `@effect/ai-typesafe`                                  |
-| `TypeSafeClient.Config.layer` + `TypeSafeClient.layer` | `TypeSafeClient.layerConfig()`                         |
-| `client.evaluate(request)`                             | `client.systemOne(request)`                            |
+| Former API                                             | Native API                                                 |
+| ------------------------------------------------------ | ---------------------------------------------------------- |
+| `DecisionSet.make({ input, questions })`               | `Decision.make({ input, decisions })`                      |
+| `DecisionQuery.choice({ options })`                    | `Decision.classify({ criteria })`                          |
+| `DecisionQuery.score({ levels })`                      | `Decision.rate({ criteria })`                              |
+| `DecisionQuery.probability`                            | `Decision.probability`, with optional outcome descriptions |
+| `model.evaluate(set, input)`                           | `DecisionModel.decide(definition, { input })`              |
+| Choice `.choice` / score `.score`                      | Classification `.label` / rating `.rating`                 |
+| `@effect-agent/ai-typesafe`                            | `@effect/ai-typesafe`                                      |
+| `TypeSafeClient.Config.layer` + `TypeSafeClient.layer` | `TypeSafeClient.layerConfig()`                             |
+| `client.evaluate(request)`                             | `client.systemOne(request)`                                |
 
 `@effect-agent/ai-decision` now exports only `AutoModel`. Import the shared decision APIs directly
 from Effect; provider integrations come directly from upstream. Custom providers implement
