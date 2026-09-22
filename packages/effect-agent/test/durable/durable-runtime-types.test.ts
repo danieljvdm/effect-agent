@@ -24,6 +24,7 @@ import {
 } from "effect-agent/submission-ledger";
 import { type SubmissionStatus } from "effect-agent/submission-status";
 import type { ThreadStore } from "effect-agent/thread-store";
+import type { WakeScheduler } from "effect-agent/wake-scheduler";
 import type { WorkerError } from "effect-agent/worker";
 
 import type { DurableRuntimeFailpoint } from "../../src/durable/DurableFailpoint.ts";
@@ -97,7 +98,7 @@ it("keeps bounded worker operations and status reads typed without hidden requir
     ThreadStore | SubmissionLedger | Crypto.Crypto | DurableRuntimeFailpoint | WorkerInputControl
   >();
   expectTypeOf<Effect.Services<ReturnType<typeof makeAgentUpdateRuntime>>>().toEqualTypeOf<
-    ThreadStore | Crypto.Crypto | DurableRuntimeFailpoint | WorkerRuntime
+    ThreadStore | Crypto.Crypto | DurableRuntimeFailpoint | WorkerRuntime | WakeScheduler
   >();
   expectTypeOf<Effect.Error<ReturnType<WorkerRuntime["Service"]["prepareUpdate"]>>>().toEqualTypeOf<
     UpdateError | LedgerError
