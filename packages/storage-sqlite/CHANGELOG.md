@@ -1,5 +1,14 @@
 # @effect-agent/storage-sqlite
 
+## 0.1.0-beta.134
+
+### Patch Changes
+
+- [#631](https://github.com/danieljvdm/effect-agent/pull/631) [`d210027`](https://github.com/danieljvdm/effect-agent/commit/d210027cd1103cb5a13da03e7054e504c0159e2d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Require Effect 4.0.0-rc.117 and update the model examples to GPT-6.
+
+- Updated dependencies [[`d210027`](https://github.com/danieljvdm/effect-agent/commit/d210027cd1103cb5a13da03e7054e504c0159e2d)]:
+  - effect-agent@0.1.0-beta.134
+
 ## 0.1.0-beta.133
 
 ### Patch Changes
