@@ -22,6 +22,10 @@ the next message, preserving reasoning effort and processing speed. Already acce
 retains its admitted model settings. Retained voice requests keep their original settings
 when reconnecting or retrying.
 
+Listing photos come from inspected page galleries. When a gallery yields no usable images,
+the reader also checks Open Graph and Twitter image metadata within the same inspection deadline.
+These source images do not verify amenities or availability; unavailable photos leave the cards usable.
+
 The current planner and scout exchange standard `WorkerUpdate` and `WorkerCompletion` messages.
 Retired planner v8–v15 and scout v1–v3 registrations and their custom report inputs are removed.
 Start fresh conversations for those demo revisions; no migration or storage reset is supplied.

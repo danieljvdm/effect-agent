@@ -426,7 +426,7 @@
     overflow: hidden;
   }
   .conversation {
-    max-width: 850px;
+    max-width: 1400px;
     margin: 0 auto;
     width: 100%;
     display: flex;
@@ -515,12 +515,12 @@
   }
   .input-wrap {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: 10px;
     background: #fff;
     border: 1px solid #dfe5d6;
     border-radius: 12px;
-    padding: 15px 14px 13px 20px;
+    padding: 14px 14px 14px 20px;
     box-shadow: 0 5px 24px #36442c05;
   }
   .input-wrap:focus-within {
@@ -529,6 +529,7 @@
   .input-wrap textarea {
     flex: 1;
     resize: none;
+    overflow-y: hidden;
     border: 0;
     outline: none;
     padding: 2px 0;
@@ -544,6 +545,7 @@
   .send {
     display: grid;
     place-items: center;
+    align-self: flex-end;
     flex-shrink: 0;
     border: none;
     border-radius: 8px;
@@ -571,7 +573,12 @@
     overflow-y: auto;
     overscroll-behavior-y: contain;
     scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #b3bea9 transparent;
     padding: 36px 0;
+  }
+  .messages:hover {
+    scrollbar-color: #849577 transparent;
   }
   .message {
     padding-bottom: 28px;
@@ -1156,7 +1163,6 @@
     .input-wrap textarea {
       line-height: 1.5;
       max-height: 120px;
-      overflow-y: auto;
     }
     .send {
       width: 44px;
@@ -1221,6 +1227,7 @@
     max-width: 100%;
   }
   .message-markdown {
+    max-width: 85ch;
     font-size: 13px;
     line-height: 1.85;
     margin-top: 9px;
@@ -1316,7 +1323,7 @@
   }
   .travel-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
     gap: 14px;
   }
   .travel-grid > section {
