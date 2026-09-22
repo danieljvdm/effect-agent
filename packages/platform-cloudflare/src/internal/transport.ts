@@ -3,6 +3,8 @@ import {
   portTransportFailure,
 } from "@effect-agent/storage-cloudflare/port-routing";
 import { Effect, Layer } from "effect";
+import type { ThreadId } from "effect-agent/identifiers";
+import { RpcTracing } from "effect-cf";
 
 import { callThreadObject, ThreadObjectNamespace } from "../CloudflareBindings.ts";
 
@@ -13,6 +15,8 @@ import { callThreadObject, ThreadObjectNamespace } from "../CloudflareBindings.t
  * already Schema-encoded JSON, so the RPC boundary carries only structured-cloneable values;
  * the protocol module stays transport-agnostic and fetch-with-JSON remains the documented
  * fallback carrier.
+ * The namespace's optional `rpcTracing` setting uses the same transient trailing context
+ * as host calls; it never changes the encoded port envelope.
  *
  * Every delivery problem — stub construction, RPC rejection, overload, deploy-in-progress —
  * surfaces as `PortTransportError` (preserving the platform stub's own `retryable` signal
@@ -26,19 +30,27 @@ export const threadPortTransportLayer: Layer.Layer<
 > = Layer.effect(ThreadPortTransport)(
   Effect.gen(function* () {
     const namespace = yield* ThreadObjectNamespace;
+    const { rpcTracing } = namespace;
 
     return ThreadPortTransport.of({
-      call: (threadId, request) =>
-        callThreadObject(
-          threadId,
-          (target) => target.portCall(request),
-          (cause) => portTransportFailure(threadId, cause),
-        ).pipe(
-          Effect.provideService(ThreadObjectNamespace, namespace),
-          Effect.withSpan("CloudflarePortTransport.call", {
-            attributes: { threadId },
-          }),
-        ),
+      call: Effect.fn(
+        function* (threadId: ThreadId, request: unknown) {
+          const traceArgs =
+            rpcTracing === undefined ? [] : yield* RpcTracing.withRpcTraceContext([]);
+
+          return yield* callThreadObject(
+            threadId,
+            (target) => target.portCall(request, ...traceArgs),
+            (cause) => portTransportFailure(threadId, cause),
+          ).pipe(Effect.provideService(ThreadObjectNamespace, namespace));
+        },
+        (effect, threadId) =>
+          rpcTracing === undefined
+            ? Effect.withSpan(effect, "CloudflarePortTransport.call", {
+                attributes: { threadId },
+              })
+            : RpcTracing.withRpcClientSpan(effect, rpcTracing, "portCall"),
+      ),
     });
   }),
 );

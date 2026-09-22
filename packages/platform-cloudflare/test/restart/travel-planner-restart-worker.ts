@@ -104,10 +104,10 @@ export class TravelPlannerRestartObject extends baseClass {
 
     return super.resolveUnknownEncoded(encoded);
   }
-  override async portCall(encoded: unknown): Promise<unknown> {
+  override async portCall(...args: Parameters<ThreadObjectRpc["portCall"]>): Promise<unknown> {
     clientEntries.push("portCall");
 
-    return super.portCall(encoded);
+    return super.portCall(...args);
   }
   override async wake(): Promise<void> {
     clientEntries.push("wake");
