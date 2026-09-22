@@ -2,8 +2,10 @@ import { Effect, Schema, Stream } from "effect";
 import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
+import { VoiceWorkRequest } from "../src/domain.ts";
 import { selectionAtom, sessionAtom, messagesAtom } from "../src/state.ts";
 import * as browser from "../src/voice/browser.ts";
+import { VoiceRequest } from "../src/voice/delegation.ts";
 import {
   startVoiceAtom,
   stopVoiceAtom,
@@ -12,12 +14,141 @@ import {
 } from "../src/voice/state.ts";
 import { fixtureSession } from "./fixtures/identity.ts";
 
-const Packet = Schema.Struct({ id: Schema.Unknown, tag: Schema.String });
+const Packet = Schema.Struct({
+  id: Schema.Unknown,
+  tag: Schema.String,
+  payload: Schema.optionalKey(Schema.Unknown),
+});
 
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+it("reconnects retained Luna requests without changing their identity or settings", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("location", new URL("https://planner.test"));
+  const session = fixtureSession();
+  const conversationId = "retained-luna";
+  const storageKey = `travel-voice:v1:${session.subjectId}:${conversationId}`;
+
+  const retained = (["prepared", "uncertain", "accepted", "settled"] as const).map((status) => ({
+    request: {
+      message: "Plan a trip to Lisbon.",
+      requestId: `voice-${status}`,
+      selectedTripId: null,
+      conversationId,
+      settings: { model: "gpt-5.6-luna", reasoningEffort: "none", fast: false },
+      voice: { input: true, messages: [] },
+    },
+    delegationId: `delegation-${status}`,
+    sessionId: "previous-live-session",
+    offset: 100,
+    status,
+    receipt: null,
+  }));
+
+  const storage = new Map([[storageKey, JSON.stringify({ version: 1, requests: retained })]]);
+
+  vi.stubGlobal("sessionStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+  });
+  const submitted: unknown[] = [];
+  const calls: string[] = [];
+
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(
+      input instanceof Request ? input : new URL(String(input), "https://planner.test"),
+      init,
+    );
+
+    const packet = Schema.decodeSync(Schema.fromJsonString(Packet))((await request.text()).trim());
+    let value: unknown;
+
+    if (packet.tag === "SendMessage") {
+      submitted.push(packet.payload);
+      calls.push("submit");
+      value = { accepted: true };
+    } else if (packet.tag === "GetVoiceWork") {
+      const { requestId } = Schema.decodeUnknownSync(VoiceWorkRequest)(packet.payload);
+      const missing = requestId === "voice-prepared" && submitted.length === 0;
+
+      calls.push(requestId);
+      value = {
+        requestId,
+        receiptId: missing ? null : `receipt-${requestId}`,
+        superseded: false,
+        submissionId: missing ? null : `submission-${requestId}`,
+        runId: null,
+        state: missing ? "missing" : requestId === "voice-settled" ? "completed" : "pending",
+        text: null,
+      };
+    }
+
+    const exit =
+      value === undefined
+        ? {
+            _tag: "Failure",
+            cause: [
+              {
+                _tag: "Fail",
+                error: { _tag: "PlannerError", code: "unavailable", message: "No snapshot" },
+              },
+            ],
+          }
+        : { _tag: "Success", value };
+
+    return new Response(`${JSON.stringify({ _tag: "Exit", requestId: packet.id, exit })}\n`, {
+      headers: { "content-type": "application/ndjson" },
+    });
+  });
+  vi.spyOn(browser, "connectBrowserVoice").mockReturnValue(
+    Effect.succeed({
+      events: Stream.make({
+        type: "session.started" as const,
+        session: { id: "replacement" },
+      }).pipe(Stream.concat(Stream.never)),
+      send: () => Effect.void,
+      silence: Effect.void,
+      resume: Effect.void,
+    }),
+  );
+  const registry = AtomRegistry.make({ defaultIdleTTL: 0, timeoutResolution: 1 });
+
+  registry.set(sessionAtom, AsyncResult.success(session));
+  registry.set(selectionAtom, { conversationId, tripId: null });
+  const unmounts = [registry.mount(voiceViewAtom), registry.mount(startVoiceAtom)];
+
+  try {
+    registry.set(startVoiceAtom, { muted: false } as HTMLAudioElement);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(registry.get(voiceViewAtom).status).toBe("listening");
+    expect(calls.slice(0, 3)).toEqual(["voice-prepared", "voice-uncertain", "submit"]);
+    expect(submitted).toEqual([retained[0]?.request]);
+
+    const persisted = Schema.decodeSync(
+      Schema.fromJsonString(
+        Schema.Struct({ version: Schema.Literal(1), requests: Schema.Array(VoiceRequest) }),
+      ),
+    )(storage.get(storageKey)!);
+
+    expect(persisted.requests).toEqual(
+      retained.map(({ status: _status, receipt: _receipt, ...identity }) =>
+        expect.objectContaining(identity),
+      ),
+    );
+    expect(persisted.requests.map(({ status }) => status)).toEqual([
+      "accepted",
+      "accepted",
+      "accepted",
+      "settled",
+    ]);
+  } finally {
+    for (const unmount of unmounts) unmount();
+    registry.dispose();
+  }
 });
 
 it("starts a fresh conversation, retains stop controls, and clears captions across identities", async () => {

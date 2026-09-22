@@ -218,7 +218,7 @@ export const PlannerSettings = Schema.Union([
 
 export type PlannerSettings = typeof PlannerSettings.Type;
 
-/** Preserve the model choice of work admitted before the GPT-6 upgrade. */
+/** Preserve the model choice of frozen requests and work admitted before the GPT-6 upgrade. */
 export const AdmittedPlannerSettings = Schema.Union([
   PlannerSettings,
   Schema.Struct({
@@ -256,7 +256,8 @@ export const SendMessageRequest = Schema.Struct({
   requestId: TripId,
   selectedTripId: Schema.NullOr(TripId),
   conversationId: ConversationId,
-  settings: Schema.optionalKey(PlannerSettings),
+  // Retained voice requests must survive decoding and retries without changing their input.
+  settings: Schema.optionalKey(AdmittedPlannerSettings),
   voice: Schema.optionalKey(VoiceContext),
 });
 

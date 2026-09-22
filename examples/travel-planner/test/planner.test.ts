@@ -190,13 +190,16 @@ it("isolates conversations while retaining owner trips, native mutations, public
       ],
     };
 
-    await rpc("SendMessage", {
+    const retainedVoiceRequest = {
       conversationId: firstConversation,
       message: "Let's go to Lisbon",
       selectedTripId: null,
       requestId: "create-lisbon",
+      settings: { model: "gpt-5.6-luna", reasoningEffort: "none", fast: false },
       voice,
-    });
+    };
+
+    await rpc("SendMessage", retainedVoiceRequest);
     const saved = await until((state) => state.pending === 0 && state.trips.length === 1);
 
     expect(saved.trips[0]?.destination).toBe("Lisbon");
@@ -217,17 +220,14 @@ it("isolates conversations while retaining owner trips, native mutations, public
       saved.conversations?.find((conversation) => conversation.conversationId === firstConversation)
         ?.title,
     ).toBe("Let's go to Lisbon");
-    expect(
-      (
-        await rpcExit("SendMessage", {
-          conversationId: firstConversation,
-          message: "Let's go to Lisbon",
-          selectedTripId: null,
-          requestId: "create-lisbon",
-          voice: { ...voice, messages: [] },
-        })
-      )._tag,
-    ).toBe("Failure");
+    for (const changed of [
+      { ...retainedVoiceRequest, voice: { ...voice, messages: [] } },
+      {
+        ...retainedVoiceRequest,
+        settings: { ...retainedVoiceRequest.settings, model: "gpt-6-luna" },
+      },
+    ])
+      expect((await rpcExit("SendMessage", changed))._tag).toBe("Failure");
     const trip = saved.trips[0]!;
 
     const voiceReceipt = Schema.decodeUnknownSync(VoiceWork)(
@@ -257,13 +257,7 @@ it("isolates conversations while retaining owner trips, native mutations, public
       ).state,
     ).toBe("missing");
 
-    await rpc("SendMessage", {
-      conversationId: firstConversation,
-      message: "Let's go to Lisbon",
-      selectedTripId: null,
-      requestId: "create-lisbon",
-      voice,
-    });
+    await rpc("SendMessage", retainedVoiceRequest);
     expect((await snapshot()).trips).toHaveLength(1);
     await rpc("SendMessage", {
       conversationId: firstConversation,
