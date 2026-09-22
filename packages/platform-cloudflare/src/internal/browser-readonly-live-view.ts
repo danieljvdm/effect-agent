@@ -46,12 +46,12 @@ export class BrowserRunReadonlyLiveView extends Context.Service<
             targetId: Redacted.Redacted<string>,
             request: BrowserRunLiveViewRequest,
           ) {
-            const identity = yield* Schema.decodeUnknownEffect(Identity)({
+            const identity = yield* Schema.decodeEffect(Identity)({
               sessionId: Redacted.value(sessionId),
               targetId: Redacted.value(targetId),
             });
 
-            const input = yield* Schema.decodeUnknownEffect(BrowserRunLiveViewRequest)(request);
+            const input = yield* Schema.decodeEffect(BrowserRunLiveViewRequest)(request);
 
             const response = yield* client
               .execute(
