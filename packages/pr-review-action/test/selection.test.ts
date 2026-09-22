@@ -37,12 +37,33 @@ const pauseItem = (id: number, head: string, limit: number): ReviewHistoryItem =
 });
 
 describe("GitHub review selection", () => {
-  it("PRR-007 trims manual commands without accepting prose or obsolete aliases", () => {
-    expect(reviewModeFromCommand("@effect-agent review\r\n")).toBe("incremental");
-    expect(reviewModeFromCommand("  @effect-agent review full\n")).toBe("full");
+  it.each([
+    { command: "@effect-agent review\r\n", mode: "incremental" },
+    { command: "  @effect-agent review full\n", mode: "full" },
+    { command: "\n\t@Effect-Agent  REVIEW\tFULL  \r\n", mode: "full" },
+    { command: "@effect-agent review\n\nThe admission lease is now fixed.", mode: "incremental" },
+    {
+      command: "@effect-agent review full\n\nThe production bootstrap finding is now resolved.",
+      mode: "full",
+    },
+    { command: "@effect-agent review\r\n\r\n@effect-agent review full", mode: "incremental" },
+  ])("PRR-007 accepts a first-line command with explanation: $command", ({ command, mode }) => {
+    expect(reviewModeFromCommand(command)).toBe(mode);
+  });
+
+  it("PRR-007 ignores quoted or embedded commands, unknown options, and obsolete aliases", () => {
     for (const command of [
+      "",
+      "  \n\t",
       "please @effect-agent review",
       "@effect-agent review please",
+      "@effect-agent review fullish",
+      "@effect-agent reviewer",
+      "@effect-agent\nreview full",
+      "> @effect-agent review full\n\nThis is a quoted example.",
+      "```\n@effect-agent review full\n```",
+      "`@effect-agent review full`",
+      "Example command:\n@effect-agent review full",
       "/effect-agent review",
       "/effect-agent review full",
     ]) {

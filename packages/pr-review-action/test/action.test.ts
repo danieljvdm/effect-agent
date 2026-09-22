@@ -862,7 +862,7 @@ describe("PR commit review checks", () => {
 });
 
 describe("Manual command acknowledgement", () => {
-  it.effect("PRR-007 reacts before reading pull-request state", () =>
+  it.effect("PRR-007 acknowledges a multiline command before reading pull-request state", () =>
     Effect.gen(function* () {
       const requests = yield* Ref.make<ReadonlyArray<string>>([]);
 
@@ -875,7 +875,8 @@ describe("Manual command acknowledgement", () => {
       });
 
       yield* runReviewAction(client, {
-        PR_REVIEW_COMMAND: "@effect-agent review full",
+        PR_REVIEW_COMMAND:
+          "\n@Effect-Agent  review full\r\n\r\nThe production bootstrap finding is now resolved.",
         PR_REVIEW_COMMENT_ID: "42",
       });
 
@@ -883,6 +884,21 @@ describe("Manual command acknowledgement", () => {
         "POST /repos/reve-ai/example/issues/comments/42/reactions",
         "GET /repos/reve-ai/example/pulls/12",
       ]);
+    }),
+  );
+
+  it.effect("skips an incidental mention before any GitHub or model request", () =>
+    Effect.gen(function* () {
+      const client = HttpClient.make(() =>
+        Effect.die("An incidental mention must not make HTTP requests"),
+      );
+
+      const exit = yield* runReviewAction(client, {
+        PR_REVIEW_COMMAND: "The guide says to use `@effect-agent review full`.",
+        PR_REVIEW_COMMENT_ID: "42",
+      }).pipe(Effect.exit);
+
+      expect(Exit.isSuccess(exit)).toBe(true);
     }),
   );
 });
