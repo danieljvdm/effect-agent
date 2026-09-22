@@ -43,6 +43,7 @@ const fixture = (
     append: () => Effect.die("Reads cannot append"),
     export: () => Effect.die("Reads cannot export"),
     observe: () => Stream.die("Reads cannot observe"),
+    readIdentity: () => Effect.die("History reads cannot look up thread identity"),
     inspectTail: () =>
       Effect.succeed(
         Schema.decodeSync(ThreadTail)({
@@ -53,6 +54,7 @@ const fixture = (
         }),
       ),
     read: (request) => {
+      if ("selection" in request) return Stream.die("History reads require a sequence window");
       requests.push(request);
 
       return Stream.suspend(() =>

@@ -356,13 +356,17 @@ const model = Model.make(
 
               return Stream.fromIterable(finish("Six scouts and the editor are working."));
             }
-            if (parent.input.message === "overflow expanded research")
+            if (parent.input.message === "overflow expanded research") {
+              if (current.some((result) => result.name === "research_scout_start"))
+                return Stream.fromIterable(finish("Worker capacity reached."));
+
               return Stream.fromIterable(
                 call("research_scout_start", {
                   title: "Overflow",
                   message: "Must exceed capacity",
                 }),
               );
+            }
 
             if (parent.input.message === "start research") {
               const started = current.filter(
