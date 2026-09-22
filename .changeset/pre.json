@@ -210,6 +210,7 @@
     "quiet-browsers-read",
     "quiet-browsers-reconnect",
     "quiet-browsers-wait",
+    "quiet-browsers-watch",
     "quiet-host-maintenance",
     "quiet-hosted-completion",
     "quiet-model-parameter-rejections",

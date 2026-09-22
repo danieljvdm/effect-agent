@@ -1,5 +1,12 @@
 # @effect-agent/workflow
 
+## 0.1.0-beta.131
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.131
+
 ## 0.1.0-beta.130
 
 ### Patch Changes

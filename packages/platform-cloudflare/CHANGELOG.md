@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.131
+
+### Patch Changes
+
+- [#617](https://github.com/danieljvdm/effect-agent/pull/617) [`7fd0bab`](https://github.com/danieljvdm/effect-agent/commit/7fd0babeb0404c59034a804c0bc0925412101dbe) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add `BrowserSession.getReadOnlyLiveView` for provider-enforced read-only viewing of the retained page. Reject URLs unless Cloudflare confirms the requested read-only guardrail and exact target.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.131
+  - effect-agent@0.1.0-beta.131
+
 ## 0.1.0-beta.130
 
 ### Patch Changes
