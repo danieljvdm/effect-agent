@@ -729,11 +729,12 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
             SubmissionLedger | ThreadStore | MessageDeliveryStore
           >();
 
-          const ledger = Context.get(local, SubmissionLedger);
+          const lookupSubmission = makeLocalSubmissionLookup({ ownsThread });
 
           return ThreadObjectPorts.of({
             handle: (request) => executePortRequest(request).pipe(Effect.provide(local)),
-            lookupSubmission: makeLocalSubmissionLookup(ledger, { ownsThread }),
+            lookupSubmission: (submissionId) =>
+              lookupSubmission(submissionId).pipe(Effect.provide(local)),
           });
         }),
       ).pipe(Layer.provide(localPorts), Layer.provide(messageStore));

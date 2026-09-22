@@ -219,11 +219,10 @@ const routableSubmissionTarget = (
  * to an owned Thread. This is placement validation, not caller authorization.
  */
 export const makeLocalSubmissionLookup = (
-  local: SubmissionLedger["Service"],
   options: RoutedPortOptions,
 ): ((
   submissionId: SubmissionId,
-) => Effect.Effect<Option.Option<SubmissionSnapshot>, LedgerError>) => {
+) => Effect.Effect<Option.Option<SubmissionSnapshot>, LedgerError, SubmissionLedger>) => {
   const submissionTarget = routableSubmissionTarget(options.ownsThread);
 
   return Effect.fn("DoPortRouting.lookupLocalSubmission")(function* (submissionId: SubmissionId) {
@@ -236,6 +235,7 @@ export const makeLocalSubmissionLookup = (
         message: "The Submission belongs to another Thread Object",
       });
 
+    const local = yield* SubmissionLedger;
     const submission = yield* local.lookup(SubmissionLookupById.make({ submissionId }));
 
     if (Option.isSome(submission) && !options.ownsThread(submission.value.threadId))
