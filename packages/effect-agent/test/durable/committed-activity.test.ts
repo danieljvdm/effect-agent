@@ -136,6 +136,7 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
   });
 
   const threads = ThreadStore.of({
+    readIdentity: () => Effect.die("Ingestion must not read worker identity"),
     materialize: () => Effect.die("Ingestion must not materialize Threads"),
     append: () => Effect.die("Ingestion must not append canonical records"),
     export: () => Effect.die("Ingestion must use bounded reads"),

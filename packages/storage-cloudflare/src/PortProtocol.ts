@@ -32,6 +32,8 @@ import {
   ThreadExport,
   ThreadPeerCountRequest,
   ThreadExportRequest,
+  ThreadIdentity,
+  ThreadIdentityRequest,
   ThreadMaterialization,
   ThreadNotMaterialized,
   ThreadReadRequest,
@@ -57,7 +59,7 @@ import {
  *
  * - ledger: `admit`, `markReady`, `lookup`, `resolveAdmission`, `requestAbort`,
  *   `recordChildSettled`;
- * - store: `materialize`, `append`, `read` (one page), `inspectTail`, `export`.
+ * - store: `materialize`, `append`, `read` (one page), `readIdentity`, `inspectTail`, `export`.
  *
  * Every other port operation is lane-local and has no envelope. A foreign disposable
  * recovery-cache load returns a miss so the caller can replay canonical history. Other
@@ -188,6 +190,13 @@ export class StoreInspectTailCall extends Schema.TaggedClass<StoreInspectTailCal
   request: ThreadTailRequest,
 }) {}
 
+/** Routed bounded `ThreadStore.readIdentity` against the owning Object. */
+export class StoreReadIdentityCall extends Schema.TaggedClass<StoreReadIdentityCall>(
+  "@effect-agent/storage-cloudflare/StoreReadIdentityCall",
+)("StoreReadIdentity", {
+  request: ThreadIdentityRequest,
+}) {}
+
 /** Routed `ThreadStore.export` against the owning Object. */
 export class StoreExportCall extends Schema.TaggedClass<StoreExportCall>(
   "@effect-agent/storage-cloudflare/StoreExportCall",
@@ -220,6 +229,7 @@ export const PortRequest = Schema.Union([
   StoreAppendCall,
   StoreReadPageCall,
   StoreInspectTailCall,
+  StoreReadIdentityCall,
   StoreExportCall,
   StoreCountPeerMessagesCall,
 ]);
@@ -291,6 +301,12 @@ export class StoreInspectTailResult extends Schema.TaggedClass<StoreInspectTailR
   tail: ThreadTail,
 }) {}
 
+export class StoreReadIdentityResult extends Schema.TaggedClass<StoreReadIdentityResult>(
+  "@effect-agent/storage-cloudflare/StoreReadIdentityResult",
+)("StoreReadIdentityResult", {
+  identity: ThreadIdentity,
+}) {}
+
 export class StoreExportResult extends Schema.TaggedClass<StoreExportResult>(
   "@effect-agent/storage-cloudflare/StoreExportResult",
 )("StoreExportResult", {
@@ -322,6 +338,7 @@ export const PortResult = Schema.Union([
   StoreAppendResult,
   StoreReadPageResult,
   StoreInspectTailResult,
+  StoreReadIdentityResult,
   StoreExportResult,
   StoreCountPeerMessagesResult,
 ]);

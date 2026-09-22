@@ -28,6 +28,7 @@ import * as Subagent from "effect-agent/subagent";
 import {
   SubagentDelegationCaps,
   SubagentGrant,
+  SubagentParentLink,
   SubagentReservationAmounts,
 } from "effect-agent/subagent-contract";
 import {
@@ -74,6 +75,7 @@ import {
   SubmissionSettled,
   SubmissionSettledRecord,
   SubtreeBudgetReserved,
+  SubagentLineageRecorded,
   ThreadCreated,
   UserInputRecorded,
   WorkerInputRequested,
@@ -84,6 +86,7 @@ import {
   ToolCallUnknown,
   type CanonicalRecordPayload,
 } from "../../src/durable/Records.ts";
+import { subagentLineageRecordId, workerOriginRecordId } from "../../src/durable/RunJournal.ts";
 import {
   AbortIntent,
   AdmissionPolicyError,
@@ -111,7 +114,9 @@ class PrivateReportFailure extends Schema.TaggedError<PrivateReportFailure>()(
 import {
   AppendConflict,
   AppendResult,
+  FenceRejected,
   ThreadExport,
+  ThreadIdentity,
   ThreadNotMaterialized,
   ThreadTail,
   ThreadStore,
@@ -209,6 +214,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
     readonly maxStoredValueBytes?: number;
     readonly authorize?: (typeof WorkerHostAuthorizer.Service)["authorize"];
     readonly beforeRead?: (request: ThreadReadRequest) => Effect.Effect<void, ThreadStoreError>;
+    readonly afterIdentity?: (snapshot: ThreadIdentity) => Effect.Effect<void, ThreadStoreError>;
     readonly sourceRevisions?: ReadonlyArray<{
       readonly definition: Agent.AnyDefinition;
       readonly digests: DefinitionDigests;
@@ -220,7 +226,10 @@ const harness = Effect.fn("workerHostHarness")(function* (
 ) {
   const now = yield* Clock.currentTimeMillis;
   const logs = new Map<ThreadId, Array<CanonicalRecordEnvelope>>();
-  const reads = { exported: 0, paged: 0, worker: 0, exact: 0 };
+  const epochs = new Map<ThreadId, ProducerEpoch>();
+  const appendAttempts: Array<{ readonly threadId: ThreadId; readonly epoch: ProducerEpoch }> = [];
+  const rejectedAppends = { tail: 0, epoch: 0 };
+  const reads = { exported: 0, paged: 0, worker: 0, exact: 0, identity: 0 };
   const deliveries = new Map<string, MessageDeliveryRecord>();
   const submissions = new Map<SubmissionId, SubmissionSnapshot>();
   const settlements = new Map<SubmissionId, Settlement>();
@@ -257,6 +266,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
       }),
     );
     logs.set(threadId, records);
+    if (!epochs.has(threadId)) epochs.set(threadId, Schema.decodeSync(ProducerEpoch)(0));
   };
 
   push(sourceId, ThreadCreated.make({ agentId: sourceAgent.id, definitions }), "source-created");
@@ -348,6 +358,34 @@ const harness = Effect.fn("workerHostHarness")(function* (
         ),
     }),
     Effect.provideService(ThreadStore, {
+      readIdentity: ({ threadId }) =>
+        Effect.gen(function* () {
+          checkThread(threadId);
+          const records = logs.get(threadId);
+
+          if (records === undefined) return yield* ThreadNotMaterialized.make({ threadId });
+          reads.identity++;
+          const selected: Array<CanonicalRecordEnvelope> = [];
+
+          for (const entry of [
+            records[0],
+            records.find(({ record }) => record.recordId === workerOriginRecordId(threadId)),
+            records.find(({ record }) => record.recordId === subagentLineageRecordId(threadId)),
+          ])
+            if (entry !== undefined && !selected.includes(entry)) selected.push(entry);
+
+          const snapshot = ThreadIdentity.make({
+            threadId,
+            tailSequence: Schema.decodeSync(CanonicalSequence)(records.length),
+            tailDigest: digest,
+            producerEpoch: epochs.get(threadId)!,
+            records: selected,
+          });
+
+          yield* options.afterIdentity?.(snapshot) ?? Effect.void;
+
+          return snapshot;
+        }),
       read: (request) =>
         Stream.suspend(() => {
           checkThread(request.threadId);
@@ -437,7 +475,7 @@ const harness = Effect.fn("workerHostHarness")(function* (
                   threadId,
                   tailSequence: Schema.decodeSync(CanonicalSequence)(records.length),
                   tailDigest: digest,
-                  producerEpoch: Schema.decodeSync(ProducerEpoch)(0),
+                  producerEpoch: epochs.get(threadId)!,
                 }),
               );
         }),
@@ -447,12 +485,30 @@ const harness = Effect.fn("workerHostHarness")(function* (
           yield* Effect.yieldNow;
           const records = logs.get(request.threadId) ?? [];
 
-          if (records.length !== request.expectedTailSequence)
+          appendAttempts.push({ threadId: request.threadId, epoch: request.producerEpoch });
+          const currentEpoch = epochs.get(request.threadId)!;
+
+          if (currentEpoch !== request.producerEpoch) {
+            rejectedAppends.epoch++;
+
+            return yield* FenceRejected.make({
+              threadId: request.threadId,
+              attemptedEpoch: request.producerEpoch,
+              actualEpoch: currentEpoch,
+            });
+          }
+          if (
+            records.length !== request.expectedTailSequence ||
+            digest !== request.expectedTailDigest
+          ) {
+            rejectedAppends.tail++;
+
             return yield* AppendConflict.make({
               threadId: request.threadId,
               batchId: request.batch.batchId,
               reason: "tail",
             });
+          }
           const first = records.length + 1;
 
           for (const record of request.batch.records)
@@ -773,6 +829,9 @@ const harness = Effect.fn("workerHostHarness")(function* (
     host,
     deliveries,
     logs,
+    epochs,
+    appendAttempts,
+    rejectedAppends,
     submissions,
     auth,
     settle,
@@ -796,6 +855,119 @@ const harness = Effect.fn("workerHostHarness")(function* (
 });
 
 layer(NodeCrypto.layer)((it) => {
+  // Regression: https://github.com/danieljvdm/effect-agent/pull/621
+  for (const advance of ["tail", "epoch"] as const)
+    it.effect(`origin establishment retries a ${advance} advance after its identity snapshot`, () =>
+      Effect.gen(function* () {
+        let onIdentity: Effect.Effect<void, ThreadStoreError> = Effect.void;
+        const h = yield* harness({ afterIdentity: () => Effect.suspend(() => onIdentity) });
+        const started = yield* h.host.start(request(`origin-${advance}-takeover`));
+        const threadId = started.worker.threadId;
+
+        const origin = h.submissions.get(started.delivery.receipt!.submissionId)!.workerAdmission!
+          .origin;
+
+        h.logs.set(threadId, h.logs.get(threadId)!.slice(0, 1));
+        h.appendAttempts.length = 0;
+        const before = h.reads.identity;
+
+        onIdentity = Effect.sync(() => {
+          onIdentity = Effect.void;
+          if (advance === "epoch") h.epochs.set(threadId, Schema.decodeSync(ProducerEpoch)(1));
+          else
+            h.push(threadId, UserInputRecorded.make({ kind: "steering", input: "raced" }), "raced");
+        });
+        yield* h.runtime.ensureOrigin(origin);
+        expect(h.rejectedAppends[advance]).toBe(1);
+        expect(h.reads.identity - before).toBe(2);
+        expect(h.appendAttempts.map((attempt) => attempt.epoch)).toEqual(
+          advance === "epoch" ? [0, 1] : [0, 0],
+        );
+        expect(h.logs.get(threadId)!.map(({ record }) => record.payload._tag)).toEqual(
+          advance === "epoch"
+            ? ["ThreadCreated", "WorkerOriginRecorded"]
+            : ["ThreadCreated", "UserInputRecorded", "WorkerOriginRecorded"],
+        );
+      }),
+    );
+
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+  it.effect(
+    "origin establishment replays the same identity and refuses incompatible canonical ancestry",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        const started = yield* h.host.start(request("origin-identity"));
+        const threadId = started.worker.threadId;
+
+        const origin = h.submissions.get(started.delivery.receipt!.submissionId)!.workerAdmission!
+          .origin;
+
+        const history = [...h.logs.get(threadId)!];
+
+        yield* h.runtime.ensureOrigin(origin);
+        expect(h.logs.get(threadId)).toEqual(history);
+
+        const mismatch = yield* h.runtime
+          .ensureOrigin({
+            ...origin,
+            firstMessageId: Schema.decodeSync(IdempotencyKey)("different-origin"),
+          })
+          .pipe(Effect.flip);
+
+        expect(mismatch.reason).toBe("worker-mismatch");
+        expect(h.logs.get(threadId)).toEqual(history);
+
+        for (const incompatible of ["empty", "agent", "digests", "lineage"] as const) {
+          h.logs.set(threadId, []);
+          if (incompatible !== "empty")
+            h.push(
+              threadId,
+              ThreadCreated.make({
+                agentId: incompatible === "agent" ? sourceAgent.id : target.id,
+                definitions:
+                  incompatible === "digests"
+                    ? DefinitionDigests.make({
+                        ...definitions,
+                        agent: Schema.decodeSync(Digest)("b".repeat(64)),
+                      })
+                    : definitions,
+              }),
+              "child-created",
+            );
+          if (incompatible === "lineage")
+            h.push(
+              threadId,
+              SubagentLineageRecorded.make({
+                parentLink: SubagentParentLink.make({
+                  delegationId: origin.worker.delegationId,
+                  parentAgentId: sourceAgent.id,
+                  parentThreadId: sourceId,
+                  parentRunId: Schema.decodeSync(RunId)("parent-run"),
+                  parentToolCallId: Schema.decodeSync(ToolCallId)("parent-call"),
+                  depth: 1,
+                }),
+                parentSubmissionId: Schema.decodeSync(SubmissionId)("parent-submission"),
+                childDefinitionDigests: definitions,
+                childInputDigest: digest,
+                grantDigest: digest,
+                policy: origin.policy,
+                budget: origin.budget,
+                grant: origin.grant,
+              }),
+              subagentLineageRecordId(threadId),
+            );
+          const before = [...h.logs.get(threadId)!];
+          const refused = yield* h.runtime.ensureOrigin(origin).pipe(Effect.flip);
+
+          expect(refused.reason).toBe("worker-mismatch");
+          expect(h.logs.get(threadId)).toEqual(before);
+        }
+        h.logs.delete(threadId);
+        expect((yield* h.runtime.ensureOrigin(origin).pipe(Effect.flip)).reason).toBe("storage");
+      }),
+  );
+
   it.effect("refuses a first reservation whose embedded worker or first message differs", () =>
     Effect.gen(function* () {
       for (const mismatch of ["worker", "message"] as const) {

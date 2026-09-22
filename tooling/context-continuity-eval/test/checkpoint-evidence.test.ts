@@ -16,6 +16,7 @@ it.each(["unsupported", "missing", "rejected", "storage-failure"] as const)(
     });
 
     const store = ThreadStore.of({
+      readIdentity: () => Effect.die("Evidence must not read worker identity"),
       materialize: () => Effect.die("Evidence must not mutate"),
       append: () => Effect.die("Evidence must not mutate"),
       read: () => Stream.die("Cache observation must not replace canonical evidence capture"),

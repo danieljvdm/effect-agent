@@ -84,7 +84,6 @@ import {
   workerInputRecordId,
   agentUpdateRecordId,
   firstWorkerInputRecordId,
-  subagentLineageRecordId,
   workerOriginRecordId,
   workerReportRecordId,
 } from "../RunJournal.ts";
@@ -108,6 +107,7 @@ import {
 import type { SubmissionStatus } from "../SubmissionStatus.ts";
 import { PreparedInput } from "../Subscription.ts";
 import {
+  ThreadIdentityRequest,
   ThreadStore,
   getRecord,
   getRunInput,
@@ -493,18 +493,9 @@ export const makeWorkerRuntime = Effect.fn("WorkerHost.make")(function* (
     threadId: ThreadId,
     operation: WorkerError["operation"],
   ) {
-    const tail = yield* deps.store
-      .inspectTail(ThreadTailRequest.make({ threadId }))
+    return yield* deps.store
+      .readIdentity(ThreadIdentityRequest.make({ threadId }))
       .pipe(Effect.mapError(storageFailure(operation)));
-
-    const first = yield* deps.store
-      .read(ThreadRead.make({ threadId, limit: 1 }))
-      .pipe(Stream.runCollect, Effect.mapError(storageFailure(operation)));
-
-    const worker = yield* exactRecord(threadId, workerOriginRecordId(threadId), operation);
-    const attached = yield* exactRecord(threadId, subagentLineageRecordId(threadId), operation);
-
-    return { ...tail, records: [...first, ...Option.toArray(worker), ...Option.toArray(attached)] };
   });
 
   const readWorkerState = Effect.fn("WorkerHost.readWorkerState")(function* (

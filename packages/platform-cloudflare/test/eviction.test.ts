@@ -1,7 +1,12 @@
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
 import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/do-storage-error";
 import { layer as doThreadStoreLayer } from "@effect-agent/storage-cloudflare/do-thread-store";
-import { StoreExportCall, encodePortRequest } from "@effect-agent/storage-cloudflare/port-protocol";
+import {
+  StoreExportCall,
+  StoreReadIdentityCall,
+  decodePortResponse,
+  encodePortRequest,
+} from "@effect-agent/storage-cloudflare/port-protocol";
 import { runInDurableObject } from "cloudflare:test";
 import { DateTime, Effect } from "effect";
 import { type Receipt } from "effect-agent/durable-agent-runtime";
@@ -15,6 +20,7 @@ import {
 import {
   ThreadCheckpoint,
   ThreadExportRequest,
+  ThreadIdentityRequest,
   ThreadTailRequest,
   ThreadStore,
   SaveCheckpointRequest,
@@ -1114,6 +1120,46 @@ describe("DC eviction matrix — joined input and lease renewal", () => {
 // ---------------------------------------------------------------------------
 
 describe("DC eviction matrix — checkpoints and export", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+  it("guards read-only identity requests without arming maintenance", async () => {
+    const owner = lane("identity-read");
+
+    const readIdentity = async (address: string) => {
+      const request = await Effect.runPromise(
+        encodePortRequest(
+          StoreReadIdentityCall.make({
+            request: ThreadIdentityRequest.make({ threadId: decodeThreadId(address) }),
+          }),
+        ),
+      );
+
+      const response = await runInDurableObject(stubFor(owner), (instance) =>
+        instance.portCall(request),
+      );
+
+      return Effect.runPromise(decodePortResponse(response));
+    };
+
+    // Let the constructor's bootstrap maintenance finish before observing this read.
+    await drainAlarmsUntil(owner, async () => (await scheduledAlarm(owner)) === null, {
+      rounds: 10,
+    });
+    expect(await scheduledAlarm(owner)).toBeNull();
+    expect(await readIdentity(owner)).toMatchObject({
+      _tag: "PortFailed",
+      failure: { _tag: "ThreadNotMaterialized", threadId: owner },
+    });
+    expect(await scheduledAlarm(owner)).toBeNull();
+    expect(await readIdentity(`${owner}-foreign`)).toMatchObject({
+      _tag: "PortFailed",
+      failure: {
+        _tag: "PortProtocolError",
+        message: "The port request is not for the addressed Thread",
+      },
+    });
+    expect(await scheduledAlarm(owner)).toBeNull();
+  });
+
   const settledLane = async (): Promise<string> => {
     const thread = lane("derivative");
 

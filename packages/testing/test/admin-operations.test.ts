@@ -509,6 +509,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const store = yield* ThreadStore;
 
       const withoutCheckpoints = ThreadStore.of({
+        readIdentity: store.readIdentity,
         materialize: store.materialize,
         append: store.append,
         read: store.read,

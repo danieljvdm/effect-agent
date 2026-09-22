@@ -40,6 +40,7 @@ import {
   SubtreeBudgetReserved,
   PeerMessagePrepared,
 } from "./Records.ts";
+import { subagentLineageRecordId, workerOriginRecordId } from "./RunJournal.ts";
 import {
   type AppendResult,
   AppendConflict,
@@ -47,6 +48,7 @@ import {
   ThreadCheckpoint,
   ThreadExportRequest,
   ThreadMaterialization,
+  ThreadIdentityRequest,
   ThreadNotMaterialized,
   ThreadObservation,
   ThreadRead,
@@ -641,10 +643,19 @@ const tailInspection = conformanceCase(
           empty.producerEpoch === EPOCH_ONE,
         "An empty Thread must report the zero tail and its registered epoch",
       );
+      const emptyIdentity = yield* store.readIdentity(ThreadIdentityRequest.make({ threadId }));
+
+      yield* ensure(
+        emptyIdentity.tailSequence === ZERO_SEQUENCE &&
+          emptyIdentity.tailDigest === EMPTY_TAIL_DIGEST &&
+          emptyIdentity.producerEpoch === EPOCH_ONE &&
+          emptyIdentity.records.length === 0,
+        "A materialized empty identity remains distinct from a missing Thread",
+      );
 
       const first = yield* append(
         threadId,
-        batch("inspect-batch-1", [record("inspect-record-1", "first")]),
+        batch("inspect-batch-1", [record(workerOriginRecordId(threadId), "first")]),
       );
 
       const afterAppend = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
@@ -653,6 +664,18 @@ const tailInspection = conformanceCase(
         afterAppend.tailSequence === first.lastSequence &&
           afterAppend.tailDigest === first.tailDigest,
         "Tail inspection must match the latest AppendResult",
+      );
+      // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+      const identity = yield* store.readIdentity(ThreadIdentityRequest.make({ threadId }));
+
+      yield* ensure(
+        identity.threadId === threadId &&
+          identity.tailSequence === first.lastSequence &&
+          identity.tailDigest === first.tailDigest &&
+          identity.producerEpoch === EPOCH_ONE &&
+          identity.records.length === 1 &&
+          identity.records[0]?.record.recordId === workerOriginRecordId(threadId),
+        "Identity captures the canonical tail and deduplicates a first record at the origin locator",
       );
 
       const resumed = yield* append(
@@ -667,6 +690,22 @@ const tailInspection = conformanceCase(
         "An append composed from the inspected tail must commit without exporting the log",
       );
 
+      const staleIdentity = yield* expectFailure(
+        "appending from an identity snapshot after a tail advance",
+        append(
+          threadId,
+          batch("inspect-stale-identity", [record("inspect-record-3", "third")]),
+          { lastSequence: identity.tailSequence, tailDigest: identity.tailDigest },
+          identity.producerEpoch,
+        ),
+      );
+
+      yield* ensure(
+        isAppendConflict(staleIdentity) && staleIdentity.reason === "tail",
+        "Identity reads do not bypass the canonical append tail fence",
+      );
+      const beforeTakeover = yield* store.readIdentity(ThreadIdentityRequest.make({ threadId }));
+
       yield* materialize(threadId, EPOCH_TWO);
       const afterTakeover = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
 
@@ -674,6 +713,43 @@ const tailInspection = conformanceCase(
         afterTakeover.producerEpoch === EPOCH_TWO &&
           afterTakeover.tailSequence === resumed.lastSequence,
         "Tail inspection must reflect epoch takeover without disturbing the tail",
+      );
+
+      const fencedIdentity = yield* expectFailure(
+        "appending from an identity snapshot after an epoch-only takeover",
+        append(
+          threadId,
+          batch("inspect-stale-epoch", [record("inspect-record-3", "third")]),
+          { lastSequence: beforeTakeover.tailSequence, tailDigest: beforeTakeover.tailDigest },
+          beforeTakeover.producerEpoch,
+        ),
+      );
+
+      yield* ensure(
+        isFenceRejected(fencedIdentity),
+        "An epoch-only takeover rejects the identity snapshot's captured producer fence",
+      );
+
+      const afterTakeoverIdentity = yield* store.readIdentity(
+        ThreadIdentityRequest.make({ threadId }),
+      );
+
+      const retried = yield* append(
+        threadId,
+        batch("inspect-retry-identity", [record("inspect-record-3", "third")]),
+        {
+          lastSequence: afterTakeoverIdentity.tailSequence,
+          tailDigest: afterTakeoverIdentity.tailDigest,
+        },
+        afterTakeoverIdentity.producerEpoch,
+      );
+
+      yield* ensure(
+        afterTakeoverIdentity.producerEpoch === EPOCH_TWO &&
+          afterTakeoverIdentity.tailSequence === resumed.lastSequence &&
+          afterTakeoverIdentity.records.length === 1 &&
+          retried.lastSequence === resumed.lastSequence + 1,
+        "Rereading identity after takeover retains the bounded facts and permits the current producer",
       );
     }),
 );
@@ -704,6 +780,10 @@ const notMaterializedOperations = conformanceCase(
         yield* expectFailure(
           "inspecting the tail of an unmaterialized Thread",
           store.inspectTail(ThreadTailRequest.make({ threadId })),
+        ),
+        yield* expectFailure(
+          "reading the identity of an unmaterialized Thread",
+          store.readIdentity(ThreadIdentityRequest.make({ threadId })),
         ),
       ];
 
@@ -1040,6 +1120,14 @@ const nativeWorkerAccounting = conformanceCase(
           Option.isSome(yield* getRecord({ threadId, recordId: decodeRecordId("requested") })),
         "Proven completion retires the input while retaining its canonical reservation",
       );
+      // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+      // Payloads do not select identity: the exact lineage locator precedes the
+      // exact origin locator in the log, while replies retain first/origin/lineage order.
+      tail = yield* append(
+        threadId,
+        batch("identity-lineage", [record(subagentLineageRecordId(threadId), "lineage")]),
+        tail,
+      );
       // Cross the recovery horizon with irrelevant conversation records. Native worker
       // accounting must return the same families and scope, while capturing the full CAS tail.
       for (let base = 0; base < 4097; base += 256) {
@@ -1060,6 +1148,30 @@ const nativeWorkerAccounting = conformanceCase(
           tail,
         );
       }
+      tail = yield* append(
+        threadId,
+        batch("identity-origin", [record(workerOriginRecordId(threadId), "origin")]),
+        tail,
+      );
+      const identity = yield* store.readIdentity(ThreadIdentityRequest.make({ threadId }));
+
+      yield* ensure(
+        identity.threadId === threadId &&
+          identity.tailSequence === tail.lastSequence &&
+          identity.tailDigest === tail.tailDigest &&
+          identity.producerEpoch === EPOCH_ONE &&
+          identity.records.length === 3 &&
+          identity.records.map(({ record }) => record.recordId).join() ===
+            [
+              "requested",
+              workerOriginRecordId(threadId),
+              subagentLineageRecordId(threadId),
+            ].join() &&
+          identity.records.every(
+            (entry) => entry.threadId === threadId && entry.sequence <= identity.tailSequence,
+          ),
+        "Identity selects the exact canonical locators in semantic order beyond the recovery horizon",
+      );
 
       const budgetRow = (id: string, sourceSubmissionId: SubmissionId) =>
         envelope(

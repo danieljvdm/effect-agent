@@ -5,6 +5,7 @@ import {
   storageConfigLayer,
   layer as storeLayer,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
+import { PortResponse } from "@effect-agent/storage-cloudflare/port-protocol";
 import {
   ThreadPortTransport,
   PortTransportError,
@@ -55,6 +56,7 @@ import { makeMessageDeliveryFixture } from "effect-agent/testing/message-deliver
 import {
   AppendConflict,
   ThreadExportRequest,
+  ThreadIdentityRequest,
   ThreadMaterialization,
   ThreadNotMaterialized,
   ThreadObservation,
@@ -107,6 +109,7 @@ const isThreadStoreError = Schema.is(ThreadStoreError);
 interface TransportControl {
   calls: number;
   fault: string | undefined;
+  transformResponse?: (response: unknown) => unknown;
 }
 
 const control = (): TransportControl => ({ calls: 0, fault: undefined });
@@ -135,7 +138,7 @@ const transportLayer = (state: TransportControl) =>
         return Effect.tryPromise({
           try: () => threadStub(threadId).portCall(request),
           catch: (cause) => portTransportFailure(threadId, cause),
-        });
+        }).pipe(Effect.map((response) => state.transformResponse?.(response) ?? response));
       }),
   });
 
@@ -189,6 +192,7 @@ const withRoutedPorts = <A, E>(
                       observe: store.observe,
                       export: store.export,
                       inspectTail: store.inspectTail,
+                      readIdentity: store.readIdentity,
                     },
               ),
               Layer.provide(
@@ -227,6 +231,117 @@ const claimedLocalLane = Effect.fn("RoutingTest.claimedLocalLane")(function* (
 });
 
 describe("cross-DO port routing", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+  it("reads one foreign identity snapshot in one owner call", () => {
+    const state = control();
+
+    return withRoutedPorts(
+      "identity-reader",
+      state,
+      Effect.gen(function* () {
+        const store = yield* ThreadStore;
+        const threadId = thread("identity-owner");
+        const firstRecord = inputRecord("identity-first", "first canonical fact");
+
+        yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }));
+
+        const appended = yield* store.append(
+          FencedAppendRequest.make({
+            threadId,
+            producerEpoch: epoch(1),
+            expectedTailSequence: sequence(0),
+            expectedTailDigest: EMPTY_TAIL_DIGEST,
+            batch: batch("identity-records", [firstRecord, inputRecord("identity-later", "later")]),
+          }),
+        );
+
+        const before = state.calls;
+        const identity = yield* store.readIdentity(ThreadIdentityRequest.make({ threadId }));
+
+        expect(identity).toMatchObject({
+          threadId,
+          producerEpoch: 1,
+          tailSequence: 2,
+          tailDigest: appended.tailDigest,
+          records: [{ threadId, sequence: 1, record: firstRecord }],
+        });
+        expect(state.calls - before).toBe(1);
+      }),
+    );
+  });
+
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
+  it("preserves identity absence and rejects invalid owner replies typed", () => {
+    const state = control();
+
+    return withRoutedPorts(
+      "identity-failure-reader",
+      state,
+      Effect.gen(function* () {
+        const store = yield* ThreadStore;
+        const threadId = thread("identity-failure-owner");
+        const request = ThreadIdentityRequest.make({ threadId });
+
+        expect(yield* store.readIdentity(request).pipe(Effect.flip)).toMatchObject({
+          _tag: "ThreadNotMaterialized",
+          threadId,
+        });
+        yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch: epoch(3) }));
+        const empty = yield* store.readIdentity(request);
+
+        expect(empty).toMatchObject({
+          threadId,
+          tailSequence: 0,
+          tailDigest: EMPTY_TAIL_DIGEST,
+          producerEpoch: 3,
+          records: [],
+        });
+
+        const invalidReplies = [
+          { _tag: "StoreMaterializeResult" },
+          { _tag: "StoreReadIdentityResult", identity: { ...empty, threadId: "another-owner" } },
+          { _tag: "StoreReadIdentityResult", identity: { ...empty, tailSequence: 1 } },
+        ];
+
+        for (const result of invalidReplies) {
+          state.transformResponse = (response) => {
+            expect(Schema.decodeUnknownSync(PortResponse)(response)._tag).toBe("PortSucceeded");
+
+            return { _tag: "PortSucceeded", result };
+          };
+          expect(yield* store.readIdentity(request).pipe(Effect.flip)).toBeInstanceOf(
+            ThreadStoreError,
+          );
+        }
+        delete state.transformResponse;
+        state.fault = "owner unavailable";
+        const unavailable = yield* store.readIdentity(request).pipe(Effect.flip);
+
+        expect(unavailable).toBeInstanceOf(ThreadStoreError);
+        if (isThreadStoreError(unavailable)) {
+          expect(unavailable.cause).toBeInstanceOf(PortTransportError);
+        }
+        state.fault = undefined;
+
+        const local = thread("identity-failure-reader");
+
+        yield* store.materialize(
+          ThreadMaterialization.make({ threadId: local, producerEpoch: epoch(2) }),
+        );
+        const beforeLocal = state.calls;
+
+        expect(
+          yield* store.readIdentity(ThreadIdentityRequest.make({ threadId: local })),
+        ).toMatchObject({
+          threadId: local,
+          producerEpoch: 2,
+          records: [],
+        });
+        expect(state.calls).toBe(beforeLocal);
+      }),
+    );
+  });
+
   it("routes current retained obligations to their source owner before materialization", async () => {
     const state = control();
     const owner = "wp2-pending-owner";
