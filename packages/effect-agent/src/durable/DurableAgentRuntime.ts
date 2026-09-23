@@ -8651,11 +8651,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       }
     }).pipe(withThreadHeadSpan);
 
-  const eligibleThreadHead = (threadId: ThreadId, afterQueueSequence = 0) =>
+  const eligibleThreadHead = (threadId: ThreadId, afterQueueSequence?: number) =>
     Stream.runHead(
       ledger.scanNonterminal.pipe(
         Stream.filter(
-          (entry) => entry.threadId === threadId && entry.queueSequence > afterQueueSequence,
+          (entry) =>
+            entry.threadId === threadId &&
+            (afterQueueSequence === undefined || entry.queueSequence > afterQueueSequence),
         ),
         Stream.filterEffect((entry) =>
           entry.state !== "unknown"
