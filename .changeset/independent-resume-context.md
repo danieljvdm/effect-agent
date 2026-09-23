@@ -2,4 +2,4 @@
 "effect-agent": patch
 ---
 
-Keep later independent Runs out of an earlier Run's resumed model context, including their context compactions. Preserve complete Thread history for new Runs and history readers.
+Resume each Run with its original input and its own continuation, preserving late results for prior calls. Keep other interleaved exchanges visible in Thread history when compacting a Run's context.

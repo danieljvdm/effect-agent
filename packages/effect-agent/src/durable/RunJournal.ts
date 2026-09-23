@@ -555,8 +555,9 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
  * are never canonical settlements or evidence for compaction, recovery or accounting. Real
  * results replace them at the original declaration, including results appended after another Run.
  * Prior user intent and assistant text remain visible; prior system instructions do not.
- * Independently admitted later Runs never enter an earlier Run's prompt or compact its context.
- * A projection without an owner still includes the complete Thread history.
+ * Each Run retains the history preceding its start and its own continuation. Other Runs'
+ * subsequent Turns cannot replace its input. Compaction covers only its creator's Run view;
+ * a projection without an owner retains interleaved exchanges from the complete Thread history.
  */
 /** @internal Lightweight canonical boundaries collected without retaining record payloads. */
 export interface JournalBoundary {
@@ -638,18 +639,40 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     settledById,
   } = metadata;
 
-  const ownerFirstSequence =
-    (ownerRunId === undefined ? undefined : firstSequenceByRun.get(ownerRunId)) ??
-    Number.POSITIVE_INFINITY;
+  const declarationByResultSequence = new Map(settledSpans.map(({ from, to }) => [to, from]));
 
-  const isLaterRun = (runId: RunId | undefined): boolean =>
-    runId !== undefined && (firstSequenceByRun.get(runId) ?? 0) > ownerFirstSequence;
+  const isInRunView = (
+    sequence: number,
+    payload: { readonly _tag: string; readonly runId?: RunId | undefined },
+    runId: RunId | undefined,
+  ): boolean => {
+    if (runId === undefined || payload.runId === undefined || payload.runId === runId) return true;
+    const first = firstSequenceByRun.get(runId) ?? Number.POSITIVE_INFINITY;
 
-  const compactions = metadata.compactions.filter(({ payload }) => !isLaterRun(payload.runId));
+    return (
+      sequence < first ||
+      (payload._tag === "ToolCallSettled" &&
+        (declarationByResultSequence.get(sequence) ?? Number.POSITIVE_INFINITY) < first)
+    );
+  };
+
+  const compactions = metadata.compactions.filter(({ sequence, payload }) =>
+    isInRunView(sequence, payload, ownerRunId),
+  );
 
   const recordsForRun = records.pipe(
-    Stream.filter(({ record: { payload } }) => !("runId" in payload) || !isLaterRun(payload.runId)),
+    Stream.filter(({ sequence, record: { payload } }) =>
+      isInRunView(sequence, payload, ownerRunId),
+    ),
   );
+
+  const isCovered = (
+    envelope: CanonicalRecordEnvelope,
+    compaction: CompactionCreated | undefined,
+  ): boolean =>
+    compaction !== undefined &&
+    envelope.sequence <= compaction.coversThrough &&
+    isInRunView(envelope.sequence, envelope.record.payload, compaction.runId);
 
   const settledCoverage = compactions.reduce(
     (through, { payload }) =>
@@ -741,12 +764,22 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       incompleteResponseSequences.some(
         (response) =>
           response.sequence <= coversThrough &&
+          isInRunView(
+            response.sequence,
+            { _tag: "ModelResponseRecorded", runId: response.runId },
+            runId,
+          ) &&
           !isTerminalPriorRun(response.runId, runId, ownSequence),
       )
     )
       return false;
     for (const span of settledSpans) {
-      if (span.from <= coversThrough && coversThrough < span.to) return false;
+      if (
+        span.from <= coversThrough &&
+        coversThrough < span.to &&
+        isInRunView(span.from, { _tag: "ModelResponseRecorded", runId: span.runId }, runId)
+      )
+        return false;
     }
 
     return true;
@@ -756,6 +789,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
   let replacement: CompactionCreated | undefined;
   let summarizeSequence = -1;
   let clearBound = 0;
+  let clearing: CompactionCreated | undefined;
   let latestWindowId: string | undefined = seed?.contextWindowId;
   let latestWindowSequence = seed?.throughSequence ?? -1;
   let rolloverCoveredThrough = 0;
@@ -780,6 +814,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       }
     } else if (payload.coversThrough > clearBound) {
       clearBound = payload.coversThrough;
+      clearing = payload;
     }
   }
   let summaryEmitted = false;
@@ -1034,8 +1069,8 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         (payload._tag === "ModelResponseRecorded" || payload._tag === "ToolCallSettled")
       )
         return;
-      if (envelope.sequence <= summarizeBound) {
-        // Projecting an earlier Run after a later summary still accounts for its covered responses.
+      if (isCovered(envelope, replacement)) {
+        // Retiring Prompt payloads does not retire the owning Run's policy or usage accounting.
         if (payload._tag === "ModelResponseRecorded" && payload.runId === ownerRunId) {
           const messages = yield* decodePromptMessages(payload.messages);
 
@@ -1046,7 +1081,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
           onBoundary?.({
             sequence: envelope.sequence,
             tag: payload._tag,
-            promptLength: replacementLength,
+            promptLength: Math.max(replacementLength, state.all.length),
             ...(isTerminalPriorRun(payload.runId, ownerRunId, Number.POSITIVE_INFINITY)
               ? { terminalPriorRun: true }
               : {}),
@@ -1073,7 +1108,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
           slot.parts[slot.partIndex] = Prompt.makePart("tool-result", {
             id: payload.toolCallId,
             name: payload.toolName,
-            result: envelope.sequence <= clearBound ? CLEARED_TOOL_RESULT : payload.result,
+            result: isCovered(envelope, clearing) ? CLEARED_TOOL_RESULT : payload.result,
             isFailure: payload.isFailure,
             providerExecuted: false,
           });
@@ -1100,7 +1135,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
         ) {
           state = yield* flushTools(state);
         }
-        state.pendingTools.push({ record: payload, cleared: envelope.sequence <= clearBound });
+        state.pendingTools.push({ record: payload, cleared: isCovered(envelope, clearing) });
         state = {
           ...state,
           pendingToolsForRun: payload.runId === ownerRunId,
