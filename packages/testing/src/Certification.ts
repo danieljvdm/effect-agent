@@ -194,6 +194,11 @@ export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLoc
   "tools:before-unavailable-append",
   "tools:after-unavailable-append",
   "subagent:after-child-abort-intent",
+  // Ephemeral helper reservations and usage are covered by durable-subagents.test.ts.
+  "subagent:before-ephemeral-reserve",
+  "subagent:after-ephemeral-reserve",
+  "subagent:before-ephemeral-usage",
+  "subagent:after-ephemeral-usage",
   // Background workers use retained delivery, source capacity, and child-origin paths absent
   // from these six attached/ordinary scenarios. The before/after creation and completion
   // boundaries are exercised by packages/effect-agent/test/durable/worker-host.test.ts.

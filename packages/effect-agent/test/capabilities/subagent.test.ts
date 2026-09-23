@@ -2634,6 +2634,15 @@ const typedDelegation = Subagent.make("typed", {
   policy: researchPolicy,
 });
 
+const typedEphemeralDelegation = Subagent.make("typed", {
+  ...typedDelegation,
+  execution: "ephemeral",
+});
+
+const typedEphemeralLayer = Subagent.layer(typedEphemeralDelegation, typedModel, {
+  mapChildFailure: (failure) => ResearchDelegationFailed.make({ childErrorTag: failure._tag }),
+});
+
 const typedLayer = Subagent.layer(typedDelegation, typedModel, {
   mapChildFailure: (failure) => ResearchDelegationFailed.make({ childErrorTag: failure._tag }),
 });
@@ -2796,6 +2805,18 @@ type PartialMappingRejectedProof = Assert<
 
 describe("Subagent type proofs", () => {
   it("keeps per-call and construction requirements distinct", () => {
+    const ephemeralRequirements: Assert<
+      Equal<LayerContext<typeof typedEphemeralLayer>, LayerContext<typeof typedLayer>>
+    > = true;
+
+    const ephemeralErrors: Assert<
+      Equal<Tool.HandlerError<typeof typedEphemeralDelegation.tool>, TypedHandlerError>
+    > = true;
+
+    const ephemeralHandlerRequirements: Assert<
+      Equal<Tool.HandlerServices<typeof typedEphemeralDelegation.tool>, TypedHandlerServices>
+    > = true;
+
     const toolProof: ToolProof = true;
     const handlerErrorProof: HandlerErrorProof = true;
     const handlerSpawnerProof: HandlerSpawnerProof = true;
@@ -2827,6 +2848,9 @@ describe("Subagent type proofs", () => {
 
     expect([
       toolProof,
+      ephemeralRequirements,
+      ephemeralErrors,
+      ephemeralHandlerRequirements,
       handlerErrorProof,
       handlerSpawnerProof,
       handlerSinkProof,
@@ -3963,8 +3987,13 @@ layer(TestServices)("Subagent usage accounting", (it) => {
       });
     }),
   );
-  for (const ending of ["defect", "timeout", "interrupt"] as const) {
-    it.effect(`retains child spend and closes resources after ${ending}`, () =>
+  for (const { ending, durable } of [
+    { ending: "defect", durable: false },
+    { ending: "timeout", durable: false },
+    { ending: "interrupt", durable: false },
+    { ending: "timeout", durable: true },
+  ] as const) {
+    it.effect(`retains child spend and closes resources after ${ending} (durable=${durable})`, () =>
       Effect.gen(function* () {
         const ready = yield* Deferred.make<void>();
         const finalized = yield* Ref.make(false);
@@ -3986,6 +4015,7 @@ layer(TestServices)("Subagent usage accounting", (it) => {
         });
 
         const delegation = Subagent.define("delegate_research", {
+          ...(durable ? ({ execution: "ephemeral" } as const) : {}),
           description: "Research",
           target,
           parameters: ResearchParams,
@@ -4045,10 +4075,30 @@ layer(TestServices)("Subagent usage accounting", (it) => {
           child: { estimateCostMicrousd: () => Effect.succeed(17) },
         }).pipe(Layer.provide(progressTools.toLayer({ progress: () => Effect.succeed("done") })));
 
-        const handle = yield* AgentRuntime.start(parent(), { mission: "review" }).pipe(
-          Effect.provide(childLayer),
-          Scope.provide(scope),
-        );
+        const ids = yield* IdGenerator;
+        const parentBinding = parent();
+
+        const handle = yield* AgentRuntime.start(
+          {
+            ...parentBinding,
+            definition: { ...parentBinding.definition, toolkit: Toolkit.make(delegation.tool) },
+          },
+          { mission: "review" },
+          durable
+            ? {
+                subagent: {
+                  establish: () =>
+                    Effect.die("Ephemeral helpers must not establish durable children"),
+                  join: () => Effect.void,
+                  ephemeral: {
+                    ids,
+                    reserve: () => Effect.succeed(undefined),
+                    finish: (_runId, report) => Effect.sync(() => expect(report).toBeUndefined()),
+                  },
+                },
+              }
+            : {},
+        ).pipe(Effect.provide(childLayer), Scope.provide(scope));
 
         yield* Deferred.await(ready);
         if (ending === "interrupt") yield* Scope.close(scope, Exit.void);
@@ -4069,6 +4119,7 @@ layer(TestServices)("Subagent usage accounting", (it) => {
           outputTokens: 3,
           costMicrousd: 17,
         });
+        if (durable) expect(report.delegatedUsage.usageStatus).toBe("partial");
         if (ending !== "interrupt") {
           const events = yield* handle.events;
 

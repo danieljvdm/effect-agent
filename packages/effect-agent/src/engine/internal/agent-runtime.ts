@@ -99,6 +99,7 @@ import {
   type SubagentGrant,
   type SubagentBudgetReservation,
   SubagentParentLink,
+  SubagentExecutionFailure,
 } from "../../core/SubagentContract.ts";
 import type { Selection } from "../../core/ToolExposure.ts";
 import { AdditionalToolCatalog, DiscoveryTool, Snapshot } from "../../core/ToolExposure.ts";
@@ -8460,6 +8461,12 @@ function streamWithCompletion<
                 context.liveChildren.add(childRunId);
                 context.childUsage.set(childRunId, read);
               },
+              options.subagent === undefined
+                ? undefined
+                : makeSubagentDurabilityService(
+                    options.subagent,
+                    yield* Effect.context<HookRequirements>(),
+                  ),
             ),
           ).pipe(
             Context.add(ContextWindow, {
@@ -9988,8 +9995,14 @@ export class AgentChildPending extends Schema.TaggedError<AgentChildPending>()(
 export class SubagentDurabilityError extends Schema.TaggedError<SubagentDurabilityError>()(
   "SubagentDurabilityError",
   {
-    operation: Schema.Literals(["establish", "join", "waiting"]),
-    reason: Schema.Literals(["hook-failed", "no-active-tool-batch"]),
+    operation: Schema.Literals([
+      "establish",
+      "join",
+      "waiting",
+      "reserve-ephemeral",
+      "record-usage",
+    ]),
+    reason: Schema.Literals(["hook-failed", "no-active-tool-batch", "unsupported"]),
     message: Schema.String.check(Schema.isMaxLength(4_096)),
     toolCallId: Schema.optionalKey(ToolCallId),
     /** Diagnostic cause for the live Effect only; Run events retain the fixed public message. */
@@ -10013,6 +10026,7 @@ export interface SubagentDurabilityEphemeral {
  */
 export interface SubagentDurabilityDurable {
   readonly mode: "durable";
+  readonly ephemeral?: RunSubagentHook<SubagentDurabilityError>["ephemeral"];
   /** Idempotent durable child establishment under the parent ownership fence. */
   readonly establish: (
     request: RunSubagentEstablishRequest,
@@ -10091,44 +10105,78 @@ const closedSubagentDurability: SubagentDurabilityService = {
 const makeSubagentDurabilityService = <HookError, HookRequirements>(
   hook: RunSubagentHook<HookError, HookRequirements>,
   hookServices: Context.Context<HookRequirements>,
-): SubagentDurabilityService => ({
-  mode: "durable",
-  establish: (request) =>
-    provideHookServices(hook.establish(request), hookServices).pipe(
-      Effect.mapError((cause) =>
-        SubagentDurabilityError.make({
-          operation: "establish",
-          reason: "hook-failed",
-          toolCallId: request.toolCallId,
-          message: "Durable child establishment failed",
-          cause,
+): SubagentDurabilityDurable => {
+  const ephemeral = hook.ephemeral;
+
+  return {
+    mode: "durable",
+    ...(ephemeral === undefined
+      ? {}
+      : {
+          ephemeral: {
+            ids: ephemeral.ids,
+            reserve: (request) =>
+              provideHookServices(ephemeral.reserve(request), hookServices).pipe(
+                Effect.mapError((cause) =>
+                  SubagentDurabilityError.make({
+                    operation: "reserve-ephemeral",
+                    reason: "hook-failed",
+                    toolCallId: request.toolCallId,
+                    message: "Ephemeral child reservation failed",
+                    cause,
+                  }),
+                ),
+              ),
+            finish: (childRunId, report) =>
+              provideHookServices(ephemeral.finish(childRunId, report), hookServices).pipe(
+                Effect.mapError((cause) =>
+                  SubagentDurabilityError.make({
+                    operation: "record-usage",
+                    reason: "hook-failed",
+                    message: "Ephemeral child usage recording failed",
+                    cause,
+                  }),
+                ),
+              ),
+          },
+        }),
+    establish: (request) =>
+      provideHookServices(hook.establish(request), hookServices).pipe(
+        Effect.mapError((cause) =>
+          SubagentDurabilityError.make({
+            operation: "establish",
+            reason: "hook-failed",
+            toolCallId: request.toolCallId,
+            message: "Durable child establishment failed",
+            cause,
+          }),
+        ),
+      ),
+    join: (request) =>
+      provideHookServices(hook.join(request), hookServices).pipe(
+        Effect.mapError((cause) =>
+          SubagentDurabilityError.make({
+            operation: "join",
+            reason: "hook-failed",
+            toolCallId: request.toolCallId,
+            message: "Durable child join failed",
+            cause,
+          }),
+        ),
+      ),
+    waiting: (toolCallId, child) =>
+      Effect.fail(
+        ToolCallWaiting.make({
+          toolCallId,
+          childThreadId: child.childThreadId,
+          childSubmissionId: child.childSubmissionId,
+          childRunId: child.childRunId,
+          receiptId: child.receiptId,
+          message: `Tool Call ${toolCallId} is waiting on durable attached child ${child.childSubmissionId}`,
         }),
       ),
-    ),
-  join: (request) =>
-    provideHookServices(hook.join(request), hookServices).pipe(
-      Effect.mapError((cause) =>
-        SubagentDurabilityError.make({
-          operation: "join",
-          reason: "hook-failed",
-          toolCallId: request.toolCallId,
-          message: "Durable child join failed",
-          cause,
-        }),
-      ),
-    ),
-  waiting: (toolCallId, child) =>
-    Effect.fail(
-      ToolCallWaiting.make({
-        toolCallId,
-        childThreadId: child.childThreadId,
-        childSubmissionId: child.childSubmissionId,
-        childRunId: child.childRunId,
-        receiptId: child.receiptId,
-        message: `Tool Call ${toolCallId} is waiting on durable attached child ${child.childSubmissionId}`,
-      }),
-    ),
-});
+  };
+};
 
 /**
  * Extract the waiting suspension signal from a handler cause. It normally
@@ -10151,6 +10199,8 @@ const waitingFromCause = (cause: Cause.Cause<unknown>): ToolCallWaiting | undefi
 export interface SpawnDelegation {
   readonly delegationId: DelegationId;
   readonly parentToolCallId: ToolCallId;
+  /** Charge scoped execution to the durable parent before starting, when hosted durably. */
+  readonly execution?: "ephemeral";
 }
 
 /**
@@ -10193,6 +10243,7 @@ const spawnWithParent = (
   history: ThreadHistory["Service"],
   preparation: RunContextPreparation["Service"],
   onChild: (runId: RunId, read: Effect.Effect<RunUsageReport>) => void,
+  durability?: SubagentDurabilityDurable,
 ) =>
   Effect.fn("AgentSpawner.spawn")(function* <
     InputSchema extends Schema.Top,
@@ -10235,14 +10286,18 @@ const spawnWithParent = (
       Agent.Output<typeof binding>,
       AgentRuntimeFailure<typeof binding, HookError, InstructionError>
     >,
-    never,
+    SubagentDurabilityError | SubagentExecutionFailure,
     | Scope.Scope
     | Exclude<
         AgentRuntimeRequirements<typeof binding, HookRequirements, InstructionRequirements>,
         ThreadHistory | RunContextPreparation
       >
   > {
-    const ids = yield* IdGenerator;
+    const ids =
+      delegation.execution === "ephemeral" && durability?.ephemeral !== undefined
+        ? durability.ephemeral.ids
+        : yield* IdGenerator;
+
     const threadId = yield* ids.nextThreadId;
     const runId = yield* ids.nextRunId;
     // `depth + 1` is always an integer >= 1, so a decode failure is a defect.
@@ -10257,6 +10312,53 @@ const spawnWithParent = (
       depth: childDepth,
     });
 
+    if (delegation.execution === "ephemeral" && durability !== undefined) {
+      const hook = durability.ephemeral;
+
+      if (
+        hook === undefined ||
+        options?.subagentBudget === undefined ||
+        options.subagentGrant === undefined
+      ) {
+        return yield* SubagentDurabilityError.make({
+          operation: "reserve-ephemeral",
+          reason: "unsupported",
+          message: "The durable host must reserve ephemeral child execution before starting",
+          toolCallId: delegation.parentToolCallId,
+        });
+      }
+
+      const denied = yield* hook.reserve({
+        toolCallId: delegation.parentToolCallId,
+        delegationId: delegation.delegationId,
+        targetAgentId: binding.definition.id,
+        childThreadId: threadId,
+        childRunId: runId,
+        depth: childDepth,
+        grant: options.subagentGrant,
+        policy: binding.definition.policy,
+        budget: options.subagentBudget,
+      });
+
+      if (denied !== undefined) {
+        return yield* SubagentExecutionFailure.make({
+          delegationId: delegation.delegationId,
+          targetAgentId: binding.definition.id,
+          classification: "establishment-denied",
+          errorTag: denied.errorTag,
+          message: denied.message,
+        });
+      }
+    }
+
+    // Register before the child fiber so it closes before we inspect its actual Exit.
+    // Handler cleanup may close the Scope successfully even when it interrupted the child.
+    let recordFinalUsage: Effect.Effect<void, SubagentDurabilityError> | undefined;
+
+    if (delegation.execution === "ephemeral" && durability?.ephemeral !== undefined) {
+      yield* Effect.addFinalizer(() => recordFinalUsage?.pipe(Effect.orDie) ?? Effect.void);
+    }
+
     const child = yield* startUnknown(binding, input, {
       ...options,
       threadId,
@@ -10266,12 +10368,50 @@ const spawnWithParent = (
       Effect.provide(
         Context.make(ThreadHistory, history).pipe(Context.add(RunContextPreparation, preparation)),
       ),
+      Effect.provideService(IdGenerator, ids),
     );
 
-    onChild(runId, child.usageReport);
+    let interrupted = false;
+
+    const usageReport = child.usageReport.pipe(
+      Effect.map((report) =>
+        interrupted
+          ? RunUsageReport.make({
+              ...report,
+              usage: RunTotals.make({
+                ...report.usage,
+                usageStatus:
+                  report.usage.modelCalls === 0 || report.usage.usageStatus === "unknown"
+                    ? "unknown"
+                    : "partial",
+                pricingStatus:
+                  report.usage.modelCalls === 0 || report.usage.pricingStatus === "unknown"
+                    ? "unknown"
+                    : "partial",
+              }),
+            })
+          : report,
+      ),
+    );
+
+    if (delegation.execution === "ephemeral" && durability?.ephemeral !== undefined) {
+      const hook = durability.ephemeral;
+
+      recordFinalUsage = Effect.exit(child.await).pipe(
+        Effect.flatMap((exit) => {
+          interrupted = Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause);
+
+          return interrupted
+            ? hook.finish(runId, undefined)
+            : usageReport.pipe(Effect.flatMap((report) => hook.finish(runId, report)));
+        }),
+      );
+    }
+    onChild(runId, usageReport);
 
     return {
       ...child,
+      usageReport,
       threadId,
       runId,
       parentLink,
@@ -10310,6 +10450,7 @@ export interface AgentSpawnerService {
     InputPromptValue extends InputPromptSource<InputSchema["Type"], unknown, unknown> | undefined =
       undefined,
     UpdatesSchema extends Schema.Top | undefined = undefined,
+    Execution extends "ephemeral" | undefined = undefined,
   >(
     binding: RuntimeBinding<
       InputSchema,
@@ -10326,7 +10467,7 @@ export interface AgentSpawnerService {
       UpdatesSchema
     >,
     input: unknown,
-    delegation: SpawnDelegation,
+    delegation: SpawnDelegation & { readonly execution?: Execution },
     options?: SpawnRunOptions<HookError, HookRequirements>,
   ) => Effect.Effect<
     SpawnedChildRun<
@@ -10350,7 +10491,7 @@ export interface AgentSpawnerService {
         InstructionError
       >
     >,
-    never,
+    Execution extends "ephemeral" ? SubagentDurabilityError | SubagentExecutionFailure : never,
     | Scope.Scope
     | Exclude<
         AgentRuntimeRequirements<
@@ -10399,6 +10540,7 @@ const makeAgentSpawner = (
   budget?: SubagentBudgetReservation,
   budgetScope?: WorkerBudgetScope,
   onChild: (runId: RunId, read: Effect.Effect<RunUsageReport>) => void = () => {},
+  durability?: SubagentDurabilityDurable,
 ): AgentSpawnerService => ({
   ...(grant === undefined ? {} : { grant }),
   ...(budget === undefined ? {} : { budget }),
@@ -10406,7 +10548,16 @@ const makeAgentSpawner = (
   policy,
   depth,
   parent,
-  spawn: spawnWithParent(parent, depth, history, preparation, onChild),
+  // Only explicit ephemeral execution can fail before a child starts. The implementation
+  // checks that discriminator before every admission failure; this bridges conditional E.
+  spawn: spawnWithParent(
+    parent,
+    depth,
+    history,
+    preparation,
+    onChild,
+    durability,
+  ) as AgentSpawnerService["spawn"],
 });
 
 /** Bound applied to the rendered defect message of `withTerminalDefectEvent` (SEC-013). */

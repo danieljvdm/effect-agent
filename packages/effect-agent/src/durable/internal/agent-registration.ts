@@ -19,7 +19,7 @@ import {
   type RunDispositionDeclaration,
 } from "../../core/Agent.ts";
 import { type ThreadId, AgentId } from "../../core/Identifiers.ts";
-import { getToolExecutionKind } from "../../core/SubagentContract.ts";
+import { EphemeralSubagentTool, getToolExecutionKind } from "../../core/SubagentContract.ts";
 import {
   AdditionalToolCatalog,
   DiscoveryTool,
@@ -96,6 +96,9 @@ export const toolReplayContracts = Effect.fn("AgentRegistration.toolReplayContra
               typeof tool.needsApproval === "function" ? "dynamic" : (tool.needsApproval ?? false),
             executionClass: getToolExecutionClass(tool),
             executionKind: getToolExecutionKind(tool.annotations),
+            ...(Context.get(tool.annotations, EphemeralSubagentTool)
+              ? { ephemeralSubagent: true }
+              : {}),
             contextRollover: Context.get(tool.annotations, ContextRolloverTool),
             completion: definition.completion?.tool === tool.name,
             completionFromTool:

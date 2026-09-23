@@ -15,6 +15,7 @@ import {
   type ToolCallId,
   type TurnId,
 } from "../core/Identifiers.ts";
+import type { Service as IdGeneratorService } from "../core/IdGenerator.ts";
 import { type MemoryRecallError } from "../core/MemoryReference.ts";
 import { RunPolicyUsage } from "../core/RunPolicyUsage.ts";
 import {
@@ -31,6 +32,7 @@ import {
   ChildRunUsage,
   UsageCompleteness,
   type RunTotals,
+  type RunUsageReport,
   type ModelCallUsage,
 } from "../core/Usage.ts";
 import type { WorkerBudgetScope, FrameworkMessage } from "../core/Worker.ts";
@@ -750,6 +752,32 @@ export interface RunSubagentHook<Error = never, Requirements = never> {
     request: RunSubagentEstablishRequest,
   ) => Effect.Effect<ChildEstablishStatus, Error, Requirements>;
   readonly join: (request: RunSubagentJoinRequest) => Effect.Effect<void, Error, Requirements>;
+  /** Reserve each physical execution before an ephemeral child starts. */
+  readonly ephemeral?: {
+    /** Fresh child identities, independent of the durable parent's fixed Run/Turn generator. */
+    readonly ids: IdGeneratorService;
+    readonly reserve: (
+      request: RunEphemeralSubagentRequest,
+    ) => Effect.Effect<ChildEstablishDenied | undefined, Error, Requirements>;
+    /** Release the live slot and retain available usage; absent evidence stays unknown. */
+    readonly finish: (
+      childRunId: RunId,
+      report: RunUsageReport | undefined,
+    ) => Effect.Effect<void, Error, Requirements>;
+  };
+}
+
+/** Parent-owned execution evidence; no child Submission or resumable lifecycle. */
+export interface RunEphemeralSubagentRequest {
+  readonly toolCallId: ToolCallId;
+  readonly delegationId: DelegationId;
+  readonly targetAgentId: AgentId;
+  readonly childThreadId: ThreadId;
+  readonly childRunId: RunId;
+  readonly depth: number;
+  readonly grant: SubagentGrant;
+  readonly policy: AgentPolicy;
+  readonly budget: SubagentBudgetReservation;
 }
 
 /** One declared Tool Call of a Turn being resumed, in canonical encoded form. */

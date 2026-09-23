@@ -78,9 +78,9 @@ const makeModel = Effect.fn("NestedWorkers.makeModel")(function* (
   return { model, calls, visibleTools, prompts };
 });
 
-it.live(
-  "settles the root independently while its background builder attaches a depth-two scout on one worker",
-  () =>
+it.live.each(["host", "ephemeral"] as const)(
+  "settles the root independently while its background builder attaches a %s depth-two scout on one worker",
+  (execution) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -114,6 +114,7 @@ it.live(
         );
 
         const scoutDeclaration = Subagent.make("scout", {
+          ...(execution === "ephemeral" ? { execution } : {}),
           target: scout.definition,
           success: output,
           projectResult: (result) => Effect.succeed(result),
@@ -366,7 +367,10 @@ it.live(
         const builderLog = yield* readLog(worker.threadId);
 
         const attached = builderLog.records.flatMap(({ record }) =>
-          record.payload._tag === "SubagentRequested" ? [record.payload] : [],
+          (record.payload._tag === "SubagentRequested" && execution === "host") ||
+          (record.payload._tag === "EphemeralSubagentReserved" && execution === "ephemeral")
+            ? [record.payload]
+            : [],
         );
 
         expect(attached).toHaveLength(1);
@@ -397,19 +401,25 @@ it.live(
 
         if (requested === undefined)
           return yield* Effect.die("Expected the attached scout request");
-        const scoutLog = yield* readLog(requested.childThreadId);
+        if (execution === "host") {
+          const scoutLog = yield* readLog(requested.childThreadId);
 
-        expect(
-          scoutLog.records.flatMap(({ record }) =>
-            record.payload._tag === "SubagentLineageRecorded" ? [record.payload] : [],
-          ),
-        ).toMatchObject([
-          {
-            parentLink: { parentThreadId: worker.threadId, depth: 2 },
-            budget: requested.budget,
-            grant: requested.grant,
-          },
-        ]);
+          expect(
+            scoutLog.records.flatMap(({ record }) =>
+              record.payload._tag === "SubagentLineageRecorded" ? [record.payload] : [],
+            ),
+          ).toMatchObject([
+            {
+              parentLink: { parentThreadId: worker.threadId, depth: 2 },
+              budget: requested.budget,
+              grant: requested.grant,
+            },
+          ]);
+        } else {
+          expect(
+            builderLog.records.some(({ record }) => record.payload._tag === "SubagentRequested"),
+          ).toBe(false);
+        }
         yield* Deferred.succeed(releaseScout, undefined);
         expect(
           yield* Subagent.await(build, worker, receipt).pipe(
@@ -425,7 +435,11 @@ it.live(
         const completedBuilder = yield* readLog(worker.threadId);
 
         expect(
-          completedBuilder.records.filter(({ record }) => record.payload._tag === "SubagentJoined"),
+          completedBuilder.records.filter(
+            ({ record }) =>
+              record.payload._tag ===
+              (execution === "host" ? "SubagentJoined" : "EphemeralSubagentUsageRecorded"),
+          ),
         ).toHaveLength(1);
         expect(
           completedBuilder.records.filter(

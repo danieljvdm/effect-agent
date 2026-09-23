@@ -98,9 +98,17 @@ Use `parentCaps` to set another aggregate pool, and share identical caps across 
 in the parent Run. This pool accounts for child work; it is separate from the parent's own
 model and tool-call counters. A global spending quota still needs a host-owned usage budget.
 
-Ephemeral settlement refunds reported unused allocation. Durable settlement conservatively
-charges the reservation when usage is unavailable. Durable admission rejects a reservation
-that exceeds the shared pool, including its child-count and concurrency limits.
+In-memory settlement refunds reported unused allocation. Durable child settlement conservatively
+charges the reservation when usage is unavailable. Admission rejects a reservation that exceeds
+the shared pool, including its child-count and concurrency limits.
+
+With `execution: "ephemeral"` on a durable host, every physical attempt consumes a child invocation
+and its full allocation, even when it finishes below its limits. Retries need remaining allowance;
+recovery never replenishes it. Concurrency slots are released when the helper's Scope closes.
+Durable and ephemeral children share the same pool, including inherited subtree limits. Recorded
+usage remains separate from reserved allowance: an attempt without a committed usage report is
+unknown, not zero. Existing child lifecycle events describe the live helper; its reservation and
+usage evidence belong to the parent's canonical history.
 
 With the custom declaration above, parent, delegation, and child limits apply at different points:
 

@@ -89,6 +89,12 @@ export const DelegationTool = Context.Reference<boolean>("@effect-agent/core/Del
   defaultValue: () => false,
 });
 
+/** Attached execution owned by the active parent Attempt, without child admission. */
+export const EphemeralSubagentTool = Context.Reference<boolean>(
+  "@effect-agent/core/EphemeralSubagentTool",
+  { defaultValue: () => false },
+);
+
 /** Marks a host-managed idempotent worker operation, independently of its Tool name. */
 export const WorkerOperationTool = Context.Reference<boolean>(
   "@effect-agent/core/WorkerOperationTool",
@@ -130,7 +136,7 @@ export type ToolExecutionKind = typeof ToolExecutionKind.Type;
 export const getToolExecutionKind = (annotations: Context.Context<never>): ToolExecutionKind =>
   Context.get(annotations, WorkerOperationTool)
     ? "orchestration"
-    : Context.get(annotations, DelegationTool)
+    : Context.get(annotations, DelegationTool) && !Context.get(annotations, EphemeralSubagentTool)
       ? "delegation"
       : "ordinary";
 

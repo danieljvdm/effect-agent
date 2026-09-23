@@ -31,7 +31,7 @@ import {
 } from "../core/SubagentContract.ts";
 import { Selection, Snapshot } from "../core/ToolExposure.ts";
 import { ToolParameterRejection } from "../core/ToolResult.ts";
-import { ModelCallUsage, RunUsageSummary, RunTotals } from "../core/Usage.ts";
+import { ModelCallUsage, RunUsageSummary, RunTotals, RunUsageReport } from "../core/Usage.ts";
 import { WorkerBudgetScope, WorkerRef, WorkerSource, WorkerStop } from "../core/Worker.ts";
 import { ContextHandoff } from "../engine/ContextWindow.ts";
 
@@ -999,11 +999,32 @@ export class SubtreeBudgetReserved extends Schema.TaggedClass<SubtreeBudgetReser
 ) {}
 
 /**
- * Current private-development canonical payload family. Phase 5 adds the seven durable-Tool tags
- * (prepared/unknown/resolved/step/approval-request/approval-decision/interrupted) additively; S2
- * adds the four durable-Subagent tags (requested/started/joined/lineage) additively, so the
- * envelope keeps `schemaVersion: 1` (P4 precedent for additive payload tags).
+ * A physical ephemeral execution charged before dispatch. Each retry consumes another full
+ * allocation; loss of its usage report never refunds it. These records belong to the parent.
  */
+export class EphemeralSubagentReserved extends Schema.TaggedClass<EphemeralSubagentReserved>()(
+  "EphemeralSubagentReserved",
+  {
+    runId: RunId,
+    toolCallId: ToolCallId,
+    delegationId: DelegationId,
+    targetAgentId: AgentId,
+    childThreadId: ThreadId,
+    childRunId: RunId,
+    depth: DelegationDepth,
+    grant: SubagentGrant,
+    policy: Schema.toCodecJson(AgentPolicy),
+    budget: SubagentBudgetReservation,
+  },
+) {}
+
+/** Observed usage is diagnostic evidence, independent of conservative allowance consumption. */
+export class EphemeralSubagentUsageRecorded extends Schema.TaggedClass<EphemeralSubagentUsageRecorded>()(
+  "EphemeralSubagentUsageRecorded",
+  { runId: RunId, childRunId: RunId, report: RunUsageReport },
+) {}
+
+/** Canonical payload tags extend additively within envelope schemaVersion 1. */
 export const CanonicalRecordPayload = Schema.Union([
   ThreadCreated,
   UserInputRecorded,
@@ -1029,6 +1050,8 @@ export const CanonicalRecordPayload = Schema.Union([
   SubagentStarted,
   SubagentJoined,
   SubagentLineageRecorded,
+  EphemeralSubagentReserved,
+  EphemeralSubagentUsageRecorded,
   WorkerInputRequested,
   WorkerStopRequested,
   WorkerOriginRecorded,
