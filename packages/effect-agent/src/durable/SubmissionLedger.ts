@@ -86,6 +86,21 @@ export const SubmissionState = Schema.Literals([
 export type SubmissionState = typeof SubmissionState.Type;
 
 /**
+ * Opt-in host policy for handling the next runnable same-Agent input in its own Run at a complete Turn
+ * boundary. This never joins inputs or changes their principals, grants, or receipts. The
+ * runtime selects the ordered candidate; policy cannot select an arbitrary Submission.
+ * Approval waits, child waits and incomplete Tool batches are not handoff boundaries. Hosts
+ * retaining independent replies must also leave those inputs unclaimed by `claimJoining`.
+ * In-flight model requests and Tool batches run to their existing safe boundary.
+ */
+export const SubmissionScheduling = Context.Reference<{
+  readonly yieldTo?: (request: {
+    readonly active: SubmissionSnapshot;
+    readonly next: SubmissionSnapshot;
+  }) => Effect.Effect<boolean, LedgerError>;
+}>("@effect-agent/thread/SubmissionScheduling", { defaultValue: () => ({}) });
+
+/**
  * Default ownership lease duration (D5). The lease is a liveness hint that makes an abandoned
  * claim reclaimable; correctness never depends on it because every canonical append is fenced by
  * producer epoch. Adapters expose this as configuration and use this value when unconfigured.
@@ -289,9 +304,21 @@ export const AdmissionResolution = Schema.Union([
 
 export type AdmissionResolution = typeof AdmissionResolution.Type;
 
+/**
+ * A trusted runtime's advisory handoff after committing a complete Turn and closing its
+ * Attempt. The epoch fences the observation; an intervening claim invalidates it. Deferred
+ * Runs retain their identities and obligations. Losing this hint resumes ordinary FIFO.
+ */
+export class ClaimHandoff extends Schema.Class<ClaimHandoff>("@effect-agent/thread/ClaimHandoff")({
+  producerEpoch: ProducerEpoch,
+  deferredSubmissionIds: Schema.NonEmptyArray(SubmissionId),
+  submissionId: SubmissionId,
+}) {}
+
 export class ClaimRequest extends Schema.Class<ClaimRequest>("@effect-agent/thread/ClaimRequest")({
   threadId: ThreadId,
   producerId: ProducerId,
+  handoff: Schema.optionalKey(ClaimHandoff),
 }) {}
 
 /**
@@ -1019,6 +1046,11 @@ export type SubmissionLedgerFailure =
  *   `attemptId` and `ownershipToken`, and starts the ownership lease (D5: adapters default to
  *   `DEFAULT_OWNERSHIP_LEASE_DURATION`, configurable). An expired lease makes the head
  *   claimable; expiry alone never revokes correctness, only permission to assume liveness.
+ *   An optional trusted-runtime `handoff` can defer only the named `input-applied` prefix,
+ *   with no abort intent, to claim the exact next runnable Submission. It is checked atomically
+ *   against the current producer epoch and the same whole-Thread ownership fence. Admission
+ *   gaps, approval/child waits and joined work cannot be bypassed. Hints are not durable facts;
+ *   recovery resumes the same retained Runs and can select another complete-Turn handoff.
  * - `renewOwnership` — extends the lease while the token still owns the lane; fails with
  *   `OwnershipLost` once superseded. Renewal after lease expiry succeeds if no other claim has
  *   taken the lane in between.

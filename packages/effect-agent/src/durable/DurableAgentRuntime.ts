@@ -293,6 +293,8 @@ import {
   ChildBudgetReservationRequest,
   ChildReservationId,
   ChildSettledNotification,
+  ClaimHandoff,
+  SubmissionScheduling,
   ClaimJoiningRequest,
   ClaimRequest,
   IdempotencyKey,
@@ -1018,7 +1020,7 @@ type AttemptOutcome = { readonly uncommittedModelUsage?: ReadonlyArray<ModelCall
  */
 type RunPhaseOutcome =
   | AttemptOutcome
-  | { readonly _tag: "yielded" }
+  | { readonly _tag: "yielded"; readonly nextSubmissionId?: SubmissionId }
   | { readonly _tag: "suspended"; readonly toolCallId: ToolCallId }
   | { readonly _tag: "suspendedChild"; readonly children: AgentChildPending["children"] };
 
@@ -1261,6 +1263,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 ) {
   const registeredBindings = [...bindings];
   const ledger = yield* SubmissionLedger;
+  const submissionScheduling = yield* SubmissionScheduling;
   const store = yield* ThreadStore;
   const wake = yield* WakeScheduler;
   const failpoint = yield* DurableRuntimeFailpoint;
@@ -5447,7 +5450,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       // handler channel; this side channel preserves the original failure so the Attempt aborts
       // (obligation still owed) instead of settling the Run `failed` on an infrastructure fault.
       const haltRef = yield* Ref.make<DurableWorkerFailure | undefined>(undefined);
-      const yieldSignal = yield* Deferred.make<void>();
+      const yieldSignal = yield* Deferred.make<SubmissionId | undefined>();
 
       const recordHalt = <A, R>(
         effect: Effect.Effect<A, DurableWorkerFailure, R>,
@@ -7080,6 +7083,41 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               // no synthetic engine RunFailed event or terminal Settlement is produced.
               return yield* Effect.never;
             }
+            if (submissionScheduling.yieldTo !== undefined && (yield* Ref.get(turnCounter)) > 0) {
+              const candidate = yield* recordHalt(
+                eligibleThreadHead(submission.threadId, submission.queueSequence),
+              );
+
+              if (
+                Option.isSome(candidate) &&
+                (candidate.value.state === "ready" ||
+                  candidate.value.state === "running" ||
+                  candidate.value.state === "input-applied")
+              ) {
+                const next = yield* recordHalt(
+                  ledger.lookup(
+                    SubmissionLookupById.make({
+                      submissionId: candidate.value.submissionId,
+                    }),
+                  ),
+                );
+
+                if (
+                  Option.isSome(next) &&
+                  next.value.agentId === submission.agentId &&
+                  (next.value.state === "ready" ||
+                    next.value.state === "running" ||
+                    next.value.state === "input-applied") &&
+                  (yield* recordHalt(
+                    submissionScheduling.yieldTo({ active: submission, next: next.value }),
+                  ))
+                ) {
+                  yield* Deferred.succeed(yieldSignal, next.value.submissionId);
+
+                  return yield* Effect.never;
+                }
+              }
+            }
           }),
         ...(runContextPreparation.transientContext === undefined
           ? {}
@@ -7617,11 +7655,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const execution = Effect.raceFirst(consume, Effect.raceFirst(abortWatcher, renewal));
 
       const raced = (
-        yieldAfter === undefined
+        yieldAfter === undefined && submissionScheduling.yieldTo === undefined
           ? execution
           : Effect.raceFirst(
               execution,
-              Deferred.await(yieldSignal).pipe(Effect.as({ _tag: "yielded" as const })),
+              Deferred.await(yieldSignal).pipe(
+                Effect.map((nextSubmissionId) => ({
+                  _tag: "yielded" as const,
+                  ...(nextSubmissionId === undefined ? {} : { nextSubmissionId }),
+                })),
+              ),
             )
       ).pipe(Effect.provideService(IdGenerator, idGenerator));
 
@@ -7829,6 +7872,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     claim: Claim,
     tokenRef: Ref.Ref<OwnershipToken>,
     resumeAfterRetention: () => void,
+    onHandoff: (nextSubmissionId: SubmissionId) => void,
     yieldAfter?: DateTime.Utc,
   ) =>
     Effect.gen(function* () {
@@ -8270,7 +8314,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           yieldAfter,
         );
 
-        if (outcome._tag === "yielded") return Option.none();
+        if (outcome._tag === "yielded") {
+          if (outcome.nextSubmissionId !== undefined) onHandoff(outcome.nextSubmissionId);
+
+          return Option.none();
+        }
         if (outcome._tag === "suspendedChild") {
           // Durable waitingForChild suspension (spec §12 step 10, SUB-030): the sibling
           // late-settles are already canonical; the ledger transition ends the ownership
@@ -8432,9 +8480,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   // reference is shared with renewal, so cleanup never releases with a superseded token.
   const acquireClaim = Effect.fn("DurableAgentRuntime.acquireClaim")(function* (
     threadId: ThreadId,
+    handoff?: ClaimHandoff,
   ) {
     const claimed = yield* ledger.claim(
-      ClaimRequest.make({ threadId, producerId: config.producerId }),
+      ClaimRequest.make({
+        threadId,
+        producerId: config.producerId,
+        ...(handoff === undefined ? {} : { handoff }),
+      }),
     );
 
     if (Option.isNone(claimed)) return Option.none();
@@ -8457,6 +8510,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       ),
     );
 
+    if (handoff !== undefined && claim.submissionId !== handoff.submissionId)
+      return yield* LedgerError.make({
+        operation: "claim handoff",
+        message: "The submission adapter did not honor the requested handoff",
+      });
+
     return Option.some({ claim, tokenRef });
   }, Effect.uninterruptible);
 
@@ -8469,10 +8528,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   ): Effect.Effect<Option.Option<Settlement>, DurableWorkerFailure | DurableBindingFailure> =>
     Effect.gen(function* () {
       let resumeAfterRetention = false;
+      let handoff: ClaimHandoff | undefined;
+      let nextHandoff: ClaimHandoff | undefined;
 
       const attempt = Effect.scoped(
         Effect.gen(function* () {
-          const claimed = yield* acquireClaim(threadId);
+          const claimed = yield* acquireClaim(threadId, handoff);
 
           if (Option.isNone(claimed)) return Option.none();
           const { claim, tokenRef } = claimed.value;
@@ -8558,6 +8619,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 () => {
                   resumeAfterRetention = true;
                 },
+                (nextSubmissionId) => {
+                  nextHandoff = ClaimHandoff.make({
+                    producerEpoch: claim.producerEpoch,
+                    deferredSubmissionIds: [
+                      ...(handoff?.deferredSubmissionIds ?? []),
+                      claim.submissionId,
+                    ],
+                    submissionId: nextSubmissionId,
+                  });
+                },
                 options?.yieldAfter,
               ),
             threadId,
@@ -8568,16 +8639,24 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       while (true) {
         resumeAfterRetention = false;
+        nextHandoff = undefined;
         const settlement = yield* attempt;
 
+        // The previous Attempt's entire Scope has closed before the next authority is built.
+        if (nextHandoff !== undefined) {
+          handoff = nextHandoff;
+          continue;
+        }
         if (!resumeAfterRetention) return settlement;
       }
     }).pipe(withThreadHeadSpan);
 
-  const eligibleThreadHead = (threadId: ThreadId) =>
+  const eligibleThreadHead = (threadId: ThreadId, afterQueueSequence = 0) =>
     Stream.runHead(
       ledger.scanNonterminal.pipe(
-        Stream.filter((entry) => entry.threadId === threadId),
+        Stream.filter(
+          (entry) => entry.threadId === threadId && entry.queueSequence > afterQueueSequence,
+        ),
         Stream.filterEffect((entry) =>
           entry.state !== "unknown"
             ? Effect.succeed(true)
@@ -11143,7 +11222,10 @@ export class DurableAgentRuntime extends Context.Service<
       threadId: ThreadId,
     ) => Effect.Effect<ReadonlyArray<Settlement>, DurableWorkerFailure | DurableBindingFailure>;
     /**
-     * Advance the FIFO head, closing its Attempt resources before returning. A vacant,
+     * Advance the FIFO head, closing its Attempt resources before returning. With an opted-in
+     * SubmissionScheduling policy, a complete Turn may hand off to the next same-Agent input;
+     * the returned Settlement identifies the Submission actually completed. Each Attempt closes
+     * before the next is claimed, and deferred Runs retain their original obligations. A vacant,
      * owned, unknown, or suspended head returns None and leaves accepted work pending.
      * Ready input may join this Run through the existing Turn seams and settle with its head.
      * Interruption ends only this Attempt; ownership cleanup uses its latest renewed token.

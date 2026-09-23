@@ -838,7 +838,43 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   return [success(Option.none()), current];
                 }
               }
-              const head = findHead(current, request.threadId);
+              let head = findHead(current, request.threadId);
+
+              if (request.handoff !== undefined) {
+                const handoff = request.handoff;
+
+                if (current.lanes.get(request.threadId)?.producerEpoch !== handoff.producerEpoch)
+                  return [success(Option.none()), current];
+
+                const candidates = [...current.submissions.values()]
+                  .filter(
+                    (entry) =>
+                      entry.row.threadId === request.threadId &&
+                      entry.row.state !== "settled" &&
+                      !(entry.row.state === "unknown" && entry.abortIntent === undefined),
+                  )
+                  .sort((a, b) => a.row.queueSequence - b.row.queueSequence);
+
+                for (const candidate of candidates) {
+                  if (candidate.row.submissionId === handoff.submissionId) {
+                    head = candidate;
+                    break;
+                  }
+                  if (
+                    !handoff.deferredSubmissionIds.includes(candidate.row.submissionId) ||
+                    candidate.row.state !== "input-applied" ||
+                    candidate.abortIntent !== undefined
+                  )
+                    return [success(Option.none()), current];
+                }
+                if (
+                  head?.row.submissionId !== handoff.submissionId ||
+                  (head.row.state !== "ready" &&
+                    head.row.state !== "running" &&
+                    head.row.state !== "input-applied")
+                )
+                  return [success(Option.none()), current];
+              }
 
               if (head === undefined) return [success(Option.none()), current];
               if (BLOCKED_HEAD_STATES.has(head.row.state)) return [success(Option.none()), current];
