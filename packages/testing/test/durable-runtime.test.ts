@@ -7993,6 +7993,16 @@ layer(testLayer)("independent input scheduling", (it) => {
                           ? "correction-one"
                           : "old-work";
 
+                      // Interleaved Runs must not replace this Run's latest accepted input:
+                      // https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
+                      expect(
+                        JSON.stringify(
+                          request.prompt.content
+                            .filter((message) => message.role === "user")
+                            .at(-1),
+                        ),
+                      ).toContain(question);
+
                       turns.push({
                         question,
                         submissionId: activeSubmission,

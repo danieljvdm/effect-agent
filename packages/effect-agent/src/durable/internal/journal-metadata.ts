@@ -14,7 +14,11 @@ export interface JournalMetadata {
   readonly firstSequenceByRun: ReadonlyMap<string, number>;
   readonly lastResponseSequenceByRun: ReadonlyMap<string, number>;
   readonly terminalSequenceByRun: ReadonlyMap<string, number>;
-  readonly settledSpans: ReadonlyArray<{ readonly from: number; readonly to: number }>;
+  readonly settledSpans: ReadonlyArray<{
+    readonly from: number;
+    readonly to: number;
+    readonly runId: RunId;
+  }>;
   readonly toolExecutionEvidence: ReadonlySet<string>;
   readonly settledToolCallRecordIds: ReadonlySet<string>;
   readonly settledById: ReadonlyMap<
@@ -45,7 +49,10 @@ export const makeJournalMetadata = (
   if (seed?.firstSequence !== undefined) firstSequenceByRun.set(seed.runId, seed.firstSequence);
   const lastResponseSequenceByRun = new Map<string, number>();
   const terminalSequenceByRun = new Map<string, number>();
-  const settledSpans: Array<{ readonly from: number; readonly to: number }> = [];
+
+  const settledSpans: Array<{ readonly from: number; readonly to: number; readonly runId: RunId }> =
+    [];
+
   const toolExecutionEvidence = new Set<string>();
   const settledToolCallRecordIds = new Set<string>();
 
@@ -98,7 +105,7 @@ export const makeJournalMetadata = (
         const from = lastResponseSequenceByRun.get(payload.runId);
 
         if (from !== undefined && from < envelope.sequence)
-          settledSpans.push({ from, to: envelope.sequence });
+          settledSpans.push({ from, to: envelope.sequence, runId: payload.runId });
       }
     },
     snapshot: (): JournalMetadata => ({

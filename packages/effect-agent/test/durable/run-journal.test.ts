@@ -675,6 +675,13 @@ describe("run journal batch split (plan §2.1)", () => {
           [["call-1", { messageId: "message-42" }]],
         ]);
         expect(toolResults(pending.prompt)[1]).toMatchObject({ _tag: "ToolOutcomeUnknown" });
+
+        const resumedLater = yield* projectRunJournal(
+          [...prefix, envelopeAt(prefix.length + 1, original.records[2]!)],
+          LATER_RUN_ID,
+        );
+
+        expect(toolResults(resumedLater.prompt)).toEqual(toolResults(resolved.prompt));
         expect(
           prefix.filter(({ record }) => record.payload._tag === "ToolCallSettled"),
         ).toHaveLength(2);
@@ -1361,6 +1368,178 @@ describe("engine compaction records and projection (RUN-026)", () => {
         }),
     );
 
+    // Independent Runs can both resume, so neither continuation nor compaction may absorb the other:
+    // https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
+    it.effect("preserves both interleaved Run contexts and their complete Thread history", () =>
+      Effect.gen(function* () {
+        const first = yield* turnCanonicalBatch({
+          ...turnInput(toolTurnAppended),
+          runScopedPrefixLength: 2,
+        });
+
+        const next = yield* turnCanonicalBatch(
+          turnInput(
+            [
+              Prompt.makeMessage("user", {
+                content: [Prompt.makePart("text", { text: "Answer while I wait." })],
+              }),
+              ...completionTurnAppended,
+            ],
+            1,
+            LATER_RUN_ID,
+          ),
+        );
+
+        const continuation = yield* turnCanonicalBatch(turnInput(finalTurnAppended, 2));
+
+        for (const settled of [true, false]) {
+          const original = [
+            ...first.records,
+            ...(settled ? next.records : next.records.slice(0, 1)),
+          ].map((record, index) => envelopeAt(index + 1, record));
+
+          const before = yield* projectRunJournal(original, LATER_RUN_ID);
+
+          const interleaved = [
+            ...original,
+            ...continuation.records.map((record, index) =>
+              envelopeAt(original.length + index + 1, record),
+            ),
+          ];
+
+          expect(yield* projectRunJournal(interleaved, LATER_RUN_ID)).toEqual(before);
+          expect(
+            textOfPrompt((yield* projectRunJournal(interleaved, RUN_ID)).prompt),
+          ).not.toContain("Answer while I wait.");
+          for (const kind of ["rollover", "clear-tool-results"] as const) {
+            const records = [
+              ...interleaved,
+              envelopeAt(
+                interleaved.length + 1,
+                auditRecord(
+                  `interleaved-${kind}`,
+                  compactionPayload({
+                    kind,
+                    runId: RUN_ID,
+                    turn: 3,
+                    coversThrough: interleaved.length,
+                    summary: undefined,
+                    handoff: "The original trip is booked.",
+                  }),
+                ),
+              ),
+            ];
+
+            expect(yield* projectRunJournal(records, LATER_RUN_ID)).toEqual(before);
+            const lengths: Array<number> = [];
+
+            const complete = (yield* projectRunJournalStream(
+              Stream.fromIterable(records),
+              undefined,
+              ({ promptLength }) => lengths.push(promptLength),
+            )).prompt;
+
+            expect(textOfPrompt(complete)).toContain("Answer while I wait.");
+            expect(toolResults(complete)).toContainEqual(
+              settled
+                ? { messageId: "message-42" }
+                : expect.objectContaining({ _tag: "ToolOutcomeUnknown" }),
+            );
+            expect(lengths.at(-1)).toBe(complete.content.length);
+            if (kind === "rollover") {
+              expect((yield* projectRunJournal(records, RUN_ID)).contextWindowId).toBe(
+                contextWindowId(RUN_ID, 3),
+              );
+            }
+          }
+        }
+      }),
+    );
+
+    // The same interleaving must retain each independently compacted context:
+    // https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
+    it.effect("does not restore retired exchanges when independent Runs both compact", () =>
+      Effect.gen(function* () {
+        const first = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+        const next = yield* turnCanonicalBatch(turnInput(completionTurnAppended, 1, LATER_RUN_ID));
+        const continuation = yield* turnCanonicalBatch(turnInput(finalTurnAppended, 2));
+
+        for (const kind of ["clear-tool-results", "rollover"] as const) {
+          const records = envelopesOf([first, next]);
+
+          records.push(
+            envelopeAt(
+              records.length + 1,
+              auditRecord(
+                "second-run-compaction",
+                compactionPayload({
+                  kind,
+                  runId: LATER_RUN_ID,
+                  turn: 2,
+                  coversThrough: records.length,
+                  summary: undefined,
+                  handoff: "The correction is recorded.",
+                }),
+              ),
+            ),
+          );
+          for (const record of continuation.records)
+            records.push(envelopeAt(records.length + 1, record));
+          records.push(
+            envelopeAt(
+              records.length + 1,
+              auditRecord(
+                "first-run-compaction",
+                compactionPayload({
+                  kind,
+                  runId: RUN_ID,
+                  turn: 3,
+                  coversThrough: records.length,
+                  summary: undefined,
+                  handoff: "The original trip is booked.",
+                }),
+              ),
+            ),
+          );
+          const projected = yield* projectRunJournal(records, RUN_NONE_ID);
+          const history = yield* promptFromCanonicalRecords(records);
+
+          expect(projected.prompt).toEqual(history);
+          if (kind === "clear-tool-results") {
+            expect(toolResults(history)).toEqual([
+              "[tool result cleared by compaction]",
+              "[tool result cleared by compaction]",
+              "[tool result cleared by compaction]",
+            ]);
+          } else {
+            expect(toolResults(history)).toEqual([]);
+            expect(textOfPrompt(history)).toContain("The correction is recorded.");
+            expect(textOfPrompt(history)).toContain("The original trip is booked.");
+            expect(textOfPrompt(history)).not.toContain('"answer":"Booked."');
+          }
+          records.push(
+            envelopeAt(
+              records.length + 1,
+              auditRecord(
+                "combined-summary",
+                compactionPayload({
+                  kind: "summarize",
+                  runId: RUN_NONE_ID,
+                  coversThrough: records.length,
+                  summary: "Both requests are complete.",
+                }),
+              ),
+            ),
+          );
+          const combined = yield* promptFromCanonicalRecords(records);
+
+          expect(combined.content).toHaveLength(1);
+          expect(textOfPrompt(combined)).toContain("Both requests are complete.");
+          expect(toolResults(combined)).toEqual([]);
+        }
+      }),
+    );
+
     it.effect(
       "rollover preserves the canonical request and Run accounting while replacing current-Run history",
       () =>
@@ -1631,14 +1810,18 @@ describe("engine compaction records and projection (RUN-026)", () => {
                       projectionOwner,
                     );
 
-                    expect(otherView.contextWindowId).toBe(contextWindowId(owner, 2));
                     expect(otherView.usage).toEqual(otherBaseline.usage);
                     expect(otherView.policyUsage).toEqual(otherBaseline.policyUsage);
                     if (projectionOwner === RUN_ID) {
+                      // A later independent Run cannot rewrite this Run's resume context:
+                      // https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
+                      expect(otherView).toEqual(otherBaseline);
                       expect(otherBaseline.usage).toMatchObject({
                         inputTokens: 100,
                         outputTokens: 10,
                       });
+                    } else {
+                      expect(otherView.contextWindowId).toBe(contextWindowId(owner, 2));
                     }
                   }
                 } else {
@@ -1705,7 +1888,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
         }),
     );
 
-    it.effect("preserves an earlier Run's policy usage under a later Run's summary", () =>
+    it.effect("keeps an earlier Run's context and usage independent of a later summary", () =>
       Effect.gen(function* () {
         const failedTurn = secondToolTurn.map((message) =>
           message.role === "tool"
@@ -1748,8 +1931,7 @@ describe("engine compaction records and projection (RUN-026)", () => {
           consecutiveToolFailures: 1,
         });
         expect(compacted.usage).toEqual(uncompacted.usage);
-        expect(promptText(compacted.prompt)).toContain("Goal: book the Kyoto trip");
-        expect(toolResults(compacted.prompt)).toEqual([]);
+        expect(compacted.prompt).toEqual(uncompacted.prompt);
       }),
     );
 
