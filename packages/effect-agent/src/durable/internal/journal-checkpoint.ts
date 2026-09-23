@@ -56,7 +56,7 @@ export class RecoveryCheckpointContents extends Schema.Class<RecoveryCheckpointC
   digest: Digest,
 }) {}
 
-export const RECOVERY_ENGINE_VERSION = "effect-agent/recovery@1";
+export const RECOVERY_ENGINE_VERSION = "effect-agent/recovery@2";
 
 /**
  * Late evidence can invalidate an old compaction. Such histories use full canonical replay;

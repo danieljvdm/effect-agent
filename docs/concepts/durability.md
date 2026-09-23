@@ -87,6 +87,7 @@ resume with their original authority and deadlines. Their model context contains
 their start and their own Turns. Later results can close prior historical calls, but another Run's
 continuation cannot replace the current input. Compaction covers its creator's context while
 complete Thread history retains interleaved exchanges from other Runs.
+Recovery checkpoints from the previous context projection rebuild from canonical history.
 Install matching runtime and storage packages.
 
 `SubmissionLedger.scanNonterminal` discovers work through `SubmissionWorkItem`: identities,
