@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.135
+
+### Patch Changes
+
+- [#637](https://github.com/danieljvdm/effect-agent/pull/637) [`8fc53ad`](https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow hosts to hand off at completed Turn boundaries to the next independent input while retaining each Run's authority, receipts and obligations. Install matching runtime and storage packages before enabling `SubmissionScheduling.yieldTo`.
+
 ## 0.1.0-beta.134
 
 ### Patch Changes
