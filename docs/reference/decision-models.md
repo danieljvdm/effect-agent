@@ -1,6 +1,6 @@
 ---
 title: Decision models
-description: Native Effect decisions, TypeSafe configuration, and thread-owned model selection.
+description: Native Effect decisions, language-model adapters, TypeSafe configuration, and thread-owned model selection.
 ---
 
 # Decision models
@@ -64,6 +64,59 @@ distribution. Application acceptance policies remain explicit.
 Effect rc.117 does not accept the former adapter's rounded totals of `0.99` or `1.01`.
 Reported probabilities are preserved without normalization; those totals fail with
 `AiError.InvalidOutputError`.
+
+## Language model adapter
+
+Provide `LanguageModelDecisionModel.layer` with any native language model that supports structured output.
+
+```ts twoslash
+import { LanguageModelDecisionModel } from "@effect-agent/ai-decision";
+import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { Config, Effect, Layer, Schema } from "effect";
+import { Decision, DecisionModel } from "effect/unstable/ai";
+import { FetchHttpClient } from "effect/unstable/http";
+
+const Sentiment = Decision.make({
+  input: Schema.String,
+  decisions: {
+    tone: Decision.classify({
+      instructions: "Classify the sentiment.",
+      criteria: {
+        positive: "Expresses satisfaction",
+        negative: "Expresses dissatisfaction",
+      },
+    }),
+  },
+});
+
+const DecisionLive = LanguageModelDecisionModel.layer.pipe(
+  Layer.provide(OpenAiLanguageModel.model("gpt-6-luna", { service_tier: "priority" })),
+  Layer.provide(OpenAiClient.layerConfig({ apiKey: Config.Redacted("OPENAI_API_KEY") })),
+  Layer.provide(FetchHttpClient.layer),
+);
+
+const program = DecisionModel.decide(Sentiment, { input: "This is excellent!" }).pipe(
+  Effect.map(({ answers }) => answers.tone.label), // "positive" | "negative"
+  Effect.provide(DecisionLive),
+);
+```
+
+The adapter answers all classification, rating, and probability decisions in one `generateObject`
+call. It derives the response schema from the decisions, puts decision instructions in the system
+message, and sends schema-encoded input as untrusted user data. Prompt separation does not make
+model decisions an authorization boundary. Input is still sent to the selected provider.
+
+Probabilities are LLM estimates, not calibrated confidence scores. Native `DecisionModel`
+validation applies unchanged: invalid distributions fail with `InvalidOutputError` without
+normalization. JSON or schema decoding failures retain `StructuredOutputError`. Token usage is
+forwarded; the adapter does not invent confidence values. Provider errors, defects, and interruption
+propagate. Configure model options on the supplied Layer and compose retry, timeout, or failover
+policies explicitly; this adapter does not automatically retry another provider.
+
+The Layer requires `LanguageModel` and provides `DecisionModel`. Import it from the package root
+or `@effect-agent/ai-decision/language-model-decision-model`. The
+[provider-neutral example](https://github.com/danieljvdm/effect-agent/blob/main/packages/ai-decision/examples/language-model.ts)
+uses the same decision API without selecting a provider.
 
 ## AutoModel
 
@@ -209,6 +262,6 @@ HTTP error text may include submitted content; the host controls tracing and log
 | `TypeSafeClient.Config.layer` + `TypeSafeClient.layer` | `TypeSafeClient.layerConfig()`                             |
 | `client.evaluate(request)`                             | `client.systemOne(request)`                                |
 
-`@effect-agent/ai-decision` now exports only `AutoModel`. Import the shared decision APIs directly
-from Effect; provider integrations come directly from upstream. Custom providers implement
+`@effect-agent/ai-decision` exports `AutoModel` and `LanguageModelDecisionModel`. Import the shared
+decision APIs directly from Effect; provider integrations come directly from upstream. Custom providers implement
 `DecisionModel.make({ decide })`, returning tagged provider answers and usage.

@@ -195,7 +195,8 @@ in your host.
 ### `@effect-agent/ai-decision` {#decision-models}
 
 Thread-owned automatic model selection, using the native Effect `DecisionModel` service.
-The package depends only on Effect and exports `AutoModel`. Import ordinary assessments
+The package depends only on Effect and exports `AutoModel` and `LanguageModelDecisionModel`.
+The latter adapts any structured-output language model to native decisions. Import ordinary assessments
 from `effect/unstable/ai` using `Decision` and `DecisionModel`.
 [`AutoModel`](./decision-models#automodel) selects a native model from described profiles on each thread's
 first turn, including new subagents. A shared selection store retains choices across follow-ups.

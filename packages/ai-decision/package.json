@@ -1,7 +1,7 @@
 {
   "name": "@effect-agent/ai-decision",
   "version": "0.1.0-beta.136",
-  "description": "Thread-owned automatic model selection using native Effect decisions.",
+  "description": "Native Effect decision adapters and thread-owned automatic model selection.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,7 +16,8 @@
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./auto-model": "./src/AutoModel.ts"
+    "./auto-model": "./src/AutoModel.ts",
+    "./language-model-decision-model": "./src/LanguageModelDecisionModel.ts"
   },
   "publishConfig": {
     "access": "public"
