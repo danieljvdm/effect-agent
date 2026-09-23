@@ -139,6 +139,7 @@
     "host-browser-viewport",
     "in-memory-assembly",
     "incremental-retained-history",
+    "independent-resume-context",
     "independent-run-authority",
     "independent-worker-reporting",
     "independent-worker-run-budgets",

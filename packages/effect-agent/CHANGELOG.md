@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.136
+
+### Patch Changes
+
+- [#639](https://github.com/danieljvdm/effect-agent/pull/639) [`a8c32dc`](https://github.com/danieljvdm/effect-agent/commit/a8c32dcc652192d81afbebf4f5940bf26fcc332c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Resume each Run with its original input and its own continuation, preserving late results for prior calls. Keep other interleaved exchanges visible in Thread history when compacting a Run's context.
+
 ## 0.1.0-beta.135
 
 ### Patch Changes

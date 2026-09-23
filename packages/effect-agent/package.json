@@ -1,6 +1,6 @@
 {
   "name": "effect-agent",
-  "version": "0.1.0-beta.135",
+  "version": "0.1.0-beta.136",
   "description": "Effect-native agents, execution, subagents, and sandbox contracts in one tree-shakeable package.",
   "license": "MIT",
   "repository": {
