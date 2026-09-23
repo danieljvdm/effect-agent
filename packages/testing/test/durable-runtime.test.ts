@@ -84,6 +84,7 @@ import {
   ClaimRequest,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   IdempotencyKey,
+  LedgerError,
   Principal,
   QueueSequence,
   RecoverySnapshotRequest,
@@ -94,6 +95,7 @@ import {
   UnknownResolutionCommand,
   Settlement,
   SubmissionLedger,
+  SubmissionScheduling,
   SubmissionLookupById,
   SubmissionLookupByKey,
   submissionInputRecordId,
@@ -7933,4 +7935,307 @@ layer(testLayer)("deployment continuity", (it) => {
         ).toHaveLength(1);
       }),
   );
+});
+
+// Native turn-boundary yielding retained the active FIFO head:
+// https://github.com/danieljvdm/effect-agent/commit/2259fc05eec3bfac2a92a8d055953f3482e54735
+layer(testLayer)("independent input scheduling", (it) => {
+  for (const origin of ["human", "agent"] as const)
+    for (const mode of ["correction", "stop", "interrupted-claim", "policy-failure"] as const)
+      it.effect(`handles ${mode} at a complete boundary after ${origin} work`, () =>
+        Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const control = yield* DurableRuntimeFailpointTestControl;
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          let inspections = 0;
+          let policyFailed = false;
+          let openAttempts = 0;
+          let activeSubmission: SubmissionId | undefined;
+
+          const turns: Array<{
+            question: string;
+            submissionId: SubmissionId | undefined;
+            at: number;
+          }> = [];
+
+          const authorizations: Array<{ runId: string; question: string }> = [];
+          const thread = `handoff-${origin}-${mode}`;
+          const initialPrincipal = Principal.make(origin === "human" ? "human-one" : "agent-one");
+          const input = Schema.Struct({ question: Schema.String });
+
+          const definition = Agent.make("main-separate-replies", {
+            input,
+            output: Schema.Struct({ answer: Schema.String }),
+            instructions: ({ question }) => question,
+            toolkit: searchTools,
+            policy: { maxTurns: 5, maxToolCalls: 4, maxDuration: "30 seconds" },
+          });
+
+          const scripted = Model.make(
+            "scripted",
+            "input-handoff",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: (request) =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      const text = request.prompt.content
+                        .filter((message) => message.role === "system")
+                        .map((message) => JSON.stringify(message.content))
+                        .join(" ");
+
+                      const question = text.includes("correction-two")
+                        ? "correction-two"
+                        : text.includes("correction-one")
+                          ? "correction-one"
+                          : "old-work";
+
+                      turns.push({
+                        question,
+                        submissionId: activeSubmission,
+                        at: DateTime.toEpochMillis(yield* DateTime.now),
+                      });
+                      expect(openAttempts).toBe(1);
+
+                      return Stream.fromIterable<Response.StreamPartEncoded>(
+                        question === "old-work" && inspections < 3
+                          ? [
+                              {
+                                type: "tool-call",
+                                id: `inspect-${inspections}`,
+                                name: "search",
+                                params: { query: question },
+                                providerExecuted: false,
+                              },
+                              { type: "finish", reason: "tool-calls", usage },
+                            ]
+                          : finalParts(JSON.stringify({ answer: question })),
+                      );
+                    }),
+                  ),
+              }),
+            ),
+          );
+
+          const agent = Agent.withModel(definition, scripted);
+
+          const binding = yield* DurableWorkerBinding.make(agent, DIGESTS).pipe(
+            Effect.provide(
+              searchTools.toLayer({
+                search: () =>
+                  Effect.gen(function* () {
+                    inspections++;
+                    if (inspections === 1) {
+                      yield* Deferred.succeed(entered, undefined);
+                      yield* Deferred.await(release);
+                    }
+                    yield* TestClock.adjust(100);
+
+                    return { available: true };
+                  }),
+              }),
+            ),
+          );
+
+          const tracked: ResolvedBinding = {
+            ...binding,
+            attempt: (driver, threadId, claim) =>
+              Effect.acquireUseRelease(
+                Effect.sync(() => {
+                  expect(openAttempts).toBe(0);
+                  openAttempts++;
+                  activeSubmission = claim.submissionId;
+                }),
+                () => binding.attempt(driver, threadId, claim),
+                () =>
+                  Effect.sync(() => {
+                    openAttempts--;
+                    activeSubmission = undefined;
+                  }),
+              ),
+          };
+
+          const runtimeLayer = DurableAgentRuntime.layerWithBindings([tracked]).pipe(
+            Layer.provide(
+              Layer.succeed(SubmissionScheduling, {
+                yieldTo: Effect.fnUntraced(function* ({ next }) {
+                  if (mode === "policy-failure" && !policyFailed) {
+                    policyFailed = true;
+
+                    return yield* LedgerError.make({
+                      operation: "handoff policy",
+                      message: "policy unavailable",
+                    });
+                  }
+
+                  return next.principal === "human-one";
+                }),
+              }),
+            ),
+            Layer.provide(
+              Layer.succeed(SubmissionLedger, {
+                ...ledger,
+                claimJoining: () => Effect.succeed([]),
+              }),
+            ),
+            Layer.provide(
+              Layer.succeed(RunToolAuthorization, {
+                authorize: (request) =>
+                  Effect.sync(() => {
+                    const admitted = Schema.decodeUnknownSync(input)(request.input);
+
+                    authorizations.push({ runId: request.runId, question: admitted.question });
+                    if (activeSubmission === undefined)
+                      throw new Error("Missing active submission");
+                    expect(request.runId).toBe(runIdForSubmission(activeSubmission));
+
+                    return { _tag: "allowed" as const };
+                  }),
+              }),
+            ),
+          );
+
+          let first: Receipt;
+          let second: Receipt;
+          let third: Receipt;
+          let admittedAt = 0;
+
+          yield* Effect.gen(function* () {
+            const runtime = yield* DurableAgentRuntime;
+
+            first = yield* runtime.submit(
+              agent,
+              { question: "old-work" },
+              {
+                ...submitOptions(thread, "first"),
+                principal: initialPrincipal,
+              },
+            );
+
+            const worker = yield* Effect.forkChild(
+              Effect.exit(runtime.processThreadHead(first.threadId)),
+            );
+
+            yield* Deferred.await(entered);
+
+            const secondOptions = {
+              ...submitOptions(thread, "second"),
+              principal: Principal.make("human-one"),
+            };
+
+            second = yield* runtime.submit(agent, { question: "correction-one" }, secondOptions);
+            admittedAt = DateTime.toEpochMillis(yield* DateTime.now);
+            third = yield* runtime.submit(
+              agent,
+              { question: "correction-two" },
+              {
+                ...submitOptions(thread, "third"),
+                principal: Principal.make("human-one"),
+              },
+            );
+            expect(
+              yield* runtime.submit(agent, { question: "correction-one" }, secondOptions),
+            ).toEqual(second);
+            expect(turns).toHaveLength(1);
+            if (mode === "interrupted-claim") yield* armFailpoint("claim:after-claim");
+            yield* Deferred.succeed(release, undefined);
+            const result = yield* Fiber.join(worker);
+
+            expect(openAttempts).toBe(0);
+            if (mode === "interrupted-claim" || mode === "policy-failure") {
+              expect(failureTag(result)).toBe(
+                mode === "interrupted-claim" ? "DurableRuntimeFailpointError" : "LedgerError",
+              );
+              yield* control.clear;
+            } else {
+              expect(Exit.isSuccess(result)).toBe(true);
+              expect(turns.map(({ question }) => question)).toEqual(["old-work", "correction-one"]);
+              if (mode === "stop")
+                yield* runtime.abort(
+                  AbortCommand.make({
+                    submissionId: first.submissionId,
+                    author: "human-one",
+                    reason: "stop old work",
+                  }),
+                );
+            }
+          }).pipe(Effect.provide(runtimeLayer));
+          // Rebuild the runtime after the handoff/claim interruption; every input and receipt
+          // comes from the original ledger, with no retained scheduling hint or ambient authority.
+          yield* Effect.gen(function* () {
+            const runtime = yield* DurableAgentRuntime;
+
+            yield* runtime.processThreadResolved(first.threadId);
+            const records = yield* readLog(thread);
+
+            expect(
+              records
+                .filter(({ record }) => record.payload._tag === "UserInputRecorded")
+                .map(({ record }) =>
+                  record.payload._tag === "UserInputRecorded"
+                    ? record.payload.submissionId
+                    : undefined,
+                ),
+            ).toEqual([first.submissionId, second.submissionId, third.submissionId]);
+            expect(
+              records.filter(({ record }) => record.payload._tag === "RunStarted"),
+            ).toHaveLength(3);
+            expect(
+              records.filter(({ record }) => record.payload._tag === "SubmissionSettled"),
+            ).toHaveLength(3);
+            for (const [receipt, question] of [
+              [first, "old-work"],
+              [second, "correction-one"],
+              [third, "correction-two"],
+            ] as const) {
+              const snapshot = yield* ledger.loadRecoverySnapshot(
+                RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+              );
+
+              expect(snapshot.ownership).toBeUndefined();
+              expect(snapshot.submission.receiptId).toBe(receipt.receiptId);
+              expect(snapshot.submission.state).toBe("settled");
+              expect(snapshot.submission.principal).toBe(
+                receipt === first ? initialPrincipal : "human-one",
+              );
+              const settled = yield* runtime.awaitSettlement(receipt);
+
+              expect(settled.outcome).toBe(
+                mode === "stop" && receipt === first ? "aborted" : "completed",
+              );
+              if (settled.outcome === "completed") {
+                const completion = records.find(
+                  ({ record }) =>
+                    record.payload._tag === "RunCompleted" &&
+                    record.payload.runId === runIdForSubmission(receipt.submissionId),
+                );
+
+                expect(completion?.record.payload).toMatchObject({ output: { answer: question } });
+              }
+            }
+
+            const correction = turns.find(
+              ({ submissionId }) => submissionId === second.submissionId,
+            );
+
+            expect(correction?.at).toBe(admittedAt + 100);
+            expect(turns.slice(0, 3).map(({ question }) => question)).toEqual([
+              "old-work",
+              "correction-one",
+              "correction-two",
+            ]);
+            expect(inspections).toBe(mode === "stop" ? 1 : 3);
+            expect(authorizations).toEqual(
+              Array.from({ length: inspections }, () => ({
+                runId: runIdForSubmission(first.submissionId),
+                question: "old-work",
+              })),
+            );
+            expect(openAttempts).toBe(0);
+          }).pipe(Effect.provide(runtimeLayer));
+        }),
+      );
 });

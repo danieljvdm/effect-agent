@@ -45,6 +45,7 @@ import {
   ChildSettledNotification,
   ClaimJoiningRequest,
   ClaimRequest,
+  ClaimHandoff,
   IdempotencyKey,
   JoinedToHost,
   LedgerError,
@@ -4770,6 +4771,124 @@ const assignmentSettlement = conformanceCase(
     }),
 );
 
+// Native turn-boundary yielding retained the active FIFO head:
+// https://github.com/danieljvdm/effect-agent/commit/2259fc05eec3bfac2a92a8d055953f3482e54735
+const cooperativeHandoff = conformanceCase(
+  "hands off complete Turns without bypassing ownership, ordering, cancellation or approval",
+  ({ ensure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      for (const scenario of [
+        "ready",
+        "live",
+        "stale",
+        "abort",
+        "approval",
+        "gap",
+        "ready-prefix",
+        "unapplied",
+        "foreign",
+      ] as const) {
+        const threadId = decodeThreadId(`ledger-handoff-${scenario}`);
+        const first = yield* admitReady(threadId, "first", { work: "old" });
+        const claim = yield* expectSome("original claim", yield* claimLane(threadId, PRODUCER_A));
+
+        if (scenario !== "unapplied")
+          yield* ledger.markInputApplied(
+            MarkInputAppliedRequest.make({
+              submissionId: first.submissionId,
+              ownershipToken: claim.ownershipToken,
+              recordId: submissionInputRecordId(first.submissionId),
+              sequence: decodeSequence(1),
+            }),
+          );
+        if (scenario === "gap")
+          yield* ledger.admit(yield* admissionRequest(threadId, "gap", { work: "not-ready" }));
+        if (scenario === "ready-prefix") yield* admitReady(threadId, "prefix", { work: "earlier" });
+        const next = yield* admitReady(threadId, "next", { work: "human" });
+
+        const handoff = ClaimHandoff.make({
+          producerEpoch: claim.producerEpoch,
+          deferredSubmissionIds: [first.submissionId],
+          submissionId: scenario === "foreign" ? decodeSubmissionId("foreign") : next.submissionId,
+        });
+
+        if (scenario === "approval") {
+          yield* ledger.suspend(
+            SuspendRequest.make({
+              submissionId: first.submissionId,
+              ownershipToken: claim.ownershipToken,
+              reason: ApprovalPendingSuspension.make({
+                toolCallIds: [decodeToolCallId("purchase")],
+              }),
+            }),
+          );
+        } else if (scenario !== "live") {
+          yield* ledger.releaseOwnership(
+            ReleaseOwnershipRequest.make({
+              submissionId: first.submissionId,
+              ownershipToken: claim.ownershipToken,
+            }),
+          );
+        }
+        if (scenario === "abort")
+          yield* ledger.requestAbort(
+            AbortCommand.make({
+              submissionId: first.submissionId,
+              author: "human",
+              reason: "stop",
+            }),
+          );
+        if (scenario === "stale") {
+          const intervening = yield* expectSome(
+            "intervening claim",
+            yield* claimLane(threadId, PRODUCER_B),
+          );
+
+          yield* ledger.releaseOwnership(
+            ReleaseOwnershipRequest.make({
+              submissionId: first.submissionId,
+              ownershipToken: intervening.ownershipToken,
+            }),
+          );
+        }
+
+        const selected = yield* ledger.claim(
+          ClaimRequest.make({ threadId, producerId: PRODUCER_B, handoff }),
+        );
+
+        if (scenario !== "ready") {
+          yield* ensure(Option.isNone(selected), `Handoff must preserve the ${scenario} boundary`);
+          continue;
+        }
+        const nextClaim = yield* expectSome("ordered handoff claim", selected);
+
+        yield* ensure(
+          nextClaim.submissionId === next.submissionId &&
+            nextClaim.producerEpoch > claim.producerEpoch,
+          "Handoff must claim the next Submission with a new epoch",
+        );
+        yield* settleClaimed(next, nextClaim.ownershipToken);
+
+        const resumed = yield* expectSome(
+          "original Run resumes",
+          yield* claimLane(threadId, PRODUCER_A),
+        );
+
+        yield* ensure(
+          resumed.submissionId === first.submissionId,
+          "The deferred Submission must retain its original obligation",
+        );
+        yield* ensure(
+          (yield* recoverySnapshot(first.submissionId)).submission.receiptId === first.receiptId &&
+            (yield* recoverySnapshot(next.submissionId)).submission.receiptId === next.receiptId,
+          "Handoff must preserve both receipt identities",
+        );
+      }
+    }),
+);
+
 /**
  * The shared, adapter-parameterized SubmissionLedger contract suite (STORE-010). Every durable
  * ledger adapter test suite must execute each case against its own ledger provisioning, inside
@@ -4788,6 +4907,7 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   admissionTupleBoundaries,
   concurrentAdmissionFifo,
   fifoHeadClaim,
+  cooperativeHandoff,
   leaseExpiryReclaim,
   releaseMakesHeadClaimable,
   inputAppliedIdempotency,

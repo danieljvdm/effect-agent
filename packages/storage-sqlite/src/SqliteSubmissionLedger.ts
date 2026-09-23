@@ -1457,13 +1457,35 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
                 )
               )
             ORDER BY queue_sequence ASC
-            LIMIT 1
+            LIMIT ${validated.handoff === undefined ? 1 : validated.handoff.deferredSubmissionIds.length + 1}
           `.pipe(Effect.mapError(sqlFailure(operation)));
 
           const heads = yield* decodeSubmissionRows(operation, validated.threadId, headRows);
 
           if (heads.length === 0) return Option.none<Claim>();
-          const head = heads[0];
+          let head = heads[0];
+
+          if (validated.handoff !== undefined) {
+            const handoff = validated.handoff;
+
+            for (const candidate of heads) {
+              if (candidate.submission_id === handoff.submissionId) {
+                head = candidate;
+                break;
+              }
+              if (
+                !handoff.deferredSubmissionIds.some((id) => id === candidate.submission_id) ||
+                candidate.state !== "input-applied" ||
+                Option.isSome(yield* readAbortIntent(operation, candidate.submission_id))
+              )
+                return Option.none<Claim>();
+            }
+            if (
+              head.submission_id !== handoff.submissionId ||
+              (head.state !== "ready" && head.state !== "running" && head.state !== "input-applied")
+            )
+              return Option.none<Claim>();
+          }
 
           // Approval/delegation suspension and joined work retain their queue barrier.
           // Unknown work with an abort intent is selected for cleanup without Tool replay.
@@ -1484,6 +1506,12 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           const threads = yield* journal
             .getThread(head.thread_id)
             .pipe(Effect.mapError(internalFailure(operation)));
+
+          if (
+            validated.handoff !== undefined &&
+            threads[0]?.producer_epoch !== validated.handoff.producerEpoch
+          )
+            return Option.none<Claim>();
 
           let producerEpoch: number;
 
