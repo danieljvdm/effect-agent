@@ -33,8 +33,12 @@ Wrong-thread, missing-profile, catalog-version, and record-version mismatches fa
 reselection or mutation. Explicit `select`, `restore`, and `resolve` support host-owned admission.
 
 For ordinary assessments, import `Decision` and `DecisionModel` from `effect/unstable/ai`.
-This package exports only `AutoModel`; the local decision and TypeSafe implementations have
-been replaced by Effect rc.116.
+Use `LanguageModelDecisionModel.layer` to answer those decisions with any native language model
+that supports structured output. Provide your chosen model Layer to the adapter; provider clients
+and configuration remain application-owned. Its probabilities are LLM estimates, not calibrated
+confidence scores. Native validation rejects invalid distributions; retries and failover are explicit.
+See the [language-model example](examples/language-model.ts) and
+[provider setup](https://effect-agent.com/reference/decision-models#language-model-adapter).
 
 See the [reference](https://effect-agent.com/reference/decision-models#automodel) for ownership,
 configuration, and migration details, or the runnable [decision](examples/decision.ts),
