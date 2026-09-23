@@ -146,6 +146,7 @@
     "initial-live-test-release",
     "interactive-browser-host-controls",
     "kom-durable-recovery-authorization",
+    "language-model-decisions",
     "large-review-patches",
     "lean-ledger-observation",
     "lean-pr-review",

@@ -1,5 +1,11 @@
 # @effect-agent/ai-decision
 
+## 0.1.0-beta.137
+
+### Minor Changes
+
+- [#642](https://github.com/danieljvdm/effect-agent/pull/642) [`bc7eee7`](https://github.com/danieljvdm/effect-agent/commit/bc7eee7713e84c185fd953f540af2be7bfd52a44) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add `LanguageModelDecisionModel.layer` to answer native Effect decisions through any structured-output language model.
+
 ## 0.1.0-beta.136
 
 ## 0.1.0-beta.135
