@@ -194,6 +194,7 @@
     "preserve-testing-failures",
     "progressive-tool-discovery",
     "prompt-cloudflare-message-delivery",
+    "prompt-input-handoff",
     "protect-prepared-context",
     "protected-browser-busy-authority",
     "protected-browser-contact-email",
