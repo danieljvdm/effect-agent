@@ -73,7 +73,8 @@ jobs:
           automatic-review-limit: 5
           expected-head: ${{ github.event.pull_request.head.sha || '' }}
           guidance-file: .github/review-guidance.md
-          model: gpt-6-astra
+          model: gpt-6-sol
+          effort: medium
           priority: fast
           base-cost-usd: "20.00"
           max-cost-usd: "25.00"
