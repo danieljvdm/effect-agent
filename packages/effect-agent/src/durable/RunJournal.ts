@@ -555,6 +555,8 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
  * are never canonical settlements or evidence for compaction, recovery or accounting. Real
  * results replace them at the original declaration, including results appended after another Run.
  * Prior user intent and assistant text remain visible; prior system instructions do not.
+ * Independently admitted later Runs never enter an earlier Run's prompt or compact its context.
+ * A projection without an owner still includes the complete Thread history.
  */
 /** @internal Lightweight canonical boundaries collected without retaining record payloads. */
 export interface JournalBoundary {
@@ -634,8 +636,20 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     toolExecutionEvidence,
     settledToolCallRecordIds,
     settledById,
-    compactions,
   } = metadata;
+
+  const ownerFirstSequence =
+    (ownerRunId === undefined ? undefined : firstSequenceByRun.get(ownerRunId)) ??
+    Number.POSITIVE_INFINITY;
+
+  const isLaterRun = (runId: RunId | undefined): boolean =>
+    runId !== undefined && (firstSequenceByRun.get(runId) ?? 0) > ownerFirstSequence;
+
+  const compactions = metadata.compactions.filter(({ payload }) => !isLaterRun(payload.runId));
+
+  const recordsForRun = records.pipe(
+    Stream.filter(({ record: { payload } }) => !("runId" in payload) || !isLaterRun(payload.runId)),
+  );
 
   const settledCoverage = compactions.reduce(
     (through, { payload }) =>
@@ -671,7 +685,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       : yield* decodePromptMessages(seed.protectedContext);
 
   if (settledCoverage > 0) {
-    yield* Stream.runForEach(records, (envelope) =>
+    yield* Stream.runForEach(recordsForRun, (envelope) =>
       Effect.gen(function* () {
         const payload = envelope.record.payload;
 
@@ -986,7 +1000,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     };
   });
 
-  yield* Stream.runForEach(records, (envelope) =>
+  yield* Stream.runForEach(recordsForRun, (envelope) =>
     Effect.gen(function* () {
       const payload = envelope.record.payload;
 

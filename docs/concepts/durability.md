@@ -83,7 +83,9 @@ own Run after a completed Turn. The prior Attempt closes before the next one acq
 principals, captured inputs, receipts and reply identities remain separate. Keep independent inputs
 out of `claimJoining`. The policy cannot bypass an admission gap, pending approval or child wait,
 and does not interrupt in-flight model requests or Tool batches. Deferred Runs remain owed and
-resume with their original authority and deadlines. Install matching runtime and storage packages.
+resume with their original authority and deadlines. Their model context contains prior history and
+their own Turns; later independent Runs cannot replace their input or compact their context.
+Install matching runtime and storage packages.
 
 `SubmissionLedger.scanNonterminal` discovers work through `SubmissionWorkItem`: identities,
 receipt, deployment, queue order and state, without execution payloads. Read `lookup` or

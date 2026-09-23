@@ -1631,14 +1631,18 @@ describe("engine compaction records and projection (RUN-026)", () => {
                       projectionOwner,
                     );
 
-                    expect(otherView.contextWindowId).toBe(contextWindowId(owner, 2));
                     expect(otherView.usage).toEqual(otherBaseline.usage);
                     expect(otherView.policyUsage).toEqual(otherBaseline.policyUsage);
                     if (projectionOwner === RUN_ID) {
+                      // A later independent Run cannot rewrite this Run's resume context:
+                      // https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
+                      expect(otherView).toEqual(otherBaseline);
                       expect(otherBaseline.usage).toMatchObject({
                         inputTokens: 100,
                         outputTokens: 10,
                       });
+                    } else {
+                      expect(otherView.contextWindowId).toBe(contextWindowId(owner, 2));
                     }
                   }
                 } else {
