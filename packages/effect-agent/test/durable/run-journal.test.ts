@@ -1456,6 +1456,90 @@ describe("engine compaction records and projection (RUN-026)", () => {
       }),
     );
 
+    // The same interleaving must retain each independently compacted context:
+    // https://github.com/danieljvdm/effect-agent/commit/8fc53ad9eb6b110ca6faaaebbb6dbba08e3c292f
+    it.effect("does not restore retired exchanges when independent Runs both compact", () =>
+      Effect.gen(function* () {
+        const first = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+        const next = yield* turnCanonicalBatch(turnInput(completionTurnAppended, 1, LATER_RUN_ID));
+        const continuation = yield* turnCanonicalBatch(turnInput(finalTurnAppended, 2));
+
+        for (const kind of ["clear-tool-results", "rollover"] as const) {
+          const records = envelopesOf([first, next]);
+
+          records.push(
+            envelopeAt(
+              records.length + 1,
+              auditRecord(
+                "second-run-compaction",
+                compactionPayload({
+                  kind,
+                  runId: LATER_RUN_ID,
+                  turn: 2,
+                  coversThrough: records.length,
+                  summary: undefined,
+                  handoff: "The correction is recorded.",
+                }),
+              ),
+            ),
+          );
+          for (const record of continuation.records)
+            records.push(envelopeAt(records.length + 1, record));
+          records.push(
+            envelopeAt(
+              records.length + 1,
+              auditRecord(
+                "first-run-compaction",
+                compactionPayload({
+                  kind,
+                  runId: RUN_ID,
+                  turn: 3,
+                  coversThrough: records.length,
+                  summary: undefined,
+                  handoff: "The original trip is booked.",
+                }),
+              ),
+            ),
+          );
+          const projected = yield* projectRunJournal(records, RUN_NONE_ID);
+          const history = yield* promptFromCanonicalRecords(records);
+
+          expect(projected.prompt).toEqual(history);
+          if (kind === "clear-tool-results") {
+            expect(toolResults(history)).toEqual([
+              "[tool result cleared by compaction]",
+              "[tool result cleared by compaction]",
+              "[tool result cleared by compaction]",
+            ]);
+          } else {
+            expect(toolResults(history)).toEqual([]);
+            expect(textOfPrompt(history)).toContain("The correction is recorded.");
+            expect(textOfPrompt(history)).toContain("The original trip is booked.");
+            expect(textOfPrompt(history)).not.toContain('"answer":"Booked."');
+          }
+          records.push(
+            envelopeAt(
+              records.length + 1,
+              auditRecord(
+                "combined-summary",
+                compactionPayload({
+                  kind: "summarize",
+                  runId: RUN_NONE_ID,
+                  coversThrough: records.length,
+                  summary: "Both requests are complete.",
+                }),
+              ),
+            ),
+          );
+          const combined = yield* promptFromCanonicalRecords(records);
+
+          expect(combined.content).toHaveLength(1);
+          expect(textOfPrompt(combined)).toContain("Both requests are complete.");
+          expect(toolResults(combined)).toEqual([]);
+        }
+      }),
+    );
+
     it.effect(
       "rollover preserves the canonical request and Run accounting while replacing current-Run history",
       () =>
