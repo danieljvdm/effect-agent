@@ -150,7 +150,11 @@ const ownershipLost = (claim: ActivityClaim) =>
  */
 export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function* (
   withWriteTransaction: SqlWriteTransaction,
-  initializeNamespace: Effect.Effect<void, ActivityStoreError> = Effect.void,
+  initializeNamespace: Effect.Effect<
+    void,
+    ActivityStoreError,
+    SqlClientService.SqlClient
+  > = Effect.void,
 ) {
   const sql = yield* SqlClientService.SqlClient;
   const failpoint = yield* ActivityMutationFailpoint;

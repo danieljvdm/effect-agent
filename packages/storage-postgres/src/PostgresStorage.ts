@@ -194,7 +194,7 @@ export const make = (options: PostgresStorageOptions) => {
 
       return yield* makeSqlActivityStore(
         withWriterLockTransaction(sql, config.lockTimeout),
-        ensurePostgresSchema(sql, config.schema).pipe(
+        ensurePostgresSchema(config.schema).pipe(
           Effect.mapError(() =>
             ActivityStoreError.make({
               operation: "initialize activity schema",

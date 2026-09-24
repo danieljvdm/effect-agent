@@ -67,10 +67,9 @@ const withReadTransaction = (sql: SqlClient.SqlClient) =>
   makeSqlTransaction(sql, { begin: "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" });
 
 /** Run while holding the writer transaction, including when this schema does not yet exist. */
-export const ensurePostgresSchema = Effect.fnUntraced(function* (
-  sql: SqlClient.SqlClient,
-  schema: string,
-) {
+export const ensurePostgresSchema = Effect.fnUntraced(function* (schema: string) {
+  const sql = yield* SqlClient.SqlClient;
+
   yield* sql`CREATE SCHEMA IF NOT EXISTS ${sql(schema)}`.withoutTransform;
   const rows = yield* sql`SELECT current_schema() AS name`;
 
@@ -182,7 +181,7 @@ export const initializePostgresStorage = Effect.fn("PostgresStorage.initialize")
 
   yield* write(
     Effect.gen(function* () {
-      yield* ensurePostgresSchema(sql, schema);
+      yield* ensurePostgresSchema(schema);
 
       const existingRows = yield* sql<Record<string, unknown>>`
         SELECT c.relname AS name
