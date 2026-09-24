@@ -266,6 +266,64 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
     }).pipe(Effect.provide(InMemory.layer)),
   );
 
+  it.effect.each(["user", "tool"] as const)(
+    "keeps the implicit %s cache boundary before appended run status",
+    (boundary) =>
+      Effect.gen(function* () {
+        const { model, requests } = yield* captureOpenAi(
+          (call) => boundary === "tool" && call === 1,
+        );
+
+        const agent = Agent.withModel(
+          Agent.make("cache-run-status", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Answer using the available evidence.",
+            toolkit: lookup,
+            policy: { ...policy, runStatus: "appended", contextTokenLimit: 2_000 },
+          }),
+          model,
+        );
+
+        const first = yield* AgentRuntime.run(agent, "First question").pipe(
+          Effect.provide(lookup.toLayer({ lookup: () => Effect.succeed("Durable evidence") })),
+        );
+
+        yield* AgentRuntime.run(agent, "Follow-up question", { threadId: first.threadId }).pipe(
+          Effect.provide(lookup.toLayer({ lookup: () => Effect.succeed("Durable evidence") })),
+        );
+        const previous = requests[boundary === "tool" ? 1 : 0]!;
+        const durableEnd = previous.input.at(-2);
+
+        expect(previous.input.at(-1)).toMatchObject({
+          role: "developer",
+          content: [{ type: "input_text", text: expect.stringContaining("<run-status>") }],
+        });
+        if (boundary === "tool") {
+          expect(durableEnd).toMatchObject({
+            type: "function_call_output",
+            call_id: "call-1",
+            output: "Durable evidence",
+          });
+        } else {
+          expect(durableEnd).toMatchObject({
+            role: "user",
+            content: [{ type: "input_text", text: '"First question"' }],
+          });
+        }
+        for (let index = 1; index < requests.length; index++) {
+          const prefix = requests[index - 1]!.input.slice(0, -1);
+
+          expect(requests[index]!.input.slice(0, prefix.length)).toEqual(prefix);
+        }
+        const history = yield* ThreadHistory.ThreadHistory;
+        const stored = yield* history.load(first.threadId);
+
+        expect(JSON.stringify(stored)).not.toContain("<run-status>");
+        expect(JSON.stringify(stored)).not.toContain("promptCacheBreakpoint");
+      }).pipe(Effect.provide(InMemory.layer)),
+  );
+
   it.effect(
     "preserves distinct instructions, latest precedence, native options and source history",
     () =>
@@ -402,9 +460,9 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
     }).pipe(Effect.provide(Layer.merge(InMemory.layer, ContextCompactor.layerRollover))),
   );
 
-  it.effect(
-    "keeps application instructions, cache markers and output contract together on Anthropic",
-    () =>
+  it.effect.each(["off", "appended"] as const)(
+    "keeps Anthropic instructions and cache markers together with run status %s",
+    (runStatus) =>
       Effect.gen(function* () {
         const Body = Schema.Struct({
           system: Schema.Array(Schema.Json),
@@ -493,7 +551,7 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
             input: Schema.String,
             output: Schema.String,
             toolkit: Toolkit.empty,
-            policy,
+            policy: { ...policy, runStatus },
             instructions: Prompt.fromMessages([
               Prompt.systemMessage({
                 content: "Author instructions",
@@ -524,9 +582,33 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
           { type: "text", text: expect.stringContaining("Final output contract:") },
         ]);
         expect(requests[1]!.system).toEqual(requests[0]!.system);
-        expect(requests[1]!.messages.slice(0, requests[0]!.messages.length)).toEqual(
-          requests[0]!.messages,
-        );
+        if (runStatus === "appended") {
+          // Anthropic combines adjacent user messages into one content array.
+          expect(requests[0]!.messages).toMatchObject([
+            {
+              role: "user",
+              content: [
+                { type: "text", text: '"First question"' },
+                { type: "text", text: expect.stringContaining("<run-status>") },
+              ],
+            },
+          ]);
+          expect(requests[1]!.messages[0]).toMatchObject({
+            role: "user",
+            content: [{ type: "text", text: '"First question"' }],
+          });
+          expect(requests[1]!.messages.at(-1)).toMatchObject({
+            role: "user",
+            content: [
+              { type: "text", text: '"Second question"' },
+              { type: "text", text: expect.stringContaining("<run-status>") },
+            ],
+          });
+        } else {
+          expect(requests[1]!.messages.slice(0, requests[0]!.messages.length)).toEqual(
+            requests[0]!.messages,
+          );
+        }
       }).pipe(Effect.provide(InMemory.layer)),
   );
 });
