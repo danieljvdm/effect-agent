@@ -40,6 +40,8 @@ export const MAX_REVIEW_PATCH_CHARS = 2_000_000;
 export const MAX_REVIEW_TOTAL_PATCH_CHARS = 8_000_000;
 const INLINE_PATCH_CHARS = 32_000;
 const DIFF_PAGE_CHARS = 32_000;
+const MAX_REVIEW_TURNS = 4_096;
+const MAX_REVIEW_TOOL_CALLS = 16_384;
 
 /** Native strategies share the same review ledger and execution budgets. */
 export const ReviewCompaction = Schema.Literals(["prune", "rollover"]);
@@ -211,8 +213,9 @@ export class ReviewCostSnapshot extends Schema.Class<ReviewCostSnapshot>(
  * A host must reserve the full possible charge before provider I/O. If admission
  * stops, the reviewer delivers recorded findings without another model request.
  * This port reports that decision; it does not enforce a spending limit itself.
- * Supplying it replaces the cumulative token quota with the host's admission;
- * per-context, turn, tool, and duration limits still apply. Accounted attempts
+ * Supplying it replaces the cumulative token quota with the host's admission
+ * and raises parent turn/tool limits to emergency backstops. The five-minute
+ * deadline and per-context limit still apply. Accounted attempts
  * return incomplete outcomes on expected failure, even without findings.
  * Input-token refusals also return incomplete outcomes without a paid attempt.
  * Capped hosts own model-visible spending feedback at their provider boundary;
@@ -242,7 +245,7 @@ export class ReviewOutcome extends Schema.Class<ReviewOutcome>(
   resolutions: Schema.optionalKey(Resolutions),
   /** Present for measured runs, including an empty array when no native event was emitted. */
   compactions: Schema.optionalKey(
-    Schema.Array(ReviewCompactionEvent).check(Schema.isMaxLength(512)),
+    Schema.Array(ReviewCompactionEvent).check(Schema.isMaxLength(MAX_REVIEW_TOOL_CALLS)),
   ),
   research: Schema.optionalKey(ReviewResearchStats),
   /** Accepted working-note replacements; the note text stays inside the review's Scope. */
@@ -449,13 +452,12 @@ const retainFindings = (findings: ReadonlyArray<ReviewFinding>, concurrent: bool
     })
     .slice(0, 24);
 
-const MAX_REVIEW_TOOL_CALLS = 512;
-
 const reviewPolicy = (costAdmitted: boolean, contextTokenLimit: number) =>
   AgentPolicy.make({
-    // Navigation and research share one allowance, with or without host pricing.
-    maxTurns: 128,
-    maxToolCalls: MAX_REVIEW_TOOL_CALLS,
+    // Spending admission and the deadline govern priced work. Retain finite
+    // backstops for cheap loops without cutting normal reviews off at 128 turns.
+    maxTurns: costAdmitted ? MAX_REVIEW_TURNS : 128,
+    maxToolCalls: costAdmitted ? MAX_REVIEW_TOOL_CALLS : 512,
     maxDuration: "5 minutes",
     toolConcurrency: 4,
     repeatedFailureLimit: 0,

@@ -81,7 +81,13 @@ reason is retained in the outcome and summary, forces incompleteness, and preven
 Excluded artifacts, lack of live execution, and hypothetical uncertainty do not themselves
 block assessment of the admitted change.
 
-Every parent conversation has 128 model turns, 512 tool calls, four concurrent tools, and a five-minute deadline.
+Every parent conversation has four concurrent tools and a five-minute deadline. With host
+spending admission (`costControl`), the spending ceiling is the primary budget; 4,096 model turns
+and 16,384 tool calls remain as emergency backstops. Without spending admission, the parent
+retains limits of 128 model turns and 512 tool calls. A cost estimator alone does not raise them.
+The in-memory history store also limits retained history to 1,024 messages and 4 MiB of content.
+Context rollover does not reset those memory limits.
+
 The default `compaction: "rollover"` strategy uses a 48,000-token working context to bound
 context growth during large reviews. Hosts can select `compaction: "prune"`
 and an integer `contextTokenLimit` from 16,000 to 128,000. These settings do not widen host input
@@ -106,7 +112,7 @@ identified as the five-minute deadline in the review summary.
 Every measured outcome includes `compactions`, an array of emitted native `CompactionPerformed`
 events containing only `kind`, `turn`, `tokensBeforeEstimate`, and `tokensAfterEstimate`.
 An empty array means no event was emitted; absence means the outcome supplied no measurement.
-The array is bounded to 512 entries and includes events retained before a typed failure. It does
+The array is bounded to 16,384 entries and includes events retained before a typed failure. It does
 not expose source or handoff text, and events alone do not distinguish automatic from requested
 rollovers. Boundaries that fail before event emission are not counted.
 
