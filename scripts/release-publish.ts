@@ -382,6 +382,7 @@ export const publishRelease = Effect.fn("releasePublish.publishRelease")(functio
     const verifyBuild = Effect.gen(function* () {
       if (Option.isNone(buildRun)) return;
       yield* verifyMainBuild(
+        root,
         (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
         buildRun.value,
         yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
@@ -479,10 +480,11 @@ export const command = CliCommand.make(
   Effect.fn("releasePublish.command")(function* (options) {
     const path = yield* Path.Path;
 
-    const root = path.resolve(
-      path.dirname(yield* path.fromFileUrl(new URL(import.meta.url))),
-      "..",
-    );
+    const sourceRoot = yield* Config.option(Config.String("RELEASE_SOURCE_ROOT"));
+
+    const root = Option.isSome(sourceRoot)
+      ? path.resolve(sourceRoot.value)
+      : path.resolve(path.dirname(yield* path.fromFileUrl(new URL(import.meta.url))), "..");
 
     yield* publishRelease(root, options);
   }),

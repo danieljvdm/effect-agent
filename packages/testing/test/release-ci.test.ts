@@ -526,7 +526,7 @@ layer(NodeServices.layer)((it) => {
         );
 
         const verifyMain = decideReleaseCi(
-          verifyMainBuild(mergedCheckout, 43, 1, "test-token"),
+          verifyMainBuild(directory, mergedCheckout, 43, 1, "test-token"),
         ).pipe(Effect.provideService(HttpClient.HttpClient, mainClient));
 
         expect((yield* verifyMain).fast).toBe(true);
