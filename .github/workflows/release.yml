@@ -8,10 +8,11 @@ on:
     workflows: [CI]
     types: [completed]
     branches: [main]
+  workflow_dispatch: {}
 
 concurrency:
   # A paid publication must not delay updates to the next version PR.
-  group: release-${{ github.event_name }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && 'workflow_run' || github.event_name }}
   cancel-in-progress: false
 
 permissions: {}
@@ -202,5 +203,163 @@ jobs:
         with:
           name: context-continuity-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: .context-continuity-eval/run/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  recover-beta-140:
+    name: Recover beta 140
+    # Only this already validated main commit is eligible. The trusted current
+    # tooling runs against its isolated checkout, so later changesets stay out.
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: write
+      id-token: write
+    env:
+      CI: "true"
+      VP_GIT_HOOKS: "0"
+      RELEASE_SOURCE_ROOT: ${{ github.workspace }}/candidate
+      CHECKOUT_MODEL: gpt-6-luna
+      CHECKOUT_REPETITIONS: "2"
+      CHECKOUT_CONCURRENCY: "4"
+      CHECKOUT_START_INTERVAL_MS: "1000"
+      CHECKOUT_HUMAN: "false"
+    steps:
+      - name: Check out trusted recovery tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check candidate ancestry and release line
+        working-directory: trusted
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          candidate=8b25e8bc4d0070b21bc2acce0c9178c9937448b8
+          current="$(git ls-remote --exit-code origin refs/heads/main | cut -f1)"
+          git fetch --no-tags origin main
+          test "$(git rev-parse FETCH_HEAD)" = "$current"
+          test "$(git merge-base "$candidate" "$current")" = "$candidate"
+          test -z "$(git diff --name-only "$candidate" "$current" -- \
+            .changeset/config.json .changeset/pre.json ':(glob)packages/*/package.json')"
+          gh api repos/danieljvdm/effect-agent/actions/runs/36061835776 |
+            jq -e --arg sha "$candidate" \
+              '.head_sha == $sha and .run_attempt == 3 and .event == "push" and
+               .head_branch == "main" and .status == "completed" and
+               .conclusion == "success" and .path == ".github/workflows/ci.yml"'
+
+      - name: Check out validated beta 140 candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 8b25e8bc4d0070b21bc2acce0c9178c9937448b8
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install trusted tooling
+        working-directory: trusted
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Install candidate dependencies
+        working-directory: candidate
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Patch Effect TypeScript-Go
+        working-directory: candidate
+        run: ./node_modules/.bin/vp run patch:tsgo
+
+      - name: Upgrade npm for trusted publishing
+        run: npm install --global npm@12.0.2
+
+      - name: Mint the release token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.EFFECT_AGENT_APP_ID }}
+          private-key: ${{ secrets.EFFECT_AGENT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Prepare isolated checkout attempt
+        shell: bash
+        run: |
+          set -euo pipefail
+          CHECKOUT_TOKEN="$(openssl rand -hex 32)"
+          echo "::add-mask::$CHECKOUT_TOKEN"
+          echo "CHECKOUT_TOKEN=$CHECKOUT_TOKEN" >> "$GITHUB_ENV"
+          echo "CHECKOUT_RUN_ID=checkout-$(openssl rand -hex 6)" >> "$GITHUB_ENV"
+
+      - name: Publish validated beta 140
+        timeout-minutes: 75
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
+        with:
+          cwd: ${{ github.workspace }}/candidate
+          publish: ${{ github.workspace }}/trusted/scripts/release-recover.sh
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_BUILD_RUN: "36061835776"
+          RELEASE_BUILD_ATTEMPT: "3"
+          RELEASE_BUILD_TOKEN: ${{ github.token }}
+          EFFECT_AGENT_LIVE: "1"
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXT_EVAL_MODEL: ${{ vars.CONTEXT_EVAL_MODEL || 'gpt-6-astra' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
+          BROWSER_RENDERING_API_TOKEN: ${{ secrets.BROWSER_RENDERING_API_TOKEN }}
+
+      - name: Retry recorded checkout cleanup
+        if: ${{ always() && env.CHECKOUT_RUN_ID != '' }}
+        timeout-minutes: 10
+        working-directory: candidate
+        shell: bash
+        env:
+          CHECKOUT_CLEANUP: "true"
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
+          BROWSER_RENDERING_API_TOKEN: ${{ secrets.BROWSER_RENDERING_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          report="tooling/browser-run-worker-proof/.checkout-proof/$CHECKOUT_RUN_ID/report.json"
+          if [[ -f "$report" && "$(jq -r '.cleanup' "$report")" != confirmed ]]; then
+            ./node_modules/.bin/vp run --no-cache -F @effect-agent/example-browser-run-worker-proof prove:live
+          fi
+
+      - name: Preserve checkout gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: checkout-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate/tooling/browser-run-worker-proof/.checkout-proof/${{ env.CHECKOUT_RUN_ID }}/report.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Preserve continuity gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: context-continuity-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: candidate/.context-continuity-eval/run/
           if-no-files-found: ignore
           retention-days: 30

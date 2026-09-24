@@ -470,8 +470,9 @@ export const verifyBuildEvidence = Effect.fn("releaseCi.verifyBuildEvidence")(fu
   yield* verifyJobs(sha, run.id, jobs, gates);
 });
 
-/** The successful workflow_run event selects a run; recheck its attempt and current main. */
+/** The successful workflow_run event selects a run; later main commits may not change its release line. */
 export const verifyMainBuild = Effect.fn("releaseCi.verifyMainBuild")(function* (
+  root: string,
   sha: string,
   runId: number,
   attempt: number,
@@ -493,9 +494,33 @@ export const verifyMainBuild = Effect.fn("releaseCi.verifyMainBuild")(function* 
     JSON.stringify(yield* get(`actions/runs/${runId}`, Run)) === JSON.stringify(run),
     "CI attempt changed during artifact verification",
   );
+  const main = (yield* get("git/ref/heads/main", Main)).object.sha;
+
+  if (main === sha) return;
+
+  // Publish the tested version commit when later main work has not versioned
+  // another release. Fetch the exact observed ref and fail if it moved again.
+  yield* readCommand(root, "git", ["fetch", "--no-tags", "origin", "main"]);
   yield* requireProof(
-    (yield* get("git/ref/heads/main", Main)).object.sha === sha,
-    "Main moved before publication",
+    (yield* readCommand(root, "git", ["rev-parse", "FETCH_HEAD"])).trim() === main,
+    "Main changed during publication proof",
+  );
+  yield* requireProof(
+    (yield* readCommand(root, "git", ["merge-base", sha, main])).trim() === sha,
+    "Release commit is not an ancestor of main",
+  );
+  yield* requireProof(
+    (yield* readCommand(root, "git", [
+      "diff",
+      "--name-only",
+      sha,
+      main,
+      "--",
+      ".changeset/config.json",
+      ".changeset/pre.json",
+      ":(glob)packages/*/package.json",
+    ])).trim() === "",
+    "Main changed the release line before publication",
   );
 });
 
