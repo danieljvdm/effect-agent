@@ -38,6 +38,7 @@ import {
 } from "../core/AgentError.ts";
 import { AgentPolicy } from "../core/AgentPolicy.ts";
 import { UpdateError } from "../core/AgentUpdates.ts";
+import type { DecisionTurnEvidence } from "../core/DecisionTurn.ts";
 import * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import {
   type ReceiptId,
@@ -1210,6 +1211,7 @@ const declaredApplicationCalls = Effect.fn("DurableAgentRuntime.declaredApplicat
  * path). `undefined` when the Run's journal ends at a complete Turn boundary.
  */
 interface PendingToolBatch {
+  readonly decision?: DecisionTurnEvidence | undefined;
   readonly toolOperations?: ReadonlyArray<ToolOperation> | undefined;
   readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;
@@ -1345,7 +1347,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     for (const {
       record: { payload },
     } of records) {
-      if (payload._tag !== "ModelResponseRecorded" || payload.runId !== runId) continue;
+      if (
+        (payload._tag !== "ModelResponseRecorded" && payload._tag !== "DecisionTurnRecorded") ||
+        payload.runId !== runId
+      )
+        continue;
       for (const operation of payload.toolOperations ?? [])
         operations.set(operation.toolCallId, operation);
     }
@@ -1868,6 +1874,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     let lastResponse:
       | {
           readonly turn: number;
+          readonly decision?: DecisionTurnEvidence | undefined;
           readonly messages: PersistedJson;
           readonly toolExposure?: Snapshot | undefined;
         }
@@ -1954,7 +1961,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           subagentLineageRecorded = true;
           break;
         }
-        case "ModelResponseRecorded": {
+        case "ModelResponseRecorded":
+        case "DecisionTurnRecorded": {
           if (
             payload.runId === runId &&
             (lastResponse === undefined || payload.turn > lastResponse.turn)
@@ -2187,6 +2195,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     let lastResponse:
       | {
           readonly turn: number;
+          readonly decision?: DecisionTurnEvidence | undefined;
           readonly messages: PersistedJson;
           readonly toolOperations?: ReadonlyArray<ToolOperation> | undefined;
           readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
@@ -2209,10 +2218,14 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     for (const envelope of records) {
       const payload = envelope.record.payload;
 
-      if (payload._tag === "ModelResponseRecorded" && payload.runId === runId) {
+      if (
+        (payload._tag === "ModelResponseRecorded" || payload._tag === "DecisionTurnRecorded") &&
+        payload.runId === runId
+      ) {
         if (lastResponse === undefined || payload.turn > lastResponse.turn) {
           settledByCallId.clear();
           lastResponse = {
+            ...(payload._tag === "DecisionTurnRecorded" ? { decision: payload.decision } : {}),
             turn: payload.turn,
             messages: payload.messages,
             toolParameterRejections: payload.toolParameterRejections,
@@ -2339,6 +2352,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       declaredIds: new Set(calls.map((call) => call.id)),
       responseRecordId: modelResponseRecordId(runId, lastResponse.turn),
       messages: lastResponse.messages,
+      ...(lastResponse.decision === undefined ? {} : { decision: lastResponse.decision }),
       toolParameterRejections: lastResponse.toolParameterRejections,
       toolOperations: lastResponse.toolOperations,
       ...(lastResponse.toolExposure === undefined
@@ -2760,7 +2774,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       const responses = records.filter(
         ({ record }) =>
-          record.payload._tag === "ModelResponseRecorded" &&
+          (record.payload._tag === "ModelResponseRecorded" ||
+            record.payload._tag === "DecisionTurnRecorded") &&
           record.payload.runId === runId &&
           record.payload.turn === call.turn,
       );
@@ -2772,7 +2787,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         prepared.turn !== call.turn ||
         prepared.toolName !== call.toolName ||
         responses.length !== 1 ||
-        response?.payload._tag !== "ModelResponseRecorded" ||
+        (response?.payload._tag !== "ModelResponseRecorded" &&
+          response?.payload._tag !== "DecisionTurnRecorded") ||
         response.recordId !== modelResponseRecordId(runId, call.turn) ||
         response.payload.turnId !== turnIdForRun(runId, call.turn)
       )
@@ -3735,7 +3751,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     for (const envelope of childRecords) {
       const payload = envelope.record.payload;
 
-      if (payload._tag === "ModelResponseRecorded" && payload.runId === childRunId) turns += 1;
+      if (
+        (payload._tag === "ModelResponseRecorded" || payload._tag === "DecisionTurnRecorded") &&
+        payload.runId === childRunId
+      )
+        turns += 1;
       if (payload._tag === "ToolCallSettled" && payload.runId === childRunId) toolCalls += 1;
     }
 
@@ -4642,7 +4662,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               if (entry.record.recordId === compactionId) compaction = entry;
               if (!("runId" in payload) || payload.runId !== runId) return;
               firstSequence ??= entry.sequence;
-              if (payload._tag === "ModelResponseRecorded") latestResponse = entry.sequence;
+              if (
+                payload._tag === "ModelResponseRecorded" ||
+                payload._tag === "DecisionTurnRecorded"
+              )
+                latestResponse = entry.sequence;
               if (
                 payload._tag === "ToolCallPrepared" &&
                 (payload.executionKind === "delegation" ||
@@ -4705,7 +4729,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 if (entry.sequence > retiredThrough) return true;
                 const payload = entry.record.payload;
 
-                if (payload._tag === "ModelResponseRecorded" || payload._tag === "ToolCallSettled")
+                if (
+                  payload._tag === "ModelResponseRecorded" ||
+                  payload._tag === "DecisionTurnRecorded" ||
+                  payload._tag === "ToolCallSettled"
+                )
                   frontier = { sequence: entry.sequence, tag: payload._tag };
                 if (
                   payload._tag === "ThreadCreated" ||
@@ -4718,6 +4746,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   return true;
                 switch (payload._tag) {
                   case "ModelResponseRecorded":
+                  case "DecisionTurnRecorded":
                   case "ToolCallPrepared":
                   case "ToolCallSettled":
                   case "ToolCallUnknown":
@@ -4754,6 +4783,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   throughSequence: retiredThrough,
                   ...(firstSequence === undefined ? {} : { firstSequence }),
                   committedTurns: retired.committedTurns,
+                  ...(retired.committedDecisionTurn === undefined
+                    ? {}
+                    : { committedDecisionTurn: retired.committedDecisionTurn }),
                   ...(retired.toolSelection === undefined
                     ? {}
                     : { toolSelection: retired.toolSelection }),
@@ -4809,6 +4841,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               candidate.toolSelection,
             ) ||
             current.committedTurns !== candidate.committedTurns ||
+            current.committedDecisionTurn !== candidate.committedDecisionTurn ||
             !Schema.toEquivalence(RunPolicyUsage)(current.policyUsage, candidate.policyUsage) ||
             (
               [
@@ -5034,7 +5067,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           payload.submissionId !== submissionId
         ) {
           joinedInputEnvelopes.set(payload.submissionId, envelope);
-        } else if (payload._tag === "ModelResponseRecorded" && payload.runId === runId) {
+        } else if (
+          (payload._tag === "ModelResponseRecorded" || payload._tag === "DecisionTurnRecorded") &&
+          payload.runId === runId
+        ) {
           if (
             lastHostResponseSequence === undefined ||
             envelope.sequence > lastHostResponseSequence
@@ -5064,7 +5100,11 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       const recordCommittedUsage = (batch: CanonicalBatch) => {
         for (const record of batch.records) {
-          if (record.payload._tag !== "ModelResponseRecorded") continue;
+          if (
+            record.payload._tag !== "ModelResponseRecorded" &&
+            record.payload._tag !== "DecisionTurnRecorded"
+          )
+            continue;
           const payload = record.payload;
 
           committedUsageLengths.set(
@@ -5296,11 +5336,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           .reverse()
           .find(
             (envelope) =>
-              envelope.record.payload._tag === "ModelResponseRecorded" &&
+              (envelope.record.payload._tag === "ModelResponseRecorded" ||
+                envelope.record.payload._tag === "DecisionTurnRecorded") &&
               envelope.record.payload.runId === runId,
           )?.record.payload;
 
-        if (response?._tag !== "ModelResponseRecorded") {
+        if (
+          response?._tag !== "ModelResponseRecorded" &&
+          response?._tag !== "DecisionTurnRecorded"
+        ) {
           return yield* RunJournalError.make({
             message: `Run ${runId} has a terminal completion marker without a response`,
           });
@@ -5433,6 +5477,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           );
         }
       }
+
+      let committedDecisionTurn = journal.committedDecisionTurn;
 
       let currentToolTurn: { readonly turn: number; readonly turnId: TurnId } | undefined =
         pending === undefined ? undefined : { turn: pending.turn, turnId: pending.turnId };
@@ -5624,6 +5670,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               const responseId = modelResponseRecordId(runId, canonicalTurn);
 
               if (knownIds.has(responseId)) return;
+              if (commit.decision !== undefined && committedDecisionTurn !== undefined)
+                return yield* RunJournalError.make({
+                  message: "A Run cannot commit more than one Decision Turn",
+                });
               const state = yield* Ref.get(stateRef);
               const history = state.history;
 
@@ -5640,6 +5690,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
               const batch = yield* withCrypto(
                 turnResponseBatch({
+                  decision: commit.decision,
                   toolExposure: commit.toolExposure,
                   toolOperations: commit.calls.map((call) =>
                     ToolOperation.make({
@@ -5667,9 +5718,19 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               );
 
               yield* appendBatch(ctx, batch);
+              if (commit.decision !== undefined) committedDecisionTurn = canonicalTurn;
               recordCommittedUsage(batch);
               for (const record of batch.records) knownIds.add(record.recordId);
               yield* hit("turn:after-response-append");
+              if (commit.decision !== undefined) {
+                // No Tool-result boundary follows this committed inference. Close only
+                // its canonical prefix now; later drained inputs belong to the next Turn.
+                yield* Ref.update(stateRef, (current) =>
+                  commit.decision?.projection === "continue"
+                    ? { ...current, lastCommitLen: history.content.length, pendingTurn: undefined }
+                    : { ...current, pendingTurn: { turn: canonicalTurn, turnId: commit.turnId } },
+                );
+              }
             }),
           ),
         prepareToolCalls: (calls) =>
@@ -5919,7 +5980,12 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               if (candidate === undefined) continue;
               const following = coverable[index + 1];
 
-              if (following !== undefined && following.tag !== "ModelResponseRecorded") continue;
+              if (
+                following !== undefined &&
+                following.tag !== "ModelResponseRecorded" &&
+                following.tag !== "DecisionTurnRecorded"
+              )
+                continue;
 
               const length = comparisonView.prefixLength(candidate.promptLength);
 
@@ -7048,6 +7114,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 ...(settledCompletion === undefined ? {} : { settledCompletion }),
                 turn: pending.turn,
                 turnId: pending.turnId,
+                ...(pending.decision === undefined ? {} : { decision: pending.decision }),
                 calls: pending.calls,
                 toolParameterRejections: pending.toolParameterRejections,
                 settled: pending.settled,
@@ -7128,6 +7195,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         resumeUsage: {
           ...journal.usage,
           ...journal.policyUsage,
+          ...(journal.committedDecisionTurn === undefined
+            ? {}
+            : { committedDecisionTurn: journal.committedDecisionTurn }),
           ...(journal.usage.modelCalls === 0 &&
           (journal.usage.unobservedModelCalls ?? 0) === 0 &&
           !records.some(
@@ -7384,6 +7454,15 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           }
           case "TurnCompleted": {
             const turnId = event.turnId ?? turnIdForRun(runId, event.turn);
+
+            // Decision accounting can fail before its response commit. Such a failure
+            // has usage evidence, but must never manufacture a generative response
+            // from input-only history. The commit sets pending state; resume reuses it.
+            if (
+              event.decisionModel !== undefined &&
+              !knownIds.has(modelResponseRecordId(runId, event.turn))
+            )
+              return Effect.void;
 
             return Ref.update(stateRef, (state) => ({
               ...state,

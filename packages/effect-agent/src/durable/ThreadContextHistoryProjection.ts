@@ -96,7 +96,7 @@ const retainedEvidence = Effect.fn("ThreadContextHistoryProjection.evidence")(fu
   const payload = envelope.record.payload;
   let text: string;
 
-  if (payload._tag === "ModelResponseRecorded") {
+  if (payload._tag === "ModelResponseRecorded" || payload._tag === "DecisionTurnRecorded") {
     text = yield* promptText(payload.messages);
   } else if (payload._tag === "ModelCompleted") {
     text =

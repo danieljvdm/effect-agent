@@ -1,6 +1,6 @@
 import {
   type Crypto,
-  type Option,
+  Option,
   type Scope,
   Context,
   Effect,
@@ -18,6 +18,7 @@ import {
   type ModelServices,
   type RunDispositionDeclaration,
 } from "../../core/Agent.ts";
+import { DecisionTurnError } from "../../core/AgentError.ts";
 import { type ThreadId, AgentId } from "../../core/Identifiers.ts";
 import { getToolExecutionKind } from "../../core/SubagentContract.ts";
 import {
@@ -30,11 +31,13 @@ import {
 import { type RuntimeBinding } from "../../engine/AgentRuntime.ts";
 import { ContextRolloverTool } from "../../engine/ContextWindow.ts";
 import { getToolExecutionClass } from "../../engine/DurableStep.ts";
+import { ConfiguredDecisionTurn } from "../../engine/internal/decision-turn.ts";
 import {
   BackgroundReporting,
   WorkerReportPreparationFailure,
   type WorkerReporting,
 } from "../../engine/SubagentHost.ts";
+import type * as DecisionTurn from "../DecisionTurn.ts";
 import { digestDefinitions, digestJson, DigestError } from "../Digest.ts";
 import type { DurableWorkerFailure, DurableWorkerRequirements } from "../DurableAgentRuntime.ts";
 import type { DefinitionDigestInput, PersistedJson } from "../Records.ts";
@@ -288,18 +291,26 @@ export interface AgentAttemptContext {
   readonly attemptId: Claim["attemptId"];
 }
 
-const capture = <A extends ExecutableAgentBinding, Provides = never, Requires = never>(
+type DecisionTurnRequirements<D> = Exclude<DecisionTurn.Requirements<D>, Scope.Scope>;
+
+const capture = <
+  A extends ExecutableAgentBinding,
+  Provides = never,
+  Requires = never,
+  D extends DecisionTurn.Definition<unknown, unknown> | undefined = undefined,
+>(
   agent: A,
   attemptLayer?: (context: AgentAttemptContext) => Layer.Layer<Provides, never, Requires>,
+  decisionTurn?: D,
 ): Effect.Effect<
   CapturedBinding,
   never,
-  Exclude<DurableWorkerRequirements<A>, Provides> | Requires
+  Exclude<DurableWorkerRequirements<A> | DecisionTurnRequirements<D>, Provides> | Requires
 > =>
   Effect.map(
-    Effect.context<Exclude<DurableWorkerRequirements<A>, Provides> | Requires>().pipe(
-      Effect.map(withoutTraceContext),
-    ),
+    Effect.context<
+      Exclude<DurableWorkerRequirements<A> | DecisionTurnRequirements<D>, Provides> | Requires
+    >().pipe(Effect.map(withoutTraceContext)),
     (context): CapturedBinding => ({
       agentId: agent.definition.id,
       definition: agent.definition,
@@ -308,7 +319,49 @@ const capture = <A extends ExecutableAgentBinding, Provides = never, Requires = 
         // collected. TypeScript cannot instantiate the higher-rank RuntimeBinding parameters
         // from the intentionally erased public shape, so specialize the driver back to A here.
         const run = driver as unknown as CapturedAttempt<A>;
-        const execute = run(agent, threadId, claim);
+
+        const execute =
+          decisionTurn === undefined
+            ? run(agent, threadId, claim)
+            : Effect.gen(function* () {
+                const controllerContext = yield* Effect.context<unknown>();
+
+                return yield* run(agent, threadId, claim).pipe(
+                  Effect.provideService(ConfiguredDecisionTurn, (request) =>
+                    decisionTurn
+                      .prepare({
+                        ...request,
+                        submissionId: claim.submissionId,
+                        attemptId: claim.attemptId,
+                      })
+                      .pipe(
+                        Effect.provide(controllerContext),
+                        Effect.mapError((cause) =>
+                          Schema.is(DecisionTurnError)(cause)
+                            ? cause
+                            : DecisionTurnError.make({ stage: "prepare", cause }),
+                        ),
+                        Effect.map(
+                          Option.map((prepared) => ({
+                            ...prepared,
+                            evaluate: prepared.evaluate.pipe(
+                              Effect.map((evaluated) => ({
+                                ...evaluated,
+                                project: evaluated.project.pipe(Effect.provide(controllerContext)),
+                              })),
+                              Effect.provide(controllerContext),
+                              Effect.mapError((cause) =>
+                                Schema.is(DecisionTurnError)(cause)
+                                  ? cause
+                                  : DecisionTurnError.make({ stage: "decide", cause }),
+                              ),
+                            ),
+                          })),
+                        ),
+                      ),
+                  ),
+                );
+              }).pipe(Effect.scoped);
 
         const scoped =
           attemptLayer === undefined
@@ -333,27 +386,63 @@ const capture = <A extends ExecutableAgentBinding, Provides = never, Requires = 
     }),
   );
 
-/**
- * Build one exact worker registration from an executable Agent Binding and
- * its already-computed definition digests.
- *
- * `make(agent, digests)` captures the binding plus its worker-requirement
- * Context at Layer/effect construction time. Hosts that start from application
- * version declarations should use `compileRegistrations`; low-level fixtures
- * may supply a previously computed digest triple directly.
- */
-export const DurableWorkerBinding = {
-  make: <A extends ExecutableAgentBinding>(
-    agent: A,
-    digests: DefinitionDigests,
-  ): Effect.Effect<ResolvedBinding, never, DurableWorkerRequirements<A>> =>
-    Effect.gen(function* () {
-      const binding = yield* capture(agent);
-      const reporting = yield* captureReporting(backgroundReports(agent.definition));
+const validateDecisionTurn = (
+  definition: Agent.AnyDefinition,
+  decisionTurn: DecisionTurn.Definition<unknown, unknown>,
+) =>
+  Object.is(decisionTurn.parent, definition) &&
+  Object.is(definition.toolkit.tools[decisionTurn.tool.name], decisionTurn.tool)
+    ? Effect.void
+    : DigestError.make({
+        message: "Decision Turn requires the exact registered Parent and Tool",
+      });
 
-      return { ...binding, digests, reporting };
-    }),
-} as const;
+function makeWorkerBinding<A extends ExecutableAgentBinding>(
+  agent: A,
+  digests: DefinitionDigests,
+): Effect.Effect<ResolvedBinding, never, DurableWorkerRequirements<A>>;
+function makeWorkerBinding<
+  A extends ExecutableAgentBinding,
+  D extends DecisionTurn.Definition<unknown, unknown>,
+>(
+  agent: A,
+  digests: DefinitionDigests,
+  options: { readonly decisionTurn: D },
+): Effect.Effect<
+  ResolvedBinding,
+  DigestError,
+  DurableWorkerRequirements<A> | DecisionTurnRequirements<D>
+>;
+function makeWorkerBinding<
+  A extends ExecutableAgentBinding,
+  D extends DecisionTurn.Definition<unknown, unknown>,
+>(
+  agent: A,
+  digests: DefinitionDigests,
+  options?: { readonly decisionTurn: D },
+): Effect.Effect<
+  ResolvedBinding,
+  DigestError,
+  DurableWorkerRequirements<A> | DecisionTurnRequirements<D>
+> {
+  return Effect.gen(function* () {
+    if (options !== undefined) yield* validateDecisionTurn(agent.definition, options.decisionTurn);
+    const binding = yield* capture(agent, undefined, options?.decisionTurn);
+    const reporting = yield* captureReporting(backgroundReports(agent.definition));
+
+    return { ...binding, digests, reporting };
+  });
+}
+
+/**
+ * Capture an executable Binding with caller-owned, already-computed definition digests.
+ * The optional Decision uses the same interpreter as compiled registrations. Its caller
+ * MUST include `yield* decisionTurn.contract` in the agent declaration before hashing
+ * the supplied digests; this low-level constructor never silently rewrites a prehash.
+ * Construct the Decision against this exact Definition, including per-Attempt policy overrides.
+ * Hosts with unhashed declarations can use compileRegistrations to include the contract.
+ */
+export const DurableWorkerBinding = { make: makeWorkerBinding } as const;
 
 /** INTERNAL identity-only capture retained for the legacy direct worker path. */
 export const makeLegacyWorkerBinding = capture;
@@ -413,6 +502,8 @@ export type AgentRegistration<A extends ExecutableAgentBinding = ExecutableAgent
       readonly definitions: DefinitionDigestInput;
     }
 ) & {
+  /** Optional first-eligible ordinary-Turn classification, at most one committed Decision per Run. */
+  readonly decisionTurn?: DecisionTurn.Definition<unknown, unknown>;
   /** Explicit operation versions let unchanged unfinished handlers survive toolbox changes. */
   readonly continuity?: {
     readonly versions: ReplayVersions;
@@ -448,7 +539,8 @@ type AttemptLayerRequirements<Requirements, AttemptLayer> = AttemptLayer extends
 // still needs the original worker services; only a definite Layer can remove them.
 type EntryRequirements<Entry> = Entry extends unknown
   ? AttemptLayerRequirements<
-      EntryWorkerRequirements<Entry>,
+      | EntryWorkerRequirements<Entry>
+      | (Entry extends { readonly decisionTurn: infer D } ? DecisionTurnRequirements<D> : never),
       "attemptLayer" extends keyof Entry ? Entry["attemptLayer"] : undefined
     >
   : never;
@@ -546,7 +638,14 @@ const compileRegistration = <Entry extends AgentRegistration>(
         const binding = yield* capture(
           entry.model === undefined ? entry.agent : { definition: entry.agent, model: entry.model },
           entry.attemptLayer,
+          entry.decisionTurn,
         );
+
+        if (entry.decisionTurn !== undefined)
+          yield* validateDecisionTurn(binding.definition, entry.decisionTurn);
+
+        const controllerDigest =
+          entry.decisionTurn === undefined ? undefined : yield* entry.decisionTurn.contract;
 
         const reporting = yield* captureReporting(backgroundReports(binding.definition));
 
@@ -554,7 +653,12 @@ const compileRegistration = <Entry extends AgentRegistration>(
           ...binding,
           ...(yield* compileBindingContracts(
             binding.definition,
-            definitions,
+            controllerDigest === undefined
+              ? definitions
+              : {
+                  ...definitions,
+                  agent: { declaration: definitions.agent, decisionTurn: controllerDigest },
+                },
             entry.continuity?.versions,
           )),
           reporting,

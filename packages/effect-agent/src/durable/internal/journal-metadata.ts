@@ -86,7 +86,7 @@ export const makeJournalMetadata = (
         !firstSequenceByRun.has(payload.runId)
       )
         firstSequenceByRun.set(payload.runId, envelope.sequence);
-      if (payload._tag === "ModelResponseRecorded") {
+      if (payload._tag === "ModelResponseRecorded" || payload._tag === "DecisionTurnRecorded") {
         lastResponseSequenceByRun.set(payload.runId, envelope.sequence);
       } else if (payload._tag === "ToolCallPrepared" || payload._tag === "ToolCallUnknown") {
         toolExecutionEvidence.add(toolExecutionKey(payload));

@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
 import { Update } from "./AgentUpdates.ts";
+import { DecisionTurnEvidence, DecisionTurnModel } from "./DecisionTurn.ts";
 import { AgentId, ThreadId, DelegationId, RunId, ToolCallId, TurnId } from "./Identifiers.ts";
 import { DelegationDepth } from "./SubagentContract.ts";
 import { Selection } from "./ToolExposure.ts";
@@ -35,6 +36,7 @@ export class TurnStarted extends Schema.TaggedClass<TurnStarted>()("TurnStarted"
 /** Signals that the model request for a turn is starting. */
 export class ModelStarted extends Schema.TaggedClass<ModelStarted>()("ModelStarted", {
   ...RunEventBase,
+  decisionModel: Schema.optionalKey(DecisionTurnModel),
   turn: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
 
@@ -50,9 +52,10 @@ export class ReasoningDelta extends Schema.TaggedClass<ReasoningDelta>()("Reason
   text: Schema.String,
 }) {}
 
-/** Reports a complete model-declared Tool Call and its execution boundary. */
+/** Reports a complete inference-declared Tool Call and its execution boundary. */
 export class ToolCallDeclared extends Schema.TaggedClass<ToolCallDeclared>()("ToolCallDeclared", {
   ...RunEventBase,
+  decision: Schema.optionalKey(DecisionTurnEvidence),
   toolCallId: ToolCallId,
   toolName: Schema.NonEmptyString,
   parameters: Schema.Json,
@@ -131,6 +134,7 @@ export class ApprovalRequested extends Schema.TaggedClass<ApprovalRequested>()(
 /** Records the normalized finish reason for a completed assistant turn. */
 export class TurnCompleted extends Schema.TaggedClass<TurnCompleted>()("TurnCompleted", {
   ...RunEventBase,
+  decisionModel: Schema.optionalKey(DecisionTurnModel),
   turn: Schema.Int.check(Schema.isGreaterThan(0)),
   finishReason: Schema.Literals([
     "stop",
@@ -234,6 +238,7 @@ export class RunCompleted extends Schema.TaggedClass<RunCompleted>()(
 /** Terminal event for a run that failed with an expected error. */
 export class RunFailed extends Schema.TaggedClass<RunFailed>()("RunFailed", {
   ...RunEventBase,
+  decisionModel: Schema.optionalKey(DecisionTurnModel),
   usage: Schema.optionalKey(RunTotals),
   delegatedUsage: Schema.optionalKey(RunTotals),
   errorTag: Schema.NonEmptyString,

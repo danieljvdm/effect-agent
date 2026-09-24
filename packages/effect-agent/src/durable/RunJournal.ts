@@ -26,6 +26,8 @@ import {
   CanonicalBatch,
   CompactionCreated,
   ModelResponseRecorded,
+  DecisionTurnRecorded,
+  type TurnResponseRecorded,
   PersistedJson,
   RecordEnvelope,
   RecordId,
@@ -407,6 +409,8 @@ export interface RunJournalProjection {
   readonly historyBefore: Prompt.Prompt;
   /** Number of canonical Turns already committed for the projected Run. */
   readonly committedTurns: number;
+  /** Canonical Decision inference consumed this Run's single eligible-turn slot. */
+  readonly committedDecisionTurn?: number | undefined;
   /** Summed per-call usage of the projected Run's committed responses; zeros for records predating usage capture. */
   readonly usage: RunJournalUsage;
   /** Latest committed context window identity, retained across ownership changes. */
@@ -426,7 +430,7 @@ interface ProjectedResponseUsage {
 }
 
 const projectedResponseUsage = (
-  response: ModelResponseRecorded,
+  response: TurnResponseRecorded,
 ): Effect.Effect<ProjectedResponseUsage, RunJournalError> =>
   Effect.gen(function* () {
     const calls = response.modelUsage;
@@ -562,7 +566,7 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
 /** @internal Lightweight canonical boundaries collected without retaining record payloads. */
 export interface JournalBoundary {
   readonly sequence: CanonicalSequence;
-  readonly tag: "ModelResponseRecorded" | "ToolCallSettled";
+  readonly tag: "ModelResponseRecorded" | "DecisionTurnRecorded" | "ToolCallSettled";
   readonly promptLength: number;
   /** A declaration without all settled results requires terminal-prior-Run proof for coverage. */
   readonly incomplete?: true | undefined;
@@ -706,7 +710,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       Effect.gen(function* () {
         const payload = envelope.record.payload;
 
-        if (payload._tag !== "ModelResponseRecorded" || envelope.sequence > settledCoverage) return;
+        if (
+          (payload._tag !== "ModelResponseRecorded" && payload._tag !== "DecisionTurnRecorded") ||
+          envelope.sequence > settledCoverage
+        )
+          return;
         const messages = yield* decodePromptMessages(payload.messages);
         const declared = declaredApplicationToolCallIds(messages);
 
@@ -880,6 +888,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
 
   let toolSelection = seed?.toolSelection;
   let usageTurn = seed?.committedTurns ?? 0;
+  let committedDecisionTurn = seed?.committedDecisionTurn;
 
   const incompleteToolTurns = new Set<string>();
   const incompleteToolCalls = new Set<string>();
@@ -896,7 +905,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
 
   const accountResponse = Effect.fn("RunJournal.accountResponse")(function* (
     envelope: CanonicalRecordEnvelope,
-    payload: ModelResponseRecorded,
+    payload: TurnResponseRecorded,
     messages: Prompt.Prompt,
   ) {
     const record = envelope.record;
@@ -918,6 +927,11 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     }
     if (payload.runId !== ownerRunId) return;
     if (seed !== undefined && envelope.sequence <= seed.throughSequence) return;
+    if (payload._tag === "DecisionTurnRecorded") {
+      if (committedDecisionTurn !== undefined)
+        return yield* journalError("A Run cannot commit more than one Decision Turn");
+      committedDecisionTurn = payload.turn;
+    }
     if (payload.turn === 1 && payload.runScopedPrefixLength !== undefined) {
       protectedContext = Prompt.fromMessages(
         messages.content.slice(0, payload.runScopedPrefixLength),
@@ -1076,18 +1090,27 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
       if (
         seed !== undefined &&
         envelope.sequence <= seed.throughSequence &&
-        (payload._tag === "ModelResponseRecorded" || payload._tag === "ToolCallSettled")
+        (payload._tag === "ModelResponseRecorded" ||
+          payload._tag === "DecisionTurnRecorded" ||
+          payload._tag === "ToolCallSettled")
       )
         return;
       if (replacements.some(({ payload }) => isCovered(envelope, payload))) {
         // Retiring Prompt payloads does not retire the owning Run's policy or usage accounting.
-        if (payload._tag === "ModelResponseRecorded" && payload.runId === ownerRunId) {
+        if (
+          (payload._tag === "ModelResponseRecorded" || payload._tag === "DecisionTurnRecorded") &&
+          payload.runId === ownerRunId
+        ) {
           const messages = yield* decodePromptMessages(payload.messages);
 
           yield* accountResponse(envelope, payload, messages);
           state = { ...state, committedTurns: Math.max(state.committedTurns, payload.turn) };
         }
-        if (payload._tag === "ModelResponseRecorded" || payload._tag === "ToolCallSettled") {
+        if (
+          payload._tag === "ModelResponseRecorded" ||
+          payload._tag === "DecisionTurnRecorded" ||
+          payload._tag === "ToolCallSettled"
+        ) {
           onBoundary?.({
             sequence: envelope.sequence,
             tag: payload._tag,
@@ -1178,7 +1201,8 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
 
         return;
       }
-      if (payload._tag !== "ModelResponseRecorded") return;
+      if (payload._tag !== "ModelResponseRecorded" && payload._tag !== "DecisionTurnRecorded")
+        return;
       const messages = yield* decodePromptMessages(payload.messages);
       const forRun = payload.runId === ownerRunId;
 
@@ -1305,6 +1329,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
     prompt: Prompt.fromMessages(state.all),
     historyBefore: Prompt.fromMessages(state.before),
     committedTurns: state.committedTurns,
+    ...(committedDecisionTurn === undefined ? {} : { committedDecisionTurn }),
     usage: unobservedModelCalls === 0 ? usage : { ...usage, unobservedModelCalls },
     ...(latestWindowId === undefined ? {} : { contextWindowId: latestWindowId }),
     ...(protectedContext === undefined ? {} : { protectedContext }),
@@ -1351,6 +1376,7 @@ const validStagedUsage = (label: string, value: number): Effect.Effect<number, R
       );
 
 export interface TurnCommitInput {
+  readonly decision?: DecisionTurnRecorded["decision"] | undefined;
   readonly toolOperations?: ModelResponseRecorded["toolOperations"] | undefined;
   readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;
@@ -1429,7 +1455,7 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
   input: TurnCommitInput,
   promptMessages: ReadonlyArray<Prompt.Message>,
 ): Effect.fn.Return<RecordEnvelope, RunJournalError | DigestError, Crypto.Crypto> {
-  if (promptMessages.length === 0) {
+  if (promptMessages.length === 0 && input.decision?.projection !== "continue") {
     return yield* journalError(`Turn ${input.turn} appended no model-visible Prompt messages`);
   }
   const runScopedPrefixLength = input.runScopedPrefixLength;
@@ -1439,7 +1465,9 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
     (input.turn !== 1 ||
       !Number.isSafeInteger(runScopedPrefixLength) ||
       runScopedPrefixLength <= 0 ||
-      runScopedPrefixLength >= promptMessages.length ||
+      (input.decision?.projection === "continue"
+        ? runScopedPrefixLength > promptMessages.length
+        : runScopedPrefixLength >= promptMessages.length) ||
       promptMessages
         .slice(0, runScopedPrefixLength)
         .some((message) => message.role !== "system" && message.role !== "user"))
@@ -1487,47 +1515,56 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
     }
   }
 
+  const fields = {
+    ...(input.toolOperations === undefined ? {} : { toolOperations: input.toolOperations }),
+    ...(input.toolParameterRejections === undefined || input.toolParameterRejections.length === 0
+      ? {}
+      : { toolParameterRejections: input.toolParameterRejections }),
+    ...(input.toolExposure === undefined ? {} : { toolExposure: input.toolExposure }),
+    runId: input.runId,
+    turnId: input.turnId,
+    turn: input.turn,
+    messages,
+    messagesDigest,
+    ...(runScopedPrefixLength === undefined ? {} : { runScopedPrefixLength }),
+    ...(modelUsage === undefined ? {} : { modelUsage }),
+    ...(input.unobservedModelCalls === undefined || input.unobservedModelCalls === 0
+      ? {}
+      : {
+          unobservedModelCalls: yield* validStagedUsage(
+            "unobservedModelCalls",
+            input.unobservedModelCalls,
+          ),
+        }),
+    ...(input.usage === undefined
+      ? {}
+      : {
+          inputTokens: yield* validStagedUsage("inputTokens", input.usage.inputTokens),
+          outputTokens: yield* validStagedUsage("outputTokens", input.usage.outputTokens),
+          // Written only when non-zero: absent re-seeds as zero, so the
+          // no-estimator case stays byte-identical to pre-cost histories.
+          ...(input.usage.costMicrousd === undefined || input.usage.costMicrousd === 0
+            ? {}
+            : {
+                costMicrousd: yield* validStagedUsage("costMicrousd", input.usage.costMicrousd),
+              }),
+        }),
+  };
+
   return RecordEnvelope.make({
     recordId: modelResponseRecordId(input.runId, input.turn),
     family: "thread",
     schemaVersion: 1,
     createdAt: input.createdAt,
     deploymentId: input.deploymentId,
-    payload: ModelResponseRecorded.make({
-      ...(input.toolOperations === undefined ? {} : { toolOperations: input.toolOperations }),
-      ...(input.toolParameterRejections === undefined || input.toolParameterRejections.length === 0
-        ? {}
-        : { toolParameterRejections: input.toolParameterRejections }),
-      ...(input.toolExposure === undefined ? {} : { toolExposure: input.toolExposure }),
-      runId: input.runId,
-      turnId: input.turnId,
-      turn: input.turn,
-      messages,
-      messagesDigest,
-      ...(runScopedPrefixLength === undefined ? {} : { runScopedPrefixLength }),
-      ...(modelUsage === undefined ? {} : { modelUsage }),
-      ...(input.unobservedModelCalls === undefined || input.unobservedModelCalls === 0
-        ? {}
-        : {
-            unobservedModelCalls: yield* validStagedUsage(
-              "unobservedModelCalls",
-              input.unobservedModelCalls,
-            ),
+    payload:
+      input.decision === undefined
+        ? ModelResponseRecorded.make(fields)
+        : DecisionTurnRecorded.make({
+            ...fields,
+            decision: input.decision,
+            projectionStart: promptMessages.length - (input.decision.projection === "tool" ? 1 : 0),
           }),
-      ...(input.usage === undefined
-        ? {}
-        : {
-            inputTokens: yield* validStagedUsage("inputTokens", input.usage.inputTokens),
-            outputTokens: yield* validStagedUsage("outputTokens", input.usage.outputTokens),
-            // Written only when non-zero: absent re-seeds as zero, so the
-            // no-estimator case stays byte-identical to pre-cost histories.
-            ...(input.usage.costMicrousd === undefined || input.usage.costMicrousd === 0
-              ? {}
-              : {
-                  costMicrousd: yield* validStagedUsage("costMicrousd", input.usage.costMicrousd),
-                }),
-          }),
-    }),
   });
 });
 

@@ -72,6 +72,7 @@ export default defineConfig({
       "src/durable/AgentRegistration.ts",
       "src/durable/CommittedActivity.ts",
       "src/durable/Digest.ts",
+      "src/durable/DecisionTurn.ts",
       "src/durable/DurableAgentRuntime.ts",
       "src/durable/DurableFailpoint.ts",
       "src/durable/EventSource.ts",
