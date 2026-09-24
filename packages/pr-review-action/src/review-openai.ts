@@ -141,6 +141,10 @@ const ChargedUsage = Schema.Struct({
   ),
 );
 
+const decodeReasoningUsage = Schema.decodeUnknownOption(
+  Schema.Struct({ reasoning_tokens: Schema.Natural }),
+);
+
 type Payload = typeof OpenAiSchema.CreateResponse.Encoded;
 const breakpoint = CacheBreakpoint.make({ mode: "explicit" });
 
@@ -156,7 +160,7 @@ const cacheContent = (content: string | ReadonlyArray<OpenAiSchema.InputContent>
 /**
  * The native client serializes its payload without stripping extra fields.
  * Decorate that supported boundary; keep upstream message/tool encoding and SSE decoding.
- * Breakpoints stay on earlier messages as history grows. Status is outgoing-only.
+ * Breakpoints stay on earlier messages as history grows.
  */
 export const withReviewPromptCache = (payload: Payload, key: string) => ({
   ...payload,
@@ -167,17 +171,6 @@ export const withReviewPromptCache = (payload: Payload, key: string) => ({
       ? [{ role: "user" as const, content: cacheContent(payload.input) }]
       : payload.input?.map((item, index, items) => {
           if ("role" in item && item.role !== "assistant") {
-            const text =
-              typeof item.content === "string"
-                ? item.content
-                : item.content.length === 1 && item.content[0]?.type === "input_text"
-                  ? item.content[0].text
-                  : "";
-
-            if (item.role === "user" && text.startsWith("<run-status>")) {
-              return item;
-            }
-
             return { ...item, content: cacheContent(item.content) };
           }
           if (item.type === "function_call_output") {
@@ -205,6 +198,42 @@ const RequestId = Schema.Trimmed.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,256}$/
 
 const requestId = (value: unknown) =>
   Option.getOrUndefined(Schema.decodeUnknownOption(RequestId)(value));
+
+// Only documented public codes may enter logs; arbitrary code strings can contain private data.
+// https://developers.openai.com/api/reference/resources/responses/streaming-events#response.failed
+const ProviderErrorCode = Schema.Literals([
+  "server_error",
+  "rate_limit_exceeded",
+  "invalid_prompt",
+  "data_residency_mismatch",
+  "bio_policy",
+  "misalignment_policy_violation",
+  "vector_store_timeout",
+  "invalid_image",
+  "invalid_image_format",
+  "invalid_base64_image",
+  "invalid_image_url",
+  "image_too_large",
+  "image_too_small",
+  "image_parse_error",
+  "image_content_policy_violation",
+  "invalid_image_mode",
+  "image_file_too_large",
+  "unsupported_image_media_type",
+  "empty_image_file",
+  "failed_to_download_image",
+  "image_file_not_found",
+]);
+
+const decodeProviderErrorEvent = Schema.decodeUnknownOption(
+  Schema.Union([
+    Schema.Struct({ type: Schema.Literal("error"), code: ProviderErrorCode }),
+    Schema.Struct({
+      type: Schema.Literal("response.failed"),
+      response: Schema.Struct({ error: Schema.Struct({ code: ProviderErrorCode }) }),
+    }),
+  ]),
+);
 
 const logProviderFailure = (
   phase: "create-response" | "open-stream" | "read-stream",
@@ -376,27 +405,10 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     if (before.closed) return yield* refuse("Review spending admission has already stopped.");
     const balance = costLimitMicrousd - before.cost - reservedCost(before);
 
-    // Outgoing-only host feedback. Count these exact bytes before reserving or
-    // dispatching; withReviewPromptCache leaves run-status outside the cache.
-    // The output allowance is determined after this count, so do not advertise
-    // a token allowance calculated for an earlier or smaller prompt.
-    const spendingStatus = [
-      "<run-status>",
-      `Review balance before this request: $${(balance / 1_000_000).toFixed(6)} of the $${(costLimitMicrousd / 1_000_000).toFixed(6)} ceiling. Estimated charges: $${(before.cost / 1_000_000).toFixed(6)}. Outstanding reservations: $${(reservedCost(before) / 1_000_000).toFixed(6)}.`,
-      `This request must first reserve its entire input at the full cache-miss rate of $${(pricing.write / 100).toFixed(Number.isInteger(pricing.write) ? 2 : 3)} per million tokens; only the remainder can fund reasoning and output at $${(pricing.output / 100).toFixed(2)} per million tokens. Cache hits reduce the settled charge, not the required reservation.`,
-      "</run-status>",
-    ].join("\n");
-
     const payload: Payload = withReviewPromptCache(
       {
         ...original,
         truncation: "disabled",
-        input: [
-          ...(typeof original.input === "string"
-            ? [{ role: "user" as const, content: original.input }]
-            : (original.input ?? [])),
-          { role: "user", content: spendingStatus },
-        ],
       },
       options.cacheKey,
     );
@@ -461,6 +473,8 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
     }));
     yield* Effect.logInfo("Review request admitted", {
       modelCall: reservation.id,
+      model: payload.model,
+      reasoningEffort: payload.reasoning?.effort,
       toolDefinitions: payload.tools?.length ?? 0,
       inputTokens,
       requestedMaxOutputTokens: requestedOutputTokens,
@@ -548,6 +562,8 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
 
     yield* Effect.logInfo("Review model usage", {
       modelCall: reservation.id,
+      model: response.model,
+      incompleteReason: response.incomplete_details?.reason,
       serviceTier: response.service_tier,
       functionCalls: response.output.filter((item) => item.type === "function_call").length,
       completionCalls: response.output.filter(
@@ -558,6 +574,9 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
       cachedInputTokens: read,
       cacheWriteInputTokens: write,
       outputTokens: usage.output_tokens,
+      reasoningTokens: Option.getOrUndefined(
+        decodeReasoningUsage(response.usage?.output_tokens_details),
+      )?.reasoning_tokens,
       outputLimitReached,
       cacheHitRatio: usage.input_tokens === 0 ? 0 : read / usage.input_tokens,
       estimatedCostMicrousd: cost,
@@ -625,6 +644,11 @@ export const makeReviewOpenAi = Effect.fn("makeReviewOpenAi")(function* (options
                     phase: "read-stream",
                     modelCall: reservation.id,
                     eventType: event.type,
+                    providerErrorCode: Option.match(decodeProviderErrorEvent(event), {
+                      onNone: () => "unrecognized",
+                      onSome: (error) =>
+                        error.type === "error" ? error.code : error.response.error.code,
+                    }),
                     status: response.status,
                     requestId: requestId(response.headers["x-request-id"]),
                   });

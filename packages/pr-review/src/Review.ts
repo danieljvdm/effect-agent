@@ -218,8 +218,8 @@ export class ReviewCostSnapshot extends Schema.Class<ReviewCostSnapshot>(
  * deadline and per-context limit still apply. Accounted attempts
  * return incomplete outcomes on expected failure, even without findings.
  * Input-token refusals also return incomplete outcomes without a paid attempt.
- * Capped hosts own model-visible spending feedback at their provider boundary;
- * the reviewer's generic turn/tool status is disabled for these runs.
+ * Capped hosts enforce spending at their provider boundary; the reviewer's
+ * generic turn/tool status is disabled for these runs.
  */
 export interface ReviewCostControl {
   readonly snapshot: Effect.Effect<ReviewCostSnapshot>;
@@ -258,6 +258,8 @@ const REVIEW_RUBRIC = `Review the exact baseRevision-to-headRevision change for 
 For a behavioral defect, establish a supported trigger, the changed operation, the affected caller or downstream contract, and concrete impact. Compare base and head with the SAME input. A new feature must satisfy its stated contract: validation, limits, isolation, or aggregation can be incomplete even if the old code accepted that input. Identify the new promise and its bypass. A changed input reaching an unchanged broken helper can expose a new defect; unrelated old bugs and target-only changes are out of scope. Incremental review covers only its supplied delta.
 
 Trace definitions, guards, callers, consumers, and tests across file boundaries, including unchanged code. Check bounds after transformations and aggregation, cleanup after failure, and concurrency or ownership transitions when those behaviors change. Every value admitted by an owned untrusted-input Schema is supported; do not assume a well-behaved producer. Verify external API claims against available source or contracts. Tests show intent; check whether changed tests would fail with the suspected bug present.
+
+Before filtering candidate issues, construct concrete counterexamples to the guarantees changed by this PR, using admitted inputs and supported execution paths. Then test those counterexamples against the supplied guards and base behavior, and report only the defects that survive those checks.
 
 Before recording a candidate, actively try to disprove it. Inspect the strongest relevant guard, documented exception, or alternative interpretation. Establish why the trigger survives that counterevidence. Discard intentional behavior that satisfies the stated contract, unsupported assumptions, and demands for rigor beyond the repository's requirements. Stop pursuing disproved hypotheses. Prefer no findings to weak claims; omit speculation, style, generic test requests, compiler diagnostics, and failures requiring ill-typed callers. There is no finding quota.
 
@@ -470,7 +472,7 @@ const reviewPolicy = (costAdmitted: boolean, contextTokenLimit: number) =>
       ? { completionReserveTokens: 0 }
       : { tokenBudget: 416_000, completionReserveTokens: 160_000 }),
     onExhaustion: "final-answer",
-    // Capped hosts supply their actual spending status at the provider boundary.
+    // Host admission enforces spending; generic counters are not a research target.
     runStatus: costAdmitted ? "off" : "appended",
   });
 

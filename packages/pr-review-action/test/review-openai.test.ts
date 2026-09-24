@@ -672,12 +672,14 @@ describe("review provider boundary", () => {
       }),
   );
 
-  it.effect.each(["provider-error", "transport", "invalid-id"] as const)(
+  // 812410b862e1c64090a47b29bd09c5cccb6cebf1 omitted even public provider error codes.
+  it.effect.each(["provider-error", "known-provider-error", "transport", "invalid-id"] as const)(
     "logs safe provider diagnostics for %s without retrying paid inference",
     (phase) =>
       Effect.gen(function* () {
         const logs: Array<unknown> = [];
         let sends = 0;
+        const streaming = phase === "provider-error" || phase === "known-provider-error";
 
         const native = yield* makeNative(
           HttpClient.make((httpRequest, url) => {
@@ -700,14 +702,13 @@ describe("review provider boundary", () => {
               HttpClientResponse.fromWeb(
                 httpRequest,
                 new globalThis.Response(
-                  phase === "provider-error"
-                    ? 'data: {"type":"error","code":"private-code","message":"private-provider-message","param":null}\n\n'
+                  streaming
+                    ? `data: {"type":"error","code":"${phase === "known-provider-error" ? "server_error" : "private_code"}","message":"private-provider-message","param":"private-param"}\n\n`
                     : JSON.stringify({ error: { message: "private-provider-body" } }),
                   {
-                    status: phase === "provider-error" ? 200 : 503,
+                    status: streaming ? 200 : 503,
                     headers: {
-                      "content-type":
-                        phase === "provider-error" ? "text/event-stream" : "application/json",
+                      "content-type": streaming ? "text/event-stream" : "application/json",
                       "x-request-id":
                         phase === "invalid-id" ? "private correlation header" : "req_safe-507",
                       "x-private-header": "private-header-value",
@@ -724,8 +725,6 @@ describe("review provider boundary", () => {
           model: "gpt-6-sol",
           cacheKey: "failure-diagnostics",
         }).pipe(Effect.provideService(OpenAiClient.OpenAiClient, native));
-
-        const streaming = phase === "provider-error";
 
         const operation: Effect.Effect<
           ReadonlyArray<OpenAiSchema.ResponseStreamEvent>,
@@ -744,17 +743,26 @@ describe("review provider boundary", () => {
         );
 
         // Native error events still reach the interpreter; diagnostics do not consume them.
-        expect(Exit.isFailure(exit)).toBe(phase !== "provider-error");
-        if (phase === "provider-error") {
+        expect(Exit.isFailure(exit)).toBe(!streaming);
+        if (streaming) {
           expect(Exit.isSuccess(exit) && exit.value).toEqual([
             expect.objectContaining({ type: "error", message: "private-provider-message" }),
           ]);
-        } else {
+          expect(logs).toContainEqual([
+            "Review provider error event",
+            expect.objectContaining({
+              providerErrorCode: phase === "known-provider-error" ? "server_error" : "unrecognized",
+              eventType: "error",
+              status: 200,
+              requestId: "req_safe-507",
+            }),
+          ]);
         }
         const diagnostic = JSON.stringify(logs);
 
         for (const secret of [
           "private-",
+          "private_code",
           "private correlation",
           "test-key-never-log",
           "api.openai.com",
