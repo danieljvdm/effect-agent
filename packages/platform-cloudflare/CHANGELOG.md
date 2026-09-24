@@ -1,5 +1,17 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.139
+
+### Minor Changes
+
+- [#648](https://github.com/danieljvdm/effect-agent/pull/648) [`46001cc`](https://github.com/danieljvdm/effect-agent/commit/46001cc629c61fdd009c4081d6f1a0f97a95f4a9) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add `BrowserSessions.createAttached` to retain a new browser and use its initial scoped attachment without reconnecting before the first command. Preserve durable ownership, per-command authorization and timeouts, and exact-session cleanup.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.139
+  - effect-agent@0.1.0-beta.139
+
 ## 0.1.0-beta.138
 
 ### Patch Changes

@@ -50,6 +50,7 @@
     "bounded-selector-scrape",
     "bright-agents-trace",
     "bright-rivers-own",
+    "browser-create-attached",
     "browser-input-recovery",
     "browser-run-page-capture",
     "browser-run-rest-capture",
