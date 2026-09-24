@@ -1,5 +1,12 @@
 # @effect-agent/storage-sqlite
 
+## 0.1.0-beta.140
+
+### Patch Changes
+
+- Updated dependencies [[`6d16773`](https://github.com/danieljvdm/effect-agent/commit/6d1677383d3377a0a399baeaec4c661d51b15878)]:
+  - effect-agent@0.1.0-beta.140
+
 ## 0.1.0-beta.139
 
 ### Patch Changes

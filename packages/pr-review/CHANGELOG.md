@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.140
+
+### Patch Changes
+
+- [#652](https://github.com/danieljvdm/effect-agent/pull/652) [`8462211`](https://github.com/danieljvdm/effect-agent/commit/84622116991dc41c94030328bc9c5138ffb1fb17) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Ask reviewers to construct supported counterexamples before filtering candidate defects.
+
+- Updated dependencies [[`6d16773`](https://github.com/danieljvdm/effect-agent/commit/6d1677383d3377a0a399baeaec4c661d51b15878)]:
+  - effect-agent@0.1.0-beta.140
+
 ## 0.1.0-beta.139
 
 ### Patch Changes
