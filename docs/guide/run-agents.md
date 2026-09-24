@@ -31,10 +31,13 @@ remains intact. Supply native `Prompt.systemMessage` options for provider cache 
 OpenAI's `options.openai.promptCacheBreakpoint` or Anthropic's `options.anthropic.cacheControl`.
 
 The immutable output contract also retains its message identity across turns, allowing opt-in
-native `ResponseIdTracker` reuse when the rest of the prompt prefix has the required identities.
-Changed instructions, prepared context, compaction, transient references, and appended run status
-can invalidate cached prefixes. Provider caching, minimum prompt lengths, and billing depend on
-the selected provider and configuration; stable ordering does not guarantee a cache hit.
+native `ResponseIdTracker` reuse for ordinary append-only prompts. Context preparation, transient
+references, and appended run status use full requests so provider-held responses cannot replay
+discarded material. Full requests can still use provider prompt caching.
+
+Changed instructions, prepared context, compaction, and transient references can invalidate cached
+prefixes. Provider caching, minimum prompt lengths, and billing depend on the selected provider
+and configuration; stable ordering does not guarantee a cache hit.
 
 Context preparation is optional. Provide `RunContextPreparation` to load extra context;
 without it, Runs use their normal prompt and compaction behavior. See

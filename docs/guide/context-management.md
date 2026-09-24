@@ -88,6 +88,13 @@ For durable execution, install `MetricContextLive` when [configuring the runtime
 Transforms change the model prompt, not stored input or history. Use
 [`inputPrompt`](./agents#choose-model-visible-input) to choose which input fields the model sees.
 
+Prepared and transient context use full provider requests, bypassing native response-ID reuse so
+discarded material cannot remain in a provider-held conversation. Prompt caching still applies to
+matching prefixes. A transient user-message suffix can move OpenAI's implicit cache-write boundary
+past the retained history, even when the reference text stays identical. To reuse that history,
+place native explicit cache markers in the stable prefix through context preparation; keep
+untrusted references in user messages.
+
 Prepared prompts receive fresh context estimates, including replacement content. For nondurable
 compaction, retain the original instruction/input messages or an unambiguous, content-equivalent
 ordering of them. The engine rejects compaction with `CompactionError` when that block cannot be
@@ -990,11 +997,11 @@ balance after reserving completion capacity. The runtime also warns when that ba
 another input as large as the last call.
 
 `runStatus` defaults to `"off"`. The optional status line is built for each request and never
-enters canonical history. Providers that write a cache entry at the latest user/tool boundary
-can therefore cache a suffix that disappears on the next turn, repeatedly rewriting growing
-history. Keeping status off preserves the retained conversation's cache boundary; host-enforced
-limits and `BudgetWarning` events remain active. If you opt into appended status, the host must
-account for its provider's cache-boundary behavior.
+enters canonical history. With OpenAI, it is trailing system/developer guidance, leaving the
+retained user/tool message as the implicit cache boundary. Other providers receive it as a
+trailing user message; account for their cache-boundary behavior when enabling it. Provider cache
+settings remain host-owned, and changing other prompt content can still prevent reuse.
+Host-enforced limits and `BudgetWarning` events remain active with either setting.
 
 <a id="warnings-and-the-token-soft-landing"></a>
 

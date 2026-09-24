@@ -24,7 +24,16 @@ import {
   Stream,
   Tracer,
 } from "effect";
-import { Tool, AiError, LanguageModel, Model, Prompt, Response, Toolkit } from "effect/unstable/ai";
+import {
+  Tool,
+  AiError,
+  LanguageModel,
+  Model,
+  Prompt,
+  Response,
+  ResponseIdTracker,
+  Toolkit,
+} from "effect/unstable/ai";
 
 import * as Agent from "../../core/Agent.ts";
 import {
@@ -3239,7 +3248,8 @@ export const formatRunStatus = (view: RunStatusView): string => {
 /**
  * The run-status message is derived per request and appended only to the
  * OUTGOING prompt: official history and durable commits never carry it, so it
- * can never accumulate or replay.
+ * can never accumulate or replay. OpenAI receives it as trailing system guidance,
+ * leaving the last user/tool result as the implicit cache-write boundary.
  */
 const outgoingModelPrompt = (
   policy: AgentPolicy,
@@ -3247,12 +3257,13 @@ const outgoingModelPrompt = (
   prepared: Prompt.Prompt,
   turn: number,
   declaredToolCalls: number,
-): Effect.Effect<Prompt.Prompt> =>
+): Effect.Effect<Prompt.Prompt, never, Model.ProviderName> =>
   Effect.gen(function* () {
     if (policy.runStatus !== "appended") {
       return prepared;
     }
     const now = yield* Clock.currentTimeMillis;
+    const provider = yield* Model.ProviderName;
 
     const status = formatRunStatus({
       turn,
@@ -3269,9 +3280,9 @@ const outgoingModelPrompt = (
 
     return Prompt.fromMessages([
       ...prepared.content,
-      Prompt.makeMessage("user", {
-        content: [Prompt.makePart("text", { text: status })],
-      }),
+      provider === "openai"
+        ? Prompt.systemMessage({ content: status })
+        : Prompt.userMessage({ content: [Prompt.textPart({ text: status })] }),
     ]);
   });
 
@@ -5679,7 +5690,9 @@ const makeTurn = <
 
       const canonicalDecoration = !admissionRequired
         ? Prompt.empty
-        : yield* outgoingModelPrompt(policy, context, Prompt.empty, turn, priorToolCalls);
+        : yield* outgoingModelPrompt(policy, context, Prompt.empty, turn, priorToolCalls).pipe(
+            withCallModel,
+          );
 
       const estimateToolSchemaTokens = Effect.suspend(() => {
         const choice = modelToolChoice();
@@ -5986,7 +5999,13 @@ const makeTurn = <
       const derivedPrompt =
         options.transientContext === undefined
           ? canonicalDecoration
-          : yield* outgoingModelPrompt(policy, context, transientContext, turn, priorToolCalls);
+          : yield* outgoingModelPrompt(
+              policy,
+              context,
+              transientContext,
+              turn,
+              priorToolCalls,
+            ).pipe(withCallModel);
 
       const derivedPromptContentTokens = !admissionRequired
         ? 0
@@ -6164,11 +6183,15 @@ const makeTurn = <
           outgoingModelPrompt(
             policy,
             context,
-            Prompt.fromMessages([...basis.content, ...transientContext.content]),
+            prepareModelPrompt(
+              Prompt.fromMessages([...basis.content, ...transientContext.content]),
+              outputContract._tag === "rendered" ? outputContract.part : undefined,
+            ),
             turn,
             priorToolCalls,
           ).pipe(
-            Effect.flatMap((outgoing) =>
+            withCallModel,
+            Effect.flatMap((providerPrompt) =>
               Effect.gen(function* () {
                 const toolChoice = modelToolChoice();
 
@@ -6212,11 +6235,6 @@ const makeTurn = <
                 }
                 context.toolExposure = snapshot;
 
-                const providerPrompt = prepareModelPrompt(
-                  outgoing,
-                  outputContract._tag === "rendered" ? outputContract.part : undefined,
-                );
-
                 // Prepared and transient context can change at every Turn. A
                 // final full-prompt check closes the per-call boundary for grace
                 // finalization and any future path that bypasses research
@@ -6250,10 +6268,9 @@ const makeTurn = <
                   Effect.as(
                     guardBudgetStream(
                       LanguageModel.streamText({
-                        // The contract joins the final outgoing prompt (after
-                        // compaction and the run-status append), so every attempt —
-                        // including the overflow retry — carries it at the last
-                        // system block.
+                        // Every attempt, including an overflow retry, places the
+                        // contract in the leading system block before appending
+                        // transient run status.
                         prompt: providerPrompt,
                         toolkit: deferredToolParameterToolkit(requestToolkit),
                         disableToolCallResolution: true,
@@ -6263,6 +6280,19 @@ const makeTurn = <
                       }),
                       options.budget,
                     ).pipe(
+                      // Provider-held responses retain prior model-only context.
+                      // Isolate tracking when a later request can discard it.
+                      (stream) =>
+                        policy.runStatus === "appended" ||
+                        options.context !== undefined ||
+                        options.transientContext !== undefined
+                          ? stream.pipe(
+                              Stream.provideServiceEffect(
+                                ResponseIdTracker.ResponseIdTracker,
+                                ResponseIdTracker.make,
+                              ),
+                            )
+                          : stream,
                       Stream.provideServiceEffect(
                         Tracer.Tracer,
                         modelTelemetryTracer(context, turnId),
