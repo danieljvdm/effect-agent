@@ -47,13 +47,16 @@ const callHandler = (
 
 const JsonRpcRequest = Schema.fromJsonString(
   Schema.Struct({
+    jsonrpc: Schema.Literal("2.0"),
     id: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number])),
     method: Schema.String,
-    params: Schema.optionalKey(Schema.Unknown),
+    params: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
   }),
 );
 
-const decodeJsonRpcRequest = Schema.decodeUnknownEffect(JsonRpcRequest);
+const decodeJsonRpcRequest = Schema.decodeUnknownEffect(JsonRpcRequest, {
+  onExcessProperty: "error",
+});
 
 interface ObservedRequest {
   readonly httpMethod: string;
@@ -188,7 +191,7 @@ const scriptedSseServer = Effect.gen(function* () {
 
 describe("MCP client over server-sent events", () => {
   it.effect(
-    "decodes SSE responses, propagates the session, and ends it with the caller's Scope",
+    "speaks strict JSON-RPC over SSE, propagates the session, and ends it with the caller's Scope",
     () =>
       Effect.gen(function* () {
         const server = yield* scriptedSseServer;

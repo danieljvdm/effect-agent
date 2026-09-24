@@ -159,6 +159,21 @@ const isServerRequest = Schema.is(ServerRequest);
 const isJsonRpcRequest = (message: unknown): message is RpcMessage.RequestEncoded =>
   isServerRequest(message);
 
+/** Effect RPC's tracing extensions are not part of MCP's strict JSON-RPC request shape. */
+const mcpWireMessage = (message: unknown): unknown => {
+  if (!Predicate.hasProperty(message, "_tag") || message._tag !== "Request") return message;
+  const payload = Predicate.hasProperty(message, "payload") ? message.payload : undefined;
+
+  return {
+    ...message,
+    payload: payload === null ? undefined : payload,
+    traceId: undefined,
+    spanId: undefined,
+    sampled: undefined,
+    headers: [],
+  };
+};
+
 /** JSON-RPC error a client returns for a server-initiated request it does not serve. */
 const declineServerRequest = (
   request: RpcMessage.RequestEncoded,
@@ -371,7 +386,7 @@ const makeHttpProtocol = Effect.fn("McpHttpTransport.protocol")(function* (
     Effect.sync(() => {
       const encode = (message: unknown): Effect.Effect<string, RpcClientError.RpcClientError> =>
         Effect.suspend(() => {
-          const encoded = parser.encode(message);
+          const encoded = parser.encode(mcpWireMessage(message));
 
           return typeof encoded === "string"
             ? Effect.succeed(encoded)
@@ -599,7 +614,7 @@ const makeStdioProtocol = Effect.fn("McpStdioTransport.protocol")(function* (
       const enqueue = (message: unknown): Effect.Effect<void, RpcClientError.RpcClientError> =>
         Effect.suspend(() => {
           if (closed !== undefined) return Effect.fail(closed);
-          const encoded = parser.encode(message);
+          const encoded = parser.encode(mcpWireMessage(message));
 
           if (typeof encoded !== "string") {
             return Effect.fail(protocolDefect("Could not encode an MCP JSON-RPC message"));
