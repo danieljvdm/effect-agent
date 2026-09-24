@@ -12,6 +12,7 @@ import {
   ReviewContextError,
   ReviewFileList,
   ReviewRepository,
+  ReviewSource,
 } from "@effect-agent/pr-review/review-repository";
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Exit, Fiber, Layer, Logger, Ref, Schema, Stream, Struct } from "effect";
@@ -588,6 +589,66 @@ describe("review output boundary", () => {
       expect(outcome.report.findings).toHaveLength(24);
       expect(outcome.report.findings[0]).toEqual(blocker);
       expect(outcome.incomplete).toBe(true);
+    }),
+  );
+
+  // Regression: 38bc3406 (#337) capped affordable cached reviews at 128 turns.
+  it.effect("completes cost-admitted reviews beyond the former iteration limits", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0);
+      const reads: Array<string> = [];
+      // 129 four-file research rounds cross both former iteration limits.
+      const researchRounds = 129;
+
+      const outcome = yield* makeReviewer({
+        costControl: costControl(calls),
+        model: scriptedModel(() =>
+          Stream.unwrap(
+            Effect.gen(function* () {
+              const call = yield* Ref.updateAndGet(calls, (n) => n + 1);
+
+              if (call <= researchRounds)
+                return toolResponse(
+                  Array.from({ length: 4 }, (_, index) => ({
+                    name: "read_file",
+                    params: {
+                      path: `src/caller-${call}-${index}.ts`,
+                      revision: "head",
+                      startLine: 1,
+                      lineCount: 1,
+                    },
+                  })),
+                );
+              if (call === researchRounds + 1)
+                return toolResponse([
+                  { name: "record_finding", params: submittedFinding(blocker, 1) },
+                ]);
+
+              return response({ resolutions: [resolution] });
+            }),
+          ),
+        ),
+      })
+        .review(ReviewRequest.make({ ...request, followUps: [followUp] }))
+        .pipe(
+          Effect.provideService(ReviewRepository, {
+            ...emptyRepository,
+            readFile: (input) =>
+              Effect.sync(() => {
+                reads.push(input.path);
+
+                return ReviewSource.make({ ...input, totalLines: 1, content: "caller();" });
+              }),
+          }),
+        );
+
+      expect(yield* Ref.get(calls)).toBe(131);
+      expect(outcome.turns).toBe(131);
+      expect(new Set(reads).size).toBe(516);
+      expect(outcome.report.findings).toEqual([blocker]);
+      expect(outcome.resolutions).toEqual([resolution]);
+      expect(outcome.incomplete).toBeUndefined();
+      expect(outcome.exhausted).toBeUndefined();
     }),
   );
 

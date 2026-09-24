@@ -314,8 +314,10 @@ manifest and established findings, so related changes stay visible across the in
 up to 32,000 total characters appear directly in the initial prompt; larger changes use `read_diff`
 pages of up to 32,000 characters. Pages can cross file boundaries, so reviewing many small files does
 not require a separate call for each file. Every retained patch line remains available in full. One spending ledger,
-128-turn allowance, 512-tool-call allowance, 5-minute deadline, and 24-finding capacity cover the entire
-attempt. Findings survive an expected execution failure. Unread diff ranges prevent complete coverage;
+5-minute deadline, and 24-finding capacity cover the entire attempt. Finite backstops of 4,096 model
+turns and 16,384 tool calls bound runaway loops within that deadline. Findings survive an expected
+execution failure. The reviewer's [history capacity limits](../packages/pr-review/README.md#coverage-and-limits)
+also apply. Unread diff ranges prevent complete coverage;
 reading every range is necessary but does not prove the model finished assessing the change.
 
 The native Agent input projection uses literal unified diff text, avoiding JSON-escaped source and
@@ -323,9 +325,9 @@ duplicated old/new context. A large remaining input can still prevent another ca
 the allowance, because admission must cover a cache miss. Refusal logs report the counted input, remaining
 balance, and minimum possible request reservation. The Action's spending admission replaces the
 reviewer's cumulative token quota, so reusing cached context does not force early finalization.
-The 128-turn and 512-tool-call bounds accommodate diff navigation and research within the shared
-spending cap. The five-minute deadline and native rollover at a 48,000-token working context
-still apply; the provider's separate exact-input admission boundary remains 128,000 tokens.
+Spending admission is the primary budget for diff navigation and research. The five-minute
+deadline and native rollover at a 48,000-token working context still apply; the provider's separate
+exact-input admission boundary remains 128,000 tokens.
 
 The Action uses explicit-only caching with a 30-minute TTL and a stable head-based routing key.
 It marks reusable instructions, the diff, and completed tool batches before the ephemeral run-status
