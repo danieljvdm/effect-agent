@@ -88,6 +88,13 @@ For durable execution, install `MetricContextLive` when [configuring the runtime
 Transforms change the model prompt, not stored input or history. Use
 [`inputPrompt`](./agents#choose-model-visible-input) to choose which input fields the model sees.
 
+Prepared and transient context use full provider requests, bypassing native response-ID reuse so
+discarded material cannot remain in a provider-held conversation. Prompt caching still applies to
+matching prefixes. A transient user-message suffix can move OpenAI's implicit cache-write boundary
+past the retained history, even when the reference text stays identical. To reuse that history,
+place native explicit cache markers in the stable prefix through context preparation; keep
+untrusted references in user messages.
+
 Prepared prompts receive fresh context estimates, including replacement content. For nondurable
 compaction, retain the original instruction/input messages or an unambiguous, content-equivalent
 ordering of them. The engine rejects compaction with `CompactionError` when that block cannot be

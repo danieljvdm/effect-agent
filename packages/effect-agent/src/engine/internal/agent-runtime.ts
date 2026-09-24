@@ -24,7 +24,16 @@ import {
   Stream,
   Tracer,
 } from "effect";
-import { Tool, AiError, LanguageModel, Model, Prompt, Response, Toolkit } from "effect/unstable/ai";
+import {
+  Tool,
+  AiError,
+  LanguageModel,
+  Model,
+  Prompt,
+  Response,
+  ResponseIdTracker,
+  Toolkit,
+} from "effect/unstable/ai";
 
 import * as Agent from "../../core/Agent.ts";
 import {
@@ -6271,6 +6280,19 @@ const makeTurn = <
                       }),
                       options.budget,
                     ).pipe(
+                      // Provider-held responses retain prior model-only context.
+                      // Isolate tracking when a later request can discard it.
+                      (stream) =>
+                        policy.runStatus === "appended" ||
+                        options.context !== undefined ||
+                        options.transientContext !== undefined
+                          ? stream.pipe(
+                              Stream.provideServiceEffect(
+                                ResponseIdTracker.ResponseIdTracker,
+                                ResponseIdTracker.make,
+                              ),
+                            )
+                          : stream,
                       Stream.provideServiceEffect(
                         Tracer.Tracer,
                         modelTelemetryTracer(context, turnId),

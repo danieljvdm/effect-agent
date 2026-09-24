@@ -4,12 +4,13 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { Agent, AgentRuntime, InMemory, ThreadHistory } from "effect-agent";
 import { ContextCompactor } from "effect-agent/context-compactor";
-import { Prompt, Tool, Toolkit } from "effect/unstable/ai";
+import { Prompt, ResponseIdTracker, Tool, Toolkit } from "effect/unstable/ai";
 import { HttpClient, HttpClientResponse, HttpServerResponse } from "effect/unstable/http";
 
 const Request = Schema.Struct({
   input: Schema.Array(Schema.Json),
   tools: Schema.optionalKey(Schema.Array(Schema.Json)),
+  previous_response_id: Schema.optionalKey(Schema.String),
 });
 
 type Request = typeof Request.Type;
@@ -322,6 +323,53 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
         expect(JSON.stringify(stored)).not.toContain("<run-status>");
         expect(JSON.stringify(stored)).not.toContain("promptCacheBreakpoint");
       }).pipe(Effect.provide(InMemory.layer)),
+  );
+
+  it.effect.each(["none", "status", "references", "prepared"] as const)(
+    "reuses native response IDs only without discarded context: %s",
+    (transient) =>
+      Effect.gen(function* () {
+        const { model, requests } = yield* captureOpenAi((call) => call === 1);
+
+        const agent = Agent.withModel(
+          Agent.make("cache-response-id", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Answer from evidence.",
+            toolkit: lookup,
+            policy: { ...policy, runStatus: transient === "status" ? "appended" : "off" },
+          }),
+          model,
+        );
+
+        yield* AgentRuntime.run(agent, "Original question", {
+          context:
+            transient === "prepared"
+              ? {
+                  prepare: ({ source }) =>
+                    Effect.succeed({
+                      prompt: Prompt.concat(source, Prompt.make("Ephemeral reference")),
+                    }),
+                }
+              : undefined,
+          transientContext:
+            transient === "references"
+              ? { load: () => Effect.succeed("Ephemeral reference") }
+              : undefined,
+        }).pipe(Effect.provide(lookup.toLayer({ lookup: () => Effect.succeed("Evidence") })));
+        expect(requests).toHaveLength(2);
+        if (transient === "none") {
+          expect(requests[1]!.previous_response_id).toBe("response-1");
+        } else {
+          // A previous response retains its discarded suffix on the provider.
+          // Local omission alone cannot remove that suffix from a continuation.
+          expect(requests[1]!.previous_response_id).toBeUndefined();
+          expect(JSON.stringify(requests[1]!.input)).toContain("Original question");
+        }
+      }).pipe(
+        Effect.provideServiceEffect(ResponseIdTracker.ResponseIdTracker, ResponseIdTracker.make),
+        Effect.provide(InMemory.layer),
+      ),
   );
 
   it.effect(
