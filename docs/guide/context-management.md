@@ -47,8 +47,11 @@ from successful Tool receipts can therefore read their canonical records during 
 compacts the prepared history, then loads optional references through
 `RunContextPreparation.transientContext.load`. If the references exceed the remaining budget,
 the engine can compact canonical history further while keeping the same reference snapshot.
-It appends the references and derived run status to the compacted view and adds the output
-contract. Compaction summaries never receive transient references. Durable
+It appends the references and derived run status to the compacted view. The outgoing request groups
+system messages into one leading block, followed by the output contract and the conversation.
+Exact system-message repeats, including provider options, keep their last occurrence; distinct
+instructions retain their relative precedence. This projection preserves stored history and
+compaction boundaries. Compaction summaries never receive transient references. Durable
 recovery rebuilds the committed model view before applying prompt preparation; a transient loader
 receives the current Attempt's official source, Thread ID, Run ID, Turn ID, and Turn number.
 
@@ -1016,7 +1019,8 @@ always fail because another model call would add time or cost.
 
 With `contextTokenLimit`, the engine estimates the next prompt before every turn. Ordinary
 append-only history starts from the last provider-reported input and estimates appended content.
-Preparation and transient-context hooks use a fresh estimate. Within a turn, the engine reuses
+Preparation and transient-context hooks use a fresh estimate. Full estimates exclude repeated
+system messages removed from the outgoing request. Within a turn, the engine reuses
 the history view and estimate until compaction changes them. The default compactor then:
 
 1. clears old application tool results outside the preferred `keepRecentTokens` tail while keeping

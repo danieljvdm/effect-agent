@@ -24,10 +24,17 @@ deliberately measures a sequential workflow. Continuity fixtures serialize chang
 Code Mode examples bound generated programs separately. Node host worker concurrency is a separate
 setting.
 
-The immutable output contract retains its message identity across turns, allowing opt-in native
-`ResponseIdTracker` reuse when the rest of the prompt prefix is unchanged. Prepared context,
-compaction, and a resumed Run can still invalidate that prefix. Provider caching and billing depend
-on the selected provider and configuration.
+Outgoing requests place system instructions and the output contract before the conversation.
+Unchanged instructions therefore stay in a stable prefix across Turns and Runs. Exact repeated
+system messages keep their last occurrence, including native provider options; stored history
+remains intact. Supply native `Prompt.systemMessage` options for provider cache controls, such as
+OpenAI's `options.openai.promptCacheBreakpoint` or Anthropic's `options.anthropic.cacheControl`.
+
+The immutable output contract also retains its message identity across turns, allowing opt-in
+native `ResponseIdTracker` reuse when the rest of the prompt prefix has the required identities.
+Changed instructions, prepared context, compaction, transient references, and appended run status
+can invalidate cached prefixes. Provider caching, minimum prompt lengths, and billing depend on
+the selected provider and configuration; stable ordering does not guarantee a cache hit.
 
 Context preparation is optional. Provide `RunContextPreparation` to load extra context;
 without it, Runs use their normal prompt and compaction behavior. See

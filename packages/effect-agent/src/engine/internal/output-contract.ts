@@ -144,30 +144,48 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
   return contract;
 };
 
-/**
- * Insert the contract immediately after the request prompt's last system
- * message (position 0 when none exists), extending the last contiguous
- * system block. Placement is normative: the Anthropic provider replaces its
- * top-level `system` parameter per contiguous system group, so only the last
- * block survives there — an isolated trailing contract message would discard
- * the author's instructions, and a contract inside an earlier block (for
- * example a resumed Thread's original instructions ahead of this Run's
- * evaluated instructions) would itself be discarded. Extending the last
- * block keeps author content and contract together on every provider and
- * preserves the author's per-message cache-control annotations.
- */
-export const insertOutputContract = (
-  prompt: Prompt.Prompt,
-  message: Prompt.SystemMessage,
-): Prompt.Prompt => {
-  const content = prompt.content;
-  let insertAt = 0;
+const sameSystemMessage = Schema.toEquivalence(Prompt.SystemMessage);
 
-  for (let index = 0; index < content.length; index += 1) {
-    if (content[index]?.role === "system") {
-      insertAt = index + 1;
+/**
+ * Project system instructions and the output contract into one leading block.
+ * Repeated Runs append instructions to canonical history; letting those copies
+ * move the contract breaks the preceding user/tool prefix used by provider caches.
+ * Keep the last occurrence of each equivalent system message, preserving the
+ * precedence of distinct instructions and their native provider options.
+ *
+ * This runs after preparation and compaction. Canonical messages, protected
+ * instruction/input spans and compaction coverage retain their original positions.
+ * Conversation order and message identities are unchanged. A single system block
+ * also prevents Anthropic's last-system-group conversion from discarding earlier
+ * application instructions or the output contract.
+ */
+export const prepareModelPrompt = (
+  prompt: Prompt.Prompt,
+  contract: Prompt.SystemMessage | undefined,
+): Prompt.Prompt => {
+  const systems: Array<Prompt.SystemMessage> = [];
+  const conversation: Array<Prompt.Message> = [];
+  const seen = new Map<string, Array<Prompt.SystemMessage>>();
+
+  for (let index = prompt.content.length - 1; index >= 0; index -= 1) {
+    const message = prompt.content[index];
+
+    if (message === undefined) continue;
+    if (message.role !== "system") {
+      conversation.push(message);
+      continue;
     }
+    const variants = seen.get(message.content);
+
+    if (variants?.some((previous) => sameSystemMessage(previous, message))) continue;
+    if (variants === undefined) seen.set(message.content, [message]);
+    else variants.push(message);
+    systems.push(message);
   }
 
-  return Prompt.fromMessages([...content.slice(0, insertAt), message, ...content.slice(insertAt)]);
+  return Prompt.fromMessages([
+    ...systems.reverse(),
+    ...(contract === undefined ? [] : [contract]),
+    ...conversation.reverse(),
+  ]);
 };

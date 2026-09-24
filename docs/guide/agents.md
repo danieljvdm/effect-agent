@@ -81,8 +81,9 @@ through an `Effect`. Strings become user messages. Prompts and message arrays ke
 parts, provider options, and multimodal content. Return an empty Prompt or message array to omit
 the input message. Its errors and service requirements join the run's `E` and `R`.
 
-The runtime builds model context in this order: history, instructions, projected input, context
-transform, compaction, output contract, and run status. See
+The runtime builds the source from history, instructions, and projected input, then applies context
+preparation and compaction. Outgoing requests place system instructions and the output contract
+before the conversation; optional transient context and run status follow the conversation. See
 [Context management](/guide/context-management).
 
 Projection changes only model-visible input. Durable admission still stores the complete encoded
