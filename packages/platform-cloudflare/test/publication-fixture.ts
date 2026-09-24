@@ -20,13 +20,11 @@ export const SOURCE_KEY = "test:publication:source";
 export interface PublicationControl {
   readonly entered?: () => void;
   readonly release?: Promise<void>;
-  readonly failure?: "failure" | "defect" | "interruption" | "timeout";
-  readonly retryAt?: number;
+  readonly failure?: "failure";
 }
 
 export const publicationControls = new Map<string, PublicationControl>();
 export const publicationResources = new Map<string, { acquired: number; released: number }>();
-export const publicationPreparations = new Map<string, Array<string>>();
 
 /** Persistent host cursor over the real local source ports; only the destination is controlled. */
 export const publicationLayer = Layer.effect(ThreadPublication)(
@@ -81,10 +79,6 @@ export const publicationLayer = Layer.effect(ThreadPublication)(
           const cursor = yield* read;
 
           if (cursor.generation === String(generation)) return;
-          const calls = publicationPreparations.get(threadId) ?? [];
-
-          calls.push(String(generation));
-          publicationPreparations.set(threadId, calls);
           yield* save({ ...cursor, generation: String(generation), dirty: true });
         }).pipe(Effect.mapError(failure)),
       drain: Effect.gen(function* () {
@@ -105,12 +99,7 @@ export const publicationLayer = Layer.effect(ThreadPublication)(
         const currentTail = yield* tail;
         const control = publicationControls.get(threadId);
 
-        if (control?.retryAt !== undefined) return;
         if (control?.failure === "failure") return yield* failure("retryable destination failure");
-        if (control?.failure === "defect") return yield* Effect.die("destination defect");
-        if (control?.failure === "interruption") return yield* Effect.interrupt;
-        if (control?.failure === "timeout")
-          return yield* Effect.never.pipe(Effect.timeout("0 millis"));
         control?.entered?.();
         const release = control?.release;
 
@@ -139,9 +128,7 @@ export const publicationLayer = Layer.effect(ThreadPublication)(
         if (!cursor.dirty && cursor.source >= (yield* source) && cursor.tail >= (yield* tail))
           return Option.none();
 
-        return Option.some(
-          publicationControls.get(threadId)?.retryAt ?? (yield* Clock.currentTimeMillis),
-        );
+        return Option.some(yield* Clock.currentTimeMillis);
       }).pipe(Effect.mapError(failure)),
     });
   }),

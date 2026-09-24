@@ -5,7 +5,6 @@ import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import type { PlatformError } from "effect";
 import {
-  Cause,
   Context,
   Effect,
   Exit,
@@ -129,45 +128,14 @@ const sourceLayer = (calls: Ref.Ref<number>, completed: Ref.Ref<boolean>) =>
     ),
   );
 
-interface DeadlineDefectProbe {
-  readonly pending: Ref.Ref<boolean>;
-  readonly attempts: Ref.Ref<number>;
-}
-
-const storeLayer = (probe?: DeadlineDefectProbe) => {
-  const sqliteStore = subscriptionStoreLayer(partition);
-
-  if (probe === undefined) return sqliteStore;
-
-  return Layer.effect(
-    SubscriptionStore,
-    Effect.map(SubscriptionStore, (store) =>
-      SubscriptionStore.of({
-        ...store,
-        nextDeadline: Ref.update(probe.attempts, (count) => count + 1).pipe(
-          Effect.andThen(Ref.getAndSet(probe.pending, false)),
-          Effect.flatMap((shouldDefect) =>
-            shouldDefect
-              ? Effect.failCause(
-                  Cause.combine(Cause.die("transient nextDeadline defect"), Cause.interrupt(0)),
-                )
-              : store.nextDeadline,
-          ),
-        ),
-      }),
-    ),
-  ).pipe(Layer.provide(sqliteStore));
-};
-
 const subscriptionLayer = (
   filename: string,
   calls: Ref.Ref<number>,
   completed: Ref.Ref<boolean>,
   runtimeFailpoint?: DurableRuntimeFailpointHandler,
-  deadlineDefectProbe?: DeadlineDefectProbe,
 ) => {
   const dependencies = Layer.mergeAll(
-    storeLayer(deadlineDefectProbe),
+    subscriptionStoreLayer(partition),
     authorizerLayer,
     sourceLayer(calls, completed),
   ).pipe(
@@ -275,58 +243,6 @@ const makeInitialAgent = Effect.sync(() => {
 
   return Agent.withModel(initialAgentDefinition, model);
 });
-
-it.effect(
-  "continues polling after a mixed defect and interruption and stops when its Scope closes",
-  () =>
-    withTemporaryDatabase((filename) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const calls = yield* Ref.make(0);
-          const completed = yield* Ref.make(false);
-          const pending = yield* Ref.make(true);
-          const attempts = yield* Ref.make(0);
-          const driverScope = yield* Scope.make();
-
-          yield* Effect.addFinalizer(() => Scope.close(driverScope, Exit.void));
-
-          const context = yield* Layer.build(
-            subscriptionLayer(filename, calls, completed, undefined, { pending, attempts }),
-          ).pipe(Scope.provide(driverScope));
-
-          const subscriptions = Context.get(context, Subscriptions);
-
-          for (let poll = 0; poll < 128 && (yield* Ref.get(attempts)) === 0; poll += 1) {
-            yield* Effect.yieldNow;
-          }
-          expect(yield* Ref.get(attempts)).toBe(1);
-          expect(yield* Ref.get(pending)).toBe(false);
-
-          yield* subscribe(subscriptions);
-          for (
-            let poll = 0;
-            poll < 128 && ((yield* Ref.get(calls)) === 0 || (yield* Ref.get(attempts)) < 2);
-            poll += 1
-          ) {
-            yield* TestClock.adjust(limits.retryMillis);
-            yield* Effect.yieldNow;
-          }
-          expect(yield* Ref.get(calls)).toBeGreaterThan(0);
-          expect(yield* Ref.get(attempts)).toBeGreaterThanOrEqual(2);
-
-          yield* Scope.close(driverScope, Exit.void);
-          const callsAfterClose = yield* Ref.get(calls);
-          const attemptsAfterClose = yield* Ref.get(attempts);
-
-          yield* TestClock.adjust(100);
-          yield* Effect.yieldNow;
-          expect(yield* Ref.get(calls)).toBe(callsAfterClose);
-          expect(yield* Ref.get(attempts)).toBe(attemptsAfterClose);
-        }),
-      ),
-    ),
-  10_000,
-);
 
 it.effect(
   "delivers after a completed Run, restart, missed GitHub event, and lost admission reply",

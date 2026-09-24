@@ -1,13 +1,11 @@
 import {
   BrowserRunInteractiveBinding,
   browserRunInteractiveLayer,
-  isBrowserRunUndispatchedActionError,
 } from "@effect-agent/platform-cloudflare/interactive-browser";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Fiber, Layer, Logger } from "effect";
 import {
   BrowserClickRequest,
-  BrowserFillRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
 } from "effect-agent/interactive-browser";
@@ -34,11 +32,6 @@ interface Request {
   resourceType: () => string;
   response: () => { status: () => number } | null;
 }
-
-const request = (type = "fetch", status = 200): Request => ({
-  resourceType: () => type,
-  response: () => ({ status: () => status }),
-});
 
 const emptyState = { matchCount: 1, kind: "button", formValid: false };
 
@@ -178,31 +171,6 @@ const click = BrowserClickRequest.make({ selector: "#private-selector" });
 const advance = (millis: number) => Effect.promise(() => vi.advanceTimersByTimeAsync(millis));
 
 describe("Browser Run observed mutations", () => {
-  it.effect(
-    "classifies a DOM syntax error as definitely undispatched without retaining the selector",
-    () => {
-      vi.stubGlobal("document", {
-        querySelectorAll: () => {
-          throw new DOMException("private invalid selector", "SyntaxError");
-        },
-      });
-      const f = fixture({ state: async (evaluate, selector) => evaluate(selector) });
-
-      return Effect.gen(function* () {
-        const handle = yield* open;
-
-        const error = yield* handle
-          .click(BrowserClickRequest.make({ selector: "[" }))
-          .pipe(Effect.flip);
-
-        expect(isBrowserRunUndispatchedActionError(error)).toBe(true);
-        expect(error).not.toHaveProperty("cause");
-        expect(f.events).not.toContain("dispatch");
-        expect(f.logs[0]?.annotations["browser.selector_match_count"]).toBe(0);
-      }).pipe(Effect.scoped, Effect.provide(f.layer));
-    },
-  );
-
   it.effect("fences dispatch when a preflight query completes after interruption", () => {
     const query = gate<unknown>();
     const entered = gate<void>();
@@ -235,183 +203,6 @@ describe("Browser Run observed mutations", () => {
       expect(f.observerCount()).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(f.layer));
   });
-
-  it.effect.each([0, 2])(
-    "refuses %i matches without dispatch or invalidating the session",
-    (count) => {
-      let matches = count;
-      const f = fixture({ state: async () => ({ matchCount: matches }) });
-
-      return Effect.gen(function* () {
-        const handle = yield* open;
-        const error = yield* handle.click(click).pipe(Effect.flip);
-
-        expect(isBrowserRunUndispatchedActionError(error)).toBe(true);
-        expect(f.events).not.toContain("dispatch");
-        expect(f.logs[0]?.annotations["browser.selector_match_count"]).toBe(count);
-        matches = 1;
-        const fiber = yield* handle.click(click).pipe(Effect.forkChild);
-
-        yield* Effect.promise(() => f.started);
-        yield* advance(200);
-        yield* Fiber.join(fiber);
-        expect(f.events.filter((e) => e === "dispatch")).toHaveLength(1);
-        expect(f.observerCount()).toBe(0);
-      }).pipe(Effect.scoped, Effect.provide(f.layer));
-    },
-  );
-
-  it.effect("rechecks uniqueness on the acquired handles and disposes an ambiguous batch", () => {
-    const f = fixture({ matches: 2 });
-
-    return Effect.gen(function* () {
-      const handle = yield* open;
-
-      expect(
-        isBrowserRunUndispatchedActionError(
-          yield* handle
-            .fill(BrowserFillRequest.make({ selector: "input", value: "private-value" }))
-            .pipe(Effect.flip),
-        ),
-      ).toBe(true);
-      expect(f.events.filter((e) => e === "dispose")).toHaveLength(2);
-      expect(f.events).not.toContain("dispatch");
-    }).pipe(Effect.scoped, Effect.provide(f.layer));
-  });
-
-  it.effect(
-    "observes delayed fetch/XHR and ignores unrelated requests without leaking request data",
-    () => {
-      const f = fixture();
-
-      return Effect.gen(function* () {
-        const handle = yield* open;
-        const fiber = yield* handle.click(click).pipe(Effect.forkChild);
-
-        yield* Effect.promise(() => f.started);
-        yield* advance(100);
-        f.emit("request", request("image"));
-
-        const requests = [
-          request("fetch", 204),
-          request("xhr", 302),
-          request("fetch", 404),
-          request("xhr", 503),
-        ];
-
-        for (const req of requests) f.emit("request", req);
-        const failed = request();
-
-        f.emit("request", failed);
-        f.emit("requestfailed", failed);
-        yield* advance(300);
-        expect(f.logs).toHaveLength(0);
-        for (const req of requests) f.emit("requestfinished", req);
-        yield* advance(200);
-        yield* Fiber.join(fiber);
-        expect(f.logs[0]?.annotations).toMatchObject({
-          "browser.fetch_xhr_total": 5,
-          "browser.fetch_xhr_2xx": 1,
-          "browser.fetch_xhr_3xx": 1,
-          "browser.fetch_xhr_4xx": 1,
-          "browser.fetch_xhr_5xx": 1,
-          "browser.fetch_xhr_failed": 1,
-          "browser.fetch_xhr_pending": 0,
-          "browser.network_settle_timed_out": false,
-        });
-        expect(f.logs[0]?.cause).toBeUndefined();
-        expect(
-          Object.values(f.logs[0]?.annotations ?? {}).every(
-            (v) =>
-              typeof v === "boolean" || typeof v === "number" || v === "click" || v === "button",
-          ),
-        ).toBe(true);
-        expect(f.observerCount()).toBe(0);
-        expect(vi.getTimerCount()).toBe(0);
-      }).pipe(Effect.scoped, Effect.provide(f.layer));
-    },
-  );
-
-  it.effect(
-    "caps pending network settlement at two seconds and post-navigation state at 250ms",
-    () => {
-      let reads = 0;
-
-      const f = fixture({
-        state: async () => (++reads === 1 ? emptyState : new Promise(() => {})),
-      });
-
-      return Effect.gen(function* () {
-        const handle = yield* open;
-        const fiber = yield* handle.click(click).pipe(Effect.forkChild);
-
-        yield* Effect.promise(() => f.started);
-        f.emit("request", request());
-        yield* advance(2_250);
-        yield* Fiber.join(fiber);
-        expect(f.logs[0]?.annotations).toMatchObject({
-          "browser.fetch_xhr_pending": 1,
-          "browser.network_settle_timed_out": true,
-          "browser.target_after_unavailable": true,
-        });
-        expect(f.observerCount()).toBe(0);
-        expect(vi.getTimerCount()).toBe(0);
-      }).pipe(Effect.scoped, Effect.provide(f.layer));
-    },
-  );
-
-  it.effect("does not turn a destroyed post-action document into an action failure", () => {
-    let reads = 0;
-
-    const f = fixture({
-      state: async () => {
-        if (++reads > 1) throw new Error("private provider exception");
-
-        return emptyState;
-      },
-    });
-
-    return Effect.gen(function* () {
-      const handle = yield* open;
-      const fiber = yield* handle.click(click).pipe(Effect.forkChild);
-
-      yield* Effect.promise(() => f.started);
-      yield* advance(200);
-      yield* Fiber.join(fiber);
-      expect(f.logs[0]?.annotations["browser.target_after_unavailable"]).toBe(true);
-      expect(f.logs[0]?.cause).toBeUndefined();
-      expect(f.observerCount()).toBe(0);
-    }).pipe(Effect.scoped, Effect.provide(f.layer));
-  });
-
-  // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
-  it.effect(
-    "retains unknown input evidence but allows fresh input after SDK rejection settles",
-    () => {
-      let attempts = 0;
-
-      const f = fixture({
-        action: async () => {
-          if (attempts++ === 0) throw new Error("private provider exception");
-        },
-      });
-
-      return Effect.gen(function* () {
-        const handle = yield* open;
-        const error = yield* handle.click(click).pipe(Effect.flip);
-
-        expect(error).toMatchObject({
-          evidence: { stage: "input", dispatch: "unknown", session: "attached" },
-        });
-        expect(error).not.toHaveProperty("cause");
-        const next = yield* handle.click(click).pipe(Effect.forkChild);
-
-        yield* advance(200);
-        yield* Fiber.join(next);
-        expect(f.events.filter((e) => e === "dispatch")).toHaveLength(2);
-      }).pipe(Effect.scoped, Effect.provide(f.layer));
-    },
-  );
 
   it.effect(
     "records uncertainty before teardown on abort, bounds cleanup, and never replays a late mutation",

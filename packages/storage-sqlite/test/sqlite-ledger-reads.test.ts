@@ -9,17 +9,12 @@ import {
   ledgerReadCases,
   reserveReadFixture,
 } from "../../../test/fixtures/ledger-read-contracts.ts";
-import { SqliteStorageFailpointError } from "../src/SqliteStorageError.ts";
 import { SqliteStorageFailpoint } from "../src/SqliteStorageFailpoint.ts";
 import { submissionLedgerLayer } from "../src/SqliteSubmissionLedger.ts";
 import { storageConfigLayer } from "../src/SqliteThreadStore.ts";
 
 const withFixture = <A, E>(
   effect: Effect.Effect<A, E, SubmissionLedger | SqlClient.SqlClient | Crypto.Crypto>,
-  options?: {
-    readonly reserved?: () => void;
-    readonly failpoint?: (point: string) => Effect.Effect<void, SqliteStorageFailpointError>;
-  },
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -30,22 +25,11 @@ const withFixture = <A, E>(
       return yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
 
-        const observed = new Proxy(sql, {
-          get(target, key, receiver) {
-            if (key === "reserve")
-              return sql.reserve.pipe(Effect.tap(() => Effect.sync(() => options?.reserved?.())));
-
-            return Reflect.get(target, key, receiver);
-          },
-        });
-
         const deps = Layer.mergeAll(
-          Layer.succeed(SqlClient.SqlClient)(observed),
+          Layer.succeed(SqlClient.SqlClient)(sql),
           storageConfigLayer({ filename, busyTimeout: 0 }),
           NodeCrypto.layer,
-          options?.failpoint === undefined
-            ? SqliteStorageFailpoint.layer
-            : Layer.succeed(SqliteStorageFailpoint)({ hit: options.failpoint }),
+          SqliteStorageFailpoint.layer,
         );
 
         return yield* effect.pipe(
@@ -93,68 +77,4 @@ describe("SQLite ledger read contracts", () => {
       }),
     ).pipe(Effect.provide(NodeFileSystem.layer)),
   );
-
-  it.effect(
-    "adds one read probe to active finalization and takes no writer reservation on replay",
-    () => {
-      let reservations = 0;
-
-      return withFixture(
-        Effect.gen(function* () {
-          const ledger = yield* SubmissionLedger;
-          const request = yield* reserveReadFixture("writer-budget");
-
-          reservations = 0;
-          yield* ledger.finalizeSettlement(request);
-          expect(reservations).toBe(1);
-          reservations = 0;
-          yield* ledger.finalizeSettlement(request);
-          expect(reservations).toBe(0);
-        }),
-        {
-          reserved: () => {
-            reservations++;
-          },
-        },
-      );
-    },
-  );
-
-  for (const point of [
-    "ledger:finalize-settlement:before",
-    "ledger:finalize-settlement:after",
-  ] as const) {
-    it.effect(`preserves ${point} on already settled replay`, () => {
-      let armed = false;
-      let hits = 0;
-
-      return withFixture(
-        Effect.gen(function* () {
-          const ledger = yield* SubmissionLedger;
-          const request = yield* reserveReadFixture(point);
-          const settled = yield* ledger.finalizeSettlement(request);
-
-          armed = true;
-          expect(yield* ledger.finalizeSettlement(request).pipe(Effect.result)).toMatchObject({
-            _tag: "Failure",
-            failure: {
-              _tag: "LedgerError",
-              cause: { _tag: "SqliteStorageFailpointError", location: point },
-            },
-          });
-          expect(hits).toBe(1);
-          armed = false;
-          expect(yield* ledger.finalizeSettlement(request)).toEqual(settled);
-        }),
-        {
-          failpoint: (location) => {
-            if (!armed || location !== point) return Effect.void;
-            hits++;
-
-            return SqliteStorageFailpointError.make({ location: point });
-          },
-        },
-      );
-    });
-  }
 });

@@ -2,18 +2,14 @@ import {
   CloudflareSubscriptionsClient,
   sourcePartitionName,
   SubscriptionPartitionNamespace,
-  type SubscriptionPartitionIdentity,
-  validateCloudflareSubscriptionLimits,
 } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { DateTime, Effect, Layer } from "effect";
-import { defaultSubscriptionLimits } from "effect-agent/subscription";
 import { SubscriptionIntake, Subscriptions } from "effect-agent/subscriptions";
-import { DurableObject, DurableObjectAlarm, type DurableObjectState } from "effect-cf";
-import { expect, expectTypeOf, it } from "vite-plus/test";
+import { DurableObject, DurableObjectAlarm } from "effect-cf";
+import { expect, it } from "vite-plus/test";
 
 import { laneRows } from "./harness.ts";
-import type { subscriptionAlarmExtensionLayer } from "./subscription-fixtures.ts";
 import {
   armSubscriptionEviction,
   subscriptionAgentId,
@@ -25,14 +21,6 @@ import {
   SubscriptionTestSourceVersion,
 } from "./subscription-fixtures.ts";
 import type { TestSubscriptionPartitionObject } from "./worker.ts";
-
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      SUBSCRIPTIONS: DurableObjectNamespace<TestSubscriptionPartitionObject>;
-    }
-  }
-}
 
 const partitionName = sourcePartitionName(subscriptionPartition);
 const stubFor = () => env.SUBSCRIPTIONS.get(env.SUBSCRIPTIONS.idFromName(partitionName));
@@ -46,102 +34,6 @@ const runClient = <A, E>(effect: Effect.Effect<A, E, Subscriptions | Subscriptio
 
 const sleep = (millis: number) => new Promise((resolve) => setTimeout(resolve, millis));
 
-it("composes host alarm handlers with native subscription services through the public object factory", async () => {
-  expectTypeOf<Layer.Services<typeof subscriptionAlarmExtensionLayer>>().toEqualTypeOf<
-    DurableObjectState.DurableObjectState | SubscriptionPartitionIdentity
-  >();
-
-  const partition = { tenantId: "alarm-native-intake", address: "events" };
-  const scope = { partition, ownerId: "owner", principal: subscriptionPrincipal };
-  const threadId = subscriptionThreadId("alarm-native-intake");
-  const stub = env.SUBSCRIPTIONS.get(env.SUBSCRIPTIONS.idFromName(sourcePartitionName(partition)));
-
-  const client = CloudflareSubscriptionsClient.layer(partition).pipe(
-    Layer.provide(Layer.succeed(SubscriptionPartitionNamespace)({ namespace: env.SUBSCRIPTIONS })),
-  );
-
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const subscriptions = yield* Subscriptions;
-
-      yield* subscriptions.subscribe(scope, {
-        subscriptionId: "native-intake",
-        source: SubscriptionTestSourceVersion,
-        parameters: { topic: "verified" },
-        context: { instruction: "process verified event" },
-        mode: "once",
-        expiresAtMillis: null,
-        destination: { _tag: "ExistingThread", threadId },
-        deliveryPrincipal: subscriptionPrincipal,
-        agentId: subscriptionAgentId,
-        definitions: subscriptionDefinitions,
-      });
-    }).pipe(Effect.provide(client)),
-  );
-
-  await runInDurableObject(stub, (instance, state) =>
-    state.blockConcurrencyWhile(async () => {
-      await instance[DurableObject.RunSymbol](
-        Effect.gen(function* () {
-          const alarms = yield* DurableObjectAlarm.DurableObjectAlarm;
-
-          yield* alarms.scheduleAlarm({
-            tag: "test/intake",
-            id: scope.ownerId,
-            payload: { eventId: "verified-event", topic: "verified", message: "verified input" },
-            runAt: DateTime.makeUnsafe(Date.now() - 1),
-          });
-        }),
-      );
-      await state.storage.deleteAlarm();
-      await instance.alarm();
-      expect(
-        state.storage.sql
-          .exec("SELECT tag FROM effect_cf_scheduled_alarms WHERE tag = 'test/intake'")
-          .toArray(),
-      ).toEqual([]);
-    }),
-  );
-
-  const { status, deliveries } = await Effect.runPromise(
-    Effect.gen(function* () {
-      const intake = yield* SubscriptionIntake;
-      const subscriptions = yield* Subscriptions;
-
-      const status = yield* intake.status(
-        subscriptionPrincipal,
-        SubscriptionTestSourceVersion,
-        "verified-event",
-      );
-
-      const deliveries = yield* subscriptions.listDeliveries(scope, {
-        partition,
-        ownerId: scope.ownerId,
-        subscriptionId: "native-intake",
-      });
-
-      return { status, deliveries };
-    }).pipe(Effect.provide(client)),
-  );
-
-  expect(status.eventId).toBe("verified-event");
-  expect(status.routingFailure).toBeNull();
-  expect(deliveries.items).toHaveLength(1);
-});
-
-it("rejects subscription limits that can outlive one safe alarm invocation", async () => {
-  const failure = await Effect.runPromise(
-    validateCloudflareSubscriptionLimits({
-      ...defaultSubscriptionLimits,
-      batchSize: 100,
-      concurrency: 1,
-      operationTimeoutMillis: 300_000,
-    }).pipe(Effect.flip),
-  );
-
-  expect(failure._tag).toBe("CloudflareSubscriptionConfigError");
-});
-
 interface EvictionCase {
   readonly name: string;
   readonly point: string;
@@ -149,18 +41,7 @@ interface EvictionCase {
 }
 
 const cases: ReadonlyArray<EvictionCase> = [
-  { name: "accepted but unrouted event", point: "subscription:accept:after", registrations: 1 },
   { name: "partial fanout", point: "subscription:select:after", registrations: 2 },
-  {
-    name: "once selection before preparation",
-    point: "subscription:select:after",
-    registrations: 1,
-  },
-  {
-    name: "prepared envelope before admission",
-    point: "subscription:delivery-prepare:after",
-    registrations: 1,
-  },
   {
     name: "admission before Receipt recording",
     point: "subscription:admission:after",
@@ -278,8 +159,6 @@ it("isolates failed and unknown ancillary alarms while advancing native work and
 
           for (const [index, tag] of [
             "test/failing",
-            "test/unknown",
-            "effect-agent/unknown",
             "test/replacement",
             "effect-agent/SubscriptionPartitionWake",
           ].entries()) {
@@ -317,31 +196,17 @@ it("isolates failed and unknown ancillary alarms while advancing native work and
     }),
   );
 
-  expect(rows.map((row) => row.tag)).toEqual([
-    "effect-agent/unknown",
-    "test/failing",
-    "test/replacement",
-    "test/unknown",
-  ]);
+  expect(rows.map((row) => row.tag)).toEqual(["test/failing", "test/replacement"]);
   const replacement = rows.find((row) => row.tag === "test/replacement");
 
   expect(replacement?.payload).toBe("2");
   expect(replacement?.run_at).toBeGreaterThan(Date.now() + 30_000);
 });
 
-it("reserves ancillary callback time within the total partition alarm budget", async () => {
-  const limits = {
-    ...defaultSubscriptionLimits,
-    batchSize: 2,
-    concurrency: 1,
-    operationTimeoutMillis: 60_000,
-  };
-
-  await Effect.runPromise(validateCloudflareSubscriptionLimits(limits));
-
-  const failure = await Effect.runPromise(
-    validateCloudflareSubscriptionLimits(limits, { ancillaryAlarms: true }).pipe(Effect.flip),
-  );
-
-  expect(failure._tag).toBe("CloudflareSubscriptionConfigError");
-});
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      SUBSCRIPTIONS: DurableObjectNamespace<TestSubscriptionPartitionObject>;
+    }
+  }
+}

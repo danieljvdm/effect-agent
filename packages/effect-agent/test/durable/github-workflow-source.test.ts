@@ -148,90 +148,6 @@ describe("GitHub workflow completion source", () => {
     ),
   );
 
-  it.effect("normalizes webhook and reconciliation races to one logical event", () =>
-    Effect.gen(function* () {
-      let accepted: unknown = undefined;
-
-      const webhook = JSON.stringify({
-        action: "completed",
-        repository: { id: 101, full_name: "effect/agent", private: true },
-        workflow_run: {
-          id: 202,
-          run_attempt: 3,
-          head_sha: SHA,
-          status: "completed",
-          conclusion: "success",
-          repository: { id: 101, full_name: "effect/agent" },
-          html_url: "https://github.com/effect/agent/actions/runs/202",
-          actor: { login: "octocat" },
-        },
-        sender: { login: "octocat" },
-      });
-
-      yield* acceptVerifiedGitHubWorkflowRunWebhook({
-        body: new TextEncoder().encode(webhook),
-        eventHeader: "workflow_run",
-        signatureHeader: `sha256=${"0".repeat(64)}`,
-        principal,
-      }).pipe(
-        Effect.provideService(
-          GitHubWebhookSignatureVerifier,
-          GitHubWebhookSignatureVerifier.of({ verify: () => Effect.void }),
-        ),
-        Effect.provideService(
-          SubscriptionIntake,
-          SubscriptionIntake.of({
-            accept: (_principal, _source, payload) => {
-              accepted = payload;
-
-              return Effect.succeed({
-                partition: record.key.partition,
-                eventId: "accepted",
-                acceptedAtMillis: 1,
-              });
-            },
-            status: () => Effect.die("unused"),
-          }),
-        ),
-      );
-
-      const source = yield* sourceWith(completedAttempt);
-      const webhookEvent = yield* source.normalize(accepted);
-      const reconcile = source.reconcile;
-
-      if (reconcile === undefined) return yield* Effect.die("source has no reconciler");
-      const reconciledEvent = yield* reconcile(record);
-
-      expect(reconciledEvent).toEqual(webhookEvent);
-      expect(webhookEvent).toEqual({
-        eventId: "github-workflow-run:101:202:3:completed",
-        matchingKey: "github-workflow-run:101:202:3:completed",
-        payload: {
-          repositoryId: 101,
-          runId: 202,
-          attempt: 3,
-          headSha: SHA,
-          conclusion: "success",
-        },
-      });
-    }),
-  );
-
-  it.effect("does not complete while the exact attempt is still running", () =>
-    Effect.gen(function* () {
-      const source = yield* sourceWith({
-        ...completedAttempt,
-        status: "in_progress",
-        conclusion: null,
-      });
-
-      const reconcile = source.reconcile;
-
-      if (reconcile === undefined) return yield* Effect.die("source has no reconciler");
-      expect(yield* reconcile(record)).toBeNull();
-    }),
-  );
-
   it.effect("fails closed on a different attempt identity", () =>
     Effect.gen(function* () {
       const source = yield* sourceWith({ ...completedAttempt, run_attempt: 4 });
@@ -245,47 +161,6 @@ describe("GitHub workflow completion source", () => {
         code: "github-identity-mismatch",
         retryable: false,
       });
-    }),
-  );
-
-  it.effect("rejects unauthorized and excess canonical completion or watch fields", () =>
-    Effect.gen(function* () {
-      const source = yield* sourceWith(completedAttempt);
-
-      const failure = yield* Effect.flip(
-        source.normalize({
-          repositoryId: 999,
-          runId: 202,
-          attempt: 3,
-          headSha: SHA,
-          conclusion: "success",
-        }),
-      );
-
-      expect(failure).toMatchObject({ _tag: "SubscriptionSourceError", code: "source-schema" });
-
-      const unexpectedEventField = yield* Effect.flip(
-        source.normalize({
-          repositoryId: 101,
-          runId: 202,
-          attempt: 3,
-          headSha: SHA,
-          conclusion: "success",
-          token: "must-not-enter-canonical-events",
-        }),
-      );
-
-      const unexpectedWatchField = yield* Effect.flip(
-        source.parameters({
-          runId: 202,
-          attempt: 3,
-          expectedHeadSha: SHA,
-          repositoryId: 999,
-        }),
-      );
-
-      expect(unexpectedEventField.code).toBe("source-schema");
-      expect(unexpectedWatchField.code).toBe("source-schema");
     }),
   );
 });

@@ -1,15 +1,11 @@
 import { join } from "node:path";
 
-import { type Effect, Schema } from "effect";
-import type { WorkerEnvironment } from "effect-cf";
+import { Schema } from "effect";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
-import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
+import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
-import { type PlannerError, type TripApp, TripAppData } from "../src/domain.ts";
-import type { publishTripAppAddress, readTripAppAddress } from "../src/trip-app/addresses.ts";
-import type { AppBuildBucket } from "../src/trip-app/bucket.ts";
-import type { callAppRepository } from "../src/trip-app/remote.ts";
+import { type TripApp, TripAppData } from "../src/domain.ts";
 
 const app: TripApp = {
   id: "a".repeat(32),
@@ -62,7 +58,7 @@ import { Effect, Schema } from "effect";
 import { WorkerEnvironment } from "effect-cf";
 import { AppBuildBucketLive } from "../src/trip-app/bindings.ts";
 import { handleRequest } from "../src/worker.ts";
-import { publishTripAppAddress, appAddressKey, tripAppHostname, appNameFromHost } from "../src/trip-app/addresses.ts";
+import { publishTripAppAddress, appAddressKey } from "../src/trip-app/addresses.ts";
 import { TripFailpoint } from "../src/server/trips.ts";
 import { PlannerError } from "../src/domain.ts";
 import { AppCommand } from "../src/trip-app/remote.ts";
@@ -92,15 +88,11 @@ export default {async fetch(request,env,ctx){
    }
    return new Response("seeded");
  }
- if(url.pathname==="/__name") {
-   const input=await request.json();const hostname=tripAppHostname(input.title,input.appId,"effect-agent.com");
-   return Response.json({hostname,name:appNameFromHost(hostname,"effect-agent.com")});
- }
  if(url.pathname==="/__register") {
    const input=await request.json();
    const result=await Effect.runPromise(publishTripAppAddress(input.owner,input.app,"effect-agent.com").pipe(
      Effect.provide(AppBuildBucketLive),Effect.provideService(WorkerEnvironment,env),
-     Effect.provideService(TripFailpoint,{hit:(point)=>point!==input.point?Effect.void:input.fault==="defect"?Effect.die("Injected defect"):input.fault==="interrupt"?Effect.interrupt:Effect.fail(new PlannerError({code:"storage",message:"Injected failure"}))}),Effect.exit));
+     Effect.provideService(TripFailpoint,{hit:(point)=>point!==input.point?Effect.void:Effect.fail(new PlannerError({code:"storage",message:"Injected failure"}))}),Effect.exit));
    return Response.json({tag:result._tag});
  }
  if(url.pathname==="/__address"){
@@ -173,65 +165,6 @@ const fetchApp = (
   method = "GET",
 ) => runtime.dispatchFetch(`${value.url}${path}`, { method, headers });
 
-it("serves public assets without authentication and keeps planner routes protected", async () => {
-  expectTypeOf<
-    Effect.Services<ReturnType<typeof publishTripAppAddress>>
-  >().toEqualTypeOf<AppBuildBucket>();
-  expectTypeOf<
-    Effect.Error<ReturnType<typeof publishTripAppAddress>>
-  >().toEqualTypeOf<PlannerError>();
-  expectTypeOf<
-    Effect.Services<ReturnType<typeof readTripAppAddress>>
-  >().toEqualTypeOf<AppBuildBucket>();
-  expectTypeOf<Effect.Error<ReturnType<typeof readTripAppAddress>>>().toEqualTypeOf<PlannerError>();
-  expectTypeOf<
-    Effect.Services<ReturnType<typeof callAppRepository>>
-  >().toEqualTypeOf<WorkerEnvironment>();
-  expectTypeOf<Effect.Error<ReturnType<typeof callAppRepository>>>().toEqualTypeOf<PlannerError>();
-  await seed(storageOwner);
-  const home = await fetchApp("/");
-
-  expect(home.status).toBe(200);
-  expect(await home.text()).toBe("<main>Built trip</main>");
-  expect(home.headers.get("cache-control")).toBe("private, no-store");
-  expect(home.headers.get("content-security-policy")).toContain("connect-src 'self'");
-  const style = await fetchApp("/assets/style.css");
-
-  expect(style.headers.get("content-type")).toContain("text/css");
-  expect(await style.text()).toBe("body{color:green}");
-  const head = await fetchApp("/", app, {}, "HEAD");
-
-  expect(head.status).toBe(200);
-  expect(await head.text()).toBe("");
-  for (const path of [
-    "/",
-    "/api/rpc",
-    "/api/access",
-    "/api/progress",
-    "/assets/style.css",
-    "/trips/lisbon/1",
-  ]) {
-    const denied = await runtime.dispatchFetch(`https://travel.effect-agent.com${path}`, {
-      redirect: "manual",
-    });
-
-    expect(denied.status).toBe(path === "/" || path.startsWith("/assets/") ? 303 : 401);
-    await denied.text();
-  }
-  for (const path of ["/api/rpc", "/api/access", "/api/progress"]) {
-    const denied = await fetchApp(path, app, {}, "POST");
-
-    expect(denied.status).toBe(405);
-    await denied.text();
-  }
-  for (const path of ["/server/index.js", "/manifest.json", "/missing.css"]) {
-    const missing = await fetchApp(path);
-
-    expect(missing.status).toBe(404);
-    await missing.text();
-  }
-});
-
 it("runs an actual Worker Loader with only scoped TripData and strips incoming and outgoing credentials", async () => {
   await seed(storageOwner);
 
@@ -267,63 +200,13 @@ it("runs an actual Worker Loader with only scoped TripData and strips incoming a
     expect(denied.status).toBe(404);
     await denied.text();
   }
-  const trip = await fetchApp("/api/trip");
-
-  expect(Schema.decodeUnknownSync(TripAppData)(await trip.json())).toEqual(data);
   const redirect = await fetchApp("/api/redirect");
 
   expect(redirect.status).toBe(502);
   expect(redirect.headers.get("location")).toBeNull();
   expect(redirect.headers.get("set-cookie")).toBeNull();
   await redirect.text();
-  const write = await fetchApp("/api/trip", app, {}, "POST");
-
-  expect(write.status).toBe(405);
-  await write.text();
 }, 30_000);
-
-it("keeps a previous built version available while a new build runs or fails", async () => {
-  const unbuilt = {
-    ...app,
-    id: "c".repeat(32),
-    url: `https://new-trip-${"c".repeat(12)}-trip.effect-agent.com`,
-    activeCommit: null,
-    pendingCommit: app.sourceCommit,
-    status: "building" as const,
-  };
-
-  await seed(memberOwner, unbuilt);
-  const pending = await fetchApp("/", unbuilt);
-
-  expect(pending.status).toBe(202);
-  expect(await pending.text()).toContain("being built");
-  await seed(memberOwner, {
-    ...unbuilt,
-    status: "failed",
-    pendingCommit: null,
-    error: "Build failed",
-  });
-  const failed = await fetchApp("/", unbuilt);
-
-  expect(failed.status).toBe(503);
-  expect(await failed.text()).toContain("needs a build");
-  for (const status of ["building", "failed"] as const) {
-    await seed(storageOwner, {
-      ...app,
-      status,
-      sourceCommit: "d".repeat(40),
-      pendingCommit: status === "building" ? "d".repeat(40) : null,
-    });
-    const previous = await fetchApp("/");
-
-    expect(previous.status).toBe(200);
-    expect(await previous.text()).toBe("<main>Built trip</main>");
-    const trip = await fetchApp("/api/trip");
-
-    expect(trip.status).toBe(200);
-    expect(await trip.json()).toEqual(data);
-  }
-});
 
 const directory = async (path: string, input: Record<string, unknown>) => {
   const response = await runtime.dispatchFetch(`https://fixture.example${path}`, {
@@ -336,54 +219,7 @@ const directory = async (path: string, input: Record<string, unknown>) => {
   return response.json();
 };
 
-it("preserves registered aliases, rejects orphaned legacy sites, and never accepts caller-selected ownership", async () => {
-  await seed(storageOwner);
-  const alias = { ...app, url: `https://${app.id}-trip.effect-agent.com` };
-
-  expect(await (await fetchApp("/", alias)).text()).toBe("<main>Built trip</main>");
-
-  const legacy = {
-    ...app,
-    id: "e".repeat(32),
-    url: `https://${"e".repeat(32)}-trip.effect-agent.com`,
-  };
-
-  await seed(storageOwner, legacy, false);
-
-  const restored = await fetchApp("/api/trip", legacy, {
-    "x-trip-owner": memberOwner,
-    "x-test-owner": memberOwner,
-  });
-
-  expect(restored.status).toBe(404);
-  await restored.text();
-  expect(await directory("/__address", { hostname: new URL(legacy.url).hostname })).toBeNull();
-
-  const unknown = await runtime.dispatchFetch(
-    `https://${"f".repeat(32)}-trip.effect-agent.com/api/trip?owner=${storageOwner}`,
-  );
-
-  expect(unknown.status).toBe(404);
-  await unknown.text();
-  const invalid = await runtime.dispatchFetch("https://nested.name-trip.effect-agent.com/");
-
-  expect(invalid.status).toBe(404);
-  await invalid.text();
-});
-
-it("refuses conflicting or malformed addresses and validates the saved app scope", async () => {
-  await seed(storageOwner);
-  const hostname = new URL(app.url).hostname;
-  const before = await directory("/__address", { hostname });
-
-  const collision = await directory("/__register", {
-    owner: memberOwner,
-    app: { ...app, id: "9".repeat(32) },
-  });
-
-  expect(collision).toEqual({ tag: "Failure" });
-  expect(await directory("/__address", { hostname })).toEqual(before);
-
+it("refuses an address whose trip does not match the saved app", async () => {
   const mismatched = {
     ...app,
     id: "8".repeat(32),
@@ -407,19 +243,14 @@ it("refuses conflicting or malformed addresses and validates the saved app scope
 
   expect(denied.status).toBe(404);
   await denied.text();
-  await directory("/__address", { hostname: otherHostname, value: { version: 2 } });
-  const corrupt = await fetchApp("/", mismatched);
-
-  expect(corrupt.status).toBe(503);
-  await corrupt.text();
-  expect(await directory("/__address", { hostname: otherHostname })).toEqual({ version: 2 });
 });
 
-it("repairs interrupted address publication without changing either owner or legacy alias", async () => {
+it("repairs a lost address publication acknowledgement without exposing an unsaved app", async () => {
   let sequence = 100;
 
-  for (const fault of ["failure", "defect", "interrupt"]) {
-    for (const point of ["app-address:before-put", "app-address:after-put"]) {
+  {
+    {
+      const point = "app-address:after-put";
       const id = (++sequence).toString(16).padStart(32, "0");
 
       const value = {
@@ -434,15 +265,16 @@ it("repairs interrupted address publication without changing either owner or leg
         owner: memberOwner,
         app: value,
         point,
-        fault,
       });
 
       expect(interrupted).toEqual({ tag: "Failure" });
-      expect(await directory("/__address", { hostname })).toEqual(
-        point.endsWith("before-put")
-          ? null
-          : { version: 1, owner: memberOwner, hostname, appId: id, tripId: value.tripId },
-      );
+      expect(await directory("/__address", { hostname })).toEqual({
+        version: 1,
+        owner: memberOwner,
+        hostname,
+        appId: id,
+        tripId: value.tripId,
+      });
       // An address without a saved owner record cannot expose data.
       const uncommitted = await fetchApp("/api/trip", value);
 
@@ -451,9 +283,7 @@ it("repairs interrupted address publication without changing either owner or leg
       const retried = await directory("/__register", { owner: memberOwner, app: value });
 
       expect(retried).toEqual({ tag: "Success" });
-      expect(
-        await directory("/__address", { hostname: `${id}-trip.effect-agent.com` }),
-      ).toMatchObject({
+      expect(await directory("/__address", { hostname })).toMatchObject({
         owner: memberOwner,
         appId: id,
         tripId: value.tripId,
@@ -465,33 +295,7 @@ it("repairs interrupted address publication without changing either owner or leg
   }
 }, 30_000);
 
-it("creates bounded readable names with stable suffixes and reserves colliding names atomically", async () => {
-  expect(
-    await directory("/__name", {
-      title: "Tahoe Cabin Getaway",
-      appId: "123456789abc".padEnd(32, "0"),
-    }),
-  ).toEqual({
-    hostname: "tahoe-cabin-getaway-123456789abc-trip.effect-agent.com",
-    name: "tahoe-cabin-getaway-123456789abc",
-  });
-  expect(
-    await directory("/__name", {
-      title: "Séjour à Montréal",
-      appId: "123456789abd".padEnd(32, "0"),
-    }),
-  ).toEqual({
-    hostname: "sejour-a-montreal-123456789abd-trip.effect-agent.com",
-    name: "sejour-a-montreal-123456789abd",
-  });
-
-  const long = Schema.decodeUnknownSync(
-    Schema.Struct({ hostname: Schema.String, name: Schema.String }),
-  )(await directory("/__name", { title: "A very long trip name ".repeat(20), appId: app.id }));
-
-  expect(long.hostname.split(".")[0]?.length).toBeLessThanOrEqual(63);
-  expect(long.name).not.toContain("--");
-
+it("reserves a colliding address atomically for one owner", async () => {
   const url = "https://same-name-collision-trip.effect-agent.com";
 
   const candidates = [

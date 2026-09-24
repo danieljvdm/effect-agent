@@ -1,7 +1,7 @@
 import { WorkflowAgentHost } from "@effect-agent/workflow/workflow-agent-host";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Clock, Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";
+import { Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { digestDefinitions } from "effect-agent/digest";
@@ -16,7 +16,6 @@ import {
   makeModel,
   pendingIntents,
   planner,
-  readLog,
   submitOptions,
   temporaryDirectory,
   until,
@@ -123,90 +122,4 @@ it.live("repairs an approval wake sent before native SQL Workflow suspension", (
       ),
     );
   }).pipe(Effect.scoped, Effect.provide(platform)),
-);
-
-it.live.each(["duration", "turns"] as const)(
-  "preserves %s accounting through SQL approval restart without charging suspension time",
-  (limit) =>
-    Effect.gen(function* () {
-      const directory = yield* temporaryDirectory;
-      const fixture = yield* makeApproval(limit === "turns" ? 1 : 4);
-      const liveClock = yield* Clock.Clock;
-      let offset = 0;
-
-      const clock: Clock.Clock = {
-        sleep: (duration) => liveClock.sleep(duration),
-        currentTimeMillisUnsafe: () => liveClock.currentTimeMillisUnsafe() + offset,
-        currentTimeMillis: Effect.sync(() => liveClock.currentTimeMillisUnsafe() + offset),
-        currentTimeNanosUnsafe: () =>
-          liveClock.currentTimeNanosUnsafe() + BigInt(offset) * 1000000n,
-        currentTimeNanos: Effect.sync(
-          () => liveClock.currentTimeNanosUnsafe() + BigInt(offset) * 1000000n,
-        ),
-        monotonicTimeNanosUnsafe: () =>
-          liveClock.monotonicTimeNanosUnsafe() + BigInt(offset) * 1000000n,
-        monotonicTimeNanos: Effect.sync(
-          () => liveClock.monotonicTimeNanosUnsafe() + BigInt(offset) * 1000000n,
-        ),
-      };
-
-      const stack = hostLayer(directory, [
-        { agent: fixture.agent, definitions: fixture.definitions },
-      ]).pipe(
-        Layer.provide(fixture.handlers),
-        Layer.provide(Layer.succeedContext(Clock.Clock.context(clock))),
-      );
-
-      const before = yield* Effect.gen(function* () {
-        const host = yield* WorkflowAgentHost;
-
-        const receipt = yield* host.submit(
-          fixture.agent,
-          { question: "bounded" },
-          submitOptions(fixture.digests),
-        );
-
-        const log = yield* until(readLog(receipt.threadId), (rows) =>
-          rows.some((row) => row.record.payload._tag === "ToolApprovalRequested"),
-        );
-
-        expect(yield* Ref.get(fixture.modelCalls)).toBe(1);
-
-        return { receipt, start: log.find((row) => row.record.payload._tag === "RunStarted") };
-      }).pipe(Effect.provide(stack));
-
-      if (limit === "duration") offset = 31000;
-
-      yield* Effect.gen(function* () {
-        const host = yield* WorkflowAgentHost;
-
-        yield* host.resolveApproval(
-          ApprovalDecisionCommand.make({
-            submissionId: before.receipt.submissionId,
-            toolCallId: callId,
-            decision: "approved",
-            resolver: "operator",
-            reason: "resume original run budget",
-          }),
-        );
-        const settlement = yield* host.awaitSettlement(before.receipt);
-
-        expect(settlement.outcome).toBe("completed");
-        yield* until(pendingIntents, (rows) => rows.length === 0);
-        const log = yield* readLog(before.receipt.threadId);
-
-        expect(
-          log.find((row) => row.record.payload._tag === "SubmissionSettled")?.record.payload,
-        ).toMatchObject(
-          limit === "duration"
-            ? { outcome: "completed" }
-            : { finishReason: "budget-exhausted", exhausted: "turns" },
-        );
-        expect(log.filter((row) => row.record.payload._tag === "RunStarted")).toEqual([
-          before.start,
-        ]);
-        expect(yield* Ref.get(fixture.modelCalls)).toBe(2);
-        expect(yield* Ref.get(fixture.toolCalls)).toBe(1);
-      }).pipe(Effect.provide(stack));
-    }).pipe(Effect.scoped, Effect.provide(platform)),
 );

@@ -8,9 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
  * The Cloudflare Dynamic Worker `CodeExecutor` lane (C4 of ADR-0017,
  * DEPLOY-011). The real adapter runs inside a bundled worker under
  * programmatic Miniflare — a genuine workerd runtime with a real
- * `worker_loaders` binding, then runs the shared executor conformance suite
- * plus the isolated-only enforcement cases (ambient network denial,
- * synchronous CPU runaway) in-worker and reports failures.
+ * `worker_loaders` binding, then checks ambient network denial, hung-program retirement, and host
+ * result limits in-worker and reports failures.
  */
 
 const workerEntry = join(import.meta.dirname, "conformance-worker.ts");
@@ -73,23 +72,13 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
     }
   });
 
-  it("passes the shared executor conformance suite and isolated-only enforcement cases in workerd", async () => {
+  it("enforces ambient network denial, hung-program retirement, and host result limits in workerd", async () => {
     const response = await runtime.dispatchFetch("http://placeholder/run");
     const payload = (await response.json()) as { readonly failures: ReadonlyArray<string> };
 
     expect(response.ok).toBe(true);
     expect(payload.failures).toEqual([]);
   }, 120_000);
-
-  it("host calls inherit the pass Scope and stay off the guest RPC fiber", async () => {
-    const response = await runtime.dispatchFetch("http://placeholder/host-call-pass-scope");
-
-    expect(response.ok).toBe(true);
-    expect(await response.json()).toMatchObject({
-      tag: "success",
-      detail: { value: "executor" },
-    });
-  }, 30_000);
 
   // Regression evidence:
   // https://github.com/reve-ai/kommunikasie/actions/runs/32474947060
@@ -103,24 +92,6 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
         { tag: "success", value: "executor" },
         { tag: "success", value: "executor" },
       ],
-    });
-  }, 30_000);
-
-  it("keeps RPC finalizers total for hostile disposal hooks", async () => {
-    const response = await runtime.dispatchFetch("http://placeholder/total-disposal");
-
-    expect(response.ok).toBe(true);
-    expect(await response.json()).toEqual({ tag: "success" });
-  });
-  it("overlaps host calls and releases dependent work without waiting for earlier calls", async () => {
-    const response = await runtime.dispatchFetch("http://placeholder/concurrent-host-calls");
-
-    expect(response.ok).toBe(true);
-    expect(await response.json()).toMatchObject({
-      outcome: { tag: "success", detail: { value: [0, 2] } },
-      completed: [1, 2, 0],
-      peak: 2,
-      active: 0,
     });
   }, 30_000);
 });

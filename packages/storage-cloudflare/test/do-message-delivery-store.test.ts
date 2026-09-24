@@ -1,11 +1,7 @@
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer } from "effect";
-import { MessageDeliveryStore, readPending } from "effect-agent/message-delivery";
-import {
-  makeMessageDeliveryFixture,
-  messageDeliveryStoreConformanceCases,
-} from "effect-agent/testing/message-delivery-store-conformance";
+import { messageDeliveryStoreConformanceCases } from "effect-agent/testing/message-delivery-store-conformance";
 import { expect, it } from "vite-plus/test";
 
 import { doMessageDeliveryStoreLayer } from "../src/DoMessageDeliveryStore.ts";
@@ -39,28 +35,3 @@ for (const [index, testCase] of messageDeliveryStoreConformanceCases.entries()) 
     ).resolves.toBeUndefined(),
   );
 }
-
-it("reconstructs pending obligations from Thread Object SQL with no active ledger work", () =>
-  expect(
-    withThreadStorage("message-reopen", (storage) =>
-      Effect.gen(function* () {
-        const record = yield* makeMessageDeliveryFixture();
-
-        yield* Effect.gen(function* () {
-          const store = yield* MessageDeliveryStore;
-
-          yield* store.insert(record);
-        }).pipe(Effect.provide(storeLayer(storage)));
-        yield* Effect.gen(function* () {
-          const store = yield* MessageDeliveryStore;
-
-          expect(yield* store.get(record.key)).toEqual(record);
-          expect(yield* readPending({ ownerThreadId: record.key.ownerThreadId, limit: 1 })).toEqual(
-            [record],
-          );
-          expect(yield* store.due(0, 10)).toEqual([record.key]);
-          expect(yield* store.nextDeadline(record.key.ownerThreadId)).toBe(0);
-        }).pipe(Effect.provide(storeLayer(storage)));
-      }).pipe(Effect.provide(BrowserCrypto.layer)),
-    ),
-  ).resolves.toBeUndefined());

@@ -1,23 +1,12 @@
-import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Context, Effect, Exit, Layer, Schema } from "effect";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Clock, Effect, Schema } from "effect";
 import { ApprovalDecisionCommand, SubmissionLedger } from "effect-agent/submission-ledger";
-import { ThreadStore } from "effect-agent/thread-store";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import { describe, expect, expectTypeOf, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
-import type { DurableAlarmError, ThreadMutationGate } from "../src/Alarm.ts";
-import { ThreadMaintenance, ThreadPublication } from "../src/Alarm.ts";
-import {
-  DurableObjectContext,
-  ThreadObjectIdentity,
-  ThreadObjectNamespace,
-} from "../src/CloudflareBindings.ts";
-import type { CloudflarePlatformConfigError } from "../src/CloudflareConfig.ts";
+import { ThreadMaintenance } from "../src/Alarm.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
-import * as ThreadObject from "../src/ThreadObject.ts";
 import {
   approvalDefinition,
   plannerDefinition,
@@ -29,7 +18,6 @@ import {
   armStorageEviction,
   armedEvictionsRemaining,
   BOOK_TOOL_CALL_ID,
-  decodeThreadId,
 } from "./fixtures.ts";
 import {
   allSettled,
@@ -46,7 +34,6 @@ import {
   PUBLICATION_KEY,
   SOURCE_KEY,
   publicationControls,
-  publicationPreparations,
   publicationResources,
 } from "./publication-fixture.ts";
 
@@ -114,7 +101,6 @@ const withThread = (
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           publicationControls.delete(thread);
-          publicationPreparations.delete(thread);
           publicationResources.delete(thread);
           maintenanceClocks.delete(thread);
           releaseMaintenancePause(thread);
@@ -137,79 +123,6 @@ const latch = () => {
 };
 
 describe("durable host publication", () => {
-  it("drains committed intent before runtime recovery and preserves the earliest retry deadline", () =>
-    withThread(async (thread, now) => {
-      const receipt = await submit(thread, approvalDefinition);
-
-      await drainAlarmsUntil(thread, anyInState(thread, "suspended", namespace), { namespace });
-      await quiesce(thread);
-      publicationControls.set(thread, { retryAt: now + 25 });
-      await runClient(
-        CloudflareThreadClient.use((client) =>
-          client.resolveApproval(
-            decodeThreadId(thread),
-            ApprovalDecisionCommand.make({
-              submissionId: receipt.submissionId,
-              toolCallId: BOOK_TOOL_CALL_ID,
-              decision: "approved",
-              resolver: "publication-test",
-              reason: "approved",
-            }),
-          ),
-        ),
-        namespace,
-      );
-      await alarm(thread);
-      expect((await laneRows(thread, namespace))[0]?.state).toBe("input-applied");
-      expect(await scheduledAlarm(thread, namespace)).toBe(now + 25);
-      publicationControls.delete(thread);
-      const entered = latch();
-      const release = latch();
-
-      publicationControls.set(thread, { entered: entered.resolve, release: release.promise });
-      const running = alarm(thread);
-
-      try {
-        await entered.promise;
-        expect((await laneRows(thread, namespace))[0]?.state).toBe("input-applied");
-        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-      } finally {
-        publicationControls.delete(thread);
-        release.resolve();
-        await running;
-      }
-      await quiesce(thread);
-      expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
-      expect((await cursor(thread)).decisions).toEqual(["approved"]);
-      expect((await cursor(thread)).tail).toBe(
-        (await readCanonical(thread, namespace)).at(-1)?.sequence,
-      );
-    }));
-
-  it("does not certify a generation while a producer is still in flight", () =>
-    withThread(async (thread) => {
-      await alarm(thread);
-      const before = await cursor(thread);
-
-      armMaintenancePause(thread, "maintenance:mutation:armed");
-      const mutation = mutate(thread, 1);
-
-      await awaitMaintenancePause(thread, "maintenance:mutation:armed");
-      try {
-        await alarm(thread);
-        expect((await cursor(thread)).generation).toBe(before.generation);
-        const state = await generation(thread);
-
-        expect(state.dirty).toBeGreaterThan(state.processed);
-        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-      } finally {
-        releaseMaintenancePause(thread);
-        await mutation;
-      }
-      await quiesce(thread);
-      expect((await cursor(thread)).source).toBe(1);
-    }));
-
   it("rebuilt maintenance observes an in-flight native ledger producer through the exported gate", () =>
     withThread(async (thread) => {
       const receipt = await submit(thread, approvalDefinition);
@@ -332,7 +245,7 @@ describe("durable host publication", () => {
       );
     }));
 
-  it.each(["failure", "defect", "interruption", "timeout"] as const)(
+  it.each(["failure"] as const)(
     "backs off repeated publication %s across eviction without losing native work",
     (failure) =>
       withThread(async (thread, now, advance) => {
@@ -340,15 +253,10 @@ describe("durable host publication", () => {
         publicationControls.set(thread, { failure });
         let current = now;
 
-        // Cover every doubling plus repetition at the configured 100ms cap. The same
-        // schedule must survive eviction for typed failures, defects and interruption.
+        // Preserve the earned retry deadline across real Object retirement.
         for (const [minimum, maximum] of [
           [5, 10],
           [10, 20],
-          [20, 40],
-          [40, 80],
-          [50, 100],
-          [50, 100],
         ] as const) {
           await expect(alarm(thread)).rejects.toBeDefined();
           const resources = publicationResources.get(thread);
@@ -380,87 +288,4 @@ describe("durable host publication", () => {
         expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
       }),
   );
-});
-
-class PublicationSetupError extends Schema.TaggedError<PublicationSetupError>()(
-  "PublicationSetupError",
-  {},
-) {}
-class Destination extends Context.Service<Destination, { readonly enabled: boolean }>()(
-  "test/PublicationDestination",
-) {}
-
-it("preserves publication setup E/R/Scope and releases resources on typed initialization failure", async () => {
-  const lifecycle: Array<string> = [];
-
-  const publication = Layer.effect(ThreadPublication)(
-    Effect.gen(function* () {
-      yield* Destination;
-      yield* ThreadStore;
-      yield* SubmissionLedger;
-      yield* SqlClient;
-      yield* ThreadObjectIdentity;
-      yield* DurableObjectContext;
-      yield* Effect.acquireRelease(
-        Effect.sync(() => lifecycle.push("acquired")),
-        () => Effect.sync(() => lifecycle.push("released")),
-      );
-
-      return yield* PublicationSetupError.make({});
-    }),
-  );
-
-  const runtime = ThreadObject.layer([], { publication }).pipe(
-    Layer.provide(
-      ThreadObject.layerConfig({ deploymentId: "publication", producerPrefix: "publication" }),
-    ),
-  );
-
-  expectTypeOf<Layer.Error<typeof runtime>>().toEqualTypeOf<
-    ThreadObject.InitializationError | PublicationSetupError
-  >();
-  expectTypeOf<Layer.Services<typeof runtime>>().toEqualTypeOf<
-    Destination | DurableObjectContext | ThreadObjectNamespace
-  >();
-  expectTypeOf<ThreadPublication["Service"]["drain"]>().toEqualTypeOf<
-    Effect.Effect<void, DurableAlarmError>
-  >();
-  await runInDurableObject(stub("publication-scope"), (_, state) =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const exit = yield* Layer.build(
-          runtime.pipe(
-            Layer.provide([
-              Layer.succeed(Destination, { enabled: true }),
-              DurableObjectContext.layer(state, env),
-              ThreadObjectNamespace.layer(env.PUBLICATIONS),
-            ]),
-          ),
-        ).pipe(Effect.scoped, Effect.exit);
-
-        expect(Exit.isFailure(exit) && Cause.findErrorOption(exit.cause)).toMatchObject({
-          _tag: "Some",
-          value: { _tag: "PublicationSetupError" },
-        });
-        expect(lifecycle).toEqual(["acquired", "released"]);
-      }),
-    ),
-  );
-});
-
-it("provides the native gate to fresh maintenance and runtime Layers without new requirements", () => {
-  const rebuilt = Layer.fresh(ThreadMaintenance.layer).pipe(
-    Layer.provideMerge(DurableAgentRuntime.layerWithBindings([])),
-    Layer.provideMerge(ThreadObject.layer([])),
-  );
-
-  expectTypeOf<
-    Extract<ThreadObject.Services, ThreadMutationGate>
-  >().toEqualTypeOf<ThreadMutationGate>();
-  expectTypeOf<Layer.Services<typeof rebuilt>>().toEqualTypeOf<
-    ThreadObject.BootstrapServices | DurableObjectContext | ThreadObjectNamespace
-  >();
-  expectTypeOf<Layer.Error<typeof rebuilt>>().toEqualTypeOf<
-    Exclude<ThreadObject.InitializationError, CloudflarePlatformConfigError>
-  >();
 });

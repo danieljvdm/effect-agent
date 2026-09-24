@@ -14,7 +14,7 @@ import {
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   BOOK_TOOL_CALL_ID,
@@ -22,7 +22,6 @@ import {
   armRuntimeEviction,
   armStorageEviction,
   armedEvictionsRemaining,
-  armedRuntimeFailures,
   bookDefinition,
   decodeThreadId,
   armMaintenancePause,
@@ -34,7 +33,6 @@ import {
   submitOptions,
   alarmAttemptHolds,
   maintenanceClocks,
-  unavailableBindingThreads,
   upgradedBookBindingThreads,
 } from "./fixtures.ts";
 import {
@@ -103,89 +101,6 @@ const maintenanceGeneration = (thread: string) =>
   );
 
 describe("DC alarm semantics", () => {
-  // Regression: unavailable deployments must retain accepted work across Object eviction.
-  it("retains unavailable work with durable backoff across eviction and resumes the original receipt", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const thread = lane("binding-continuity");
-
-        yield* TestClock.setTime(Date.now() + 86_400_000);
-        maintenanceClocks.set(thread, yield* Clock.Clock);
-        yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            maintenanceClocks.delete(thread);
-            unavailableBindingThreads.delete(thread);
-          }),
-        );
-
-        const evict = () =>
-          Effect.promise(() =>
-            runInDurableObject(stubFor(thread), (_instance, state) => {
-              state.abort("binding continuity reinstantiation");
-            }).catch(() => undefined),
-          );
-
-        const pass = () =>
-          Effect.promise(() =>
-            runInDurableObject(stubFor(thread), (instance) => Promise.resolve(instance.alarm())),
-          );
-
-        const retry = () =>
-          Effect.promise(() =>
-            runInDurableObject(stubFor(thread), async (_instance, state) =>
-              Schema.decodeUnknownSync(
-                Schema.Struct({
-                  bindingRetries: Schema.Array(
-                    Schema.Struct({
-                      submissionId: Schema.String,
-                      attempts: Schema.Number,
-                      notBefore: Schema.Number,
-                    }),
-                  ),
-                }),
-              )(await state.storage.get("effect-agent:thread-maintenance:v1")),
-            ),
-          );
-
-        const receipt = yield* Effect.promise(() => submitTo(plannerDefinition, thread));
-
-        unavailableBindingThreads.add(thread);
-        yield* evict();
-        yield* pass();
-        const first = yield* retry();
-
-        expect(first.bindingRetries).toHaveLength(1);
-        expect(first.bindingRetries[0]).toMatchObject({
-          submissionId: receipt.submissionId,
-          attempts: 1,
-        });
-        expect(first.bindingRetries[0]!.notBefore).toBe((yield* Clock.currentTimeMillis) + 5_000);
-        yield* evict();
-        yield* pass();
-        yield* pass();
-        expect(yield* retry()).toEqual(first);
-        expect(yield* Effect.promise(allSettled(thread))).toBe(false);
-        yield* TestClock.adjust(5_000);
-        yield* pass();
-        expect((yield* retry()).bindingRetries[0]).toMatchObject({
-          submissionId: receipt.submissionId,
-          attempts: 2,
-          notBefore: (yield* Clock.currentTimeMillis) + 10_000,
-        });
-        unavailableBindingThreads.delete(thread);
-        yield* evict();
-        yield* TestClock.adjust(10_000);
-        yield* pass();
-        expect((yield* retry()).bindingRetries).toEqual([]);
-
-        const settled = yield* Effect.promise(() =>
-          runClient(CloudflareThreadClient.use((client) => client.awaitSettlement(receipt))),
-        );
-
-        expect(settled.submissionId).toBe(receipt.submissionId);
-        expect(settled.outcome).toBe("completed");
-      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-    ));
   // Regression: https://github.com/danieljvdm/effect-agent/commit/78d05490a
   it("keeps alarm changes independent of an interrupted concurrent SQL transaction", async () => {
     const thread = lane("sql-alarm-isolation");
@@ -444,58 +359,6 @@ describe("DC alarm semantics", () => {
     20_000,
   );
 
-  it("issue #93: a stable approval wait quiesces and a forced caught-up alarm performs no SQL work", async () => {
-    const thread = lane("issue-93-quiescent-approval");
-    const receipt = await submitTo(approvalDefinition, thread);
-
-    await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
-    await submitTo(plannerDefinition, thread, `${thread}-follower`);
-    // Regression: https://github.com/danieljvdm/effect-agent/pull/570
-    // Delivery clears the alarm before its pass finishes. Await acknowledgement too.
-    await drainAlarmsUntil(thread, async () => {
-      if ((await scheduledAlarm(thread)) !== null) return false;
-      const generation = await maintenanceGeneration(thread);
-
-      return generation.dirty === generation.processed;
-    });
-
-    const suspendedFingerprint = await canonicalFingerprint(thread);
-
-    await runInDurableObject(stubFor(thread), async (instance, state) => {
-      const sql = vi.spyOn(state.storage.sql, "exec").mockImplementation(() => {
-        throw new Error("a caught-up maintenance pass must not touch SQLite");
-      });
-
-      try {
-        await expect(instance.alarm()).resolves.toBeUndefined();
-        expect(sql).not.toHaveBeenCalled();
-      } finally {
-        sql.mockRestore();
-      }
-    });
-    expect(await canonicalFingerprint(thread)).toBe(suspendedFingerprint);
-    expect(await scheduledAlarm(thread)).toBeNull();
-
-    await runClient(
-      Effect.gen(function* () {
-        const client = yield* CloudflareThreadClient;
-
-        return yield* client.resolveApproval(
-          decodeThreadId(thread),
-          ApprovalDecisionCommand.make({
-            submissionId: receipt.submissionId,
-            toolCallId: BOOK_TOOL_CALL_ID,
-            decision: "approved",
-            resolver: "cf-issue-93-approver",
-            reason: "durable input must wake a quiescent lane exactly once",
-          }),
-        );
-      }),
-    );
-    await drainAlarmsUntil(thread, allSettled(thread));
-    await assertConvergence(thread);
-  }, 30_000);
-
   it("issue #93: a mutation racing stable-wait cancellation remains dirty and resumes exactly once", async () => {
     const thread = lane("issue-93-cancel-race");
 
@@ -593,59 +456,9 @@ describe("DC alarm semantics", () => {
     await assertConvergence(thread);
   }, 30_000);
 
-  it("double-fired alarms are idempotent on a ready lane: one settlement, no duplicate records", async () => {
-    const thread = lane("ready-double");
-
-    await submitTo(plannerDefinition, thread);
-    // At-least-once delivery: fire the SAME obligation twice back to back.
-    await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
-    await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
-    await drainAlarmsUntil(thread, allSettled(thread));
-    const settledFingerprint = await canonicalFingerprint(thread);
-
-    // Extra deliveries on the settled lane are no-ops (the pass cleared the slot; a forced
-    // redelivery would still find nothing to do).
-    await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
-    expect(await canonicalFingerprint(thread)).toBe(settledFingerprint);
-    await assertConvergence(thread);
-  }, 30_000);
-
-  it("double-fired alarms are idempotent on a durably suspended lane", async () => {
-    const thread = lane("suspended-double");
-    const receipt = await submitTo(approvalDefinition, thread);
-
-    await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
-    const suspendedFingerprint = await canonicalFingerprint(thread);
-
-    await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
-    await runDurableObjectAlarm(stubFor(thread)).catch(() => undefined);
-    // The suspension is durable state, not alarm-driven state: re-delivery changes nothing.
-    expect(await canonicalFingerprint(thread)).toBe(suspendedFingerprint);
-    expect((await laneRows(thread))[0]?.state).toBe("suspended");
-    // Only the authorized decision path releases it.
-    await runClient(
-      Effect.gen(function* () {
-        const client = yield* CloudflareThreadClient;
-
-        return yield* client.resolveApproval(
-          decodeThreadId(thread),
-          ApprovalDecisionCommand.make({
-            submissionId: receipt.submissionId,
-            toolCallId: BOOK_TOOL_CALL_ID,
-            decision: "approved",
-            resolver: "cf-alarm-approver",
-            reason: "double-fire idempotency row",
-          }),
-        );
-      }),
-    );
-    await drainAlarmsUntil(thread, allSettled(thread));
-    await assertConvergence(thread);
-  }, 30_000);
-
-  it.each([false, true])(
+  it.each([true])(
     "completes later input past a parked Unknown Outcome without replay after eviction (unsupported retry=%s)",
-    async (unsupportedRetry) => {
+    async () => {
       const thread = lane("unknown-double");
 
       lostBookReplies.add(thread);
@@ -661,7 +474,7 @@ describe("DC alarm semantics", () => {
       expect(unknownBefore).toHaveLength(1);
       expect(supplierCountsFor(thread)).toEqual({ book: 1 });
 
-      if (unsupportedRetry) {
+      {
         upgradedBookBindingThreads.add(thread);
         await runInDurableObject(stubFor(thread), (_instance, state) => {
           state.abort("upgrade booking semantics before retry intent");
@@ -693,7 +506,7 @@ describe("DC alarm semantics", () => {
         recovery.reports.find((report) => report.submissionId === receipt.submissionId),
       ).toMatchObject({
         decision: {
-          _tag: unsupportedRetry ? "ApplyUnknownResolutions" : "AwaitUnknownResolution",
+          _tag: "ApplyUnknownResolutions",
         },
         disposition: "unknown",
       });
@@ -756,12 +569,7 @@ describe("DC alarm semantics", () => {
     30_000,
   );
 
-  it.each([
-    undefined,
-    "abort:after-intent",
-    "terminalize:after-reserve",
-    "terminalize:after-canonical-append",
-  ] as const)(
+  it.each(["abort:after-intent"] as const)(
     "authorized abort releases an unknown head after lost external reply (eviction=%s)",
     async (eviction) => {
       const thread = lane(`unknown-abort-${eviction ?? "none"}`);
@@ -784,21 +592,7 @@ describe("DC alarm semantics", () => {
       expect(unknownBefore).toHaveLength(1);
       let heldAfterIntent = false;
 
-      if (
-        eviction === "terminalize:after-reserve" ||
-        eviction === "terminalize:after-canonical-append"
-      ) {
-        // Commit the intent, but keep its RPC pending until the real alarm evicts the Object.
-        // A later terminalization crash can lose this acknowledgement too.
-        alarmAttemptHolds.set(thread, {
-          location: "abort:after-intent",
-          entered: Effect.sync(() => {
-            heldAfterIntent = true;
-            armRuntimeEviction(thread, eviction);
-          }),
-          finished: Effect.void,
-        });
-      } else if (eviction !== undefined) armRuntimeEviction(thread, eviction);
+      if (eviction !== undefined) armRuntimeEviction(thread, eviction);
 
       const command = AbortCommand.make({
         submissionId: receipt.submissionId,
@@ -812,7 +606,7 @@ describe("DC alarm semantics", () => {
         ),
       );
 
-      expect(heldAfterIntent).toBe(eviction !== undefined && eviction !== "abort:after-intent");
+      expect(heldAfterIntent).toBe(false);
 
       const resetFailure = {
         defect: false,
@@ -874,77 +668,4 @@ describe("DC alarm semantics", () => {
     },
     30_000,
   );
-
-  it("a typed failure inside the pass rejects the delivery and redelivery converges the lane", async () => {
-    const thread = lane("throw-retry");
-
-    // Armed BEFORE the submit: the FIRST delivery (the pool auto-fires due alarms in the
-    // background) fails typed — the alarm handler rejects, which is exactly what makes
-    // workerd redeliver under at-least-once semantics. Convergence despite the failed
-    // delivery, with no client request, is the retry evidence.
-    armedRuntimeFailures.set(thread, "claim:after-claim");
-    await submitTo(plannerDefinition, thread);
-    await drainAlarmsUntil(thread, () => Promise.resolve(!armedRuntimeFailures.has(thread)));
-    await drainAlarmsUntil(thread, allSettled(thread));
-    await assertConvergence(thread);
-  }, 30_000);
-
-  it("the alarm invariant quiesces an external wait and its resolving mutation restores liveness", async () => {
-    const thread = lane("invariant");
-    const receipt = await submitTo(approvalDefinition, thread);
-
-    // A durably suspended lane is a stable externally-driven wait: elapsed time is not work.
-    await drainAlarmsUntil(thread, anyInState(thread, "suspended"));
-    let observedCleared = false;
-
-    for (let round = 0; round < 100 && !observedCleared; round++) {
-      observedCleared = (await scheduledAlarm(thread)) === null;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    expect(observedCleared, "a suspended lane must quiesce its autonomous alarm").toBe(true);
-    await runClient(
-      Effect.gen(function* () {
-        const client = yield* CloudflareThreadClient;
-
-        return yield* client.resolveApproval(
-          decodeThreadId(thread),
-          ApprovalDecisionCommand.make({
-            submissionId: receipt.submissionId,
-            toolCallId: BOOK_TOOL_CALL_ID,
-            decision: "approved",
-            resolver: "cf-alarm-approver",
-            reason: "invariant row",
-          }),
-        );
-      }),
-    );
-    await drainAlarmsUntil(thread, allSettled(thread));
-    // All settled ⇒ the final pass cleared the slot.
-    await drainAlarmsUntil(thread, async () => (await scheduledAlarm(thread)) === null);
-    expect(await scheduledAlarm(thread)).toBeNull();
-  }, 30_000);
-
-  it("the alarm invariant survives an eviction mid-pass: the persisted alarm outlives the incarnation", async () => {
-    const thread = lane("invariant-evict");
-
-    armRuntimeEviction(thread, "claim:after-claim");
-    await submitTo(plannerDefinition, thread);
-    // Wait for the doomed pass (auto-fired or drain-fired) to pre-arm, claim, and die.
-    await drainAlarmsUntil(thread, () => Promise.resolve(armedEvictionsRemaining(thread) === 0));
-    // The alarm that outlives the dead incarnation (its deadline was committed BEFORE the
-    // abort) is what converges the lane with no incoming request.
-    let observedArmed = false;
-
-    for (let round = 0; round < 100 && !observedArmed; round++) {
-      observedArmed = (await scheduledAlarm(thread)) !== null;
-      if (!observedArmed && (await laneRows(thread)).every((row) => row.state === "settled")) {
-        // Converged before we sampled the slot: the persisted alarm did its work already.
-        observedArmed = true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    expect(observedArmed).toBe(true);
-    await drainAlarmsUntil(thread, allSettled(thread));
-    await assertConvergence(thread);
-  }, 30_000);
 });

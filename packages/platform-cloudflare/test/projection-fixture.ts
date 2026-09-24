@@ -1,6 +1,4 @@
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
-import * as Agent from "effect-agent/agent";
-import { DurableWorkerBinding } from "effect-agent/agent-registration";
 import type { CanonicalRecordEnvelope } from "effect-agent/records";
 import { CanonicalSequence } from "effect-agent/records";
 import {
@@ -8,17 +6,13 @@ import {
   ThreadProjectionMaintenance,
 } from "effect-agent/thread-projection-maintenance";
 import { ThreadRead, ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
-import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { ThreadHostMaintenance, type ThreadHostMaintenanceLane } from "../src/Alarm.ts";
-import { DurableObjectContext, ThreadObjectIdentity } from "../src/CloudflareBindings.ts";
-import { TEST_DIGESTS, finalParts, plannerDefinition } from "./fixtures.ts";
+import { ThreadObjectIdentity } from "../src/CloudflareBindings.ts";
 
 interface ProjectionControl {
   readonly operation?: "live" | "drain";
-  readonly failure?: "failure" | "defect" | "interruption" | "timeout" | "eviction";
-  readonly stage?: "before" | "after";
   readonly skipLive?: boolean;
   readonly retryAt?: number;
   readonly entered?: () => void;
@@ -26,10 +20,6 @@ interface ProjectionControl {
 }
 
 export const projectionControls = new Map<string, ProjectionControl>();
-export const projectionResources = new Map<string, { acquired: number; released: number }>();
-export const projectionConstructions = new Map<string, number>();
-export const projectionLookups = new Map<string, Array<number>>();
-export const projectionLiveBatches = new Map<string, Array<number>>();
 
 export const hostMaintenanceControls = new Map<string, ReadonlyArray<ThreadHostMaintenanceLane>>();
 
@@ -64,12 +54,10 @@ const failure = (cause?: unknown) =>
 /** Real SQLite index and atomic cursor; only fault timing and the model are controlled. */
 export const projectionLayer = Layer.effectContext(
   Effect.gen(function* () {
-    const { ctx } = yield* DurableObjectContext;
     const { threadId } = yield* ThreadObjectIdentity;
     const store = yield* ThreadStore;
     const sql = yield* SqlClient;
 
-    projectionConstructions.set(threadId, (projectionConstructions.get(threadId) ?? 0) + 1);
     yield* sql`CREATE TABLE IF NOT EXISTS test_projection_rows (sequence INTEGER PRIMARY KEY, record_id TEXT NOT NULL)`;
     yield* sql`CREATE TABLE IF NOT EXISTS test_projection_cursor (singleton INTEGER PRIMARY KEY, watermark INTEGER NOT NULL)`;
     yield* sql`INSERT OR IGNORE INTO test_projection_cursor VALUES (1, 0)`;
@@ -96,27 +84,11 @@ export const projectionLayer = Layer.effectContext(
     ) {
       const control = projectionControls.get(threadId);
 
-      if (control?.operation !== operation || (control.stage ?? "before") !== stage) return;
+      if (control?.operation !== operation || stage !== "before") return;
       control.entered?.();
       const release = control.release;
 
       if (release !== undefined) yield* Effect.promise(() => release);
-      switch (control.failure) {
-        case undefined:
-          return;
-        case "failure":
-          return yield* failure();
-        case "defect":
-          return yield* Effect.die("projection defect");
-        case "interruption":
-          return yield* Effect.interrupt;
-        case "timeout":
-          return yield* Effect.never.pipe(Effect.timeoutOrElse({ duration: 0, orElse: failure }));
-        case "eviction":
-          projectionControls.delete(threadId);
-
-          return yield* Effect.sync(() => ctx.abort("projection commit failpoint"));
-      }
     });
 
     const batch = Effect.fn("projectionFixture.batch")(function* (
@@ -124,18 +96,6 @@ export const projectionLayer = Layer.effectContext(
       limit: number,
       operation: "live" | "drain",
     ) {
-      const resources = projectionResources.get(threadId) ?? { acquired: 0, released: 0 };
-
-      projectionResources.set(threadId, resources);
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          resources.acquired++;
-        }),
-        () =>
-          Effect.sync(() => {
-            resources.released++;
-          }),
-      );
       const before = yield* watermark;
 
       if (before >= through) return;
@@ -175,10 +135,6 @@ export const projectionLayer = Layer.effectContext(
       const indexed = yield* watermark;
 
       if (indexed < captured) return yield* failure();
-      const lookups = projectionLookups.get(threadId) ?? [];
-
-      lookups.push(indexed);
-      projectionLookups.set(threadId, lookups);
 
       return indexed;
     });
@@ -187,10 +143,6 @@ export const projectionLayer = Layer.effectContext(
       Context.add(ThreadProjectionMaintenance, {
         applyCommitted: (request, result) =>
           Effect.gen(function* () {
-            const batches = projectionLiveBatches.get(threadId) ?? [];
-
-            batches.push(request.batch.records.length);
-            projectionLiveBatches.set(threadId, batches);
             if (
               projectionControls.get(threadId)?.skipLive ||
               (yield* watermark) < result.firstSequence - 1
@@ -209,66 +161,4 @@ export const projectionLayer = Layer.effectContext(
       }),
     );
   }),
-);
-
-const lookupTools = Toolkit.make(
-  Tool.make("lookup_projection", {
-    parameters: Schema.Struct({}),
-    success: Schema.Natural,
-    failure: ThreadProjectionError,
-    dependencies: [ProjectionIndex],
-  }),
-);
-
-export const projectionDefinition = Agent.make("cf-projection", {
-  input: plannerDefinition.input,
-  output: plannerDefinition.output,
-  instructions: "Look up earlier evidence three times, then finish.",
-  toolkit: lookupTools,
-  policy: { maxTurns: 5, maxToolCalls: 4, maxDuration: "30 seconds" },
-});
-
-const lookupModel = Model.make(
-  "scripted",
-  "projection",
-  Layer.effect(
-    LanguageModel.LanguageModel,
-    LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: (options) => {
-        const prompt = JSON.stringify(options.prompt);
-        const next = [1, 2, 3].find((turn) => !prompt.includes(`projection-lookup-${turn}`));
-
-        return Stream.fromIterable(
-          next === undefined
-            ? finalParts('{"answer":"done"}')
-            : [
-                {
-                  type: "tool-call",
-                  id: `projection-lookup-${next}`,
-                  name: "lookup_projection",
-                  params: {},
-                  providerExecuted: false,
-                },
-                {
-                  type: "finish",
-                  reason: "tool-calls",
-                  usage: { inputTokens: {}, outputTokens: {} },
-                },
-              ],
-        );
-      },
-    }),
-  ),
-);
-
-export const makeProjectionBinding = DurableWorkerBinding.make(
-  Agent.withModel(projectionDefinition, lookupModel),
-  TEST_DIGESTS,
-).pipe(
-  Effect.provide(
-    lookupTools.toLayer({
-      lookup_projection: () => Effect.flatMap(ProjectionIndex, (index) => index.lookup),
-    }),
-  ),
 );

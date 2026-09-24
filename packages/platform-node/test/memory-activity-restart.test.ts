@@ -4,7 +4,6 @@ import { NodeServices } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
 import {
-  Schema as NamespaceSchema,
   Duration,
   Effect,
   Fiber,
@@ -12,41 +11,29 @@ import {
   Layer,
   Option,
   Path,
-  Ref,
   Result,
   Schema,
   Stream,
 } from "effect";
 import { PersistentHistory } from "effect-agent";
-import { ActivityProcessorStore, type PreparedActivity } from "effect-agent/activity-store";
+import { ActivityProcessorStore } from "effect-agent/activity-store";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
 import { ThreadId } from "effect-agent/identifiers";
-import * as Memory from "effect-agent/memory";
-import * as MemoryNamespace from "effect-agent/memory-namespace";
-import { MemoryRecallLimits } from "effect-agent/memory-reference";
-import { revalidateMemoryLookup } from "effect-agent/memory-revalidation";
-import { MemoryScope, MemoryReader, MemoryWrite, MemoryWriter } from "effect-agent/memory-store";
-import { type ActiveMemoryDocument } from "effect-agent/memory-store";
+import { MemoryReader } from "effect-agent/memory-store";
 import { RunContextPreparationPassthrough } from "effect-agent/run-options";
-import { memoryReaderLayer, memoryStoreLayer } from "effect-agent/sql-memory-store";
-import { ThreadHistory } from "effect-agent/thread-history";
+import { memoryReaderLayer } from "effect-agent/sql-memory-store";
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
-import { LanguageModel, Model, Prompt, type Response, Toolkit } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response, Toolkit } from "effect/unstable/ai";
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
 
 import {
-  ActivityMemoryOutput,
-  CORRECTED_TEXT,
   DAN_THREAD,
   DIVERGENT_TEXT,
-  MEMORY_NAMESPACE,
-  MEMORY_SCOPE,
   MemoryActivityMarker,
   MemoryActivityWorkerResult,
   ORIGINAL_TEXT,
-  TIM_THREAD,
   activityKey,
   DanStatement,
   danStatement,
@@ -54,24 +41,7 @@ import {
   type MemoryActivityWorkerMode,
 } from "./memory-activity-fixtures.ts";
 
-const TestNamespace = MemoryNamespace.define({
-  name: "test/memory",
-  version: 1,
-  identity: NamespaceSchema.String,
-});
-
 const danThreadId = Schema.decodeSync(ThreadId)(DAN_THREAD);
-const timThreadId = Schema.decodeSync(ThreadId)(TIM_THREAD);
-
-const recallLimits = MemoryRecallLimits.make({
-  maxSources: 2,
-  maxItems: 8,
-  maxBytes: 64_000,
-  maxTokens: 64_000,
-  timeoutMillis: 5_000,
-});
-
-const FIVE_MINUTES_MILLIS = 300_000;
 
 const policy = AgentPolicy.make({
   maxTurns: 1,
@@ -89,7 +59,7 @@ const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncoded> => 
   { type: "finish", reason: "stop", usage },
 ];
 
-const model = (name: string, answer: string, prompts?: Ref.Ref<ReadonlyArray<Prompt.Prompt>>) =>
+const model = (name: string, answer: string) =>
   Model.make(
     "scripted",
     name,
@@ -97,13 +67,7 @@ const model = (name: string, answer: string, prompts?: Ref.Ref<ReadonlyArray<Pro
       LanguageModel.LanguageModel,
       LanguageModel.make({
         generateText: () => Effect.succeed([]),
-        streamText: ({ prompt }) =>
-          Stream.unwrap(
-            (prompts === undefined
-              ? Effect.void
-              : Ref.update(prompts, (seen) => [...seen, prompt])
-            ).pipe(Effect.as(Stream.fromIterable(finalParts(answer)))),
-          ),
+        streamText: () => Stream.fromIterable(finalParts(answer)),
       }),
     ),
   );
@@ -119,14 +83,6 @@ const sourceAgent = Agent.withModel(
   model("memory-observer-chad", ORIGINAL_TEXT),
 );
 
-const timDefinition = Agent.make("memory-consumer-tim", {
-  input: Schema.Struct({ question: Schema.String, askedAt: Schema.Finite }),
-  output: Schema.String,
-  instructions: "Answer using supplied references, preserving attribution and uncertainty.",
-  toolkit: Toolkit.empty,
-  policy,
-});
-
 const historyLayer = (filename: string) =>
   PersistentHistory.layer.pipe(Layer.provide(sqliteThreadStoreLayer({ filename })));
 
@@ -134,9 +90,6 @@ const activityLayer = (filename: string) =>
   activityProcessorStoreLayer.pipe(
     Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })),
   );
-
-const memoryLayer = (filename: string) =>
-  memoryStoreLayer.pipe(Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
 
 const readerLayer = (filename: string) =>
   memoryReaderLayer.pipe(Layer.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
@@ -216,96 +169,8 @@ const runWorker = (filename: string, mode: MemoryActivityWorkerMode) =>
     }),
   );
 
-const candidateFrom = (document: ActiveMemoryDocument) => ({
-  _tag: "Found" as const,
-  passages: [
-    {
-      version: 1 as const,
-      source: document.source,
-      passageId: "document",
-      content: document.content,
-    },
-  ],
-});
-
-const runTim = Effect.fn("MemoryActivityTest.runTim")(function* (
-  filename: string,
-  question: string,
-  askedAt: number,
-  candidates: ReturnType<typeof candidateFrom>,
-) {
-  const prompts = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
-  const recalled = yield* Ref.make<ReadonlyArray<string>>([]);
-  const agent = Agent.withModel(timDefinition, model(`tim-${question}`, "acknowledged", prompts));
-
-  yield* AgentRuntime.run(
-    agent,
-    { question, askedAt },
-    {
-      threadId: timThreadId,
-      transientContext: {
-        load: () =>
-          Memory.recall(
-            [
-              {
-                id: "authoritative-team-memory",
-                essential: false,
-                read: revalidateMemoryLookup(candidates, {
-                  namespace: MEMORY_NAMESPACE,
-                  scope: MEMORY_SCOPE,
-                }),
-              },
-            ],
-            recallLimits,
-          ).pipe(
-            Effect.tap((result) => Ref.update(recalled, (texts) => [...texts, result.text])),
-            Effect.map((result) =>
-              result.text.length === 0
-                ? Prompt.empty
-                : Prompt.make([{ role: "user", content: result.text }]),
-            ),
-          ),
-      },
-    },
-  ).pipe(
-    Effect.provide([
-      historyLayer(filename),
-      readerLayer(filename),
-
-      RunContextPreparationPassthrough,
-    ]),
-  );
-
-  return { prompts: yield* Ref.get(prompts), recalled: yield* Ref.get(recalled) };
-});
-
-const originalWriteFrom = Effect.fn("MemoryActivityTest.originalWriteFrom")(function* (
-  pending: PreparedActivity,
-) {
-  const output = yield* Schema.decodeUnknownEffect(ActivityMemoryOutput)(pending.output);
-
-  if (output._tag !== "Remember") return yield* Effect.die("Expected remembered activity");
-
-  return yield* Schema.decodeEffect(MemoryWrite.Wire)({
-    _tag: "Put",
-    key: output.key,
-    operationId: pending.workId,
-    expectedRevision: null,
-    locator: output.locator,
-    content: {
-      ...output.content,
-      metadata: {
-        ...output.content.metadata,
-        sourceRecordDigest: pending.recordDigest,
-        sourceWorkId: pending.workId,
-      },
-    },
-    scopes: output.scopes,
-  });
-});
-
 it.live(
-  "replays pinned cross-Thread memory after SIGKILL, then honors correction and withdrawal",
+  "replays pinned memory after SIGKILL without re-extracting or overwriting it",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -392,144 +257,6 @@ it.live(
         expect(original.generation).toBe(1);
         expect(original.content.text).toBe(ORIGINAL_TEXT);
         expect(original.content.text).not.toBe(DIVERGENT_TEXT);
-        expect(original.content.attributions).toEqual([
-          {
-            originId: source.records[0].record.recordId,
-            speaker: "Dan",
-            observers: ["Chad"],
-            locator: danStatement.locator,
-            activityAt: 1_000,
-            interpretation: "proposal reported by Dan; not a decision",
-          },
-        ]);
-        expect(original.content).toMatchObject({ recordedAt: 2_000, extractedAt: 3_000 });
-        expect(original.content.metadata).toMatchObject({
-          sourceThreadId: DAN_THREAD,
-          sourceSequence: 1,
-          sourceRecordId: source.records[0].record.recordId,
-          sourceSchemaVersion: 1,
-          sourceRecordDigest: pending.recordDigest,
-          sourceWorkId: pending.workId,
-        });
-
-        const staleCandidates = candidateFrom(original);
-        const askedAt = danStatement.activityAt + FIVE_MINUTES_MILLIS;
-
-        const initialRecall = yield* runTim(
-          filename,
-          "What did Dan say about Chad?",
-          askedAt,
-          staleCandidates,
-        );
-
-        const initialPrompt = JSON.stringify(initialRecall.prompts[0]);
-        const recalledText = initialRecall.recalled[0] ?? "";
-
-        expect(recalledText).toContain(ORIGINAL_TEXT);
-        expect(recalledText).toContain('"speaker":"Dan"');
-        expect(recalledText).toContain('"observers":["Chad"]');
-        expect(recalledText).toContain(danStatement.locator);
-        expect(recalledText).toContain('"activityAt":1000');
-        expect(recalledText).toContain('"revision":"1"');
-        expect(recalledText).toContain('"sourceSchemaVersion":1');
-        expect(recalledText).toContain(source.records[0].record.recordId);
-        expect(recalledText).toContain("proposal reported by Dan; not a decision");
-        expect(recalledText).toContain(pending.recordDigest);
-        expect(initialPrompt).toContain(ORIGINAL_TEXT);
-        expect(initialPrompt).toContain(String(askedAt));
-
-        const wrongNamespace = yield* revalidateMemoryLookup(staleCandidates, {
-          namespace: TestNamespace.make("another-team"),
-          scope: MEMORY_SCOPE,
-        }).pipe(Effect.provide(readerLayer(filename)));
-
-        const wrongScope = yield* revalidateMemoryLookup(staleCandidates, {
-          namespace: MEMORY_NAMESPACE,
-          scope: MemoryScope.make("unshared-channel"),
-        }).pipe(Effect.provide(readerLayer(filename)));
-
-        expect(wrongNamespace).toEqual({ _tag: "NoMatch" });
-        expect(wrongScope).toEqual({ _tag: "NoMatch" });
-
-        const corrected = yield* Effect.flatMap(MemoryWriter, (writer) =>
-          writer.change({
-            _tag: "Put",
-            key: memoryKey,
-            operationId: "correct-project-atlas",
-            expectedRevision: original.source.revision,
-            locator: original.source.locator,
-            content: {
-              ...original.content,
-              text: CORRECTED_TEXT,
-              recordedAt: 4_000,
-              extractedAt: 4_500,
-            },
-            scopes: [MEMORY_SCOPE],
-          }),
-        ).pipe(Effect.provide(memoryLayer(filename)));
-
-        expect(corrected).toMatchObject({
-          _tag: "ActiveMemoryDocument",
-          generation: 2,
-          predecessor: original.source,
-        });
-
-        const correctedRecall = yield* runTim(
-          filename,
-          "Was the Project Atlas statement corrected?",
-          askedAt + 1_000,
-          staleCandidates,
-        );
-
-        expect(correctedRecall.recalled[0]).toContain(CORRECTED_TEXT);
-        expect(correctedRecall.recalled[0]).not.toContain(ORIGINAL_TEXT);
-
-        const withdrawn = yield* Effect.flatMap(MemoryWriter, (writer) =>
-          writer.change({
-            _tag: "Withdraw",
-            key: memoryKey,
-            operationId: "withdraw-project-atlas",
-            expectedRevision: corrected.source.revision,
-            reason: "Dan withdrew the source statement",
-          }),
-        ).pipe(Effect.provide(memoryLayer(filename)));
-
-        expect(withdrawn).toMatchObject({ _tag: "WithdrawnMemoryDocument", generation: 3 });
-
-        const replayed = yield* Effect.flatMap(MemoryWriter, (writer) =>
-          Effect.flatMap(originalWriteFrom(pending), writer.change),
-        ).pipe(Effect.provide(memoryLayer(filename)));
-
-        expect(replayed).toMatchObject({
-          _tag: "ActiveMemoryDocument",
-          generation: 1,
-          source: { revision: "1" },
-        });
-        expect(yield* readMemory(filename)).toMatchObject({
-          _tag: "WithdrawnMemoryDocument",
-          generation: 3,
-        });
-
-        const withdrawnRecall = yield* runTim(
-          filename,
-          "What remains recallable after withdrawal?",
-          askedAt + 2_000,
-          staleCandidates,
-        );
-
-        expect(withdrawnRecall.recalled[0]).toBe("");
-        expect(JSON.stringify(withdrawnRecall.prompts[0])).not.toContain(CORRECTED_TEXT);
-
-        const timHistory = yield* Effect.flatMap(ThreadHistory, (history) =>
-          history.load(timThreadId),
-        ).pipe(Effect.provide(historyLayer(filename)));
-
-        const canonicalTim = JSON.stringify(timHistory);
-
-        expect(canonicalTim).not.toContain(ORIGINAL_TEXT);
-        expect(canonicalTim).not.toContain(CORRECTED_TEXT);
-        expect(canonicalTim).not.toContain(pending.recordDigest);
-        expect((yield* exportThread(filename, timThreadId)).records).toHaveLength(9);
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
   60_000,

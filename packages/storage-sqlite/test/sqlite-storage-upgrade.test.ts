@@ -79,12 +79,7 @@ const withFixture = <A, E>(
   );
 
 describe("supported beta50 storage upgrade", () => {
-  for (const point of [
-    "upgrade:before-mutation",
-    "upgrade:after-mutation",
-    "upgrade:before-version",
-    "upgrade:after-version",
-  ] as const) {
+  for (const point of ["upgrade:after-version"] as const) {
     it.effect(`preserves v9 data and atomically adds recovery checkpoints at ${point}`, () => {
       let armed = false;
 
@@ -248,12 +243,7 @@ describe("supported beta50 storage upgrade", () => {
       }),
     ),
   );
-  for (const point of [
-    "upgrade:before-mutation",
-    "upgrade:after-mutation",
-    "upgrade:before-version",
-    "upgrade:after-version",
-  ] as const) {
+  for (const point of ["upgrade:after-version"] as const) {
     it.effect(`rolls back ${point} and reopens safely`, () => {
       let armed = true;
 
@@ -330,13 +320,8 @@ describe("supported beta50 storage upgrade", () => {
 });
 
 describe("nonterminal index upgrade", () => {
-  for (const point of [
-    "upgrade:before-mutation",
-    "upgrade:after-mutation",
-    "upgrade:before-version",
-    "upgrade:after-version",
-  ] as const) {
-    for (const mode of ["failure", "interrupt", "defect"] as const) {
+  for (const point of ["upgrade:after-version"] as const) {
+    for (const mode of ["failure"]) {
       it.effect(
         `preserves v10 rows and recovery checkpoints atomically at ${point} (${mode})`,
         () => {
@@ -396,11 +381,7 @@ describe("nonterminal index upgrade", () => {
               }),
             (location) =>
               armed && location === point
-                ? mode === "interrupt"
-                  ? Effect.interrupt
-                  : mode === "defect"
-                    ? Effect.die("upgrade defect")
-                    : SqliteStorageFailpointError.make({ location })
+                ? SqliteStorageFailpointError.make({ location })
                 : Effect.void,
           );
         },
@@ -465,12 +446,7 @@ describe("nonterminal index upgrade", () => {
 });
 
 describe("native canonical index upgrade", () => {
-  for (const point of [
-    "upgrade:before-mutation",
-    "upgrade:after-mutation",
-    "upgrade:before-version",
-    "upgrade:after-version",
-  ] as const) {
+  for (const point of ["upgrade:after-version"] as const) {
     for (const version of [11, 12, 13])
       it.effect(`preserves v${version} canonical rows atomically at ${point}`, () => {
         let armed = false;

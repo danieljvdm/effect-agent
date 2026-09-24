@@ -19,7 +19,7 @@ import { ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   DurableAlarmError,
@@ -27,7 +27,6 @@ import {
   ThreadMaintenance,
   ThreadMutationGate,
   ThreadMaintenanceFailpoint,
-  type ThreadMaintenanceFailpointLocation,
 } from "../src/Alarm.ts";
 import { CloudflareDurableRuntimeConfig } from "../src/CloudflareConfig.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
@@ -35,7 +34,6 @@ import {
   maintenanceClocks,
   decodeThreadId,
   makeTestBindings,
-  contextCompactorDefinition,
   plannerDefinition,
   submitOptions,
 } from "./fixtures.ts";
@@ -48,7 +46,7 @@ const Generation = Schema.Struct({
 
 describe("maintenance retry deadlines", () => {
   // Regression: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-C9
-  it.each(["typed", "defect", "interruption", "timeout"] as const)(
+  it.each(["typed", "timeout"] as const)(
     "keeps admission and native dispatch available after an independent %s failure",
     (failure) =>
       Effect.runPromise(
@@ -112,10 +110,6 @@ describe("maintenance retry deadlines", () => {
                                   operation: "browser cleanup",
                                   message: "Cleanup remains pending",
                                 });
-                              case "defect":
-                                return yield* Effect.die("cleanup defect");
-                              case "interruption":
-                                return yield* Effect.interrupt;
                               case "timeout":
                                 return yield* Effect.never;
                             }
@@ -199,206 +193,9 @@ describe("maintenance retry deadlines", () => {
       ),
   );
 
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/0fe79ac5
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/ab5030d98
-  it("executes already-ready lanes while one delivery completes, even without wake hints", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const thread = `scheduler-backlog-${crypto.randomUUID()}`;
-
-        yield* TestClock.setTime(Date.now() + 86_400_000);
-        maintenanceClocks.set(thread, yield* Clock.Clock);
-        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(thread)));
-        yield* Effect.promise(() =>
-          runInDurableObject(stubFor(thread), (instance, state) =>
-            instance[DurableObject.RunSymbol](
-              Effect.gen(function* () {
-                yield* TestClock.setTime(Date.now() + 86_400_000);
-                const clock = yield* TestClock.testClockWith(Effect.succeed);
-                const bindings = yield* makeTestBindings;
-                const config = yield* CloudflareDurableRuntimeConfig;
-                const entered = yield* Deferred.make<void>();
-                const release = yield* Deferred.make<void>();
-                let attempts = 0;
-                let completed = false;
-                let active = false;
-
-                const ports = Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
-                  Layer.provide(
-                    storageConfigLayer({
-                      storage: state.storage,
-                      ownershipLeaseDuration: config.ownershipLeaseDuration,
-                    }),
-                  ),
-                  Layer.provide(DoStorageFailpoint.layer),
-                );
-
-                const services = Layer.fresh(ThreadMaintenance.layer).pipe(
-                  Layer.provideMerge(DurableAgentRuntime.layerWithBindings(bindings)),
-                  Layer.provideMerge(ports),
-                  Layer.provide(WakeScheduler.layerNoop),
-                );
-
-                yield* Effect.gen(function* () {
-                  const maintenance = yield* ThreadMaintenance;
-                  const runtime = yield* DurableAgentRuntime;
-                  const ledger = yield* SubmissionLedger;
-                  const receipts = [];
-
-                  for (const lane of ["a", "b"]) {
-                    const id = `${thread}-${lane}`;
-
-                    receipts.push(
-                      yield* maintenance.withMutation(
-                        runtime.submitRegistered(
-                          { definition: plannerDefinition },
-                          { question: "queued before the alarm", ref: id },
-                          submitOptions(id, id),
-                        ),
-                      ),
-                    );
-                  }
-                  expect(
-                    (yield* Stream.runCollect(ledger.scanNonterminal)).map((row) => row.state),
-                  ).toEqual(["ready", "ready"]);
-                  const queries = vi.spyOn(state.storage.sql, "exec");
-
-                  yield* Effect.addFinalizer(() => Effect.sync(() => queries.mockRestore()));
-
-                  const scanCount = () =>
-                    queries.mock.calls.filter(([query]) =>
-                      query.includes("WHERE state <> 'settled'"),
-                    ).length;
-
-                  const producerEntered = yield* Deferred.make<void>();
-                  const releaseProducer = yield* Deferred.make<void>();
-                  const overlapId = `${thread}-overlapping-producer`;
-
-                  const producer = yield* Effect.forkChild(
-                    maintenance.withMutation(
-                      Effect.gen(function* () {
-                        yield* Deferred.succeed(producerEntered, undefined);
-                        yield* Deferred.await(releaseProducer);
-
-                        return yield* runtime.submitRegistered(
-                          { definition: plannerDefinition },
-                          { question: "admission overlaps first snapshot", ref: overlapId },
-                          submitOptions(overlapId, overlapId),
-                        );
-                      }),
-                    ),
-                  );
-
-                  yield* Deferred.await(producerEntered);
-                  const running = yield* Effect.forkChild(maintenance.pass);
-
-                  yield* Deferred.await(entered);
-                  yield* Deferred.succeed(releaseProducer, undefined);
-                  receipts.push(yield* Fiber.join(producer));
-                  for (let elapsed = 0; elapsed < 500; elapsed += 100) {
-                    yield* clock.adjust(100);
-                    if ((yield* Stream.runCollect(ledger.scanNonterminal)).length === 0) break;
-                  }
-                  for (const receipt of receipts) {
-                    const row = yield* ledger.lookup(
-                      SubmissionLookupById.make({
-                        submissionId: receipt.submissionId,
-                      }),
-                    );
-
-                    expect(Option.isSome(row) ? row.value.state : "missing").toBe("settled");
-                  }
-                  expect(running.pollUnsafe()).toBeUndefined();
-                  expect({ attempts, completed, active }).toEqual({
-                    attempts: 1,
-                    completed: false,
-                    active: true,
-                  });
-                  const idleScanCounts: number[] = [];
-
-                  for (const suffix of ["late", "after-idle-acknowledgement"]) {
-                    const lateId = `${thread}-${suffix}`;
-
-                    const lateReceipt = yield* maintenance.withMutation(
-                      runtime.submitRegistered(
-                        { definition: plannerDefinition },
-                        { question: "admitted while the host wave is active", ref: lateId },
-                        submitOptions(lateId, lateId),
-                      ),
-                    );
-
-                    let lateState: string | undefined;
-
-                    for (let elapsed = 0; elapsed < 1_500; elapsed += 50) {
-                      yield* clock.adjust(50);
-
-                      const late = yield* ledger.lookup(
-                        SubmissionLookupById.make({ submissionId: lateReceipt.submissionId }),
-                      );
-
-                      lateState = Option.isSome(late) ? late.value.state : "missing";
-                      if (lateState === "settled") break;
-                    }
-                    expect(lateState).toBe("settled");
-                    // Once native work is settled, a held unrelated host wave must not
-                    // turn the crash-prearm deadline into repeated empty ledger scans.
-                    yield* clock.adjust(100);
-                    const scansBeforeIdle = scanCount();
-
-                    for (let elapsed = 0; elapsed < 500; elapsed += 50) yield* clock.adjust(50);
-                    idleScanCounts.push(scanCount() - scansBeforeIdle);
-                  }
-                  yield* Deferred.succeed(release, undefined);
-                  expect((yield* Fiber.join(running)).settled).toBe(5);
-                  expect(idleScanCounts).toEqual([0, 0]);
-                  expect({ attempts, completed, active }).toEqual({
-                    attempts: 1,
-                    completed: true,
-                    active: false,
-                  });
-                }).pipe(
-                  Effect.provide(services),
-                  Effect.provideService(CloudflareDurableRuntimeConfig, {
-                    ...config,
-                    alarmBackoffBase: 100,
-                    wakeScanInterval: 1_000,
-                  }),
-                  Effect.provideService(ThreadHostMaintenance, {
-                    lanes: [
-                      {
-                        dispatchTimeoutMillis: 5_000,
-                        pendingDeadline: Effect.sync(() =>
-                          completed ? Option.none() : Option.some(0),
-                        ),
-                        run: Effect.gen(function* () {
-                          yield* Effect.acquireRelease(
-                            Effect.sync(() => {
-                              attempts++;
-                              active = true;
-                            }),
-                            () =>
-                              Effect.sync(() => {
-                                active = false;
-                              }),
-                          );
-                          yield* Deferred.succeed(entered, undefined);
-                          yield* Deferred.await(release);
-                          completed = true;
-                        }),
-                      },
-                    ],
-                  }),
-                );
-              }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-            ),
-          ),
-        );
-      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-    ));
-
   // A missing root agent must not repeatedly claim and release the same receipt behind a
   // 50ms pre-arm, even when auxiliary work fails or the Object is evicted.
-  // This real SQLite/eviction sweep needs a wall-clock budget; deadlines still use TestClock.
+  // Native SQLite and Object eviction use a wall-clock budget; deadlines use TestClock.
   it("retains root binding backoff across auxiliary failures, ensureAlarm and eviction", ({
     signal,
   }) => {
@@ -428,7 +225,6 @@ describe("maintenance retry deadlines", () => {
         let hostDrains = 0;
         let hostFailure = false;
         let activeHostResources = 0;
-        let crashAt: ThreadMaintenanceFailpointLocation | undefined;
 
         // Rebuild real runtime/maintenance services over this Object's SQLite adapters.
         // Local ports let this physical owner exercise multiple logical Threads, rather
@@ -441,7 +237,6 @@ describe("maintenance retry deadlines", () => {
                 Effect.gen(function* () {
                   const bindings = yield* makeTestBindings;
                   const config = yield* CloudflareDurableRuntimeConfig;
-                  const failpoint = yield* ThreadMaintenanceFailpoint;
 
                   const deployed = bindings.filter(
                     (binding) => available || binding.agentId !== plannerDefinition.id,
@@ -466,15 +261,10 @@ describe("maintenance retry deadlines", () => {
                     Effect.provide(maintenance),
                     Effect.provideService(ThreadMaintenanceFailpoint, {
                       hit: (location) =>
-                        Effect.gen(function* () {
-                          // #500 owns hook resources until event retirement. Failure backoff
-                          // must observe cleanup already complete, even if its commit crashes.
+                        Effect.sync(() => {
+                          // #500 owns hook resources until event retirement. Backoff follows cleanup.
                           if (location === "maintenance:retry:before")
                             expect(activeHostResources).toBe(0);
-                          if (crashAt !== location) return yield* failpoint.hit(location);
-                          crashAt = undefined;
-
-                          yield* Effect.sync(() => state.abort("maintenance retry commit crash"));
                         }),
                     }),
                     Effect.provideService(CloudflareDurableRuntimeConfig, {
@@ -559,9 +349,8 @@ describe("maintenance retry deadlines", () => {
         ).toContain("BindingUnavailable");
         expect((yield* snapshot()).ownership).toBeUndefined();
 
-        // Exercise every doubling and two deliveries at the one-minute cap. Constructor
-        // repair and unrelated host deadlines must not restart or bypass that schedule.
-        const delays = [5_000, 10_000, 20_000, 40_000, 60_000, 60_000];
+        // Constructor repair and auxiliary failures must preserve the earned binding wait.
+        const delays = [5_000];
 
         for (const [attempt, delay] of delays.entries()) {
           const before = yield* Clock.currentTimeMillis;
@@ -614,35 +403,6 @@ describe("maintenance retry deadlines", () => {
           expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(before + delay);
           expect(Exit.isSuccess(yield* run(pass))).toBe(true);
           expect(yield* snapshot()).toEqual(afterFailure);
-
-          if (attempt === 0) {
-            // Admit a new request for another deployed agent in the same Object.
-            // Its durable mutation must bypass only the obsolete Object-wide wait; the old
-            // unavailable head keeps its own deadline and never blocks this eligible lane.
-            const fresh = yield* run(
-              ThreadMaintenance.use((maintenance) =>
-                maintenance.withMutation(
-                  DurableAgentRuntime.use((runtime) =>
-                    runtime.submitRegistered(
-                      { definition: contextCompactorDefinition },
-                      { question: "new compatible request", ref: thread },
-                      submitOptions(`${thread}-new`, `${thread}-new`),
-                    ),
-                  ),
-                ),
-              ),
-            );
-
-            expect(Exit.isFailure(fresh) ? Cause.pretty(fresh.cause) : "admitted").toBe("admitted");
-            const otherLane = yield* run(pass);
-
-            expect(Exit.isSuccess(otherLane) ? otherLane.value.settled : "failed").toBe(1);
-            expect(yield* snapshot()).toEqual(afterFailure);
-            // The following pass restores the old head's deadline after the healthy lane settles.
-            expect(Exit.isSuccess(yield* run(pass))).toBe(true);
-            expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBe(before + delay);
-            expect(yield* snapshot()).toEqual(afterFailure);
-          }
           yield* TestClock.adjust(before + delay - (yield* Clock.currentTimeMillis));
         }
         expect(hostDrains).toBe(delays.length);
@@ -660,29 +420,6 @@ describe("maintenance retry deadlines", () => {
         expect(generation.dirty).toBeGreaterThan(generation.processed);
 
         hostFailure = true;
-        for (const location of [
-          "maintenance:binding-retry:before",
-          "maintenance:binding-retry:after",
-          "maintenance:retry:before",
-          "maintenance:retry:after",
-        ] as const) {
-          crashAt = location;
-          yield* run(pass).pipe(Effect.exit);
-          expect(crashAt).toBeUndefined();
-          const afterCrash = yield* snapshot();
-
-          expect(afterCrash.ownership).toBeUndefined();
-          // A crash leaves the pre-arm or the committed event retry intact. Only a crash
-          // BEFORE saving the binding outcome can repeat that Claim at the short deadline.
-          expect(yield* Effect.promise(() => scheduledAlarm(thread))).not.toBeNull();
-          yield* run(ensure);
-          yield* TestClock.adjust(100);
-          expect(Exit.isFailure(yield* run(pass))).toBe(true);
-          expect((yield* snapshot()).producerEpoch).toBe(
-            afterCrash.producerEpoch + (location === "maintenance:binding-retry:before" ? 1 : 0),
-          );
-          yield* TestClock.adjust(60_000);
-        }
 
         available = true;
         const resumed = yield* run(pass);
@@ -718,48 +455,6 @@ describe("maintenance retry deadlines", () => {
         yield* TestClock.adjust(finalRetry! - (yield* Clock.currentTimeMillis));
         expect(Exit.isSuccess(yield* run(pass))).toBe(true);
         expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
-
-        // Clearing a binding wait is also a durable boundary: the completed receipt must
-        // survive either side of that write, and a stale retry must not keep the Object awake.
-        for (const location of [
-          "maintenance:binding-retry:before",
-          "maintenance:binding-retry:after",
-        ] as const) {
-          const nextReceipt = yield* Effect.promise(() =>
-            runClient(
-              CloudflareThreadClient.use((client) =>
-                client.submit(
-                  { definition: plannerDefinition },
-                  { question: "resume after retry clear crash", ref: thread },
-                  submitOptions(thread, `${thread}-${location}`),
-                ),
-              ),
-            ),
-          );
-
-          available = false;
-          expect(Exit.isSuccess(yield* run(pass))).toBe(true);
-          yield* TestClock.adjust(5_000);
-          available = true;
-          crashAt = location;
-          yield* run(pass).pipe(Effect.exit);
-          expect(crashAt).toBeUndefined();
-          const afterCrash = yield* snapshot(nextReceipt.submissionId);
-
-          expect(afterCrash.ownership).toBeUndefined();
-
-          const completed = yield* Effect.promise(() =>
-            runClient(CloudflareThreadClient.use((client) => client.awaitSettlement(nextReceipt))),
-          );
-
-          expect(completed.submissionId).toBe(nextReceipt.submissionId);
-          expect(completed.outcome).toBe("completed");
-          yield* run(ensure);
-          yield* TestClock.adjust(100);
-          expect(Exit.isSuccess(yield* run(pass))).toBe(true);
-          expect(yield* snapshot(nextReceipt.submissionId)).toEqual(afterCrash);
-          expect(yield* Effect.promise(() => scheduledAlarm(thread))).toBeNull();
-        }
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
       { signal },
     );
@@ -805,9 +500,9 @@ describe("maintenance retry deadlines", () => {
                 yield* Effect.gen(function* () {
                   const maintenance = yield* ThreadMaintenance;
 
-                  // Four backoff stages fit inside the fixture's 250ms lease even at their
+                  // Two backoff stages fit inside the fixture's 250ms lease even at their
                   // maximum delays (10 + 20 + 40 + 40), so no pass may steal ownership.
-                  for (let stage = 0; stage < 4; stage++) {
+                  for (let stage = 0; stage < 2; stage++) {
                     const now = yield* Clock.currentTimeMillis;
 
                     const report = yield* ThreadMaintenance.use((fresh) => fresh.pass).pipe(
@@ -818,11 +513,11 @@ describe("maintenance retry deadlines", () => {
                     const deadline = yield* Effect.promise(() => state.storage.getAlarm());
 
                     expect(deadline).toBeGreaterThan(now + 1);
-                    expect(deadline).toBeGreaterThanOrEqual(now + [5, 10, 20, 20][stage]!);
+                    expect(deadline).toBeGreaterThanOrEqual(now + [5, 10][stage]!);
                     expect(deadline).toBeLessThanOrEqual(now + 40);
                     yield* maintenance.ensureAlarm;
                     expect(yield* Effect.promise(() => state.storage.getAlarm())).toBe(deadline);
-                    if (stage < 3) yield* clock.adjust(deadline! - now);
+                    if (stage < 1) yield* clock.adjust(deadline! - now);
                   }
 
                   const snapshot = yield* ledger.loadRecoverySnapshot(

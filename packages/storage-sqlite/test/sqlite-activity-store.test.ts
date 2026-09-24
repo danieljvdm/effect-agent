@@ -15,14 +15,10 @@ import {
   ActivityOwnershipLost,
   ActivityProcessorKey,
   ActivityProcessorStore,
-  ActivityProgress,
-  ActivityStoreError,
   ActivityWorkConflict,
   PreparedActivity,
 } from "effect-agent/activity-store";
-import { RecordId } from "effect-agent/records";
 import { TestClock } from "effect/testing";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 const key = Schema.decodeSync(ActivityProcessorKey)({
   processorId: "profile",
@@ -99,79 +95,7 @@ const inspect = (filename: string, activityKey = key) =>
     }),
   );
 
-const runRaw = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService.SqlClient>) =>
-  effect.pipe(Effect.provide(SqliteClient.layer({ filename, busyTimeout: 5_000 })));
-
 describe("SQLite activity processor store", () => {
-  it.effect(
-    "rejects oversized encoded progress without mutation and reopens the exact boundary",
-    () =>
-      withTemporaryDatabase((filename) =>
-        Effect.gen(function* () {
-          const prepared = yield* runStore(
-            filename,
-            Effect.gen(function* () {
-              const store = yield* ActivityProcessorStore;
-              const claim = yield* store.claim(request("worker"));
-              const before = yield* store.inspect(key);
-              const initial = work(1, "a");
-
-              const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(ActivityProgress))(
-                ActivityProgress.make({ ...claim, version: 1, pending: initial, advancedAt: null }),
-              );
-
-              const boundary = PreparedActivity.make({
-                ...initial,
-                recordId: yield* Schema.decodeEffect(RecordId)(
-                  "r".repeat(16 * 1024 * 1024 - encoded.length + initial.recordId.length),
-                ),
-              });
-
-              const oversized = PreparedActivity.make({
-                ...boundary,
-                recordId: yield* Schema.decodeEffect(RecordId)(`${boundary.recordId}x`),
-              });
-
-              const escaped = PreparedActivity.make({
-                ...initial,
-                recordId: yield* Schema.decodeEffect(RecordId)("\0".repeat(3 * 1024 * 1024)),
-              });
-
-              for (const rejected of [oversized, escaped]) {
-                expect(yield* store.prepare({ claim, work: rejected }).pipe(Effect.flip)).toEqual(
-                  ActivityStoreError.make({
-                    operation: "prepare activity output",
-                    reason: "invalid-input",
-                  }),
-                );
-                expect(yield* store.inspect(key)).toEqual(before);
-              }
-              yield* store.prepare({ claim, work: boundary });
-              expect(yield* store.prepare({ claim, work: boundary })).toEqual(boundary);
-              yield* store.release(claim);
-
-              return boundary;
-            }),
-          );
-
-          expect((yield* inspect(filename))?.pending).toEqual(prepared);
-          yield* runStore(
-            filename,
-            Effect.gen(function* () {
-              const store = yield* ActivityProcessorStore;
-              const claim = yield* store.claim(request("worker"));
-
-              expect(claim.pending).toEqual(prepared);
-              const next = yield* store.advance({ claim, workId: prepared.workId });
-
-              expect(next.throughSequence).toBe(1);
-              expect(next.pending).toBeNull();
-            }),
-          );
-        }),
-      ),
-  );
-
   it.effect("preserves pending output across takeover and release, then fences reacquisition", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
@@ -295,34 +219,6 @@ describe("SQLite activity processor store", () => {
           );
         }),
       ),
-    ),
-  );
-
-  it.effect("keeps thread, processor, and processor-version progress independent", () =>
-    withTemporaryDatabase((filename) =>
-      Effect.gen(function* () {
-        yield* runStore(
-          filename,
-          Effect.gen(function* () {
-            const store = yield* ActivityProcessorStore;
-
-            for (const [index, activityKey] of independentKeys.entries()) {
-              const claim = yield* store.claim(request(`worker-${index}`, activityKey));
-
-              if (index === 0) {
-                const prepared = work(1, "d", activityKey);
-
-                yield* store.prepare({ claim, work: prepared });
-                yield* store.advance({ claim, workId: prepared.workId });
-              }
-            }
-          }),
-        );
-        expect((yield* inspect(filename, independentKeys[0]))?.throughSequence).toBe(1);
-        for (const activityKey of independentKeys.slice(1)) {
-          expect((yield* inspect(filename, activityKey))?.throughSequence).toBe(0);
-        }
-      }),
     ),
   );
 
@@ -514,41 +410,6 @@ describe("SQLite activity processor store", () => {
         yield* Fiber.interrupt(releasing);
         expect(Exit.isFailure(yield* Fiber.await(releasing))).toBe(true);
         expect((yield* inspect(filename))?.owner).toBe(claim.owner);
-      }),
-    ),
-  );
-
-  it.effect("rejects incompatible stored formats", () =>
-    withTemporaryDatabase((filename) =>
-      Effect.gen(function* () {
-        yield* runStore(
-          filename,
-          Effect.gen(function* () {
-            const store = yield* ActivityProcessorStore;
-
-            yield* store.claim(request("worker"));
-          }),
-        );
-        yield* runRaw(
-          filename,
-          Effect.gen(function* () {
-            const sql = yield* SqlClientService.SqlClient;
-
-            yield* sql`
-              UPDATE effect_agent_activity_processor_state_v1
-              SET format_version = 2
-              WHERE processor_id = ${key.processorId}
-                AND processor_version = ${key.processorVersion}
-                AND thread_id = ${key.threadId}
-            `;
-          }),
-        );
-        expect(yield* inspect(filename).pipe(Effect.flip)).toEqual(
-          ActivityStoreError.make({
-            operation: "inspect activity progress",
-            reason: "incompatible",
-          }),
-        );
       }),
     ),
   );

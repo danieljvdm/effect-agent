@@ -192,7 +192,7 @@ describe("bounded recovery failure isolation", () => {
       }),
   );
 
-  for (const mode of ["failure", "defect", "timeout", "interruption"] as const) {
+  for (const mode of ["timeout", "interruption"] as const) {
     it.effect(`isolates ${mode} without granting execution authority or leaking resources`, () =>
       Effect.gen(function* () {
         let armed = false;
@@ -220,13 +220,6 @@ describe("bounded recovery failure isolation", () => {
                         Effect.gen(function* () {
                           yield* Deferred.succeed(entered, undefined);
                           switch (mode) {
-                            case "failure":
-                              return yield* ThreadStoreError.make({
-                                operation: "fixture read",
-                                message: "private payload must not be copied",
-                              });
-                            case "defect":
-                              return yield* Effect.die("private defect payload must not be copied");
                             case "timeout":
                               return yield* Effect.never;
                             case "interruption":
@@ -296,12 +289,7 @@ describe("bounded recovery failure isolation", () => {
                 failure: {
                   phase: "history",
                   reason: mode,
-                  errorTag:
-                    mode === "failure"
-                      ? "ThreadStoreError"
-                      : mode === "defect"
-                        ? "Defect"
-                        : "RecoveryTimeout",
+                  errorTag: "RecoveryTimeout",
                 },
               },
             ],

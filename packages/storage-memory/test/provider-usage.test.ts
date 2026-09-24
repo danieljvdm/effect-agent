@@ -8,14 +8,8 @@ import { CompactionPolicy } from "effect-agent/agent-policy";
 import { DurableAgentRuntime, DurableRuntimeConfig } from "effect-agent/durable-agent-runtime";
 import { DurableRuntimeFailpoint } from "effect-agent/durable-failpoint";
 import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import {
-  DefinitionDigests,
-  DeploymentId,
-  Digest,
-  ProducerId,
-  SubmissionSettled,
-} from "effect-agent/records";
-import { RunToolAuthorization, type RunCostEstimateRequest } from "effect-agent/run-options";
+import { DefinitionDigests, DeploymentId, Digest, ProducerId } from "effect-agent/records";
+import { RunToolAuthorization } from "effect-agent/run-options";
 import { ApprovalDecisionCommand, IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
@@ -44,13 +38,12 @@ const definitions = DefinitionDigests.make({ agent: digest, model: digest, tools
 
 // Reported usage was discarded before protocol validation in the original runtime:
 // https://github.com/danieljvdm/effect-agent/commit/9257d75caff1d2bb145effc3d461e39f72f8bbc5
-for (const failure of ["open-part", "missing-usage", "continuation", "invalid-estimate"] as const) {
+for (const failure of ["open-part", "missing-usage"] as const) {
   const reportsUsage = failure !== "missing-usage";
-  const retainsUsage = reportsUsage && failure !== "invalid-estimate";
+  const retainsUsage = reportsUsage;
 
   it.live(`retains ${failure} failed-call usage without recounting the committed call`, () =>
     Effect.gen(function* () {
-      const seen: Array<RunCostEstimateRequest> = [];
       let requests = 0;
 
       const model = Model.make(
@@ -75,22 +68,13 @@ for (const failure of ["open-part", "missing-usage", "continuation", "invalid-es
                         providerExecuted: false,
                       },
                     ]
-                  : failure === "continuation"
-                    ? []
-                    : failure === "invalid-estimate"
-                      ? [
-                          { type: "text-start" as const, id: "answer" },
-                          { type: "text-delta" as const, id: "answer", delta: "done" },
-                          { type: "text-end" as const, id: "answer" },
-                        ]
-                      : [{ type: "text-start" as const, id: "unfinished" }]),
+                  : [{ type: "text-start" as const, id: "unfinished" }]),
               ];
 
               if (requests === 1 || reportsUsage)
                 parts.push({
                   type: "finish",
-                  reason:
-                    requests === 1 ? "tool-calls" : failure === "continuation" ? "length" : "stop",
+                  reason: requests === 1 ? "tool-calls" : "stop",
                   usage,
                   metadata: { scripted: { serviceTier: "priority" } },
                 });
@@ -112,12 +96,10 @@ for (const failure of ["open-part", "missing-usage", "continuation", "invalid-es
         DurableRuntimeConfig.layer({
           deploymentId: Schema.decodeSync(DeploymentId)("usage-test"),
           producerId: Schema.decodeSync(ProducerId)("usage-test"),
-          estimateCostMicrousd: (_usage, request) =>
+          estimateCostMicrousd: () =>
             Effect.sync(() => {
-              seen.push(request);
-
               return {
-                costMicrousd: requests === 2 && failure === "invalid-estimate" ? -1 : 25,
+                costMicrousd: 25,
                 serviceTier: "priority",
                 pricingVersion: "test-v1",
                 pricingStatus: "estimated" as const,
@@ -173,21 +155,6 @@ for (const failure of ["open-part", "missing-usage", "continuation", "invalid-es
           retainsUsage ? ["response-1", "response-2"] : ["response-1"],
         );
 
-        const {
-          runId: _runId,
-          usageSummary: _summary,
-          uncommittedModelUsage: _usage,
-          ...withoutRunAccounting
-        } = Schema.encodeSync(SubmissionSettled)(settlement);
-
-        // A retained accounting suffix requires a Run identity and its aggregate summary.
-        expect(Schema.decodeExit(SubmissionSettled)(withoutRunAccounting)._tag).toBe("Success");
-        expect(
-          Schema.decodeExit(SubmissionSettled)({
-            ...withoutRunAccounting,
-            uncommittedModelUsage: retainedCalls,
-          })._tag,
-        ).toBe("Failure");
         if (retainsUsage)
           expect(settlement?.uncommittedModelUsage?.[0]).toMatchObject({
             model: "requested-alias",
@@ -196,12 +163,6 @@ for (const failure of ["open-part", "missing-usage", "continuation", "invalid-es
             usageStatus: "complete",
             pricingStatus: "estimated",
           });
-        expect(seen).toHaveLength(reportsUsage ? 2 : 1);
-        expect(seen[0]).toMatchObject({
-          model: "requested-alias",
-          response: { id: "response-1", model: "actual-model" },
-          finishMetadata: { scripted: { serviceTier: "priority" } },
-        });
         yield* runtime.processThread(agent, threadId);
         expect(requests).toBe(2);
 

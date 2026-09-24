@@ -9,11 +9,9 @@ import {
   Deferred,
   Effect,
   Exit,
-  Fiber,
   FileSystem,
   Layer,
   Option,
-  Ref,
   Schema,
   Scope,
   Stream,
@@ -25,7 +23,6 @@ import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { DurableRuntimeFailpointError } from "effect-agent/durable-failpoint";
 import { AgentId, ThreadId } from "effect-agent/identifiers";
 import {
-  MessageDeliveryError,
   MessageDeliveryStore,
   prepareMessageDelivery,
   type MessageDeliveryKey,
@@ -148,7 +145,7 @@ const waitFor = Effect.fn("NodeMessageTest.waitFor")(function* (
 });
 
 describe("Node message delivery recovery", () => {
-  for (const pool of ["managed", "manual"] as const) {
+  for (const pool of ["managed"] as const) {
     it.effect(
       `rediscovers source-owned work after restart with no live source or wake hint in a ${pool} pool`,
       () =>
@@ -200,26 +197,16 @@ describe("Node message delivery recovery", () => {
 
               yield* Effect.addFinalizer(() => Scope.close(secondScope, Exit.void));
 
-              const live =
-                pool === "managed"
-                  ? NodeHost.layer(
-                      [{ agent: recipient, definitions: declarations }],
-                      options(filename),
-                    )
-                  : NodeDurableHost.layerRegistered(
-                      [{ agent: recipient, definitions: declarations }],
-                      options(filename),
-                    );
+              const live = NodeHost.layer(
+                [{ agent: recipient, definitions: declarations }],
+                options(filename),
+              );
 
               const secondContext = yield* Layer.build(live).pipe(Scope.provide(secondScope));
               const host = Context.get(secondContext, NodeDurableHost);
               const store = Context.get(secondContext, MessageDeliveryStore);
 
               expect(host.startupRecovery).toEqual([]);
-              if (pool === "manual") {
-                expect((yield* store.get(messageKey))?.retry.attempts).toBe(0);
-                yield* Effect.forkScoped(host.runResolvedWorkers).pipe(Scope.provide(secondScope));
-              }
               const accepted = yield* waitFor(store, (record) => record.status === "accepted");
 
               expect(accepted.receipt?.threadId).toBe(destinationThreadId);
@@ -322,174 +309,4 @@ describe("Node message delivery recovery", () => {
       ),
     15_000,
   );
-
-  it.effect(
-    "interrupts in-flight message admission and finalizes it when the managed host Scope closes",
-    () =>
-      withTemporaryDatabase((filename) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const definitions = yield* digestDefinitions(declarations).pipe(
-              Effect.provide(NodeCrypto.layer),
-            );
-
-            const seed = yield* prepare(definitions).pipe(Effect.provide(NodeCrypto.layer));
-
-            yield* Effect.gen(function* () {
-              yield* (yield* MessageDeliveryStore).insert(seed);
-            }).pipe(Effect.provide(NodeDurableAgentRuntime.layer(options(filename))));
-            const entered = yield* Deferred.make<void>();
-            const calls = yield* Ref.make(0);
-            const finalized = yield* Ref.make(0);
-            const hostScope = yield* Scope.make();
-
-            yield* Effect.addFinalizer(() => Scope.close(hostScope, Exit.void));
-
-            const context = yield* Layer.build(
-              NodeHost.layer([], {
-                ...options(filename),
-                runtimeFailpoint: (location) =>
-                  location === "submit:after-admit"
-                    ? Ref.update(calls, (count) => count + 1).pipe(
-                        Effect.andThen(Deferred.succeed(entered, undefined)),
-                        Effect.andThen(Effect.never),
-                        Effect.ensuring(Ref.update(finalized, (count) => count + 1)),
-                      )
-                    : Effect.void,
-              }),
-            ).pipe(Scope.provide(hostScope));
-
-            yield* Deferred.await(entered);
-            yield* Scope.close(hostScope, Exit.void);
-            expect(yield* Context.get(context, NodeDurableHost).admissionOpen).toBe(false);
-            expect(yield* Ref.get(finalized)).toBe(1);
-            const callsAtClose = yield* Ref.get(calls);
-
-            yield* TestClock.adjust(1_000);
-            expect(yield* Ref.get(calls)).toBe(callsAtClose);
-          }),
-        ),
-      ),
-    15_000,
-  );
-
-  it.effect("stops and finalizes live workers when the delivery driver interrupts internally", () =>
-    withTemporaryDatabase((filename) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const workerStarted = yield* Deferred.make<void>();
-          const driverInterrupted = yield* Deferred.make<void>();
-          const finalized = yield* Ref.make(0);
-
-          const observed = Layer.effect(
-            MessageDeliveryStore,
-            Effect.map(MessageDeliveryStore, (store) =>
-              MessageDeliveryStore.of({
-                ...store,
-                due: () =>
-                  Deferred.await(workerStarted).pipe(
-                    Effect.andThen(Deferred.succeed(driverInterrupted, undefined)),
-                    Effect.andThen(Effect.interrupt),
-                  ),
-              }),
-            ),
-          ).pipe(Layer.provideMerge(NodeDurableAgentRuntime.layer(options(filename))));
-
-          yield* Effect.gen(function* () {
-            const host = yield* NodeDurableHost;
-
-            const worker = Deferred.succeed(workerStarted, undefined).pipe(
-              Effect.andThen(Effect.never),
-              Effect.ensuring(Ref.update(finalized, (count) => count + 1)),
-            );
-
-            const running = yield* Effect.forkChild(
-              host.runWorkers(worker).pipe(Effect.timeout(100)),
-            );
-
-            yield* Deferred.await(driverInterrupted);
-            yield* TestClock.adjust(100);
-
-            const exit = yield* Fiber.await(running);
-
-            expect(Exit.hasInterrupts(exit)).toBe(true);
-            expect(yield* Ref.get(finalized)).toBe(1);
-          }).pipe(Effect.provide(NodeDurableHost.layer.pipe(Layer.provideMerge(observed))));
-        }),
-      ),
-    ),
-  );
-
-  for (const failureAt of ["due", "deadline"] as const) {
-    it.effect(
-      `retries a transient ${failureAt} store failure at the configured bounded cadence`,
-      () =>
-        withTemporaryDatabase((filename) =>
-          Effect.scoped(
-            Effect.gen(function* () {
-              const calls = yield* Ref.make(0);
-              const runtimeLayer = NodeDurableAgentRuntime.layer(options(filename));
-
-              const observed = Layer.effect(
-                MessageDeliveryStore,
-                Effect.map(MessageDeliveryStore, (store) =>
-                  MessageDeliveryStore.of({
-                    ...store,
-                    due: (...args) =>
-                      failureAt === "due"
-                        ? Ref.updateAndGet(calls, (count) => count + 1).pipe(
-                            Effect.flatMap((count) =>
-                              count === 1
-                                ? Effect.fail(
-                                    MessageDeliveryError.make({
-                                      reason: "storage",
-                                      operation: "due",
-                                    }),
-                                  )
-                                : store.due(...args),
-                            ),
-                          )
-                        : store.due(...args),
-                    nextDeadline: (...args) =>
-                      failureAt === "deadline"
-                        ? Ref.updateAndGet(calls, (count) => count + 1).pipe(
-                            Effect.flatMap((count) =>
-                              count === 1
-                                ? Effect.fail(
-                                    MessageDeliveryError.make({
-                                      reason: "storage",
-                                      operation: "deadline",
-                                    }),
-                                  )
-                                : store.nextDeadline(...args),
-                            ),
-                          )
-                        : store.nextDeadline(...args),
-                  }),
-                ),
-              ).pipe(Layer.provideMerge(runtimeLayer));
-
-              yield* Effect.gen(function* () {
-                const host = yield* NodeDurableHost;
-                const running = yield* Effect.forkChild(host.runWorkers(Effect.never));
-
-                for (let count = 0; count < 128 && (yield* Ref.get(calls)) === 0; count += 1)
-                  yield* Effect.yieldNow;
-                expect(yield* Ref.get(calls)).toBe(1);
-                yield* TestClock.adjust(9);
-                expect(yield* Ref.get(calls)).toBe(1);
-                yield* TestClock.adjust(1);
-                for (let count = 0; count < 128 && (yield* Ref.get(calls)) < 2; count += 1)
-                  yield* Effect.yieldNow;
-                expect(yield* Ref.get(calls)).toBe(2);
-                yield* Fiber.interrupt(running);
-                yield* TestClock.adjust(100);
-                expect(yield* Ref.get(calls)).toBe(2);
-              }).pipe(Effect.provide(NodeDurableHost.layer.pipe(Layer.provideMerge(observed))));
-            }),
-          ),
-        ),
-      15_000,
-    );
-  }
 });

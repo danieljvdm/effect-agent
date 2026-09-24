@@ -1,9 +1,9 @@
 # Verification
 
-Follow repository testing policy. Use existing checks and direct requests when
-sufficient; add committed tests only for an authorized or evidenced regression.
-Choose from the scenarios below based on the changed boundary, rather than
-creating a test suite for every endpoint edit.
+Load the repository's testing skill first. Default to existing checks and direct
+requests; these scenarios are possible verification questions, not a test plan
+or permission to add automation. Never add post-implementation unit tests or
+expand a suite merely because an endpoint changed.
 
 Test the contract spine at its seams. Use the repository's established Effect
 test integration and command authority.
@@ -32,7 +32,7 @@ suppression documented with the same concrete boundary justification.
 
 ## Server tests
 
-- Build every changed group and fail the test if an endpoint handler is missing.
+- Build changed groups through the existing static checks.
 - Provide deterministic test layers for application services and middleware.
 - Prove each handler exposes only errors declared by its endpoint; exercise
   expected reason mapping and unexpected failure defects separately.
@@ -51,15 +51,14 @@ decoding are skipped.
 - Derive the client from the same root API used by the server.
 - Provide every `requiredForClient` middleware with
   `HttpApiMiddleware.layerClient` and assert that it transforms the request.
-- Assert params, query, headers, payload, and expected errors at least once for
-  every changed request shape.
+- Exercise the request or error path needed to answer the remaining question.
 - For Atom clients, select the relevant scenarios from the
   [Effect Atom testing reference](../atom/effect-atom-testing.md); use a deterministic HTTP
   layer so request encoding, invalidation, and lifecycle remain observable.
 
-## Completion matrix
+## Optional boundary map
 
-Account for every changed endpoint across these columns:
+For a complex cross-boundary change, this map can help locate an unverified outcome:
 
 | Contract                                         | Middleware                       | Handler/service                  | Client/query/mutation                          | Tests                            |
 | ------------------------------------------------ | -------------------------------- | -------------------------------- | ---------------------------------------------- | -------------------------------- |

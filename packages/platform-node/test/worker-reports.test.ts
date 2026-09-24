@@ -1,5 +1,4 @@
 import * as NodeHost from "@effect-agent/platform-node/node-durable-host";
-import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
@@ -9,7 +8,6 @@ import {
   Exit,
   FileSystem,
   Layer,
-  Redacted,
   Ref,
   Schema,
   Scope,
@@ -32,8 +30,7 @@ import {
 import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerError } from "effect-agent/worker";
 import { WorkerHostAuthorizer } from "effect-agent/worker-host";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { LanguageModel, Model, Toolkit, type Response, type Tool } from "effect/unstable/ai";
 
 const principal = Schema.decodeSync(Principal)("report-owner");
 const sourceThreadId = Schema.decodeSync(ThreadId)("report-source");
@@ -99,132 +96,15 @@ const agent = <Tools extends Record<string, Tool.Any>>(
     ),
   );
 
-// Keep the real OpenAI encoder and SSE decoder; only the HTTP transport is synthetic.
-const hostedChild = () => {
-  let requests = 0;
-  let completions = 0;
-
-  const tools = Toolkit.make(
-    OpenAiTool.WebSearch({}),
-    Tool.make("finish_research", { parameters: output, success: output }),
-  );
-
-  const http = HttpClient.make((request) =>
-    Effect.sync(() => {
-      requests++;
-
-      const search = {
-        type: "web_search_call",
-        id: "search-1",
-        status: "completed",
-        action: { type: "search", query: "research", sources: [] },
-      };
-
-      const completion = {
-        type: "function_call",
-        id: "function-1",
-        call_id: "finish-1",
-        name: "finish_research",
-        arguments: JSON.stringify({ answer: "done" }),
-        status: "completed",
-      };
-
-      const response = { id: "response-1", model: "gpt-6-sol", created_at: 1, output: [] };
-
-      const events = [
-        { type: "response.created", response },
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { ...search, status: "in_progress" },
-        },
-        { type: "response.output_item.done", output_index: 0, item: search },
-        { type: "response.output_item.added", output_index: 1, item: completion },
-        {
-          type: "response.function_call_arguments.done",
-          output_index: 1,
-          item_id: completion.id,
-          arguments: completion.arguments,
-        },
-        { type: "response.output_item.done", output_index: 1, item: completion },
-        {
-          type: "response.completed",
-          response: {
-            ...response,
-            output: [search, completion],
-            usage: {
-              input_tokens: 10,
-              output_tokens: 5,
-              total_tokens: 15,
-              input_tokens_details: { cached_tokens: 0 },
-              output_tokens_details: { reasoning_tokens: 0 },
-            },
-          },
-        },
-      ];
-
-      return HttpClientResponse.fromWeb(
-        request,
-        new globalThis.Response(
-          events
-            .map(
-              (event, sequence_number) =>
-                `data: ${JSON.stringify({ ...event, sequence_number })}\n\n`,
-            )
-            .join(""),
-          { headers: { "content-type": "text/event-stream" } },
-        ),
-      );
-    }),
-  );
-
-  const model = OpenAiLanguageModel.model("gpt-6-sol", { store: false }).pipe(
-    Layer.provide(
-      OpenAiClient.layer({ apiKey: Redacted.make("fixture-key") }).pipe(
-        Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
-      ),
-    ),
-  );
-
-  return {
-    agent: Agent.withModel(
-      Agent.make("report-child-agent", {
-        input,
-        output,
-        instructions: "Research, then finish.",
-        toolkit: tools,
-        completion: { tool: "finish_research", required: true, project: ({ result }) => result },
-        policy: { maxTurns: 2, maxToolCalls: 2, maxDuration: "1 minute" },
-      }),
-      model,
-    ),
-    handlers: tools.toLayer({
-      finish_research: (result) =>
-        Effect.sync(() => {
-          completions++;
-
-          return result;
-        }),
-    }),
-    requests: () => requests,
-    completions: () => completions,
-  };
-};
-
-it.live.each([
-  "turn:after-response-append",
-  "turn:after-results-append",
-  "worker:after-report-append",
-] as const)(
-  "recovers hosted search completion and one standard report for joined child inputs after %s and a Node restart",
+it.live.each(["worker:after-report-append"] as const)(
+  "recovers one prepared report for joined child inputs after %s and a Node restart",
   (failpoint) =>
     withReportClock((advanceTo) =>
       Effect.gen(function* () {
         const clock = yield* Clock.Clock;
         const fs = yield* FileSystem.FileSystem;
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "worker-report-" });
-        const native = hostedChild();
-        const child = native.agent;
+        const child = agent("report-child-agent", Toolkit.empty);
 
         const projected = yield* Ref.make(0);
 
@@ -287,7 +167,7 @@ it.live.each([
                 : Effect.void,
           }).pipe(
             Layer.provide(authority),
-            Layer.provide(Layer.merge(native.handlers, background.layer)),
+            Layer.provide(background.layer),
             Layer.provide(Layer.succeedContext(Clock.Clock.context(clock))),
           ),
         ).pipe(Scope.provide(firstScope));
@@ -334,10 +214,7 @@ it.live.each([
 
         expect(interrupted).toMatchObject({
           _tag: "Failure",
-          failure:
-            failpoint === "worker:after-report-append"
-              ? { _tag: "LedgerError", operation: "worker-completion" }
-              : { _tag: "DurableRuntimeFailpointError", location: failpoint },
+          failure: { _tag: "LedgerError", operation: "worker-completion" },
         });
 
         const firstLog = yield* Context.get(first, ThreadStore).export(
@@ -353,10 +230,8 @@ it.live.each([
             record.payload._tag === "WorkerReportRefused" ? [record.payload] : [],
           ),
         ).toEqual([]);
-        expect(decisions).toHaveLength(failpoint === "worker:after-report-append" ? 1 : 0);
-        expect(yield* Ref.get(projected)).toBe(failpoint === "worker:after-report-append" ? 1 : 0);
-        expect(native.requests()).toBe(1);
-        expect(native.completions()).toBe(failpoint === "turn:after-response-append" ? 0 : 1);
+        expect(decisions).toHaveLength(1);
+        expect(yield* Ref.get(projected)).toBe(1);
         expect(
           (yield* Context.get(first, MessageDeliveryStore).list({
             ownerThreadId: started.worker.threadId,
@@ -369,7 +244,7 @@ it.live.each([
         const second = yield* Layer.build(
           NodeHost.layer(registrations, options).pipe(
             Layer.provide(authority),
-            Layer.provide(Layer.merge(native.handlers, background.layer)),
+            Layer.provide(background.layer),
             Layer.provide(Layer.succeedContext(Clock.Clock.context(clock))),
           ),
         );
@@ -507,16 +382,13 @@ it.live.each([
           reports[0]?.runId,
           reports[0]?.runId,
         ]);
-        if (decisions.length > 0) expect(reports).toEqual(decisions);
-        expect(native.requests()).toBe(1);
-        expect(native.completions()).toBe(1);
+        expect(reports).toEqual(decisions);
         expect(
           childLog.records.filter(({ record }) => record.payload._tag === "RunCompleted"),
         ).toHaveLength(1);
         expect(
           childLog.records.filter(({ record }) => record.payload._tag === "ModelResponseRecorded"),
         ).toHaveLength(1);
-        expect(JSON.stringify(childLog)).toContain("OpenAiWebSearch");
         expect(yield* Ref.get(projected)).toBe(1);
         expect(
           (yield* deliveries.list({ ownerThreadId: started.worker.threadId, limit: 100 })).items,

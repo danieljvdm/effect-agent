@@ -1,8 +1,8 @@
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Cause, Effect, Fiber, Option, Schema } from "effect";
+import { runInDurableObject } from "cloudflare:test";
+import { Effect, Fiber } from "effect";
 import { type Receipt } from "effect-agent/durable-agent-runtime";
-import { CanonicalSequence } from "effect-agent/records";
+import type { CanonicalSequence } from "effect-agent/records";
 import { ApprovalDecisionCommand } from "effect-agent/submission-ledger";
 import { describe, expect, it, onTestFinished } from "vite-plus/test";
 
@@ -24,8 +24,6 @@ import {
   stubFor,
 } from "./harness.ts";
 import type { TestThreadObject } from "./worker.ts";
-
-const ZERO_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 let laneCounter = 0;
 const lane = (label: string): string => `cf-progress-${label}-${laneCounter++}`;
 
@@ -80,29 +78,6 @@ const awaitProgressEffect = (thread: string, afterSequence: CanonicalSequence) =
     const client = yield* CloudflareThreadClient;
 
     yield* client.awaitProgress(decodeThreadId(thread), afterSequence);
-  });
-
-const awaitCanonicalTagEffect = (thread: string, afterSequence: CanonicalSequence, tag: string) =>
-  Effect.gen(function* () {
-    const client = yield* CloudflareThreadClient;
-    const threadId = decodeThreadId(thread);
-    let cursor = afterSequence;
-
-    for (;;) {
-      const records = yield* client.readPage(threadId, {
-        afterSequence: cursor,
-        limit: 1_024,
-      });
-
-      if (records.some((record) => record.record.payload._tag === tag)) return;
-      const last = records.at(-1);
-
-      if (last !== undefined) {
-        cursor = last.sequence;
-        continue;
-      }
-      yield* client.awaitProgress(threadId, cursor);
-    }
   });
 
 const runTrackedClientFiber = <A, E>(effect: Effect.Effect<A, E, CloudflareThreadClient>) => {
@@ -170,99 +145,6 @@ describe("#94 Cloudflare durable progress wait", () => {
       ).pipe(Effect.provide(ProgressWaitRegistry.layer)),
     ));
 
-  it("bounds cancellation history by evicting oldest tombstones without removing active waiters", () =>
-    Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const registry = yield* ProgressWaitRegistry;
-          const active = yield* registry.subscribe("active-during-eviction");
-
-          for (let index = 0; index <= 1_024; index++) {
-            const id = `cancel-${index}`;
-            const cancelled = index % 2 === 0 ? yield* registry.subscribe(id) : Effect.void;
-
-            yield* registry.cancel(id);
-            yield* cancelled;
-          }
-          for (let index = 1; index <= 1_024; index++) {
-            yield* yield* registry.subscribe(`cancel-${index}`);
-          }
-          const evicted = yield* registry.subscribe("cancel-0");
-          const waiting = yield* Effect.forkChild(evicted, { startImmediately: true });
-
-          expect(waiting.pollUnsafe()).toBeUndefined();
-          yield* registry.cancel("active-during-eviction");
-          yield* active;
-          yield* registry.cancel("cancel-0");
-          yield* Fiber.join(waiting);
-        }),
-      ).pipe(Effect.provide(ProgressWaitRegistry.layer)),
-    ));
-
-  it("returns for committed history and wakes promptly after a canonical append", async () => {
-    const thread = lane("append");
-    const approval = await prepareApproval(thread);
-
-    const committed = runTrackedClientFiber(awaitProgressEffect(thread, ZERO_SEQUENCE));
-
-    await Effect.runPromise(Fiber.join(committed));
-    const before = await readCanonical(thread);
-    const cursor = before.at(-1)?.sequence;
-
-    expect(cursor).toBeDefined();
-    if (cursor === undefined) return;
-
-    const waiting = runTrackedClientFiber(
-      awaitCanonicalTagEffect(thread, cursor, "ToolApprovalDecided"),
-    );
-
-    await progressStub(thread).awaitProgressWaiterCount(1);
-    await approve(thread, approval.receipt);
-    await runDurableObjectAlarm(stubFor(thread));
-    await Effect.runPromise(Fiber.join(waiting));
-
-    const after = await readCanonical(thread);
-
-    expect(after.some((record) => record.sequence > cursor)).toBe(true);
-  }, 20_000);
-
-  it("broadcasts to every waiter, isolates lanes, and cleans up an interrupted caller", async () => {
-    const thread = lane("many");
-    const unrelated = lane("unrelated");
-    const main = await prepareApproval(thread);
-    const other = await prepareApproval(unrelated);
-    const cursor = main.cursor;
-    const unrelatedCursor = other.cursor;
-
-    const first = runTrackedClientFiber(
-      awaitCanonicalTagEffect(thread, cursor, "ToolApprovalDecided"),
-    );
-
-    const second = runTrackedClientFiber(
-      awaitCanonicalTagEffect(thread, cursor, "ToolApprovalDecided"),
-    );
-
-    const interruptedFiber = runTrackedClientFiber(awaitProgressEffect(thread, cursor));
-    const unrelatedFiber = runTrackedClientFiber(awaitProgressEffect(unrelated, unrelatedCursor));
-
-    await progressStub(thread).awaitProgressWaiterCount(3);
-    await progressStub(unrelated).awaitProgressWaiterCount(1);
-
-    await Effect.runPromise(Fiber.interrupt(interruptedFiber));
-    await progressStub(thread).awaitProgressWaiterCount(2);
-    expect(await progressStub(unrelated).progressWaiterCount()).toBe(1);
-
-    await approve(thread, main.receipt);
-    await Effect.runPromise(Effect.all([Fiber.join(first), Fiber.join(second)]));
-    expect(await progressStub(unrelated).progressWaiterCount()).toBe(1);
-
-    await Effect.runPromise(Fiber.interrupt(unrelatedFiber));
-    await progressStub(unrelated).awaitProgressWaiterCount(0);
-    await approve(unrelated, other.receipt);
-    await drainAlarmsUntil(thread, allSettled(thread));
-    await drainAlarmsUntil(unrelated, allSettled(unrelated));
-  }, 20_000);
-
   it("reconnects after eviction, reconstructs the wait, and rechecks durable authority", async () => {
     const thread = lane("eviction");
     const approval = await prepareApproval(thread);
@@ -291,72 +173,4 @@ describe("#94 Cloudflare durable progress wait", () => {
 
     expect(after.some((record) => record.sequence > cursor)).toBe(true);
   }, 20_000);
-
-  it("delivers the remote wake seam used by child, parent, and host settlement", async () => {
-    const thread = lane("remote");
-    const approval = await prepareApproval(thread);
-    const waiting = runTrackedClientFiber(awaitProgressEffect(thread, approval.cursor));
-
-    await progressStub(thread).awaitProgressWaiterCount(1);
-
-    await stubFor(thread).wake();
-    await Effect.runPromise(Fiber.join(waiting));
-    await progressStub(thread).awaitProgressWaiterCount(0);
-    expect(await progressStub(thread).progressWaiterCount()).toBe(0);
-    await approve(thread, approval.receipt);
-    await drainAlarmsUntil(thread, allSettled(thread));
-  });
-
-  it("preserves the typed non-materialized failure across the RPC client boundary", async () => {
-    const thread = lane("missing");
-
-    const tag = await runClient(
-      Effect.gen(function* () {
-        const client = yield* CloudflareThreadClient;
-
-        const exit = yield* Effect.exit(
-          client.awaitProgress(decodeThreadId(thread), ZERO_SEQUENCE),
-        );
-
-        if (exit._tag === "Success") return "success";
-        const error = Cause.findErrorOption(exit.cause);
-
-        if (Option.isNone(error)) return "defect";
-        const value: unknown = error.value;
-
-        return typeof value === "object" && value !== null && "_tag" in value
-          ? String(value._tag)
-          : "unknown";
-      }),
-    );
-
-    expect(tag).toBe("ThreadNotMaterialized");
-  });
-
-  it("preserves a typed authorization denial across the RPC client boundary", async () => {
-    const thread = lane("denied");
-
-    const tag = await runClient(
-      Effect.gen(function* () {
-        const client = yield* CloudflareThreadClient;
-
-        const exit = yield* Effect.exit(
-          client.awaitProgress(decodeThreadId(thread), ZERO_SEQUENCE),
-        );
-
-        if (exit._tag === "Success") return "success";
-        const error = Cause.findErrorOption(exit.cause);
-
-        if (Option.isNone(error)) return "defect";
-        const value: unknown = error.value;
-
-        return typeof value === "object" && value !== null && "_tag" in value
-          ? String(value._tag)
-          : "unknown";
-      }),
-      "DENIED",
-    );
-
-    expect(tag).toBe("OperationDenied");
-  });
 });

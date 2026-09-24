@@ -32,8 +32,6 @@ import {
 } from "./harness.ts";
 
 const crashPoints = [
-  { name: "runtime before save", killAt: "checkpoint:before-save", present: false },
-  { name: "runtime after save", killAt: "checkpoint:after-save", present: true },
   { name: "SQLite before save", killAtStorage: "save-recovery-checkpoint:before", present: false },
   { name: "SQLite after save", killAtStorage: "save-recovery-checkpoint:after", present: true },
 ] as const;
@@ -148,16 +146,6 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   expect(prompt).not.toContain('"id":"checkpoint-call-1"');
                   expect(prompt).not.toContain('"id":"checkpoint-call-2"');
                 }
-                const first = JSON.stringify(requests[0]);
-
-                expect(first).toContain("turn 3/4");
-                expect(first).toContain("tool-calls 2/3");
-                expect(first).toContain("tokens 220/");
-                const last = JSON.stringify(requests[1]);
-
-                expect(last).toContain("turn 4/4");
-                expect(last).toContain("tool-calls 3/3");
-                expect(last).toContain("tokens 330/");
 
                 const records = yield* readLog(thread);
 

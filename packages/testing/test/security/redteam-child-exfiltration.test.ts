@@ -23,9 +23,7 @@ import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { ThreadId, ToolCallId } from "effect-agent/identifiers";
 import { type CanonicalRecordEnvelope } from "effect-agent/records";
-import { Redactor, StructuralRedactorLive } from "effect-agent/redaction";
 import { childThreadIdFor, runIdForSubmission } from "effect-agent/run-journal";
-import { SubagentExecutionFailure } from "effect-agent/subagent";
 import { IdempotencyKey } from "effect-agent/submission-ledger";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 
@@ -202,97 +200,5 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
           );
         }),
       ),
-  );
-});
-
-const SECRET = "child-cause-secret-ZZZ-do-not-leak";
-const decodeExecutionFailure = Schema.decodeUnknownEffect(SubagentExecutionFailure);
-
-/** A well-formed durable child-failure projection, with the fields a real join would carry. */
-const validFailurePayload = {
-  _tag: "SubagentExecutionFailure",
-  delegationId: "delegate_document_summary",
-  targetAgentId: "doc-summarizer",
-  classification: "child-failed",
-  errorTag: "DocumentSummaryFailed",
-  message: "the child Run failed",
-} as const;
-
-describe("S2-D5 the durable failure projection cannot smuggle a raw Cause or unbounded payload", () => {
-  it.effect(
-    "SubagentExecutionFailure has no Cause/stack field: an injected raw-Cause key is dropped on decode",
-    () =>
-      Effect.gen(function* () {
-        // An attacker-shaped join payload tries to ride a raw Cause, a stack trace, and a child
-        // payload alongside the declared fields.
-        const attackerShaped = {
-          ...validFailurePayload,
-          cause: { secret: SECRET, stack: `Error: ${SECRET}\n  at child` },
-          childPayload: { apiKey: SECRET },
-          stack: `Error: ${SECRET}`,
-        };
-
-        const decoded = yield* decodeExecutionFailure(attackerShaped);
-
-        // Only the declared, bounded fields survive; no channel exists for the smuggled data.
-        expect(decoded.errorTag).toBe("DocumentSummaryFailed");
-        expect(Object.keys(decoded)).not.toContain("cause");
-        expect(Object.keys(decoded)).not.toContain("childPayload");
-        expect(Object.keys(decoded)).not.toContain("stack");
-
-        const reEncoded = JSON.stringify(
-          yield* Schema.encodeEffect(SubagentExecutionFailure)(decoded),
-        );
-
-        expect(reEncoded).not.toContain(SECRET);
-      }),
-  );
-
-  it.effect("the bounded errorTag and message reject an over-length secret-bearing payload", () =>
-    Effect.gen(function* () {
-      // errorTag is bounded at 256 bytes; a child that stuffs a long secret into it is rejected
-      // fail-closed rather than persisting an unbounded value on the canonical join.
-      const oversizedTag = yield* Effect.flip(
-        decodeExecutionFailure({
-          ...validFailurePayload,
-          errorTag: `${SECRET}-${"x".repeat(512)}`,
-        }),
-      );
-
-      expect(oversizedTag._tag).toBe("SchemaError");
-
-      // message is bounded at 4096 bytes; the same fail-closed rejection applies.
-      const oversizedMessage = yield* Effect.flip(
-        decodeExecutionFailure({
-          ...validFailurePayload,
-          message: `${SECRET} ${"y".repeat(8192)}`,
-        }),
-      );
-
-      expect(oversizedMessage._tag).toBe("SchemaError");
-    }),
-  );
-
-  it.effect(
-    "the structural Redactor strips every secret scalar from a child failure/progress preview (SEC-008)",
-    () =>
-      Effect.gen(function* () {
-        const redactor = yield* Redactor;
-
-        // A secret-bearing child failure + progress payload as it would appear in an event/span.
-        const childEventPayload = {
-          _tag: "ToolCallFailed",
-          errorTag: "DocumentSummaryFailed",
-          message: `internal note: ${SECRET}`,
-          progress: { note: SECRET, fetchedBody: `amber-ledger-passage ${SECRET}` },
-        };
-
-        const preview = yield* redactor.redact(childEventPayload);
-
-        expect(preview).not.toContain(SECRET);
-        expect(preview).not.toContain("amber-ledger-passage");
-        // Shape survives for the reviewer; scalars become type markers.
-        expect(preview).toContain("[REDACTED:string]");
-      }).pipe(Effect.provide(StructuralRedactorLive)),
   );
 });

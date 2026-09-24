@@ -15,13 +15,9 @@ export const MEMORY_NAMESPACE = MemoryNamespace.define({
 export const MEMORY_SCOPE = MemoryScope.make("participating-channels");
 export const MEMORY_SOURCE_ID = "dan-chad-project-atlas";
 export const DAN_THREAD = "memory-source-dan-thread";
-export const TIM_THREAD = "memory-consumer-tim-thread";
 
 export const ORIGINAL_TEXT =
   "Dan proposed that Chad lead Project Atlas. This remains a proposal, not a decision.";
-
-export const CORRECTED_TEXT =
-  "Dan proposed that Chad advise Project Atlas. This remains a proposal, not a decision.";
 
 export const DIVERGENT_TEXT = "Divergent restart extraction must never replace pinned output.";
 

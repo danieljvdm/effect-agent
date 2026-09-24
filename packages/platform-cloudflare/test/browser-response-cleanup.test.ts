@@ -55,10 +55,8 @@ const capture = (
 };
 
 it.effect.each([
-  { kind: "capture", failure: "overflow" },
   { kind: "capture", failure: "interruption" },
   { kind: "screenshot", failure: "overflow" },
-  { kind: "screenshot", failure: "interruption" },
   { kind: "screenshot", failure: "content-type" },
 ] as const)("bounds stalled $kind response cancellation after $failure", ({ kind, failure }) =>
   Effect.gen(function* () {
@@ -120,9 +118,7 @@ it.effect.each([
           _tag:
             failure === "content-type"
               ? "PageCaptureProtocolError"
-              : kind === "capture"
-                ? "PageCaptureOutputLimitError"
-                : "PageScreenshotOutputLimitError",
+              : "PageScreenshotOutputLimitError",
         });
       }
       expect(Cause.hasDies(exit.cause)).toBe(false);

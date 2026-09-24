@@ -8,7 +8,7 @@ Review this Effect v4 framework for concrete defects, not style.
 - The canonical log is append-only; projections are disposable. Never claim exactly-once external effects or automatically replay an unresolved ordinary tool call.
 - Bound concurrency and use structured Effect concurrency. Security decisions fail closed; model output is untrusted.
 - Flag a new abstraction only when deleting it would remove real ownership, policy, or behavior.
-- Tests must cover a concrete regression. Do not request speculative cleanup or unrelated hardening.
+- Default to no new test automation. Require a concrete uncovered failure and a reason existing checks or direct workflow evidence are insufficient before accepting new tests, fixtures, assertions or matrix growth. A current incident, provenance link or public-library label alone is insufficient. Never request post-implementation unit tests or a larger integration/E2E substitute for unnecessary tests. Read `.agents/skills/testing/SKILL.md`; do not request speculative cleanup or unrelated hardening.
 
 ## Dependencies passed as parameters
 

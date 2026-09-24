@@ -59,7 +59,6 @@ export const CrashEnv = {
  * file named by `EFFECT_AGENT_DB`:
  *
  * - `submit` — durably submit one Submission and print its Receipt.
- * - `abort-ready` — submit, then durably abort the still-unclaimed Submission.
  * - `run` — submit, then drain the lane to Settlement with a single-turn model.
  * - `run-checkpoint` — roll over before Turn 3 and kill around the recovery-cache write.
  * - `run-two` — submit two FIFO Submissions, then drain the lane.
@@ -88,15 +87,12 @@ export const CrashEnv = {
  *   join; armed kill/block failpoints land inside establishment (drive 1), the child Settlement
  *   (drive 2), or the join/release (drive 3).
  * - `subagent-child` — drive ONLY the derived child Thread lane (a second worker process
- *   for the simultaneous-kill and independent-fencing rows); honors the blocked child model.
- * - `subagent-abort` — submit, drive the parent to `waitingForChild`, then durably abort it
- *   (killAt `abort:after-intent` dies right after the parent abort intent commits).
+ *   for independent fencing); honors the blocked child model.
  * - `subagent-recover` — run ONE host startup-recovery pass over the shared file (killAt
  *   `subagent:after-child-abort-intent` dies right after the propagated child abort intent).
  */
 export const CrashScenario = Schema.Literals([
   "submit",
-  "abort-ready",
   "abort-queued",
   "run",
   "run-checkpoint",
@@ -112,7 +108,6 @@ export const CrashScenario = Schema.Literals([
   "resolve-unknown",
   "subagent-run",
   "subagent-child",
-  "subagent-abort",
   "subagent-recover",
 ]);
 

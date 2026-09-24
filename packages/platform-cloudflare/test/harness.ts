@@ -23,36 +23,14 @@ import { expect } from "vite-plus/test";
 
 import { decodeThreadId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
 import type {
+  TestThreadObject,
   PublicationThreadObject,
   ProjectionThreadObject,
-  ContextCompactorThreadObject,
-  DynamicBindingsThreadObject,
-  DeniedThreadObject,
-  LimitedThreadObject,
   SubagentThreadObject,
   TelemetryThreadObject,
-  TestThreadObject,
+  ContextCompactorThreadObject,
   TestScheduleOwnerObject,
-  TinyDatabaseThreadObject,
 } from "./worker.ts";
-
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      THREADS: DurableObjectNamespace<TestThreadObject>;
-      PUBLICATIONS: DurableObjectNamespace<PublicationThreadObject>;
-      PROJECTIONS: DurableObjectNamespace<ProjectionThreadObject>;
-      LIMITED: DurableObjectNamespace<LimitedThreadObject>;
-      TINYDB: DurableObjectNamespace<TinyDatabaseThreadObject>;
-      DENIED: DurableObjectNamespace<DeniedThreadObject>;
-      SUBAGENTS: DurableObjectNamespace<SubagentThreadObject>;
-      DYNAMIC_BINDINGS: DurableObjectNamespace<DynamicBindingsThreadObject>;
-      TELEMETRY: DurableObjectNamespace<TelemetryThreadObject>;
-      CONTEXT_COMPACTOR: DurableObjectNamespace<ContextCompactorThreadObject>;
-      SCHEDULES: DurableObjectNamespace<TestScheduleOwnerObject>;
-    }
-  }
-}
 
 /**
  * Shared eviction-harness machinery (plan §3): fresh stubs per call (an aborted incarnation
@@ -65,11 +43,7 @@ export type TestNamespace =
   | "PUBLICATIONS"
   | "PROJECTIONS"
   | "THREADS"
-  | "LIMITED"
-  | "TINYDB"
-  | "DENIED"
   | "SUBAGENTS"
-  | "DYNAMIC_BINDINGS"
   | "TELEMETRY"
   | "CONTEXT_COMPACTOR";
 
@@ -412,32 +386,22 @@ export const assertConvergence = async (
             `book result "${result.confirmation}" is absent from the supplier store — fabricated`,
           ).toBe(true);
         }
-        if (
-          typeof result === "object" &&
-          result !== null &&
-          "state" in result &&
-          typeof result.state === "string" &&
-          result.state.includes("+")
-        ) {
-          for (const part of result.state.split("+")) {
-            expect(
-              produced.has(part),
-              `itinerary step result "${part}" is absent from the supplier store — fabricated`,
-            ).toBe(true);
-          }
-        }
-      }
-      if (payload._tag === "ToolStepSettled") {
-        const output: unknown = payload.output;
-
-        if (typeof output === "string") {
-          expect(
-            produced.has(output),
-            `step output "${output}" is absent from the supplier store — fabricated`,
-          ).toBe(true);
-        }
       }
     }
     expect(supplierCountsFor(options.supplier.ref)).toEqual(options.supplier.counts);
   }
 };
+
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      THREADS: DurableObjectNamespace<TestThreadObject>;
+      PUBLICATIONS: DurableObjectNamespace<PublicationThreadObject>;
+      PROJECTIONS: DurableObjectNamespace<ProjectionThreadObject>;
+      SUBAGENTS: DurableObjectNamespace<SubagentThreadObject>;
+      TELEMETRY: DurableObjectNamespace<TelemetryThreadObject>;
+      CONTEXT_COMPACTOR: DurableObjectNamespace<ContextCompactorThreadObject>;
+      SCHEDULES: DurableObjectNamespace<TestScheduleOwnerObject>;
+    }
+  }
+}

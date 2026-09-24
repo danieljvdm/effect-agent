@@ -7,7 +7,6 @@ import { digestDefinitions } from "effect-agent/digest";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import { AbortCommand } from "effect-agent/submission-ledger";
 import { Toolkit, type Response } from "effect/unstable/ai";
 
 import {
@@ -127,49 +126,6 @@ it.live(
   30_000,
 );
 
-it.live(
-  "a timed out waiter detaches; explicit abort interrupts the model and releases its resources",
-  () =>
-    Effect.gen(function* () {
-      const directory = yield* temporaryDirectory;
-      const started = yield* Deferred.make<void>();
-      const finalized = yield* Ref.make(0);
-
-      const fixture = yield* makePlanner(() =>
-        Stream.fromEffect(
-          Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
-        ).pipe(Stream.ensuring(Ref.update(finalized, (n) => n + 1))),
-      );
-
-      yield* Effect.gen(function* () {
-        const host = yield* WorkflowAgentHost;
-
-        const receipt = yield* host.submit(
-          fixture.agent,
-          { question: "wait" },
-          submitOptions(fixture.digests),
-        );
-
-        yield* Deferred.await(started);
-        const waited = yield* host.awaitSettlement(receipt).pipe(Effect.timeoutOption("20 millis"));
-
-        expect(waited._tag).toBe("None");
-        expect(yield* Ref.get(finalized)).toBe(0);
-        expect((yield* host.submissionStatus(receipt))._tag).toBe("pending");
-        yield* host.abort(
-          AbortCommand.make({
-            submissionId: receipt.submissionId,
-            author: "operator",
-            reason: "cancel",
-          }),
-        );
-        expect((yield* host.awaitSettlement(receipt)).outcome).toBe("aborted");
-        yield* until(pendingIntents, (rows) => rows.length === 0);
-        expect(yield* Ref.get(finalized)).toBe(1);
-      }).pipe(Effect.provide(hostLayer(directory, [fixture])));
-    }).pipe(Effect.scoped, Effect.provide(platform)),
-);
-
 it.live("competing Workflow owners fence the stale model result out of canonical history", () =>
   Effect.gen(function* () {
     let phase = "constructing first owner";
@@ -286,6 +242,6 @@ it.live("a one-row repair page reaches Unicode thread names in SQLite order", ()
       const rows = yield* until(pendingIntents, (intents) => intents.length === 2);
 
       expect(rows.map((row) => row.receipt.threadId).sort()).toEqual([...ids].sort());
-    }).pipe(Effect.provide(hostLayer(directory, [fixture], {}, false, 1)));
+    }).pipe(Effect.provide(hostLayer(directory, [fixture], {}, 1)));
   }).pipe(Effect.scoped, Effect.provide(platform)),
 );

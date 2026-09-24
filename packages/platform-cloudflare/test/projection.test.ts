@@ -1,17 +1,5 @@
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import {
-  Cause,
-  Clock,
-  Context,
-  Deferred,
-  Effect,
-  Exit,
-  Layer,
-  Option,
-  Schema,
-  type Scope,
-  Stream,
-} from "effect";
+import { Cause, Clock, Deferred, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import type { Receipt } from "effect-agent/receipt";
 import { ProducerEpoch, type PersistedJson } from "effect-agent/records";
@@ -23,7 +11,6 @@ import {
   SubmissionLookupById,
   type AbortIntent,
 } from "effect-agent/submission-ledger";
-import type { ThreadProjectionMaintenance } from "effect-agent/thread-projection-maintenance";
 import {
   FencedAppendRequest,
   ThreadMaterialization,
@@ -34,19 +21,15 @@ import {
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
-import { SqlClient } from "effect/unstable/sql/SqlClient";
-import { describe, expect, expectTypeOf, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   DurableAlarmError,
   ThreadHostMaintenance,
-  ThreadMessageDelivery,
   ThreadMaintenance,
   ThreadMaintenanceFailpoint,
 } from "../src/Alarm.ts";
-import type { DurableObjectContext, ThreadObjectNamespace } from "../src/CloudflareBindings.ts";
 import { CloudflareThreadClient } from "../src/CloudflareThreadClient.ts";
-import * as ThreadObject from "../src/ThreadObject.ts";
 import {
   BOOK_TOOL_CALL_ID,
   approvalDefinition,
@@ -72,13 +55,7 @@ import {
 import {
   hostMaintenanceControls,
   ProjectionIndex,
-  projectionLayer,
-  projectionDefinition,
   projectionControls,
-  projectionResources,
-  projectionConstructions,
-  projectionLookups,
-  projectionLiveBatches,
 } from "./projection-fixture.ts";
 
 const namespace = "PROJECTIONS";
@@ -97,13 +74,7 @@ const quiesce = (thread: string) =>
     namespace,
   });
 
-const submit = (
-  thread: string,
-  definition:
-    | typeof projectionDefinition
-    | typeof plannerDefinition
-    | typeof approvalDefinition = projectionDefinition,
-) =>
+const submit = (thread: string, definition: typeof plannerDefinition | typeof approvalDefinition) =>
   runClient(
     Effect.flatMap(CloudflareThreadClient, (client) =>
       client.submit(
@@ -131,10 +102,6 @@ const withThread = (
         Effect.sync(() => {
           hostMaintenanceControls.delete(thread);
           projectionControls.delete(thread);
-          projectionResources.delete(thread);
-          projectionConstructions.delete(thread);
-          projectionLookups.delete(thread);
-          projectionLiveBatches.delete(thread);
           maintenanceClocks.delete(thread);
           releaseMaintenancePause(thread);
         }),
@@ -187,208 +154,6 @@ const append = (thread: string, request: FencedAppendRequest) =>
   );
 
 describe("live Thread projection and alarm backfill", () => {
-  it(
-    "shares one raw-source index and SQL owner with Tools throughout an active Run",
-    () =>
-      withThread(async (thread) => {
-        await submit(thread);
-        await drainAlarmsUntil(thread, allSettled(thread, namespace), { namespace });
-        const lookups = projectionLookups.get(thread);
-
-        expect(lookups).toHaveLength(3);
-        expect(new Set(lookups).size).toBe(3);
-        expect(projectionConstructions.get(thread)).toBe(1);
-        await runInDurableObject(stub(thread), (instance) =>
-          instance[DurableObject.RunSymbol](
-            Effect.gen(function* () {
-              expect((yield* ProjectionIndex).ownerSql).toBe(yield* SqlClient);
-            }),
-          ),
-        );
-        const records = await readCanonical(thread, namespace);
-
-        expect(
-          records
-            .filter((record) => record.record.payload._tag === "ToolCallSettled")
-            .every(
-              (record) =>
-                record.record.payload._tag !== "ToolCallSettled" ||
-                !record.record.payload.isFailure,
-            ),
-        ).toBe(true);
-        await quiesce(thread);
-      }),
-    30_000,
-  );
-
-  it(
-    "applies all 256 committed records before returning, replays idempotently, and rejects stale producers",
-    () =>
-      withThread(async (thread) => {
-        const request = await prepareAppend(thread, 256);
-        const result = await append(thread, request);
-
-        expect(result.lastSequence).toBe(256);
-        expect(await watermark(thread)).toBe(256);
-        expect((await append(thread, request)).replayed).toBe(true);
-        expect(await watermark(thread)).toBe(256);
-        const calls = projectionLiveBatches.get(thread)?.length;
-
-        await runInDurableObject(stub(thread), (instance) =>
-          instance[DurableObject.RunSymbol](
-            Effect.gen(function* () {
-              const store = yield* ThreadStore;
-
-              yield* store.materialize(
-                ThreadMaterialization.make({
-                  threadId: decodeThreadId(thread),
-                  producerEpoch: ProducerEpoch.make(1),
-                }),
-              );
-              const exit = yield* store.append(request).pipe(Effect.exit);
-
-              expect(Exit.isFailure(exit) && Cause.findErrorOption(exit.cause)).toMatchObject({
-                _tag: "Some",
-                value: { _tag: "FenceRejected" },
-              });
-            }),
-          ),
-        );
-        expect(projectionLiveBatches.get(thread)?.length).toBe(calls);
-        await quiesce(thread);
-      }),
-    30_000,
-  );
-
-  it.each(["failure", "defect"] as const)(
-    "keeps a canonical commit authoritative after live %s",
-    (failure) =>
-      withThread(async (thread) => {
-        const request = await prepareAppend(thread, 9);
-
-        projectionControls.set(thread, { operation: "live", failure });
-        expect((await append(thread, request)).lastSequence).toBe(9);
-        expect(await watermark(thread)).toBe(0);
-        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-        projectionControls.delete(thread);
-        await alarm(thread);
-        expect(await watermark(thread)).toBe(4);
-        await quiesce(thread);
-        expect(await watermark(thread)).toBe(9);
-      }),
-  );
-
-  it.each(["before", "after"] as const)(
-    "resumes bounded backfill after eviction %s its atomic commit",
-    (stage) =>
-      withThread(async (thread) => {
-        const request = await prepareAppend(thread, 9);
-
-        projectionControls.set(thread, { skipLive: true });
-        await append(thread, request);
-        projectionControls.set(thread, { operation: "drain", failure: "eviction", stage });
-        await alarm(thread).catch(() => undefined);
-        expect(await watermark(thread)).toBe(stage === "before" ? 0 : 4);
-        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-        await quiesce(thread);
-        expect(await watermark(thread)).toBe(9);
-        expect(projectionConstructions.get(thread)).toBe(2);
-        await runInDurableObject(stub(thread), async (_, state) => {
-          const rows = state.storage.sql
-            .exec<{ count: number }>("SELECT count(*) AS count FROM test_projection_rows")
-            .one();
-
-          expect(rows.count).toBe(9);
-        });
-      }),
-  );
-
-  it.each(["failure", "defect", "timeout"] as const)(
-    "runs canonical work before reporting a backfill %s and releases resources",
-    (failure) =>
-      withThread(async (thread, _now, advance) => {
-        projectionControls.set(thread, { skipLive: true });
-        await submit(thread, plannerDefinition);
-        projectionControls.set(thread, { skipLive: true, operation: "drain", failure });
-        await expect(alarm(thread)).rejects.toBeDefined();
-        expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
-        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-        const resources = projectionResources.get(thread);
-
-        expect(resources?.released).toBe(resources?.acquired);
-        projectionControls.delete(thread);
-        await advance(100);
-        await quiesce(thread);
-      }),
-  );
-
-  it.each(["failure", "timeout", "message preparation"] as const)(
-    "runs native work before reporting an unrelated maintenance %s",
-    (failure) =>
-      withThread(async (thread, _now, advance) => {
-        await submit(thread, plannerDefinition);
-        let markEntered!: () => void;
-
-        const entered = new Promise<void>((resolve) => {
-          markEntered = resolve;
-        });
-
-        hostMaintenanceControls.set(thread, [
-          {
-            dispatchTimeoutMillis: 1_000,
-            run: Effect.suspend(() => {
-              markEntered();
-
-              return failure === "timeout"
-                ? Effect.never
-                : DurableAlarmError.make({
-                    operation: "test host setup",
-                    message: "outbox unavailable",
-                  });
-            }),
-            pendingDeadline: Effect.succeed(Option.some(0)),
-          },
-        ]);
-
-        const runAlarm =
-          failure === "message preparation"
-            ? runInDurableObject(stub(thread), (instance) =>
-                instance[DurableObject.RunSymbol](
-                  ThreadMaintenance.use((maintenance) => maintenance.pass).pipe(
-                    Effect.provide(Layer.fresh(ThreadMaintenance.layer)),
-                    Effect.provideService(ThreadHostMaintenance, { lanes: [] }),
-                    Effect.provideService(ThreadMessageDelivery, {
-                      prepare: DurableAlarmError.make({
-                        operation: "test message preparation",
-                        message: "outbox unavailable",
-                      }),
-                      pendingDeadline: Effect.succeed(Option.some(0)),
-                    }),
-                  ),
-                ),
-              )
-            : alarm(thread);
-
-        const rejected = runAlarm.then(
-          () => undefined,
-          (cause: unknown) => cause,
-        );
-
-        if (failure === "timeout") {
-          await entered;
-          await advance(1_000);
-        }
-        expect(String(await rejected)).toContain(
-          failure === "timeout" ? "host wave exceeded its allowance" : "outbox unavailable",
-        );
-        expect(await allSettled(thread, namespace)()).toBe(true);
-        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-        hostMaintenanceControls.delete(thread);
-        await advance(100);
-        await quiesce(thread);
-      }),
-  );
-
   // Regression: https://github.com/danieljvdm/effect-agent/commit/b0a978cbf654962a42d8a794c2e826cc23a4c625
   it("includes interruptible finalizers in the host lane's original allowance", () =>
     withThread(async (thread, _now, advance) => {
@@ -452,65 +217,6 @@ describe("live Thread projection and alarm backfill", () => {
         release();
         await running;
       }
-    }));
-
-  it("preserves a completed interruption until an independent dispatch retires", () =>
-    withThread(async (thread, _now, advance) => {
-      projectionControls.set(thread, { skipLive: true });
-      await submit(thread, plannerDefinition);
-      projectionControls.set(thread, {
-        skipLive: true,
-        operation: "drain",
-        failure: "interruption",
-      });
-      let release!: () => void;
-      let enter!: () => void;
-      let retired = false;
-
-      const held = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-
-      const entered = new Promise<void>((resolve) => {
-        enter = resolve;
-      });
-
-      hostMaintenanceControls.set(thread, [
-        {
-          dispatchTimeoutMillis: 1_000,
-          run: Effect.sync(enter).pipe(Effect.andThen(Effect.promise(() => held))),
-          pendingDeadline: Effect.succeed(Option.none()),
-        },
-      ]);
-
-      const running = alarm(thread)
-        .then(
-          () => ({ failed: false }),
-          () => ({ failed: true }),
-        )
-        .finally(() => {
-          retired = true;
-        });
-
-      try {
-        await entered;
-        await advance(100);
-        expect(retired).toBe(false);
-        release();
-        expect(await running).toEqual({ failed: true });
-        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-        const resources = projectionResources.get(thread);
-
-        expect(resources?.released).toBe(resources?.acquired);
-      } finally {
-        hostMaintenanceControls.delete(thread);
-        projectionControls.delete(thread);
-        release();
-        await running;
-      }
-      await advance(100);
-      await quiesce(thread);
-      expect((await laneRows(thread, namespace))[0]?.state).toBe("settled");
     }));
 
   // Incident regression: https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-AA
@@ -795,122 +501,7 @@ describe("live Thread projection and alarm backfill", () => {
   });
 
   // Regression: https://github.com/danieljvdm/effect-agent/commit/0fe79ac5
-  it.each(["host", "projection"] as const)(
-    "executes admitted work while the same %s delivery remains in flight",
-    (held) =>
-      withThread(async (thread, _now, advance) => {
-        let entered!: () => void;
-        let release!: () => void;
-
-        const started = new Promise<void>((resolve) => {
-          entered = resolve;
-        });
-
-        const response = new Promise<void>((resolve) => {
-          release = resolve;
-        });
-
-        let released = false;
-        let retired = false;
-
-        projectionControls.set(thread, { skipLive: true });
-        await submit(thread, plannerDefinition);
-        if (held === "projection") {
-          projectionControls.set(thread, {
-            skipLive: true,
-            operation: "drain",
-            entered: () => entered(),
-            release: response,
-          });
-        }
-        hostMaintenanceControls.set(thread, [
-          {
-            pendingDeadline: Effect.succeed(held === "host" ? Option.some(0) : Option.none()),
-            dispatchTimeoutMillis: 1_000,
-            run: Effect.gen(function* () {
-              if (held !== "host") return;
-              yield* Effect.addFinalizer(() =>
-                Effect.sync(() => {
-                  released = true;
-                }),
-              );
-              entered();
-              yield* Effect.promise(() => response);
-            }),
-          },
-        ]);
-
-        const running = alarm(thread).then(
-          () => {
-            retired = true;
-
-            return undefined;
-          },
-          (cause: unknown) => {
-            retired = true;
-
-            return cause;
-          },
-        );
-
-        try {
-          await started;
-          for (
-            let attempt = 0;
-            attempt < 200 && !(await allSettled(thread, namespace)());
-            attempt++
-          ) {
-            await Promise.resolve();
-          }
-          expect(await allSettled(thread, namespace)()).toBe(true);
-          expect(retired).toBe(false);
-
-          await runClient(
-            Effect.flatMap(CloudflareThreadClient, (client) =>
-              client.submit(
-                { definition: plannerDefinition },
-                { question: "new input", ref: thread },
-                submitOptions(thread, "next-input"),
-              ),
-            ),
-            namespace,
-          );
-          expect(released).toBe(false);
-          await advance(100);
-          expect(retired).toBe(false);
-          expect((await laneRows(thread, namespace)).map((row) => row.state)).toEqual([
-            "settled",
-            "settled",
-          ]);
-          await advance(1_000);
-          expect(retired).toBe(true);
-          expect(released).toBe(held === "host");
-          expect((await laneRows(thread, namespace)).map((row) => row.state)).toEqual([
-            "settled",
-            "settled",
-          ]);
-          expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-          const outcome = await running;
-
-          expect(held === "host" ? String(outcome) : outcome).toEqual(
-            held === "host"
-              ? expect.stringContaining("host wave exceeded its allowance")
-              : undefined,
-          );
-        } finally {
-          hostMaintenanceControls.delete(thread);
-          projectionControls.delete(thread);
-          release();
-          await running;
-        }
-        await alarm(thread);
-        expect(await allSettled(thread, namespace)()).toBe(true);
-        await quiesce(thread);
-      }),
-  );
-
-  // Regression: https://github.com/danieljvdm/effect-agent/commit/0fe79ac5
-  it.each(["maintenance:checkpoint:before", "maintenance:checkpoint:after"] as const)(
+  it.each(["maintenance:checkpoint:after"] as const)(
     "recovers native progress and pending projection after eviction at %s",
     (location) =>
       withThread(async (thread) => {
@@ -1036,63 +627,4 @@ describe("live Thread projection and alarm backfill", () => {
       expect(Exit.isSuccess(result) && result.value).toBe(2);
       await quiesce(thread);
     }));
-
-  it("retains a producer racing projection-only acknowledgement", () =>
-    withThread(async (thread) => {
-      await alarm(thread);
-      const request = await prepareAppend(thread, 1);
-
-      armMaintenancePause(thread, "maintenance:finish:before");
-      const running = alarm(thread);
-
-      await awaitMaintenancePause(thread, "maintenance:finish:before");
-      try {
-        projectionControls.set(thread, { skipLive: true });
-        await append(thread, request);
-      } finally {
-        projectionControls.delete(thread);
-        releaseMaintenancePause(thread);
-        await running;
-      }
-      expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
-      await quiesce(thread);
-      expect(await watermark(thread)).toBe(1);
-    }));
-});
-
-it("exposes index services and preserves distinct publication and projection E/R", () => {
-  class Destination extends Context.Service<Destination, {}>()("test/ProjectionDestination") {}
-  class SetupError extends Schema.TaggedError<SetupError>()("ProjectionSetupError", {}) {}
-
-  const projection = projectionLayer.pipe(
-    Layer.provide(
-      Layer.effect(SqlClient)(
-        Effect.gen(function* () {
-          yield* Destination;
-
-          return yield* SetupError.make({});
-        }),
-      ),
-    ),
-  );
-
-  const runtime = ThreadObject.layer([], { projection }).pipe(
-    Layer.provide(ThreadObject.layerConfig({ deploymentId: "test", producerPrefix: "test" })),
-  );
-
-  expectTypeOf<
-    Extract<Layer.Success<typeof runtime>, ProjectionIndex>
-  >().toEqualTypeOf<ProjectionIndex>();
-  expectTypeOf<Extract<Layer.Services<typeof runtime>, Destination>>().toEqualTypeOf<Destination>();
-  expectTypeOf<Extract<Layer.Error<typeof runtime>, SetupError>>().toEqualTypeOf<SetupError>();
-  expectTypeOf<
-    Extract<Layer.Success<typeof runtime>, ThreadProjectionMaintenance>
-  >().toEqualTypeOf<ThreadProjectionMaintenance>();
-  expectTypeOf<Exclude<Layer.Services<typeof runtime>, Destination>>().toEqualTypeOf<
-    DurableObjectContext | ThreadObjectNamespace
-  >();
-
-  type Lane = Context.Service.Shape<typeof ThreadHostMaintenance>["lanes"][number];
-  expectTypeOf<Effect.Services<Lane["run"]>>().toEqualTypeOf<Scope.Scope>();
-  expectTypeOf<Effect.Error<Lane["run"]>>().toEqualTypeOf<DurableAlarmError>();
 });

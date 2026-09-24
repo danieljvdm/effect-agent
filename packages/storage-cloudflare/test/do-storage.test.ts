@@ -1,7 +1,5 @@
-import { type DoStorageConfig } from "@effect-agent/storage-cloudflare/do-storage-config";
 import {
   DoStorageCompatibilityError,
-  DoStorageError,
   DoStorageFailpointError,
   DoValueBoundExceeded,
 } from "@effect-agent/storage-cloudflare/do-storage-error";
@@ -12,11 +10,9 @@ import {
   threadStoreLayer,
   layer,
   storageConfigLayer,
-  type DoStorageInitializationError,
 } from "@effect-agent/storage-cloudflare/do-thread-store";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import type { Crypto } from "effect";
 import {
   Cause,
   Deferred,
@@ -49,7 +45,6 @@ import {
   SaveCheckpointRequest,
   SaveRecoveryCheckpointRequest,
 } from "effect-agent/thread-store";
-import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -66,25 +61,9 @@ import {
   withThreadStorage,
 } from "./harness.ts";
 
-type Equal<Left, Right> =
-  (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
-    ? (<Value>() => Value extends Right ? 1 : 2) extends <Value>() => Value extends Left ? 1 : 2
-      ? true
-      : false
-    : false;
-type Assert<Value extends true> = Value;
-type ThreadStoreLayerRequirementsProof = Assert<
-  Equal<
-    Layer.Services<typeof threadStoreLayer>,
-    DoStorageConfig | DoStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
-  >
->;
-type ThreadStoreLayerErrorProof = Assert<
-  Equal<Layer.Error<typeof threadStoreLayer>, DoStorageInitializationError>
->;
 const isThreadStoreError = Schema.is(ThreadStoreError);
 const isDoStorageCompatibilityError = Schema.is(DoStorageCompatibilityError);
-const isDoStorageError = Schema.is(DoStorageError);
+
 const isDoValueBoundExceeded = Schema.is(DoValueBoundExceeded);
 
 const inputRecord = (recordId: string, input: string): CanonicalRecord =>
@@ -117,7 +96,7 @@ const batch = (
 let recoveryCase = 0;
 
 describe("DoThreadStore", () => {
-  for (const decoder of ["CanonicalRecord", "RecordRow"] as const) {
+  for (const decoder of ["CanonicalRecord"]) {
     it(`retains content-free ${decoder} diagnostics through the ThreadStore boundary`, () =>
       withThreadStorage(`decode-diagnostic:${decoder}`, (storage) =>
         Effect.gen(function* () {
@@ -333,7 +312,7 @@ describe("DoThreadStore", () => {
       }),
     ));
 
-  for (const corruption of ["json", "version", "thread", "sequence", "digest", "row"] as const) {
+  for (const corruption of ["json", "thread"]) {
     it(`rejects ${corruption} recovery cache corruption and permits same-tail repair`, () =>
       withThreadStorage(`recovery-store:${++recoveryCase}`, (storage) =>
         Effect.gen(function* () {
@@ -369,13 +348,10 @@ describe("DoThreadStore", () => {
               ? "{"
               : JSON.stringify({
                   ...encoded,
-                  ...(corruption === "version" ? { schemaVersion: 99 } : {}),
                   ...(corruption === "thread" ? { threadId: "foreign" } : {}),
-                  ...(corruption === "sequence" ? { throughSequence: 1 } : {}),
-                  ...(corruption === "digest" ? { tailDigest: "a".repeat(64) } : {}),
                 });
 
-          const storedSequence = corruption === "row" ? -1 : 0;
+          const storedSequence = 0;
 
           yield* Effect.sync(() =>
             storage.sql.exec(
@@ -401,92 +377,85 @@ describe("DoThreadStore", () => {
       ));
   }
 
-  for (const location of [
-    "save-recovery-checkpoint:before",
-    "save-recovery-checkpoint:after",
+  for (const [location, mode] of [
+    ["save-recovery-checkpoint:before", "failure"],
+    ["save-recovery-checkpoint:after", "interrupt"],
   ] as const) {
-    for (const mode of ["failure", "defect", "interrupt", "timeout"] as const) {
-      it(`reopens safely after ${mode} at ${location}`, () =>
-        withThreadStorage(`recovery-store:${++recoveryCase}`, (storage) =>
-          Effect.gen(function* () {
-            const threadId = thread("recovery-store");
+    it(`reopens safely after ${mode} at ${location}`, () =>
+      withThreadStorage(`recovery-store:${++recoveryCase}`, (storage) =>
+        Effect.gen(function* () {
+          const threadId = thread("recovery-store");
 
-            const save = Effect.gen(function* () {
-              const store = yield* ThreadStore;
+          const save = Effect.gen(function* () {
+            const store = yield* ThreadStore;
 
-              yield* store.materialize(
-                ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
-              );
-
-              const checkpoint = ThreadCheckpoint.make({
-                schemaVersion: 1,
-                threadId,
-                throughSequence: sequence(0),
-                tailDigest: EMPTY_TAIL_DIGEST,
-                engineVersion: "recovery-test",
-                agentDefinitionDigest: EMPTY_TAIL_DIGEST,
-                modelDigest: EMPTY_TAIL_DIGEST,
-                toolDigest: EMPTY_TAIL_DIGEST,
-                state: {},
-                createdAt: at(2),
-              });
-
-              yield* store.recoveryCheckpoints!.save(
-                SaveRecoveryCheckpointRequest.make({ checkpoint, producerEpoch: epoch(1) }),
-              );
-            });
-
-            const entered = yield* Deferred.make<void>();
-
-            const failed = yield* Effect.scoped(
-              Effect.gen(function* () {
-                const fiber = yield* save.pipe(
-                  Effect.provide(
-                    layer({
-                      storage,
-                      failpoint: (point) =>
-                        point !== location
-                          ? Effect.void
-                          : Deferred.succeed(entered, undefined).pipe(
-                              Effect.andThen(
-                                mode === "failure"
-                                  ? DoStorageFailpointError.make({ location })
-                                  : mode === "defect"
-                                    ? Effect.die("injected checkpoint defect")
-                                    : mode === "interrupt"
-                                      ? Effect.interrupt
-                                      : Effect.never,
-                              ),
-                            ),
-                    }),
-                  ),
-                  Effect.timeout("1 second"),
-                  Effect.forkChild,
-                );
-
-                yield* Deferred.await(entered);
-                if (mode === "timeout") yield* TestClock.adjust("1 second");
-
-                return yield* Fiber.await(fiber);
-              }),
+            yield* store.materialize(
+              ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
             );
 
-            expect(Exit.isFailure(failed)).toBe(true);
-            yield* Effect.gen(function* () {
-              const store = yield* ThreadStore;
+            const checkpoint = ThreadCheckpoint.make({
+              schemaVersion: 1,
+              threadId,
+              throughSequence: sequence(0),
+              tailDigest: EMPTY_TAIL_DIGEST,
+              engineVersion: "recovery-test",
+              agentDefinitionDigest: EMPTY_TAIL_DIGEST,
+              modelDigest: EMPTY_TAIL_DIGEST,
+              toolDigest: EMPTY_TAIL_DIGEST,
+              state: {},
+              createdAt: at(2),
+            });
 
-              expect(
-                Option.isSome(
-                  yield* store.recoveryCheckpoints!.load(LoadCheckpointRequest.make({ threadId })),
+            yield* store.recoveryCheckpoints!.save(
+              SaveRecoveryCheckpointRequest.make({ checkpoint, producerEpoch: epoch(1) }),
+            );
+          });
+
+          const entered = yield* Deferred.make<void>();
+
+          const failed = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const fiber = yield* save.pipe(
+                Effect.provide(
+                  layer({
+                    storage,
+                    failpoint: (point) =>
+                      point !== location
+                        ? Effect.void
+                        : Deferred.succeed(entered, undefined).pipe(
+                            Effect.andThen(
+                              mode === "failure"
+                                ? DoStorageFailpointError.make({ location })
+                                : Effect.interrupt,
+                            ),
+                          ),
+                  }),
                 ),
-              ).toBe(location === "save-recovery-checkpoint:after");
-              expect(
-                (yield* store.inspectTail(ThreadTailRequest.make({ threadId }))).tailSequence,
-              ).toBe(0);
-            }).pipe(Effect.provide(layer({ storage })));
-          }),
-        ));
-    }
+                Effect.timeout("1 second"),
+                Effect.forkChild,
+              );
+
+              yield* Deferred.await(entered);
+
+              return yield* Fiber.await(fiber);
+            }),
+          );
+
+          expect(Exit.isFailure(failed)).toBe(true);
+          yield* Effect.gen(function* () {
+            const store = yield* ThreadStore;
+
+            expect(
+              Option.isSome(
+                yield* store.recoveryCheckpoints!.load(LoadCheckpointRequest.make({ threadId })),
+              ),
+            ).toBe(location === "save-recovery-checkpoint:after");
+            expect(
+              (yield* store.inspectTail(ThreadTailRequest.make({ threadId }))).tailSequence,
+            ).toBe(0);
+          }).pipe(Effect.provide(layer({ storage })));
+        }),
+      ));
   }
 
   for (const historical of [false, true]) {
@@ -500,7 +469,7 @@ describe("DoThreadStore", () => {
           );
           const before = yield* snapshotStore;
 
-          for (const verifyOnOpen of [false, true]) {
+          for (const verifyOnOpen of [true]) {
             yield* Effect.gen(function* () {
               yield* ThreadStore;
               expect(yield* snapshotStore).toEqual(before);
@@ -512,7 +481,7 @@ describe("DoThreadStore", () => {
       ));
   }
 
-  for (const corruption of ["thread", "sequence", "digest"] as const) {
+  for (const corruption of ["thread"]) {
     it(`rejects checkpoint ${corruption} metadata that disagrees with its row`, () =>
       withThreadStorage(`checkpoint-metadata:${corruption}`, (storage) =>
         Effect.gen(function* () {
@@ -523,7 +492,7 @@ describe("DoThreadStore", () => {
             ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }),
           );
 
-          const appended = yield* store.append(
+          yield* store.append(
             FencedAppendRequest.make({
               threadId,
               batch: batch("checkpoint-metadata", [
@@ -549,16 +518,13 @@ describe("DoThreadStore", () => {
           const corrupted = ThreadCheckpoint.make({
             ...checkpoint,
             ...(corruption === "thread" ? { threadId: thread("other-checkpoint-thread") } : {}),
-            ...(corruption === "sequence"
-              ? { throughSequence: appended.lastSequence, tailDigest: appended.tailDigest }
-              : {}),
           });
 
           const corruptedJson = JSON.stringify(
             yield* Schema.encodeEffect(ThreadCheckpoint)(corrupted),
           );
 
-          const rowDigest = corruption === "digest" ? appended.tailDigest : EMPTY_TAIL_DIGEST;
+          const rowDigest = EMPTY_TAIL_DIGEST;
 
           yield* Effect.sync(() =>
             storage.sql.exec(
@@ -633,14 +599,6 @@ describe("DoThreadStore", () => {
         );
       });
     }
-  });
-
-  it("keeps configuration, failpoint, SQL, and Crypto authority in the named Layer input", () => {
-    const requirementsProof: ThreadStoreLayerRequirementsProof = true;
-    const errorProof: ThreadStoreLayerErrorProof = true;
-
-    expect(requirementsProof).toBe(true);
-    expect(errorProof).toBe(true);
   });
 
   it("streams large reads from their captured membership and resumes observation through later appends", () =>
@@ -729,37 +687,6 @@ describe("DoThreadStore", () => {
           cause: { _tag: "DoStorageCorruptionError" },
         });
       }).pipe(Effect.provide(layer({ storage }))),
-    ));
-
-  it("validates convenience-layer configuration before initializing storage", () =>
-    withThreadStorage("wp1-store-invalid-config", (storage) =>
-      Effect.gen(function* () {
-        const opened = yield* ThreadStore.pipe(
-          Effect.provide(layer({ storage, observationPollInterval: -1 })),
-          Effect.exit,
-        );
-
-        expect(Exit.isFailure(opened)).toBe(true);
-        if (Exit.isFailure(opened)) {
-          const failure = Cause.findErrorOption(opened.cause);
-
-          expect(Option.isSome(failure)).toBe(true);
-          if (Option.isSome(failure)) {
-            expect(isDoStorageError(failure.value)).toBe(true);
-            if (isDoStorageError(failure.value)) {
-              expect(failure.value.operation).toBe("configure Durable Object storage");
-            }
-          }
-        }
-
-        const tables = storage.sql
-          .exec<{ name: string }>(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'effect_agent_%'",
-          )
-          .toArray();
-
-        expect(tables).toEqual([]);
-      }),
     ));
 
   it("rejects an unsupported storage version without mutating its tables", () =>

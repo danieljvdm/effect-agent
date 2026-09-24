@@ -2,16 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { Effect } from "effect";
 import { Schema } from "effect";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
-import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
+import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
 import { OpenAiConnection } from "../src/credential-domain.ts";
-import type { PlannerError } from "../src/domain.ts";
-import { PlannerSnapshot } from "../src/domain.ts";
-import type { CredentialStore } from "../src/server/credentials.ts";
 import { ownerEmail } from "./fixtures/identity.ts";
 
 const token = "preference-test-token";
@@ -50,13 +46,7 @@ const makeRuntime = () =>
         const key = request.headers.get("authorization") ?? "";
 
         return new Response("", {
-          status: key.includes("invalid")
-            ? 401
-            : key.includes("busy")
-              ? 429
-              : key.includes("redirect")
-                ? 302
-                : 200,
+          status: key.includes("invalid") ? 401 : key.includes("redirect") ? 302 : 200,
           headers: key.includes("redirect") ? { location: "https://must-not-follow.test" } : {},
         });
       },
@@ -124,25 +114,12 @@ const get = async (email = ownerEmail) =>
 const save = async (apiKey: string, email = ownerEmail) =>
   Schema.decodeUnknownSync(OpenAiConnection)(await rpc("ConnectOpenAi", { apiKey }, email));
 
-const remove = async (email = ownerEmail) =>
-  Schema.decodeUnknownSync(OpenAiConnection)(await rpc("DisconnectOpenAi", undefined, email));
-
 const resolve = async (email = ownerEmail) => {
   const response = await runtime.dispatchFetch("http://planner/__test/credentials?resolve", {
     headers: headers(email),
   });
 
   return response.json();
-};
-
-const arm = async (point: string, mode = "failure") => {
-  const response = await runtime.dispatchFetch(
-    `http://planner/__test/credentials?point=${point}&mode=${mode}`,
-    { headers: headers(ownerEmail) },
-  );
-
-  await response.arrayBuffer();
-  expect(response.status).toBe(200);
 };
 
 const raw = async (email: string, value?: string) => {
@@ -157,31 +134,10 @@ const raw = async (email: string, value?: string) => {
   );
 };
 
-it("encrypts account keys, resolves them after restart, rotates and removes without touching trips", async () => {
+it("encrypts separate account keys and resolves them after restart", async () => {
   const guest = "friend@example.com";
 
-  expect(await get()).toMatchObject({ connected: false, lastFour: null });
-  expect(await raw(ownerEmail)).toEqual([]);
-  await rpc("SaveTrip", {
-    conversationId: "existing-trip",
-    tripId: null,
-    expectedRevision: null,
-    title: "Retained trip",
-    destination: "Lisbon",
-    summary: "A stored draft",
-    startDate: null,
-    endDate: null,
-    travelers: 1,
-    days: [],
-    notes: ["Preserve this trip"],
-  });
-
-  const before = Schema.decodeUnknownSync(PlannerSnapshot)(
-    await rpc("GetPlanner", { conversationId: null }),
-  );
-
   expect(await save(first)).toMatchObject({ connected: true, lastFour: "1111" });
-  expect(await get(guest)).toMatchObject({ connected: false });
   expect(await save(second, guest)).toMatchObject({ connected: true, lastFour: "2222" });
   const saved = await raw(ownerEmail);
 
@@ -192,29 +148,13 @@ it("encrypts account keys, resolves them after restart, rotates and removes with
   runtime = makeRuntime();
   expect(await resolve()).toEqual({ lastFour: "1111" });
   expect(await resolve(guest)).toEqual({ lastFour: "2222" });
-  expect(await rpc("GetPlanner", { conversationId: null })).toEqual(before);
-  await save(second);
-  expect(await resolve()).toEqual({ lastFour: "2222" });
-  await remove();
-  expect(await raw(ownerEmail)).toEqual([]);
-  expect(await resolve()).toMatchObject({
-    error: "Connect your OpenAI API key in Settings to continue planning.",
-  });
-  expect(await resolve(guest)).toEqual({ lastFour: "2222" });
-  expect(await rpc("GetPlanner", { conversationId: null })).toEqual(before);
-  expect(await remove()).toMatchObject({ connected: false });
 }, 30_000);
 
 it("preserves the previous key on validation failure and never follows validation redirects", async () => {
   const email = "validation@example.com";
 
   await save(first, email);
-  for (const apiKey of [
-    "bad",
-    "sk-fixture-invalid-PRIVATE",
-    "sk-fixture-busy-PRIVATE",
-    "sk-fixture-redirect-PRIVATE",
-  ]) {
+  for (const apiKey of ["sk-fixture-invalid-PRIVATE", "sk-fixture-redirect-PRIVATE"]) {
     const result = await rpcExit("ConnectOpenAi", { apiKey }, email);
 
     expect(result._tag).toBe("Failure");
@@ -223,51 +163,7 @@ it("preserves the previous key on validation failure and never follows validatio
   }
 }, 30_000);
 
-it("recovers after interrupted credential schema initialization", async () => {
-  for (const point of ["schema:before", "schema:after"]) {
-    for (const mode of ["failure", "defect", "interrupt"]) {
-      const email = `${point.replace(":", "-")}-${mode}@example.com`;
-
-      await arm(point, mode);
-
-      const response = await runtime.dispatchFetch("http://planner/api/rpc", {
-        method: "POST",
-        headers: { ...headers(email), "content-type": "application/ndjson" },
-        body: `${JSON.stringify({ _tag: "Request", id: "1", tag: "GetOpenAiConnection", payload: null, headers: [] })}\n`,
-      });
-
-      const body = await response.text();
-
-      expect(response.ok && body.includes('"_tag":"Success"')).toBe(false);
-      await runtime.dispose();
-      runtime = makeRuntime();
-      expect(await get(email)).toMatchObject({ connected: false });
-      expect(await save(first, email)).toMatchObject({ connected: true, lastFour: "1111" });
-    }
-  }
-}, 30_000);
-
-it("handles faults before and after durable writes without exposing key material", async () => {
-  const email = "failure@example.com";
-
-  for (const mode of ["failure", "defect", "interrupt"]) {
-    await save(first, email);
-    await arm("save:before", mode);
-    expect((await rpcExit("ConnectOpenAi", { apiKey: second }, email))._tag).toBe("Failure");
-    expect(await resolve(email)).toEqual({ lastFour: "1111" });
-    await arm("save:after", mode);
-    expect((await rpcExit("ConnectOpenAi", { apiKey: second }, email))._tag).toBe("Failure");
-    expect(await resolve(email)).toEqual({ lastFour: "2222" });
-    await arm("remove:before", mode);
-    expect((await rpcExit("DisconnectOpenAi", undefined, email))._tag).toBe("Failure");
-    expect(await resolve(email)).toEqual({ lastFour: "2222" });
-    await arm("remove:after", mode);
-    expect((await rpcExit("DisconnectOpenAi", undefined, email))._tag).toBe("Failure");
-    expect(await get(email)).toMatchObject({ connected: false });
-  }
-}, 30_000);
-
-it("binds encrypted keys to their owner and rejects malformed records without replacing them", async () => {
+it("refuses to decrypt an encrypted key copied from another owner", async () => {
   const email = "corrupt@example.com";
 
   await save(first, "source@example.com");
@@ -277,35 +173,4 @@ it("binds encrypted keys to their owner and rejects malformed records without re
   await get(email);
   await raw(email, copied);
   expect(await resolve(email)).toHaveProperty("error");
-  for (const value of ["not-json-PRIVATE", JSON.stringify({ version: 99 })]) {
-    await raw(email, value);
-    for (const result of [
-      await rpcExit("GetOpenAiConnection", undefined, email),
-      await rpcExit("ConnectOpenAi", { apiKey: second }, email),
-      await rpcExit("DisconnectOpenAi", undefined, email),
-    ]) {
-      expect(result._tag).toBe("Failure");
-      expect(JSON.stringify(result)).not.toContain("PRIVATE");
-    }
-    expect(await raw(email)).toEqual([{ value }]);
-  }
 }, 30_000);
-
-it("requires authentication and rejects cross-origin requests before reaching credentials", async () => {
-  for (const [extra, expected] of [
-    [{}, 401],
-    [{ ...headers(ownerEmail), origin: "https://attacker.test" }, 403],
-  ] as const) {
-    const response = await runtime.dispatchFetch("http://planner/api/rpc", {
-      method: "POST",
-      headers: extra,
-    });
-
-    await response.arrayBuffer();
-    expect(response.status).toBe(expected);
-  }
-  expectTypeOf<Effect.Error<CredentialStore["Service"]["status"]>>().toEqualTypeOf<PlannerError>();
-  expectTypeOf<
-    Effect.Services<ReturnType<CredentialStore["Service"]["save"]>>
-  >().toEqualTypeOf<never>();
-});

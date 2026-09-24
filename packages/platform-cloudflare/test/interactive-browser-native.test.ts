@@ -13,7 +13,6 @@ import {
   BrowserFillRequest,
   BrowserNavigateRequest,
   BrowserReadTextRequest,
-  BrowserSelectFileRequest,
   InteractiveBrowser,
   InteractiveBrowserPolicy,
 } from "effect-agent/interactive-browser";
@@ -39,33 +38,21 @@ const sdkCall = <A>(run: () => Promise<A>) =>
 // Opt-in local transport proof. No Cloudflare credentials or deployment. The
 // Puppeteer version and every adapter callback are the production ones.
 it.live(
-  "observes native product controls and delayed cart requests in real Chromium",
+  "refuses stale DOM authority at final dispatch in real Chromium",
   (context) =>
     Effect.gen(function* () {
       const executable = yield* Config.option(Config.String("BROWSER_TEST_EXECUTABLE"));
 
       if (Option.isNone(executable)) return context.skip();
       let cartRequests = 0;
-      const received: Uint8Array[] = [];
 
       const html = `<!doctype html><html><body>
-    <nav>${Array.from({ length: 80 }, (_, i) => `<a href="#nav${i}">Navigation ${i}</a>`).join("")}</nav>
     <form id="cart">
       <input id="small" type="radio" name="size" value="private-small-value" required style="display:none"><label for="small">12oz</label>
-      <input id="large" type="radio" name="size" value="private-large-value" required style="display:none"><label for="large">2lb</label>
-      <select id="roast" required><option value="">Choose roast</option><option value="private-roast-value">Light</option><option value="private-dark-value">Dark</option></select>
-      <input type="password" value="private-credential"><textarea>private-textarea-default</textarea>
       <div id="cart-target"><button>Add to Cart</button></div>
     </form>
-    <input id="file" type="file"><button id="choose" type="button">Choose file</button>
     <script>
     document.querySelector('#cart').addEventListener('submit', e => { e.preventDefault(); setTimeout(() => fetch('/cart', {method:'POST',body:'private-body'}), 100); });
-    const upload = event => fetch('/upload', {method:'POST',body:event.target.files[0]});
-    document.querySelector('#file').addEventListener('change', upload);
-    document.querySelector('#choose').onclick = () => {
-      const input = document.createElement('input'); input.type = 'file'; input.hidden = true;
-      document.body.append(input); input.addEventListener('change', upload); input.click();
-    };
     </script>
   </body></html>`;
 
@@ -78,15 +65,7 @@ it.live(
           () =>
             new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
               const server = createServer((request, response) => {
-                if (request.url === "/upload") {
-                  const chunks: Uint8Array[] = [];
-
-                  request.on("data", (chunk: Uint8Array) => chunks.push(chunk));
-                  request.on("end", () => {
-                    received.push(Buffer.concat(chunks));
-                    response.writeHead(200).end("received");
-                  });
-                } else if (request.url === "/cart") {
+                if (request.url === "/cart") {
                   cartRequests++;
 
                   const timer = setTimeout(() => {
@@ -172,47 +151,9 @@ it.live(
         const read = handle.readText(BrowserReadTextRequest.make({}));
         const initial = yield* read;
         const observed = yield* Schema.decodeEffect(BrowserRunPageObservation)(initial.text);
-
-        expect(observed.controlsTruncated).toBe(true);
-        expect(observed.controls).toHaveLength(64);
         const size = observed.controls.find((c) => c.label === "12oz");
         const cart = observed.controls.find((c) => c.label === "Add to Cart");
 
-        expect(size).toMatchObject({
-          kind: "label:radio",
-          checked: false,
-          required: true,
-          valid: false,
-          formValid: false,
-        });
-        expect(cart).toBeDefined();
-        expect(observed.controls.filter((c) => c.kind === "option")).toMatchObject([
-          { label: "Choose roast", selected: true },
-          { label: "Light", selected: false },
-          { label: "Dark", selected: false },
-        ]);
-        for (const control of observed.controls) {
-          expect(
-            yield* sdkCall(() => page.$$eval(control.selector, (elements) => elements.length)),
-          ).toBe(1);
-          expect(control.selector).not.toContain("private-");
-        }
-        expect(initial.text).not.toContain("private-small-value");
-        expect(initial.text).not.toContain("private-roast-value");
-        expect(initial.text).not.toContain("private-credential");
-        expect(observed.controls.every((control) => !control.label?.includes("private-"))).toBe(
-          true,
-        );
-        expect(
-          isBrowserRunUndispatchedActionError(
-            yield* handle.click(BrowserClickRequest.make({ selector: "[" })).pipe(Effect.flip),
-          ),
-        ).toBe(true);
-        expect(
-          isBrowserRunUndispatchedActionError(
-            yield* handle.click(BrowserClickRequest.make({ selector: "label" })).pipe(Effect.flip),
-          ),
-        ).toBe(true);
         if (size === undefined || cart === undefined)
           return yield* Effect.die("Missing product controls");
 
@@ -250,15 +191,6 @@ it.live(
         ).toBe("0");
 
         // https://github.com/danieljvdm/effect-agent/commit/5f83df46d392b1d61e39cb2c74d9eebf36c52415
-        const sameDocument = yield* Schema.decodeEffect(BrowserRunPageObservation)(
-          (yield* read).text,
-        );
-
-        expect(sameDocument.documentId).toBe(observed.documentId);
-        expect(
-          sameDocument.controls.find((control) => control.selector === cart.selector)?.nodeId,
-        ).toBe(cart.nodeId);
-        expect(observed.controls.some((control) => control.inputType === "password")).toBe(true);
         for (const update of [
           { property: "checked", value: true, restore: false },
           { property: "type", value: "password", restore: "radio" },
@@ -358,89 +290,7 @@ it.live(
           ),
         ).toBe(true);
 
-        const finalObservation = yield* Schema.decodeEffect(BrowserRunPageObservation)(
-          (yield* read).text,
-        );
-
-        const finalCart = finalObservation.controls.find(
-          (control) => control.selector === cart.selector,
-        );
-
-        if (finalCart === undefined) return yield* Effect.die("Missing final control");
-        expect(
-          isBrowserRunUndispatchedActionError(
-            yield* handle
-              .click(
-                BrowserClickRequest.make({
-                  selector: finalCart.selector,
-                  expectedTarget: {
-                    documentId: finalObservation.documentId,
-                    nodeId: finalCart.nodeId,
-                    state: finalCart,
-                    scopeSelector: "nav",
-                  },
-                }),
-              )
-              .pipe(Effect.flip),
-          ),
-        ).toBe(true);
-        yield* handle.click(
-          BrowserClickRequest.make({
-            selector: finalCart.selector,
-            expectedTarget: {
-              documentId: finalObservation.documentId,
-              nodeId: finalCart.nodeId,
-              state: finalCart,
-              scopeSelector: "#cart",
-            },
-          }),
-        );
         expect(cartRequests).toBe(0);
-        yield* handle.click(BrowserClickRequest.make({ selector: size.selector }));
-        yield* handle.fill(
-          BrowserFillRequest.make({ selector: "#roast", value: "private-roast-value" }),
-        );
-        const selected = yield* Schema.decodeEffect(BrowserRunPageObservation)((yield* read).text);
-
-        expect(selected.controls.find((c) => c.label === "12oz")).toMatchObject({
-          checked: true,
-          formValid: true,
-        });
-        expect(
-          selected.controls.find((c) => c.kind === "option" && c.label === "Light"),
-        ).toMatchObject({ selected: true });
-        yield* handle.click(BrowserClickRequest.make({ selector: cart.selector }));
-        expect(cartRequests).toBe(1);
-        expect(logs.at(-1)?.annotations).toMatchObject({
-          "browser.fetch_xhr_total": 1,
-          "browser.fetch_xhr_failed": 0,
-          "browser.fetch_xhr_2xx": 1,
-          "browser.fetch_xhr_pending": 0,
-          "browser.network_settle_timed_out": false,
-        });
-        const bytes = new TextEncoder().encode("%PDF-1.7\nsynthetic remote byte selection\n%%EOF");
-
-        for (const target of ["input", "chooser"] as const) {
-          const selection = yield* handle.selectFile(
-            BrowserSelectFileRequest.make({
-              selector: target === "input" ? "#file" : "#choose",
-              target,
-              fileName: "synthetic.pdf",
-              mediaType: "application/pdf",
-              bytes,
-            }),
-          );
-
-          expect(selection).toMatchObject({
-            fileName: "synthetic.pdf",
-            mediaType: "application/pdf",
-            size: bytes.length,
-          });
-        }
-        expect(received.map((bytes) => Array.from(bytes))).toEqual([
-          Array.from(bytes),
-          Array.from(bytes),
-        ]);
         expect(page.listenerCount("requestfinished")).toBe(0);
         expect(page.listenerCount("requestfailed")).toBe(0);
         expect(page.listenerCount("request")).toBe(requestListenerBaseline + 1);

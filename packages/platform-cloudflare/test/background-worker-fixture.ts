@@ -327,8 +327,6 @@ export const capturedPolicyWorkers = (policy: AgentPolicy) =>
     }),
   });
 
-export const capturedPolicyOutages = new Set<string>();
-
 export const capturedConcurrency = new Map<
   string,
   { readonly owner: SubmissionId; readonly limit: number }
@@ -462,8 +460,6 @@ export const backgroundWorkerAuthority = Layer.mergeAll(
         if (request.source.agentId !== capturedPolicySource.id) return Option.none();
         if (request.definition !== independentPersona)
           return yield* WorkerError.make({ operation: "start", reason: "denied" });
-        if (capturedPolicyOutages.has(request.source.threadId))
-          return yield* WorkerError.make({ operation: "start", reason: "unavailable" });
         if (request._tag === "RetainedWorker") return Option.some(request.origin.policy);
         if (request.sourceSubmission === undefined)
           return yield* WorkerError.make({ operation: "start", reason: "unavailable" });

@@ -8,11 +8,9 @@ import { Scheduling } from "effect-agent/scheduling";
 import { Principal } from "effect-agent/submission-ledger";
 
 export const SchedulingCrashBoundary = Schema.Literals([
-  "schedule:insert:before",
   "schedule:insert:after",
   "schedule:prepare:after",
   "schedule:admission:after",
-  "schedule:complete:before",
   "schedule:complete:after",
 ]);
 

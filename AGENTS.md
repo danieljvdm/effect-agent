@@ -25,7 +25,8 @@ Run `vp help` for available commands and `vp <command> --help` for command-speci
 Use these repository commands:
 
 - Install dependencies: `vp install`.
-- Full validation: `vp run check`.
+- Full handoff gate: `vp run ready`.
+- Repository static and export checks: `vp run check`.
 - Static checks: `vp check`.
 - Format check: `vp fmt --check`; format fixes: `vp fmt`.
 - Lint only: `vp lint`; lint fixes: `vp lint --fix`.
@@ -55,8 +56,9 @@ Before editing code:
 7. Inspect neighboring package tests before introducing a new pattern.
 
 Keep user-facing behavior in existing guides, implementation contracts beside the code, and
-regression evidence in tests. Explain change rationale in the pull request. Do not create separate
-specifications, planning documents, decision registers, ADRs, roadmaps, or evidence logs.
+verification evidence in the task or PR artifacts. Explain change rationale in the pull request.
+Do not commit separate specifications, planning documents, decision registers, ADRs, roadmaps,
+or investigation logs to the product repository.
 
 ## Documentation
 
@@ -126,8 +128,8 @@ packages.
 - The root catalog is the single source for the exact Effect v4 version. Do not pin Effect
   independently in a package.
 - After changing an Effect-family version, run `vp install` and `vp run check`.
-- Contributor skills under `.agents/skills` are repo-owned, each tracked by its own
-  `.dev-kit-origin.json` receipt. Check for upstream updates with
+- Contributor skills under `.agents/skills` are repo-owned. Dev Kit copies track their source
+  in a `.dev-kit-origin.json` receipt. Check for upstream updates with
   `bunx @danieljvdm/dev-kit@latest skills status`, and fast-forward an unmodified skill with
   `bunx @danieljvdm/dev-kit@latest skills update <name>`; a skill with local edits is left for an
   agent merge instead of being overwritten. Add a new skill from the approved catalog with
@@ -140,9 +142,9 @@ packages.
 ## Change discipline
 
 - Add or update Effect Schema definitions before implementing new wire or persisted values.
-- Add type tests for inferred `E` and `R` whenever Agent or Effect AI composition changes.
-- Add deterministic tests for every new state transition.
-- Add failpoints before and after every new durable mutation.
+- Use the [simplify skill](.agents/skills/simplify/SKILL.md) to consider removing unnecessary
+  mechanisms within the affected workflow. Preserve public and persisted contracts; complexity
+  alone does not justify unrelated cleanup.
 - Update existing guides or API comments when a change affects their documented behavior.
 - Explain rejected alternatives in the pull request when a future agent could reasonably
   re-propose them.
@@ -155,38 +157,43 @@ packages.
   a short usage example or an explicit BEHAVIOR CHANGE note when consumers must act; keep IDs,
   root-cause, review and test stories, and implementation mechanics in the pull request.
 
-## Test discipline
+## Testing policy
 
-Follow `.agents/skills/testing/SKILL.md`.
+Default to no new tests or test infrastructure. Verify requested behavior with
+existing checks and direct workflow evidence. Prefer E2E for complex features;
+this does not require writing an E2E suite or a larger substitute for a rejected
+unit test. Save a verifiable, repeatable artifact without building reporting
+machinery.
 
-- Every test must protect a plausible regression with an independent observable assertion and
-  distinct coverage beyond its neighbors. Avoid implementation mirrors and redundant smoke tests.
-- Use the cheapest faithful boundary; exercise decision tables over typed results while retaining
-  real wiring, adapter, restart, security and cleanup guarantees in the PR gate.
-- Size loops from quotas, pages, replay horizons or documented scale regressions. Reduced fault
-  sweeps must account for every scenario/location pair and expose new or lost routes.
-- Compare equivalent workloads before claiming savings. Reuse successful checks for unchanged
-  inputs, state the limits of resource assertions and explain material coverage tradeoffs.
+Never write unit tests after implementation. If isolation is necessary, first
+write the scoped failure inventory, then the necessary failing tests, then the
+code. New or expanded committed automation requires a current regression or an
+explicit human test request, plus a concrete gap existing proof cannot cover.
+Being a library does not waive this bar or require tests for every transition.
+
+Load the [testing skill](.agents/skills/testing/SKILL.md) before planning proof
+or adding, retaining, or removing tests. It owns selection, failure-first
+isolation, artifacts, evidence reuse and placement. Keep useful public-contract,
+recovery and authority checks at their strongest boundary; remove redundant
+matrices and implementation mirrors. The final `vp run ready` gate still applies.
+
+Use [open-pull-request](.agents/skills/open-pull-request/SKILL.md) for concise
+PR descriptions. Add diagrams only for meaningful architecture changes and code
+examples only when they clarify the change.
 
 ## Parallel work
 
 Parallel agents must own disjoint packages or documents. Shared domain schemas, error unions,
-journal records, and public exports require one designated integrator. Before merging parallel
-branches, run:
-
-1. `vp run ready`;
-2. adapter contract suites;
-3. generated schema fixture checks;
-4. relevant crash/fault tests.
+journal records, and public exports require one designated integrator.
+Before integrating parallel work, review the combined diff and run
+`vp run ready`. Add focused verification only for a concrete remaining question;
+do not automatically repeat successful adapter, schema or crash suites.
 
 ## Completion standard
 
-A feature is not complete merely because the happy path works. It is complete when:
-
-- its interface, invariants, and error modes are documented;
-- success, expected failure, defect, timeout, and interruption paths are tested;
-- resource finalizers are verified;
-- durable crash points are specified when persistence is involved;
-- security and telemetry behavior are defined;
-- public examples compile;
-- no forbidden dependency crosses into core.
+Finish when the requested observable outcomes have sufficient evidence, relevant
+public contracts and operational limitations are documented, and `vp run ready`
+passes. Choose failure, interruption, resource, recovery and security checks for
+concrete risks in the change; this is not a mandatory scenario matrix. Preserve
+blocked required proof explicitly. A new source file, state transition or public
+API does not imply a new test file.

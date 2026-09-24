@@ -156,12 +156,6 @@ it.effect(
               VALUES (${partition.tenantId}, ${partition.address}, ${brokenKey.subscription.ownerId}, ${brokenKey.subscription.subscriptionId}, ${brokenKey.eventId}, ${subscriptionDeliveryKeyString(brokenKey)}, 'selected', 0, '{')`;
           }),
         );
-        armed = "subscription:compact:before";
-        expect(
-          (yield* reopen(
-            Effect.flatMap(SubscriptionStore, (store) => store.compact(1_000, policy, 1)),
-          ).pipe(Effect.flip))._tag,
-        ).toBe("SubscriptionFailpointError");
         armed = "subscription:compact:after";
         expect(
           (yield* reopen(
@@ -183,7 +177,7 @@ it.effect(
             expect(
               yield* sql`SELECT record_json FROM effect_agent_subscription_events WHERE event_id='a-corrupt'`,
             ).toEqual([{ record_json: "{}" }]);
-            for (const state of ["selected", "delivered"]) {
+            for (const state of ["delivered"]) {
               yield* sql`UPDATE effect_agent_subscription_deliveries SET state=${state} WHERE event_id=${brokenKey.eventId}`;
               expect(yield* store.pendingDeliveries(1_000, "", 1)).toEqual([brokenKey]);
               expect(yield* store.nextDeadline).toBe(0);

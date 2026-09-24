@@ -64,7 +64,6 @@ export default defineConfig({
               compatibilityDate: "2025-05-01",
               compatibilityFlags: ["nodejs_compat"],
               durableObjects: {
-                PROBE: { className: "ProbeDurableObject", useSQLite: true },
                 THREADS: { className: "ThreadStorageObject", useSQLite: true },
                 SCHEDULES: { className: "ScheduleStorageObject", useSQLite: true },
               },

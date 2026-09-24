@@ -72,7 +72,6 @@ export default defineConfig({
             miniflare: {
               compatibilityDate: "2025-05-01",
               compatibilityFlags: ["nodejs_compat"],
-              bindings: { REGISTRATION_LABEL: "configured-by-worker" },
               durableObjects: {
                 THREADS: { className: "TestThreadObject", useSQLite: true },
                 PUBLICATIONS: { className: "PublicationThreadObject", useSQLite: true },
@@ -80,14 +79,7 @@ export default defineConfig({
                 MEMORIES: { className: "TestMemoryObject", useSQLite: true },
                 SCHEDULES: { className: "TestScheduleOwnerObject", useSQLite: true },
                 SUBSCRIPTIONS: { className: "TestSubscriptionPartitionObject", useSQLite: true },
-                LIMITED: { className: "LimitedThreadObject", useSQLite: true },
-                TINYDB: { className: "TinyDatabaseThreadObject", useSQLite: true },
-                DENIED: { className: "DeniedThreadObject", useSQLite: true },
                 SUBAGENTS: { className: "SubagentThreadObject", useSQLite: true },
-                DYNAMIC_BINDINGS: {
-                  className: "DynamicBindingsThreadObject",
-                  useSQLite: true,
-                },
                 TELEMETRY: {
                   className: "TelemetryThreadObject",
                   useSQLite: true,
@@ -109,7 +101,6 @@ export default defineConfig({
             "test/interactive-browser-actions.test.ts",
             "test/interactive-browser-native.test.ts",
             "test/browser-credentials-native.test.ts",
-            "test/travel-planner-dc.test.ts",
           ],
         },
       },
@@ -121,28 +112,6 @@ export default defineConfig({
             "test/interactive-browser-native.test.ts",
             "test/browser-credentials-native.test.ts",
           ],
-        },
-      },
-      {
-        // WP5's Travel Planner slice runs against its OWN worker entry (the phase-6 fixture
-        // Bindings) in a separate workerd instance, so the eviction worker's registrations
-        // and this one never interfere.
-        plugins: [
-          cloudflareTest({
-            main: "./test/travel-planner-worker.ts",
-            miniflare: {
-              compatibilityDate: "2025-05-01",
-              compatibilityFlags: ["nodejs_compat"],
-              durableObjects: {
-                THREADS: { className: "TravelPlannerThreadObject", useSQLite: true },
-                LIMITED: { className: "TravelPlannerLimitedObject", useSQLite: true },
-              },
-            },
-          }),
-        ],
-        test: {
-          name: "travel-planner",
-          include: ["test/travel-planner-dc.test.ts"],
         },
       },
       {

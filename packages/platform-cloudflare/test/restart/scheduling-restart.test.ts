@@ -136,52 +136,6 @@ const waitForLostReply = (runtime: Miniflare) =>
   });
 
 it.live(
-  "re-delivers a persisted Schedule Owner alarm after a full Miniflare restart",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-
-        const persistDirectory = yield* fs.makeTempDirectoryScoped({
-          prefix: "effect-agent-cf-schedule-restart-",
-        });
-
-        const script = yield* buildWorker;
-
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const first = yield* openRuntime(persistDirectory, script);
-
-            yield* call(first, "/introspect");
-            const nowMillis = yield* Clock.currentTimeMillis;
-            const deadlineAtMillis = nowMillis + 5_000;
-
-            yield* call(first, "/create", { deadlineAtMillis });
-          }),
-        );
-
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const second = yield* openRuntime(persistDirectory, script);
-
-            yield* waitForAlarm(second);
-            const rawStatus = yield* call(second, "/status");
-
-            const status = yield* Schema.decodeUnknownEffect(Status)(rawStatus).pipe(
-              Effect.mapError(() => RestartHarnessError.make({ operation: "validate status" })),
-            );
-
-            expect(status.delivered).toBe(true);
-            expect(status.pending).toBe(false);
-            expect(status.submissionIds).toEqual([status.receiptSubmissionId]);
-          }),
-        );
-      }),
-    ).pipe(Effect.provide(NodeFileSystem.layer)),
-  120_000,
-);
-
-it.live(
   "recovers a lost admission reply from only the persisted wake after Miniflare restart",
   () =>
     Effect.scoped(

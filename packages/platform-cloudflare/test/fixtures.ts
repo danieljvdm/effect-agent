@@ -5,7 +5,7 @@ import {
 import { type DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare/do-storage-error";
 import { type DoStorageFailpointHandler } from "@effect-agent/storage-cloudflare/do-storage-failpoint";
 import { evictionFailpointHandler } from "@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing";
-import { type Clock, Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
+import { type Clock, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
@@ -13,13 +13,12 @@ import { estimatePromptTokens } from "effect-agent/compaction";
 import { CompactionError, ContextCompactor } from "effect-agent/context-compactor";
 import { type DurableSubmitOptions } from "effect-agent/durable-agent-runtime";
 import {
-  DurableRuntimeFailpointError,
   type DurableRuntimeFailpointHandler,
   type DurableRuntimeFailpointLocation,
 } from "effect-agent/durable-failpoint";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
+import { ToolExecutionClass } from "effect-agent/durable-step";
 import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import { DefinitionDigestInput, DefinitionDigests, Digest } from "effect-agent/records";
+import { DefinitionDigests, Digest } from "effect-agent/records";
 import { RunToolAuthorization } from "effect-agent/run-options";
 import {
   ScheduleFailpointError,
@@ -29,11 +28,7 @@ import {
 } from "effect-agent/schedule";
 import { scheduleOwnerKey } from "effect-agent/schedule-transition";
 import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
-import {
-  ReconciliationSafeToRetry,
-  ReconciliationUncertain,
-  ToolReconciler,
-} from "effect-agent/tool-reconciler";
+import { ReconciliationUncertain, ToolReconciler } from "effect-agent/tool-reconciler";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { layerFromBindings } from "../src/internal/layers.ts";
@@ -55,9 +50,6 @@ import { pauseWorkerInputInsertion } from "./helpers/worker-input-contention.ts"
 
 const armedStorageEvictions = new Map<string, Array<DoStorageFailpointLocation>>();
 const armedRuntimeEvictions = new Map<string, Array<DurableRuntimeFailpointLocation>>();
-
-/** Typed (thrown, NOT abort) pass failures for the workerd alarm-retry row. */
-export const armedRuntimeFailures = new Map<string, DurableRuntimeFailpointLocation>();
 
 /** Virtual event clocks and a scoped post-claim hold for native alarm deadline evidence. */
 export const unavailableBindingThreads = new Set<string>();
@@ -135,7 +127,7 @@ export const storageEvictionFailpoint = (ctx: DurableObjectState): DoStorageFail
     },
   });
 
-/** Coordinator failpoint factory: armed eviction → `ctx.abort()`; armed failure → typed. */
+/** Coordinator failpoint factory: armed eviction → `ctx.abort()`. */
 export const runtimeEvictionFailpoint =
   (ctx: DurableObjectState): DurableRuntimeFailpointHandler =>
   (location) =>
@@ -153,11 +145,6 @@ export const runtimeEvictionFailpoint =
           () => hold.release ?? Effect.never,
           () => hold.finished,
         );
-      }
-      if (armedRuntimeFailures.get(name) === location) {
-        armedRuntimeFailures.delete(name);
-
-        return Effect.fail(DurableRuntimeFailpointError.make({ location }));
       }
       const queue = armedRuntimeEvictions.get(name);
 
@@ -270,27 +257,6 @@ export const maintenanceRaceFailpoint =
       yield* Effect.promise(() => gate.released);
       maintenancePauseGates.delete(key);
     });
-
-// ---------------------------------------------------------------------------
-// Release gates (sticky; hanging scripted models poll them)
-// ---------------------------------------------------------------------------
-
-const releasedGates = new Set<string>();
-
-export const releaseGate = (ref: string): void => {
-  releasedGates.add(ref);
-};
-
-export const resetGate = (ref: string): void => {
-  releasedGates.delete(ref);
-};
-
-const awaitGate = (ref: string): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    while (!releasedGates.has(ref)) {
-      yield* Effect.sleep(Duration.millis(10));
-    }
-  });
 
 // ---------------------------------------------------------------------------
 // In-memory external supplier store (the never-fabricate reference set)
@@ -421,10 +387,6 @@ export const armScheduleAdmissionPause = (owner: ScheduleOwner) => {
   };
 };
 
-export const armScheduleAdmissionEviction = (owner: ScheduleOwner): void => {
-  scheduleEvictions.set(scheduleOwnerKey(owner), "schedule:admission:after");
-};
-
 export const armScheduleEviction = (owner: ScheduleOwner, point: string): void => {
   scheduleEvictions.set(scheduleOwnerKey(owner), point);
 };
@@ -519,15 +481,6 @@ export const scheduleFailpoint = (ctx: DurableObjectState) => ({
     }),
 });
 
-const schedulePolicyResources = new Map<
-  string,
-  {
-    acquired: number;
-    released: number;
-    fail: boolean;
-  }
->();
-
 export const schedulePrepareHolds = new Map<
   string,
   {
@@ -536,40 +489,9 @@ export const schedulePrepareHolds = new Map<
   }
 >();
 
-export const observeSchedulePolicyResources = (owner: ScheduleOwner) => {
-  const probe = { acquired: 0, released: 0, fail: false };
-
-  schedulePolicyResources.set(scheduleOwnerKey(owner), probe);
-
-  return probe;
-};
-
 export const scheduleAuthorizer = (owner: ScheduleOwner) => {
   // This cached policy acquires no resources during construction. Each operation owns its scope.
-  const scoped = <A, E>(operation: Effect.Effect<A, E>) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const probe = schedulePolicyResources.get(scheduleOwnerKey(owner));
-
-        if (probe === undefined) return yield* operation;
-        yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            probe.acquired += 1;
-          }),
-          () =>
-            Effect.sync(() => {
-              probe.released += 1;
-            }),
-        );
-        if (probe.fail)
-          return yield* ScheduleStorageError.make({
-            operation: "test scoped Schedule policy",
-            reason: "unavailable",
-          });
-
-        return yield* operation;
-      }),
-    );
+  const scoped = <A, E>(operation: Effect.Effect<A, E>) => Effect.scoped(operation);
 
   return {
     manage: () => scoped(Effect.void),
@@ -765,7 +687,6 @@ export const finalParts = (text: string): ReadonlyArray<Response.StreamPartEncod
 
 export const SEARCH_CALL_ID = "search-1";
 export const BOOK_CALL_ID = "book-1";
-export const ITINERARY_CALL_ID = "itinerary-1";
 /** The booking Tool Call identity as the branded type the resolution commands carry. */
 export const BOOK_TOOL_CALL_ID: ToolCallId = Schema.decodeSync(ToolCallId)(BOOK_CALL_ID);
 
@@ -785,17 +706,6 @@ const bookToolCallParts = (ref: string): ReadonlyArray<Response.StreamPartEncode
     type: "tool-call",
     id: BOOK_CALL_ID,
     name: "book",
-    params: { ref },
-    providerExecuted: false,
-  },
-  { type: "finish", reason: "tool-calls", usage },
-];
-
-const itineraryToolCallParts = (ref: string): ReadonlyArray<Response.StreamPartEncoded> => [
-  {
-    type: "tool-call",
-    id: ITINERARY_CALL_ID,
-    name: "itinerary",
     params: { ref },
     providerExecuted: false,
   },
@@ -943,67 +853,6 @@ export const approvalDefinition = Agent.make("cf-book-approval", {
   policy: fixturePolicy,
 });
 
-/** Durable Tool: declaring `DurableStep` as a dependency is what makes it durable. */
-const ItineraryTool = Tool.make("itinerary", {
-  parameters: Schema.Struct({ ref: Schema.String }),
-  success: Schema.Struct({ state: Schema.String }),
-  failure: DurableStepError,
-  dependencies: [DurableStep],
-});
-
-const itineraryTools = Toolkit.make(ItineraryTool);
-
-export const itineraryToolLayer = itineraryTools.toLayer({
-  itinerary: ({ ref }) =>
-    Effect.gen(function* () {
-      yield* Effect.sync(() => recordSupplierCall("itinerary-enter", ref, `enter-${ref}`));
-      const step = yield* DurableStep;
-
-      const flight = yield* step.do(
-        "reserve-flight",
-        Schema.String,
-        Effect.sync(() => {
-          const value = `flight-${ref}`;
-
-          recordSupplierCall("reserve-flight", ref, value);
-
-          return value;
-        }),
-      );
-
-      const lodging = yield* step.do(
-        "reserve-lodging",
-        Schema.String,
-        Effect.sync(() => {
-          const value = `lodging-${ref}`;
-
-          recordSupplierCall("reserve-lodging", ref, value);
-
-          return value;
-        }),
-      );
-
-      return { state: `${flight}+${lodging}` };
-    }),
-});
-
-export const itineraryDefinition = Agent.make("cf-itinerary", {
-  input: FixtureInput,
-  output: FixtureOutput,
-  instructions: ({ ref }) => `Reserve the itinerary. [ref:${ref}]`,
-  toolkit: itineraryTools,
-  policy: fixturePolicy,
-});
-
-/** Host agent whose FIRST model request hangs on the release gate (join/renewal rows). */
-export const joinDefinition = Agent.make("cf-join-host", {
-  input: FixtureInput,
-  output: FixtureOutput,
-  instructions: ({ ref }) => `Search, wait for the gate, and fold in queued input. [ref:${ref}]`,
-  toolkit: searchTools,
-  policy: fixturePolicy,
-});
-
 // ---------------------------------------------------------------------------
 // Models
 // ---------------------------------------------------------------------------
@@ -1078,35 +927,13 @@ const approvalModel = promptAwareModel("cf-book-approval", (promptJson) =>
     : Stream.fromIterable(bookToolCallParts(refFromPrompt(promptJson))),
 );
 
-const itineraryModel = promptAwareModel("cf-itinerary", (promptJson) =>
-  promptJson.includes(ITINERARY_CALL_ID)
-    ? Stream.fromIterable(finalParts(FINAL_ANSWER))
-    : Stream.fromIterable(itineraryToolCallParts(refFromPrompt(promptJson))),
-);
-
-/** First request per committed history: hang on the gate, then declare the search call. */
-const joinModel = promptAwareModel("cf-join-host", (promptJson) =>
-  promptJson.includes(SEARCH_CALL_ID)
-    ? Stream.fromIterable(finalParts(FINAL_ANSWER))
-    : Stream.fromEffectDrain(awaitGate(refFromPrompt(promptJson))).pipe(
-        Stream.concat(Stream.fromIterable(searchToolCallParts)),
-      ),
-);
-
-/**
- * Reconciliation policy for the fixture toolkits (durability §10): the re-enterable Durable
- * Tool `itinerary` is `SafeToRetry` (its Steps replay from their exactly-once records);
- * every ordinary call keeps the fail-closed default answer — no proof means Uncertain, so
- * the `book` rows remain parked with a durable Unknown Outcome until resolution or abort.
- */
+/** Ordinary calls remain uncertain until explicit resolution or abort. */
 export const fixtureReconcilerLayer: Layer.Layer<ToolReconciler> = Layer.succeed(ToolReconciler)({
   reconcile: (evidence) =>
     Effect.sync(() =>
-      evidence.toolName === "itinerary"
-        ? ReconciliationSafeToRetry.make()
-        : ReconciliationUncertain.make({
-            reason: `No proof exists for ${evidence.toolName}; fail closed`,
-          }),
+      ReconciliationUncertain.make({
+        reason: `No proof exists for ${evidence.toolName}; fail closed`,
+      }),
     ),
 });
 
@@ -1145,24 +972,8 @@ export const makeTestBindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> = E
       TEST_DIGESTS,
     ).pipe(Effect.provide(approvalToolLayer));
 
-    const itinerary: ResolvedBinding = yield* DurableWorkerBinding.make(
-      Agent.withModel(itineraryDefinition, itineraryModel),
-      TEST_DIGESTS,
-    ).pipe(Effect.provide(itineraryToolLayer));
-
-    const join: ResolvedBinding = yield* DurableWorkerBinding.make(
-      Agent.withModel(joinDefinition, joinModel),
-      TEST_DIGESTS,
-    ).pipe(Effect.provide(searchToolLayer));
-
-    return [planner, contextCompactor, search, book, approval, itinerary, join];
+    return [planner, contextCompactor, search, book, approval];
   },
 );
 
 export const testRuntimeLayer = Layer.unwrap(Effect.map(makeTestBindings, layerFromBindings));
-
-export const registrationDefinitions = DefinitionDigestInput.make({
-  agent: { id: plannerDefinition.id, revision: 1 },
-  model: { provider: "scripted", name: "cf-planner" },
-  tools: [],
-});

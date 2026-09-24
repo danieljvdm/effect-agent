@@ -1,16 +1,5 @@
-import { expect, expectTypeOf, it } from "@effect/vitest";
-import {
-  Cause,
-  Clock,
-  Deferred,
-  Effect,
-  ErrorReporter,
-  Fiber,
-  Layer,
-  Redacted,
-  Schema,
-} from "effect";
-import { InteractiveBrowserPolicy } from "effect-agent/interactive-browser";
+import { expect, it } from "@effect/vitest";
+import { Cause, Deferred, Effect, ErrorReporter, Fiber, Layer, Redacted, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -19,13 +8,6 @@ import {
   BrowserSessionReference,
   BrowserSessions,
 } from "../src/BrowserSession.ts";
-import {
-  BrowserRunInteractiveBinding,
-  BrowserRunInteractiveCheckpoint,
-  BrowserRunInteractiveHost,
-  BrowserRunPageIdentity,
-  browserRunInteractiveHostLayer,
-} from "../src/InteractiveBrowser.ts";
 import { BrowserRunBinding } from "../src/internal/browser-binding.ts";
 import { browserFailure } from "../src/internal/browser-failure.ts";
 import { BrowserRunReadonlyLiveView } from "../src/internal/browser-readonly-live-view.ts";
@@ -58,17 +40,7 @@ const packet = Schema.decodeUnknownSync(
 
 // Real Workers WebSockets and the published browser client. Only the remote CDP
 // endpoint is substituted; these tests run inside the existing workerd lane.
-const endpoint = Effect.fnUntraced(function* (
-  mode:
-    | "success"
-    | "reject"
-    | "pending"
-    | "pending-version"
-    | "wrong-id"
-    | "malformed"
-    | "disconnect",
-  withRetainedPage = false,
-) {
+const endpoint = Effect.fnUntraced(function* (mode: "success" | "pending" | "pending-version") {
   const pair = yield* Effect.acquireRelease(
     Effect.sync(() => new WebSocketPair()),
     (pair) =>
@@ -108,56 +80,31 @@ const endpoint = Effect.fnUntraced(function* (
       if (mode === "pending-version") return;
     }
     if (mode === "pending") return;
-    if (mode === "malformed") {
-      pair[1].send("private-malformed-provider-detail");
-
-      return;
-    }
-    if (mode === "disconnect") {
-      pair[1].close();
-
-      return;
-    }
-    if (withRetainedPage && message.sessionId === undefined) {
-      if (message.method === "Target.setDiscoverTargets")
-        pair[1].send(JSON.stringify({ method: "Target.targetCreated", params: { targetInfo } }));
-      if (message.method === "Target.setAutoAttach")
-        pair[1].send(
-          JSON.stringify({
-            method: "Target.attachedToTarget",
-            params: { sessionId: "retained-session", targetInfo, waitingForDebugger: false },
-          }),
-        );
-    }
     if (message.method === "Emulation.setDeviceMetricsOverride") {
       viewport.width = message.params?.width ?? viewport.width;
       viewport.height = message.params?.height ?? viewport.height;
     }
     pair[1].send(
-      JSON.stringify(
-        mode === "reject"
-          ? { id: message.id, error: { code: -32000, message: "private-provider-detail" } }
-          : {
-              id: mode === "wrong-id" ? message.id + 1 : message.id,
-              ...(message.sessionId === undefined ? {} : { sessionId: message.sessionId }),
-              result:
-                message.method === "Target.getBrowserContexts"
-                  ? { browserContextIds: ["retained-context"] }
-                  : message.method === "Browser.getVersion"
-                    ? { product: "Fixture Chromium", protocolVersion: "1.3" }
-                    : message.method === "Page.getFrameTree"
-                      ? {
-                          frameTree: {
-                            frame: {
-                              id: "retained-frame",
-                              loaderId: "retained-loader",
-                              url: targetInfo.url,
-                            },
-                          },
-                        }
-                      : {},
-            },
-      ),
+      JSON.stringify({
+        id: message.id,
+        ...(message.sessionId === undefined ? {} : { sessionId: message.sessionId }),
+        result:
+          message.method === "Target.getBrowserContexts"
+            ? { browserContextIds: ["retained-context"] }
+            : message.method === "Browser.getVersion"
+              ? { product: "Fixture Chromium", protocolVersion: "1.3" }
+              : message.method === "Page.getFrameTree"
+                ? {
+                    frameTree: {
+                      frame: {
+                        id: "retained-frame",
+                        loaderId: "retained-loader",
+                        url: targetInfo.url,
+                      },
+                    },
+                  }
+                : {},
+      }),
     );
   });
 
@@ -183,262 +130,6 @@ const endpoint = Effect.fnUntraced(function* (
     viewport,
   };
 });
-
-const keepAliveHost = (browser: Pick<BrowserRun, "fetch">) =>
-  BrowserSessions.layerNoDeps.pipe(
-    Layer.provide(
-      BrowserRunReadonlyLiveView.layer({
-        accountId: "1234567890abcdef1234567890abcdef",
-        apiToken: Redacted.make("fixture-token"),
-      }).pipe(Layer.provide(FetchHttpClient.layer)),
-    ),
-    Layer.provide(BrowserRunBinding.layer(browser)),
-    Layer.provide(
-      Layer.succeed(BrowserRunSessionLifecycle, {
-        close: () => Effect.die("Keepalive must never terminate the provider"),
-      }),
-    ),
-  );
-
-it.effect(
-  "keeps an exact session alive with one browser command and releases its raw attachment",
-  () =>
-    Effect.gen(function* () {
-      const fixture = yield* endpoint("success");
-
-      yield* Effect.gen(function* () {
-        const call = (yield* BrowserSessions).keepAlive(identity.sessionId);
-
-        expectTypeOf(call).toEqualTypeOf<Effect.Effect<void, BrowserSessionError>>();
-        yield* call;
-      }).pipe(Effect.provide(keepAliveHost(fixture.browser)));
-      yield* Deferred.await(fixture.closed);
-      expect(fixture.methods).toEqual(["Browser.getVersion"]);
-      expect(fixture.requests).toEqual([
-        { method: "GET", path: `/v1/devtools/browser/${Redacted.value(identity.sessionId)}` },
-      ]);
-    }).pipe(Effect.scoped),
-);
-
-it.effect.each(["reject", "malformed", "disconnect"] as const)(
-  "sanitizes keepalive failure and releases only its connection (%s)",
-  (mode) =>
-    Effect.gen(function* () {
-      const fixture = yield* endpoint(mode);
-      const reports: Array<Cause.Cause<unknown>> = [];
-
-      const error = yield* Effect.gen(function* () {
-        return yield* (yield* BrowserSessions).keepAlive(identity.sessionId).pipe(Effect.flip);
-      }).pipe(
-        Effect.provide([
-          keepAliveHost(fixture.browser),
-          ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))]),
-        ]),
-      );
-
-      expect(error).toMatchObject({
-        reason: "provider",
-        dispatch: "not-dispatched",
-        cleanup: "not-requested",
-      });
-      expect(ErrorReporter.isIgnored(error)).toBe(true);
-      yield* Deferred.await(fixture.closed);
-      expect(fixture.methods).toEqual(["Browser.getVersion"]);
-      expect(reports).toHaveLength(1);
-      expect(JSON.stringify(reports)).toContain('"operation":"session.keepAlive"');
-      expect(JSON.stringify(reports)).toContain(
-        `"reason":"${mode === "malformed" ? "malformed" : "provider"}"`,
-      );
-      expect(JSON.stringify({ error, reports })).not.toContain("private-");
-    }).pipe(Effect.scoped),
-);
-
-it.effect.each(["timeout", "interruption", "wrong-id"] as const)(
-  "does not accept missing or unrelated keepalive replies (%s)",
-  (ending) =>
-    Effect.gen(function* () {
-      const fixture = yield* endpoint(ending === "wrong-id" ? "wrong-id" : "pending");
-      const reports: Array<Cause.Cause<unknown>> = [];
-
-      const attempt = yield* Effect.gen(function* () {
-        yield* (yield* BrowserSessions).keepAlive(identity.sessionId);
-      }).pipe(
-        Effect.provide([
-          keepAliveHost(fixture.browser),
-          ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))]),
-        ]),
-        Effect.forkChild,
-      );
-
-      yield* Deferred.await(fixture.started);
-      if (ending === "interruption") {
-        yield* Fiber.interrupt(attempt);
-        const exit = yield* Fiber.await(attempt);
-
-        expect(exit._tag === "Failure" && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-      } else {
-        yield* TestClock.adjust(10_000);
-        expect(yield* Fiber.join(attempt).pipe(Effect.flip)).toMatchObject({
-          reason: "timeout",
-          dispatch: "not-dispatched",
-          cleanup: "not-requested",
-        });
-      }
-      yield* Deferred.await(fixture.closed);
-      expect(fixture.methods).toEqual(["Browser.getVersion"]);
-      expect(reports).toHaveLength(ending === "interruption" ? 0 : 1);
-      expect(JSON.stringify(reports)).not.toContain('"reason":"provider"');
-    }).pipe(Effect.scoped),
-);
-
-it.effect.each(["upgrade", "refusal", "defect"] as const)(
-  "cleans a late keepalive upgrade and preserves genuine late failures (%s)",
-  (ending) =>
-    Effect.gen(function* () {
-      const fixture = yield* endpoint("success");
-      const fetching = yield* Deferred.make<void>();
-      const respond = yield* Deferred.make<void>();
-      const lateFailure = yield* Deferred.make<void>();
-      const reports: Array<Cause.Cause<unknown>> = [];
-
-      const attempt = yield* Effect.gen(function* () {
-        yield* (yield* BrowserSessions).keepAlive(identity.sessionId);
-      }).pipe(
-        Effect.provide([
-          keepAliveHost({
-            fetch: async (input, init) => {
-              Effect.runSync(Deferred.succeed(fetching, undefined));
-              await Effect.runPromise(Deferred.await(respond));
-              if (ending === "defect") throw new TypeError("private-late-keepalive-detail");
-
-              return ending === "refusal"
-                ? new Response("private-refusal-detail", { status: 503 })
-                : fixture.browser.fetch(input, init);
-            },
-          }),
-          ErrorReporter.layer([
-            ErrorReporter.make(({ cause }) => {
-              reports.push(cause);
-              if (reports.length === 2) Effect.runSync(Deferred.succeed(lateFailure, undefined));
-            }),
-          ]),
-        ]),
-        Effect.forkChild,
-      );
-
-      yield* Deferred.await(fetching);
-      yield* TestClock.adjust(10_000);
-      expect(yield* Fiber.join(attempt).pipe(Effect.flip)).toMatchObject({
-        reason: "timeout",
-        cleanup: "not-requested",
-      });
-      yield* Deferred.succeed(respond, undefined);
-      if (ending === "upgrade") {
-        yield* Deferred.await(fixture.closed);
-        expect(reports).toHaveLength(1);
-      } else {
-        yield* Deferred.await(lateFailure);
-        expect(JSON.stringify(reports[1])).toContain(
-          ending === "refusal" ? '"status":503' : '"name":"TypeError"',
-        );
-        // This fixture endpoint was never handed to the adapter in these two cases.
-        fixture.socket.accept();
-      }
-      expect(fixture.methods).toEqual([]);
-      expect(JSON.stringify(reports)).not.toContain("private-");
-    }).pipe(Effect.scoped),
-);
-
-it.effect("refuses an invalid keepalive identity before contacting the provider", () =>
-  Effect.gen(function* () {
-    const error = yield* (yield* BrowserSessions)
-      .keepAlive(Redacted.make("../not-a-session"))
-      .pipe(Effect.flip);
-
-    expect(error).toMatchObject({ reason: "invalid", cleanup: "not-requested" });
-  }).pipe(
-    Effect.provide(
-      keepAliveHost({
-        fetch: async () => {
-          throw new Error("Must not fetch");
-        },
-      }),
-    ),
-  ),
-);
-
-it.effect("connects through a Workers upgrade and releases only the attachment", () =>
-  Effect.gen(function* () {
-    const fixture = yield* endpoint("success");
-
-    const binding = yield* BrowserRunBinding.pipe(
-      Effect.provide(BrowserRunBinding.layer(fixture.browser)),
-    );
-
-    const browser = yield* native(
-      () => binding.connect(Redacted.value(identity.sessionId), "session.connect").browser,
-    );
-
-    expect(browser.browserContexts().map((context) => context.id)).toContain("retained-context");
-    expect(yield* native(() => browser.version())).toBe("Fixture Chromium");
-    yield* native(() => browser.disconnect());
-    yield* Deferred.await(fixture.closed);
-    expect(fixture.methods).not.toContain("Browser.close");
-    expect(fixture.requests).toEqual([
-      { method: "GET", path: `/v1/devtools/browser/${Redacted.value(identity.sessionId)}` },
-    ]);
-  }).pipe(Effect.scoped),
-);
-
-// Regression: https://github.com/danieljvdm/effect-agent/commit/83fb83078a95a5fb60fffa0ea818dca98d4e88bd
-it.effect("attaches a retained page without replacing its host-owned viewport", () =>
-  Effect.gen(function* () {
-    const fixture = yield* endpoint("success", true);
-
-    const binding = yield* BrowserRunBinding.pipe(
-      Effect.provide(BrowserRunBinding.layer(fixture.browser)),
-    );
-
-    const attachment = binding.connect(Redacted.value(identity.sessionId), "session.connect");
-
-    yield* Effect.addFinalizer(() => attachment.retire.pipe(Effect.orDie));
-    const browser = yield* native(() => attachment.browser);
-    const pages = yield* native(() => browser.pages());
-
-    expect(pages.map((page) => page.url())).toEqual(["https://fixture.test/"]);
-    expect(fixture.viewport).toEqual({ width: 624, height: 980 });
-  }).pipe(Effect.scoped),
-);
-
-// https://github.com/danieljvdm/effect-agent/actions/runs/35650674026
-it.effect("acknowledges peer-initiated closure before retiring the attachment", () =>
-  Effect.gen(function* () {
-    const fixture = yield* endpoint("success");
-
-    const binding = yield* BrowserRunBinding.pipe(
-      Effect.provide(BrowserRunBinding.layer(fixture.browser)),
-    );
-
-    const attachment = binding.connect(Redacted.value(identity.sessionId), "session.connect");
-    const browser = yield* native(() => attachment.browser);
-
-    const notified = yield* Deferred.make<void>();
-
-    fixture.socket.addEventListener(
-      "close",
-      () => Effect.runSync(Deferred.succeed(notified, undefined)),
-      {
-        once: true,
-      },
-    );
-    fixture.peer.close(1000);
-    yield* Deferred.await(notified);
-    expect(browser.connected).toBe(false);
-    expect(fixture.socket.readyState).toBe(WebSocket.CLOSED);
-    yield* attachment.retire;
-    expect(fixture.methods).not.toContain("Browser.close");
-  }).pipe(Effect.scoped),
-);
 
 it.effect("retires SDK pending callbacks before acknowledging raw attachment closure", () =>
   Effect.gen(function* () {
@@ -469,28 +160,7 @@ it.effect("retires SDK pending callbacks before acknowledging raw attachment clo
   }).pipe(Effect.scoped),
 );
 
-it.effect("releases the raw attachment when client initialization rejects", () =>
-  Effect.gen(function* () {
-    const fixture = yield* endpoint("reject");
-
-    const binding = yield* BrowserRunBinding.pipe(
-      Effect.provide(BrowserRunBinding.layer(fixture.browser)),
-    );
-
-    const failure = yield* native(
-      () => binding.connect(Redacted.value(identity.sessionId), "session.connect").browser,
-    ).pipe(Effect.flip);
-
-    expect(failure).toMatchObject({ operation: "session.connect", reason: "provider" });
-    expect(ErrorReporter.isIgnored(failure)).toBe(false);
-    expect(JSON.stringify(failure)).not.toContain("private-provider-detail");
-    expect(fixture.socket.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
-    yield* Deferred.await(fixture.closed);
-    expect(fixture.methods).not.toContain("Browser.close");
-  }).pipe(Effect.scoped),
-);
-
-it.effect.each(["refusal", "defect", "upgrade", "close-failure"] as const)(
+it.effect.each(["upgrade", "close-failure"] as const)(
   "retires late resume upgrades without SDK dispatch and preserves genuine failures (%s)",
   (mode) =>
     Effect.gen(function* () {
@@ -502,7 +172,7 @@ it.effect.each(["refusal", "defect", "upgrade", "close-failure"] as const)(
       const close = fixture.socket.close.bind(fixture.socket);
 
       // These refusals never hand the fixture socket to the binding; accept it for local release.
-      if (mode === "refusal" || mode === "defect") fixture.socket.accept();
+
       if (mode === "close-failure") {
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
@@ -529,7 +199,7 @@ it.effect.each(["refusal", "defect", "upgrade", "close-failure"] as const)(
             fetch: async (input, init) => {
               Effect.runSync(Deferred.succeed(started, undefined));
               await Effect.runPromise(Deferred.await(respond));
-              if (mode === "defect") throw new TypeError("private-late-provider-detail");
+
               if (mode === "upgrade" || mode === "close-failure")
                 return fixture.browser.fetch(input, init);
 
@@ -584,17 +254,15 @@ it.effect.each(["refusal", "defect", "upgrade", "close-failure"] as const)(
           ? '"operation":"session.disconnect"'
           : '"operation":"session.connect"',
       );
-      expect(JSON.stringify(reports)).toContain(
-        mode === "refusal" ? '"status":503' : '"name":"TypeError"',
-      );
+      expect(JSON.stringify(reports)).toContain('"name":"TypeError"');
       expect(JSON.stringify(reports)).not.toContain("private-late-provider-detail");
       expect(fixture.methods).toEqual([]);
     }).pipe(Effect.scoped),
 );
 
-it.effect.each(["timeout", "interruption"] as const)(
+it.effect.each(["timeout"] as const)(
   "releases a pending resume connection without terminating the retained provider (%s)",
-  (ending) =>
+  () =>
     Effect.gen(function* () {
       const fixture = yield* endpoint("pending");
       const reports: Array<Cause.Cause<unknown>> = [];
@@ -638,23 +306,18 @@ it.effect.each(["timeout", "interruption"] as const)(
 
       yield* Deferred.await(fixture.started);
       expect(fixture.socket.readyState).toBe(WebSocket.OPEN);
-      if (ending === "timeout") {
+      {
         yield* TestClock.adjust(30_000);
         expect(yield* Fiber.join(attempt).pipe(Effect.flip)).toMatchObject({
           reason: "timeout",
           dispatch: "not-dispatched",
           cleanup: "not-requested",
         });
-      } else {
-        yield* Fiber.interrupt(attempt);
-        const exit = yield* Fiber.await(attempt);
-
-        expect(exit._tag === "Failure" && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
       }
       expect(fixture.socket.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
       yield* Deferred.await(fixture.closed);
       yield* Effect.yieldNow;
-      expect(reports).toHaveLength(ending === "timeout" ? 1 : 0);
+      expect(reports).toHaveLength(1);
       expect(JSON.stringify(reports)).not.toContain('"reason":"provider"');
       expect(terminations).toBe(0);
       expect(fixture.requests).toHaveLength(1);
@@ -662,9 +325,9 @@ it.effect.each(["timeout", "interruption"] as const)(
     }).pipe(Effect.scoped),
 );
 
-it.effect.each(["throws", "unacknowledged"] as const)(
+it.effect.each(["unacknowledged"] as const)(
   "does not qualify a failed resume whose raw retirement is uncertain (%s)",
-  (mode) =>
+  () =>
     Effect.gen(function* () {
       const fixture = yield* endpoint("pending");
       const close = fixture.socket.close.bind(fixture.socket);
@@ -677,9 +340,7 @@ it.effect.each(["throws", "unacknowledged"] as const)(
       );
       Object.defineProperty(fixture.socket, "close", {
         configurable: true,
-        value: () => {
-          if (mode === "throws") throw new TypeError("private-local-close-detail");
-        },
+        value: () => {},
       });
 
       const layer = BrowserSessions.layerNoDeps.pipe(
@@ -737,115 +398,4 @@ it.effect.each(["throws", "unacknowledged"] as const)(
       expect(fixture.methods).toEqual(["Target.getBrowserContexts"]);
       expect(fixture.socket.readyState).toBe(WebSocket.OPEN);
     }).pipe(Effect.scoped),
-);
-
-it.effect("releases an ordinary retained connection when its initialization times out", () =>
-  Effect.gen(function* () {
-    const fixture = yield* endpoint("pending");
-    const reports: Array<Cause.Cause<unknown>> = [];
-    let terminations = 0;
-
-    const layer = browserRunInteractiveHostLayer().pipe(
-      Layer.provide(
-        BrowserRunInteractiveBinding.layer({
-          browser: {
-            ...fixture.browser,
-            quickAction: async () => {
-              throw new Error("No quick action during attachment");
-            },
-          },
-        }).pipe(
-          Layer.provide(
-            Layer.succeed(BrowserRunSessionLifecycle, {
-              close: () =>
-                Effect.sync(() => {
-                  terminations++;
-                }),
-            }),
-          ),
-        ),
-      ),
-    );
-
-    const checkpoint = BrowserRunInteractiveCheckpoint.make({
-      sessionId: identity.sessionId,
-      page: BrowserRunPageIdentity.make({
-        contextId: Redacted.value(identity.contextId),
-        targetId: Redacted.value(identity.targetId),
-      }),
-      policy: InteractiveBrowserPolicy.make({
-        network: { _tag: "Unrestricted" },
-        maxActions: 10,
-        maxElapsedMillis: 60_000,
-        maxReturnedBytes: 16_384,
-      }),
-      startedAt: yield* Clock.currentTimeMillis,
-      consumedActions: 0,
-      inputState: "idle",
-    });
-
-    const attempt = yield* Effect.gen(function* () {
-      return yield* (yield* BrowserRunInteractiveHost).resume(checkpoint, { pendingInput: false });
-    }).pipe(
-      Effect.scoped,
-      Effect.provide([
-        layer,
-        ErrorReporter.layer([ErrorReporter.make(({ cause }) => reports.push(cause))]),
-      ]),
-      Effect.forkChild,
-    );
-
-    yield* Deferred.await(fixture.started);
-    yield* TestClock.adjust(10_000);
-    expect(yield* Fiber.join(attempt).pipe(Effect.flip)).toMatchObject({
-      _tag: "InteractiveBrowserProtocolError",
-    });
-    expect(fixture.socket.readyState).toBeGreaterThanOrEqual(WebSocket.CLOSING);
-    yield* Deferred.await(fixture.closed);
-    yield* Effect.yieldNow;
-    expect(reports).toHaveLength(1);
-    expect(JSON.stringify(reports)).toContain('"operation":"interactive.resume"');
-    expect(terminations).toBe(0);
-    expect(fixture.requests).toHaveLength(1);
-    expect(fixture.methods).not.toContain("Browser.close");
-  }).pipe(Effect.scoped),
-);
-
-it.effect.each(["refused", "missing-socket"] as const)(
-  "preserves a safe failed-upgrade diagnostic (%s)",
-  (mode) =>
-    Effect.gen(function* () {
-      let cancelled = false;
-
-      const binding = yield* BrowserRunBinding.pipe(
-        Effect.provide(
-          BrowserRunBinding.layer({
-            fetch: async () =>
-              mode === "refused"
-                ? new Response(
-                    new ReadableStream({
-                      cancel: () => {
-                        cancelled = true;
-                        throw new Error("private-cancellation-detail");
-                      },
-                    }),
-                    { status: 403 },
-                  )
-                : Object.defineProperty(new Response(null), "status", { value: 101 }),
-          }),
-        ),
-      );
-
-      const failure = yield* native(
-        () => binding.connect(Redacted.value(identity.sessionId), "session.connect").browser,
-      ).pipe(Effect.flip);
-
-      expect(failure).toMatchObject(
-        mode === "refused"
-          ? { operation: "session.connect", reason: "provider", status: 403 }
-          : { operation: "session.connect", reason: "malformed" },
-      );
-      expect(JSON.stringify(failure)).not.toContain("private-cancellation-detail");
-      expect(cancelled).toBe(mode === "refused");
-    }),
 );

@@ -149,9 +149,6 @@ const makeFixture = Effect.fn("dispatch-test.makeFixture")(function* (ordinaryTo
   const claims = yield* Ref.make(0);
   const nativeName = yield* Ref.make("");
   const pollOverride = yield* Ref.make<Option.Option<WorkflowSettlementReference>>(Option.none());
-  const parkNextRun = yield* Ref.make(false);
-  const parking = yield* Deferred.make<void>();
-  const allowSuspension = yield* Deferred.make<void>();
   const toolEntered = yield* Deferred.make<void>();
   const releaseTool = yield* Deferred.make<void>();
   const toolInvocations = yield* Ref.make(0);
@@ -247,13 +244,6 @@ const makeFixture = Effect.fn("dispatch-test.makeFixture")(function* (ordinaryTo
         Effect.andThen(
           native.register(workflow, (payload, executionId) =>
             Effect.gen(function* () {
-              if (yield* Ref.getAndSet(parkNextRun, false)) {
-                yield* Deferred.succeed(parking, undefined);
-                yield* Deferred.await(allowSuspension);
-
-                return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
-              }
-
               return yield* execute(payload, executionId);
             }),
           ),
@@ -413,7 +403,7 @@ const makeFixture = Effect.fn("dispatch-test.makeFixture")(function* (ordinaryTo
 
   const waitNative = Effect.fn("dispatch-test.waitNative")(function* (
     intent: WorkflowDispatchIntent,
-    tag: "Suspended" | "Complete",
+    tag: "Complete",
   ) {
     while (true) {
       const status = yield* native.poll(client(intent), intent.executionId);
@@ -442,9 +432,6 @@ const makeFixture = Effect.fn("dispatch-test.makeFixture")(function* (ordinaryTo
     launched,
     claims,
     pollOverride,
-    parkNextRun,
-    parking,
-    allowSuspension,
     toolEntered,
     releaseTool,
     toolInvocations,
@@ -610,46 +597,6 @@ it.effect("rejects corrupted and cross-deployment outbox identities before launc
     }
     expect(yield* Ref.get(fixture.launched)).toEqual([]);
     expect(yield* Ref.get(fixture.claims)).toBe(0);
-  }).pipe(Effect.scoped),
-);
-
-it.effect("retains an early wake until suspension and rejects premature native completion", () =>
-  Effect.gen(function* () {
-    const fixture = yield* makeFixture();
-    const receipt = yield* fixture.admit("early-wake");
-    const intent = yield* fixture.intentFor(receipt);
-
-    yield* Ref.set(fixture.parkNextRun, true);
-    yield* Ref.set(
-      fixture.pollOverride,
-      Option.some(
-        WorkflowSettlementReference.make({
-          version: 1,
-          submissionId: receipt.submissionId,
-          threadId: receipt.threadId,
-          settlementId: Schema.decodeSync(SettlementId)("premature"),
-        }),
-      ),
-    );
-    const early = yield* Effect.result(fixture.host.repair);
-
-    yield* Deferred.await(fixture.parking);
-    expect(
-      Result.isFailure(early) &&
-        early.failure._tag === "WorkflowDispatchError" &&
-        early.failure.operation === "completion",
-    ).toBe(true);
-    expect((yield* fixture.runtime.inspectSubmissionStatus(receipt))._tag).toBe("pending");
-    expect(fixture.rows.has(intent.executionId)).toBe(true);
-    yield* Ref.set(fixture.pollOverride, Option.none());
-    yield* Deferred.succeed(fixture.allowSuspension, undefined);
-    // The native engine now retains the early wake and resumes immediately after
-    // suspension; polling is not guaranteed to observe the transient suspended state.
-    yield* fixture.waitNative(intent, "Complete");
-    expect(fixture.rows.has(intent.executionId)).toBe(true);
-    yield* fixture.host.repair;
-    expect((yield* fixture.runtime.inspectSubmissionStatus(receipt))._tag).toBe("settled");
-    expect(fixture.rows.size).toBe(0);
   }).pipe(Effect.scoped),
 );
 

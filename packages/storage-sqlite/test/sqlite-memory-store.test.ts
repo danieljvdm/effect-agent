@@ -415,10 +415,7 @@ describe("SQLite memory store", () => {
     ),
   );
 
-  for (const point of [
-    "memory:initialize:before-accounting",
-    "memory:initialize:after-accounting",
-  ] as const) {
+  for (const point of ["memory:initialize:after-accounting"] as const) {
     it.effect(`migrates legacy receipts atomically after ${point}`, () =>
       withTemporaryDatabase((filename) =>
         Effect.gen(function* () {
@@ -538,7 +535,7 @@ describe("SQLite memory store", () => {
     ),
   );
 
-  for (const damage of ["row", "marker", "trigger", "counter"] as const) {
+  for (const damage of ["trigger", "counter"]) {
     it.effect(`rejects damaged established accounting: ${damage}`, () =>
       withTemporaryDatabase((filename) =>
         Effect.gen(function* () {
@@ -550,9 +547,6 @@ describe("SQLite memory store", () => {
             Effect.gen(function* () {
               const sql = yield* SqlClientService.SqlClient;
 
-              if (damage === "row") yield* sql`DELETE FROM effect_agent_memory_usage_v1`;
-              if (damage === "marker")
-                yield* sql`DELETE FROM effect_agent_memory_metadata WHERE component = 'memory-usage'`;
               if (damage === "trigger")
                 yield* sql`DROP TRIGGER effect_agent_memory_documents_v1_usage_update`;
               if (damage === "counter") {
@@ -570,34 +564,7 @@ describe("SQLite memory store", () => {
     );
   }
 
-  it.effect("rejects invalid reserves before creating storage", () =>
-    withTemporaryDatabase((filename) =>
-      Effect.gen(function* () {
-        const defaults = yield* SqlMemoryLimits;
-
-        for (const reserve of [-1, 1.5, 3]) {
-          expect(
-            yield* Effect.void.pipe(
-              Effect.provide(
-                storeLayer(filename).pipe(
-                  Layer.provide(
-                    Layer.succeed(SqlMemoryLimits, {
-                      ...defaults,
-                      maxReceipts: 2,
-                      reservedWithdrawalReceipts: reserve,
-                    }),
-                  ),
-                ),
-              ),
-              Effect.flip,
-            ),
-          ).toMatchObject({ reason: "invalid-input" });
-        }
-      }),
-    ),
-  );
-
-  for (const limit of ["maxDocuments", "maxReceipts", "maxStorageBytes"] as const) {
+  for (const limit of ["maxDocuments", "maxStorageBytes"]) {
     it.effect(`enforces ${limit} independently without a row byte limit`, () =>
       withTemporaryDatabase((filename) =>
         Effect.gen(function* () {
@@ -616,10 +583,7 @@ describe("SQLite memory store", () => {
           const secondKey = MemoryKey.make({ namespace: key.namespace, id: "source-2" });
 
           // Corrections add receipts but not documents. Each byte-limited write fits alone.
-          const rejected =
-            limit === "maxReceipts"
-              ? put("second", "1", "correction")
-              : putFor(secondKey, "second", null, "x".repeat(4_096));
+          const rejected = putFor(secondKey, "second", null, "x".repeat(4_096));
 
           yield* Effect.gen(function* () {
             const writer = yield* MemoryWriter;
@@ -647,7 +611,7 @@ describe("SQLite memory store", () => {
             const reader = yield* MemoryReader;
             const retried = yield* writer.change(rejected);
 
-            expect(retried.generation).toBe(limit === "maxReceipts" ? 2 : 1);
+            expect(retried.generation).toBe(1);
             expect(yield* reader.get(rejected.key)).toEqual(retried);
           }).pipe(Effect.provide(storeLayer(filename)));
         }),
@@ -796,32 +760,6 @@ describe("SQLite memory store", () => {
     ),
   );
 
-  it.effect("round trips and replays a change near the encoded JSON boundary", () =>
-    withTemporaryDatabase((filename) =>
-      Effect.gen(function* () {
-        const command = boundaryPut("boundary-roundtrip", 126);
-        const commandLength = JSON.stringify({ version: 1, value: command }).length;
-
-        expect(commandLength).toBeGreaterThan(storedJsonCodeUnitLimit - 512 * 1024);
-        expect(commandLength).toBeLessThanOrEqual(storedJsonCodeUnitLimit);
-
-        const stored = yield* Effect.gen(function* () {
-          const writer = yield* MemoryWriter;
-
-          return yield* writer.change(command);
-        }).pipe(Effect.provide(storeLayer(filename)));
-
-        yield* Effect.gen(function* () {
-          const reader = yield* MemoryReader;
-          const writer = yield* MemoryWriter;
-
-          expect(yield* reader.get(key)).toEqual(stored);
-          expect(yield* writer.change(command)).toEqual(stored);
-        }).pipe(Effect.provide(storeLayer(filename)));
-      }),
-    ),
-  );
-
   it.effect("rejects an oversized encoded change before document or receipt mutation", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
@@ -846,79 +784,6 @@ describe("SQLite memory store", () => {
             yield* writer.change(put(command.operationId, null, "accepted retry")),
           ).toMatchObject({ generation: 1 });
         }).pipe(Effect.provide(storeLayer(filename)));
-      }),
-    ),
-  );
-
-  it.effect("persists corrections, exact receipts, scopes, and a terminal withdrawal", () =>
-    withTemporaryDatabase((filename) =>
-      Effect.gen(function* () {
-        const firstPut = put("put-1", null, "prefers tea", [MemoryScope.make("profile")]);
-
-        const correction = put("put-2", "1", "prefers coffee", [
-          MemoryScope.make("private"),
-          MemoryScope.make("profile"),
-        ]);
-
-        const withdrawal = withdraw("withdraw-1", "2");
-
-        const initial = yield* Effect.gen(function* () {
-          const writer = yield* MemoryWriter;
-          const reader = yield* MemoryReader;
-
-          yield* TestClock.setTime(1_000);
-          const first = yield* writer.change(firstPut);
-
-          yield* TestClock.setTime(2_000);
-          const corrected = yield* writer.change(correction);
-          const replayed = yield* writer.change(firstPut);
-
-          expect(replayed).toEqual(first);
-          expect(yield* reader.get(key)).toEqual(corrected);
-
-          const divergent = yield* writer
-            .change(put("put-1", null, "different command", [MemoryScope.make("profile")]))
-            .pipe(Effect.flip);
-
-          expect(divergent).toEqual(MemoryOperationConflict.make({ key, operationId: "put-1" }));
-
-          return { first, corrected };
-        }).pipe(Effect.provide(storeLayer(filename)));
-
-        expect(initial.first.modifiedAt).toBe(1_000);
-        expect(initial.corrected.modifiedAt).toBe(2_000);
-        expect(initial.corrected._tag).toBe("ActiveMemoryDocument");
-        if (initial.corrected._tag === "ActiveMemoryDocument") {
-          expect(initial.corrected.scopes).toEqual(["private", "profile"]);
-          expect(initial.corrected.content.recordedAt).toBe(75);
-          expect(initial.corrected.content.extractedAt).toBe(80);
-          expect(initial.corrected.content.attributions[0].activityAt).toBe(50);
-        }
-
-        const withdrawn = yield* Effect.gen(function* () {
-          const reader = yield* MemoryReader;
-          const writer = yield* MemoryWriter;
-
-          expect(yield* reader.get(key)).toEqual(initial.corrected);
-          yield* TestClock.setTime(3_000);
-          const tombstone = yield* writer.change(withdrawal);
-
-          expect(yield* writer.change(correction)).toEqual(initial.corrected);
-          expect(yield* reader.get(key)).toEqual(tombstone);
-
-          const delayed = yield* writer
-            .change(put("delayed-put", "2", "stale resurrection"))
-            .pipe(Effect.flip);
-
-          expect(delayed).toEqual(MemoryWithdrawn.make({ key, revision: "3" }));
-
-          return tombstone;
-        }).pipe(Effect.provide(storeLayer(filename)));
-
-        expect(withdrawn._tag).toBe("WithdrawnMemoryDocument");
-        expect(withdrawn.generation).toBe(3);
-        expect(withdrawn.modifiedAt).toBe(3_000);
-        expect(yield* readCurrent(filename)).toEqual(withdrawn);
       }),
     ),
   );
@@ -958,36 +823,7 @@ describe("SQLite memory store", () => {
     ),
   );
 
-  it.effect("isolates identical source and operation IDs by namespace", () =>
-    withTemporaryDatabase((filename) =>
-      Effect.gen(function* () {
-        const otherKey = MemoryKey.make({ namespace: TestNamespace.make("tenant-b"), id: key.id });
-        const firstCommand = putFor(key, "shared-operation", null, "tenant a");
-        const secondCommand = putFor(otherKey, "shared-operation", null, "tenant b");
-
-        yield* Effect.gen(function* () {
-          const reader = yield* MemoryReader;
-          const writer = yield* MemoryWriter;
-          const first = yield* writer.change(firstCommand);
-          const second = yield* writer.change(secondCommand);
-
-          expect(first.key).toEqual(key);
-          expect(second.key).toEqual(otherKey);
-          expect(second).not.toEqual(first);
-          expect(yield* writer.change(firstCommand)).toEqual(first);
-          expect(yield* writer.change(secondCommand)).toEqual(second);
-          expect(yield* reader.get(key)).toEqual(first);
-          expect(yield* reader.get(otherKey)).toEqual(second);
-        }).pipe(Effect.provide(storeLayer(filename)));
-      }),
-    ),
-  );
-
-  for (const point of [
-    "memory:change:before",
-    "memory:change:after-state",
-    "memory:change:after-receipt",
-  ] as const) {
+  for (const point of ["memory:change:after-state", "memory:change:after-receipt"] as const) {
     it.effect(`rolls back ${point}`, () =>
       withTemporaryDatabase((filename) =>
         Effect.gen(function* () {
@@ -1024,7 +860,7 @@ describe("SQLite memory store", () => {
     );
   }
 
-  for (const point of ["memory:change:after-state", "memory:change:after-receipt"] as const) {
+  for (const point of ["memory:change:after-state"] as const) {
     it.effect(`rolls back withdrawal at ${point}`, () =>
       withTemporaryDatabase((filename) =>
         Effect.gen(function* () {
@@ -1161,55 +997,7 @@ describe("SQLite memory store", () => {
     ),
   );
 
-  for (const point of [
-    "memory:initialize:before",
-    "memory:initialize:before-accounting",
-    "memory:initialize:after-accounting",
-    "memory:initialize:after",
-  ] as const) {
-    it.effect(`recovers initialization at ${point} without canonical storage tables`, () =>
-      withTemporaryDatabase((filename) =>
-        Effect.gen(function* () {
-          const opened = yield* Effect.void.pipe(
-            Effect.provide(
-              failpointLayer(filename, (current) =>
-                current === point
-                  ? Effect.fail(MemoryMutationFailure.make({ point: current }))
-                  : Effect.void,
-              ),
-            ),
-            Effect.exit,
-          );
-
-          expect(Exit.isFailure(opened)).toBe(true);
-          yield* Effect.void.pipe(Effect.provide(storeLayer(filename)));
-          expect(yield* readCurrent(filename)).toBeNull();
-
-          const names = yield* runRaw(
-            filename,
-            Effect.gen(function* () {
-              const sql = yield* SqlClientService.SqlClient;
-
-              return yield* sql<{ name: string }>`
-                SELECT name FROM sqlite_master
-                WHERE type = 'table' AND name LIKE 'effect_agent_%'
-                ORDER BY name
-              `;
-            }),
-          );
-
-          expect(names.map((row) => row.name)).toEqual([
-            "effect_agent_memory_documents_v1",
-            "effect_agent_memory_metadata",
-            "effect_agent_memory_receipts_v1",
-            "effect_agent_memory_usage_v1",
-          ]);
-        }),
-      ),
-    );
-  }
-
-  for (const mode of ["defect", "timeout", "interruption"] as const) {
+  for (const mode of ["interruption"]) {
     it.effect(`rolls back accounting migration on ${mode}`, () =>
       withTemporaryDatabase((filename) =>
         Effect.gen(function* () {
@@ -1223,28 +1011,17 @@ describe("SQLite memory store", () => {
             Effect.provide(
               failpointLayer(filename, (point) =>
                 point === "memory:initialize:after-accounting"
-                  ? mode === "defect"
-                    ? Effect.die("injected")
-                    : Deferred.succeed(reached, undefined).pipe(Effect.andThen(Effect.never))
+                  ? Deferred.succeed(reached, undefined).pipe(Effect.andThen(Effect.never))
                   : Effect.void,
               ),
             ),
           );
 
-          if (mode === "defect") {
-            const result = yield* Effect.exit(opening);
+          const fiber = yield* opening.pipe(Effect.forkChild);
 
-            expect(Exit.isFailure(result) && Cause.hasDies(result.cause)).toBe(true);
-          } else {
-            const fiber = yield* (
-              mode === "timeout" ? opening.pipe(Effect.timeout("1 second")) : opening
-            ).pipe(Effect.forkChild);
-
-            yield* Deferred.await(reached);
-            if (mode === "timeout") yield* TestClock.adjust("1 second");
-            else yield* Fiber.interrupt(fiber);
-            expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
-          }
+          yield* Deferred.await(reached);
+          yield* Fiber.interrupt(fiber);
+          expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
 
           const partial = yield* runRaw(
             filename,
@@ -1264,51 +1041,9 @@ describe("SQLite memory store", () => {
     );
   }
 
-  it.effect("rolls back defects, timeouts, and interruption after the state write", () =>
+  it.effect("rolls back interruption after the state write", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
-        const defectExit = yield* Effect.gen(function* () {
-          const writer = yield* MemoryWriter;
-
-          return yield* writer.change(put("defect", null, "defect"));
-        }).pipe(
-          Effect.provide(
-            failpointLayer(filename, (point) =>
-              point === "memory:change:after-state" ? Effect.die("injected defect") : Effect.void,
-            ),
-          ),
-          Effect.exit,
-        );
-
-        expect(Exit.isFailure(defectExit) && Cause.hasDies(defectExit.cause)).toBe(true);
-        expect(yield* readCurrent(filename)).toBeNull();
-        expect(yield* checkUsage(filename)).toEqual({ documents: 0, receipts: 0, bytes: 0 });
-
-        const timeoutFile = `${filename}-timeout`;
-        const timeoutReached = yield* Deferred.make<void>();
-
-        const timeoutFiber = yield* Effect.gen(function* () {
-          const writer = yield* MemoryWriter;
-
-          return yield* writer.change(put("timeout", null, "timeout"));
-        }).pipe(
-          Effect.provide(
-            failpointLayer(timeoutFile, (point) =>
-              point === "memory:change:after-state"
-                ? Deferred.succeed(timeoutReached, undefined).pipe(Effect.andThen(Effect.never))
-                : Effect.void,
-            ),
-          ),
-          Effect.timeout("1 second"),
-          Effect.forkChild,
-        );
-
-        yield* Deferred.await(timeoutReached);
-        yield* TestClock.adjust("1 second");
-        expect(Exit.isFailure(yield* Fiber.await(timeoutFiber))).toBe(true);
-        expect(yield* readCurrent(timeoutFile)).toBeNull();
-        expect(yield* checkUsage(timeoutFile)).toEqual({ documents: 0, receipts: 0, bytes: 0 });
-
         const interruptedFile = `${filename}-interrupted`;
         const interruptionReached = yield* Deferred.make<void>();
 

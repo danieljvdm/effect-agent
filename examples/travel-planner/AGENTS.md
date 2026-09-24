@@ -8,8 +8,8 @@ API that could be safer, simpler, or harder to misuse.
   provider behavior. State uncertainty when the cause is not yet confirmed.
 - Explain the concrete failure, the relevant library boundary, and a possible
   improvement. Do not silently hide a library problem behind an app workaround.
-- Fix reusable framework defects in separate library PRs with focused regression
-  coverage and changesets. Keep library source changes out of the demo PR.
+- Fix reusable framework defects in separate library PRs with sufficient verification
+  under the root testing policy and changesets. Keep library source changes out of the demo PR.
 - Consume exact published npm versions of Effect Agent. Do not use workspace
   links, source aliases, or local library patches to make the demo pass. If a
   required fix is unreleased, identify the library PR and wait for its release

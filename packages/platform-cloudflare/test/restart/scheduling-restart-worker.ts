@@ -26,15 +26,6 @@ import {
   plannerDefinition,
 } from "../fixtures.ts";
 
-declare global {
-  namespace Cloudflare {
-    interface Env {
-      RESTART_THREADS: DurableObjectNamespace<SchedulingRestartThread>;
-      RESTART_SCHEDULES: DurableObjectNamespace<SchedulingRestartOwner>;
-    }
-  }
-}
-
 const threadOptions: ThreadObject.Options = {
   namespaceBinding: "RESTART_THREADS",
   deploymentId: DEPLOYMENT_ID,
@@ -195,3 +186,12 @@ export default {
     );
   },
 };
+
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      RESTART_THREADS: DurableObjectNamespace<SchedulingRestartThread>;
+      RESTART_SCHEDULES: DurableObjectNamespace<SchedulingRestartOwner>;
+    }
+  }
+}

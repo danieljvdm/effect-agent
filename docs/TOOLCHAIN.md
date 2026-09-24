@@ -123,7 +123,7 @@ CI gives the travel planner, context-continuity evaluation, runtime benchmark, N
 testing package, and both Cloudflare packages separate runners. The remaining workspace suites
 share one runner and run sequentially. Each suite keeps its own Vitest/workerd worker limits;
 running more heavy suites on one runner can starve ownership-lease renewals in crash tests.
-Builds follow dependency order. Process-kill, soak, and adapter contract suites are part of
+Builds follow dependency order. Process-kill and adapter contract suites are part of
 the ordinary test command.
 
 Vite Task caches successful results against their inputs. Vitest's mutable result cache is
@@ -138,12 +138,6 @@ module type, and dependency declarations also affect execution.
 
 Use `vp run -v test` for cache decisions, `vp run --last-details` for the previous run,
 or `vp run --no-cache test` to rerun every suite.
-
-## Storage certification reports
-
-The repository runs the same certification against memory, SQLite, and Cloudflare adapters. Set
-`EFFECT_AGENT_CERTIFICATION_OUT` in a Node certification test to write a local schema-encoded
-report. Set `PRINT_REPORT` in the Cloudflare test file to print its workerd report.
 
 ## Documentation examples
 
@@ -275,7 +269,7 @@ Package scripts use Bun through `vp run`.
 Scripts that import `@effect-agent/storage-sqlite` continue to use
 `node --experimental-transform-types` to exercise the Node host runtime.
 Strip-only execution cannot handle the framework's runtime namespaces.
-This includes `admin:durable` and the Node crash/soak workers.
+This includes `admin:durable` and the Node crash workers.
 
 ## Post-install setup
 

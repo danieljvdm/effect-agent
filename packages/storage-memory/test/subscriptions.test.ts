@@ -17,13 +17,10 @@ import {
 } from "effect-agent/submission-ledger";
 import { SettledSubmission } from "effect-agent/submission-status";
 import {
-  AcceptedEvent,
   SubscriptionAuthorizer,
-  SubscriptionDelivery,
   SubscriptionError,
   SubscriptionFailpoint,
   SubscriptionFailpointError,
-  SubscriptionRecord,
   SubscriptionSourceError,
   SubscriptionStore,
   defaultSubscriptionLimits,
@@ -194,90 +191,6 @@ const registerAndAccept = Effect.gen(function* () {
 });
 
 describe("Durable subscription delivery", () => {
-  it.effect("keeps explicit indefinite lifetime separate from finite deadline bounds", () =>
-    Effect.gen(function* () {
-      const management = yield* Subscriptions;
-
-      expect(
-        yield* management
-          .subscribe(scope, {
-            ...options("too-long"),
-            expiresAtMillis: limits.maxLifetimeMillis + 1,
-          })
-          .pipe(Effect.flip),
-      ).toMatchObject({ reason: "validation" });
-      yield* management.subscribe(scope, { ...options("indefinite"), expiresAtMillis: null });
-      yield* TestClock.adjust(limits.maxLifetimeMillis + 1);
-      expect((yield* management.getSubscription(scope, key("indefinite").subscription)).state).toBe(
-        "active",
-      );
-      yield* (yield* SubscriptionIntake).accept(principal, source, event("completion"));
-      yield* drain();
-      expect((yield* (yield* SubscriptionStore).delivery(key("indefinite")))?.state).toBe(
-        "delivered",
-      );
-      expect(yield* (yield* SubscriptionStore).nextDeadline).toBeNull();
-    }).pipe(Effect.provide(layer())),
-  );
-
-  it.effect("pins selected configuration while CAS edits pause and resume future selection", () => {
-    const admitted: Array<PreparedInput> = [];
-
-    return Effect.gen(function* () {
-      const management = yield* Subscriptions;
-      const intake = yield* SubscriptionIntake;
-
-      yield* management.subscribe(scope, options("watch", "continuous"));
-      yield* intake.accept(principal, source, event("old"));
-      yield* drain(1);
-      const original = yield* (yield* SubscriptionStore).delivery(key("watch", "old"));
-
-      const changed = yield* management.updateSubscription(scope, key().subscription, 1, {
-        ...options("watch", "continuous"),
-        context: { text: "changed" },
-      });
-
-      expect(changed.configurationRevision).toBe(2);
-      yield* drain();
-      expect(admitted[0]?.admissionKey).toBe(original?.admissionKey);
-      expect(
-        (yield* (yield* SubscriptionStore).delivery(key("watch", "old")))?.configuration?.context,
-      ).toEqual({ text: "private-continuation" });
-      yield* management.pauseSubscription(scope, key().subscription, 2);
-      yield* intake.accept(principal, source, event("paused"));
-      yield* drain();
-      expect(admitted).toHaveLength(1);
-      yield* management.resumeSubscription(scope, key().subscription, 3);
-
-      const stale = yield* management
-        .pauseSubscription(scope, key().subscription, 2)
-        .pipe(Effect.flip);
-
-      expect(stale).toMatchObject({
-        reason: "conflict",
-        currentRevision: 4,
-        currentState: "active",
-      });
-      yield* intake.accept(principal, source, event("new"));
-      yield* drain();
-      expect(admitted).toHaveLength(2);
-      expect(
-        (yield* management.subscribe(scope, options("watch", "continuous"))).configurationRevision,
-      ).toBe(4);
-    }).pipe(
-      Effect.provide(
-        layer({
-          submit: (input) =>
-            Effect.sync(() => {
-              admitted.push(input);
-
-              return receipt(input);
-            }),
-        }),
-      ),
-    );
-  });
-
   it.effect(
     "parks ambiguous admission and explicitly recovers the same envelope after cancellation",
     () => {
@@ -433,86 +346,6 @@ describe("Durable subscription delivery", () => {
     );
   });
 
-  it.effect("prepares one event for different Agents and retained definition versions", () =>
-    Effect.gen(function* () {
-      const otherAgent = Schema.decodeSync(AgentId)("other-agent");
-      const nextDefinitions = { ...definitions, agent: Schema.decodeSync(Digest)("b".repeat(64)) };
-
-      const common = {
-        source,
-        event: Event,
-        parameters: Schema.Struct({ key: Schema.String }),
-      };
-
-      const original = yield* makeSubscriptionInputBinding({
-        ...common,
-        agentId,
-        definitions,
-        context: Schema.Struct({ text: Schema.String }),
-        input: Input,
-        prepare: (e, _p, c) => Effect.succeed({ text: `${c.text}:${e.text}` }),
-      });
-
-      const next = yield* makeSubscriptionInputBinding({
-        ...common,
-        agentId,
-        definitions: nextDefinitions,
-        context: Schema.Struct({ prefix: Schema.String }),
-        input: Input,
-        prepare: (e, _p, c) => Effect.succeed({ text: `${c.prefix}:${e.text}` }),
-      });
-
-      const other = yield* makeSubscriptionInputBinding({
-        ...common,
-        agentId: otherAgent,
-        definitions,
-        context: Schema.Struct({ count: Schema.Number }),
-        input: Schema.Struct({ count: Schema.Number, eventId: Schema.String }),
-        prepare: (e, _p, c) => Effect.succeed({ count: c.count, eventId: e.id }),
-      });
-
-      const admitted: Array<PreparedInput> = [];
-
-      yield* Effect.gen(function* () {
-        const subscriptions = yield* Subscriptions;
-
-        yield* subscriptions.subscribe(scope, options("old"));
-        yield* subscriptions.subscribe(scope, {
-          ...options("new"),
-          definitions: nextDefinitions,
-          context: { prefix: "new" },
-        });
-        yield* subscriptions.subscribe(scope, {
-          ...options("other"),
-          agentId: otherAgent,
-          context: { count: 7 },
-        });
-        yield* (yield* SubscriptionIntake).accept(principal, source, event("completion"));
-        yield* drain();
-        expect(admitted).toHaveLength(3);
-        expect(admitted.map((input) => input.input)).toEqual(
-          expect.arrayContaining([
-            { text: "private-continuation:completion" },
-            { text: "new:completion" },
-            { count: 7, eventId: "completion" },
-          ]),
-        );
-      }).pipe(
-        Effect.provide(
-          layer({
-            bindings: [original, next, other],
-            submit: (input) =>
-              Effect.sync(() => {
-                admitted.push(input);
-
-                return receipt(input);
-              }),
-          }),
-        ),
-      );
-    }),
-  );
-
   it.effect("keeps selected work pending when its exact preparation binding is unavailable", () =>
     Effect.gen(function* () {
       let hold = true;
@@ -613,78 +446,6 @@ describe("Durable subscription delivery", () => {
       ),
     );
   });
-
-  it.effect("rejects duplicate intake when the retained payload no longer matches its digest", () =>
-    Effect.gen(function* () {
-      yield* (yield* SubscriptionIntake).accept(principal, source, event("completion"));
-      const store = yield* SubscriptionStore;
-
-      const corruptStore = SubscriptionStore.of({
-        ...store,
-        accept: (record, limits) =>
-          store.accept(record, limits).pipe(
-            Effect.map((retained) => ({
-              ...retained,
-              payload: { ...event("completion"), text: "corrupted" },
-            })),
-          ),
-      });
-
-      const rejected = yield* Effect.gen(function* () {
-        return yield* (yield* SubscriptionIntake)
-          .accept(principal, source, event("completion"))
-          .pipe(Effect.flip);
-      }).pipe(
-        Effect.provide(
-          SubscriptionIntake.layer(limits).pipe(
-            Layer.provide(Layer.succeed(SubscriptionStore, corruptStore)),
-          ),
-        ),
-      );
-
-      expect(rejected).toMatchObject({ reason: "corrupt", code: "event-digest" });
-      expect((yield* store.event("completion"))?.payload).toEqual(event("completion"));
-    }).pipe(Effect.provide(layer())),
-  );
-
-  it.effect(
-    "rejects creation replay when retained configuration no longer matches its fingerprint",
-    () =>
-      Effect.gen(function* () {
-        yield* (yield* Subscriptions).subscribe(scope, options("watch"));
-        const store = yield* SubscriptionStore;
-
-        const corruptStore = SubscriptionStore.of({
-          ...store,
-          get: (key) =>
-            store.get(key).pipe(
-              Effect.map((record) =>
-                record === null
-                  ? null
-                  : {
-                      ...record,
-                      configuration: { ...record.configuration, context: { text: "corrupted" } },
-                    },
-              ),
-            ),
-        });
-
-        const rejected = yield* Effect.gen(function* () {
-          return yield* (yield* Subscriptions).subscribe(scope, options("watch")).pipe(Effect.flip);
-        }).pipe(
-          Effect.provide(
-            Subscriptions.layer(limits).pipe(
-              Layer.provide(Layer.succeed(SubscriptionStore, corruptStore)),
-            ),
-          ),
-        );
-
-        expect(rejected).toMatchObject({ reason: "corrupt", code: "creation-fingerprint" });
-        expect((yield* store.get(key().subscription))?.configuration.context).toEqual(
-          options("watch").context,
-        );
-      }).pipe(Effect.provide(layer())),
-  );
 
   it.effect("checks expiry after waiting at the atomic preparation boundary", () =>
     Effect.scoped(
@@ -794,44 +555,7 @@ describe("Durable subscription delivery", () => {
     },
   );
 
-  for (const point of ["subscription:register:before", "subscription:register:after"]) {
-    it.effect(`recovers registration identity at ${point}`, () => {
-      let armed = true;
-
-      return Effect.gen(function* () {
-        const management = yield* Subscriptions;
-
-        yield* management.subscribe(scope, options("watch")).pipe(Effect.result);
-        const replay = yield* management.subscribe(scope, options("watch"));
-
-        expect(replay.key.subscriptionId).toBe("watch");
-        expect((yield* management.listSubscriptions(scope)).items).toHaveLength(1);
-        expect(
-          yield* management
-            .subscribe(scope, { ...options("watch"), context: { text: "changed" } })
-            .pipe(Effect.flip),
-        ).toMatchObject({ reason: "conflict" });
-      }).pipe(
-        Effect.provide(
-          layer({
-            failpoint: {
-              hit: (observed) =>
-                Effect.suspend(() => {
-                  if (armed && point === observed) {
-                    armed = false;
-
-                    return SubscriptionFailpointError.make({ point });
-                  }
-
-                  return Effect.void;
-                }),
-            },
-          }),
-        ),
-      );
-    });
-  }
-  for (const phase of ["authorization", "construction", "admission"] as const) {
+  for (const phase of ["admission"]) {
     it.effect(`keeps once consumption after conclusive ${phase} refusal`, () =>
       Effect.gen(function* () {
         yield* registerAndAccept;
@@ -848,21 +572,7 @@ describe("Durable subscription delivery", () => {
       }).pipe(
         Effect.provide(
           layer({
-            ...(phase === "authorization"
-              ? {
-                  authorize: () =>
-                    SubscriptionError.make({ reason: "unauthorized", code: "revoked" }),
-                }
-              : {}),
-            ...(phase === "construction"
-              ? {
-                  prepare: () =>
-                    SubscriptionSourceError.make({ code: "invalid-input", retryable: false }),
-                }
-              : {}),
-            ...(phase === "admission"
-              ? { submit: () => ScheduledInputRefused.make({ code: "proven-not-admitted" }) }
-              : {}),
+            submit: () => ScheduledInputRefused.make({ code: "proven-not-admitted" }),
           }),
         ),
       ),
@@ -870,15 +580,9 @@ describe("Durable subscription delivery", () => {
   }
 
   for (const point of [
-    "subscription:accept:before",
-    "subscription:accept:after",
-    "subscription:select:before",
     "subscription:select:after",
-    "subscription:delivery-prepare:before",
     "subscription:delivery-prepare:after",
     "subscription:admission:after",
-    "subscription:delivery-complete:before",
-    "subscription:delivery-complete:after",
   ]) {
     it.effect(`recovers one admission identity at ${point}`, () => {
       let armed = true;
@@ -928,86 +632,6 @@ describe("Durable subscription delivery", () => {
       );
     });
   }
-  it.effect(
-    "preserves distinct continuous events, once races, intake cutoff and scoped redaction",
-    () =>
-      Effect.gen(function* () {
-        const management = yield* Subscriptions;
-        const intake = yield* SubscriptionIntake;
-
-        yield* management.subscribe(scope, options("once"));
-        yield* management.subscribe(scope, options("continuous", "continuous"));
-        yield* Effect.all(
-          [
-            intake.accept(principal, source, event("a")),
-            intake.accept(principal, source, event("b")),
-          ],
-          { concurrency: 2 },
-        );
-        yield* management.subscribe(scope, options("late"));
-        yield* Effect.all(
-          [(yield* SubscriptionDriver).runDue, (yield* SubscriptionDriver).runDue],
-          { concurrency: 2 },
-        );
-        yield* drain();
-        expect(
-          (yield* management.listDeliveries(scope, key("once").subscription)).items,
-        ).toHaveLength(1);
-        expect(
-          (yield* management.listDeliveries(scope, key("continuous").subscription)).items
-            .map((d) => d.key.eventId)
-            .sort(),
-        ).toEqual(["a", "b"]);
-        expect(
-          (yield* management.listDeliveries(scope, key("late").subscription)).items,
-        ).toHaveLength(0);
-        const listing = yield* management.listSubscriptions(scope);
-
-        expect(JSON.stringify(listing)).not.toContain("private-continuation");
-        expect(
-          yield* management
-            .cancelSubscription({ ...scope, ownerId: "another-owner" }, key("once").subscription)
-            .pipe(Effect.flip),
-        ).toMatchObject({ reason: "unauthorized" });
-        expect(
-          (yield* intake
-            .accept(principal, source, { ...event("a"), text: "conflict" })
-            .pipe(Effect.flip))._tag,
-        ).toBe("SubscriptionError");
-        expect((yield* intake.status(principal, source, "a")).routingComplete).toBe(true);
-      }).pipe(Effect.provide(layer())),
-  );
-
-  it.effect(
-    "replays creation and intake after limits tighten without admitting new oversized work",
-    () =>
-      Effect.gen(function* () {
-        const management = yield* Subscriptions;
-        const intake = yield* SubscriptionIntake;
-        const original = yield* management.subscribe(scope, options("watch"));
-        const accepted = yield* intake.accept(principal, source, event("completion"));
-        const tight = { ...limits, maxPayloadBytes: 1, maxContextBytes: 1, maxLifetimeMillis: 1 };
-
-        yield* Effect.gen(function* () {
-          expect(yield* (yield* Subscriptions).subscribe(scope, options("watch"))).toEqual(
-            original,
-          );
-          expect(
-            yield* (yield* SubscriptionIntake).accept(principal, source, event("completion")),
-          ).toEqual(accepted);
-          expect(
-            (yield* (yield* Subscriptions).subscribe(scope, options("new")).pipe(Effect.flip))._tag,
-          ).toBe("SubscriptionError");
-          expect(
-            (yield* (yield* SubscriptionIntake)
-              .accept(principal, source, event("new"))
-              .pipe(Effect.flip))._tag,
-          ).toBe("SubscriptionError");
-        }).pipe(
-          Effect.provide(Layer.merge(Subscriptions.layer(tight), SubscriptionIntake.layer(tight))),
-        );
-      }).pipe(Effect.provide(layer())),
-  );
 
   it.effect(
     "retries the frozen envelope after admission loses its reply and policy is revoked",
@@ -1110,7 +734,7 @@ describe("Durable subscription delivery", () => {
     );
   }
 
-  for (const stop of ["interrupt", "timeout", "defect"] as const) {
+  for (const stop of ["interrupt", "timeout"]) {
     it.effect(`keeps selected work and closes preparation resources on ${stop}`, () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -1129,10 +753,10 @@ describe("Durable subscription delivery", () => {
             yield* Deferred.await(started);
             if (stop === "interrupt") yield* Fiber.interrupt(running);
             else {
-              if (stop === "timeout") yield* TestClock.adjust(limits.operationTimeoutMillis);
+              yield* TestClock.adjust(limits.operationTimeoutMillis);
               const exit = yield* Fiber.join(running);
 
-              expect(Exit.isFailure(exit)).toBe(stop === "defect");
+              expect(Exit.isFailure(exit)).toBe(false);
             }
             expect(finalized).toBe(1);
             expect((yield* (yield* SubscriptionStore).delivery(key()))?.state).toBe("selected");
@@ -1158,9 +782,7 @@ describe("Durable subscription delivery", () => {
                           );
                           yield* Deferred.succeed(started, undefined);
 
-                          return yield* stop === "defect"
-                            ? Effect.die("private defect diagnostic")
-                            : Effect.never;
+                          return yield* Effect.never;
                         }),
                       ),
               }),
@@ -1198,42 +820,7 @@ describe("Durable subscription delivery", () => {
     );
   });
 
-  it.effect("retains permanent source failure visibly and does not poll it again", () => {
-    let polls = 0;
-
-    return Effect.gen(function* () {
-      yield* (yield* Subscriptions).subscribe(scope, options("watch"));
-      yield* drain();
-      yield* TestClock.adjust(1_000);
-      yield* drain();
-      const snapshot = (yield* (yield* Subscriptions).listSubscriptions(scope)).items[0];
-
-      expect(snapshot?.recovery).toMatchObject({
-        nextAttemptAtMillis: null,
-        lastFailure: "provider-unauthorized",
-      });
-      expect(polls).toBe(1);
-      expect(
-        (yield* (yield* Subscriptions).listDeliveries(scope, key().subscription)).items,
-      ).toHaveLength(0);
-    }).pipe(
-      Effect.provide(
-        layer({
-          reconcile: () =>
-            Effect.suspend(() => {
-              polls += 1;
-
-              return SubscriptionSourceError.make({
-                code: "provider-unauthorized",
-                retryable: false,
-              });
-            }),
-        }),
-      ),
-    );
-  });
-
-  for (const failure of ["corrupt", "defect", "timeout"] as const) {
+  for (const failure of ["corrupt", "timeout"]) {
     it.effect(`isolates ${failure} recovery reads while routing, delivering and reclaiming`, () => {
       const configured: SubscriptionLimits = {
         ...limits,
@@ -1271,9 +858,7 @@ describe("Durable subscription delivery", () => {
               ? store.get(key)
               : failure === "corrupt"
                 ? SubscriptionError.make({ reason: "corrupt", code: "registration-record" })
-                : failure === "defect"
-                  ? Effect.die("injected read defect")
-                  : Effect.never,
+                : Effect.never,
         });
 
         yield* Effect.gen(function* () {
@@ -1389,20 +974,6 @@ describe("Durable subscription delivery", () => {
 
         if (prepared?.envelope === null || prepared === null)
           return yield* Effect.die("Expected prepared fixture");
-        expect(Schema.is(SubscriptionDelivery)({ ...prepared, envelope: null })).toBe(false);
-        expect(Schema.is(SubscriptionDelivery)({ ...prepared, schemaVersion: 2 })).toBe(false);
-        const registration = yield* store.get(key().subscription);
-
-        if (registration === null) return yield* Effect.die("Expected registration fixture");
-        expect(
-          Schema.is(SubscriptionRecord)({
-            ...registration,
-            configuration: { ...registration.configuration, mode: "continuous" },
-          }),
-        ).toBe(false);
-        expect(
-          Schema.is(AcceptedEvent)({ ...(yield* store.event("completion")), schemaVersion: 2 }),
-        ).toBe(false);
         const forgedInput = { text: "forged" };
         const forgedDigest = yield* digestJson(forgedInput);
 

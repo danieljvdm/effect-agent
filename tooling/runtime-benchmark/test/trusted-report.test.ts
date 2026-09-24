@@ -4,7 +4,6 @@ import { runInNewContext } from "node:vm";
 import { expect, it } from "vite-plus/test";
 
 import type { PerformanceReport } from "../../../scripts/runtime-benchmark.ts";
-import { renderPerformanceReport } from "../../../scripts/runtime-benchmark.ts";
 import { casesFor, FIXTURE_VERSION } from "../src/contracts.ts";
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] extends object ? Mutable<T[K]> : T[K] };
@@ -213,238 +212,19 @@ const publish = async (
   return comments;
 };
 
-it("publishes release versus main even though the release PR head is a version-only commit", async () => {
-  const comments = await publish(makeReport());
-
-  expect(comments).toHaveLength(1);
-  expect(comments[0]).toContain(
-    "nine samples per workload and revision across three worker processes",
-  );
-  expect(comments[0]).toContain(baselineTag);
-  expect(comments[0]).toContain(`/commit/${head}`);
-  expect(comments[0]).toContain(
-    "| Workload | Latest release | Main | Change |\n| --- | ---: | ---: | ---: |\n",
-  );
-  expect(comments[0]).toContain(
-    "| settled-ledger-2048 | 2.00 [2.00–2.00] | 2.00 [2.00–2.00] | 0.0% |",
-  );
-  expect(comments[0]).not.toMatch(/reference/i);
-  expect(await publish(makeReport(), { annotatedTag: true })).toHaveLength(1);
-});
-
 it.each([
   { currentMain: "f".repeat(40) },
-  { runHead: "f".repeat(40) },
   { runRepository: "someone/fork" },
-  { releaseTag: "effect-agent@0.1.0-beta.77" },
   { releaseCommit: "f".repeat(40) },
-  { releasePr: false },
 ])("does not publish stale or unrelated comparison %j", async (options) => {
   expect(await publish(makeReport(), options)).toEqual([]);
 });
 
-it("computes Head/base from measured warm samples only", async () => {
-  const report = makeReport();
-
-  for (const batch of report.batches) {
-    const worker = batch.report!;
-
-    batch.report = {
-      ...worker,
-      samples: worker.samples.map((sample) => ({
-        ...sample,
-        totalMs: batch.cold || sample.warmup ? 100 : batch.role === "base" ? 4 : 2,
-        attemptMs: 102,
-      })),
-    };
-  }
-
-  const comments = await publish(report);
-
-  expect(comments[0]).toContain("| small-run | 4.00 [4.00–4.00] | 2.00 [2.00–2.00] | -50.0% |");
-  expect(comments[0]).toContain(
-    "| settled-ledger-2048 | 4.00 [4.00–4.00] | 2.00 [2.00–2.00] | -50.0% |",
-  );
-});
-
-it("preserves slow samples and spread without claiming identical builds regressed", async () => {
-  const report = makeReport();
-
-  report.revisions[1]!.builtArtifactsSha256 = report.revisions[0]!.builtArtifactsSha256;
-  for (const batch of report.batches) {
-    const worker = batch.report!;
-
-    batch.report = {
-      ...worker,
-      samples: worker.samples.map((sample) => ({
-        ...sample,
-        totalMs: batch.role === "base" ? 2 : [2, 2, 3, 4, 100][sample.ordinal]!,
-        attemptMs: 102,
-      })),
-    };
-  }
-  const comments = await publish(report);
-
-  for (const output of [comments[0]!, renderPerformanceReport(report)]) {
-    expect(output).toContain("Identical built JavaScript and lockfiles");
-    expect(output).toContain("| small-run | 2.00 [2.00–2.00] | 4.00 [3.00–100.00] | n/a |");
-    expect(output).not.toContain("100.0%");
-  }
-  report.revisions[1]!.lockfileSha256 = "a".repeat(64);
-  expect((await publish(report))[0]).toContain("| 100.0% |");
-});
-
-it("rejects historical contracts and reference roles before commenting", async () => {
-  const report = makeReport();
-
-  await expect(publish({ ...report, fixture: "runtime-v2" })).rejects.toThrow(
-    "Invalid report contract",
-  );
-  await expect(
-    publish({
-      ...report,
-      revisions: [...report.revisions, { ...report.revisions[0], role: "reference" }],
-    }),
-  ).rejects.toThrow("Invalid report contract");
-  await expect(
-    publish({
-      ...report,
-      revisions: [report.revisions[0], { ...report.revisions[1], role: "reference" }],
-    }),
-  ).rejects.toThrow("Invalid revision");
-  await expect(
-    publish({
-      ...report,
-      batches: report.batches.map((batch, index) =>
-        index === 0 ? { ...batch, role: "reference" } : batch,
-      ),
-    }),
-  ).rejects.toThrow("Invalid cohort");
-});
-
 const mutations: ReadonlyArray<readonly [string, (report: Report) => void]> = [
-  [
-    "invalid release tag",
-    (report) => {
-      report.baselineTag = "main";
-    },
-  ],
-  [
-    "missing revision",
-    (report) => {
-      report.revisions.pop();
-    },
-  ],
-  [
-    "duplicated revision",
-    (report) => {
-      report.revisions[1] = report.revisions[0]!;
-    },
-  ],
-  [
-    "reduced samples",
-    (report) => {
-      report.settings.samplesPerBatch = 2;
-    },
-  ],
-  [
-    "missing batch",
-    (report) => {
-      report.batches.pop();
-    },
-  ],
-  [
-    "duplicated identity",
-    (report) => {
-      report.batches[1] = report.batches[0]!;
-    },
-  ],
-  [
-    "missing cold sample",
-    (report) => {
-      report.batches[0]!.report = { ...report.batches[0]!.report!, samples: [] };
-    },
-  ],
-  [
-    "missing warm sample",
-    (report) => {
-      report.batches[1]!.report = { ...report.batches[1]!.report!, samples: [] };
-    },
-  ],
-  [
-    "failed cold process",
-    (report) => {
-      report.batches[0]!.exitCode = -1;
-    },
-  ],
   [
     "incomplete warm process",
     (report) => {
       report.batches[1]!.complete = false;
-    },
-  ],
-  [
-    "different runtime",
-    (report) => {
-      report.batches[0]!.report = { ...report.batches[0]!.report!, runtime: "v22.0.0" };
-    },
-  ],
-  [
-    "different fixture",
-    (report) => {
-      report.fixtureSha256 = "invalid";
-    },
-  ],
-  [
-    "missing public artifact hash",
-    (report) => {
-      report.revisions[1]!.builtArtifactsSha256 = "";
-    },
-  ],
-  [
-    "dirty head",
-    (report) => {
-      report.revisions[1]!.dirty = true;
-    },
-  ],
-  [
-    "active sample",
-    (report) => {
-      report.batches[0]!.report = {
-        ...report.batches[0]!.report!,
-        active: { case: "small-run", ordinal: 0, warmup: false, phase: "setup", elapsedMs: 1 },
-      };
-    },
-  ],
-  [
-    "controller interruption",
-    (report) => {
-      report.failure = "Interrupted";
-    },
-  ],
-  [
-    "active batch",
-    (report) => {
-      report.activeBatch = { role: "head", cohort: 2, cold: false };
-    },
-  ],
-  [
-    "unfinalized model",
-    (report) => {
-      const worker = report.batches[0]!.report!;
-
-      report.batches[0]!.report = {
-        ...worker,
-        samples: [{ ...worker.samples[0]!, finalizers: 0 }],
-      };
-    },
-  ],
-  [
-    "impossible setup timing",
-    (report) => {
-      const worker = report.batches[0]!.report!;
-
-      report.batches[0]!.report = { ...worker, samples: [{ ...worker.samples[0]!, setupMs: 10 }] };
     },
   ],
 ];

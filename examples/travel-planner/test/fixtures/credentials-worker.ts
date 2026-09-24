@@ -4,33 +4,12 @@ import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import { PlannerError, TripSiteStore } from "../../src/domain.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
-import {
-  credentialForOwner,
-  credentialSourceLayer,
-  CredentialFailpoint,
-} from "../../src/server/credentials.ts";
+import { credentialForOwner, credentialSourceLayer } from "../../src/server/credentials.ts";
 import { plannerOwner } from "../../src/server/tenancy.ts";
 import { FixtureBrowserLive } from "./browser.ts";
 import { ownerEmail, fixtureSubject } from "./identity.ts";
 import { FixtureModel } from "./models.ts";
 import fixtureWorker from "./worker.ts";
-
-let failurePoint = "";
-let failureMode = "failure";
-
-const failures = Layer.succeed(CredentialFailpoint, {
-  hit: (point) =>
-    Effect.suspend(() => {
-      if (failurePoint !== point) return Effect.void;
-      failurePoint = "";
-      if (failureMode === "defect") return Effect.die("fixture preference defect");
-      if (failureMode === "interrupt") return Effect.interrupt;
-
-      return Effect.fail(
-        new PlannerError({ code: "storage", message: "Injected preference failure." }),
-      );
-    }),
-});
 
 const sites = Layer.succeed(TripSiteStore, {
   publish: () =>
@@ -41,9 +20,7 @@ const sites = Layer.succeed(TripSiteStore, {
 /** The only raw-row access is in this isolated test bundle. */
 export class TravelPlannerThread extends makeTravelPlannerThread(
   sites,
-  plannerApplication(FixtureModel, "fixture-script-v1", "Test model", FixtureBrowserLive).pipe(
-    Layer.provideMerge(failures),
-  ),
+  plannerApplication(FixtureModel, "fixture-script-v1", "Test model", FixtureBrowserLive),
 ) {
   fetch(request: Request): Promise<Response> {
     return this[DurableObject.RunSymbol](
@@ -78,12 +55,6 @@ export default {
         request.headers.get("authorization") !== `Bearer ${env.PLANNER_TOKEN}`
       )
         return new Response("Unauthorized", { status: 401 });
-      if (url.searchParams.has("point")) {
-        failurePoint = url.searchParams.get("point") ?? "";
-        failureMode = url.searchParams.get("mode") ?? "failure";
-
-        return new Response("Armed");
-      }
 
       const owner = await Effect.runPromise(
         plannerOwner(fixtureSubject(request.headers.get("x-test-email") ?? ownerEmail)),
