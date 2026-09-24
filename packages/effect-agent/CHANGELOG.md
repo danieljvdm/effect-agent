@@ -1,5 +1,11 @@
 # effect-agent
 
+## 0.1.0-beta.140
+
+### Patch Changes
+
+- [#655](https://github.com/danieljvdm/effect-agent/pull/655) [`6d16773`](https://github.com/danieljvdm/effect-agent/commit/6d1677383d3377a0a399baeaec4c661d51b15878) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve reusable prompt prefixes across Runs by keeping system instructions and the output contract before conversation history. Retain native cache controls and distinct instruction precedence without rewriting stored history.
+
 ## 0.1.0-beta.139
 
 ## 0.1.0-beta.138
