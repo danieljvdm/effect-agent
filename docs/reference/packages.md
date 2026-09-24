@@ -403,6 +403,10 @@ action failures, and cleanup.
 `BrowserSessions.layer({ browser, accountId, apiToken })` requires `HttpClient`.
 `create(options, retain)` calls the host's retention Effect with a private
 `BrowserSessionReference`; successful retention makes the host responsible for remote cleanup.
+`createAttached(options, retain)` returns a `BrowserSession` after the same retention step,
+keeping its initial connection in the caller's `Scope`. Failed acquisition releases the child
+scope before returning the failure. Its 30-second acquisition timeout does not cover subsequent
+commands; each command uses the reference's remaining expiry and command timeout.
 `attach(reference)` acquires a local connection in `Scope`. Its finalizer disconnects locally.
 
 | Creation option        | Default  | Meaning                                                        |

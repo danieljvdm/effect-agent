@@ -426,22 +426,26 @@ declare const authorize: Effect.Effect<void>;
 
 const startBrowser = Effect.gen(function* () {
   const sessions = yield* BrowserSessions;
-  const reference = yield* sessions.create({ maxElapsedMillis: 3_600_000 }, retain);
+  const session = yield* sessions.createAttached({ maxElapsedMillis: 3_600_000 }, retain);
 
-  return yield* Effect.gen(function* () {
-    const session = yield* sessions.attach(reference);
-    return yield* session.run(authorize, async (page) => {
-      await page.goto("https://example.com/");
-      return await page.title();
-    });
-  }).pipe(Effect.scoped);
-});
+  return yield* session.run(authorize, async (page) => {
+    await page.goto("https://example.com/");
+    return await page.title();
+  });
+}).pipe(Effect.scoped);
 ```
 
 `retain` commits the private reference to the application's existing durable owner. Creation
 attempts exact-session cleanup if that commit fails. Keep references outside Tool results and agent journals.
 The reference identifies the exact provider session, context, and page, with a fixed expiry.
 Attachment never creates a replacement page.
+
+Use `createAttached` when the creating operation will also use the page: it preserves the initial
+attachment until the caller's Scope exits, avoiding a disconnect and reconnect before the first
+command. Its 30-second acquisition timeout ends when the attachment is returned; commands retain
+their own timeout and the fixed session expiry. Use `create` when only the retained reference is
+needed, then `attach(reference)` inside a later operation's Scope. Both creation methods retain
+the reference before returning and release failed acquisitions immediately.
 
 The owner retains the reference and remains responsible for cleanup after an attachment's Scope
 exits. Attachments disconnect locally; they do not transfer ownership or close the remote browser.
