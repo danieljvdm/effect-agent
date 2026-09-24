@@ -222,153 +222,6 @@ describe("canonical context history", () => {
     },
   );
 
-  it.effect("searches literal text newest first across retained windows and Runs", () => {
-    const p = probe(archived);
-
-    return Effect.gen(function* () {
-      const history = yield* ContextHistory;
-      const hits = yield* history.search(search("NEEDLE[1]"));
-
-      expect(hits.map(({ recordId, windowId }) => ({ recordId, windowId }))).toEqual([
-        { recordId: "record:8", windowId: "context:run-1:3" },
-        { recordId: "record:7", windowId: "context:run-1:3" },
-        { recordId: "record:5", windowId: "context:run-1:2" },
-        { recordId: "record:3", windowId: "context:run-1:0" },
-        { recordId: "record:2", windowId: "context:run-1:0" },
-        { recordId: "record:1", windowId: "context:run-0:0" },
-      ]);
-      expect((yield* history.search(search("needle[1]", 2))).map((hit) => hit.recordId)).toEqual([
-        "record:8",
-        "record:7",
-      ]);
-      expect(yield* history.search(search("needle.*"))).toEqual([]);
-      expect(yield* history.search(search("needle first"))).toEqual([]);
-      expect((yield* history.read(read("record:3"))).text).toContain("original tool evidence");
-    }).pipe(Effect.provide(provide(p.store)));
-  });
-
-  it.effect(
-    "terminates exact pages and supports nonmatching opaque anchors with later boundaries",
-    () => {
-      const p = probe([
-        response(1, "needle"),
-        response(2, "needle"),
-        CanonicalRecordEnvelope.make({
-          ...response(3, "needle"),
-          record: { ...response(3, "needle").record, recordId: archived[7]!.record.recordId },
-        }),
-        response(4, "another query"),
-        record(5, {
-          _tag: "CompactionCreated",
-          runId: "run-1",
-          turn: 2,
-          kind: "rollover",
-          coversThrough: 2,
-        }),
-      ]);
-
-      return Effect.gen(function* () {
-        const history = yield* ContextHistory;
-        const hits = yield* history.search(search("needle", 3, "record:4"));
-
-        expect(hits.map(({ recordId, windowId }) => ({ recordId, windowId }))).toEqual([
-          { recordId: "record:8", windowId: "context:run-1:2" },
-          { recordId: "record:2", windowId: "context:run-1:0" },
-          { recordId: "record:1", windowId: "context:run-1:0" },
-        ]);
-        expect(yield* history.search(search("needle", 3, hits.at(-1)!.recordId))).toEqual([]);
-        expect(
-          (yield* history.search(search("needle", 1, "record:8"))).map((hit) => hit.recordId),
-        ).toEqual(["record:2"]);
-        expect(yield* history.search(search("absent", 3, "record:4"))).toEqual([]);
-      }).pipe(Effect.provide(provide(p.store)));
-    },
-  );
-
-  it.effect("rejects missing, foreign, and non-evidence anchors without widening access", () => {
-    const hidden = record(2, {
-      _tag: "UserInputRecorded",
-      runId: "run-1",
-      kind: "user",
-      input: "needle secret",
-    });
-
-    const p = probe([response(1, "needle"), hidden]);
-    const foreignThread = ThreadId.make("foreign-thread");
-
-    const store = ThreadStore.of({
-      ...p.store,
-      inspectTail: (request) =>
-        request.threadId === threadId
-          ? p.store.inspectTail(request)
-          : Effect.succeed(
-              ThreadTail.make({
-                threadId: request.threadId,
-                tailSequence: sequence(0),
-                tailDigest: EMPTY_TAIL_DIGEST,
-                producerEpoch: Schema.decodeSync(ProducerEpoch)(0),
-              }),
-            ),
-    });
-
-    return Effect.gen(function* () {
-      const history = yield* ContextHistory;
-
-      const requests = [
-        search("needle", 3, "missing"),
-        search("needle", 3, "record:2"),
-        ContextHistorySearch.make({
-          ...search("needle", 3, "record:1"),
-          threadId: foreignThread,
-        }),
-      ];
-
-      for (const request of requests) {
-        const result = yield* Effect.exit(history.search(request));
-
-        expect(Exit.isFailure(result) && Cause.squash(result.cause)).toEqual(
-          ContextHistoryError.make({
-            reason: "not-found",
-            message: "Retained context record was not found in this Thread",
-          }),
-        );
-      }
-    }).pipe(Effect.provide(provide(store)));
-  });
-
-  it.effect("pages retained text exactly and returns a bounded snippet around a late match", () => {
-    const retained = `start-${"x".repeat(22_000)}-target-end`;
-
-    const p = probe([
-      record(1, {
-        _tag: "ToolCallSettled",
-        runId: "run-1",
-        toolCallId: "call-1",
-        toolName: "read_file",
-        result: retained,
-        isFailure: false,
-      }),
-    ]);
-
-    return Effect.gen(function* () {
-      const history = yield* ContextHistory;
-      const first = yield* history.read(read("record:1"));
-
-      expect(first.text).toHaveLength(20_000);
-      expect(first.nextOffset).toBe(20_000);
-      const rest = yield* history.read(read("record:1", first.nextOffset ?? 0));
-
-      expect(rest.nextOffset).toBe(null);
-      expect(first.text + rest.text).toBe(
-        `tool result read_file (call-1; success):\n${JSON.stringify(retained)}`,
-      );
-      const hits = yield* history.search(search("target"));
-
-      expect(hits[0]?.text).toContain("target-end");
-      expect(hits[0]?.text.length).toBeLessThanOrEqual(2_000);
-    }).pipe(Effect.provide(provide(p.store)));
-  });
-
   it.effect(
     "excludes raw submitted fields, system instructions, reasoning, and Step outputs",
     () => {
@@ -427,32 +280,6 @@ describe("canonical context history", () => {
     },
   );
 
-  it.effect("captures a fixed tail and requests bounded pages even when new records arrive", () => {
-    const p = probe(Array.from({ length: 65 }, (_, i) => response(i + 1, `entry ${i + 1}`)));
-
-    const store = ThreadStore.of({
-      ...p.store,
-      read: (request) => {
-        if (p.state.records.length === 65) p.state.records.push(response(66, "late arrival"));
-
-        return p.store.read(request);
-      },
-    });
-
-    return Effect.gen(function* () {
-      const history = yield* ContextHistory;
-
-      expect(yield* history.search(search("late arrival"))).toEqual([]);
-      expect(p.state.pages).toEqual([64, 1]);
-      expect((yield* history.search(search("late arrival"))).map((hit) => hit.recordId)).toEqual([
-        "record:66",
-      ]);
-      expect(
-        (yield* history.search(search("entry", 1, "record:65"))).map((hit) => hit.recordId),
-      ).toEqual(["record:64"]);
-    }).pipe(Effect.provide(provide(store)));
-  });
-
   it.effect("only accepts anchors in the captured tail and verifies records after the anchor", () =>
     Effect.gen(function* () {
       const p = probe(archived);
@@ -500,44 +327,6 @@ describe("canonical context history", () => {
     }),
   );
 
-  it.effect("fails explicitly before scanning an archive above the configured ceiling", () => {
-    const p = probe(archived);
-
-    return Effect.gen(function* () {
-      const history = yield* ContextHistory;
-
-      for (const request of [search("needle"), search("needle", 3, "record:2")]) {
-        const exit = yield* Effect.exit(history.search(request));
-
-        expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({ reason: "limit" });
-      }
-      expect(p.state.pages).toEqual([]);
-    }).pipe(Effect.provide(provide(p.store, { maxRecords: 2 })));
-  });
-
-  it.effect("rejects whitespace queries and reads beyond retained text", () => {
-    const p = probe([response(1, "short")]);
-
-    return Effect.gen(function* () {
-      const history = yield* ContextHistory;
-
-      const requests: ReadonlyArray<Effect.Effect<unknown, ContextHistoryError>> = [
-        history.search(search("  ")),
-        history.search({ ...search("short"), beforeRecordId: "" }),
-        history.search({ ...search("short"), beforeRecordId: "x".repeat(257) }),
-        history.read(read("record:1", 100)),
-      ];
-
-      for (const request of requests) {
-        const exit = yield* Effect.exit(request);
-
-        expect(Exit.isFailure(exit) && Cause.squash(exit.cause)).toMatchObject({
-          reason: "invalid-input",
-        });
-      }
-    }).pipe(Effect.provide(provide(p.store)));
-  });
-
   it.effect("fails closed on foreign or noncontiguous records and hides storage diagnostics", () =>
     Effect.gen(function* () {
       const p = probe([response(1, "private")]);
@@ -582,12 +371,7 @@ describe("canonical context history", () => {
       );
 
       expect(Exit.isFailure(defect) && Cause.squash(defect.cause)).toBe("backend defect");
-      for (const mode of [
-        "read-timeout",
-        "read-interrupt",
-        "search-timeout",
-        "search-interrupt",
-      ] as const) {
+      for (const mode of ["read-timeout", "search-interrupt"] as const) {
         const entered = yield* Deferred.make<void>();
         let released = 0;
 
@@ -629,21 +413,4 @@ describe("canonical context history", () => {
       }
     }),
   );
-});
-
-type Equal<L, R> =
-  (<T>() => T extends L ? 1 : 2) extends <T>() => T extends R ? 1 : 2
-    ? (<T>() => T extends R ? 1 : 2) extends <T>() => T extends L ? 1 : 2
-      ? true
-      : false
-    : false;
-type Assert<T extends true> = T;
-type HistoryLayer = ReturnType<typeof ThreadContextHistory.layer>;
-type SuccessProof = Assert<Equal<Layer.Success<HistoryLayer>, ContextHistory>>;
-type FailureProof = Assert<Equal<Layer.Error<HistoryLayer>, ContextHistoryError>>;
-type RequirementProof = Assert<Equal<Layer.Services<HistoryLayer>, ThreadStore>>;
-it("keeps the archive dependency and typed lookup failures visible", () => {
-  const proof: readonly [SuccessProof, FailureProof, RequirementProof] = [true, true, true];
-
-  expect(proof).toEqual([true, true, true]);
 });

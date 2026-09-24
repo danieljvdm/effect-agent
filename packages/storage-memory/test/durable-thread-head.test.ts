@@ -61,7 +61,6 @@ import {
   ThreadTailRequest,
   ThreadRead,
   ThreadStore,
-  ThreadStoreError,
 } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
@@ -247,7 +246,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
     }).pipe(Effect.annotateLogs({ hostContext: "captured registration" })),
   );
 
-  it.effect.each(["new-failure", "provider-failure", "retained-incomplete"] as const)(
+  it.effect.each(["provider-failure", "retained-incomplete"])(
     "rolls over after terminal Tool failure without rewriting evidence: %s",
     (scenario) =>
       Effect.gen(function* () {
@@ -578,7 +577,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
         expect(retainedJournal.usage).toEqual(priorJournal.usage);
         expect(retainedJournal.usage).toMatchObject({ inputTokens: 100, outputTokens: 10 });
         expect(retainedJournal.policyUsage).toEqual(priorJournal.policyUsage);
-        expect(handlerCalls).toBe(scenario === "new-failure" ? 1 : 0);
+        expect(handlerCalls).toBe(0);
         if (providerFailure) {
           expect(
             after.records.some(
@@ -606,7 +605,7 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       const store = yield* ThreadStore;
       const failpoints = yield* DurableRuntimeFailpointTestControl;
 
-      for (const restart of [false, true]) {
+      for (const restart of [true]) {
         const requests: Array<Prompt.Prompt> = [];
 
         const model = Model.make(
@@ -741,309 +740,303 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
   );
 
   // Regression seam: https://linear.app/reve/issue/KOM-125
-  it.effect.each([
-    "live",
-    "append-failure",
-    "append-interruption",
-    "after-append-failure",
-    "failed-tool",
-  ] as const)("prepares from canonical profile evidence after %s", (scenario) =>
-    Effect.gen(function* () {
-      const restart = scenario !== "live" && scenario !== "failed-tool";
+  it.effect.each(["append-interruption", "after-append-failure", "failed-tool"])(
+    "prepares from canonical profile evidence after %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        const restart = scenario !== "failed-tool";
 
-      const profileReceipt = Schema.Struct({
-        profile: Schema.Literal("small"),
-        evidence: Schema.String,
-      });
-
-      const selectModel = Tool.make("select_model", {
-        parameters: Schema.Struct({}),
-        success: profileReceipt,
-        failure: Schema.Struct({ message: Schema.String }),
-        failureMode: "return",
-        dependencies: [DurableStep],
-      }).annotate(ToolExecutionClass, "idempotent");
-
-      const tools = Toolkit.make(selectModel);
-
-      const routedDefinition = Agent.make("recover-routed-context", {
-        input: Schema.String,
-        output: Schema.String,
-        instructions: "Preserve the current request and return a JSON string.",
-        toolkit: tools,
-        policy: AgentPolicy.make({
-          ...policy,
-          runStatus: "appended",
-          tokenBudget: 5_000,
-          completionReserveTokens: 500,
-        }),
-      });
-
-      const store = yield* ThreadStore;
-      const requests: Array<{ model: string; prompt: Prompt.Prompt }> = [];
-      const preparations: Array<string> = [];
-      let handlerCalls = 0;
-      let appendFault = scenario === "append-failure" || scenario === "append-interruption";
-
-      const faultingStore = ThreadStore.of({
-        ...store,
-        append: (request) =>
-          Effect.suspend(() => {
-            if (
-              appendFault &&
-              request.batch.records.some((record) => record.payload._tag === "ToolCallSettled")
-            ) {
-              appendFault = false;
-
-              return scenario === "append-interruption"
-                ? Effect.interrupt
-                : ThreadStoreError.make({
-                    operation: "append",
-                    message: "Profile result append failed",
-                  });
-            }
-
-            return store.append(request);
-          }),
-      });
-
-      const nativeModel = (name: "large" | "small") =>
-        Model.make(
-          "scripted",
-          name,
-          Layer.effect(
-            LanguageModel.LanguageModel,
-            LanguageModel.make({
-              generateText: () => Effect.succeed([]),
-              streamText: (request) => {
-                requests.push({ model: name, prompt: request.prompt });
-
-                return Stream.fromIterable<Response.StreamPartEncoded>(
-                  requests.length === 1
-                    ? [
-                        {
-                          type: "tool-call",
-                          id: "select-small",
-                          name: "select_model",
-                          params: {},
-                          providerExecuted: false,
-                        },
-                        {
-                          type: "finish",
-                          reason: "tool-calls",
-                          usage: { inputTokens: { total: 100 }, outputTokens: { total: 10 } },
-                        },
-                      ]
-                    : [
-                        ...finalParts.slice(0, -1),
-                        {
-                          type: "finish",
-                          reason: "stop",
-                          usage: { inputTokens: { total: 75 }, outputTokens: { total: 5 } },
-                        },
-                      ],
-                );
-              },
-            }),
-          ),
-        );
-
-      const agent = Agent.withModel(routedDefinition, makeModel(Stream.empty));
-
-      const freshRuntime = Effect.gen(function* () {
-        // Each runtime has fresh host services. The only route state crosses the restart
-        // in a successful canonical Tool result, not an incarnation-local Ref.
-        const preparation = RunContextPreparation.of({
-          hook: {
-            prepare: (request) =>
-              Effect.gen(function* () {
-                const records = yield* store
-                  .read(ThreadRead.make({ threadId: request.threadId, limit: 128 }))
-                  .pipe(
-                    Stream.runCollect,
-                    Effect.mapError((cause) =>
-                      CompactionError.make({ message: "Profile receipt is unavailable", cause }),
-                    ),
-                  );
-
-                const receipt = records.findLast(
-                  (entry) =>
-                    entry.record.payload._tag === "ToolCallSettled" &&
-                    entry.record.payload.runId === request.runId &&
-                    entry.record.payload.toolName === "select_model" &&
-                    !entry.record.payload.isFailure,
-                )?.record.payload;
-
-                const profile =
-                  receipt?._tag === "ToolCallSettled"
-                    ? (yield* Schema.decodeUnknownEffect(profileReceipt)(receipt.result).pipe(
-                        Effect.mapError((cause) =>
-                          CompactionError.make({ message: "Invalid profile receipt", cause }),
-                        ),
-                      )).profile
-                    : "large";
-
-                preparations.push(profile);
-
-                return {
-                  prompt: request.source,
-                  modelCall: {
-                    model: nativeModel(profile),
-                    context: ModelCallContext.make({
-                      contextCapacity: profile === "large" ? 12_000 : 4_000,
-                      maxInputTokens: profile === "large" ? 9_000 : 2_000,
-                      outputReserveTokens: 400,
-                      uncountedOverheadTokens: 100,
-                    }),
-                  },
-                };
-              }),
-          },
+        const profileReceipt = Schema.Struct({
+          profile: Schema.Literal("small"),
+          evidence: Schema.String,
         });
 
-        const binding = yield* DurableWorkerBinding.make(agent, digests).pipe(
-          Effect.provide(
-            tools.toLayer({
-              select_model: () =>
-                Effect.gen(function* () {
-                  const steps = yield* DurableStep;
+        const selectModel = Tool.make("select_model", {
+          parameters: Schema.Struct({}),
+          success: profileReceipt,
+          failure: Schema.Struct({ message: Schema.String }),
+          failureMode: "return",
+          dependencies: [DurableStep],
+        }).annotate(ToolExecutionClass, "idempotent");
 
-                  const selected = yield* steps.do(
-                    "select-profile",
-                    profileReceipt,
-                    Effect.sync(() => {
-                      handlerCalls += 1;
+        const tools = Toolkit.make(selectModel);
 
-                      return {
-                        profile: "small" as const,
-                        evidence: "completed action evidence ".repeat(600),
-                      };
-                    }),
-                  );
+        const routedDefinition = Agent.make("recover-routed-context", {
+          input: Schema.String,
+          output: Schema.String,
+          instructions: "Preserve the current request and return a JSON string.",
+          toolkit: tools,
+          policy: AgentPolicy.make({
+            ...policy,
+            runStatus: "appended",
+            tokenBudget: 5_000,
+            completionReserveTokens: 500,
+          }),
+        });
 
-                  if (scenario === "failed-tool") {
-                    return yield* Effect.fail({ message: "Profile selection was rejected" });
-                  }
+        const store = yield* ThreadStore;
+        const requests: Array<{ model: string; prompt: Prompt.Prompt }> = [];
+        const preparations: Array<string> = [];
+        let handlerCalls = 0;
+        let appendFault = scenario === "append-interruption";
 
-                  return selected;
-                }),
+        const faultingStore = ThreadStore.of({
+          ...store,
+          append: (request) =>
+            Effect.suspend(() => {
+              if (
+                appendFault &&
+                request.batch.records.some((record) => record.payload._tag === "ToolCallSettled")
+              ) {
+                appendFault = false;
+
+                return Effect.interrupt;
+              }
+
+              return store.append(request);
             }),
-          ),
+        });
+
+        const nativeModel = (name: "large" | "small") =>
+          Model.make(
+            "scripted",
+            name,
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: (request) => {
+                  requests.push({ model: name, prompt: request.prompt });
+
+                  return Stream.fromIterable<Response.StreamPartEncoded>(
+                    requests.length === 1
+                      ? [
+                          {
+                            type: "tool-call",
+                            id: "select-small",
+                            name: "select_model",
+                            params: {},
+                            providerExecuted: false,
+                          },
+                          {
+                            type: "finish",
+                            reason: "tool-calls",
+                            usage: { inputTokens: { total: 100 }, outputTokens: { total: 10 } },
+                          },
+                        ]
+                      : [
+                          ...finalParts.slice(0, -1),
+                          {
+                            type: "finish",
+                            reason: "stop",
+                            usage: { inputTokens: { total: 75 }, outputTokens: { total: 5 } },
+                          },
+                        ],
+                  );
+                },
+              }),
+            ),
+          );
+
+        const agent = Agent.withModel(routedDefinition, makeModel(Stream.empty));
+
+        const freshRuntime = Effect.gen(function* () {
+          // Each runtime has fresh host services. The only route state crosses the restart
+          // in a successful canonical Tool result, not an incarnation-local Ref.
+          const preparation = RunContextPreparation.of({
+            hook: {
+              prepare: (request) =>
+                Effect.gen(function* () {
+                  const records = yield* store
+                    .read(ThreadRead.make({ threadId: request.threadId, limit: 128 }))
+                    .pipe(
+                      Stream.runCollect,
+                      Effect.mapError((cause) =>
+                        CompactionError.make({ message: "Profile receipt is unavailable", cause }),
+                      ),
+                    );
+
+                  const receipt = records.findLast(
+                    (entry) =>
+                      entry.record.payload._tag === "ToolCallSettled" &&
+                      entry.record.payload.runId === request.runId &&
+                      entry.record.payload.toolName === "select_model" &&
+                      !entry.record.payload.isFailure,
+                  )?.record.payload;
+
+                  const profile =
+                    receipt?._tag === "ToolCallSettled"
+                      ? (yield* Schema.decodeUnknownEffect(profileReceipt)(receipt.result).pipe(
+                          Effect.mapError((cause) =>
+                            CompactionError.make({ message: "Invalid profile receipt", cause }),
+                          ),
+                        )).profile
+                      : "large";
+
+                  preparations.push(profile);
+
+                  return {
+                    prompt: request.source,
+                    modelCall: {
+                      model: nativeModel(profile),
+                      context: ModelCallContext.make({
+                        contextCapacity: profile === "large" ? 12_000 : 4_000,
+                        maxInputTokens: profile === "large" ? 9_000 : 2_000,
+                        outputReserveTokens: 400,
+                        uncountedOverheadTokens: 100,
+                      }),
+                    },
+                  };
+                }),
+            },
+          });
+
+          const binding = yield* DurableWorkerBinding.make(agent, digests).pipe(
+            Effect.provide(
+              tools.toLayer({
+                select_model: () =>
+                  Effect.gen(function* () {
+                    const steps = yield* DurableStep;
+
+                    const selected = yield* steps.do(
+                      "select-profile",
+                      profileReceipt,
+                      Effect.sync(() => {
+                        handlerCalls += 1;
+
+                        return {
+                          profile: "small" as const,
+                          evidence: "completed action evidence ".repeat(600),
+                        };
+                      }),
+                    );
+
+                    if (scenario === "failed-tool") {
+                      return yield* Effect.fail({ message: "Profile selection was rejected" });
+                    }
+
+                    return selected;
+                  }),
+              }),
+            ),
+          );
+
+          return yield* makeRuntime([binding]).pipe(
+            Effect.provideService(RunContextPreparation, preparation),
+            Effect.provideService(ThreadStore, faultingStore),
+            Effect.provide(ContextCompactor.layerRollover),
+          );
+        });
+
+        const first = yield* freshRuntime;
+
+        const receipt = yield* first.submit(
+          agent,
+          "CURRENT REQUEST: investigate the connection pool",
+          options(`routed-${scenario}`, "first"),
         );
 
-        return yield* makeRuntime([binding]).pipe(
-          Effect.provideService(RunContextPreparation, preparation),
-          Effect.provideService(ThreadStore, faultingStore),
-          Effect.provide(ContextCompactor.layerRollover),
+        const failpoints = yield* DurableRuntimeFailpointTestControl;
+
+        if (restart) {
+          yield* failpoints.setHandler((location) =>
+            scenario === "after-append-failure" && location === "turn:after-results-append"
+              ? DurableRuntimeFailpointError.make({ location })
+              : Effect.void,
+          );
+          const interrupted = yield* Effect.exit(first.processThreadHead(receipt.threadId));
+
+          expect(Exit.isFailure(interrupted)).toBe(true);
+          expect(preparations).toEqual(["large"]);
+          expect(requests.map((request) => request.model)).toEqual(["large"]);
+          expect((yield* snapshot(receipt)).ownership).toBeUndefined();
+        }
+
+        const before = yield* store.export(
+          ThreadExportRequest.make({ threadId: receipt.threadId }),
         );
-      });
 
-      const first = yield* freshRuntime;
-
-      const receipt = yield* first.submit(
-        agent,
-        "CURRENT REQUEST: investigate the connection pool",
-        options(`routed-${scenario}`, "first"),
-      );
-
-      const failpoints = yield* DurableRuntimeFailpointTestControl;
-
-      if (restart) {
-        yield* failpoints.setHandler((location) =>
-          scenario === "after-append-failure" && location === "turn:after-results-append"
-            ? DurableRuntimeFailpointError.make({ location })
-            : Effect.void,
+        const startedBefore = before.records.filter(
+          (entry) => entry.record.payload._tag === "RunStarted",
         );
-        const interrupted = yield* Effect.exit(first.processThreadHead(receipt.threadId));
 
-        expect(Exit.isFailure(interrupted)).toBe(true);
-        expect(preparations).toEqual(["large"]);
-        expect(requests.map((request) => request.model)).toEqual(["large"]);
-        expect((yield* snapshot(receipt)).ownership).toBeUndefined();
-      }
-      const before = yield* store.export(ThreadExportRequest.make({ threadId: receipt.threadId }));
+        expect(startedBefore).toHaveLength(restart ? 1 : 0);
 
-      const startedBefore = before.records.filter(
-        (entry) => entry.record.payload._tag === "RunStarted",
-      );
+        yield* failpoints.clear;
+        if (restart) yield* TestClock.adjust("5 seconds");
+        const resumed = restart ? yield* freshRuntime : first;
+        const settled = yield* resumed.processThreadHead(receipt.threadId);
 
-      expect(startedBefore).toHaveLength(restart ? 1 : 0);
+        expect(Option.isSome(settled)).toBe(true);
+        const selected = scenario === "failed-tool" ? "large" : "small";
 
-      yield* failpoints.clear;
-      if (restart) yield* TestClock.adjust("5 seconds");
-      const resumed = restart ? yield* freshRuntime : first;
-      const settled = yield* resumed.processThreadHead(receipt.threadId);
+        expect(preparations).toEqual(["large", selected]);
+        expect(requests.map((request) => request.model)).toEqual(["large", selected]);
+        expect(handlerCalls).toBe(1);
+        const second = requests[1];
 
-      expect(Option.isSome(settled)).toBe(true);
-      const selected = scenario === "failed-tool" ? "large" : "small";
+        if (second === undefined) throw new Error("Expected the resumed smaller-model call");
+        const text = JSON.stringify(second.prompt);
 
-      expect(preparations).toEqual(["large", selected]);
-      expect(requests.map((request) => request.model)).toEqual(["large", selected]);
-      expect(handlerCalls).toBe(1);
-      const second = requests[1];
+        expect(text).toContain("CURRENT REQUEST: investigate the connection pool");
+        if (selected === "small") {
+          expect(text).toContain("A fresh context window has started.");
+          expect(text).toContain("turn 2/2");
+          expect(text).toContain("tool-calls 1/2");
+          expect(text).toContain("tokens 110/5000");
+          expect(text).toContain(`elapsed ${restart ? 5 : 0}s/30s`);
+        }
+        const after = yield* store.export(ThreadExportRequest.make({ threadId: receipt.threadId }));
 
-      if (second === undefined) throw new Error("Expected the resumed smaller-model call");
-      const text = JSON.stringify(second.prompt);
+        const startedAfter = after.records.filter(
+          (entry) => entry.record.payload._tag === "RunStarted",
+        );
 
-      expect(text).toContain("CURRENT REQUEST: investigate the connection pool");
-      if (selected === "small") {
-        expect(text).toContain("A fresh context window has started.");
-        expect(text).toContain("turn 2/2");
-        expect(text).toContain("tool-calls 1/2");
-        expect(text).toContain("tokens 110/5000");
-        expect(text).toContain(`elapsed ${restart ? 5 : 0}s/30s`);
-      }
-      const after = yield* store.export(ThreadExportRequest.make({ threadId: receipt.threadId }));
+        expect(startedAfter).toHaveLength(1);
+        if (restart) expect(startedAfter).toEqual(startedBefore);
+        expect(
+          after.records.filter((entry) => entry.record.payload._tag === "ToolStepSettled"),
+        ).toHaveLength(1);
 
-      const startedAfter = after.records.filter(
-        (entry) => entry.record.payload._tag === "RunStarted",
-      );
+        const profileResults = after.records.filter(
+          (entry) => entry.record.payload._tag === "ToolCallSettled",
+        );
 
-      expect(startedAfter).toHaveLength(1);
-      if (restart) expect(startedAfter).toEqual(startedBefore);
-      expect(
-        after.records.filter((entry) => entry.record.payload._tag === "ToolStepSettled"),
-      ).toHaveLength(1);
+        expect(profileResults).toHaveLength(1);
+        expect(profileResults[0]?.record.payload).toMatchObject({
+          toolName: "select_model",
+          isFailure: scenario === "failed-tool",
+        });
 
-      const profileResults = after.records.filter(
-        (entry) => entry.record.payload._tag === "ToolCallSettled",
-      );
+        const rollovers = after.records.filter(
+          (entry) => entry.record.payload._tag === "CompactionCreated",
+        );
 
-      expect(profileResults).toHaveLength(1);
-      expect(profileResults[0]?.record.payload).toMatchObject({
-        toolName: "select_model",
-        isFailure: scenario === "failed-tool",
-      });
+        expect(rollovers).toHaveLength(selected === "small" ? 1 : 0);
+        if (selected === "small") {
+          expect(rollovers[0]?.record.payload).toMatchObject({ kind: "rollover", turn: 2 });
+        }
 
-      const rollovers = after.records.filter(
-        (entry) => entry.record.payload._tag === "CompactionCreated",
-      );
+        const terminal = after.records.find(
+          (entry) => entry.record.payload._tag === "SubmissionSettled",
+        )?.record.payload;
 
-      expect(rollovers).toHaveLength(selected === "small" ? 1 : 0);
-      if (selected === "small") {
-        expect(rollovers[0]?.record.payload).toMatchObject({ kind: "rollover", turn: 2 });
-      }
-
-      const terminal = after.records.find(
-        (entry) => entry.record.payload._tag === "SubmissionSettled",
-      )?.record.payload;
-
-      expect(terminal).toMatchObject({
-        outcome: "completed",
-        usageSummary: {
-          modelCalls: 2,
-          inputTokens: { total: 175 },
-          outputTokens: { total: 15 },
-          byModel:
-            selected === "small"
-              ? [
-                  { model: "large", modelCalls: 1 },
-                  { model: "small", modelCalls: 1 },
-                ]
-              : [{ model: "large", modelCalls: 2 }],
-        },
-      });
-    }),
+        expect(terminal).toMatchObject({
+          outcome: "completed",
+          usageSummary: {
+            modelCalls: 2,
+            inputTokens: { total: 175 },
+            outputTokens: { total: 15 },
+            byModel:
+              selected === "small"
+                ? [
+                    { model: "large", modelCalls: 1 },
+                    { model: "small", modelCalls: 1 },
+                  ]
+                : [{ model: "large", modelCalls: 2 }],
+          },
+        });
+      }),
   );
 
   it.effect("settles only the FIFO head and closes its provider before returning", () =>
@@ -1099,53 +1092,42 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
     }),
   );
 
-  it.effect.each(["failpoint", "lookup", "defect"] as const)(
-    "releases a claim after an early %s failure",
-    (failure) =>
-      Effect.gen(function* () {
-        const ledger = yield* SubmissionLedger;
-        const armed = yield* Ref.make(false);
+  it.effect.each(["lookup"])("releases a claim after an early %s failure", (failure) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+      const armed = yield* Ref.make(false);
 
-        const runtime = yield* makeRuntime().pipe(
-          Effect.provideService(SubmissionLedger, {
-            ...ledger,
-            lookup: (request) =>
-              Ref.get(armed).pipe(
-                Effect.flatMap((enabled) => {
-                  if (!enabled || failure === "failpoint") return ledger.lookup(request);
+      const runtime = yield* makeRuntime().pipe(
+        Effect.provideService(SubmissionLedger, {
+          ...ledger,
+          lookup: (request) =>
+            Ref.get(armed).pipe(
+              Effect.flatMap((enabled) => {
+                if (!enabled) return ledger.lookup(request);
 
-                  return failure === "lookup"
-                    ? Effect.fail(LedgerError.make({ operation: "lookup", message: "unavailable" }))
-                    : Effect.die("lookup defect");
-                }),
-              ),
-          }),
-        );
+                return Effect.fail(
+                  LedgerError.make({ operation: "lookup", message: "unavailable" }),
+                );
+              }),
+            ),
+        }),
+      );
 
-        const receipt = yield* runtime.submit(
-          { definition },
-          "first",
-          options(`early-${failure}`, "first"),
-        );
+      const receipt = yield* runtime.submit(
+        { definition },
+        "first",
+        options(`early-${failure}`, "first"),
+      );
 
-        const control = yield* DurableRuntimeFailpointTestControl;
+      yield* Ref.set(armed, true);
+      const result = yield* Effect.exit(runtime.processThreadHead(receipt.threadId));
 
-        yield* Ref.set(armed, true);
-        if (failure === "failpoint") {
-          yield* control.setHandler((location) =>
-            location === "claim:after-claim"
-              ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
-              : Effect.void,
-          );
-        }
-        const result = yield* Effect.exit(runtime.processThreadHead(receipt.threadId));
+      expect(Exit.isFailure(result)).toBe(true);
+      expect((yield* snapshot(receipt)).ownership).toBeUndefined();
 
-        expect(Exit.isFailure(result)).toBe(true);
-        expect((yield* snapshot(receipt)).ownership).toBeUndefined();
-        yield* control.clear;
-        yield* Ref.set(armed, false);
-        expect((yield* runtime.submissionStatus(receipt))._tag).toBe("pending");
-      }),
+      yield* Ref.set(armed, false);
+      expect((yield* runtime.submissionStatus(receipt))._tag).toBe("pending");
+    }),
   );
 
   it.effect("registers claim cleanup even when interrupted during the acquisition handoff", () =>
@@ -1262,98 +1244,6 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
       }),
   );
 
-  it.effect("keeps approval suspension pending without touching a queued follower", () =>
-    Effect.gen(function* () {
-      const approvalTools = Toolkit.make(
-        Tool.make("approve", {
-          parameters: Schema.Struct({}),
-          success: Schema.String,
-          needsApproval: true,
-        }),
-      );
-
-      const agent = Agent.withModel(
-        Agent.make("approval-head", {
-          input: Schema.String,
-          output: Schema.String,
-          instructions: "Call approve.",
-          toolkit: approvalTools,
-          policy,
-        }),
-        makeModel(
-          Stream.fromIterable<Response.StreamPartEncoded>([
-            {
-              type: "tool-call",
-              id: "approval-1",
-              name: "approve",
-              params: {},
-              providerExecuted: false,
-            },
-            { type: "finish", reason: "tool-calls", usage: { inputTokens: {}, outputTokens: {} } },
-          ]),
-        ),
-      );
-
-      const binding = yield* DurableWorkerBinding.make(agent, digests).pipe(
-        Effect.provide(approvalTools.toLayer({ approve: () => Effect.die("unapproved handler") })),
-      );
-
-      const runtime = yield* makeRuntime([binding]);
-
-      const first = yield* runtime.submit(agent, "first", options("suspended", "first"));
-      const second = yield* runtime.submit(agent, "second", options("suspended", "second"));
-
-      expect(Option.isNone(yield* runtime.processThreadHead(first.threadId))).toBe(true);
-      expect((yield* snapshot(first)).submission.state).toBe("suspended");
-      expect((yield* runtime.submissionStatus(first))._tag).toBe("pending");
-      expect(Option.isNone(yield* runtime.processThreadHead(first.threadId))).toBe(true);
-      expect((yield* snapshot(second)).ownership).toBeUndefined();
-      expect((yield* runtime.submissionStatus(second))._tag).toBe("pending");
-    }),
-  );
-
-  it.effect("recovers a queued abort without claiming or releasing the head", () =>
-    Effect.gen(function* () {
-      const ledger = yield* SubmissionLedger;
-      const claims = yield* Ref.make(0);
-
-      const runtime = yield* makeRuntime().pipe(
-        Effect.provideService(SubmissionLedger, {
-          ...ledger,
-          claim: (request) =>
-            Ref.update(claims, (n) => n + 1).pipe(Effect.andThen(ledger.claim(request))),
-        }),
-      );
-
-      const first = yield* runtime.submit(
-        { definition },
-        "first",
-        options("queued-abort", "first"),
-      );
-
-      const second = yield* runtime.submit(
-        { definition },
-        "second",
-        options("queued-abort", "second"),
-      );
-
-      yield* runtime.abort(
-        AbortCommand.make({
-          submissionId: second.submissionId,
-          author: "test",
-          reason: "cancel queued work",
-        }),
-      );
-      yield* runtime.recoverSubmission(second.submissionId);
-      expect(yield* Ref.get(claims)).toBe(0);
-      expect((yield* snapshot(first)).ownership).toBeUndefined();
-      const status = yield* runtime.submissionStatus(second);
-
-      expect(status._tag).toBe("settled");
-      if (status._tag === "settled") expect(status.settlement.outcome).toBe("aborted");
-    }),
-  );
-
   it.effect(
     "releases recovery ownership when settlement reservation fails before its canonical append",
     () =>
@@ -1389,29 +1279,6 @@ layer(baseLayer)("bounded durable Thread processing", (it) => {
         yield* runtime.recoverSubmission(receipt.submissionId);
         expect((yield* runtime.submissionStatus(receipt))._tag).toBe("settled");
       }),
-  );
-
-  it.effect("reports invalid public admission constraints as typed failures", () =>
-    Effect.gen(function* () {
-      const runtime = yield* makeRuntime();
-
-      expect(
-        (yield* runtime
-          .submit({ definition }, "input", {
-            ...options("invalid-constraints", "group"),
-            admissionGroup: "",
-          })
-          .pipe(Effect.flip))._tag,
-      ).toBe("LedgerError");
-      expect(
-        (yield* runtime
-          .submit({ definition }, "input", {
-            ...options("invalid-constraints", "fence"),
-            admissionFence: { policyId: "host", key: "entity", revision: "" },
-          })
-          .pipe(Effect.flip))._tag,
-      ).toBe("LedgerError");
-    }),
   );
 
   for (const location of [

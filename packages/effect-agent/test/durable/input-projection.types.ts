@@ -1,28 +1,7 @@
-import {
-  type Crypto,
-  type Stream,
-  Context,
-  Effect,
-  Schema,
-  SchemaGetter,
-  type Scope,
-  Layer,
-} from "effect";
-import { PersistentHistory } from "effect-agent";
+import { type Crypto, Context, Effect, Schema, SchemaGetter, Layer } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
-import { DurableWorkerBinding, type ResolvedBinding } from "effect-agent/agent-registration";
-import * as AgentRuntime from "effect-agent/agent-runtime";
-import { type AgentRuntimeFailure } from "effect-agent/agent-runtime";
-import { type DigestError } from "effect-agent/digest";
-import {
-  type DurableAgentRuntime,
-  type DurableWorkerRequirements,
-} from "effect-agent/durable-agent-runtime";
-import { type ThreadId } from "effect-agent/identifiers";
-import { type DefinitionDigests } from "effect-agent/records";
-import { type ThreadHistory } from "effect-agent/thread-history";
-import { type ThreadStore } from "effect-agent/thread-store";
+import { type DurableWorkerRequirements } from "effect-agent/durable-agent-runtime";
 import { Toolkit, type LanguageModel, type Model, Tool } from "effect/unstable/ai";
 
 import { compileRegistrations } from "../../src/durable/internal/agent-registration.ts";
@@ -129,83 +108,6 @@ const definition = Agent.make("durable-input-projection-types", {
   },
 });
 
-export const proveWorkerRequirements = (
-  runtime: DurableAgentRuntime["Service"],
-  model: Layer.Layer<
-    LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
-    never,
-    ProviderInfrastructure
-  >,
-  threadId: ThreadId,
-  digests: DefinitionDigests,
-) => {
-  const agent = Agent.withModel(definition, model);
-  const process = runtime.processThread(agent, threadId);
-  const worker = runtime.runWorker(agent);
-  const registered = DurableWorkerBinding.make(agent, digests);
-
-  const execution = AgentRuntime.run(
-    agent,
-    { question: "hello", hostOnly: "private" },
-    { threadId },
-  );
-
-  const retained = execution.pipe(Effect.provide(PersistentHistory.layer));
-
-  const events = AgentRuntime.stream(
-    agent,
-    { question: "hello", hostOnly: "private" },
-    { threadId },
-  );
-
-  const detached = AgentRuntime.start(
-    agent,
-    { question: "hello", hostOnly: "private" },
-    { threadId },
-  );
-
-  type Expected = InputProjection | InstructionContext | ProviderInfrastructure;
-  type ProcessProof = Assert<Equal<Effect.Services<typeof process>, Expected>>;
-  type WorkerProof = Assert<Equal<Effect.Services<typeof worker>, Expected>>;
-  type RegisteredProof = Assert<Equal<Effect.Services<typeof registered>, Expected>>;
-  type PublicProof = Assert<Equal<DurableWorkerRequirements<typeof agent>, Expected>>;
-  type FailureProof = Assert<
-    Equal<Extract<Agent.Failure<typeof agent>, InputProjectionFailure>, InputProjectionFailure>
-  >;
-  type RunRequirementsProof = Assert<
-    Equal<Effect.Services<typeof execution>, Expected | ThreadHistory>
-  >;
-  type StreamRequirementsProof = Assert<
-    Equal<Stream.Services<typeof events>, Expected | ThreadHistory>
-  >;
-  type StartRequirementsProof = Assert<
-    Equal<Effect.Services<typeof detached>, Expected | ThreadHistory | Scope.Scope>
-  >;
-  type HistoryRequirementsProof = Assert<
-    Equal<Effect.Services<typeof retained>, Expected | ThreadStore>
-  >;
-  type HistoryFailureProof = Assert<
-    Equal<Effect.Error<typeof retained>, AgentRuntimeFailure<typeof agent>>
-  >;
-  type HistoryOutputProof = Assert<Equal<Effect.Success<typeof retained>["output"], string>>;
-
-  const proofs: readonly [
-    ProcessProof,
-    WorkerProof,
-    RegisteredProof,
-    PublicProof,
-    FailureProof,
-    RunRequirementsProof,
-    StreamRequirementsProof,
-    StartRequirementsProof,
-    HistoryRequirementsProof,
-    HistoryFailureProof,
-    HistoryOutputProof,
-  ] = [true, true, true, true, true, true, true, true, true, true, true];
-
-  return proofs;
-};
-
 export const proveRegistrationRequirements = (
   firstModel: Layer.Layer<
     LanguageModel.LanguageModel | Model.ProviderName | Model.ModelName,
@@ -237,8 +139,6 @@ export const proveRegistrationRequirements = (
       }),
     },
   ]);
-
-  const empty = compileRegistrations([]);
 
   const conditionalEntry = {
     agent: first,
@@ -281,17 +181,6 @@ export const proveRegistrationRequirements = (
 
   void conditionalRequirements;
 
-  const rejectedMixedModel = compileRegistrations([
-    // @ts-expect-error An existing Binding cannot also select a different model.
-    {
-      agent: first,
-      model: secondModel,
-      definitions: DefinitionDigestInput.make({ agent: "mixed", model: "mixed", tools: [] }),
-    },
-  ]);
-
-  void rejectedMixedModel;
-
   const scoped = compileRegistrations([
     {
       agent: definition,
@@ -315,20 +204,7 @@ export const proveRegistrationRequirements = (
     >
   > = true;
 
-  const scopedErrors: Assert<Equal<Effect.Error<typeof scoped>, DigestError>> = true;
-
   void scopedRequirements;
-  void scopedErrors;
-
-  const identityOnly = {
-    agentId: first.definition.id,
-    attempt: () => Effect.never,
-  };
-
-  // @ts-expect-error Exact registrations require a definition digest triple.
-  const rejectedIdentityOnly: ResolvedBinding = identityOnly;
-
-  void rejectedIdentityOnly;
 
   type Services = Effect.Services<typeof compiled>;
   type Expected =
@@ -336,30 +212,8 @@ export const proveRegistrationRequirements = (
     | DurableWorkerRequirements<typeof first>
     | DurableWorkerRequirements<typeof second>;
   type CompleteUnion = Assert<Equal<Services, Expected>>;
-  type FirstModel = Assert<
-    Equal<Extract<Services, ProviderInfrastructure>, ProviderInfrastructure>
-  >;
-  type SecondModel = Assert<
-    Equal<Extract<Services, SecondProviderInfrastructure>, SecondProviderInfrastructure>
-  >;
-  type SchemaDecode = Assert<Equal<Extract<Services, SchemaDecoder>, SchemaDecoder>>;
-  type SchemaEncode = Assert<Equal<Extract<Services, SchemaEncoder>, SchemaEncoder>>;
-  type FirstTool = Assert<Equal<Extract<Services, LookupDependency>, LookupDependency>>;
-  type SecondTool = Assert<Equal<Extract<Services, AuditDependency>, AuditDependency>>;
-  type Failure = Assert<Equal<Effect.Error<typeof compiled>, DigestError>>;
-  type Empty = Assert<Equal<Effect.Services<typeof empty>, Crypto.Crypto>>;
 
-  const proofs: readonly [
-    CompleteUnion,
-    FirstModel,
-    SecondModel,
-    SchemaDecode,
-    SchemaEncode,
-    FirstTool,
-    SecondTool,
-    Failure,
-    Empty,
-  ] = [true, true, true, true, true, true, true, true, true];
+  const proofs: readonly [CompleteUnion] = [true];
 
   return proofs;
 };

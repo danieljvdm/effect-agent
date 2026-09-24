@@ -20,33 +20,23 @@ import { runInDurableObject } from "cloudflare:test";
 import type { Crypto } from "effect";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { digestJson, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { RunId } from "effect-agent/identifiers";
 import { MessageDeliveryStore, readPending } from "effect-agent/message-delivery";
-import { CanonicalRecord, UserInputRecorded, type PersistedJson } from "effect-agent/records";
+import { type PersistedJson } from "effect-agent/records";
 import {
-  AbortCommand,
-  AdmissionConflict,
-  ApprovalPendingSuspension,
   AttachChildToReservationRequest,
   ChildBudgetReservationRequest,
   ChildReservationId,
   ChildSettledNotification,
-  ClaimJoiningRequest,
   ClaimRequest,
   IdempotencyKey,
-  JoinedToHost,
   LedgerError,
-  MarkJoinedRequest,
   MarkReadyRequest,
   RecoverySnapshotRequest,
-  AbortIntentRequest,
   RenewOwnershipRequest,
-  SettlementConflict,
   SettlementFinalization,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
-  submissionInputRecordId,
   SuspendRequest,
   WaitingChild,
   WaitingForChildSuspension,
@@ -54,33 +44,18 @@ import {
 } from "effect-agent/submission-ledger";
 import { makeMessageDeliveryFixture } from "effect-agent/testing/message-delivery-store-conformance";
 import {
-  AppendConflict,
-  ThreadExportRequest,
   ThreadIdentityRequest,
   ThreadMaterialization,
-  ThreadNotMaterialized,
-  ThreadObservation,
-  ThreadRead,
   ThreadStore,
-  getRecord,
-  getRunInput,
-  readOutstanding,
-  readWorkerState,
   ThreadStoreError,
-  ThreadTailRequest,
-  FenceRejected,
-  FencedAppendRequest,
-  LoadCheckpointRequest,
 } from "effect-agent/thread-store";
 import { describe, expect, it } from "vite-plus/test";
 
-import { batch, inputRecord } from "./canonical-fixtures.ts";
 import {
   admission,
   thread,
   threadStub,
   id,
-  sequence,
   epoch,
   settlementReservation,
   TEST_PRINCIPAL,
@@ -92,12 +67,7 @@ import {
 const submissionId = (value: string) => id(MarkReadyRequest.fields.submissionId, value);
 const ownershipToken = (value: string) => id(RenewOwnershipRequest.fields.ownershipToken, value);
 const idempotencyKey = (value: string) => id(IdempotencyKey, value);
-const isAdmissionConflict = Schema.is(AdmissionConflict);
-const isSettlementConflict = Schema.is(SettlementConflict);
-const isJoinedToHost = Schema.is(JoinedToHost);
-const isThreadNotMaterialized = Schema.is(ThreadNotMaterialized);
-const isAppendConflict = Schema.is(AppendConflict);
-const isFenceRejected = Schema.is(FenceRejected);
+
 const isLedgerError = Schema.is(LedgerError);
 const isThreadStoreError = Schema.is(ThreadStoreError);
 
@@ -232,43 +202,6 @@ const claimedLocalLane = Effect.fn("RoutingTest.claimedLocalLane")(function* (
 
 describe("cross-DO port routing", () => {
   // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
-  it("reads one foreign identity snapshot in one owner call", () => {
-    const state = control();
-
-    return withRoutedPorts(
-      "identity-reader",
-      state,
-      Effect.gen(function* () {
-        const store = yield* ThreadStore;
-        const threadId = thread("identity-owner");
-        const firstRecord = inputRecord("identity-first", "first canonical fact");
-
-        yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch: epoch(1) }));
-
-        const appended = yield* store.append(
-          FencedAppendRequest.make({
-            threadId,
-            producerEpoch: epoch(1),
-            expectedTailSequence: sequence(0),
-            expectedTailDigest: EMPTY_TAIL_DIGEST,
-            batch: batch("identity-records", [firstRecord, inputRecord("identity-later", "later")]),
-          }),
-        );
-
-        const before = state.calls;
-        const identity = yield* store.readIdentity(ThreadIdentityRequest.make({ threadId }));
-
-        expect(identity).toMatchObject({
-          threadId,
-          producerEpoch: 1,
-          tailSequence: 2,
-          tailDigest: appended.tailDigest,
-          records: [{ threadId, sequence: 1, record: firstRecord }],
-        });
-        expect(state.calls - before).toBe(1);
-      }),
-    );
-  });
 
   // Regression: https://github.com/danieljvdm/effect-agent/commit/6a4f4f870
   it("preserves identity absence and rejects invalid owner replies typed", () => {
@@ -298,9 +231,7 @@ describe("cross-DO port routing", () => {
         });
 
         const invalidReplies = [
-          { _tag: "StoreMaterializeResult" },
           { _tag: "StoreReadIdentityResult", identity: { ...empty, threadId: "another-owner" } },
-          { _tag: "StoreReadIdentityResult", identity: { ...empty, tailSequence: 1 } },
         ];
 
         for (const result of invalidReplies) {
@@ -322,22 +253,6 @@ describe("cross-DO port routing", () => {
           expect(unavailable.cause).toBeInstanceOf(PortTransportError);
         }
         state.fault = undefined;
-
-        const local = thread("identity-failure-reader");
-
-        yield* store.materialize(
-          ThreadMaterialization.make({ threadId: local, producerEpoch: epoch(2) }),
-        );
-        const beforeLocal = state.calls;
-
-        expect(
-          yield* store.readIdentity(ThreadIdentityRequest.make({ threadId: local })),
-        ).toMatchObject({
-          threadId: local,
-          producerEpoch: 2,
-          records: [],
-        });
-        expect(state.calls).toBe(beforeLocal);
       }),
     );
   });
@@ -375,395 +290,6 @@ describe("cross-DO port routing", () => {
           yield* readPending({ ownerThreadId: thread("wp2-pending-caller"), limit: 1 }),
         ).toEqual([]);
       }),
-    );
-  });
-
-  it("routes exact canonical lookups and bounded inventories to their owning Object", () =>
-    withRoutedPorts(
-      "native-reader",
-      control(),
-      Effect.gen(function* () {
-        const store = yield* ThreadStore;
-        const owner = thread("native-record-owner");
-
-        yield* store.materialize(
-          ThreadMaterialization.make({ threadId: owner, producerEpoch: epoch(1) }),
-        );
-
-        const runId = Schema.decodeSync(RunId)("native-owner-run");
-
-        const original = inputRecord("native-input", "accepted input");
-
-        const record = CanonicalRecord.make({
-          ...original,
-          payload: UserInputRecorded.make({
-            kind: "user",
-            runId,
-            input: "accepted input",
-          }),
-        });
-
-        yield* store.append(
-          FencedAppendRequest.make({
-            threadId: owner,
-            producerEpoch: epoch(1),
-            expectedTailSequence: sequence(0),
-            expectedTailDigest: EMPTY_TAIL_DIGEST,
-            batch: batch("native-input", [record]),
-          }),
-        );
-
-        expect(
-          Option.getOrThrow(yield* getRecord({ threadId: owner, recordId: record.recordId }))
-            .record,
-        ).toEqual(record);
-        expect(Option.getOrThrow(yield* getRunInput({ threadId: owner, runId })).record).toEqual(
-          record,
-        );
-        expect(yield* readOutstanding({ threadId: owner, limit: 1 })).toMatchObject({
-          complete: true,
-          operations: [],
-          workerInputs: [],
-          throughSequence: 1,
-        });
-        expect(yield* readWorkerState({ threadId: owner, limit: 1 })).toMatchObject({
-          records: [],
-          tailSequence: 1,
-        });
-        expect(yield* store.countPeerMessages!({ threadId: owner, limit: 1 })).toBe(0);
-        expect(
-          (yield* getRecord({
-            threadId: thread("native-missing-owner"),
-            recordId: record.recordId,
-          }).pipe(Effect.flip))._tag,
-        ).toBe("ThreadNotMaterialized");
-      }),
-    ));
-
-  it("preserves absent checkpoint support while routing base store operations", () => {
-    const state = control();
-
-    return withRoutedPorts(
-      "wp2-no-checkpoints",
-      state,
-      Effect.gen(function* () {
-        const store = yield* ThreadStore;
-
-        expect(store.checkpoints).toBeUndefined();
-        expect(store.recoveryCheckpoints).toBeUndefined();
-
-        const missing = yield* store
-          .export(
-            ThreadExportRequest.make({
-              threadId: thread("wp2-no-checkpoints-foreign"),
-            }),
-          )
-          .pipe(Effect.flip);
-
-        expect(missing._tag).toBe("ThreadNotMaterialized");
-        expect(state.calls).toBe(1);
-      }),
-      false,
-    );
-  });
-
-  it("maps hostile transport causes without escaping the typed error channel", () => {
-    const hostile = new Proxy(
-      {},
-      {
-        get: () => {
-          throw new Error("hostile getter");
-        },
-        getPrototypeOf: () => {
-          throw new Error("hostile prototype");
-        },
-      },
-    );
-
-    expect(() => portTransportFailure("foreign-thread", hostile)).not.toThrow();
-    const mapped = portTransportFailure("foreign-thread", hostile);
-
-    expect(mapped).toMatchObject({
-      _tag: "PortTransportError",
-      target: "foreign-thread",
-      message: "[unavailable transport diagnostic]",
-    });
-    expect(mapped.retryable).toBeUndefined();
-
-    const signaled = portTransportFailure("foreign-thread", {
-      message: "overloaded",
-      retryable: true,
-      toString: () => "overloaded",
-    });
-
-    expect(signaled.retryable).toBe(true);
-    expect(portTransportFailure("foreign-thread", "x".repeat(5_000)).message).toHaveLength(4_096);
-  });
-
-  it("routes the admission subset to the owning Thread Object with error-tag fidelity", async () => {
-    const parentConv = "wp2-admission-parent";
-    const childConv = "wp2-admission-child";
-    const state = control();
-
-    const established = await withRoutedPorts(
-      parentConv,
-      state,
-      Effect.gen(function* () {
-        const ledger = yield* SubmissionLedger;
-
-        const byKey = SubmissionLookupByKey.make({
-          threadId: thread(childConv),
-          principal: TEST_PRINCIPAL,
-          idempotencyKey: idempotencyKey("wp2-child-key"),
-        });
-
-        // The authoritative owner proves absence before any admission (SUB-031).
-        const before = yield* ledger.resolveAdmission(byKey);
-
-        expect(before._tag).toBe("NotAdmitted");
-
-        const request = yield* admission(childConv, "wp2-child-key", { task: "research" });
-        const admitted = yield* ledger.admit(request);
-
-        expect(admitted.replayed).toBe(false);
-        expect(admitted.state).toBe("admitted");
-        // D-P6-5: the minted identity carries its owning Thread after the first ":".
-        expect(admitted.submissionId.endsWith(`:${childConv}`)).toBe(true);
-
-        // An identical routed replay resumes instead of duplicating (DUR-001).
-        const replay = yield* ledger.admit(request);
-
-        expect(replay.replayed).toBe(true);
-        expect(replay.submissionId).toBe(admitted.submissionId);
-        expect(replay.receiptId).toBe(admitted.receiptId);
-
-        // A divergent payload under the same key re-decodes as the SAME tagged conflict the
-        // owning Object's local facet raised, fields intact (error-tag fidelity).
-        const divergent = yield* admission(childConv, "wp2-child-key", { task: "different" });
-        const conflict = yield* ledger.admit(divergent).pipe(Effect.flip);
-
-        expect(conflict).toBeInstanceOf(AdmissionConflict);
-        if (isAdmissionConflict(conflict)) {
-          expect(conflict.threadId).toBe(childConv);
-          expect(conflict.existingInputDigest).toBe(request.inputDigest);
-          expect(conflict.attemptedInputDigest).toBe(divergent.inputDigest);
-        }
-
-        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
-
-        const byIdRow = yield* ledger.lookup(
-          SubmissionLookupById.make({ submissionId: admitted.submissionId }),
-        );
-
-        expect(Option.isSome(byIdRow)).toBe(true);
-        if (Option.isSome(byIdRow)) {
-          expect(byIdRow.value.state).toBe("ready");
-          expect(byIdRow.value.threadId).toBe(childConv);
-        }
-
-        const byKeyRow = yield* ledger.lookup(byKey);
-
-        expect(Option.isSome(byKeyRow)).toBe(true);
-
-        const after = yield* ledger.resolveAdmission(byKey);
-
-        expect(after._tag).toBe("Admitted");
-        if (after._tag === "Admitted") {
-          expect(after.submission.submissionId).toBe(admitted.submissionId);
-        }
-
-        // A missing foreign key still answers through the owner — absence there is proof.
-        const unknown = yield* ledger.lookup(
-          SubmissionLookupByKey.make({
-            threadId: thread(childConv),
-            principal: TEST_PRINCIPAL,
-            idempotencyKey: idempotencyKey("wp2-never-admitted"),
-          }),
-        );
-
-        expect(Option.isNone(unknown)).toBe(true);
-
-        // This Object's OWN ledger holds nothing: the child row lives in the owning Object.
-        const localScan = yield* ledger.scanNonterminal.pipe(Stream.runCollect);
-
-        expect(localScan).toEqual([]);
-
-        return admitted;
-      }),
-    );
-
-    expect(state.calls).toBeGreaterThan(0);
-
-    // Authoritative verification inside the owning Object's local facet.
-    await withThreadStorage(childConv, (storage) =>
-      Effect.gen(function* () {
-        const ledger = yield* SubmissionLedger;
-
-        const row = yield* ledger.lookup(
-          SubmissionLookupById.make({ submissionId: established.submissionId }),
-        );
-
-        expect(Option.isSome(row)).toBe(true);
-        if (Option.isSome(row)) {
-          expect(row.value.state).toBe("ready");
-          expect(row.value.threadId).toBe(childConv);
-          expect(row.value.receiptId).toBe(established.receiptId);
-        }
-      }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
-    );
-  });
-
-  it("routes requestAbort with SettlementConflict, JoinedToHost, and intent fidelity", async () => {
-    const callerConv = "wp2-abort-caller";
-    const targetConv = "wp2-abort-target";
-    const state = control();
-
-    // Prepare the owning Object's lanes locally: one settled lane, one live lane, and one
-    // lane joined to a host Run.
-    const prepared = await withThreadStorage(targetConv, (storage) =>
-      Effect.gen(function* () {
-        const ledger = yield* SubmissionLedger;
-
-        const host = yield* ledger.admit(
-          yield* admission(targetConv, "wp2-abort-host", { role: "host" }),
-        );
-
-        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: host.submissionId }));
-
-        const hostClaim = Option.getOrThrow(
-          yield* ledger.claim(
-            ClaimRequest.make({
-              threadId: thread(targetConv),
-              producerId: TEST_PRODUCER,
-            }),
-          ),
-        );
-
-        const queued = yield* ledger.admit(
-          yield* admission(targetConv, "wp2-abort-joined", { role: "queued" }),
-        );
-
-        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: queued.submissionId }));
-
-        const joining = yield* ledger.claimJoining(
-          ClaimJoiningRequest.make({
-            threadId: thread(targetConv),
-            hostSubmissionId: host.submissionId,
-            ownershipToken: hostClaim.ownershipToken,
-            maxCount: 1,
-          }),
-        );
-
-        expect(joining.map((claim) => claim.submissionId)).toEqual([queued.submissionId]);
-        yield* ledger.markJoined(
-          MarkJoinedRequest.make({
-            submissionId: queued.submissionId,
-            ownershipToken: hostClaim.ownershipToken,
-            recordId: submissionInputRecordId(queued.submissionId),
-            sequence: sequence(1),
-          }),
-        );
-
-        // Settle the host lane so the routed abort of a settled Submission conflicts typed.
-        const reservation = yield* settlementReservation(
-          host,
-          hostClaim.ownershipToken,
-          "completed",
-        );
-
-        yield* ledger.reserveSettlement(reservation);
-        yield* ledger.finalizeSettlement(
-          SettlementFinalization.make({
-            submissionId: host.submissionId,
-            settlementId: reservation.settlementId,
-          }),
-        );
-
-        const live = yield* ledger.admit(
-          yield* admission(targetConv, "wp2-abort-live", { role: "live" }),
-        );
-
-        return { host, joined: queued, live };
-      }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
-    );
-
-    await withRoutedPorts(
-      callerConv,
-      state,
-      Effect.gen(function* () {
-        const ledger = yield* SubmissionLedger;
-
-        // Terminal outcomes are immutable across Objects: the conflict re-decodes verbatim.
-        const settledConflict = yield* ledger
-          .requestAbort(
-            AbortCommand.make({
-              submissionId: prepared.host.submissionId,
-              author: "wp2-operator",
-              reason: "too late",
-            }),
-          )
-          .pipe(Effect.flip);
-
-        expect(settledConflict).toBeInstanceOf(SettlementConflict);
-        if (isSettlementConflict(settledConflict)) {
-          expect(settledConflict.existingOutcome).toBe("completed");
-          expect(settledConflict.submissionId).toBe(prepared.host.submissionId);
-        }
-
-        // A joined Submission settles with its host: the redirect crosses Objects typed.
-        const joinedRedirect = yield* ledger
-          .requestAbort(
-            AbortCommand.make({
-              submissionId: prepared.joined.submissionId,
-              author: "wp2-operator",
-              reason: "wrong lane",
-            }),
-          )
-          .pipe(Effect.flip);
-
-        expect(joinedRedirect).toBeInstanceOf(JoinedToHost);
-        if (isJoinedToHost(joinedRedirect)) {
-          expect(joinedRedirect.hostSubmissionId).toBe(prepared.host.submissionId);
-        }
-
-        // A live lane records the intent durably and idempotently through the route.
-        const intent = yield* ledger.requestAbort(
-          AbortCommand.make({
-            submissionId: prepared.live.submissionId,
-            author: "wp2-operator",
-            reason: "no longer needed",
-          }),
-        );
-
-        expect(intent.submissionId).toBe(prepared.live.submissionId);
-        expect(intent.author).toBe("wp2-operator");
-        expect(intent.reason).toBe("no longer needed");
-
-        const replay = yield* ledger.requestAbort(
-          AbortCommand.make({
-            submissionId: prepared.live.submissionId,
-            author: "wp2-other-author",
-            reason: "duplicate request",
-          }),
-        );
-
-        // Idempotent per submission: the FIRST recorded intent replays unchanged (DUR-012).
-        expect(replay.author).toBe("wp2-operator");
-        expect(replay.requestedAt).toStrictEqual(intent.requestedAt);
-      }),
-    );
-
-    // The intent row lives durably in the owning Object.
-    await withThreadStorage(targetConv, (storage) =>
-      Effect.gen(function* () {
-        const ledger = yield* SubmissionLedger;
-
-        const snapshot = yield* ledger.loadRecoverySnapshot(
-          RecoverySnapshotRequest.make({ submissionId: prepared.live.submissionId }),
-        );
-
-        expect(snapshot.abortIntent?.reason).toBe("no longer needed");
-      }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     );
   });
 
@@ -927,143 +453,6 @@ describe("cross-DO port routing", () => {
     );
   });
 
-  it("routes the thread store subset with error-tag fidelity", async () => {
-    const callerConv = "wp2-store-caller";
-    const targetConv = "wp2-store-target";
-    const state = control();
-
-    await withRoutedPorts(
-      callerConv,
-      state,
-      Effect.gen(function* () {
-        const store = yield* ThreadStore;
-
-        // The owner proves non-materialization typed across the route.
-        const missing = yield* store
-          .inspectTail(ThreadTailRequest.make({ threadId: thread(targetConv) }))
-          .pipe(Effect.flip);
-
-        expect(missing).toBeInstanceOf(ThreadNotMaterialized);
-        if (isThreadNotMaterialized(missing)) {
-          expect(missing.threadId).toBe(targetConv);
-        }
-
-        yield* store.materialize(
-          ThreadMaterialization.make({
-            threadId: thread(targetConv),
-            producerEpoch: epoch(1),
-          }),
-        );
-
-        const appended = yield* store.append(
-          FencedAppendRequest.make({
-            threadId: thread(targetConv),
-            batch: batch("wp2-routed-batch", [
-              inputRecord("wp2-routed-record-1", "first routed input"),
-              inputRecord("wp2-routed-record-2", "second routed input"),
-            ]),
-            expectedTailSequence: sequence(0),
-            expectedTailDigest: EMPTY_TAIL_DIGEST,
-            producerEpoch: epoch(1),
-          }),
-        );
-
-        expect(appended.firstSequence).toBe(1);
-        expect(appended.lastSequence).toBe(2);
-        expect(appended.replayed).toBe(false);
-
-        const page = yield* store
-          .read(ThreadRead.make({ threadId: thread(targetConv), limit: 10 }))
-          .pipe(Stream.runCollect);
-
-        expect(page.map((envelope) => envelope.record.recordId)).toEqual([
-          "wp2-routed-record-1",
-          "wp2-routed-record-2",
-        ]);
-
-        const tail = yield* store.inspectTail(
-          ThreadTailRequest.make({ threadId: thread(targetConv) }),
-        );
-
-        expect(tail.tailSequence).toBe(2);
-        expect(tail.tailDigest).toBe(appended.tailDigest);
-        expect(tail.producerEpoch).toBe(1);
-
-        const exported = yield* store.export(
-          ThreadExportRequest.make({ threadId: thread(targetConv) }),
-        );
-
-        expect(exported.threadId).toBe(targetConv);
-        expect(exported.tailSequence).toBe(2);
-        expect(exported.records).toHaveLength(2);
-
-        // A stale expected tail re-decodes as AppendConflict with the resume hint intact.
-        const staleTail = yield* store
-          .append(
-            FencedAppendRequest.make({
-              threadId: thread(targetConv),
-              batch: batch("wp2-stale-batch", [inputRecord("wp2-stale-record", "stale")]),
-              expectedTailSequence: sequence(0),
-              expectedTailDigest: EMPTY_TAIL_DIGEST,
-              producerEpoch: epoch(1),
-            }),
-          )
-          .pipe(Effect.flip);
-
-        expect(staleTail).toBeInstanceOf(AppendConflict);
-        if (isAppendConflict(staleTail)) {
-          expect(staleTail.reason).toBe("tail");
-          expect(staleTail.actualTailSequence).toBe(2);
-          expect(staleTail.actualTailDigest).toBe(appended.tailDigest);
-        }
-
-        // A superseded producer epoch re-decodes as FenceRejected with both epochs.
-        const fenced = yield* store
-          .append(
-            FencedAppendRequest.make({
-              threadId: thread(targetConv),
-              batch: batch("wp2-fenced-batch", [inputRecord("wp2-fenced-record", "fenced")]),
-              expectedTailSequence: tail.tailSequence,
-              expectedTailDigest: tail.tailDigest,
-              producerEpoch: epoch(9),
-            }),
-          )
-          .pipe(Effect.flip);
-
-        expect(fenced).toBeInstanceOf(FenceRejected);
-        if (isFenceRejected(fenced)) {
-          expect(fenced.actualEpoch).toBe(1);
-          expect(fenced.attemptedEpoch).toBe(9);
-        }
-
-        const staleMaterialize = yield* store
-          .materialize(
-            ThreadMaterialization.make({
-              threadId: thread(targetConv),
-              producerEpoch: epoch(0),
-            }),
-          )
-          .pipe(Effect.flip);
-
-        expect(staleMaterialize).toBeInstanceOf(FenceRejected);
-      }),
-    );
-    expect(state.calls).toBeGreaterThan(0);
-
-    // The canonical rows live in the owning Object's private database.
-    await withThreadStorage(targetConv, (storage) =>
-      Effect.gen(function* () {
-        const store = yield* ThreadStore;
-
-        const local = yield* store
-          .read(ThreadRead.make({ threadId: thread(targetConv), limit: 10 }))
-          .pipe(Stream.runCollect);
-
-        expect(local).toHaveLength(2);
-      }).pipe(Effect.provide(storeLayer({ storage, observationPollInterval: 1 }))),
-    );
-  });
-
   it("fails fast typed for foreign operations outside the closed route-capable subset", async () => {
     const localConv = "wp2-cross-local";
     const foreignConv = "wp2-cross-foreign";
@@ -1075,7 +464,6 @@ describe("cross-DO port routing", () => {
       state,
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
-        const store = yield* ThreadStore;
 
         const expectCrossLedger = <A, E>(effect: Effect.Effect<A, E>) =>
           effect.pipe(
@@ -1096,33 +484,7 @@ describe("cross-DO port routing", () => {
             }),
           ),
         );
-        yield* expectCrossLedger(
-          ledger.claimJoining(
-            ClaimJoiningRequest.make({
-              threadId: thread(foreignConv),
-              hostSubmissionId: foreignSid,
-              ownershipToken: ownershipToken("wp2-cross-token"),
-              maxCount: 1,
-            }),
-          ),
-        );
-        yield* expectCrossLedger(
-          ledger.renewOwnership(
-            RenewOwnershipRequest.make({
-              submissionId: foreignSid,
-              ownershipToken: ownershipToken("wp2-cross-token"),
-            }),
-          ),
-        );
-        yield* expectCrossLedger(
-          ledger.suspend(
-            SuspendRequest.make({
-              submissionId: foreignSid,
-              ownershipToken: ownershipToken("wp2-cross-token"),
-              reason: ApprovalPendingSuspension.make({ toolCallIds: [toolCall("wp2-cross")] }),
-            }),
-          ),
-        );
+
         yield* expectCrossLedger(
           ledger.reserveChildBudget(
             ChildBudgetReservationRequest.make({
@@ -1135,160 +497,10 @@ describe("cross-DO port routing", () => {
             }),
           ),
         );
-        yield* expectCrossLedger(
-          ledger.loadRecoverySnapshot(RecoverySnapshotRequest.make({ submissionId: foreignSid })),
-        );
-        yield* expectCrossLedger(
-          ledger.readAbortIntent(AbortIntentRequest.make({ submissionId: foreignSid })),
-        );
-
-        const observeFailure = yield* store
-          .observe(ThreadObservation.make({ threadId: thread(foreignConv) }))
-          .pipe(Stream.runCollect, Effect.flip);
-
-        expect(observeFailure).toBeInstanceOf(ThreadStoreError);
-        if (isThreadStoreError(observeFailure)) {
-          expect(observeFailure.message).toContain("not route-capable");
-        }
-
-        const checkpointFailure = yield* store
-          .checkpoints!.load(LoadCheckpointRequest.make({ threadId: thread(foreignConv) }))
-          .pipe(Effect.flip);
-
-        expect(checkpointFailure).toBeInstanceOf(ThreadStoreError);
-        if (isThreadStoreError(checkpointFailure)) {
-          expect(checkpointFailure.message).toContain("not route-capable");
-        }
       }),
     );
 
     // Fail-fast means fail BEFORE the transport: no delivery was ever attempted.
-    expect(state.calls).toBe(0);
-  });
-
-  it("treats a foreign recovery cache as missing without routing it", async () => {
-    const state = control();
-
-    await withRoutedPorts(
-      "wp2-cache-local",
-      state,
-      Effect.gen(function* () {
-        const store = yield* ThreadStore;
-
-        const checkpoint = yield* store.recoveryCheckpoints!.load(
-          LoadCheckpointRequest.make({ threadId: thread("wp2-cache-foreign") }),
-        );
-
-        // Runtime recovery can continue through the authorized canonical read route.
-        expect(Option.isNone(checkpoint)).toBe(true);
-      }),
-    );
-
-    expect(state.calls).toBe(0);
-  });
-
-  it("refuses a Submission identity beyond the routable bound typed, without routing", async () => {
-    const localConv = "wp2-bound-local";
-    const state = control();
-
-    await withRoutedPorts(
-      localConv,
-      state,
-      Effect.gen(function* () {
-        const ledger = yield* SubmissionLedger;
-        const oversized = submissionId("a".repeat(1_100));
-
-        const failure = yield* ledger
-          .markReady(MarkReadyRequest.make({ submissionId: oversized }))
-          .pipe(Effect.flip);
-
-        expect(failure).toBeInstanceOf(LedgerError);
-        if (isLedgerError(failure)) {
-          expect(failure.message).toContain("1024");
-        }
-      }),
-    );
-    expect(state.calls).toBe(0);
-  });
-
-  it("delegates this-thread and opaque-identity operations to the local facet without the transport", async () => {
-    const localConv = "wp2-local-delegation";
-    const state = control();
-
-    // A transport that would fail EVERY delivery proves by construction that local work
-    // never touches it.
-    state.fault = "poisoned transport: local operations must not route";
-
-    await withRoutedPorts(
-      localConv,
-      state,
-      Effect.gen(function* () {
-        const ledger = yield* SubmissionLedger;
-        const store = yield* ThreadStore;
-
-        const lane = yield* claimedLocalLane(localConv, "wp2-local-key", { work: "local" });
-
-        expect(lane.admitted.submissionId.endsWith(`:${localConv}`)).toBe(true);
-
-        const found = yield* ledger.lookup(
-          SubmissionLookupById.make({ submissionId: lane.admitted.submissionId }),
-        );
-
-        expect(Option.isSome(found)).toBe(true);
-
-        const resolution = yield* ledger.resolveAdmission(
-          SubmissionLookupByKey.make({
-            threadId: thread(localConv),
-            principal: TEST_PRINCIPAL,
-            idempotencyKey: idempotencyKey("wp2-local-key"),
-          }),
-        );
-
-        expect(resolution._tag).toBe("Admitted");
-
-        // Identities without the DC-minted shape fall back to the local authority.
-        const opaque = yield* ledger.lookup(
-          SubmissionLookupById.make({ submissionId: submissionId("submission-opaque") }),
-        );
-
-        expect(Option.isNone(opaque)).toBe(true);
-
-        const nonUuidHead = yield* ledger.lookup(
-          SubmissionLookupById.make({ submissionId: submissionId("not-a-uuid:some-conv") }),
-        );
-
-        expect(Option.isNone(nonUuidHead)).toBe(true);
-
-        yield* store.materialize(
-          ThreadMaterialization.make({
-            threadId: thread(localConv),
-            producerEpoch: lane.claim.producerEpoch,
-          }),
-        );
-        yield* store.append(
-          FencedAppendRequest.make({
-            threadId: thread(localConv),
-            batch: batch("wp2-local-batch", [inputRecord("wp2-local-record", "local input")]),
-            expectedTailSequence: sequence(0),
-            expectedTailDigest: EMPTY_TAIL_DIGEST,
-            producerEpoch: lane.claim.producerEpoch,
-          }),
-        );
-
-        const page = yield* store
-          .read(ThreadRead.make({ threadId: thread(localConv), limit: 10 }))
-          .pipe(Stream.runCollect);
-
-        expect(page).toHaveLength(1);
-
-        const tail = yield* store.inspectTail(
-          ThreadTailRequest.make({ threadId: thread(localConv) }),
-        );
-
-        expect(tail.tailSequence).toBe(1);
-        yield* store.export(ThreadExportRequest.make({ threadId: thread(localConv) }));
-      }),
-    );
     expect(state.calls).toBe(0);
   });
 

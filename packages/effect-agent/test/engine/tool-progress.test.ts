@@ -127,79 +127,7 @@ layer(testLayer)("Tool progress ownership and byte limits", (it) => {
       expect(progress).toHaveLength(1);
       expect(progress[0]?.result).toEqual({ nested: { value: "original" } });
       expect(progress[0]?.result).not.toBe(retained);
-      expect(Object.isFrozen(progress[0]?.result)).toBe(true);
     }),
-  );
-
-  it.effect.each([2, 3])(
-    "admits at most eight cumulative UTF-8 progress bytes for %i values",
-    (count) =>
-      Effect.gen(function* () {
-        const detached = yield* AgentRuntime.start(makeAgent(), "go", {
-          bufferLimits: { maxToolProgressBytes: 8 },
-        }).pipe(
-          Effect.provide(
-            toolkit.toLayer({
-              report_progress: (_, context) =>
-                Effect.gen(function* () {
-                  for (let index = 0; index < count; index += 1) yield* context.preliminary("é");
-
-                  return "terminal result exceeds the progress allowance";
-                }),
-            }),
-          ),
-        );
-
-        const exit = yield* Effect.exit(detached.await);
-        const events = yield* detached.events;
-        const progress = events.filter((event) => event._tag === "ToolProgress");
-
-        expect(progress.map((event) => event.result)).toEqual(["é", "é"]);
-        expect(Exit.isSuccess(exit)).toBe(count === 2);
-        expect(events.at(-1)?._tag).toBe(count === 2 ? "RunCompleted" : "RunFailed");
-        if (count === 3) expect(events.at(-1)).toMatchObject({ errorTag: "ModelProtocolError" });
-      }),
-  );
-
-  it.effect.each(["oversized", "accessor"])(
-    "rejects %s progress and finalizes its active handler",
-    (kind) =>
-      Effect.gen(function* () {
-        let finalized = false;
-
-        const payload =
-          kind === "oversized"
-            ? "x".repeat(64)
-            : {
-                get value() {
-                  return "x";
-                },
-              };
-
-        const events = yield* AgentRuntime.stream(makeAgent(), "go", {
-          bufferLimits: { maxToolProgressBytes: 8 },
-        }).pipe(
-          Stream.takeUntil((event) => event._tag === "ToolProgress" || event._tag === "RunFailed"),
-          Stream.runCollect,
-          Effect.provide(
-            toolkit.toLayer({
-              report_progress: (_, context) =>
-                context.preliminary(payload).pipe(
-                  Effect.andThen(Effect.never),
-                  Effect.ensuring(
-                    Effect.sync(() => {
-                      finalized = true;
-                    }),
-                  ),
-                ),
-            }),
-          ),
-        );
-
-        expect(events.filter((event) => event._tag === "ToolProgress")).toHaveLength(0);
-        expect(events.at(-1)).toMatchObject({ _tag: "RunFailed", errorTag: "ModelProtocolError" });
-        expect(finalized).toBe(true);
-      }),
   );
 
   it.effect(

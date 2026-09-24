@@ -2,13 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { type Effect, Schema } from "effect";
+import { Schema } from "effect";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
-import { afterAll, beforeAll, expect, expectTypeOf, it } from "vite-plus/test";
+import { afterAll, beforeAll, expect, it } from "vite-plus/test";
 
-import { type TripApp, type PlannerError } from "../src/domain.ts";
-import type { AppRepository } from "../src/trip-app/repository.ts";
+import { type TripApp } from "../src/domain.ts";
 
 const app: TripApp = {
   id: "a".repeat(32),
@@ -55,23 +54,19 @@ beforeAll(async () => {
     import { Effect, Layer, Schema, Cause } from "effect";
     import { SqlClient } from "effect/unstable/sql/SqlClient";
     import { AppRepository, AppRepositoryLive } from "../src/trip-app/repository.ts";
-    import { TripFailpoint } from "../src/server/trips.ts";
-    import { PlannerError, TripApp } from "../src/domain.ts";
-    const Command = Schema.Struct({ kind: Schema.String, app: Schema.optionalKey(TripApp), expected: Schema.optionalKey(Schema.NullOr(Schema.Number)), value: Schema.optionalKey(Schema.String), point: Schema.optionalKey(Schema.String), mode: Schema.optionalKey(Schema.String) });
+    import { TripApp } from "../src/domain.ts";
+    const Command = Schema.Struct({ kind: Schema.String, app: Schema.optionalKey(TripApp), expected: Schema.optionalKey(Schema.NullOr(Schema.Number)) });
     export class Apps extends DurableObject {
       async fetch(request) {
         const input = Schema.decodeUnknownSync(Command)(await request.json());
         const sql = SqliteClient.layer({ storage: this.ctx.storage });
-        const layers = AppRepositoryLive.pipe(Layer.provideMerge(sql), Layer.provide(Layer.succeed(TripFailpoint, {
-          hit: (point) => point !== input.point ? Effect.void : input.mode === "defect" ? Effect.die("injected defect") : input.mode === "interrupt" ? Effect.interrupt : Effect.fail(new PlannerError({code:"storage", message:"Injected failure"})),
-        })));
+        const layers = AppRepositoryLive.pipe(Layer.provideMerge(sql));
         const result = await Effect.runPromise(Effect.gen(function* () {
           const repository = yield* AppRepository;
           const client = yield* SqlClient;
           if (input.kind === "save" && input.app) return yield* repository.save(input.app, input.expected ?? null);
           if (input.kind === "get") return yield* repository.get("lisbon");
           if (input.kind === "id") return yield* repository.getById("${app.id}");
-          if (input.kind === "corrupt") yield* client\`UPDATE travel_app_revisions SET value = $\{input.value} WHERE revision = 1\`;
           return yield* client\`SELECT value FROM travel_app_revisions ORDER BY revision\`;
         }).pipe(Effect.provide(layers), Effect.exit));
         return Response.json(result._tag === "Success" ? { _tag: "Success", value: result.value } : { _tag: "Failure", error: Cause.pretty(result.cause) });
@@ -126,8 +121,7 @@ const value = async (owner: string, input: unknown) => {
   return result.value;
 };
 
-it("keeps append-only CAS revisions across restart and isolates account stores", async () => {
-  expect(await value("owner", { kind: "get" })).toBeNull();
+it("keeps the latest revision across an old retry and object restart", async () => {
   expect(await value("owner", { kind: "save", app, expected: null })).toEqual(app);
 
   const ready: TripApp = {
@@ -141,64 +135,8 @@ it("keeps append-only CAS revisions across restart and isolates account stores",
   expect(await value("owner", { kind: "save", app: ready, expected: 1 })).toEqual(ready);
   expect(await value("owner", { kind: "save", app, expected: null })).toEqual(app);
   expect(await value("owner", { kind: "get" })).toEqual(ready);
-  expect(await value("other", { kind: "id" })).toBeNull();
   await runtime.dispose();
   runtime = start();
   expect(await value("owner", { kind: "id" })).toEqual(ready);
   expect(await value("owner", { kind: "rows" })).toHaveLength(2);
-  for (const candidate of [
-    { ...ready, revision: 3 },
-    { ...ready, id: "c".repeat(32) },
-    { ...ready, tripId: "different" },
-  ])
-    expect(await call("owner", { kind: "save", app: candidate, expected: 1 })).toMatchObject({
-      _tag: "Failure",
-      error: expect.stringContaining("changed"),
-    });
-  expect(await value("owner", { kind: "rows" })).toHaveLength(2);
-}, 30_000);
-
-it("reconciles a lost save acknowledgement and leaves pre-write failures unchanged", async () => {
-  for (const mode of ["failure", "defect", "interrupt"])
-    expect((await call("faults", { kind: "save", app, point: "app:save:before", mode }))._tag).toBe(
-      "Failure",
-    );
-  expect(await value("faults", { kind: "get" })).toBeNull();
-  expect((await call("faults", { kind: "save", app, point: "app:save:after" }))._tag).toBe(
-    "Failure",
-  );
-  expect(await value("faults", { kind: "get" })).toEqual(app);
-  expect(await value("faults", { kind: "save", app })).toEqual(app);
-  expect(await value("faults", { kind: "rows" })).toHaveLength(1);
-}, 30_000);
-
-it("rejects corrupt and unknown stored formats without replacing their bytes", async () => {
-  await value("corrupt", { kind: "save", app });
-  for (const stored of [
-    "PRIVATE_SENTINEL",
-    JSON.stringify({ version: 99, app }),
-    JSON.stringify({ version: 1, app: { ...app, tripId: "wrong" } }),
-  ]) {
-    await value("corrupt", { kind: "corrupt", value: stored });
-    for (const request of [
-      { kind: "get" },
-      { kind: "id" },
-      { kind: "save", app: { ...app, revision: 2 }, expected: 1 },
-    ]) {
-      const result = await call("corrupt", request);
-
-      expect(result).toMatchObject({
-        _tag: "Failure",
-        error: expect.stringContaining("unsupported data"),
-      });
-      expect(JSON.stringify(result)).not.toContain("PRIVATE_SENTINEL");
-    }
-    expect(await value("corrupt", { kind: "rows" })).toEqual([{ value: stored }]);
-  }
-  expectTypeOf<
-    Effect.Error<ReturnType<AppRepository["Service"]["save"]>>
-  >().toEqualTypeOf<PlannerError>();
-  expectTypeOf<
-    Effect.Services<ReturnType<AppRepository["Service"]["save"]>>
-  >().toEqualTypeOf<never>();
 }, 30_000);

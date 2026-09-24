@@ -24,7 +24,6 @@ import { IdempotencyKey, Principal } from "effect-agent/submission-ledger";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effect/unstable/ai";
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster";
-import { WorkflowEngine } from "effect/unstable/workflow";
 
 export const deploymentId = Schema.decodeSync(DeploymentId)("workflow-certification");
 export const workflowPrefix = "effect-agent/certification/v1";
@@ -133,7 +132,6 @@ export const hostLayer = <const Entries extends ReadonlyArray<AgentRegistration>
   directory: string,
   registrations: Entries,
   options: Partial<NodeDurableAgentRuntimeOptions> = {},
-  memoryEngine = false,
   repairBatchSize = 2,
 ) =>
   WorkflowAgentHost.layer({
@@ -155,13 +153,7 @@ export const hostLayer = <const Entries extends ReadonlyArray<AgentRegistration>
         ...options,
       }),
     ),
-    Layer.provideMerge(
-      memoryEngine
-        ? Layer.mergeAll(WorkflowEngine.layerMemory, SqlWorkflowDispatchStore.layer).pipe(
-            Layer.provideMerge(SqliteClient.layer({ filename: `${directory}/workflow.sqlite` })),
-          )
-        : workflowInfrastructure(directory),
-    ),
+    Layer.provideMerge(workflowInfrastructure(directory)),
     Layer.provide(NodeWorkflowRepairTrigger.layer({ interval: "10 millis" })),
     Layer.provide(NodeCrypto.layer),
   );

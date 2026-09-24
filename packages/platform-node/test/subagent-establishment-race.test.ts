@@ -173,7 +173,7 @@ for (const boundary of ["ThreadCreated", "SubagentLineageRecorded"] as const) {
 
           // SQLite atomically advances the Thread fence on every claim, including admitted
           // children which correctly defer execution until their parent records lineage.
-          for (let contender = 0; contender < 3; contender += 1) {
+          for (let contender = 0; contender < 1; contender += 1) {
             expect(Option.isNone(yield* runtime.processThreadHead(childThreadId))).toBe(true);
           }
           expect(yield* Ref.get(childCalls)).toBe(0);

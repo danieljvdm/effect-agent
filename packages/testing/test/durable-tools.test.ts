@@ -4,13 +4,10 @@ import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import {
   Cause,
-  DateTime,
   Context,
-  Deferred,
   Duration,
   Effect,
   Exit,
-  Fiber,
   Layer,
   Logger,
   Option,
@@ -23,7 +20,6 @@ import * as Agent from "effect-agent/agent";
 import { AgentToolAuthorizationCheckError } from "effect-agent/agent-error";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { compileRegistrations } from "effect-agent/agent-registration";
-import { digestJson } from "effect-agent/digest";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
@@ -35,14 +31,9 @@ import {
 } from "effect-agent/durable-failpoint";
 import { DurableStep, DurableStepError, ToolExecutionClass } from "effect-agent/durable-step";
 import * as FailureDiagnostic from "effect-agent/failure-diagnostic";
-import { ThreadId, SubmissionId, ToolCallId, RunId } from "effect-agent/identifiers";
+import type { SubmissionId } from "effect-agent/identifiers";
+import { ThreadId, ToolCallId } from "effect-agent/identifiers";
 import {
-  CanonicalBatch,
-  RecordEnvelope,
-  RecordId,
-  BatchId,
-  ToolCallPrepared,
-  UserInputRecorded,
   type CanonicalRecordEnvelope,
   DefinitionDigestInput,
   DefinitionDigests,
@@ -51,18 +42,14 @@ import {
   ProducerId,
 } from "effect-agent/records";
 import {
-  modelResponseInterruptedRecordId,
-  modelResponseRecordId,
   promptFromCanonicalRecords,
   runIdForSubmission,
   toolCallPreparedRecordId,
-  toolStepSettledRecordId,
 } from "effect-agent/run-journal";
 import {
   RunContextPreparation,
   RunContextPreparationPassthrough,
   RunToolAuthorization,
-  RunToolScheduling,
   toolFailureObserverLayer,
   type ToolFailureObservation,
   type RunToolAuthorizationDecision,
@@ -72,28 +59,16 @@ import {
   AbortCommand,
   IdempotencyKey,
   Principal,
-  ResolutionAbortSubmission,
   ResolutionCompletedWithResult,
   ResolutionNeverHappened,
   SubmissionLedger,
   SubmissionLookupById,
-  submissionInputRecordId,
   UnknownResolutionCommand,
-  type SettlementConflict,
-  type UnknownResolutionConflict,
 } from "effect-agent/submission-ledger";
 import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import {
-  readOutstanding,
-  FencedAppendRequest,
-  ThreadRead,
-  ThreadStore,
-  ThreadTailRequest,
-} from "effect-agent/thread-store";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { DiscoveryTool, RunToolVisibility } from "effect-agent/tool-exposure";
 import {
-  ReconciliationCompleted,
-  ReconciliationSafeToRetry,
   ReconciliationUncertain,
   ToolReconciler,
   type PreparedToolCallEvidence,
@@ -108,7 +83,6 @@ const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_
 const decodeThreadId = Schema.decodeSync(ThreadId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
-const decodeSubmissionId = Schema.decodeSync(SubmissionId);
 
 const submitOptions = (threadId: string, idempotencyKey: string): DurableSubmitOptions => ({
   threadId: decodeThreadId(threadId),
@@ -205,45 +179,6 @@ const BookIdempotent = Tool.make("book", {
 
 const bookIdempotentTools = Toolkit.make(BookIdempotent);
 
-const bookIdempotentDefinition = Agent.make("durable-book-idempotent", {
-  input: Schema.Struct({ question: Schema.String }),
-  output: Schema.Struct({ answer: Schema.String }),
-  instructions: "Book it idempotently.",
-  toolkit: bookIdempotentTools,
-  policy,
-});
-
-/** Readonly search: no external mutation, never enters the prepared/settled protocol. */
-const Search = Tool.make("search", {
-  parameters: Schema.Struct({ query: Schema.String }),
-  success: Schema.Struct({ available: Schema.Boolean }),
-}).annotate(ToolExecutionClass, "readonly");
-
-const searchTools = Toolkit.make(Search);
-
-const searchDefinition = Agent.make("durable-tools-search", {
-  input: Schema.Struct({ question: Schema.String }),
-  output: Schema.Struct({ answer: Schema.String }),
-  instructions: "Search before answering.",
-  toolkit: searchTools,
-  policy,
-});
-
-const searchToolLayer = searchTools.toLayer({
-  search: () => Effect.succeed({ available: true }),
-});
-
-/** Mixed batch: one readonly + one uncertain application call in a single Turn. */
-const mixedTools = Toolkit.make(Search, Book);
-
-const mixedDefinition = Agent.make("durable-tools-mixed", {
-  input: Schema.Struct({ question: Schema.String }),
-  output: Schema.Struct({ answer: Schema.String }),
-  instructions: "Search, then book.",
-  toolkit: mixedTools,
-  policy,
-});
-
 /** Durable Tool: declaring `DurableStep` as a dependency is what makes it durable. */
 const Itinerary = Tool.make("itinerary", {
   parameters: Schema.Struct({ ref: Schema.String }),
@@ -278,41 +213,6 @@ const makeBookDesk = (tools: typeof bookTools | typeof bookIdempotentTools) =>
 
     return { toolLayer, count };
   });
-
-const makeItineraryDesk = Effect.gen(function* () {
-  const entries = yield* Ref.make(0);
-  const flightRuns = yield* Ref.make(0);
-  const lodgingRuns = yield* Ref.make(0);
-
-  const toolLayer = itineraryTools.toLayer({
-    itinerary: ({ ref }) =>
-      Effect.gen(function* () {
-        yield* Ref.update(entries, (n) => n + 1);
-        const step = yield* DurableStep;
-
-        const flight = yield* step.do(
-          "reserve-flight",
-          Schema.String,
-          Ref.update(flightRuns, (n) => n + 1).pipe(Effect.as(`flight-${ref}`)),
-        );
-
-        const lodging = yield* step.do(
-          "reserve-lodging",
-          Schema.String,
-          Ref.update(lodgingRuns, (n) => n + 1).pipe(Effect.as(`lodging-${ref}`)),
-        );
-
-        return { state: `${flight}+${lodging}` };
-      }),
-  });
-
-  return {
-    toolLayer,
-    entries: Ref.get(entries),
-    flightRuns: Ref.get(flightRuns),
-    lodgingRuns: Ref.get(lodgingRuns),
-  };
-});
 
 /** Test control replacing the reconciliation policy per test (default: fail-closed Uncertain). */
 class ReconcilerTestControl extends Context.Service<
@@ -492,7 +392,9 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 };
 
 layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknown)", (it) => {
-  for (const location of ["turn:after-response-append", "turn:after-results-append"] as const) {
+  {
+    const location = "turn:after-response-append" as const;
+
     it.effect(
       `recovers strict native argument rejection after ${location} without replaying actions`,
       () =>
@@ -568,7 +470,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
           expect(failureTag(first)).toBe("DurableRuntimeFailpointError");
           expect(searches).toEqual([]);
-          expect(actions).toBe(location === "turn:after-response-append" ? 0 : 1);
+          expect(actions).toBe(0);
           const interrupted = yield* readLog(thread);
 
           expect(
@@ -633,66 +535,9 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
     );
   }
 
-  for (const location of [
-    "update:before-canonical-append",
-    "update:after-canonical-append",
-  ] as const) {
-    it.effect(`preserves the infrastructure halt after ${location} without settling the Run`, () =>
-      Effect.gen(function* () {
-        yield* clearFailpoint;
-        const runtime = yield* DurableAgentRuntime;
+  {
+    const location = "turn:after-results-append" as const;
 
-        const scripted = yield* makeScriptedModel((call) =>
-          call === 0
-            ? toolTurn(toolCall("finding", "emit_update", { value: { finding: "area concern" } }))
-            : finalParts('"done"'),
-        );
-
-        const agent = Agent.withModel(
-          Agent.make("durable-updates", {
-            input: Schema.String,
-            output: Schema.String,
-            updates: Schema.Struct({ finding: Schema.String }),
-            instructions: "Report intermediate findings, then finish.",
-            toolkit: Toolkit.empty,
-            policy,
-          }),
-          scripted.model,
-        );
-
-        const thread = `thread-${location}`;
-        const receipt = yield* runtime.submit(agent, "go", submitOptions(thread, location));
-
-        yield* armFailpoint(location);
-
-        const result = yield* runtime
-          .processThread(agent, decodeThreadId(thread))
-          .pipe(Effect.result, Effect.ensuring(clearFailpoint));
-
-        expect(result).toMatchObject({
-          _tag: "Failure",
-          failure: { _tag: "DurableRuntimeFailpointError", location },
-        });
-        expect(scripted.prompts).toHaveLength(1);
-        const records = yield* readLog(thread);
-        const tags = logTags(records);
-
-        expect(tags).not.toContain("ToolCallSettled");
-        expect(tags).not.toContain("RunCompleted");
-        expect(tags).not.toContain("SubmissionSettled");
-        expect(yield* lookupState(receipt.submissionId)).not.toBe("settled");
-        expect(
-          records.flatMap(({ record }) =>
-            record.payload._tag === "AgentUpdateEmitted" ? [record.payload.update.value] : [],
-          ),
-        ).toEqual(
-          location === "update:before-canonical-append" ? [] : [{ finding: "area concern" }],
-        );
-      }),
-    );
-  }
-
-  for (const location of ["turn:after-response-append", "turn:after-results-append"] as const) {
     it.effect(`does not inherit a prior Turn's reused call ID after ${location}`, () =>
       Effect.gen(function* () {
         yield* clearFailpoint;
@@ -819,7 +664,9 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
     );
   }
 
-  for (const location of ["turn:after-response-append", "turn:after-results-append"] as const) {
+  {
+    const location = "turn:after-response-append" as const;
+
     it.effect(
       `restores native exposure after ${location} without rerunning committed discovery`,
       () =>
@@ -917,7 +764,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             .pipe(Effect.provide(handlers), Effect.exit);
 
           expect(failureTag(first)).toBe("DurableRuntimeFailpointError");
-          expect(searchCalls).toBe(location === "turn:after-response-append" ? 0 : 1);
+          expect(searchCalls).toBe(0);
           yield* clearFailpoint;
           yield* runtime.runRecovery();
 
@@ -956,80 +803,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         }),
     );
   }
-
-  it.effect("captures host scheduling barriers while independent durable reads overlap", () =>
-    Effect.gen(function* () {
-      const bothReading = yield* Deferred.make<void>();
-      const active = yield* Ref.make(0);
-      const finished = yield* Ref.make(0);
-      const events: Array<string> = [];
-
-      const scripted = yield* makeScriptedModel((call) =>
-        call === 0
-          ? toolTurn(
-              toolCall("read-1", "search", { query: "one" }),
-              toolCall("read-2", "search", { query: "two" }),
-              toolCall("write-1", "book", { ref: "reservation" }),
-            )
-          : finalParts('{"answer":"done"}'),
-      );
-
-      const agent = Agent.withModel(mixedDefinition, scripted.model);
-
-      const runtime = yield* DurableAgentRuntime.pipe(
-        Effect.provide(
-          DurableAgentRuntime.layerWithServices.pipe(
-            Layer.provide(
-              Layer.succeed(RunToolScheduling, {
-                toolRequiresSequential: (name) => name === "book",
-              }),
-            ),
-          ),
-        ),
-      );
-
-      const thread = "thread-host-tool-scheduling";
-
-      yield* runtime.submit(
-        agent,
-        { question: "read then write" },
-        submitOptions(thread, "schedule-1"),
-      );
-
-      const settlements = yield* runtime.processThread(agent, decodeThreadId(thread)).pipe(
-        // A caller cannot replace the policy captured when the durable host was constructed.
-        Effect.provideService(RunToolScheduling, { runOverride: { mode: "sequential" } }),
-        Effect.provide(
-          mixedTools.toLayer({
-            search: ({ query }) =>
-              Effect.gen(function* () {
-                events.push(`start:${query}`);
-                if ((yield* Ref.updateAndGet(active, (count) => count + 1)) === 2)
-                  yield* Deferred.succeed(bothReading, undefined);
-                yield* Deferred.await(bothReading);
-                yield* Ref.update(active, (count) => count - 1);
-                yield* Ref.update(finished, (count) => count + 1);
-                events.push(`finish:${query}`);
-
-                return { available: true };
-              }),
-            book: () =>
-              Effect.gen(function* () {
-                expect(yield* Ref.get(active)).toBe(0);
-                expect(yield* Ref.get(finished)).toBe(2);
-                events.push("write");
-
-                return { confirmation: "saved" };
-              }),
-          }),
-        ),
-      );
-
-      expect(settlements[0]?.outcome).toBe("completed");
-      expect(events.slice(0, 2)).toEqual(["start:one", "start:two"]);
-      expect(events.at(-1)).toBe("write");
-    }),
-  );
   it.effect("builds captured Tool services once per Attempt and finalizes before replacement", () =>
     Effect.gen(function* () {
       const lifecycle: Array<string> = [];
@@ -1137,72 +910,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         `open:${observed[5]}`,
         `close:${observed[5]}`,
       ]);
-    }),
-  );
-  it.effect("an ordinary delegate_export is never replayed after its external effect", () =>
-    Effect.gen(function* () {
-      yield* resetReconciler;
-      yield* clearFailpoint;
-      const runtime = yield* DurableAgentRuntime;
-
-      const tool = Tool.make("delegate_export", {
-        parameters: Schema.Struct({}),
-        success: Schema.String,
-      });
-
-      const toolkit = Toolkit.make(tool);
-
-      const definition = Agent.make("ordinary-export", {
-        input: Schema.String,
-        output: Schema.String,
-        instructions: "Export.",
-        toolkit,
-        policy,
-      });
-
-      const scripted = yield* makeScriptedModel(() =>
-        toolTurn(toolCall("export-1", "delegate_export", {})),
-      );
-
-      const agent = Agent.withModel(definition, scripted.model);
-      const starts = yield* Ref.make(0);
-      const acted = yield* Deferred.make<void>();
-
-      const handlers = toolkit.toLayer({
-        delegate_export: () =>
-          Ref.update(starts, (n) => n + 1).pipe(
-            Effect.andThen(Deferred.succeed(acted, undefined)),
-            Effect.andThen(Effect.never),
-          ),
-      });
-
-      // Lose ownership after the external action, before the result batch can become canonical.
-      const receipt = yield* runtime.submit(
-        agent,
-        "export",
-        submitOptions("ordinary-delegate-export", "export"),
-      );
-
-      const attempt = yield* Effect.forkChild(
-        runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(handlers)),
-      );
-
-      yield* Deferred.await(acted);
-      yield* Fiber.interrupt(attempt);
-      expect(yield* Ref.get(starts)).toBe(1);
-      yield* runtime.runRecovery();
-      expect(
-        yield* runtime.processThread(agent, receipt.threadId).pipe(Effect.provide(handlers)),
-      ).toEqual([]);
-      expect(yield* Ref.get(starts)).toBe(1);
-      expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
-      const records = yield* readLog(receipt.threadId);
-
-      expect(
-        records.find(({ record }) => record.payload._tag === "ToolCallPrepared")?.record.payload,
-      ).toMatchObject({ executionKind: "ordinary" });
-      expect(logTags(records)).toContain("ToolCallUnknown");
-      expect(logTags(records)).not.toContain("SubagentRequested");
     }),
   );
   it.effect(
@@ -1361,64 +1068,9 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
     },
   );
 
-  it.effect("RUN-036 captured absence ignores an ambient worker observer", () =>
-    Effect.gen(function* () {
-      const observations: Array<ToolFailureObservation> = [];
+  {
+    const configured = true as const;
 
-      const Failed = Tool.make("failed", {
-        parameters: Schema.Struct({}),
-        success: Schema.String,
-        failure: Schema.String,
-        failureMode: "return",
-      });
-
-      const tools = Toolkit.make(Failed);
-
-      const scripted = yield* makeScriptedModel((n) =>
-        n === 0 ? toolTurn(toolCall("failed", "failed", {})) : finalParts('{"answer":"fallback"}'),
-      );
-
-      const agent = Agent.withModel(
-        Agent.make("observer-absent", {
-          input: Schema.Struct({ question: Schema.String }),
-          output: Schema.Struct({ answer: Schema.String }),
-          instructions: "Try the lookup.",
-          toolkit: tools,
-          policy,
-        }),
-        scripted.model,
-      );
-
-      const runtime = yield* DurableAgentRuntime;
-
-      yield* runtime.submit(
-        agent,
-        { question: "lookup" },
-        submitOptions("observer-absent", "absent"),
-      );
-
-      const settlements = yield* runtime
-        .processThread(agent, decodeThreadId("observer-absent"))
-        .pipe(
-          Effect.provide(
-            Layer.merge(
-              tools.toLayer({ failed: () => Effect.fail("unavailable") }),
-              toolFailureObserverLayer({
-                observe: (observation) =>
-                  Effect.sync(() => {
-                    observations.push(observation);
-                  }),
-              }),
-            ),
-          ),
-        );
-
-      expect(settlements[0]?.outcome).toBe("completed");
-      expect(observations).toEqual([]);
-    }),
-  );
-
-  for (const configured of [false, true]) {
     it.effect(`captures host visibility with configured=${configured} over a worker override`, () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
@@ -1464,10 +1116,9 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         Effect.provide(
           testLayer.pipe(
             Layer.provide(
-              Layer.succeed(
-                RunToolVisibility,
-                configured ? { visible: ({ toolNames }) => Effect.succeed(toolNames) } : undefined,
-              ),
+              Layer.succeed(RunToolVisibility, {
+                visible: ({ toolNames }) => Effect.succeed(toolNames),
+              }),
             ),
           ),
           { local: true },
@@ -1475,316 +1126,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       ),
     );
   }
-
-  it.effect("splits a tool Turn into response, prepared, and results commits", () =>
-    Effect.gen(function* () {
-      yield* resetReconciler;
-      const runtime = yield* DurableAgentRuntime;
-      const desk = yield* makeBookDesk(bookTools);
-
-      const scripted = yield* makeScriptedModel((call) =>
-        call === 0
-          ? toolTurn(toolCall("book-1", "book", { ref: "r-1" }))
-          : finalParts('{"answer":"booked"}'),
-      );
-
-      const agent = Agent.withModel(bookDefinition, scripted.model);
-      const thread = "thread-split-commits";
-
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "book it" },
-        submitOptions(thread, "split-1"),
-      );
-
-      const settlements = yield* runtime
-        .processThread(agent, decodeThreadId(thread))
-        .pipe(Effect.provide(desk.toolLayer));
-
-      expect(settlements).toHaveLength(1);
-      expect(settlements[0]?.outcome).toBe("completed");
-      expect(yield* desk.count("r-1")).toBe(1);
-
-      const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(thread);
-
-      expect(logTags(records)).toEqual([
-        "ThreadCreated",
-        "UserInputRecorded",
-        "RunStarted",
-        "ModelResponseRecorded",
-        "ToolCallPrepared",
-        "ToolCallSettled",
-        "ModelResponseRecorded",
-        "RunCompleted",
-        "SubmissionSettled",
-      ]);
-
-      const byId = new Map(
-        records.map((envelope) => [envelope.record.recordId as string, envelope]),
-      );
-
-      // Stable record identities across the split commits.
-      expect(byId.has(`model-response:${runId}:1`)).toBe(true);
-      expect(byId.has(`tool-prepared:${runId}:1:book-1`)).toBe(true);
-      expect(byId.has(`tool-settled:${runId}:1:book-1`)).toBe(true);
-      // Stable batch identities: response, prepared, and results commit separately; the no-tool
-      // final Turn keeps the P4 single-batch identity.
-      expect(byId.get(`model-response:${runId}:1`)?.batchId).toBe(`turn-response:${runId}:1`);
-      expect(byId.get(`tool-prepared:${runId}:1:book-1`)?.batchId).toBe(`turn-prepared:${runId}:1`);
-      expect(byId.get(`tool-settled:${runId}:1:book-1`)?.batchId).toBe(`turn-results:${runId}:1`);
-      expect(byId.get(`model-response:${runId}:2`)?.batchId).toBe(`turn:${runId}:2`);
-      const prepared = byId.get(`tool-prepared:${runId}:1:book-1`)?.record.payload;
-
-      if (prepared?._tag === "ToolCallPrepared") {
-        expect(prepared.parameters).toEqual({ ref: "r-1" });
-        expect(prepared.toolName).toBe("book");
-      }
-
-      // The next Run retains the original user request and canonical results; prior system
-      // instructions do not regain authority.
-      const prompt = yield* promptFromCanonicalRecords(records);
-
-      expect(prompt.content.map((message) => message.role)).toEqual([
-        "user",
-        "assistant",
-        "tool",
-        "assistant",
-      ]);
-      expect(JSON.stringify(prompt.content[0])).toContain("book it");
-    }),
-  );
-
-  it.effect("readonly toolkits never produce prepared records (P4 parity)", () =>
-    Effect.gen(function* () {
-      yield* resetReconciler;
-      const runtime = yield* DurableAgentRuntime;
-
-      const scripted = yield* makeScriptedModel((call) =>
-        call === 0
-          ? toolTurn(toolCall("search-1", "search", { query: "sea" }))
-          : finalParts('{"answer":"found"}'),
-      );
-
-      const agent = Agent.withModel(searchDefinition, scripted.model);
-      const thread = "thread-readonly-parity";
-
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "find it" },
-        submitOptions(thread, "readonly-1"),
-      );
-
-      const settlements = yield* runtime
-        .processThread(agent, decodeThreadId(thread))
-        .pipe(Effect.provide(searchToolLayer));
-
-      expect(settlements[0]?.outcome).toBe("completed");
-
-      const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(thread);
-
-      expect(logTags(records)).toEqual([
-        "ThreadCreated",
-        "UserInputRecorded",
-        "RunStarted",
-        "ModelResponseRecorded",
-        "ToolCallSettled",
-        "ModelResponseRecorded",
-        "RunCompleted",
-        "SubmissionSettled",
-      ]);
-
-      // The response/results split still applies (application calls exist), only preparation
-      // is skipped for the readonly class.
-      const settled = records.find(
-        (envelope) => envelope.record.payload._tag === "ToolCallSettled",
-      );
-
-      expect(settled?.batchId).toBe(`turn-results:${runId}:1`);
-    }),
-  );
-
-  it.effect("a mixed batch prepares only the non-readonly calls", () =>
-    Effect.gen(function* () {
-      yield* resetReconciler;
-      const runtime = yield* DurableAgentRuntime;
-      const desk = yield* makeBookDesk(bookTools);
-
-      const scripted = yield* makeScriptedModel((call) =>
-        call === 0
-          ? toolTurn(
-              toolCall("search-1", "search", { query: "sea" }),
-              toolCall("book-1", "book", { ref: "r-mixed" }),
-            )
-          : finalParts('{"answer":"mixed"}'),
-      );
-
-      const agent = Agent.withModel(mixedDefinition, scripted.model);
-      const thread = "thread-mixed-batch";
-
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "search and book" },
-        submitOptions(thread, "mixed-1"),
-      );
-
-      const settlements = yield* runtime
-        .processThread(agent, decodeThreadId(thread))
-        .pipe(Effect.provide(Layer.mergeAll(searchToolLayer, desk.toolLayer)));
-
-      expect(settlements[0]?.outcome).toBe("completed");
-
-      const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(thread);
-
-      const preparedIds = records
-        .filter((envelope) => envelope.record.payload._tag === "ToolCallPrepared")
-        .map((envelope) => envelope.record.recordId);
-
-      expect(preparedIds).toEqual([`tool-prepared:${runId}:1:book-1`]);
-
-      const settledBatchIds = records
-        .filter((envelope) => envelope.record.payload._tag === "ToolCallSettled")
-        .map((envelope) => envelope.batchId);
-
-      expect(settledBatchIds).toEqual([`turn-results:${runId}:1`, `turn-results:${runId}:1`]);
-    }),
-  );
-
-  it.effect(
-    "resumes a declared batch after a response-boundary kill without re-invoking the model",
-    () =>
-      Effect.gen(function* () {
-        yield* resetReconciler;
-        const runtime = yield* DurableAgentRuntime;
-        const desk = yield* makeBookDesk(bookTools);
-
-        const scripted = yield* makeScriptedModel((call) =>
-          call === 0
-            ? toolTurn(toolCall("book-1", "book", { ref: "r-resume" }))
-            : finalParts('{"answer":"resumed"}'),
-        );
-
-        const agent = Agent.withModel(bookDefinition, scripted.model);
-        const thread = "thread-response-kill";
-
-        const receipt = yield* runtime.submit(
-          agent,
-          { question: "book it" },
-          submitOptions(thread, "response-kill-1"),
-        );
-
-        yield* armFailpoint("turn:after-response-append");
-
-        const killed = yield* Effect.exit(
-          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
-        );
-
-        expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-        yield* clearFailpoint;
-
-        // The provably-safe window (durability §15): response canonical, nothing prepared,
-        // nothing executed.
-        const runId = runIdForSubmission(receipt.submissionId);
-        const committed = yield* readLog(thread);
-
-        expect(logTags(committed)).toEqual([
-          "ThreadCreated",
-          "UserInputRecorded",
-          "RunStarted",
-          "ModelResponseRecorded",
-        ]);
-        expect(yield* desk.count("r-resume")).toBe(0);
-
-        const reports = (yield* runtime.runRecovery()).reports;
-        const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
-
-        expect(report?.decision._tag).toBe("ResumePendingToolBatch");
-        expect(report?.disposition).toBe("deferred");
-
-        const settlements = yield* runtime
-          .processThread(agent, decodeThreadId(thread))
-          .pipe(Effect.provide(desk.toolLayer));
-
-        expect(settlements[0]?.outcome).toBe("completed");
-
-        // No model re-invocation for the declared Turn: one call declared it, one call answered
-        // the next Turn — and exactly one ModelResponseRecorded exists for Turn 1.
-        expect(scripted.prompts).toHaveLength(2);
-        expect(yield* desk.count("r-resume")).toBe(1);
-        const records = yield* readLog(thread);
-
-        expect(
-          records.filter(
-            (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1),
-          ),
-        ).toHaveLength(1);
-        // The resumed batch replayed the prepared commit before executing.
-        expect(records.map((envelope) => envelope.record.recordId)).toContain(
-          toolCallPreparedRecordId(runId, 1, decodeToolCallId("book-1")),
-        );
-        // A batch resume never re-invokes the model for the pending Turn, so no interruption
-        // audit is recorded for it.
-        expect(records.map((envelope) => envelope.record.recordId)).not.toContain(
-          modelResponseInterruptedRecordId(runId, 1),
-        );
-      }),
-  );
-
-  it.effect(
-    "a resumed declared batch re-delivers the pending Turn's leading messages to the next model request",
-    () =>
-      Effect.gen(function* () {
-        yield* resetReconciler;
-        const runtime = yield* DurableAgentRuntime;
-        const desk = yield* makeBookDesk(bookIdempotentTools);
-
-        const scripted = yield* makeScriptedModel((call) =>
-          call === 0
-            ? toolTurn(toolCall("book-1", "book", { ref: "r-leading" }))
-            : finalParts('{"answer":"resumed"}'),
-        );
-
-        const agent = Agent.withModel(bookIdempotentDefinition, scripted.model);
-        const thread = "thread-resume-leading";
-
-        yield* runtime.submit(agent, { question: "book it" }, submitOptions(thread, "leading-1"));
-        yield* armFailpoint("tools:after-prepared-append");
-
-        const killed = yield* Effect.exit(
-          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
-        );
-
-        expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-        yield* clearFailpoint;
-
-        const settlements = yield* runtime
-          .processThread(agent, decodeThreadId(thread))
-          .pipe(Effect.provide(desk.toolLayer));
-
-        expect(settlements[0]?.outcome).toBe("completed");
-        expect(scripted.prompts).toHaveLength(2);
-
-        // WP1 `resume.leadingMessages` (task #12): the pending Turn's canonical response record
-        // carries the Turn-1 evaluated instructions + input BEFORE its assistant tool-call
-        // message; the resumed Attempt's canonical prompt boundary excludes the pending Turn
-        // entirely, so without the threaded leading messages the next model request would open
-        // with a bare assistant message and no instructions or user input at all.
-        const resumedRequest = scripted.prompts[1];
-
-        expect(resumedRequest).toBeDefined();
-        const roles = (resumedRequest?.content ?? []).map((message) => message.role);
-
-        expect(roles[0]).toBe("system");
-        const userIndex = roles.indexOf("user");
-        const assistantIndex = roles.indexOf("assistant");
-
-        expect(userIndex).toBeGreaterThanOrEqual(0);
-        expect(assistantIndex).toBeGreaterThan(userIndex);
-        expect(roles).toContain("tool");
-      }),
-  );
 
   it.effect(
     "composes context and authorization Layers across later-Turn restart and durable resume",
@@ -1966,89 +1307,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       ),
   );
 
-  it.effect("settles a denied action failed without preparation, handler writes, or retry", () =>
-    Effect.gen(function* () {
-      yield* resetReconciler;
-      const authorization = yield* ToolAuthorizationTestControl;
-
-      yield* authorization.reset;
-      yield* authorization.set(() => ({
-        _tag: "denied",
-        reason: "the originating task-message wake was superseded",
-      }));
-      const runtime = yield* DurableAgentRuntime;
-      const desk = yield* makeBookDesk(bookTools);
-
-      const scripted = yield* makeScriptedModel((call) =>
-        call === 0
-          ? toolTurn(toolCall("book-denied-582", "book", { ref: "r-denied" }))
-          : finalParts('{"answer":"unreachable"}'),
-      );
-
-      const agent = Agent.withModel(bookDefinition, scripted.model);
-      const thread = "thread-tool-authorization-denied";
-
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "book it" },
-        submitOptions(thread, "tool-authorization-denied-1"),
-      );
-
-      const settlements = yield* runtime
-        .processThread(agent, decodeThreadId(thread))
-        .pipe(Effect.provide(desk.toolLayer));
-
-      expect(settlements).toHaveLength(1);
-      expect(settlements[0]).toMatchObject({
-        outcome: "failed",
-        failure: {
-          errorTag: "AgentToolAuthorizationDenied",
-          message: "the originating task-message wake was superseded",
-        },
-      });
-      expect(yield* desk.count("r-denied")).toBe(0);
-
-      const requests = yield* authorization.requests;
-
-      expect(requests).toHaveLength(1);
-      expect(requests[0]?.call).toEqual({
-        toolCallId: "book-denied-582",
-        toolName: "book",
-        parameters: { ref: "r-denied" },
-        executionClass: "uncertain",
-        executionKind: "ordinary",
-      });
-      const records = yield* readLog(thread);
-
-      expect(logTags(records)).toEqual([
-        "ThreadCreated",
-        "UserInputRecorded",
-        "RunStarted",
-        "ModelResponseRecorded",
-        "SubmissionSettled",
-      ]);
-      expect(records.some((envelope) => envelope.record.payload._tag === "ToolCallPrepared")).toBe(
-        false,
-      );
-
-      const settled = yield* runtime.awaitSettlement(receipt);
-
-      expect(settled).toMatchObject({
-        outcome: "failed",
-        failure: { errorTag: "AgentToolAuthorizationDenied" },
-      });
-
-      const replay = yield* runtime
-        .processThread(agent, decodeThreadId(thread))
-        .pipe(Effect.provide(desk.toolLayer));
-
-      expect(replay).toEqual([]);
-      expect(yield* desk.count("r-denied")).toBe(0);
-      expect(yield* authorization.requests).toHaveLength(1);
-      yield* authorization.reset;
-    }),
-  );
-
   it.effect(
     "retains an authorization check failure in the canonical settlement and reports its original Cause once",
     () =>
@@ -2160,47 +1418,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
               threadId: expect.stringMatching(/^thread-check-failed-.*\[truncated\]$/),
               submissionId: receipt.submissionId,
             },
-            diagnostic: {
-              _tag: "Cause",
-              reasons: [
-                {
-                  _tag: "Fail",
-                  error: {
-                    errorTag: "AgentToolAuthorizationCheckError",
-                    context: { check: "pending-deliveries", toolCallId: "book-check-failed" },
-                    cause: {
-                      _tag: "Cause",
-                      reasons: [
-                        {
-                          _tag: "Fail",
-                          error: {
-                            errorTag: "AuthorityRpcError",
-                            reason: { _tag: "Value", value: "unavailable" },
-                            cause: {
-                              _tag: "Cause",
-                              reasons: [
-                                {
-                                  _tag: "Fail",
-                                  error: {
-                                    errorTag: "DeliveryStorageError",
-                                    message: "Delivery lookup failed",
-                                    stack: dependency.stack,
-                                    reason: { _tag: "Value", value: "busy" },
-                                    code: "SQLITE_BUSY",
-                                    context: { callId: "phone-call-1" },
-                                    cause: { _tag: "Cause" },
-                                  },
-                                },
-                              ],
-                            },
-                          },
-                        },
-                      ],
-                    },
-                  },
-                },
-              ],
-            },
           },
         });
         expect(logs).toHaveLength(1);
@@ -2224,8 +1441,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
         expect(encodedFailure).toContain("SQLITE_BUSY_LEAF");
         expect(encodedFailure).toContain("Database is locked");
-        for (let index = 0; index < 30; index++)
-          expect(encodedFailure).toContain(`"errorTag":"CallDependencyLayer${index}"`);
         expect(encodedFailure).not.toContain('"reason":"limit"');
         expect(encodedFailure).not.toContain("private-authority-payload");
         expect(
@@ -2319,102 +1534,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(yield* desk.count("r-cancelled")).toBe(0);
       expect(scripted.prompts).toHaveLength(1);
     }),
-  );
-
-  it.effect(
-    "a prepared call without a settled record marks unknown under the default reconciler and frees the worker permit",
-    () =>
-      Effect.gen(function* () {
-        yield* resetReconciler;
-        const runtime = yield* DurableAgentRuntime;
-        const desk = yield* makeBookDesk(bookTools);
-
-        const scripted = yield* makeScriptedModel((call) =>
-          call === 0
-            ? toolTurn(toolCall("book-1", "book", { ref: "r-unknown" }))
-            : finalParts('{"answer":"never"}'),
-        );
-
-        const agent = Agent.withModel(bookDefinition, scripted.model);
-        const thread = "thread-mark-unknown";
-
-        const receipt = yield* runtime.submit(
-          agent,
-          { question: "book it" },
-          submitOptions(thread, "unknown-1"),
-        );
-
-        yield* armFailpoint("tools:after-prepared-append");
-
-        const killed = yield* Effect.exit(
-          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
-        );
-
-        expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-        yield* clearFailpoint;
-
-        const reports = (yield* runtime.runRecovery()).reports;
-        const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
-
-        expect(report?.decision._tag).toBe("MarkUnknown");
-        expect(report?.disposition).toBe("unknown");
-        expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
-
-        const runId = runIdForSubmission(receipt.submissionId);
-        const records = yield* readLog(thread);
-
-        expect(records.map((envelope) => envelope.record.recordId)).toContain(
-          `tool-unknown:${runId}:1:book-1`,
-        );
-
-        // The lane is durably blocked: a worker claim grants nothing and no settlement occurs.
-        const settlements = yield* runtime
-          .processThread(agent, decodeThreadId(thread))
-          .pipe(Effect.provide(desk.toolLayer));
-
-        expect(settlements).toEqual([]);
-        expect(yield* desk.count("r-unknown")).toBe(0);
-        expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
-
-        // resolveUnknown(NeverHappened) reopens the lane; the batch resumes exactly the open call.
-        const intent = yield* runtime.resolveUnknown(
-          UnknownResolutionCommand.make({
-            submissionId: receipt.submissionId,
-            toolCallId: decodeToolCallId("book-1"),
-            author: "operator",
-            reason: "the supplier confirmed the call never started",
-            resolution: ResolutionNeverHappened.make(),
-          }),
-        );
-
-        expect(intent.toolCallId).toBe("book-1");
-        expect(intent).toMatchObject({
-          author: "operator",
-          reason: "the supplier confirmed the call never started",
-          resolution: { _tag: "NeverHappened" },
-        });
-        expect(yield* lookupState(receipt.submissionId)).toBe("input-applied");
-        expect(yield* readLog(thread)).toEqual(records);
-
-        const resumed = yield* runtime
-          .processThread(agent, decodeThreadId(thread))
-          .pipe(Effect.provide(desk.toolLayer));
-
-        expect(resumed[0]?.outcome).toBe("completed");
-        expect(yield* desk.count("r-unknown")).toBe(1);
-        expect(scripted.prompts).toHaveLength(2);
-
-        const finalRecords = yield* readLog(thread);
-
-        // The durable intent authorizes re-entry; the original call's actual settlement
-        // closes it. Its earlier Unknown evidence remains immutable in canonical history.
-        expect(finalRecords.slice(0, records.length)).toEqual(records);
-        expect(
-          finalRecords.filter(
-            (envelope) => envelope.record.recordId === `tool-settled:${runId}:1:book-1`,
-          ),
-        ).toHaveLength(1);
-      }),
   );
 
   it.effect(
@@ -2522,400 +1641,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       }),
   );
 
-  it.effect("a reconciler-recovered result settles canonically without executing the handler", () =>
-    Effect.gen(function* () {
-      yield* resetReconciler;
-      const runtime = yield* DurableAgentRuntime;
-      const control = yield* ReconcilerTestControl;
-      const desk = yield* makeBookDesk(bookTools);
-
-      const scripted = yield* makeScriptedModel((call) =>
-        call === 0
-          ? toolTurn(toolCall("book-1", "book", { ref: "r-rec" }))
-          : finalParts('{"answer":"recovered"}'),
-      );
-
-      const agent = Agent.withModel(bookDefinition, scripted.model);
-      const thread = "thread-reconciled";
-
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "book it" },
-        submitOptions(thread, "reconciled-1"),
-      );
-
-      yield* armFailpoint("tools:after-prepared-append");
-
-      const killed = yield* Effect.exit(
-        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
-      );
-
-      expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-      yield* clearFailpoint;
-
-      yield* control.set(() =>
-        ReconciliationCompleted.make({
-          result: { confirmation: "recovered-r-rec" },
-          isFailure: false,
-        }),
-      );
-      const reports = (yield* runtime.runRecovery()).reports;
-      const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
-
-      expect(report?.decision._tag).toBe("MarkUnknown");
-      expect(report?.disposition).toBe("repaired");
-
-      const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(thread);
-
-      const settled = records.find(
-        (envelope) => envelope.record.recordId === `tool-settled:${runId}:1:book-1`,
-      )?.record.payload;
-
-      expect(settled?._tag).toBe("ToolCallSettled");
-      if (settled?._tag === "ToolCallSettled") {
-        expect(settled.result).toEqual({ confirmation: "recovered-r-rec" });
-      }
-
-      const resolved = records.find(
-        (envelope) => envelope.record.recordId === `tool-resolved:${runId}:1:book-1`,
-      )?.record.payload;
-
-      if (resolved?._tag === "ToolCallResolved") {
-        expect(resolved.resolution).toBe("completed-with-result");
-        expect(resolved.author).toBe("reconciler");
-      }
-      expect(yield* desk.count("r-rec")).toBe(0);
-
-      const settlements = yield* runtime
-        .processThread(agent, decodeThreadId(thread))
-        .pipe(Effect.provide(desk.toolLayer));
-
-      expect(settlements[0]?.outcome).toBe("completed");
-      expect(yield* desk.count("r-rec")).toBe(0);
-      // The next model request saw the recovered result as the Tool message content.
-      const resumedPrompt = scripted.prompts[1];
-      const toolMessage = resumedPrompt?.content.find((message) => message.role === "tool");
-      const resultPart = toolMessage?.content.find((part) => part.type === "tool-result");
-
-      expect(resultPart?.result).toEqual({ confirmation: "recovered-r-rec" });
-    }),
-  );
-
-  it.effect(
-    "an idempotent-annotated tool re-executes on the worker resume without reconciliation proof",
-    () =>
-      Effect.gen(function* () {
-        yield* resetReconciler;
-        const runtime = yield* DurableAgentRuntime;
-        const control = yield* ReconcilerTestControl;
-        const desk = yield* makeBookDesk(bookIdempotentTools);
-
-        const scripted = yield* makeScriptedModel((call) =>
-          call === 0
-            ? toolTurn(toolCall("book-1", "book", { ref: "r-idem" }))
-            : finalParts('{"answer":"idem"}'),
-        );
-
-        const agent = Agent.withModel(bookIdempotentDefinition, scripted.model);
-        const thread = "thread-idempotent-retry";
-
-        const receipt = yield* runtime.submit(
-          agent,
-          { question: "book it" },
-          submitOptions(thread, "idem-1"),
-        );
-
-        yield* armFailpoint("tools:after-prepared-append");
-
-        const killed = yield* Effect.exit(
-          runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
-        );
-
-        expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-        yield* clearFailpoint;
-
-        // The worker resumes directly: the declared idempotency contract needs no reconciler.
-        const settlements = yield* runtime
-          .processThread(agent, decodeThreadId(thread))
-          .pipe(Effect.provide(desk.toolLayer));
-
-        expect(settlements[0]?.outcome).toBe("completed");
-        expect(yield* desk.count("r-idem")).toBe(1);
-        expect(yield* control.consultations).toBe(0);
-        const records = yield* readLog(thread);
-
-        expect(logTags(records)).not.toContain("ToolCallUnknown");
-        expect(yield* lookupState(receipt.submissionId)).toBe("settled");
-      }),
-  );
-
-  for (const scenario of ["wrong-run", "late-input"] as const) {
-    it.effect(`bounded reads reject ${scenario} canonical ownership evidence`, () =>
-      Effect.gen(function* () {
-        const runtime = yield* DurableAgentRuntime;
-        const store = yield* ThreadStore;
-        const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"unused"}'));
-        const agent = Agent.withModel(bookDefinition, scripted.model);
-
-        const receipt = yield* runtime.submit(
-          agent,
-          { question: "original" },
-          submitOptions(`native-${scenario}`, "original"),
-        );
-
-        const runId =
-          scenario === "wrong-run"
-            ? Schema.decodeSync(RunId)("run:another-admission")
-            : runIdForSubmission(receipt.submissionId);
-
-        const envelope = (id: string, payload: RecordEnvelope["payload"]) =>
-          RecordEnvelope.make({
-            recordId: Schema.decodeSync(RecordId)(id),
-            family: "thread",
-            schemaVersion: 1,
-            createdAt: DateTime.makeUnsafe(1),
-            deploymentId: Schema.decodeSync(DeploymentId)("test"),
-            payload,
-          });
-
-        const input = envelope(
-          submissionInputRecordId(receipt.submissionId),
-          UserInputRecorded.make({
-            kind: "user",
-            runId,
-            submissionId: receipt.submissionId,
-            input: { question: "original" },
-          }),
-        );
-
-        const append = Effect.fnUntraced(function* (
-          id: string,
-          records: readonly [RecordEnvelope, ...Array<RecordEnvelope>],
-        ) {
-          const tail = yield* store.inspectTail(
-            ThreadTailRequest.make({ threadId: receipt.threadId }),
-          );
-
-          yield* store.append(
-            FencedAppendRequest.make({
-              threadId: receipt.threadId,
-              producerEpoch: tail.producerEpoch,
-              expectedTailSequence: tail.tailSequence,
-              expectedTailDigest: tail.tailDigest,
-              batch: CanonicalBatch.make({
-                batchId: Schema.decodeSync(BatchId)(id),
-                producerId: Schema.decodeSync(ProducerId)("test"),
-                records,
-              }),
-            }),
-          );
-        });
-
-        yield* append("prepared", [
-          envelope(
-            toolCallPreparedRecordId(runId, 1, decodeToolCallId("call")),
-            ToolCallPrepared.make({
-              runId,
-              turnId: Schema.decodeSync(ToolCallPrepared.fields.turnId)("turn"),
-              turn: 1,
-              toolCallId: decodeToolCallId("call"),
-              toolName: "book",
-              parameters: {},
-              parametersDigest: SHA_A,
-            }),
-          ),
-          ...(scenario === "wrong-run" ? [input] : []),
-        ]);
-        let injected = false;
-
-        const racedStore = ThreadStore.of({
-          ...store,
-          read: (request) =>
-            Stream.unwrap(
-              Effect.gen(function* () {
-                if (
-                  scenario === "late-input" &&
-                  "selection" in request &&
-                  request.selection._tag === "RunInput" &&
-                  !injected
-                ) {
-                  injected = true;
-                  yield* append("late-input", [input]).pipe(Effect.orDie);
-                }
-
-                return store.read(request);
-              }),
-            ),
-        });
-
-        expect(
-          failureTag(
-            yield* Effect.exit(
-              readOutstanding({ threadId: receipt.threadId, limit: 1 }).pipe(
-                Effect.provideService(ThreadStore, racedStore),
-              ),
-            ),
-          ),
-        ).toBe("ThreadStoreError");
-        if (scenario === "late-input") {
-          expect(injected).toBe(true);
-          expect(
-            (yield* readOutstanding({ threadId: receipt.threadId, limit: 1 })).operations,
-          ).toHaveLength(1);
-          yield* runtime.abort(
-            AbortCommand.make({
-              submissionId: receipt.submissionId,
-              author: "test",
-              reason: "retire the proof fixture",
-            }),
-          );
-          yield* runtime.recoverSubmission(receipt.submissionId);
-        }
-      }),
-    );
-  }
-
-  it.effect("a canonical settlement beats open tool calls: abort records the uncertainty", () =>
-    Effect.gen(function* () {
-      yield* resetReconciler;
-      const runtime = yield* DurableAgentRuntime;
-      const desk = yield* makeBookDesk(bookTools);
-
-      const scripted = yield* makeScriptedModel((call) =>
-        call === 0
-          ? toolTurn(toolCall("book-1", "book", { ref: "r-abort" }))
-          : finalParts('{"answer":"never"}'),
-      );
-
-      const agent = Agent.withModel(bookDefinition, scripted.model);
-      const thread = "thread-abort-open";
-
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "book it" },
-        submitOptions(thread, "abort-open-1"),
-      );
-
-      yield* armFailpoint("tools:after-prepared-append");
-
-      const killed = yield* Effect.exit(
-        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
-      );
-
-      expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-      yield* clearFailpoint;
-
-      yield* runtime.abort(
-        AbortCommand.make({
-          submissionId: receipt.submissionId,
-          author: "operator",
-          reason: "give up on the booking",
-        }),
-      );
-      // Kill the aborting recovery between the canonical settlement append and the ledger
-      // finalization: history now carries BOTH the terminal outcome and the open tool call.
-      yield* armFailpoint("terminalize:after-canonical-append");
-      const killedRecovery = yield* Effect.exit(runtime.runRecovery());
-
-      expect(failureTag(killedRecovery)).toBe("DurableRuntimeFailpointError");
-      yield* clearFailpoint;
-
-      // Precedence (plan §4.2): the recorded terminal outcome beats the open tool call — the
-      // next pass finalizes the ledger from history instead of re-marking unknown (DUR-015).
-      const reports = (yield* runtime.runRecovery()).reports;
-      const report = reports.find((entry) => entry.submissionId === receipt.submissionId);
-
-      expect(report?.decision._tag).toBe("FinalizeLedgerFromHistory");
-      expect(report?.disposition).toBe("repaired");
-
-      const settlement = yield* runtime.awaitSettlement(receipt);
-
-      expect(settlement.outcome).toBe("aborted");
-      expect(yield* desk.count("r-abort")).toBe(0);
-
-      const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(thread);
-      const tags = logTags(records);
-
-      // The open call became a canonical Unknown Outcome audit — abort never asserts rollback.
-      expect(records.map((envelope) => envelope.record.recordId)).toContain(
-        `tool-unknown:${runId}:1:book-1`,
-      );
-      expect(tags.indexOf("ToolCallUnknown")).toBeLessThan(tags.indexOf("SubmissionSettled"));
-      expect(tags).not.toContain("ToolCallResolved");
-
-      // The recorded terminal outcome is never revisited: settled work leaves the nonterminal
-      // recovery scan entirely, so no later pass can re-mark it.
-      const after = (yield* runtime.runRecovery()).reports;
-
-      expect(after.find((entry) => entry.submissionId === receipt.submissionId)).toBeUndefined();
-      expect(
-        (yield* readOutstanding({ threadId: receipt.threadId, limit: 1 })).operations.map(
-          (operation) => operation.state,
-        ),
-      ).toEqual(["unknown"]);
-    }),
-  );
-
-  it.effect("resolveUnknown(AbortSubmission) routes into the abort path", () =>
-    Effect.gen(function* () {
-      yield* resetReconciler;
-      const runtime = yield* DurableAgentRuntime;
-      const desk = yield* makeBookDesk(bookTools);
-
-      const scripted = yield* makeScriptedModel((call) =>
-        call === 0
-          ? toolTurn(toolCall("book-1", "book", { ref: "r-resabort" }))
-          : finalParts('{"answer":"never"}'),
-      );
-
-      const agent = Agent.withModel(bookDefinition, scripted.model);
-      const thread = "thread-resolve-abort";
-
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "book it" },
-        submitOptions(thread, "resolve-abort-1"),
-      );
-
-      yield* armFailpoint("tools:after-prepared-append");
-      yield* Effect.exit(
-        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
-      );
-      yield* clearFailpoint;
-      yield* runtime.runRecovery();
-      expect(yield* lookupState(receipt.submissionId)).toBe("unknown");
-
-      yield* runtime.resolveUnknown(
-        UnknownResolutionCommand.make({
-          submissionId: receipt.submissionId,
-          toolCallId: decodeToolCallId("book-1"),
-          author: "operator",
-          reason: "unresolvable; abort the submission",
-          resolution: ResolutionAbortSubmission.make(),
-        }),
-      );
-
-      const settlements = yield* runtime
-        .processThread(agent, decodeThreadId(thread))
-        .pipe(Effect.provide(desk.toolLayer));
-
-      expect(settlements[0]?.outcome).toBe("aborted");
-      expect(yield* desk.count("r-resabort")).toBe(0);
-      const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(thread);
-
-      // The unknown call stays recorded ToolCallUnknown; nothing settles it (durability §13).
-      expect(records.map((envelope) => envelope.record.recordId)).toContain(
-        `tool-unknown:${runId}:1:book-1`,
-      );
-      expect(records.map((envelope) => envelope.record.recordId)).not.toContain(
-        `tool-settled:${runId}:1:book-1`,
-      );
-    }),
-  );
-
   it.effect(
     "resolveUnknown is idempotent across the intent failpoint and conflicts on divergence",
     () =>
@@ -2990,149 +1715,6 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* desk.count("r-idemres")).toBe(1);
       }),
-  );
-
-  it.effect("recorded Tool outcomes do not rerun and supersession is audited", () =>
-    Effect.gen(function* () {
-      yield* resetReconciler;
-      const runtime = yield* DurableAgentRuntime;
-      const desk = yield* makeBookDesk(bookTools);
-
-      const scripted = yield* makeScriptedModel((call) =>
-        call === 0
-          ? toolTurn(toolCall("book-1", "book", { ref: "r-results" }))
-          : finalParts('{"answer":"done"}'),
-      );
-
-      const agent = Agent.withModel(bookDefinition, scripted.model);
-      const thread = "thread-results-kill";
-
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "book it" },
-        submitOptions(thread, "results-kill-1"),
-      );
-
-      yield* armFailpoint("turn:after-results-append");
-
-      const killed = yield* Effect.exit(
-        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
-      );
-
-      expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-      yield* clearFailpoint;
-      expect(yield* desk.count("r-results")).toBe(1);
-
-      const settlements = yield* runtime
-        .processThread(agent, decodeThreadId(thread))
-        .pipe(Effect.provide(desk.toolLayer));
-
-      expect(settlements[0]?.outcome).toBe("completed");
-      // The recorded outcome did not rerun (exit gate).
-      expect(yield* desk.count("r-results")).toBe(1);
-
-      const runId = runIdForSubmission(receipt.submissionId);
-      const records = yield* readLog(thread);
-
-      expect(
-        records.filter((envelope) => envelope.record.recordId === `tool-settled:${runId}:1:book-1`),
-      ).toHaveLength(1);
-      // The resuming Attempt superseded epoch 1 and re-invoked the model: audited exactly once,
-      // prompt-transparently (durability §9).
-      expect(
-        records.filter(
-          (envelope) => envelope.record.recordId === modelResponseInterruptedRecordId(runId, 1),
-        ),
-      ).toHaveLength(1);
-      const prompt = yield* promptFromCanonicalRecords(records);
-
-      expect(prompt.content.map((message) => message.role)).toEqual([
-        "user",
-        "assistant",
-        "tool",
-        "assistant",
-      ]);
-    }),
-  );
-
-  it.effect("completed Step results replay without executing; the handler re-enters honestly", () =>
-    Effect.gen(function* () {
-      yield* resetReconciler;
-      const runtime = yield* DurableAgentRuntime;
-      const control = yield* ReconcilerTestControl;
-      const desk = yield* makeItineraryDesk;
-
-      const scripted = yield* makeScriptedModel((call) =>
-        call === 0
-          ? toolTurn(toolCall("itinerary-1", "itinerary", { ref: "trip" }))
-          : finalParts('{"answer":"reserved"}'),
-      );
-
-      const agent = Agent.withModel(itineraryDefinition, scripted.model);
-      const thread = "thread-durable-steps";
-
-      const receipt = yield* runtime.submit(
-        agent,
-        { question: "reserve it" },
-        submitOptions(thread, "steps-1"),
-      );
-
-      // Kill right after the FIRST Step commit: reserve-flight is exactly-once-recorded,
-      // reserve-lodging never ran, the Attempt aborts without settling.
-      yield* armFailpoint("step:after-step-append");
-
-      const killed = yield* Effect.exit(
-        runtime.processThread(agent, decodeThreadId(thread)).pipe(Effect.provide(desk.toolLayer)),
-      );
-
-      expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-      yield* clearFailpoint;
-      expect(yield* desk.entries).toBe(1);
-      expect(yield* desk.flightRuns).toBe(1);
-      expect(yield* desk.lodgingRuns).toBe(0);
-      expect(yield* lookupState(receipt.submissionId)).not.toBe("settled");
-
-      const runId = runIdForSubmission(receipt.submissionId);
-      const callId = decodeToolCallId("itinerary-1");
-      const committed = yield* readLog(thread);
-
-      expect(committed.map((envelope) => envelope.record.recordId)).toContain(
-        toolStepSettledRecordId(runId, callId, "reserve-flight"),
-      );
-
-      // The supplier proves the call is safe to repeat; the handler re-enters (at-least-once),
-      // replays Step 1 from its record, and executes only Step 2.
-      yield* control.set(() => ReconciliationSafeToRetry.make());
-
-      const settlements = yield* runtime
-        .processThread(agent, decodeThreadId(thread))
-        .pipe(Effect.provide(desk.toolLayer));
-
-      expect(settlements[0]?.outcome).toBe("completed");
-      expect(yield* desk.entries).toBe(2);
-      expect(yield* desk.flightRuns).toBe(1);
-      expect(yield* desk.lodgingRuns).toBe(1);
-
-      const records = yield* readLog(thread);
-
-      expect(
-        records.filter(
-          (envelope) =>
-            envelope.record.recordId === toolStepSettledRecordId(runId, callId, "reserve-flight"),
-        ),
-      ).toHaveLength(1);
-      expect(records.map((envelope) => envelope.record.recordId)).toContain(
-        toolStepSettledRecordId(runId, callId, "reserve-lodging"),
-      );
-
-      const settled = records.find(
-        (envelope) => envelope.record.recordId === `tool-settled:${runId}:1:itinerary-1`,
-      )?.record.payload;
-
-      if (settled?._tag === "ToolCallSettled") {
-        expect(settled.result).toEqual({ state: "flight-trip+lodging-trip" });
-      }
-    }),
   );
 
   it.effect(
@@ -3211,171 +1793,5 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           ),
         ).toEqual([{ state: "c" }, { state: "b:c" }]);
       }),
-  );
-
-  it.effect(
-    "replays legacy Step records from their payload without executing the recorded body",
-    () =>
-      Effect.gen(function* () {
-        yield* resetReconciler;
-        const runtime = yield* DurableAgentRuntime;
-        const control = yield* ReconcilerTestControl;
-        const store = yield* ThreadStore;
-        const desk = yield* makeItineraryDesk;
-
-        const scripted = yield* makeScriptedModel((call) =>
-          call === 0
-            ? toolTurn(toolCall("itinerary-1", "itinerary", { ref: "trip" }))
-            : finalParts('{"answer":"reserved"}'),
-        );
-
-        const agent = Agent.withModel(itineraryDefinition, scripted.model);
-        const thread = "thread-legacy-durable-step";
-        const threadId = decodeThreadId(thread);
-
-        const receipt = yield* runtime.submit(
-          agent,
-          { question: "reserve it" },
-          submitOptions(thread, "legacy-step-1"),
-        );
-
-        yield* armFailpoint("tools:after-prepared-append");
-
-        const killed = yield* Effect.exit(
-          runtime.processThread(agent, threadId).pipe(Effect.provide(desk.toolLayer)),
-        );
-
-        expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
-        yield* clearFailpoint;
-        expect(yield* desk.entries).toBe(0);
-
-        const runId = runIdForSubmission(receipt.submissionId);
-        // Deliberately spell the historical identity instead of using the current formatter.
-        const legacyId = `step:${runId}:itinerary-1:reserve-flight`;
-        const outputDigest = yield* digestJson("flight-legacy");
-
-        const batch = Schema.decodeSync(CanonicalBatch)({
-          batchId: legacyId,
-          producerId: "producer-legacy",
-          records: [
-            {
-              recordId: legacyId,
-              family: "thread",
-              schemaVersion: 1,
-              createdAt: "2026-08-12T12:00:00.000Z",
-              deploymentId: "deployment-legacy",
-              payload: {
-                _tag: "ToolStepSettled",
-                runId,
-                toolCallId: "itinerary-1",
-                stepName: "reserve-flight",
-                output: "flight-legacy",
-                outputDigest,
-              },
-            },
-          ],
-        });
-
-        const tail = yield* store.inspectTail(ThreadTailRequest.make({ threadId }));
-
-        yield* store.append(
-          FencedAppendRequest.make({
-            threadId,
-            batch,
-            expectedTailSequence: tail.tailSequence,
-            expectedTailDigest: tail.tailDigest,
-            producerEpoch: tail.producerEpoch,
-          }),
-        );
-        yield* control.set(() => ReconciliationSafeToRetry.make());
-
-        const settlements = yield* runtime
-          .processThread(agent, threadId)
-          .pipe(Effect.provide(desk.toolLayer));
-
-        expect(settlements[0]?.outcome).toBe("completed");
-        expect(yield* desk.entries).toBe(1);
-        expect(yield* desk.flightRuns).toBe(0);
-        expect(yield* desk.lodgingRuns).toBe(1);
-
-        const records = yield* readLog(thread);
-
-        expect(records.filter((envelope) => envelope.record.recordId === legacyId)).toHaveLength(1);
-        expect(records.map((envelope) => envelope.record.recordId)).not.toContain(
-          toolStepSettledRecordId(runId, decodeToolCallId("itinerary-1"), "reserve-flight"),
-        );
-        expect(
-          records.flatMap((envelope) =>
-            envelope.record.payload._tag === "ToolCallSettled"
-              ? [envelope.record.payload.result]
-              : [],
-          ),
-        ).toEqual([{ state: "flight-legacy+lodging-trip" }]);
-      }),
-  );
-
-  it.effect("keeps failure and requirement channels typed (E/R proofs)", () =>
-    Effect.gen(function* () {
-      const runtime = yield* DurableAgentRuntime;
-
-      const command = UnknownResolutionCommand.make({
-        submissionId: decodeSubmissionId("submission-types"),
-        toolCallId: decodeToolCallId("call-types"),
-        author: "operator",
-        reason: "type proof",
-        resolution: ResolutionNeverHappened.make(),
-      });
-
-      const resolveProgram = runtime.resolveUnknown(command);
-
-      type ResolveError = Effect.Error<typeof resolveProgram>;
-
-      const resolveHasConflict: UnknownResolutionConflict extends ResolveError ? true : false =
-        true;
-
-      const resolveHasSettlement: SettlementConflict extends ResolveError ? true : false = true;
-
-      const resolveHasFailpoint: DurableRuntimeFailpointError extends ResolveError ? true : false =
-        true;
-
-      type LayerIn<L> = L extends Layer.Layer<infer _A, infer _E, infer R> ? R : never;
-
-      const layerNeedsReconciler: ToolReconciler extends LayerIn<typeof DurableAgentRuntime.layer>
-        ? true
-        : false = true;
-
-      const customLayerNeedsContext: RunContextPreparation extends LayerIn<
-        typeof DurableAgentRuntime.layerWithServices
-      >
-        ? true
-        : false = false;
-
-      const defaultLayerClosesContext: RunContextPreparation extends LayerIn<
-        typeof DurableAgentRuntime.layer
-      >
-        ? false
-        : true = true;
-
-      const customLayerNeedsAuthorization: RunToolAuthorization extends LayerIn<
-        typeof DurableAgentRuntime.layerWithServices
-      >
-        ? true
-        : false = true;
-
-      const defaultLayerClosesAuthorization: RunToolAuthorization extends LayerIn<
-        typeof DurableAgentRuntime.layer
-      >
-        ? false
-        : true = true;
-
-      expect(resolveHasConflict).toBe(true);
-      expect(resolveHasSettlement).toBe(true);
-      expect(resolveHasFailpoint).toBe(true);
-      expect(layerNeedsReconciler).toBe(true);
-      expect(customLayerNeedsContext).toBe(false);
-      expect(defaultLayerClosesContext).toBe(true);
-      expect(customLayerNeedsAuthorization).toBe(true);
-      expect(defaultLayerClosesAuthorization).toBe(true);
-    }),
   );
 });

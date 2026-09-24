@@ -2,9 +2,8 @@ import {
   MemoryOwnerAuthorizer,
   MemoryOwnerIdentity,
   MemoryRpcError,
-  type MemoryOwnerRequest,
 } from "@effect-agent/storage-cloudflare/memory-protocol";
-import { Clock, Deferred, Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import * as MemoryNamespace from "effect-agent/memory-namespace";
 import {
   type MemoryLookup,
@@ -15,7 +14,6 @@ import { MemoryAccess } from "effect-agent/memory-revalidation";
 import {
   MemoryScope,
   MemoryMutationFailpoint,
-  MemoryMutationFailure,
   MemoryWrite,
   type MemoryMutationPoint,
 } from "effect-agent/memory-store";
@@ -91,19 +89,7 @@ export const memoryCandidates = (ids: ReadonlyArray<string>): MemoryLookup => ({
   ),
 });
 
-export const memoryCalls = new Map<string, number>();
-export const memoryRequests = new Map<string, Array<MemoryOwnerRequest>>();
-export const memoryReplies = new Map<string, string>();
-export const memoryDeniedSources = new Map<string, ReadonlySet<string>>();
-
-export const memoryFaults = new Map<
-  string,
-  { point: MemoryMutationPoint; kind: "fail" | "abort" }
->();
-
-export const slowStarted = new Map<string, Deferred.Deferred<void>>();
-export const slowFinished = new Map<string, Deferred.Deferred<void>>();
-export const memoryClocks = new Map<string, Clock.Clock>();
+export const memoryFaults = new Map<string, { point: MemoryMutationPoint; kind: "abort" }>();
 
 export const memoryAuthorizer = Layer.effect(
   MemoryOwnerAuthorizer,
@@ -114,47 +100,11 @@ export const memoryAuthorizer = Layer.effect(
 
     return {
       authorize: Effect.fn("test.memory.authorize")(function* (request) {
-        const requests = memoryRequests.get(namespace.address) ?? [];
-
-        requests.push(request);
-        memoryRequests.set(namespace.address, requests);
-        if (request.principal === "defect") return yield* Effect.die("authorization defect");
-        if (request.principal === "slow") {
-          return yield* Effect.acquireUseRelease(
-            Effect.gen(function* () {
-              const started = slowStarted.get(namespace.address);
-
-              if (started) yield* Deferred.succeed(started, undefined);
-            }),
-            () => Effect.never,
-            () =>
-              Effect.gen(function* () {
-                const finished = slowFinished.get(namespace.address);
-
-                if (finished) yield* Deferred.succeed(finished, undefined);
-              }),
-          );
-        }
         if (request.principal !== memoryPrincipal || request.access.scope !== memoryScope)
-          return yield* MemoryRpcError.make({ reason: "denied" });
-        if (
-          request._tag === "Get" &&
-          memoryDeniedSources.get(namespace.address)?.has(request.key.id)
-        )
           return yield* MemoryRpcError.make({ reason: "denied" });
       }),
     };
   }),
-).pipe(
-  Layer.merge(
-    Layer.effect(Clock.Clock)(
-      Effect.gen(function* () {
-        const { namespace } = yield* MemoryOwnerIdentity;
-
-        return memoryClocks.get(namespace.address) ?? (yield* Clock.Clock);
-      }),
-    ),
-  ),
 );
 
 export const memoryFailpoints = Layer.effect(
@@ -171,9 +121,7 @@ export const memoryFailpoints = Layer.effect(
           if (!fault || fault.point !== point) return Effect.void;
           memoryFaults.delete(name);
 
-          return fault.kind === "fail"
-            ? Effect.fail(MemoryMutationFailure.make({ point }))
-            : Effect.sync(() => state.raw.abort(`memory fault ${point}`));
+          return Effect.sync(() => state.raw.abort(`memory fault ${point}`));
         }),
     };
   }),

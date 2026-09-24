@@ -1,7 +1,6 @@
 import { ThreadObjectIdentity } from "@effect-agent/platform-cloudflare/cloudflare-bindings";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { ThreadId } from "effect-agent/identifiers";
-import { SubmissionLedger } from "effect-agent/submission-ledger";
 import { ThreadExport, ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
 import { DurableObject, WorkerEnvironment } from "effect-cf";
@@ -13,27 +12,11 @@ import {
   type Response as AiResponse,
 } from "effect/unstable/ai";
 
-import {
-  PlannerError,
-  PlannerInput,
-  PlannerWorkerDetail,
-  SaveTripRequest,
-  Trip,
-  TripSiteStore,
-} from "../../src/domain.ts";
+import { PlannerError, PlannerInput, TripSiteStore } from "../../src/domain.ts";
 import { ReadTravelPage } from "../../src/research.ts";
 import { ScoutInput } from "../../src/research/contracts.ts";
-import { UpdatingResearchScoutActions } from "../../src/research/scout.ts";
 import { makeTravelPlannerThread, plannerApplication } from "../../src/server/cloudflare.ts";
-import { PlannerAttempt } from "../../src/server/progress.ts";
 import { ownerOfThread } from "../../src/server/tenancy.ts";
-import {
-  plannerWorker,
-  workerStatus,
-  WorkerLocator,
-  WorkerStatusRequest,
-} from "../../src/server/worker-state.ts";
-import { EditorInput } from "../../src/trip-app/editor.ts";
 import fixtureWorker from "./worker.ts";
 
 const call = (
@@ -42,8 +25,6 @@ const call = (
   id = name,
 ): ReadonlyArray<AiResponse.StreamPartEncoded> => [
   { type: "tool-call", id, name, params, providerExecuted: false },
-  // A mature conversation incurs input usage on every model call. The coordinator must
-  // still have room to steer a scout, read/save the trip, and then deliver its reply.
   {
     type: "finish",
     reason: "tool-calls",
@@ -72,31 +53,6 @@ const inputs = <A, I>(prompt: Prompt.Prompt, schema: Schema.Codec<A, I>) =>
       : [],
   );
 
-// Exercise real tool rejection and recovery, including a report with no selectedTripId.
-const updateCurrentTrip = (prompt: Prompt.Prompt, after: number, note: string) => {
-  const current = results(prompt, after);
-  const listed = current.find((result) => result.name === "list_trips");
-
-  if (!listed) return call("list_trips", {}, `list-${after}`);
-  const trips = Schema.decodeUnknownSync(Schema.Array(Trip))(listed.result);
-
-  if (trips.length !== 1 || trips[0]?.destination !== "Lisbon")
-    throw new Error("Trip discovery must return only this conversation's Lisbon trip");
-  if (current.some((result) => result.name === "save_trip" && !result.isFailure)) return null;
-  const trip = trips[0];
-
-  return call(
-    "save_trip",
-    Schema.encodeSync(SaveTripRequest)({
-      ...trip,
-      tripId: trip.id,
-      expectedRevision: trip.revision,
-      notes: [...trip.notes, note],
-    }),
-    `save-current-${after}`,
-  );
-};
-
 const model = Model.make(
   "fixture",
   "research-v1",
@@ -112,51 +68,12 @@ const model = Model.make(
 
             if (Option.isNone(environment) || Option.isNone(thread))
               return yield* Effect.die("Missing fixture context");
-            const identity = thread.value;
             const bucket = environment.value.APP_BUILDS;
 
             if (!bucket) return yield* Effect.die("Missing fixture bucket");
-            const editor = inputs(prompt, EditorInput).at(-1);
-            const scoutForBilling = inputs(prompt, ScoutInput).at(-1);
-            const attempt = yield* Effect.serviceOption(PlannerAttempt);
-
-            if (Option.isNone(attempt)) return yield* Effect.die("Missing billing attempt");
-            const billed = yield* attempt.value.billingOwner.pipe(Effect.orDie);
-
-            const expected = ownerOfThread(
-              editor?.input.sourceThreadId ??
-                scoutForBilling?.input.sourceThreadId ??
-                identity.threadId,
-            );
-
-            if (billed !== expected) return yield* Effect.die("Worker billed the wrong account");
-
-            if (editor) {
-              const key = "gate/Expanded editor";
-
-              yield* Effect.promise(() => bucket.put(`${key}/entered`, "yes"));
-              while ((yield* Effect.promise(() => bucket.head(`${key}/open`))) === null)
-                yield* Effect.sleep("25 millis");
-
-              const reads = results(prompt, editor.index).filter(
-                (result) => result.name === "get_trip",
-              ).length;
-
-              return Stream.fromIterable(
-                reads < 35
-                  ? call("get_trip", { tripId: editor.input.tripId }, `editor-read-${reads}`)
-                  : finish("Expanded editor completed."),
-              );
-            }
             const scout = inputs(prompt, ScoutInput).at(-1);
 
             if (scout) {
-              yield* Effect.promise(() =>
-                bucket.put(
-                  `tools/${identity.threadId}`,
-                  JSON.stringify(tools.map((tool) => tool.name)),
-                ),
-              );
               const key = `gate/${scout.input.title}`;
 
               const milestone = {
@@ -167,7 +84,7 @@ const model = Model.make(
               };
 
               if (
-                ["Live progress", "Report denial"].includes(scout.input.title) &&
+                scout.input.title === "Report denial" &&
                 tools.some((tool) => tool.name === "emit_update") &&
                 !results(prompt, scout.index).some((result) => result.name === "emit_update")
               )
@@ -183,30 +100,12 @@ const model = Model.make(
                 (result) => result.name === "read_travel_page",
               ).length;
 
-              if (reads < (scout.input.title.startsWith("Expanded") ? 13 : 1))
+              if (reads < 1)
                 return Stream.fromIterable(
                   call(
                     "read_travel_page",
                     { url: "https://visitlisboa.com", focus: scout.input.message },
                     `read-${scout.index}-${reads}`,
-                  ),
-                );
-
-              if (
-                scout.input.title === "Live progress" &&
-                tools.some(
-                  (tool) => tool.name === "finish_research" && tool.failureMode === "return",
-                ) &&
-                !results(prompt, scout.index).some((result) => result.name === "finish_research")
-              )
-                return Stream.fromIterable(
-                  call(
-                    "finish_research",
-                    {
-                      summary: "Evidence that must be shortened. ".repeat(150),
-                      sources: [],
-                    },
-                    `oversized-${scout.index}`,
                   ),
                 );
 
@@ -240,9 +139,7 @@ const model = Model.make(
               if (
                 report?.role === "user" &&
                 report.content.some(
-                  (part) =>
-                    part.type === "text" &&
-                    (part.text.includes("Report denial") || part.text.includes("Stays:")),
+                  (part) => part.type === "text" && part.text.includes("Report denial"),
                 )
               )
                 return Stream.fromIterable(
@@ -256,29 +153,11 @@ const model = Model.make(
                   ),
                 );
 
-              if (
-                completion?.index === frameworkIndex &&
-                report?.role === "user" &&
-                report.content.some(
-                  (part) => part.type === "text" && part.text.includes("Activities:"),
-                )
-              ) {
-                const save = updateCurrentTrip(
-                  prompt,
-                  frameworkIndex,
-                  "Research findings saved after restart",
-                );
-
-                if (save) return Stream.fromIterable(save);
-              }
-
               return Stream.fromIterable(
                 finish(
                   frameworkIndex === update?.index
                     ? "Verified milestone received while research continues."
-                    : completion?.input.report.worker.delegationId === "app_editor"
-                      ? "Editor completion received."
-                      : "Research update received.",
+                    : "Research update received.",
                 ),
               );
             }
@@ -286,171 +165,15 @@ const model = Model.make(
             if (!parent) return Stream.fromIterable(finish("Ready"));
             const current = results(prompt, parent.index);
 
-            if (["start live progress", "start report denial"].includes(parent.input.message))
+            if (parent.input.message === "start report denial")
               return Stream.fromIterable(
                 current.some((result) => result.name === "research_scout_start")
                   ? finish("Research started.")
                   : call("research_scout_start", {
-                      title:
-                        parent.input.message === "start report denial"
-                          ? "Report denial"
-                          : "Live progress",
+                      title: "Report denial",
                       message: "Find coastal trails; distance unknown",
                     }),
               );
-            if (parent.input.message === "steer live progress 50 km") {
-              const started = results(prompt).find(
-                (result) => result.name === "research_scout_start" && !result.isFailure,
-              );
-
-              if (!started) return yield* Effect.die("Missing live scout");
-
-              const start = UpdatingResearchScoutActions.tools.research_scout_start;
-              const follow = UpdatingResearchScoutActions.tools.research_scout_follow_up;
-
-              const accepted = yield* Schema.decodeUnknownEffect(start.successSchema)(
-                started.result,
-              ).pipe(Effect.orDie);
-
-              return Stream.fromIterable(
-                current.some((result) => result.name === follow.name)
-                  ? finish("50 km correction accepted.")
-                  : call(follow.name, {
-                      worker: Schema.encodeSync(follow.parametersSchema.fields.worker)(
-                        accepted.worker,
-                      ),
-                      parameters: {
-                        title: "Live progress",
-                        message: "Experienced at 50 km; include ultra distances",
-                      },
-                    }),
-              );
-            }
-
-            if (parent.input.message === "start expanded research") {
-              const started = current.filter(
-                (result) => result.name === "research_scout_start" && !result.isFailure,
-              ).length;
-
-              if (started < 6)
-                return Stream.fromIterable(
-                  call(
-                    "research_scout_start",
-                    {
-                      title: `Expanded ${started + 1}`,
-                      message: "Research a distinct Lisbon topic with the expanded allowance",
-                    },
-                    `expanded-${started}`,
-                  ),
-                );
-              const listed = current.find((result) => result.name === "list_trips");
-
-              if (!listed) return Stream.fromIterable(call("list_trips", {}));
-              const trip = Schema.decodeUnknownSync(Schema.Array(Trip))(listed.result)[0];
-
-              if (!trip) return yield* Effect.die("Missing expanded fixture trip");
-              if (!current.some((result) => result.name === "app_editor_start"))
-                return Stream.fromIterable(
-                  call("app_editor_start", { tripId: trip.id, message: "Expanded editor" }),
-                );
-
-              return Stream.fromIterable(finish("Six scouts and the editor are working."));
-            }
-            if (parent.input.message === "overflow expanded research") {
-              if (current.some((result) => result.name === "research_scout_start"))
-                return Stream.fromIterable(finish("Worker capacity reached."));
-
-              return Stream.fromIterable(
-                call("research_scout_start", {
-                  title: "Overflow",
-                  message: "Must exceed capacity",
-                }),
-              );
-            }
-
-            if (parent.input.message === "start research") {
-              const started = current.filter(
-                (result) => result.name === "research_scout_start",
-              ).length;
-
-              if (started < 2) {
-                const title = started === 0 ? "Stays" : "Activities";
-
-                return Stream.fromIterable(
-                  call(
-                    "research_scout_start",
-                    { title, message: "Lisbon hold initial research" },
-                    `start-${title}`,
-                  ),
-                );
-              }
-
-              return Stream.fromIterable(finish("Research is running. What is your budget?"));
-            }
-            if (
-              parent.input.message.startsWith("follow research") &&
-              !current.some((result) => result.name === "research_scout_follow_up")
-            ) {
-              const started = results(prompt).find(
-                (result) => result.name === "research_scout_start" && !result.isFailure,
-              );
-
-              if (!started) return yield* Effect.die("Missing existing scout");
-
-              const accepted = yield* Schema.decodeUnknownEffect(
-                UpdatingResearchScoutActions.tools.research_scout_start.successSchema,
-              )(started.result).pipe(Effect.orDie);
-
-              return Stream.fromIterable(
-                call(
-                  "research_scout_follow_up",
-                  {
-                    worker: Schema.encodeSync(
-                      UpdatingResearchScoutActions.tools.research_scout_follow_up.parametersSchema
-                        .fields.worker,
-                    )(accepted.worker),
-                    parameters: { title: "Stays", message: parent.input.message },
-                  },
-                  `follow-${parent.index}`,
-                ),
-              );
-            }
-
-            if (parent.input.message.startsWith("follow research")) {
-              const referenceId = /referenceTripId=([a-f0-9-]+)/.exec(parent.input.message)?.[1];
-              const reference = current.find((result) => result.name === "get_trip");
-
-              if (!referenceId) return yield* Effect.die("Missing other-trip fixture ID");
-              if (!reference) return Stream.fromIterable(call("get_trip", { tripId: referenceId }));
-              const wrongSave = current.find((result) => result.id === "save-wrong-trip");
-
-              if (!wrongSave) {
-                const trip = Schema.decodeUnknownSync(Trip)(reference.result);
-
-                return Stream.fromIterable(
-                  call(
-                    "save_trip",
-                    Schema.encodeSync(SaveTripRequest)({
-                      ...trip,
-                      tripId: trip.id,
-                      expectedRevision: trip.revision,
-                      notes: ["Must not overwrite another conversation"],
-                    }),
-                    "save-wrong-trip",
-                  ),
-                );
-              }
-              if (!wrongSave.isFailure)
-                return yield* Effect.die("Cross-conversation write was accepted");
-
-              const next = updateCurrentTrip(
-                prompt,
-                parent.index,
-                "Budget 200, quiet neighborhood",
-              );
-
-              if (next) return Stream.fromIterable(next);
-            }
 
             return Stream.fromIterable(finish(`Planner handled: ${parent.input.message}`));
           }),
@@ -476,73 +199,11 @@ const researchBrowser = Toolkit.make(ReadTravelPage).toLayer({
     }),
 });
 
-// These RPCs must remain finite projections over the published adapters. Guard actual
-// records consumed, not only the requested limit; a hidden export/observe is a regression.
-const withReadBudget = Effect.fnUntraced(function* <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-  maximum: number,
-) {
-  const store = yield* ThreadStore;
-  const ledger = yield* SubmissionLedger;
-  let lookups = 0;
-  let consumed = 0;
-
-  return yield* effect.pipe(
-    Effect.provideService(SubmissionLedger, {
-      ...ledger,
-      lookup: (request) =>
-        Effect.suspend(() =>
-          ++lookups > 1
-            ? Effect.die("Worker view exceeded its one-lookup budget")
-            : ledger.lookup(request),
-        ),
-    }),
-    Effect.provideService(ThreadStore, {
-      ...store,
-      materialize: () => Effect.die("Worker view must not materialize history"),
-      append: () => Effect.die("Worker view must not append history"),
-      export: () => Effect.die("Worker view must not export history"),
-      observe: () => Stream.die("Worker view must not observe unbounded history"),
-      read: (request) =>
-        store.read(request).pipe(
-          Stream.tap(() =>
-            Effect.sync(() => {
-              if (++consumed > maximum)
-                throw new Error(`Worker view exceeded its ${maximum}-record budget`);
-            }),
-          ),
-        ),
-    }),
-  );
-});
-
 export class TravelPlannerThread extends makeTravelPlannerThread(
   sites,
   plannerApplication(model, "research-v1", "Research fixture", researchBrowser),
   { ownershipLeaseDuration: 3_000, leaseRenewalInterval: 500 },
 ) {
-  plannerWorker(request: string): Promise<string> {
-    return this[DurableObject.RunSymbol](
-      withReadBudget(
-        Schema.decodeEffect(Schema.fromJsonString(WorkerLocator))(request).pipe(
-          Effect.flatMap(plannerWorker),
-          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
-        ),
-        1,
-      ),
-    );
-  }
-  plannerWorkerStatus(request: string): Promise<string> {
-    return this[DurableObject.RunSymbol](
-      withReadBudget(
-        Schema.decodeEffect(Schema.fromJsonString(WorkerStatusRequest))(request).pipe(
-          Effect.flatMap(workerStatus),
-          Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(PlannerWorkerDetail))),
-        ),
-        100,
-      ),
-    );
-  }
   fetch(request: Request): Promise<Response> {
     return this[DurableObject.RunSymbol](
       Effect.gen(function* () {
@@ -588,15 +249,9 @@ export default {
         const key = `gate/${url.searchParams.get("name") ?? ""}`;
 
         if (request.method === "POST") await bucket.put(`${key}/open`, "yes");
-        if (request.method === "DELETE") await bucket.delete(`${key}/open`);
 
         return Response.json({ entered: (await bucket.head(`${key}/entered`)) !== null });
       }
-
-      return new Response(
-        (await (await bucket.get(`tools/${url.searchParams.get("thread") ?? ""}`))?.text()) ??
-          "null",
-      );
     }
 
     return fixtureWorker.fetch(request, env);

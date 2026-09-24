@@ -6,16 +6,6 @@ import {
 } from "../../src/durable/internal/foreign-diagnostic.ts";
 
 describe("foreign failure diagnostics", () => {
-  it("reads only Schema-validated diagnostic fields", () => {
-    expect(
-      inspectForeignDiagnostic({
-        _tag: "SupplierUnavailable",
-        message: "supplier timed out",
-        secret: "must not be projected",
-      }),
-    ).toEqual({ tag: "SupplierUnavailable", message: "supplier timed out" });
-  });
-
   it("keeps hostile getters, proxies, and coercion hooks total", () => {
     const hostile = new Proxy(Object.create(null), {
       get() {

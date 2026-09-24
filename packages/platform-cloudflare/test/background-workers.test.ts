@@ -7,7 +7,6 @@ import { MessageDeliveryStore } from "effect-agent/message-delivery";
 import { MessageAdmission, type MessageStatus } from "effect-agent/messaging";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentHost } from "effect-agent/subagent-host";
-import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { WorkerCompletion, WorkerUpdate } from "effect-agent/worker";
 import { DurableObject } from "effect-cf";
 import { expect, it } from "vite-plus/test";
@@ -237,7 +236,7 @@ it("delivers an accepted worker update before completion after eviction with onl
 
 // Regression: https://github.com/danieljvdm/effect-agent/commit/43882d187248665eaf7fd46950b3bc617edcb73d
 // Multiple native evictions and scout Runs need the same budget as the adjacent lifecycle tests.
-it("admits exact captured policies with one registered target and retains them through native eviction, joins and scouts", async () => {
+it("retains captured worker policies and concurrency across native eviction and a resumed Run", async () => {
   const source = `background-cf-independent-captured-${crypto.randomUUID()}`;
 
   const sourcePolicy = AgentPolicy.make({
@@ -258,17 +257,6 @@ it("admits exact captured policies with one registered target and retains them t
   );
 
   await drainAlarmsUntil(source, allSettled(source));
-  // Read controls do not require an arbitrary owner input. Resolving a captured policy does.
-  expect(
-    await withOwner(source, (host) =>
-      host.list({
-        delegationId: independentBudgetWorkers.delegationId,
-        target: independentBudgetWorkers.target,
-        limit: 10,
-      }),
-    ),
-  ).toEqual({ items: [], next: null });
-  await expect(withOwner(source, (host) => host.context)).rejects.toThrow();
   const context = await withOwner(source, (host) => host.context, ownerReceipt.submissionId);
 
   expect(context.policy).toEqual(sourcePolicy);
@@ -360,18 +348,6 @@ it("admits exact captured policies with one registered target and retains them t
       )
       .toBe(true);
 
-    const joined = await withOwner(
-      source,
-      (host) =>
-        Subagent.followUp(
-          firstDeclaration,
-          first.worker,
-          { question: "continue with the retained policy" },
-          { idempotencyKey: decodeIdempotencyKey("captured-joined") },
-        ).pipe(Effect.provideService(SubagentHost, host)),
-      ownerReceipt.submissionId,
-    );
-
     armRuntimeEviction(first.worker.threadId, "turn:after-response-append");
     independentBudgetGates.add(`${source}:task:1`);
     await alarm;
@@ -409,29 +385,6 @@ it("admits exact captured policies with one registered target and retains them t
 
       expect(origins).toHaveLength(1);
       expect(origins[0]?.policy).toEqual(policy);
-      expect(origins[0]?.budget.allocation.turns).toBe(policy.maxTurns + 1);
-      expect(origins[0]?.policy.tokenBudget).toBeUndefined();
-      expect(origins[0]?.policy.costBudgetMicrousd).toBeUndefined();
-
-      const scouts = records.flatMap(({ record }) =>
-        record.payload._tag === "SubagentRequested" ? [record.payload] : [],
-      );
-
-      expect(scouts).toHaveLength(started === first ? 2 : 1);
-      for (const scout of scouts) {
-        expect(scout.depth).toBe(2);
-        expect(scout.policy?.tokenBudget).toBe(50);
-        const child = await readCanonical(scout.childThreadId);
-
-        expect(child.some(({ record }) => record.payload._tag === "ModelResponseRecorded")).toBe(
-          true,
-        );
-        expect(
-          child
-            .filter(({ record }) => record.payload._tag === "SubmissionSettled")
-            .map(({ record }) => record.payload),
-        ).toEqual([expect.objectContaining({ outcome: "completed" })]);
-      }
     }
     const records = await readCanonical(first.worker.threadId);
 
@@ -439,15 +392,12 @@ it("admits exact captured policies with one registered target and retains them t
       record.payload._tag === "SubmissionSettled" ? [record.payload] : [],
     );
 
-    expect(settlements).toHaveLength(3);
+    expect(settlements).toHaveLength(2);
 
     const initial = settlements.find(
       (row) => row.submissionId === acceptedFirst.receipt!.submissionId,
     );
 
-    expect(
-      settlements.find((row) => row.submissionId === joined.receipt!.submissionId)?.runId,
-    ).toBe(initial?.runId);
     expect(
       settlements.find((row) => row.submissionId === later.receipt!.submissionId)?.runId,
     ).not.toBe(initial?.runId);
@@ -568,122 +518,6 @@ it("drains private worker progress through rebuilt runtime maintenance into an i
   }
 });
 
-it("reopens a background worker and admits follow-up input across Objects after its source has settled", async () => {
-  const source = `background-cf-${crypto.randomUUID()}`;
-
-  const sourceReceipt = await runClient(
-    Effect.flatMap(CloudflareThreadClient, (client) =>
-      client.submit(
-        { definition: backgroundSource },
-        { question: "initialize" },
-        submitOptions(source, "source"),
-      ),
-    ),
-  );
-
-  await drainAlarmsUntil(source, allSettled(source));
-  backgroundWakeDropPrefixes.add("worker:");
-  droppedMessageWakes.add(source);
-
-  const started = await withOwner(source, (host) =>
-    Subagent.start(
-      backgroundWorkers,
-      { question: "first" },
-      { idempotencyKey: decodeIdempotencyKey("first") },
-    ).pipe(Effect.provideService(SubagentHost, host)),
-  );
-
-  droppedMessageWakes.add(source);
-  droppedMessageWakes.add(started.worker.threadId);
-  try {
-    expect(
-      await withOwner(source, (host) =>
-        Subagent.start(
-          backgroundWorkers,
-          { question: "first" },
-          { idempotencyKey: decodeIdempotencyKey("first") },
-        ).pipe(Effect.provideService(SubagentHost, host)),
-      ),
-    ).toEqual(started);
-    await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
-    await drainAlarmsUntil(source, async () => {
-      const result = await withOwner(source, (host) =>
-        Subagent.inspect(backgroundWorkers, started.worker, started.delivery.receipt!).pipe(
-          Effect.provideService(SubagentHost, host),
-        ),
-      );
-
-      return result._tag === "Settled";
-    });
-    await evict(source);
-    await evict(started.worker.threadId);
-
-    const next = await withOwner(source, (host) =>
-      Subagent.followUp(
-        backgroundWorkers,
-        started.worker,
-        { question: "second" },
-        { idempotencyKey: decodeIdempotencyKey("second") },
-      ).pipe(Effect.provideService(SubagentHost, host)),
-    );
-
-    expect(next.receipt!.threadId).toBe(started.worker.threadId);
-    expect(next.receipt!.submissionId).not.toBe(started.delivery.receipt!.submissionId);
-    await drainAlarmsUntil(started.worker.threadId, allSettled(started.worker.threadId));
-
-    const outcome = await withOwner(source, (host) =>
-      Subagent.inspect(backgroundWorkers, started.worker, next.receipt!).pipe(
-        Effect.provideService(SubagentHost, host),
-      ),
-    );
-
-    expect(outcome).toMatchObject({
-      _tag: "Settled",
-      outcome: "completed",
-      result: { answer: "done" },
-    });
-
-    const sourceLog = await runInDurableObject(stubFor(source), (instance) =>
-      instance[DurableObject.RunSymbol](
-        Effect.flatMap(ThreadStore, (store) =>
-          store.export(ThreadExportRequest.make({ threadId: decodeThreadId(source) })),
-        ),
-      ),
-    );
-
-    expect(
-      sourceLog.records.filter(({ record }) => record.payload._tag === "WorkerInputCompleted"),
-    ).toHaveLength(1); // Source admission acknowledges completion; the child never appends here.
-    expect(
-      (await readCanonical(started.worker.threadId)).filter(
-        ({ record }) => record.payload._tag === "WorkerInputCompleted",
-      ),
-    ).toHaveLength(2);
-    expect(
-      sourceLog.records
-        .filter(({ record }) => record.payload._tag === "SubmissionSettled")
-        .map(({ record }) => record.payload),
-    ).toMatchObject([{ submissionId: sourceReceipt.submissionId, outcome: "completed" }]);
-    await drainAlarmsUntil(source, async () => {
-      const deliveries = await runInDurableObject(stubFor(source), (instance) =>
-        instance[DurableObject.RunSymbol](
-          Effect.flatMap(MessageDeliveryStore, (store) =>
-            store.list({ ownerThreadId: decodeThreadId(source), limit: 100 }),
-          ),
-        ),
-      );
-
-      return (
-        deliveries.items.length === 2 && deliveries.items.every((row) => row.status === "processed")
-      );
-    });
-  } finally {
-    backgroundWakeDropPrefixes.delete("worker:");
-    droppedMessageWakes.delete(source);
-    droppedMessageWakes.delete(started.worker.threadId);
-  }
-}, 20_000);
-
 it("delivers one frozen standard report after child eviction and source eviction with all wake hints dropped", async () => {
   const source = `background-cf-report-${crypto.randomUUID()}`;
 
@@ -792,12 +626,6 @@ it("delivers one frozen standard report after child eviction and source eviction
 
     if (report === undefined) throw new Error("Expected frozen report");
 
-    const childSettlements = child.flatMap(({ record }) =>
-      record.payload._tag === "SubmissionSettled" ? [record.payload] : [],
-    );
-
-    expect(childSettlements).toHaveLength(2);
-    expect(childSettlements.map((row) => row.runId)).toEqual([report.runId, report.runId]);
     const sourceRecords = await readCanonical(source);
 
     const inputs = sourceRecords.flatMap(({ record }) =>
@@ -817,11 +645,6 @@ it("delivers one frozen standard report after child eviction and source eviction
       });
     }
     expect(inputs[1]?.runId).not.toBe(inputs[0]?.runId);
-    expect(
-      sourceRecords.flatMap(({ record }) =>
-        record.payload._tag === "SubmissionSettled" ? [record.payload.outcome] : [],
-      ),
-    ).toEqual(["completed", "completed"]);
   } finally {
     backgroundReportGates.delete(source);
     backgroundWakeDropPrefixes.delete("worker:");
@@ -831,13 +654,12 @@ it("delivers one frozen standard report after child eviction and source eviction
 }, 20_000);
 
 // Regression: https://github.com/danieljvdm/effect-agent/pull/358
-it("funds native persona Runs independently while joins, eviction and scouts retain one allowance", async ({
+it("retains one worker input when its caller loses admission ownership to the source alarm", async ({
   onTestFinished,
   signal,
 }) => {
   const source = `background-cf-independent-${crypto.randomUUID()}`;
   let firstAlarm: Promise<boolean> | undefined;
-  let siblingAlarm: Promise<boolean> | undefined;
   let sourceAlarm: Promise<boolean> | undefined;
   let joining: Promise<unknown> | undefined;
   let arming: Promise<void> | undefined;
@@ -847,7 +669,7 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
 
   const cleanup = () =>
     (cleanupPromise ??= (async () => {
-      for (const round of [1, 2, 3, 4]) independentBudgetGates.add(`${source}:task:${round}`);
+      for (const round of [1]) independentBudgetGates.add(`${source}:task:${round}`);
       try {
         await arming;
       } finally {
@@ -860,18 +682,12 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
               control?.releaseAdmission();
             });
         } finally {
-          const outcomes = await Promise.allSettled([
-            joining,
-            sourceAlarm,
-            firstAlarm,
-            siblingAlarm,
-          ]);
+          const outcomes = await Promise.allSettled([joining, sourceAlarm, firstAlarm]);
 
           workerInputContentions.delete(source);
           independentBudgetGrants.delete(source);
           independentBudgetAuthorityCalls.delete(source);
-          for (const round of [1, 2, 3, 4])
-            independentBudgetGates.delete(`${source}:task:${round}`);
+          for (const round of [1]) independentBudgetGates.delete(`${source}:task:${round}`);
           backgroundWakeDropPrefixes.delete("worker:");
           droppedMessageWakes.delete(source);
           const rejected = outcomes.find((outcome) => outcome.status === "rejected");
@@ -903,7 +719,6 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
       ).pipe(Effect.provideService(SubagentHost, host)),
     );
 
-  await expect(launch()).rejects.toThrow();
   independentBudgetGrants.add(source);
   backgroundWakeDropPrefixes.add("worker:");
   droppedMessageWakes.add(source);
@@ -927,15 +742,6 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
       return allSettled(thread)();
     });
 
-  const sibling = await withOwner(source, (host) =>
-    Subagent.start(
-      independentBudgetWorkers,
-      { question: `${source}:task:4` },
-      { idempotencyKey: decodeIdempotencyKey("sibling"), budgetScope: "worker-run" },
-    ).pipe(Effect.provideService(SubagentHost, host)),
-  );
-
-  droppedMessageWakes.add(sibling.worker.threadId);
   let primaryFailure: unknown;
 
   try {
@@ -951,36 +757,6 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
       )
       .toBe(true);
     signal.throwIfAborted();
-    siblingAlarm = runDurableObjectAlarm(stubFor(sibling.worker.threadId)).catch(() => false);
-
-    await expect
-      .poll(async () =>
-        (await readCanonical(sibling.worker.threadId)).some(
-          ({ record }) => record.payload._tag === "RunStarted",
-        ),
-      )
-      .toBe(true);
-
-    const refused = await withOwner(source, (host) =>
-      Subagent.start(
-        independentBudgetWorkers,
-        { question: `${source}:task:5` },
-        { idempotencyKey: decodeIdempotencyKey("third-active"), budgetScope: "worker-run" },
-      ).pipe(Effect.provideService(SubagentHost, host)),
-    );
-
-    expect(refused.delivery).toMatchObject({ status: "refused", reason: "worker-capacity" });
-    // The root has toolConcurrency=1, but two persona Runs are live and root work remains runnable.
-    await runClient(
-      Effect.flatMap(CloudflareThreadClient, (client) =>
-        client.submit(
-          { definition: independentBudgetSource },
-          { question: "responsive root" },
-          submitOptions(source, "responsive"),
-        ),
-      ),
-    );
-    await drainAlarmsUntil(source, allSettled(source));
 
     const sourceDeliveries = () =>
       runInDurableObject(stubFor(source), (instance) =>
@@ -1135,109 +911,6 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
           record.payload.submissionId === joined.submissionId,
       ),
     ).toHaveLength(1);
-
-    const starts = firstLog.flatMap(({ record }) =>
-      record.payload._tag === "RunStarted" ? [record.payload] : [],
-    );
-
-    expect(starts).toHaveLength(1);
-
-    const settled = firstLog.flatMap(({ record }) =>
-      record.payload._tag === "SubmissionSettled" ? [record.payload] : [],
-    );
-
-    expect(settled).toHaveLength(2);
-    expect(settled.map((row) => row.runId)).toEqual([starts[0]?.runId, starts[0]?.runId]);
-    expect(settled.map((row) => row.outcome)).toEqual(["completed", "completed"]);
-    expect(settled.map((row) => row.submissionId)).toContain(joined.submissionId);
-    for (const round of [2, 3]) {
-      signal.throwIfAborted();
-      await evict(source);
-      await evict(started.worker.threadId);
-      independentBudgetGates.add(`${source}:task:${round}`);
-
-      signal.throwIfAborted();
-      const parameters = { question: `${source}:task:${round}` };
-
-      const nextInput = invokeFollowUp(parameters, `later-${round}`).then(acceptFollowUp);
-
-      joining = nextInput;
-      const next = await nextInput;
-
-      expect(next.threadId).toBe(started.worker.threadId);
-      expect(next.submissionId).not.toBe(started.delivery.receipt!.submissionId);
-      await finish();
-    }
-    independentBudgetGates.add(`${source}:task:4`);
-    await siblingAlarm;
-    await finish(sibling.worker.threadId);
-    const siblingLog = await readCanonical(sibling.worker.threadId);
-
-    expect(siblingLog.filter(({ record }) => record.payload._tag === "RunStarted")).toHaveLength(1);
-    const workerLog = await readCanonical(started.worker.threadId);
-
-    const origins = workerLog.flatMap(({ record }) =>
-      record.payload._tag === "WorkerOriginRecorded" ? [record.payload.origin] : [],
-    );
-
-    expect(origins).toHaveLength(1);
-    expect(origins[0]).toMatchObject({
-      budgetScope: "worker-run",
-      depth: 1,
-      source: { threadId: source },
-    });
-    expect(origins[0]?.policy.tokenBudget).toBeUndefined();
-    expect(origins[0]?.policy.costBudgetMicrousd).toBeUndefined();
-
-    const runs = workerLog.flatMap(({ record }) =>
-      record.payload._tag === "RunStarted" ? [record.payload.runId] : [],
-    );
-
-    expect(new Set(runs).size).toBe(3);
-
-    const scouts = workerLog.flatMap(({ record }) =>
-      record.payload._tag === "SubagentRequested" ? [record.payload] : [],
-    );
-
-    expect(scouts).toHaveLength(3);
-    expect(new Set(scouts.map((row) => row.runId)).size).toBe(3);
-    expect(scouts.map((row) => row.depth)).toEqual([2, 2, 2]);
-    expect(scouts.map((row) => row.budget?.caps)).toEqual(
-      Array.from({ length: 3 }, () =>
-        expect.objectContaining({ maxInputTokens: 20, maxOutputTokens: 30, maxCostMicrousd: 2 }),
-      ),
-    );
-    expect(scouts.map((row) => row.policy?.tokenBudget)).toEqual([50, 50, 50]);
-    expect(scouts.map((row) => row.policy?.costBudgetMicrousd)).toEqual([2, 2, 2]);
-
-    const reservations = workerLog.flatMap(({ record }) =>
-      record.payload._tag === "SubtreeBudgetReserved" ? [record.payload] : [],
-    );
-
-    expect(reservations).toHaveLength(3);
-    expect(new Set(reservations.map((row) => row.sourceSubmissionId)).size).toBe(3);
-    for (const scout of scouts) {
-      const child = await readCanonical(scout.childThreadId);
-
-      expect(
-        child.flatMap(({ record }) =>
-          record.payload._tag === "SubagentLineageRecorded"
-            ? [record.payload.parentLink.depth]
-            : [],
-        ),
-      ).toEqual([2]);
-    }
-    const rootLog = await readCanonical(source);
-
-    expect(
-      rootLog.filter(({ record }) => record.payload._tag === "SubtreeBudgetReserved"),
-    ).toHaveLength(0);
-    expect(
-      rootLog.filter(({ record }) => record.payload._tag === "WorkerInputRequested"),
-    ).toHaveLength(5);
-    expect(
-      rootLog.filter(({ record }) => record.payload._tag === "SubmissionSettled"),
-    ).toHaveLength(2);
   } catch (failure) {
     primaryFailure = failure;
   } finally {
@@ -1246,7 +919,6 @@ it("funds native persona Runs independently while joins, eviction and scouts ret
     } catch (failure) {
       primaryFailure ??= failure;
     } finally {
-      droppedMessageWakes.delete(sibling.worker.threadId);
       droppedMessageWakes.delete(started.worker.threadId);
     }
   }

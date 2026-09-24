@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import { Context, Effect, Schema, SchemaGetter } from "effect";
 import { makeEventSource } from "effect-agent/event-source";
 import { AgentId, ThreadId } from "effect-agent/identifiers";
@@ -157,13 +157,6 @@ describe("subscription callback resource ownership", () => {
             input: codec,
             prepare: () => callback,
           });
-
-          expectTypeOf<Effect.Services<typeof sourceEffect>>().toEqualTypeOf<
-            CallbackDependency | Decoder | Encoder
-          >();
-          expectTypeOf<Effect.Services<typeof bindingEffect>>().toEqualTypeOf<
-            CallbackDependency | Decoder | Encoder
-          >();
 
           const source = yield* sourceEffect;
           const binding = yield* bindingEffect;

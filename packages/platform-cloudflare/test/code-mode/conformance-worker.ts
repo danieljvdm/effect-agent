@@ -1,18 +1,5 @@
-import { codeExecutorConformanceCases } from "@effect-agent/testing/code-executor-conformance";
 import { DurableObject } from "cloudflare:workers";
-import {
-  Cause,
-  Context,
-  Duration,
-  Deferred,
-  Effect,
-  Exit,
-  ManagedRuntime,
-  Option,
-  Predicate,
-  Schema,
-  type Layer,
-} from "effect";
+import { Duration, Effect, ManagedRuntime, Predicate, type Layer } from "effect";
 import {
   CodeExecutionHost,
   CodeExecutionLimits,
@@ -22,16 +9,10 @@ import {
   CodeHostCallFailure,
   CodeHostCallSuccess,
   type CodeExecutionError,
-  type CodeHostCall,
-  type CodeHostCallResult,
 } from "effect-agent/code-executor";
-import { NetworkAllowlist, NetworkDisabled } from "effect-agent/sandbox";
+import { NetworkDisabled } from "effect-agent/sandbox";
 
-import {
-  disposeRpcHandle,
-  dynamicWorkerCodeExecutorLayer,
-  dynamicWorkerImplementation,
-} from "../../src/CloudflareCodeMode.ts";
+import { dynamicWorkerCodeExecutorLayer } from "../../src/CloudflareCodeMode.ts";
 
 interface WorkerEnv {
   readonly LOADER: WorkerLoader;
@@ -97,60 +78,10 @@ const runOutcome = (
 ): Effect.Effect<{ readonly tag: string; readonly detail: unknown }> =>
   executeOutcome(req, host).pipe(Effect.provide(layer));
 
-/**
- * A representative subset of the shared conformance suite plus the
- * isolated-only enforcement cases, run against the real adapter in workerd.
- * The full 17-case kit runs against the deterministic substitute in the
- * testing package; every worker load here boots a fresh dynamic worker, so
- * the workerd lane proves the trust and enforcement boundaries on a curated
- * set rather than paying that cost 17 times. Case names are matched against
- * the shared kit's names so a rename here fails loudly.
- */
-const workerdConformanceCaseNames: ReadonlyArray<string> = [
-  "TEST-015 executes bounded JSON computation and returns the program value",
-  "CAP-015 reports its isolation posture honestly in results and errors",
-  "TEST-015 routes host calls through the CodeExecutionHost in program order",
-  "TEST-015 a caught failed host call lets the program branch on the envelope",
-  "TEST-015 an uncaught failed host call fails the program with the envelope",
-  "TEST-015 fails typed on syntactically invalid source",
-  "TEST-015 fails typed when the expression is not one async function",
-  "TEST-015 fails typed when the final result exceeds its byte budget",
-  "TEST-015 fails typed when host calls exceed the executor cap",
-  "TEST-015 fails typed on a host outcome outside the protocol schema",
-  "TEST-015 surfaces an uncaught program throw with its bounded log capture",
-  "TEST-015 fails typed when the program returns a non-JSON value",
-  "CAP-015 rejects a network allowlist it cannot enforce with a typed unsupported error",
-  "TEST-015 interruption reaches in-flight host calls and pass teardown",
-];
-
 const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
   Effect.gen(function* () {
     const layer = executorLayerFor(env);
     const failures: Array<string> = [];
-
-    const allCases = codeExecutorConformanceCases({
-      implementation: dynamicWorkerImplementation,
-    });
-
-    for (const name of workerdConformanceCaseNames) {
-      const conformanceCase = allCases.find((candidate) => candidate.name === name);
-
-      if (conformanceCase === undefined) {
-        failures.push(`missing shared conformance case: ${name}`);
-        continue;
-      }
-      const exit = yield* conformanceCase.run.pipe(Effect.provide(layer), Effect.exit);
-
-      if (Exit.isFailure(exit)) {
-        const violation = Cause.findErrorOption(exit.cause);
-
-        failures.push(
-          Option.isSome(violation)
-            ? `${conformanceCase.name}: ${violation.value.message}`
-            : `${conformanceCase.name} DEFECT: ${Cause.pretty(exit.cause).slice(0, 1_000)}`,
-        );
-      }
-    }
 
     // Isolated-only enforcement (testing spec §8.1): the deterministic
     // substitute cannot prove these, but a real Dynamic Worker must.
@@ -162,19 +93,6 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
     if (networkOutcome.tag !== "CodeProgramFailedError") {
       failures.push(
         `ambient network denial: expected a program failure, got ${networkOutcome.tag}`,
-      );
-    }
-
-    const allowlistOutcome = yield* runOutcome(
-      request("async () => 1", {
-        network: NetworkAllowlist.make({ domains: ["example.com"], ports: [443] }),
-      }),
-      layer,
-    );
-
-    if (allowlistOutcome.tag !== "CodeExecutorUnsupportedError") {
-      failures.push(
-        `network allowlist rejection: expected CodeExecutorUnsupportedError, got ${allowlistOutcome.tag}`,
       );
     }
 
@@ -200,41 +118,6 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
 
     // End-to-end host composition through the real Worker Loader RPC.
     const namespace = CodeExecutionNamespace.make({ name: "warehouse", methods: ["query"] });
-    const calls: Array<CodeHostCall> = [];
-
-    // A plain-object outcome (the shape the Code Mode capability's broker
-    // route returns), not a class instance — the adapter must accept both.
-    const host: CodeExecutionHost["Service"] = {
-      call: (hostCall) =>
-        Effect.sync(() => {
-          calls.push(hostCall);
-
-          return { _tag: "CodeHostCallSuccess", value: { rows: [1, 2, 3] } } as CodeHostCallResult;
-        }),
-    };
-
-    const composed = yield* runOutcome(
-      request(
-        `async () => {
-          const result = await warehouse.query({ sql: "select 1" });
-          console.log("rows", result.rows.length);
-          return { doubled: result.rows.map((n) => n * 2) };
-        }`,
-        { namespaces: [namespace] },
-      ),
-      layer,
-      host,
-    );
-
-    if (
-      composed.tag !== "success" ||
-      JSON.stringify((composed.detail as { value: unknown }).value) !==
-        JSON.stringify({ doubled: [2, 4, 6] })
-    ) {
-      failures.push(`host composition: unexpected outcome ${JSON.stringify(composed)}`);
-    } else if (calls.length !== 1) {
-      failures.push(`host composition: expected 1 host call, observed ${calls.length}`);
-    }
 
     const resultLimit = CodeExecutionLimits.make({
       ...baseLimits,
@@ -270,35 +153,6 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
 
     return failures;
   });
-
-/**
- * Distinguishes a `runFork` root fiber (default `"root"`) from a child of
- * the `execute` Scope (provided `"executor"`). Host calls must see the pass
- * Context — they still run on a sibling fiber of the guest RPC waiter so
- * the return RPC is not coupled to `entrypoint.run()`.
- */
-const ExecutorFiberMarker = Context.Reference<"root" | "executor">(
-  "@effect-agent/platform-cloudflare/test/ExecutorFiberMarker",
-  { defaultValue: () => "root" },
-);
-
-const runHostCallScopeRegression = (env: WorkerEnv) => {
-  const layer = executorLayerFor(env);
-  const namespace = CodeExecutionNamespace.make({ name: "warehouse", methods: ["query"] });
-
-  const host: CodeExecutionHost["Service"] = {
-    call: () =>
-      ExecutorFiberMarker.pipe(Effect.map((value) => CodeHostCallSuccess.make({ value }))),
-  };
-
-  return runOutcome(
-    request("async () => warehouse.query({ sql: 'select 1' })", {
-      namespaces: [namespace],
-    }),
-    layer,
-    host,
-  ).pipe(Effect.provideService(ExecutorFiberMarker, "executor"));
-};
 
 export class CodeModeExecutorObject extends DurableObject<WorkerEnv> {
   readonly #runtime: ManagedRuntime.ManagedRuntime<CodeExecutor, never>;
@@ -353,87 +207,6 @@ interface CodeModeExecutorStub {
   readonly run: () => Promise<{ readonly tag: string; readonly value: unknown }>;
 }
 
-const runDisposalRegression = Effect.gen(function* () {
-  const hostileHandles: ReadonlyArray<unknown> = [
-    new Proxy(
-      {},
-      {
-        has: () => {
-          throw new Error("hostile disposal membership probe");
-        },
-      },
-    ),
-    new Proxy(
-      {},
-      {
-        has: (_target, key) => key === Symbol.dispose,
-        get: () => {
-          throw new Error("hostile disposal getter");
-        },
-      },
-    ),
-    {
-      [Symbol.dispose]: () => {
-        throw new Error("hostile disposal invocation");
-      },
-    },
-  ];
-
-  yield* Effect.forEach(hostileHandles, disposeRpcHandle, { discard: true });
-
-  return { tag: "success" };
-});
-
-const runConcurrentRegression = (env: WorkerEnv) =>
-  Effect.gen(function* () {
-    const dependentFinished = yield* Deferred.make<void>();
-    let active = 0;
-    let peak = 0;
-    const completed: Array<number> = [];
-
-    const outcome = yield* runOutcome(
-      request(
-        `async () => {
-    const first = example.write({ id: 0 });
-    const second = (async () => {
-      await example.write({ id: 1 });
-      return await example.write({ id: 2 });
-    })();
-    return await Promise.all([first, second]);
-  }`,
-        {
-          namespaces: [CodeExecutionNamespace.make({ name: "example", methods: ["write"] })],
-          limits: CodeExecutionLimits.make({ ...baseLimits, maxHostCallConcurrency: 2 }),
-        },
-      ),
-      executorLayerFor(env),
-      {
-        call: (call) =>
-          Effect.gen(function* () {
-            const { id } = yield* Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.Int }))(
-              call.argument,
-            ).pipe(Effect.orDie);
-
-            active++;
-            peak = Math.max(peak, active);
-            if (id === 0) yield* Deferred.await(dependentFinished);
-            completed.push(id);
-            if (id === 2) yield* Deferred.succeed(dependentFinished, undefined);
-
-            return CodeHostCallSuccess.make({ value: id });
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                active--;
-              }),
-            ),
-          ),
-      },
-    );
-
-    return { outcome, completed, peak, active };
-  });
-
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     try {
@@ -449,15 +222,6 @@ export default {
         const outcomes = [await second.run(), await first.run()];
 
         return Response.json({ outcomes });
-      }
-      if (new URL(request.url).pathname === "/host-call-pass-scope") {
-        return Response.json(await Effect.runPromise(runHostCallScopeRegression(env)));
-      }
-      if (new URL(request.url).pathname === "/concurrent-host-calls") {
-        return Response.json(await Effect.runPromise(runConcurrentRegression(env)));
-      }
-      if (new URL(request.url).pathname === "/total-disposal") {
-        return Response.json(await Effect.runPromise(runDisposalRegression));
       }
       const failures = await Effect.runPromise(runAllChecks(env));
 

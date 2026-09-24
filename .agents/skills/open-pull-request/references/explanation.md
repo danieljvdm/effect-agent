@@ -4,14 +4,16 @@ Pick the smallest view that makes the change clear, and place it beside the
 short explanation it supports. Prefer a diagram or example over a long prose
 description; simple changes can stay prose-only.
 
-- For changes to component ownership, boundaries, or data flow, include a
-  focused Mermaid architecture chart. Use a sequence diagram when call order
-  matters. Name the actual components, label the interactions, and make the
-  changed responsibility or path clear without mapping the whole system.
-- For new or changed APIs, show a concrete caller example: an HTTP request and
-  response, or a typed function/SDK call and its result. Include the inputs,
-  outputs, and error behavior relevant to the change. Use a small before/after
-  diff when callers must migrate; show the complete example when the API is new.
+- For meaningful architecture changes to component ownership, boundaries, or
+  data flow, use a focused Mermaid chart only when it explains the change more
+  clearly than short prose. A sequence diagram can help when interactions between
+  components change. Name actual components and changed interactions without
+  mapping the whole system. Routine fixes and local branching need no diagram.
+- Include a small code excerpt or caller example only when it clarifies a changed
+  contract or subtle behavior. For an API change, this can be an HTTP request and
+  response or a typed call and its result. Show only relevant inputs, outputs,
+  and errors. A before/after diff can explain a caller migration; an obvious
+  edit needs no sample.
 
 Use fenced Mermaid and code blocks directly in the PR. A call tree or pseudocode
 can replace a chart when it explains the change more clearly. Match diagrams

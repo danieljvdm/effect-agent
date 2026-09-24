@@ -10,8 +10,6 @@ import { SqliteClient } from "@effect/sql-sqlite-do";
 import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer } from "effect";
 
-export { ProbeDurableObject } from "./probe-worker.ts";
-
 /**
  * SQLite-backed Durable Object shell hosting the WP1/WP2 adapter suites. Tests use
  * `runInDurableObject` to run the adapter Layers directly against `ctx.storage`; the class

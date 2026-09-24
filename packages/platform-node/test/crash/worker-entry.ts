@@ -347,19 +347,6 @@ const scenario = Effect.gen(function* () {
 
       return;
     }
-    case "abort-ready": {
-      const receipt = yield* submitPlanner(idempotencyKey);
-
-      yield* runtime.abort(
-        AbortCommand.make({
-          submissionId: receipt.submissionId,
-          author: "operator",
-          reason: "crash harness abort",
-        }),
-      );
-
-      return;
-    }
     case "abort-queued": {
       // P7 §7(c): a head plus a QUEUED second Submission; the abort targets the queued row
       // and the kill fires at abort:after-intent, so restart recovery must settle the
@@ -630,21 +617,6 @@ const scenario = Effect.gen(function* () {
 
       return;
     }
-    case "subagent-abort": {
-      const receipt = yield* submitCoordinator(idempotencyKey);
-
-      yield* driveResolved(threadId);
-      yield* runtime.abort(
-        AbortCommand.make({
-          submissionId: receipt.submissionId,
-          author: "operator",
-          reason: "crash harness abort",
-        }),
-      );
-      yield* emit({ kind: "resolved", value: "aborted" });
-
-      return;
-    }
     case "subagent-recover": {
       // One host startup-recovery pass over the shared file (binding-free executors only); the
       // armed kill dies mid-pass, e.g. right after the propagated child abort intent commits.
@@ -671,9 +643,7 @@ const isFencedFailure = (tag: string): boolean =>
 const runtimeLayer = Layer.unwrap(
   Effect.gen(function* () {
     const bindings =
-      env.EFFECT_AGENT_SCENARIO === "subagent-run" ||
-      env.EFFECT_AGENT_SCENARIO === "subagent-child" ||
-      env.EFFECT_AGENT_SCENARIO === "subagent-abort"
+      env.EFFECT_AGENT_SCENARIO === "subagent-run" || env.EFFECT_AGENT_SCENARIO === "subagent-child"
         ? yield* makeSubagentBindings
         : [];
 

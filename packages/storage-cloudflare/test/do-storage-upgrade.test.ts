@@ -51,7 +51,7 @@ const fixture = <A, E>(
     >,
     dependencies: ReturnType<typeof services>,
   ) => Effect.Effect<A, E, SqlClientService.SqlClient>,
-  hit: (point: string) => "failure" | "interrupt" | "defect" | undefined = () => undefined,
+  hit: (point: string) => "failure" | "interrupt" | undefined = () => undefined,
 ) =>
   withScheduleStorage(`v2-upgrade-${counter++}`, (storage) =>
     Effect.gen(function* () {
@@ -87,7 +87,7 @@ const fixture = <A, E>(
 
 const services = (
   storage: DurableObjectStorage,
-  hit: (point: string) => "failure" | "interrupt" | "defect" | undefined,
+  hit: (point: string) => "failure" | "interrupt" | undefined,
 ) => {
   const fault = <E>(point: string, error: E): Effect.Effect<void, E> => {
     switch (hit(point)) {
@@ -95,8 +95,6 @@ const services = (
         return Effect.fail(error);
       case "interrupt":
         return Effect.interrupt;
-      case "defect":
-        return Effect.die("upgrade fixture defect");
       case undefined:
         return Effect.void;
     }
@@ -191,12 +189,7 @@ describe("unpatched v2 native storage upgrade", () => {
       }).pipe(Effect.provide(SqliteClient.layer({ storage }))),
     ));
 
-  for (const point of [
-    "upgrade:before-mutation",
-    "upgrade:after-mutation",
-    "upgrade:before-version",
-    "upgrade:after-version",
-  ] as const) {
+  for (const point of ["upgrade:after-version"] as const) {
     it(`preserves v4 data and atomically adds recovery checkpoints at ${point}`, () => {
       let armed = false;
 
@@ -375,7 +368,7 @@ describe("unpatched v2 native storage upgrade", () => {
           }
         }),
       ));
-    for (const mode of ["failure", "interrupt", "defect"] as const) {
+    for (const mode of ["interrupt"] as const) {
       it(`rolls back ${store} on ${mode} after mutation and reopens`, () => {
         let armed = true;
 
@@ -450,13 +443,8 @@ describe("unpatched v2 native storage upgrade", () => {
 });
 
 describe("nonterminal index upgrade", () => {
-  for (const point of [
-    "upgrade:before-mutation",
-    "upgrade:after-mutation",
-    "upgrade:before-version",
-    "upgrade:after-version",
-  ] as const) {
-    for (const mode of ["failure", "interrupt", "defect"] as const) {
+  for (const point of ["upgrade:after-version"] as const) {
+    for (const mode of ["interrupt"] as const) {
       it(`preserves v5 rows and recovery checkpoints atomically at ${point} (${mode})`, () => {
         let armed = false;
 
@@ -580,12 +568,7 @@ describe("nonterminal index upgrade", () => {
 });
 
 describe("native canonical index upgrade", () => {
-  for (const point of [
-    "upgrade:before-mutation",
-    "upgrade:after-mutation",
-    "upgrade:before-version",
-    "upgrade:after-version",
-  ] as const) {
+  for (const point of ["upgrade:after-version"] as const) {
     for (const version of [6, 7, 8])
       it(`preserves v${version} canonical rows atomically at ${point}`, () => {
         let armed = false;

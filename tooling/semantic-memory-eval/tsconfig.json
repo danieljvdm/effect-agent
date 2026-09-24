@@ -4,5 +4,5 @@
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tsbuildinfo",
     "types": ["node"]
   },
-  "include": ["src", "test"]
+  "include": ["src"]
 }

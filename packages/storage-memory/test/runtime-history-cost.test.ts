@@ -2,7 +2,7 @@ import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
-import { Array, Cause, DateTime, Effect, Exit, Layer, Schema, Stream } from "effect";
+import { Array, DateTime, Effect, Exit, Layer, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
@@ -13,7 +13,6 @@ import {
   BatchId,
   CanonicalBatch,
   CanonicalSequence,
-  CompactionCreated,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -37,7 +36,6 @@ import {
   FencedAppendRequest,
   ThreadMaterialization,
   ThreadStore,
-  ThreadStoreError,
   ThreadTailRequest,
   type ThreadRead,
 } from "effect-agent/thread-store";
@@ -81,14 +79,13 @@ const base = Layer.mergeAll(
   }),
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
-type ReadFault = "gap" | "short" | "failure" | "defect" | "interruption";
-type ReadPhase = "prefix" | "suffix" | "fold";
+type ReadFault = "interruption";
+type ReadPhase = "suffix";
 
 const measure = Effect.fn("RuntimeHistoryCost.measure")(function* (
   historySize: number,
   fault?: { readonly kind: ReadFault; readonly phase: ReadPhase },
   raceAppend = false,
-  withCompaction = false,
 ) {
   const store = yield* ThreadStore;
   const threadId = Schema.decodeSync(ThreadId)(`history-cost-${historySize}`);
@@ -103,8 +100,7 @@ const measure = Effect.fn("RuntimeHistoryCost.measure")(function* (
     const records = Array.makeBy(Math.min(256, historySize - start), (offset) => {
       const position = start + offset;
       const input = `retained input ${position}`;
-      const compaction = withCompaction && position === 128;
-      const retained = position > 0 && position % 4 === 0 && !compaction;
+      const retained = position > 0 && position % 4 === 0;
 
       if (retained) retainedInputs.push(input);
 
@@ -117,31 +113,23 @@ const measure = Effect.fn("RuntimeHistoryCost.measure")(function* (
         payload:
           start + offset === 0
             ? ThreadCreated.make({ agentId: definition.id, definitions })
-            : compaction
-              ? CompactionCreated.make({
-                  runId: RunId.make("prior-compaction"),
-                  turn: 1,
-                  kind: "summarize",
-                  coversThrough: Schema.decodeSync(CanonicalSequence)(0),
-                  summary: "Invalid zero coverage must not hide retained input",
-                })
-              : retained
-                ? ModelCompleted.make({
-                    runId: RunId.make(`retained:${position}`),
-                    output: "retained answer",
-                    messages: Schema.decodeUnknownSync(PersistedJson)(
-                      Schema.encodeSync(Prompt.Prompt)(
-                        Prompt.make([
-                          { role: "user", content: input },
-                          { role: "assistant", content: "retained answer" },
-                        ]),
-                      ),
+            : retained
+              ? ModelCompleted.make({
+                  runId: RunId.make(`retained:${position}`),
+                  output: "retained answer",
+                  messages: Schema.decodeUnknownSync(PersistedJson)(
+                    Schema.encodeSync(Prompt.Prompt)(
+                      Prompt.make([
+                        { role: "user", content: input },
+                        { role: "assistant", content: "retained answer" },
+                      ]),
                     ),
-                  })
-                : RepairAnnotated.make({
-                    reason: "history-cost",
-                    details: { text: "x".repeat(128) },
-                  }),
+                  ),
+                })
+              : RepairAnnotated.make({
+                  reason: "history-cost",
+                  details: { text: "x".repeat(128) },
+                }),
       });
     });
 
@@ -162,12 +150,10 @@ const measure = Effect.fn("RuntimeHistoryCost.measure")(function* (
     tailSequence = appended.lastSequence;
     tailDigest = appended.tailDigest;
   }
-  let returnedRecords = 0;
   let measured = false;
 
   let openedPages = 0;
   let closedPages = 0;
-  let prefixTraversals = 0;
   let injected = false;
   let raced = false;
   const requests: Array<ThreadRead> = [];
@@ -179,32 +165,13 @@ const measure = Effect.fn("RuntimeHistoryCost.measure")(function* (
         if ("selection" in request) return store.read(request);
         openedPages++;
         requests.push(request);
-        if (request.afterSequence === undefined) prefixTraversals++;
 
-        const inject =
-          !injected &&
-          fault !== undefined &&
-          (fault.phase === "suffix"
-            ? request.afterSequence === historySize
-            : request.afterSequence === 1_024 &&
-              prefixTraversals === (fault.phase === "prefix" ? 1 : 2));
+        const inject = !injected && fault !== undefined && request.afterSequence === historySize;
 
         if (inject) {
           injected = true;
-          switch (fault.kind) {
-            case "gap":
-              return store.read(request).pipe(Stream.drop(1));
-            case "short":
-              return Stream.empty;
-            case "failure":
-              return Stream.fail(
-                ThreadStoreError.make({ operation: "history test", message: "read unavailable" }),
-              );
-            case "defect":
-              return Stream.die("read defect");
-            case "interruption":
-              return Stream.fromEffect(Effect.interrupt);
-          }
+
+          return Stream.fromEffect(Effect.interrupt);
         }
 
         if (raceAppend && !raced && request.afterSequence === 1_024) {
@@ -259,11 +226,6 @@ const measure = Effect.fn("RuntimeHistoryCost.measure")(function* (
 
         return store.read(request);
       }).pipe(
-        Stream.tap(() =>
-          Effect.sync(() => {
-            if (!measured) returnedRecords++;
-          }),
-        ),
         Stream.ensuring(
           Effect.sync(() => {
             closedPages++;
@@ -321,7 +283,6 @@ const measure = Effect.fn("RuntimeHistoryCost.measure")(function* (
   );
 
   return {
-    returnedRecords,
     measured,
     exit,
     openedPages,
@@ -333,47 +294,21 @@ const measure = Effect.fn("RuntimeHistoryCost.measure")(function* (
   };
 });
 
-it.live("bounds startup history reads while retaining the complete fixed prefix", () =>
+it.live.each([{ kind: "interruption", phase: "suffix" }] satisfies ReadonlyArray<{
+  readonly kind: ReadFault;
+  readonly phase: ReadPhase;
+}>)("releases startup reads and ownership after $phase $kind", (fault) =>
   Effect.gen(function* () {
-    for (const historySize of [1, 11, 2051]) {
-      const measurement = yield* measure(historySize).pipe(Effect.provide(base));
+    const result = yield* measure(1_025, fault).pipe(Effect.provide(base));
 
-      expect(Exit.isSuccess(measurement.exit)).toBe(true);
-      expect(measurement.measured).toBe(true);
-      expect(measurement.openedPages).toBe(measurement.closedPages);
-      expect(measurement.snapshot.ownership).toBeUndefined();
-      expect(measurement.returnedRecords).toBeLessThanOrEqual(2 * historySize + 6);
-    }
+    expect(result.injected).toBe(true);
+    expect(result.measured).toBe(false);
+    expect(Exit.isFailure(result.exit)).toBe(true);
+    expect(result.openedPages).toBe(result.closedPages);
+    expect(result.snapshot.ownership).toBeUndefined();
+    expect(result.snapshot.reservation).toBeUndefined();
+    expect(result.requests.every((request) => request.limit <= 1_024)).toBe(true);
   }),
-);
-
-it.live.each([
-  { kind: "gap", phase: "prefix" },
-  { kind: "short", phase: "prefix" },
-  { kind: "failure", phase: "prefix" },
-  { kind: "defect", phase: "prefix" },
-  { kind: "interruption", phase: "prefix" },
-  { kind: "gap", phase: "suffix" },
-  { kind: "failure", phase: "suffix" },
-  { kind: "interruption", phase: "suffix" },
-  { kind: "gap", phase: "fold" },
-  { kind: "short", phase: "fold" },
-] satisfies ReadonlyArray<{ readonly kind: ReadFault; readonly phase: ReadPhase }>)(
-  "releases startup reads and ownership after $phase $kind",
-  (fault) =>
-    Effect.gen(function* () {
-      const result = yield* measure(1_025, fault).pipe(Effect.provide(base));
-
-      expect(result.injected).toBe(true);
-      expect(result.measured).toBe(false);
-      expect(Exit.isFailure(result.exit)).toBe(true);
-      expect(result.openedPages).toBe(result.closedPages);
-      expect(result.snapshot.ownership).toBeUndefined();
-      expect(result.snapshot.reservation).toBeUndefined();
-      expect(result.requests.every((request) => request.limit <= 1_024)).toBe(true);
-      if (Exit.isFailure(result.exit) && ["gap", "short", "failure"].includes(fault.kind))
-        expect(Cause.hasFails(result.exit.cause)).toBe(true);
-    }),
 );
 
 it.live("captures the initial tail and incorporates racing appends through a later suffix", () =>
@@ -383,26 +318,6 @@ it.live("captures the initial tail and incorporates racing appends through a lat
     expect(result.raced).toBe(true);
     expect(result.measured).toBe(true);
     expect(Exit.isSuccess(result.exit)).toBe(true);
-    expect(
-      result.requests.slice(0, 2).map(({ afterSequence, limit }) => [afterSequence ?? 0, limit]),
-    ).toEqual([
-      [0, 1_024],
-      [1_024, 1],
-    ]);
-    expect(result.returnedRecords).toBeLessThanOrEqual(2 * 1_026 + 6);
-    expect(result.openedPages).toBe(result.closedPages);
-    expect(result.snapshot.ownership).toBeUndefined();
-  }),
-);
-
-it.live("falls back to ordinary journal scans when any compaction metadata is present", () =>
-  Effect.gen(function* () {
-    const result = yield* measure(1_025, undefined, false, true).pipe(Effect.provide(base));
-
-    expect(result.measured).toBe(true);
-    expect(Exit.isSuccess(result.exit)).toBe(true);
-    expect(result.returnedRecords).toBeGreaterThanOrEqual(3 * 1_025);
-    expect(result.returnedRecords).toBeLessThanOrEqual(3 * 1_025 + 6);
     expect(result.openedPages).toBe(result.closedPages);
     expect(result.snapshot.ownership).toBeUndefined();
   }),

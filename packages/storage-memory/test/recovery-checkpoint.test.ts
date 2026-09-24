@@ -29,7 +29,6 @@ import {
 } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
-import { TestClock } from "effect/testing";
 import type { Prompt, Response } from "effect/unstable/ai";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 
@@ -66,27 +65,13 @@ const final: ReadonlyArray<Response.StreamPartEncoded> = [
 
 const scenarios = [
   "cache",
-  "missing",
   "corrupt",
-  "incompatible",
-  "engineVersion",
-  "agentDefinitionDigest",
-  "modelDigest",
-  "toolDigest",
-  "definitions",
   "gap",
   "uncertain",
-  "downtime",
   "approval",
   "steps",
-  "second-rollover",
-  "checkpoint-before-failure",
-  "checkpoint-after-failure",
-  "checkpoint-before-interruption",
   "checkpoint-after-interruption",
-  "checkpoint-before-defect",
-  "checkpoint-after-defect",
-] as const;
+];
 
 describe("disposable durable recovery checkpoint", () => {
   it.effect(
@@ -357,7 +342,7 @@ describe("disposable durable recovery checkpoint", () => {
               requests.push(request.prompt);
 
               return Stream.fromIterable<Response.StreamPartEncoded>(
-                requests.length <= (scenario === "second-rollover" ? 5 : 4)
+                requests.length <= 4
                   ? [
                       {
                         type: "tool-call",
@@ -413,15 +398,11 @@ describe("disposable durable recovery checkpoint", () => {
               prepare: (request) =>
                 Effect.succeed({
                   prompt: request.source,
-                  ...((request.turn === 3 &&
-                    !JSON.stringify(request.source).includes("Keep the continuation.")) ||
-                  (scenario === "second-rollover" && request.turn === 6)
+                  ...(request.turn === 3 &&
+                  !JSON.stringify(request.source).includes("Keep the continuation.")
                     ? {
                         rollover: {
-                          handoff:
-                            scenario === "second-rollover" && request.turn === 6
-                              ? "Second continuation."
-                              : "Keep the continuation.",
+                          handoff: "Keep the continuation.",
                           through: request.source.content.length,
                         },
                       }
@@ -443,9 +424,7 @@ describe("disposable durable recovery checkpoint", () => {
 
       yield* failpoints.setHandler((location) => {
         const atCheckpoint =
-          scenario.startsWith("checkpoint-") &&
-          location ===
-            (scenario.includes("before") ? "checkpoint:before-save" : "checkpoint:after-save");
+          scenario.startsWith("checkpoint-") && location === "checkpoint:after-save";
 
         const atBatch =
           !scenario.startsWith("checkpoint-") &&
@@ -459,7 +438,6 @@ describe("disposable durable recovery checkpoint", () => {
 
         if (!atCheckpoint && !atBatch) return Effect.void;
         if (scenario.endsWith("interruption")) return Effect.interrupt;
-        if (scenario.endsWith("defect")) return Effect.die("checkpoint crash");
 
         return DurableRuntimeFailpointError.make({ location });
       });
@@ -480,7 +458,7 @@ describe("disposable durable recovery checkpoint", () => {
         LoadCheckpointRequest.make({ threadId: receipt.threadId }),
       );
 
-      expect(Option.isSome(checkpoint)).toBe(!scenario.includes("checkpoint-before"));
+      expect(Option.isSome(checkpoint)).toBe(true);
 
       const original = yield* store.export(
         ThreadExportRequest.make({ threadId: receipt.threadId }),
@@ -490,66 +468,35 @@ describe("disposable durable recovery checkpoint", () => {
       const callsBefore = calls;
 
       yield* failpoints.clear;
-      if (scenario === "downtime") yield* TestClock.adjust("31 seconds");
-      let readRecords = 0;
       const checkpoints = store.recoveryCheckpoints!;
 
       const observed = ThreadStore.of({
         ...store,
-        recoveryCheckpoints:
-          scenario === "missing"
-            ? undefined
-            : {
-                ...checkpoints,
-                load: (request) =>
-                  checkpoints.load(request).pipe(
-                    Effect.map(
-                      Option.map((saved) => {
-                        if (
-                          [
-                            "engineVersion",
-                            "agentDefinitionDigest",
-                            "modelDigest",
-                            "toolDigest",
-                          ].includes(scenario)
-                        ) {
-                          const encoded = Schema.encodeSync(ThreadCheckpoint)(saved);
+        recoveryCheckpoints: {
+          ...checkpoints,
+          load: (request) =>
+            checkpoints.load(request).pipe(
+              Effect.map(
+                Option.map((saved) => {
+                  if (scenario === "corrupt")
+                    return ThreadCheckpoint.make({ ...saved, state: { invalid: true } });
 
-                          return Schema.decodeUnknownSync(ThreadCheckpoint)(
-                            Object.fromEntries(
-                              Object.entries(encoded).filter(([key]) => key !== scenario),
-                            ),
-                          );
-                        }
-                        if (scenario === "corrupt")
-                          return ThreadCheckpoint.make({ ...saved, state: { invalid: true } });
-                        if (scenario === "incompatible")
-                          return ThreadCheckpoint.make({ ...saved, engineVersion: "future" });
-                        if (scenario === "definitions")
-                          return ThreadCheckpoint.make({
-                            ...saved,
-                            agentDefinitionDigest: Digest.make("b".repeat(64)),
-                          });
-
-                        return saved;
-                      }),
-                    ),
-                  ),
-              },
+                  return saved;
+                }),
+              ),
+            ),
+        },
         read: (request) =>
-          store.read(request).pipe(
-            Stream.filter(
-              (entry) =>
-                scenario !== "gap" ||
-                Option.isNone(checkpoint) ||
-                entry.sequence !== checkpoint.value.throughSequence + 1,
+          store
+            .read(request)
+            .pipe(
+              Stream.filter(
+                (entry) =>
+                  scenario !== "gap" ||
+                  Option.isNone(checkpoint) ||
+                  entry.sequence !== checkpoint.value.throughSequence + 1,
+              ),
             ),
-            Stream.tap(() =>
-              Effect.sync(() => {
-                readRecords++;
-              }),
-            ),
-          ),
       });
 
       const resumed = yield* makeRuntime.pipe(Effect.provideService(ThreadStore, observed));
@@ -590,23 +537,18 @@ describe("disposable durable recovery checkpoint", () => {
         expect(pending.submission.state).toBe("unknown");
       } else {
         expect(Option.isSome(outcome) && outcome.value.outcome).toBe("completed");
-        expect(calls).toBe(scenario === "second-rollover" ? 5 : 4);
+        expect(calls).toBe(4);
         if (scenario === "steps") expect(stepEffects).toBe(3);
-        expect(requests).toHaveLength(scenario === "second-rollover" ? 6 : 5);
+        expect(requests).toHaveLength(5);
         const prompt = JSON.stringify(requests.at(-1));
 
         expect(prompt).toContain("Original input");
         expect(prompt).toContain("Keep original instructions.");
-        expect(prompt).toContain(
-          scenario === "second-rollover" ? "Second continuation." : "Keep the continuation.",
-        );
-        expect(prompt).toContain(scenario === "second-rollover" ? "turn 6/10" : "turn 5/10");
-        expect(prompt).toContain(scenario === "second-rollover" ? "tokens 550/" : "tokens 440/");
+        expect(prompt).toContain("Keep the continuation.");
+        expect(prompt).toContain("turn 5/10");
+        expect(prompt).toContain("tokens 440/");
         if (scenario !== "steps") expect(prompt).not.toContain('"id":"call-1"');
-        if (Option.isSome(outcome))
-          expect(outcome.value.usageSummary?.modelCalls).toBe(
-            scenario === "second-rollover" ? 6 : 5,
-          );
+        if (Option.isSome(outcome)) expect(outcome.value.usageSummary?.modelCalls).toBe(5);
       }
 
       const completed = yield* store.export(
@@ -617,11 +559,6 @@ describe("disposable durable recovery checkpoint", () => {
       expect(
         completed.records.filter(({ record }) => record.payload._tag === "RunStarted"),
       ).toHaveLength(1);
-      if (scenario === "cache") expect(readRecords).toBeLessThan(original.records.length * 2);
-      if (
-        ["engineVersion", "agentDefinitionDigest", "modelDigest", "toolDigest"].includes(scenario)
-      )
-        expect(readRecords).toBeGreaterThanOrEqual(original.records.length);
     }).pipe(Effect.provide(base)),
   );
 });

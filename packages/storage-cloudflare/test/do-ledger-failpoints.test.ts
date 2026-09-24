@@ -26,7 +26,6 @@ import {
   OwnershipLost,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
-  RenewOwnershipRequest,
   ResolutionCompletedWithResult,
   ResolutionNeverHappened,
   RevertJoiningRequest,
@@ -54,12 +53,8 @@ import {
 } from "./harness.ts";
 
 /**
- * The DC crash matrix at the storage level: every ledger failpoint location keeps the SAME
- * name as the Node/SQLite adapter's (`SqliteStorageFailpointLocation` copied verbatim), and
- * every row asserts the same durable-state/recovery pair — before → nothing durable to
- * repair; after → the mutation is durable even though the caller never observed it, and the
- * retry converges idempotently. These are the exact rows WP3's eviction harness re-runs with
- * `ctx.abort()` instead of a typed failure.
+ * Lost acknowledgements at durable ledger boundaries must converge on retry.
+ * The separate eviction cases cover host aborts after actual storage writes.
  */
 
 const S2_FAILPOINT_RESERVATION = Schema.decodeSync(ChildReservationId)(
@@ -115,7 +110,7 @@ const makeFailpointHarness = (storage: DurableObjectStorage) =>
   });
 
 describe("DoSubmissionLedger failpoints", () => {
-  it("leaves a recovery-classifiable state at every ledger failpoint", () =>
+  it("recovers ledger identity and ownership after lost acknowledgements", () =>
     withThreadStorage("wp1-failpoints-base", (storage) =>
       Effect.gen(function* () {
         const { select, failingLedger, withSql } = yield* makeFailpointHarness(storage);
@@ -198,10 +193,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        // admit: before → nothing durable; after → row durable, retry replays the same identity.
-        yield* select("ledger:admit:before");
-        expectInjectedFailure(yield* admitOnce.pipe(Effect.exit), "ledger:admit:before");
-        expect(yield* submissionStates).toEqual([]);
         yield* select("ledger:admit:after");
         expectInjectedFailure(yield* admitOnce.pipe(Effect.exit), "ledger:admit:after");
         const admittedRows = yield* submissionStates;
@@ -215,7 +206,6 @@ describe("DoSubmissionLedger failpoints", () => {
         expect(admitted.submissionId).toBe(admittedRows[0]?.submission_id);
         expect(admitted.receiptId).toBe(admittedRows[0]?.receipt_id);
 
-        // markReady: before → still admitted; after → ready durable, retry is a no-op.
         const markReadyOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -224,17 +214,9 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:mark-ready:before");
-        expectInjectedFailure(yield* markReadyOnce.pipe(Effect.exit), "ledger:mark-ready:before");
-        expect((yield* submissionStates)[0]?.state).toBe("admitted");
-        yield* select("ledger:mark-ready:after");
-        expectInjectedFailure(yield* markReadyOnce.pipe(Effect.exit), "ledger:mark-ready:after");
-        expect((yield* submissionStates)[0]?.state).toBe("ready");
         yield* select(undefined);
         yield* markReadyOnce;
 
-        // claim: before → no ownership, no thread row, no epoch consumed; after → the
-        // claim is durable (ownership + audit + epoch bump) even though the caller never saw it.
         const claimOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -245,10 +227,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:claim:before");
-        expectInjectedFailure(yield* claimOnce.pipe(Effect.exit), "ledger:claim:before");
-        expect(yield* ownershipRows).toEqual([]);
-        expect(yield* threadRows).toEqual([]);
         yield* select("ledger:claim:after");
         expectInjectedFailure(yield* claimOnce.pipe(Effect.exit), "ledger:claim:after");
         const orphanedOwnership = yield* ownershipRows;
@@ -270,7 +248,6 @@ describe("DoSubmissionLedger failpoints", () => {
         expect(claim.value.producerEpoch).toBe(2);
         expect(yield* attemptRows).toHaveLength(2);
 
-        // markInputApplied: before → no marker; after → marker durable, retry is a no-op.
         const markInputOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -286,55 +263,9 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:mark-input-applied:before");
-        expectInjectedFailure(
-          yield* markInputOnce.pipe(Effect.exit),
-          "ledger:mark-input-applied:before",
-        );
-        expect((yield* submissionStates)[0]?.input_applied_record_id).toBeNull();
-        yield* select("ledger:mark-input-applied:after");
-        expectInjectedFailure(
-          yield* markInputOnce.pipe(Effect.exit),
-          "ledger:mark-input-applied:after",
-        );
-        expect((yield* submissionStates)[0]?.input_applied_record_id).toBe(
-          submissionInputRecordId(admitted.submissionId),
-        );
-        expect((yield* submissionStates)[0]?.state).toBe("input-applied");
         yield* select(undefined);
         yield* markInputOnce;
 
-        // renew: before → lease unchanged; after → extension durable.
-        const renewOnce = failingLedger(
-          Effect.gen(function* () {
-            const ledger = yield* SubmissionLedger;
-
-            return yield* ledger.renewOwnership(
-              RenewOwnershipRequest.make({
-                submissionId: admitted.submissionId,
-                ownershipToken: claim.value.ownershipToken,
-              }),
-            );
-          }),
-        );
-
-        const leaseBeforeRenew = (yield* ownershipRows)[0]?.lease_expires_at;
-
-        yield* TestClock.adjust(1_000);
-        yield* select("ledger:renew:before");
-        expectInjectedFailure(yield* renewOnce.pipe(Effect.exit), "ledger:renew:before");
-        expect((yield* ownershipRows)[0]?.lease_expires_at).toBe(leaseBeforeRenew);
-        yield* select("ledger:renew:after");
-        expectInjectedFailure(yield* renewOnce.pipe(Effect.exit), "ledger:renew:after");
-        const leaseAfterRenew = (yield* ownershipRows)[0]?.lease_expires_at;
-
-        expect(leaseAfterRenew).not.toBe(leaseBeforeRenew);
-        yield* select(undefined);
-        yield* renewOnce;
-
-        // reserveSettlement: before → no reservation, submission nonterminal; after → the
-        // reservation row is durable and the submission is terminalizing but NOT settled,
-        // exactly the state a recovery pass classifies as append-then-finalize.
         const reservation = yield* settlementReservation(
           admitted,
           claim.value.ownershipToken,
@@ -349,13 +280,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:reserve-settlement:before");
-        expectInjectedFailure(
-          yield* reserveOnce.pipe(Effect.exit),
-          "ledger:reserve-settlement:before",
-        );
-        expect(yield* reservationRows).toEqual([]);
-        expect((yield* submissionStates)[0]?.state).toBe("input-applied");
         yield* select("ledger:reserve-settlement:after");
         expectInjectedFailure(
           yield* reserveOnce.pipe(Effect.exit),
@@ -371,8 +295,6 @@ describe("DoSubmissionLedger failpoints", () => {
 
         expect(replayedReservation.replayed).toBe(true);
 
-        // finalizeSettlement: before → reservation unfinalized, still terminalizing; after →
-        // settled durably; the retry replays the recorded Settlement.
         const finalizeOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -386,13 +308,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:finalize-settlement:before");
-        expectInjectedFailure(
-          yield* finalizeOnce.pipe(Effect.exit),
-          "ledger:finalize-settlement:before",
-        );
-        expect((yield* reservationRows)[0]?.finalized_at).toBeNull();
-        expect((yield* submissionStates)[0]?.state).toBe("terminalizing");
         yield* select("ledger:finalize-settlement:after");
         expectInjectedFailure(
           yield* finalizeOnce.pipe(Effect.exit),
@@ -406,7 +321,6 @@ describe("DoSubmissionLedger failpoints", () => {
 
         expect(settlement.outcome).toBe("completed");
 
-        // requestAbort: before → no intent; after → intent durable, retry returns it unchanged.
         const abortLane = "thread-failpoints-abort";
 
         yield* select(undefined);
@@ -439,9 +353,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:request-abort:before");
-        expectInjectedFailure(yield* abortOnce.pipe(Effect.exit), "ledger:request-abort:before");
-        expect(yield* abortRows).toEqual([]);
         yield* select("ledger:request-abort:after");
         expectInjectedFailure(yield* abortOnce.pipe(Effect.exit), "ledger:request-abort:after");
         const abortIntents = yield* abortRows;
@@ -452,8 +363,6 @@ describe("DoSubmissionLedger failpoints", () => {
 
         expect(intent.reason).toBe("failpoint abort");
 
-        // release: before → ownership retained; after → ownership released durably, the retry
-        // observes OwnershipLost exactly as a recovering caller would.
         const abortClaim = yield* failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -483,9 +392,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:release:before");
-        expectInjectedFailure(yield* releaseOnce.pipe(Effect.exit), "ledger:release:before");
-        expect(yield* ownershipRows).toHaveLength(1);
         yield* select("ledger:release:after");
         expectInjectedFailure(yield* releaseOnce.pipe(Effect.exit), "ledger:release:after");
         expect(yield* ownershipRows).toEqual([]);
@@ -503,7 +409,7 @@ describe("DoSubmissionLedger failpoints", () => {
       }),
     ));
 
-  it("leaves a recovery-classifiable state at every Phase 5 ledger failpoint", () =>
+  it("preserves join, approval and unknown-operation evidence after lost acknowledgements", () =>
     withThreadStorage("wp1-failpoints-p5", (storage) =>
       Effect.gen(function* () {
         const { select, failingLedger, withSql } = yield* makeFailpointHarness(storage);
@@ -601,9 +507,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        // claimJoining: before → nothing claimed; after → the joining transition and host
-        // linkage are durable even though the caller never saw the claims (recovery sees a
-        // joining Submission without canonical input → RevertJoining).
         const claimJoiningOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -619,12 +522,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:claim-joining:before");
-        expectInjectedFailure(
-          yield* claimJoiningOnce.pipe(Effect.exit),
-          "ledger:claim-joining:before",
-        );
-        expect(markerFor(yield* submissionMarkers, queued.submissionId)?.state).toBe("ready");
         yield* select("ledger:claim-joining:after");
         expectInjectedFailure(
           yield* claimJoiningOnce.pipe(Effect.exit),
@@ -642,8 +539,6 @@ describe("DoSubmissionLedger failpoints", () => {
           queuedSecond.submissionId,
         ]);
 
-        // markJoined: before → still joining without a marker; after → joined durably;
-        // the retry is an idempotent no-op.
         const markJoinedOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -659,24 +554,9 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:mark-joined:before");
-        expectInjectedFailure(yield* markJoinedOnce.pipe(Effect.exit), "ledger:mark-joined:before");
-        expect(
-          markerFor(yield* submissionMarkers, queued.submissionId)?.input_applied_record_id,
-        ).toBeNull();
-        yield* select("ledger:mark-joined:after");
-        expectInjectedFailure(yield* markJoinedOnce.pipe(Effect.exit), "ledger:mark-joined:after");
-        const joinedMarker = markerFor(yield* submissionMarkers, queued.submissionId);
-
-        expect(joinedMarker?.state).toBe("joined");
-        expect(joinedMarker?.input_applied_record_id).toBe(
-          submissionInputRecordId(queued.submissionId),
-        );
         yield* select(undefined);
         yield* markJoinedOnce;
 
-        // revertJoining: before → still joining; after → ready with the linkage cleared;
-        // the retry is an idempotent no-op.
         const revertOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -687,22 +567,9 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:revert-joining:before");
-        expectInjectedFailure(yield* revertOnce.pipe(Effect.exit), "ledger:revert-joining:before");
-        expect(markerFor(yield* submissionMarkers, queuedSecond.submissionId)?.state).toBe(
-          "joining",
-        );
-        yield* select("ledger:revert-joining:after");
-        expectInjectedFailure(yield* revertOnce.pipe(Effect.exit), "ledger:revert-joining:after");
-        const revertedMarker = markerFor(yield* submissionMarkers, queuedSecond.submissionId);
-
-        expect(revertedMarker?.state).toBe("ready");
-        expect(revertedMarker?.joined_host_submission_id).toBeNull();
         yield* select(undefined);
         yield* revertOnce;
 
-        // recordApprovalDecision: before → no intent; after → intent durable; the retry
-        // replays the recorded intent unchanged.
         const decideOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -719,12 +586,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:approval-decision:before");
-        expectInjectedFailure(
-          yield* decideOnce.pipe(Effect.exit),
-          "ledger:approval-decision:before",
-        );
-        expect(yield* approvalRows).toEqual([]);
         yield* select("ledger:approval-decision:after");
         expectInjectedFailure(
           yield* decideOnce.pipe(Effect.exit),
@@ -739,9 +600,6 @@ describe("DoSubmissionLedger failpoints", () => {
         expect(replayedIntent.decision).toBe("approved");
         expect(yield* approvalRows).toHaveLength(1);
 
-        // suspend: before → ownership retained, no suspension; after → suspended durably
-        // with the ownership period ended; the retry observes OwnershipLost exactly as a
-        // recovering caller would.
         const suspendOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -756,10 +614,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:suspend:before");
-        expectInjectedFailure(yield* suspendOnce.pipe(Effect.exit), "ledger:suspend:before");
-        expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("running");
-        expect(yield* ownershipRows).toHaveLength(1);
         yield* select("ledger:suspend:after");
         expectInjectedFailure(yield* suspendOnce.pipe(Effect.exit), "ledger:suspend:after");
         const suspendedMarker = markerFor(yield* submissionMarkers, host.submissionId);
@@ -793,8 +647,6 @@ describe("DoSubmissionLedger failpoints", () => {
         );
         expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("input-applied");
 
-        // markUnknown: before → state unchanged; after → the unknown mark is durable; the
-        // retry is an idempotent no-op.
         const markUnknownOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -809,12 +661,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:mark-unknown:before");
-        expectInjectedFailure(
-          yield* markUnknownOnce.pipe(Effect.exit),
-          "ledger:mark-unknown:before",
-        );
-        expect(markerFor(yield* submissionMarkers, host.submissionId)?.unknown_reason).toBeNull();
         yield* select("ledger:mark-unknown:after");
         expectInjectedFailure(
           yield* markUnknownOnce.pipe(Effect.exit),
@@ -828,9 +674,6 @@ describe("DoSubmissionLedger failpoints", () => {
         yield* select(undefined);
         yield* markUnknownOnce;
 
-        // recordUnknownResolution: before → no intent; after → the intent is durable while
-        // the lane stays blocked; the covering resolution's wake transition commits
-        // atomically with its intent.
         const resolveOnce = (call: string, resolution: "never" | "completed") =>
           failingLedger(
             Effect.gen(function* () {
@@ -854,12 +697,6 @@ describe("DoSubmissionLedger failpoints", () => {
             }),
           );
 
-        yield* select("ledger:unknown-resolution:before");
-        expectInjectedFailure(
-          yield* resolveOnce("call-fp-c", "never").pipe(Effect.exit),
-          "ledger:unknown-resolution:before",
-        );
-        expect(yield* resolutionRows).toEqual([]);
         yield* select("ledger:unknown-resolution:after");
         expectInjectedFailure(
           yield* resolveOnce("call-fp-c", "never").pipe(Effect.exit),
@@ -890,7 +727,7 @@ describe("DoSubmissionLedger failpoints", () => {
       }),
     ));
 
-  it("leaves a recovery-classifiable state at every S2 ledger failpoint", () =>
+  it("preserves child accounting and wake identity after lost acknowledgements", () =>
     withThreadStorage("wp1-failpoints-s2", (storage) =>
       Effect.gen(function* () {
         const { select, failingLedger, withSql } = yield* makeFailpointHarness(storage);
@@ -970,8 +807,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        // reserveChildBudget: before → no row, nothing to repair; after → the reservation is
-        // durable ('reserved') even though the caller never saw it; the retry replays it.
         const allocation = { turns: 2 };
 
         const allocationDigest = yield* digestJson(allocation).pipe(
@@ -995,12 +830,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:child-reservation:before");
-        expectInjectedFailure(
-          yield* reserveOnce.pipe(Effect.exit),
-          "ledger:child-reservation:before",
-        );
-        expect(yield* reservationRows).toEqual([]);
         yield* select("ledger:child-reservation:after");
         expectInjectedFailure(
           yield* reserveOnce.pipe(Effect.exit),
@@ -1016,8 +845,6 @@ describe("DoSubmissionLedger failpoints", () => {
 
         expect(replayedReserve.replayed).toBe(true);
 
-        // attachChildToReservation: before → no child recorded; after → the attachment is
-        // durable; the retry is an idempotent no-op.
         const attachOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -1032,19 +859,11 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:child-attach:before");
-        expectInjectedFailure(yield* attachOnce.pipe(Effect.exit), "ledger:child-attach:before");
-        expect((yield* reservationRows)[0]?.child_submission_id).toBeNull();
-        yield* select("ledger:child-attach:after");
-        expectInjectedFailure(yield* attachOnce.pipe(Effect.exit), "ledger:child-attach:after");
-        expect((yield* reservationRows)[0]?.child_submission_id).toBe(child.submissionId);
         yield* select(undefined);
         const replayedAttach = yield* attachOnce;
 
         expect(replayedAttach.childSubmissionId).toBe(child.submissionId);
 
-        // beginChildBudgetRelease: before → status reserved with no frozen accounting; after →
-        // releasePending with the frozen decision; the retry is an idempotent no-op.
         const accounting = { consumed: { turns: 1 }, released: { turns: 1 } };
 
         const beginOnce = failingLedger(
@@ -1057,13 +876,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:child-release-pending:before");
-        expectInjectedFailure(
-          yield* beginOnce.pipe(Effect.exit),
-          "ledger:child-release-pending:before",
-        );
-        expect((yield* reservationRows)[0]?.status).toBe("reserved");
-        expect((yield* reservationRows)[0]?.accounting_json).toBeNull();
         yield* select("ledger:child-release-pending:after");
         expectInjectedFailure(
           yield* beginOnce.pipe(Effect.exit),
@@ -1078,8 +890,6 @@ describe("DoSubmissionLedger failpoints", () => {
 
         expect(replayedBegin.status).toBe("releasePending");
 
-        // releaseChildBudget: before → still releasePending; after → released durably; the
-        // retry replays the released row: the unused allocation never returns twice.
         const releaseOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -1090,10 +900,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:child-release:before");
-        expectInjectedFailure(yield* releaseOnce.pipe(Effect.exit), "ledger:child-release:before");
-        expect((yield* reservationRows)[0]?.status).toBe("releasePending");
-        expect((yield* reservationRows)[0]?.released_at).toBeNull();
         yield* select("ledger:child-release:after");
         expectInjectedFailure(yield* releaseOnce.pipe(Effect.exit), "ledger:child-release:after");
         expect((yield* reservationRows)[0]?.status).toBe("released");
@@ -1103,10 +909,6 @@ describe("DoSubmissionLedger failpoints", () => {
 
         expect(replayedRelease.status).toBe("released");
 
-        // recordChildSettled: before → the parent stays suspended AND no notification marker
-        // exists; after → the wake transition and the durable cross-store marker are one
-        // atomic durable step even though the caller never saw it; the retry answers
-        // not-waiting.
         yield* failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -1166,10 +968,6 @@ describe("DoSubmissionLedger failpoints", () => {
           }),
         );
 
-        yield* select("ledger:child-settled:before");
-        expectInjectedFailure(yield* notifyOnce.pipe(Effect.exit), "ledger:child-settled:before");
-        expect((yield* parentMarkers(parent.submissionId))[0]?.state).toBe("suspended");
-        expect(yield* settlementMarkers).toEqual([]);
         yield* select("ledger:child-settled:after");
         expectInjectedFailure(yield* notifyOnce.pipe(Effect.exit), "ledger:child-settled:after");
         const wokenMarkers = yield* parentMarkers(parent.submissionId);

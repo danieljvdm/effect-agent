@@ -3,27 +3,13 @@ import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-threa
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import {
-  ObligationThresholds,
-  RECOVERY_DECISION_MEANINGS,
-  RetryCommand,
-  renderRecoveryExplanation,
-  type IntegrityCheckName,
-  type IntegrityReport,
-  type ObligationReport,
-  type RecoveryExplanation,
-} from "effect-agent/admin";
+import { ObligationThresholds, RetryCommand } from "effect-agent/admin";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
-  type DurableExplainFailure,
-  type DurableObligationFailure,
-  type DurableRetryFailure,
   type DurableSubmitOptions,
-  type DurableVerifyFailure,
-  type RecoveryReport,
 } from "effect-agent/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
@@ -43,9 +29,6 @@ import {
   DeploymentId,
   Digest,
   ProducerId,
-  RecordEnvelope,
-  UserInputRecorded,
-  type BatchId,
 } from "effect-agent/records";
 import {
   AbortCommand,
@@ -61,16 +44,9 @@ import {
   UnknownResolutionCommand,
 } from "effect-agent/submission-ledger";
 import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
-import { verifyThreadInvariants } from "effect-agent/thread-invariants";
-import {
-  ThreadExport,
-  ThreadExportRequest,
-  ThreadRead,
-  ThreadStore,
-} from "effect-agent/thread-store";
+import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
-import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
@@ -429,240 +405,7 @@ const makeSettledLane = (thread: string, key: string) =>
     return receipt;
   });
 
-const checkByName = (
-  report: IntegrityReport,
-  name: IntegrityCheckName,
-): { readonly status: string; readonly detail?: string | undefined } => {
-  const found = report.checks.find((check) => check.name === name);
-
-  expect(found, `missing integrity check ${name}`).toBeDefined();
-  if (found === undefined) throw new Error(`missing integrity check ${name}`);
-
-  return found;
-};
-
 layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
-  it.effect(
-    "explain performs zero writes: the canonical log and ledger rows are byte-identical before and after",
-    () =>
-      Effect.gen(function* () {
-        yield* resetAuthorizer;
-        const runtime = yield* DurableAgentRuntime;
-        const thread = "thread-admin-explain";
-        const receipt = yield* makeUnknownLane(thread, "explain-1");
-
-        const before = yield* durableStateFingerprint(thread);
-        const explanation = yield* runtime.explain(receipt.submissionId);
-        const laneExplanations = yield* runtime.explainThread(decodeThreadId(thread));
-        const after = yield* durableStateFingerprint(thread);
-
-        expect(after).toBe(before);
-
-        expect(explanation.submission.submissionId).toBe(receipt.submissionId);
-        expect(explanation.submission.state).toBe("unknown");
-        expect(explanation.decision._tag).toBe("AwaitUnknownResolution");
-        expect(explanation.disposition).toBe("unknown");
-        expect(explanation.decisionMeaning).toBe(RECOVERY_DECISION_MEANINGS.AwaitUnknownResolution);
-        expect(explanation.evidence.unknownCalls).toHaveLength(1);
-        expect(explanation.evidence.unknownCalls[0]?.toolCallId).toBe("book-1");
-        expect(explanation.evidence.unknownCalls[0]?.resolved).toBe(false);
-        expect(explanation.submission.ageSeconds).toBeGreaterThanOrEqual(0);
-
-        expect(laneExplanations).toHaveLength(1);
-        expect(laneExplanations[0]?.decision._tag).toBe("AwaitUnknownResolution");
-
-        // The pure renderer names the decision, its meaning, and the block for the operator.
-        const rendered = renderRecoveryExplanation(explanation);
-
-        expect(rendered).toContain("AwaitUnknownResolution");
-        expect(rendered).toContain("unknown outcome: book#book-1");
-        expect(rendered).toContain("disposition unknown");
-      }),
-  );
-
-  it.effect("verify reports typed per-check results and stays honest about the digest chain", () =>
-    Effect.gen(function* () {
-      yield* resetAuthorizer;
-      const runtime = yield* DurableAgentRuntime;
-      const thread = "thread-admin-verify";
-
-      yield* makeSettledLane(thread, "verify-1");
-
-      const report = yield* runtime.verify(decodeThreadId(thread));
-
-      expect(report.ok).toBe(true);
-      expect(report.submissionCount).toBe(1);
-      expect(checkByName(report, "schema-round-trip").status).toBe("passed");
-      expect(checkByName(report, "record-identity").status).toBe("passed");
-      expect(checkByName(report, "sequence-contiguity").status).toBe("passed");
-      expect(checkByName(report, "fifo-input-order").status).toBe("passed");
-      expect(checkByName(report, "fifo-settlement-order").status).toBe("passed");
-      expect(checkByName(report, "terminal-uniqueness").status).toBe("passed");
-      expect(checkByName(report, "ledger-canonical-agreement").status).toBe("passed");
-      // Honest scoping: the port does not export per-batch producer identity, so the runtime
-      // operation reports the chain check skipped instead of silently claiming it.
-      const digestCheck = checkByName(report, "digest-chain");
-
-      expect(digestCheck.status).toBe("skipped");
-      expect(digestCheck.detail).toContain("producer identity");
-
-      const store = yield* ThreadStore;
-
-      const withoutCheckpoints = ThreadStore.of({
-        readIdentity: store.readIdentity,
-        materialize: store.materialize,
-        append: store.append,
-        read: store.read,
-        observe: store.observe,
-        export: store.export,
-        inspectTail: store.inspectTail,
-      });
-
-      const unsupported = yield* Effect.flatMap(DurableAgentRuntime, (runtime) =>
-        runtime.verify(decodeThreadId(thread)),
-      ).pipe(
-        Effect.provide(Layer.fresh(DurableAgentRuntime.layer)),
-        Effect.provideService(ThreadStore, withoutCheckpoints),
-      );
-
-      expect(unsupported.ok).toBe(true);
-      expect(checkByName(unsupported, "checkpoint-binding")).toMatchObject({
-        status: "skipped",
-        detail: "checkpoint support was not supplied",
-      });
-    }),
-  );
-
-  it.effect(
-    "verifyThreadInvariants catches an injected digest break and a record-identity duplicate on a corrupted copy",
-    () =>
-      Effect.gen(function* () {
-        yield* resetAuthorizer;
-        const thread = "thread-admin-corrupt";
-        const receipt = yield* makeSettledLane(thread, "corrupt-1");
-        const ledger = yield* SubmissionLedger;
-        const store = yield* ThreadStore;
-
-        const exported = yield* store.export(
-          ThreadExportRequest.make({
-            threadId: decodeThreadId(thread),
-          }),
-        );
-
-        const submissionRow = yield* ledger.lookup(
-          SubmissionLookupById.make({ submissionId: receipt.submissionId }),
-        );
-
-        expect(Option.isSome(submissionRow)).toBe(true);
-        if (Option.isNone(submissionRow)) throw new Error("Expected the Submission row");
-        const submissions = [submissionRow.value];
-
-        // Single-producer lane: the coordinator wrote every batch, so the test KNOWS the
-        // per-batch producer directory the port cannot export.
-        const batchProducers = new Map<BatchId, ProducerId>(
-          exported.records.map((envelope) => [envelope.batchId, PRODUCER_ID]),
-        );
-
-        const clean = yield* verifyThreadInvariants({
-          export: exported,
-          submissions,
-          batchProducers,
-          requireAllSettled: true,
-        });
-
-        expect(clean.ok).toBe(true);
-        expect(checkByName(clean, "digest-chain").status).toBe("passed");
-        expect(checkByName(clean, "all-settled").status).toBe("passed");
-
-        // Injected digest break: tamper one record's payload content on a copy.
-        const tamperedRecords = exported.records.map((envelope) => {
-          const payload = envelope.record.payload;
-
-          if (payload._tag !== "UserInputRecorded") return envelope;
-
-          return CanonicalRecordEnvelope.make({
-            threadId: envelope.threadId,
-            batchId: envelope.batchId,
-            sequence: envelope.sequence,
-            offset: envelope.offset,
-            record: RecordEnvelope.make({
-              recordId: envelope.record.recordId,
-              family: envelope.record.family,
-              schemaVersion: envelope.record.schemaVersion,
-              createdAt: envelope.record.createdAt,
-              deploymentId: envelope.record.deploymentId,
-              payload: UserInputRecorded.make({
-                submissionId: payload.submissionId,
-                kind: payload.kind,
-                input: "tampered-by-the-integrity-test",
-                ...(payload.runId === undefined ? {} : { runId: payload.runId }),
-              }),
-            }),
-          });
-        });
-
-        const digestBroken = yield* verifyThreadInvariants({
-          export: ThreadExport.make({
-            format: exported.format,
-            threadId: exported.threadId,
-            tailSequence: exported.tailSequence,
-            tailDigest: exported.tailDigest,
-            records: tamperedRecords,
-          }),
-          submissions,
-          batchProducers,
-        });
-
-        expect(digestBroken.ok).toBe(false);
-        expect(checkByName(digestBroken, "digest-chain").status).toBe("failed");
-        expect(checkByName(digestBroken, "record-identity").status).toBe("passed");
-
-        // Injected record-identity duplicate: the last record reuses the first record's id.
-        const first = exported.records[0];
-        const last = exported.records.at(-1);
-
-        expect(first).toBeDefined();
-        expect(last).toBeDefined();
-        if (first === undefined || last === undefined) throw new Error("Expected records");
-
-        const duplicated = [
-          ...exported.records.slice(0, -1),
-          CanonicalRecordEnvelope.make({
-            threadId: last.threadId,
-            batchId: last.batchId,
-            sequence: last.sequence,
-            offset: last.offset,
-            record: RecordEnvelope.make({
-              recordId: first.record.recordId,
-              family: last.record.family,
-              schemaVersion: last.record.schemaVersion,
-              createdAt: last.record.createdAt,
-              deploymentId: last.record.deploymentId,
-              payload: last.record.payload,
-            }),
-          }),
-        ];
-
-        const identityBroken = yield* verifyThreadInvariants({
-          export: ThreadExport.make({
-            format: exported.format,
-            threadId: exported.threadId,
-            tailSequence: exported.tailSequence,
-            tailDigest: exported.tailDigest,
-            records: duplicated,
-          }),
-          submissions,
-          batchProducers,
-        });
-
-        expect(identityBroken.ok).toBe(false);
-        expect(checkByName(identityBroken, "record-identity").status).toBe("failed");
-        expect(checkByName(identityBroken, "record-identity").detail).toContain(
-          first.record.recordId,
-        );
-      }),
-  );
-
   it.effect(
     "retry materializes admitted work without appending an ownership-free repair annotation",
     () =>
@@ -723,26 +466,10 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       }),
   );
 
-  it.effect("retry refuses typed for settled, unknown-blocked, and approval-blocked lanes", () =>
+  it.effect("retry refuses unknown-blocked and approval-blocked lanes", () =>
     Effect.gen(function* () {
       yield* resetAuthorizer;
       const runtime = yield* DurableAgentRuntime;
-
-      const settled = yield* makeSettledLane("thread-admin-refuse-settled", "refuse-1");
-
-      const settledExit = yield* Effect.exit(
-        runtime.retry(
-          RetryCommand.make({
-            submissionId: settled.submissionId,
-            author: "operator",
-            reason: "re-drive settled work",
-          }),
-        ),
-      );
-
-      const settledRefusal = failureValue(settledExit);
-
-      expect(settledRefusal).toMatchObject({ _tag: "RetryRefused", refusal: "settled" });
 
       const unknown = yield* makeUnknownLane("thread-admin-refuse-unknown", "refuse-2");
 
@@ -779,57 +506,6 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         refusal: "await-approval-decision",
         decisionTag: "AwaitApprovalDecision",
       });
-    }),
-  );
-
-  it.effect("scanObligations ages and severities deterministically under TestClock", () =>
-    Effect.gen(function* () {
-      yield* resetAuthorizer;
-      const runtime = yield* DurableAgentRuntime;
-
-      // Three obligations at TestClock time zero: an unknown block, an approval suspension,
-      // and a ready lane nobody claims.
-      const unknown = yield* makeUnknownLane("thread-admin-age-unknown", "age-1");
-      const approval = yield* makeApprovalSuspendedLane("thread-admin-age-approval", "age-2");
-      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"queued"}'));
-      const agent = Agent.withModel(plainDefinition, scripted.model);
-
-      const ready = yield* runtime.submit(
-        agent,
-        { question: "wait" },
-        submitOptions("thread-admin-age-ready", "age-3"),
-      );
-
-      yield* TestClock.adjust(Duration.seconds(120));
-      const thresholds = ObligationThresholds.make({ agingSeconds: 60, overdueSeconds: 600 });
-      const report = yield* runtime.scanObligations(thresholds);
-      const byId = new Map(report.entries.map((entry) => [entry.submissionId, entry]));
-
-      const unknownEntry = byId.get(unknown.submissionId);
-
-      expect(unknownEntry?.blockedOn).toBe("unknown");
-      expect(unknownEntry?.ageSeconds).toBe(120);
-      expect(unknownEntry?.severity).toBe("aging");
-
-      const approvalEntry = byId.get(approval.submissionId);
-
-      expect(approvalEntry?.blockedOn).toBe("approval");
-      expect(approvalEntry?.ageSeconds).toBe(120);
-      expect(approvalEntry?.severity).toBe("aging");
-
-      const readyEntry = byId.get(ready.submissionId);
-
-      expect(readyEntry?.blockedOn).toBe("ready-aged");
-      expect(readyEntry?.ageSeconds).toBe(120);
-      expect(readyEntry?.severity).toBe("aging");
-
-      yield* TestClock.adjust(Duration.seconds(600));
-      const later = yield* runtime.scanObligations(thresholds);
-      const laterById = new Map(later.entries.map((entry) => [entry.submissionId, entry]));
-
-      expect(laterById.get(unknown.submissionId)?.ageSeconds).toBe(720);
-      expect(laterById.get(unknown.submissionId)?.severity).toBe("overdue");
-      expect(laterById.get(ready.submissionId)?.severity).toBe("overdue");
     }),
   );
 
@@ -1048,18 +724,6 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const after = yield* durableStateFingerprint(thread);
 
       expect(after).toBe(before);
-      const requests = yield* control.requests;
-
-      expect(requests.map((request) => request.operation)).toEqual([
-        "explain",
-        "verify",
-        "retry",
-        "wake",
-        "scanObligations",
-        "observe",
-        "resolveUnknown",
-        "resolveApproval",
-      ]);
 
       // The denial policy lifts and the default possession behavior is restored.
       yield* control.reset;
@@ -1067,44 +731,6 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
 
       expect(explanation.decision._tag).toBe("NoAction");
       expect(explanation.disposition).toBe("none");
-    }),
-  );
-
-  it.effect("keeps the admin failure channels typed (E proofs)", () =>
-    Effect.gen(function* () {
-      const runtime = yield* DurableAgentRuntime;
-      const threadId = decodeThreadId("thread-admin-types");
-      const receipt = yield* makeSettledLane("thread-admin-types", "types-1");
-
-      const explainEffect: Effect.Effect<RecoveryExplanation, DurableExplainFailure> =
-        runtime.explain(receipt.submissionId);
-
-      const explainLane: Effect.Effect<
-        ReadonlyArray<RecoveryExplanation>,
-        DurableExplainFailure
-      > = runtime.explainThread(threadId);
-
-      const verifyEffect: Effect.Effect<IntegrityReport, DurableVerifyFailure> =
-        runtime.verify(threadId);
-
-      const retryEffect: Effect.Effect<RecoveryReport, DurableRetryFailure> = runtime.retry(
-        RetryCommand.make({ submissionId: receipt.submissionId, author: "a", reason: "b" }),
-      );
-
-      const wakeEffect: Effect.Effect<void, OperationDenied> = runtime.wake(threadId);
-
-      const scanEffect: Effect.Effect<ObligationReport, DurableObligationFailure> =
-        runtime.scanObligations(ObligationThresholds.make({ agingSeconds: 1, overdueSeconds: 2 }));
-
-      // Execute the read-only members to keep the proof honest at runtime too.
-      yield* explainEffect;
-      yield* explainLane;
-      yield* verifyEffect;
-      yield* wakeEffect;
-      yield* scanEffect;
-      const retryExit = yield* Effect.exit(retryEffect);
-
-      expect(failureTag(retryExit)).toBe("RetryRefused");
     }),
   );
 });

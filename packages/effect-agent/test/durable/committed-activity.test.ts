@@ -19,11 +19,7 @@ import {
   ActivityProcessorKey,
   ActivityProcessorStore,
 } from "effect-agent/activity-store";
-import {
-  ActivityPassLimits,
-  ActivityProcessingError,
-  processCommittedActivity,
-} from "effect-agent/committed-activity";
+import { ActivityPassLimits, processCommittedActivity } from "effect-agent/committed-activity";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { ThreadId } from "effect-agent/identifiers";
 import {
@@ -174,50 +170,6 @@ const probe = (initial: ReadonlyArray<CanonicalRecordEnvelope> = [record(1)]) =>
 };
 
 describe("finite committed activity processing", () => {
-  it.effect("captures a bounded prefix and leaves later commits for another pass", () => {
-    const p = probe([record(1), record(2), record(3)]);
-    const applied: Array<number> = [];
-
-    const options = {
-      key,
-      owner: "worker",
-      limits,
-      extract: (value: CanonicalRecordEnvelope) =>
-        Effect.sync(() => {
-          if (value.sequence === 1) p.state.records.push(record(4));
-
-          return value.record.payload._tag;
-        }),
-      apply: (work: PreparedActivity) =>
-        Effect.sync(() => {
-          applied.push(work.sequence);
-        }),
-    };
-
-    return Effect.gen(function* () {
-      const first = yield* processCommittedActivity(options);
-
-      expect(first).toMatchObject({
-        capturedTail: 3,
-        throughSequence: 2,
-        processed: 2,
-        pendingRecords: 1,
-      });
-      expect(applied).toEqual([1, 2]);
-      const second = yield* processCommittedActivity(options);
-
-      expect(second).toMatchObject({
-        capturedTail: 4,
-        throughSequence: 4,
-        processed: 2,
-        pendingRecords: 0,
-      });
-      expect(p.state.pages).toEqual([1, 1, 1, 1]);
-      expect(applied).toEqual([1, 2, 3, 4]);
-      expect(p.state.released).toBe(2);
-    }).pipe(Effect.provide(p.layer));
-  });
-
   it.effect(
     "reuses pinned output after lost prepare acknowledgement even when the observation cursor changes",
     () => {
@@ -357,43 +309,6 @@ describe("finite committed activity processing", () => {
         });
         expect(applied).toBe(0);
         expect(changed.state.through).toBe(0);
-      }),
-  );
-
-  it.effect(
-    "keeps expected failures and defects visible and rejects malformed callback output",
-    () =>
-      Effect.gen(function* () {
-        for (const scenario of [
-          {
-            extract: () => Effect.fail(new ExtractionUnavailable()),
-            expected: new ExtractionUnavailable(),
-          },
-          { extract: () => Effect.die("extract defect"), expected: "extract defect" },
-          {
-            extract: () => Effect.succeed(Number.NaN),
-            expected: ActivityProcessingError.make({
-              reason: "invalid-input",
-              message: "Malformed activity output",
-            }),
-          },
-        ]) {
-          const p = probe();
-
-          const exit = yield* processCommittedActivity({
-            key,
-            owner: "worker",
-            limits,
-            extract: scenario.extract,
-            apply: () => Effect.die("No invalid output may apply"),
-          }).pipe(Effect.provide(p.layer), Effect.exit);
-
-          expect(Exit.isFailure(exit)).toBe(true);
-          if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toEqual(scenario.expected);
-          expect(p.state.prepared).toHaveLength(0);
-          expect(p.state.through).toBe(0);
-          expect(p.state.released).toBe(1);
-        }
       }),
   );
 

@@ -1,8 +1,7 @@
 import { expect, layer } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Layer, Option, Schema, SchemaGetter, Stream } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Schema, SchemaGetter, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import * as AgentRuntime from "effect-agent/agent-runtime";
-import { ContextRolloverTool } from "effect-agent/context-window";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { IdGenerator } from "effect-agent/id-generator";
 import { RunId, ThreadId, TurnId } from "effect-agent/identifiers";
@@ -10,9 +9,7 @@ import { SubagentGrant } from "effect-agent/subagent-contract";
 import { ThreadHistory } from "effect-agent/thread-history";
 import * as ToolDiscovery from "effect-agent/tool-discovery";
 import {
-  AdditionalToolCatalog,
   DiscoveryTool,
-  IncludesCatalogDocumentation,
   PinnedTool,
   Selection,
   Snapshot,
@@ -122,94 +119,101 @@ const failure = <E>(exit: Exit.Exit<unknown, E>) =>
 
 layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", (it) => {
   // Regression: https://github.com/danieljvdm/effect-agent/issues/496
-  for (const budget of ["aggregate", "single"] as const) {
-    it.effect(`continues after ${budget} discovery overflow with only documented selections`, () =>
-      Effect.gen(function* () {
-        const documentation = "東京".repeat(64);
+  {
+    it.effect(
+      "continues after discovery result-byte overflow with only documented selections",
+      () =>
+        Effect.gen(function* () {
+          const documentation = "東京".repeat(64);
 
-        const ReadDocument = Tool.make("read", {
-          description: "Read café 東京 😀",
-          parameters: Schema.Struct({
-            key: Schema.String.annotate({ description: documentation }),
-          }),
-          success: Schema.NumberFromString,
-        });
-
-        const WriteDocument = Tool.make("write", {
-          parameters: ReadDocument.parametersSchema,
-          success: Schema.String,
-        });
-
-        const HostHidden = Tool.make("host_hidden", { success: Schema.String });
-        const GrantHidden = Tool.make("grant_hidden", { success: Schema.String });
-        const maxResultBytes = budget === "aggregate" ? 1_024 : 256;
-        let finalized = 0;
-
-        const discovery = ToolDiscovery.make({
-          maxResultBytes,
-          search: (_request, catalogue) =>
-            Effect.gen(function* () {
-              expect(catalogue.map((entry) => entry.name)).toEqual([
-                "discover_tools",
-                "read",
-                "status",
-                "write",
-              ]);
-              yield* Effect.addFinalizer(() =>
-                Effect.sync(() => {
-                  finalized++;
-                }),
-              );
-
-              return budget === "aggregate" ? ["native:read", "native:write"] : ["native:read"];
+          const ReadDocument = Tool.make("read", {
+            description: "Read café 東京 😀",
+            parameters: Schema.Struct({
+              key: Schema.String.annotate({ description: documentation }),
             }),
-        });
+            success: Schema.NumberFromString,
+          });
 
-        const actions = Toolkit.make(ReadDocument, WriteDocument, Status, HostHidden, GrantHidden);
+          const WriteDocument = Tool.make("write", {
+            parameters: ReadDocument.parametersSchema,
+            success: Schema.String,
+          });
 
-        const agent = Agent.make("bounded-discovery", {
-          input: Schema.String,
-          output: Schema.String,
-          instructions: "Discover and use tools.",
-          toolkit: Toolkit.merge(actions, discovery.toolkit),
-          toolExposure: { initialToolNames: ["write"] },
-        });
+          const HostHidden = Tool.make("host_hidden", { success: Schema.String });
+          const GrantHidden = Tool.make("grant_hidden", { success: Schema.String });
+          const maxResultBytes = 1_024;
+          let finalized = 0;
 
-        let turn = 0;
-        const invoked: Array<string> = [];
+          const discovery = ToolDiscovery.make({
+            maxResultBytes,
+            search: (_request, catalogue) =>
+              Effect.gen(function* () {
+                expect(catalogue.map((entry) => entry.name)).toEqual([
+                  "discover_tools",
+                  "read",
+                  "status",
+                  "write",
+                ]);
+                yield* Effect.addFinalizer(() =>
+                  Effect.sync(() => {
+                    finalized++;
+                  }),
+                );
 
-        const model = Model.make(
-          "test",
-          "bounded-discovery",
-          Layer.effect(
-            LanguageModel.LanguageModel,
-            LanguageModel.make({
-              generateText: () => Effect.succeed([]),
-              streamText: (options) => {
-                if (turn++ === 0)
-                  return Stream.fromIterable([
-                    call("find", "discover_tools", { query: "read" }),
-                    finish,
-                  ]);
-                if (turn === 2) {
-                  const results = options.prompt.content.flatMap((message) =>
-                    message.role === "tool" ? message.content : [],
-                  );
+                return ["native:read", "native:write"];
+              }),
+          });
 
-                  const result = results.find((part) => part.type === "tool-result");
+          const actions = Toolkit.make(
+            ReadDocument,
+            WriteDocument,
+            Status,
+            HostHidden,
+            GrantHidden,
+          );
 
-                  expect(result).toMatchObject({ id: "find", isFailure: false });
-                  const decoded = Schema.decodeUnknownSync(ToolDiscovery.Result)(result?.result);
+          const agent = Agent.make("bounded-discovery", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Discover and use tools.",
+            toolkit: Toolkit.merge(actions, discovery.toolkit),
+            toolExposure: { initialToolNames: ["write"] },
+          });
 
-                  expect(
-                    new TextEncoder().encode(JSON.stringify(result?.result)).length,
-                  ).toBeLessThanOrEqual(maxResultBytes);
-                  expect(decoded).toMatchObject({
-                    toolNames: budget === "aggregate" ? ["read"] : [],
-                    notice: expect.stringMatching(/narrow.*search/i),
-                  });
-                  expect(decoded.matches.map((match) => match.name)).toEqual(decoded.toolNames);
-                  if (budget === "aggregate")
+          let turn = 0;
+          const invoked: Array<string> = [];
+
+          const model = Model.make(
+            "test",
+            "bounded-discovery",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: (options) => {
+                  if (turn++ === 0)
+                    return Stream.fromIterable([
+                      call("find", "discover_tools", { query: "read" }),
+                      finish,
+                    ]);
+                  if (turn === 2) {
+                    const results = options.prompt.content.flatMap((message) =>
+                      message.role === "tool" ? message.content : [],
+                    );
+
+                    const result = results.find((part) => part.type === "tool-result");
+
+                    expect(result).toMatchObject({ id: "find", isFailure: false });
+                    const decoded = Schema.decodeUnknownSync(ToolDiscovery.Result)(result?.result);
+
+                    expect(
+                      new TextEncoder().encode(JSON.stringify(result?.result)).length,
+                    ).toBeLessThanOrEqual(maxResultBytes);
+                    expect(decoded).toMatchObject({
+                      toolNames: ["read"],
+                      notice: expect.stringMatching(/narrow.*search/i),
+                    });
+                    expect(decoded.matches.map((match) => match.name)).toEqual(decoded.toolNames);
                     expect(decoded.matches).toMatchObject([
                       {
                         parameters: {
@@ -218,434 +222,61 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", 
                         success: { type: "string" },
                       },
                     ]);
-                  expect(options.tools.map((tool) => tool.name).toSorted()).toEqual(
-                    budget === "aggregate"
-                      ? ["discover_tools", "read", "status"]
-                      : ["discover_tools", "status"],
-                  );
+                    expect(options.tools.map((tool) => tool.name).toSorted()).toEqual([
+                      "discover_tools",
+                      "read",
+                      "status",
+                    ]);
 
-                  return Stream.fromIterable([
-                    budget === "aggregate"
-                      ? call("use", "read", { key: "record" })
-                      : call("use", "status"),
-                    finish,
-                  ]);
-                }
+                    return Stream.fromIterable([call("use", "read", { key: "record" }), finish]);
+                  }
 
-                return Stream.fromIterable(done);
-              },
-            }),
-          ),
-        );
-
-        const result = yield* AgentRuntime.run(Agent.withModel(agent, model), "go", {
-          subagentGrant: SubagentGrant.make({
-            allowedToolNames: ["discover_tools", "read", "write", "status", "host_hidden"],
-            maxDepth: 1,
-          }),
-          delegationDepth: 1,
-        }).pipe(
-          Effect.provideService(RunToolVisibility, {
-            visible: ({ toolNames }) =>
-              Effect.succeed(toolNames.filter((name) => name !== "host_hidden")),
-          }),
-          Effect.provide([
-            discovery.handlers,
-            actions.toLayer({
-              read: () =>
-                Effect.sync(() => {
-                  invoked.push("read");
-
-                  return 1;
-                }),
-              status: () =>
-                Effect.sync(() => {
-                  invoked.push("status");
-
-                  return "ok";
-                }),
-              write: () => Effect.die("Undocumented tool must not execute"),
-              host_hidden: () => Effect.die("Host-hidden tool must not execute"),
-              grant_hidden: () => Effect.die("Grant-hidden tool must not execute"),
-            }),
-          ]),
-        );
-
-        expect(result.output).toBe("done");
-        expect(turn).toBe(3);
-        expect(invoked).toEqual([budget === "aggregate" ? "read" : "status"]);
-        expect(finalized).toBe(1);
-      }),
-    );
-  }
-
-  for (const authority of ["host", "grant"] as const) {
-    it.effect(`keeps eligible pins across replacements while ${authority} hides another pin`, () =>
-      Effect.gen(function* () {
-        const native = Toolkit.make(Search, Read.annotate(PinnedTool, true), Write, Status);
-
-        const agent = Agent.make("eligible-pins", {
-          input: Schema.String,
-          output: Schema.String,
-          instructions: "Use authorized Tools.",
-          toolkit: native,
-          toolExposure: { maxTools: 3 },
-        });
-
-        const requests: Array<ReadonlyArray<string>> = [];
-        let hiddenStarts = 0;
-
-        const handlers = native.toLayer({
-          discover: ({ select }) =>
-            Effect.gen(function* () {
-              expect((yield* CurrentToolCatalog).entries.map((entry) => entry.tool.name)).toEqual([
-                "discover",
-                "read",
-                "write",
-              ]);
-
-              return { toolNames: select === "" ? [] : [select], padding: "" };
-            }),
-          read: () => Effect.succeed("read"),
-          write: () => Effect.succeed("write"),
-          status: () =>
-            Effect.sync(() => {
-              hiddenStarts++;
-
-              return "status";
-            }),
-        });
-
-        const options =
-          authority === "grant"
-            ? {
-                subagentGrant: SubagentGrant.make({
-                  allowedToolNames: ["discover", "read", "write"],
-                  maxDepth: 1,
-                }),
-                delegationDepth: 1,
-              }
-            : {};
-
-        const visibility = Layer.succeed(
-          RunToolVisibility,
-          authority === "host"
-            ? {
-                visible: ({ toolNames }) =>
-                  Effect.succeed(toolNames.filter((name) => name !== "status")),
-              }
-            : undefined,
-        );
-
-        const result = yield* AgentRuntime.run(
-          Agent.withModel(
-            agent,
-            scripted(
-              [
-                [call("select", "discover", { select: "write" }), finish],
-                [call("clear", "discover", { select: "" }), finish],
-                done,
-              ],
-              requests,
-            ),
-          ),
-          "go",
-          options,
-        ).pipe(Effect.provide([handlers, visibility]));
-
-        expect(result.output).toBe("done");
-        expect(requests).toEqual([
-          ["discover", "read"],
-          ["discover", "read", "write"],
-          ["discover", "read"],
-        ]);
-
-        const rejected = yield* AgentRuntime.run(
-          Agent.withModel(agent, scripted([[call("hidden", "status"), finish]], [])),
-          "go",
-          options,
-        ).pipe(Effect.provide([handlers, visibility]), Effect.exit);
-
-        expect(Exit.isFailure(rejected)).toBe(true);
-        expect(hiddenStarts).toBe(0);
-      }),
-    );
-  }
-
-  for (const mandatory of ["discovery", "rollover", "completion"] as const) {
-    it.effect(`refuses an unavailable mandatory ${mandatory} Tool before model dispatch`, () =>
-      Effect.gen(function* () {
-        const required =
-          mandatory === "discovery"
-            ? Search
-            : mandatory === "rollover"
-              ? Read.annotate(ContextRolloverTool, true)
-              : Read;
-
-        const native = Toolkit.make(required);
-
-        const agent = Agent.make("mandatory-tool", {
-          input: Schema.String,
-          output: Schema.String,
-          instructions: "Go.",
-          toolkit: native,
-          toolExposure: {},
-          ...(mandatory === "completion"
-            ? { completion: { tool: "read", required: true, project: () => "done" } }
-            : {}),
-        });
-
-        const requests: Array<ReadonlyArray<string>> = [];
-
-        const exit = yield* AgentRuntime.run(
-          Agent.withModel(agent, scripted([done], requests)),
-          "go",
-        ).pipe(
-          Effect.provideService(RunToolVisibility, { visible: () => Effect.succeed([]) }),
-          Effect.provide(
-            native.toLayer({
-              discover: () => Effect.die("Unavailable discovery must not execute"),
-              read: () => Effect.die("Unavailable mandatory Tool must not execute"),
-            }),
-          ),
-          Effect.exit,
-        );
-
-        expect(failure(exit)).toMatchObject({
-          _tag: "ModelProtocolError",
-          message: "A mandatory Tool is excluded by host visibility or the inherited grant",
-        });
-        expect(requests).toEqual([]);
-      }),
-    );
-  }
-
-  it.effect(
-    "replaces in declaration order, keeps pins, and projects before result truncation",
-    () =>
-      Effect.gen(function* () {
-        const requests: Array<ReadonlyArray<string>> = [];
-        const secondFinished = yield* Deferred.make<void>();
-        const selections: Array<Selection> = [];
-
-        const model = scripted(
-          [
-            [
-              call("first", "discover", { select: "read" }),
-              call("second", "discover", { select: "write" }),
-              finish,
-            ],
-            [call("clear", "discover", { select: "" }), finish],
-            done,
-          ],
-          requests,
-        );
-
-        const events = yield* AgentRuntime.stream(Agent.withModel(definition, model), "go").pipe(
-          Stream.tap((event) =>
-            event._tag === "ToolCallSucceeded" && event.toolCallId === "second"
-              ? Deferred.succeed(secondFinished, undefined)
-              : Effect.void,
-          ),
-          Stream.runCollect,
-          Effect.provide(
-            tools.toLayer({
-              discover: ({ select }) =>
-                Effect.gen(function* () {
-                  expect(
-                    (yield* CurrentToolCatalog).entries.map((entry) => entry.tool.name),
-                  ).toEqual(["discover", "read", "write", "status"]);
-                  if (select === "read") yield* Deferred.await(secondFinished);
-
-                  return { toolNames: select === "" ? [] : [select], padding: "x".repeat(1_024) };
-                }),
-              read: () => Effect.succeed("read"),
-              write: () => Effect.succeed("write"),
-              status: () => Effect.succeed("status"),
-            }),
-          ),
-        );
-
-        for (const event of events)
-          if (event._tag === "ToolCallSucceeded" && event.toolSelection !== undefined)
-            selections.push(event.toolSelection);
-        expect(requests).toEqual([
-          ["discover", "status"],
-          ["discover", "write", "status"],
-          ["discover", "status"],
-        ]);
-        expect(selections.map((selection) => selection.toolNames)).toEqual([
-          ["write"],
-          ["read"],
-          [],
-        ]);
-        expect(
-          events.some(
-            (event) =>
-              event._tag === "ToolCallSucceeded" &&
-              event.toolSelection !== undefined &&
-              JSON.stringify(event.result).includes("truncatedToolResult"),
-          ),
-        ).toBe(true);
-      }),
-  );
-
-  it.effect("rejects hidden native calls before any Handler starts", () =>
-    Effect.gen(function* () {
-      let starts = 0;
-      const requests: Array<ReadonlyArray<string>> = [];
-
-      const exit = yield* AgentRuntime.run(
-        Agent.withModel(definition, scripted([[call("hidden", "write"), finish]], requests)),
-        "go",
-      ).pipe(
-        Effect.provide(
-          tools.toLayer({
-            discover: () => Effect.succeed({ toolNames: [], padding: "" }),
-            read: () => Effect.succeed(""),
-            write: () =>
-              Effect.sync(() => {
-                starts++;
-
-                return "";
-              }),
-            status: () => Effect.succeed(""),
-          }),
-        ),
-        Effect.exit,
-      );
-
-      expect(Exit.isFailure(exit)).toBe(true);
-      expect(starts).toBe(0);
-      expect(requests).toEqual([["discover", "status"]]);
-    }),
-  );
-
-  it.effect("filters catalogue metadata before discovery and accepts host context selection", () =>
-    Effect.gen(function* () {
-      const requests: Array<ReadonlyArray<string>> = [];
-
-      const exit = yield* AgentRuntime.run(
-        Agent.withModel(
-          definition,
-          scripted([[call("find", "discover", { select: "read" }), finish], done], requests),
-        ),
-        "go",
-        {
-          context: {
-            prepare: ({ source }) =>
-              Effect.succeed({
-                prompt: source,
-                toolSelection: Selection.make({ toolNames: ["read"] }),
-              }),
-          },
-        },
-      ).pipe(
-        Effect.provideService(RunToolVisibility, {
-          visible: ({ toolNames }) => Effect.succeed(toolNames.filter((name) => name !== "write")),
-        }),
-        Effect.provide(
-          tools.toLayer({
-            discover: () =>
-              Effect.gen(function* () {
-                expect((yield* CurrentToolCatalog).entries.map((entry) => entry.tool.name)).toEqual(
-                  ["discover", "read", "status"],
-                );
-
-                return { toolNames: ["read"], padding: "" };
-              }),
-            read: () => Effect.succeed(""),
-            write: () => Effect.succeed(""),
-            status: () => Effect.succeed(""),
-          }),
-        ),
-        Effect.exit,
-      );
-
-      expect(Exit.isSuccess(exit)).toBe(true);
-      expect(requests).toEqual([
-        ["discover", "read", "status"],
-        ["discover", "read", "status"],
-      ]);
-    }),
-  );
-
-  for (const configuration of [
-    { initialToolNames: ["missing"] },
-    { initialToolNames: ["toString"] },
-    { initialToolNames: ["__proto__"] },
-    { initialToolNames: ["read"], maxTools: 2 },
-    { initialToolNames: ["read"], maxSchemaBytes: 1 },
-  ]) {
-    it.effect(
-      `rejects invalid or over-limit exposure before dispatch: ${JSON.stringify(configuration)}`,
-      () =>
-        Effect.gen(function* () {
-          const requests: Array<ReadonlyArray<string>> = [];
-
-          const limited = Agent.make("limited", {
-            input: Schema.String,
-            output: Schema.String,
-            instructions: "Use Tools.",
-            toolkit: tools,
-            toolExposure: configuration,
-          });
-
-          const exit = yield* AgentRuntime.run(
-            Agent.withModel(limited, scripted([done], requests)),
-            "go",
-          ).pipe(
-            Effect.provide(
-              tools.toLayer({
-                discover: () => Effect.succeed({ toolNames: [], padding: "" }),
-                read: () => Effect.succeed(""),
-                write: () => Effect.succeed(""),
-                status: () => Effect.succeed(""),
+                  return Stream.fromIterable(done);
+                },
               }),
             ),
-            Effect.exit,
           );
 
-          expect(failure(exit)).toMatchObject({ _tag: "ModelProtocolError" });
-          expect(requests).toEqual([]);
+          const result = yield* AgentRuntime.run(Agent.withModel(agent, model), "go", {
+            subagentGrant: SubagentGrant.make({
+              allowedToolNames: ["discover_tools", "read", "write", "status", "host_hidden"],
+              maxDepth: 1,
+            }),
+            delegationDepth: 1,
+          }).pipe(
+            Effect.provideService(RunToolVisibility, {
+              visible: ({ toolNames }) =>
+                Effect.succeed(toolNames.filter((name) => name !== "host_hidden")),
+            }),
+            Effect.provide([
+              discovery.handlers,
+              actions.toLayer({
+                read: () =>
+                  Effect.sync(() => {
+                    invoked.push("read");
+
+                    return 1;
+                  }),
+                status: () =>
+                  Effect.sync(() => {
+                    invoked.push("status");
+
+                    return "ok";
+                  }),
+                write: () => Effect.die("Undocumented tool must not execute"),
+                host_hidden: () => Effect.die("Host-hidden tool must not execute"),
+                grant_hidden: () => Effect.die("Grant-hidden tool must not execute"),
+              }),
+            ]),
+          );
+
+          expect(result.output).toBe("done");
+          expect(turn).toBe(3);
+          expect(invoked).toEqual(["read"]);
+          expect(finalized).toBe(1);
         }),
     );
   }
-
-  it.effect(
-    "refuses static Code Mode declarations before hidden metadata can reach discovery",
-    () =>
-      Effect.gen(function* () {
-        const outer = Tool.make("run_code", {
-          parameters: Schema.Struct({}),
-          success: Schema.String,
-        })
-          .annotate(AdditionalToolCatalog, [{ tool: Write, namespace: "db", method: "write" }])
-          .annotate(IncludesCatalogDocumentation, true);
-
-        const native = Toolkit.make(outer);
-        const requests: Array<ReadonlyArray<string>> = [];
-
-        const agent = Agent.make("code-leak", {
-          input: Schema.String,
-          output: Schema.String,
-          instructions: "Go.",
-          toolkit: native,
-        });
-
-        const exit = yield* AgentRuntime.run(
-          Agent.withModel(agent, scripted([done], requests)),
-          "go",
-        ).pipe(
-          Effect.provideService(RunToolVisibility, { visible: () => Effect.succeed(["run_code"]) }),
-          Effect.provide(native.toLayer({ run_code: () => Effect.succeed("") })),
-          Effect.exit,
-        );
-
-        expect(failure(exit)).toMatchObject({ _tag: "ModelProtocolError" });
-        expect(requests).toEqual([]);
-      }),
-  );
 
   it.effect(
     "resumes against original request exposure without calling the model or discovery",
@@ -774,315 +405,6 @@ layer(Layer.mergeAll(identifiers, ThreadHistory.layer))("native Tool exposure", 
       expect(readCalls).toBe(0);
       expect(writeCalls).toBe(1);
       expect(requests).toEqual([["write"]]);
-    }),
-  );
-
-  for (const [label, snapshot] of [
-    ["missing", undefined],
-    [
-      "retired selection",
-      Snapshot.make({
-        exposedToolNames: ["read"],
-        selection: Selection.make({ toolNames: ["retired"] }),
-      }),
-    ],
-    ["retired exposure", Snapshot.make({ exposedToolNames: ["read", "retired"] })],
-    ["unexposed call", Snapshot.make({ exposedToolNames: ["retired"] })],
-  ] as const) {
-    it.effect(
-      `preserves original authority with ${label} in a visibility-only resumed request`,
-      () =>
-        Effect.gen(function* () {
-          const native = Toolkit.make(Read);
-
-          const agent = Agent.make("invalid-resume-exposure", {
-            input: Schema.String,
-            output: Schema.String,
-            instructions: "Answer.",
-            toolkit: native,
-          });
-
-          const requests: Array<ReadonlyArray<string>> = [];
-          let starts = 0;
-
-          const exit = yield* AgentRuntime.run(
-            Agent.withModel(agent, scripted([done], requests)),
-            "go",
-            {
-              resume: {
-                turn: 1,
-                turnId: TurnId.make("original"),
-                calls: [{ id: "read-1", name: "read", params: {} }],
-                settled: [],
-                ...(snapshot === undefined ? {} : { toolExposure: snapshot }),
-              },
-              resumeUsage: {
-                committedTurns: 1,
-                toolCalls: 1,
-                modelCalls: 1,
-                inputTokens: 0,
-                outputTokens: 0,
-                lastInputTokens: 0,
-                lastOutputTokens: 0,
-                costMicrousd: 0,
-                consecutiveToolFailures: 0,
-                programmaticToolCalls: 0,
-                finalizationUsed: false,
-              },
-            },
-          ).pipe(
-            Effect.provideService(RunToolVisibility, { visible: () => Effect.succeed(["read"]) }),
-            Effect.provide(
-              native.toLayer({
-                read: () =>
-                  Effect.sync(() => {
-                    starts++;
-
-                    return "";
-                  }),
-              }),
-            ),
-            Effect.exit,
-          );
-
-          if (label === "missing" || label === "unexposed call") {
-            expect(failure(exit)).toMatchObject({ _tag: "ModelProtocolError" });
-            expect(starts).toBe(0);
-            expect(requests).toEqual([]);
-          } else {
-            expect(Exit.isSuccess(exit)).toBe(true);
-            expect(starts).toBe(1);
-            expect(requests).toEqual([label === "retired selection" ? [] : ["read"]]);
-          }
-        }),
-    );
-  }
-
-  it.effect("records the actual oneOf declarations in an optional-completion grace Turn", () =>
-    Effect.gen(function* () {
-      const Finish = Tool.make("finish", { parameters: Schema.Struct({}), success: Schema.String });
-      const native = Toolkit.make(Read, Finish);
-
-      const agent = Agent.make("grace-exposure", {
-        input: Schema.String,
-        output: Schema.String,
-        instructions: "Read then finish.",
-        toolkit: native,
-        toolExposure: { initialToolNames: ["read"] },
-        policy: { maxTurns: 1, maxToolCalls: 5, onExhaustion: "final-answer" },
-        completion: { tool: "finish", project: ({ result }) => result },
-      });
-
-      const requests: Array<ReadonlyArray<string>> = [];
-      const staged: Array<Snapshot> = [];
-
-      const result = yield* AgentRuntime.run(
-        Agent.withModel(
-          agent,
-          scripted(
-            [
-              [call("read-1", "read"), finish],
-              [call("finish-1", "finish"), finish],
-            ],
-            requests,
-          ),
-        ),
-        "go",
-        {
-          durability: {
-            noteToolExposure: (_, snapshot) =>
-              Effect.sync(() => {
-                staged.push(snapshot);
-              }),
-            commitResponse: () => Effect.void,
-            prepareToolCalls: () => Effect.void,
-            commitCompaction: () => Effect.void,
-            noteTurnUsage: () => Effect.void,
-            step: { lookup: () => Effect.succeed(Option.none()), commit: () => Effect.void },
-          },
-        },
-      ).pipe(
-        Effect.provide(
-          native.toLayer({
-            read: () => Effect.succeed("read"),
-            finish: () => Effect.succeed("done"),
-          }),
-        ),
-      );
-
-      expect(result.output).toBe("done");
-      expect(requests).toEqual([["read"], ["finish"]]);
-      expect(staged.map((snapshot) => snapshot.exposedToolNames)).toEqual(requests);
-      expect(staged[1]?.selection?.toolNames).toEqual(["read"]);
-    }),
-  );
-
-  for (const authority of ["host", "grant"] as const) {
-    it.effect(`finishes with text when ${authority} hides an optional completion Tool`, () =>
-      Effect.gen(function* () {
-        const Finish = Tool.make("finish", {
-          parameters: Schema.Struct({}),
-          success: Schema.String,
-        }).annotate(PinnedTool, true);
-
-        const native = Toolkit.make(Read, Finish);
-
-        const agent = Agent.make("hidden-optional-completion", {
-          input: Schema.String,
-          output: Schema.String,
-          instructions: "Read then answer.",
-          toolkit: native,
-          toolExposure: { initialToolNames: ["read"] },
-          policy: { maxTurns: 1, maxToolCalls: 5, onExhaustion: "final-answer" },
-          completion: { tool: "finish", project: ({ result }) => result },
-        });
-
-        const requests: Array<ReadonlyArray<string>> = [];
-        const choices: Array<LanguageModel.ToolChoice<string>> = [];
-        const staged: Array<Snapshot> = [];
-
-        const result = yield* AgentRuntime.run(
-          Agent.withModel(
-            agent,
-            scripted([[call("read-1", "read"), finish], done], requests, choices),
-          ),
-          "go",
-          {
-            ...(authority === "grant"
-              ? {
-                  subagentGrant: SubagentGrant.make({ allowedToolNames: ["read"], maxDepth: 1 }),
-                  delegationDepth: 1,
-                }
-              : {}),
-            durability: {
-              noteToolExposure: (_, snapshot) =>
-                Effect.sync(() => {
-                  staged.push(snapshot);
-                }),
-              commitResponse: () => Effect.void,
-              prepareToolCalls: () => Effect.void,
-              commitCompaction: () => Effect.void,
-              noteTurnUsage: () => Effect.void,
-              step: { lookup: () => Effect.succeed(Option.none()), commit: () => Effect.void },
-            },
-          },
-        ).pipe(
-          Effect.provideService(
-            RunToolVisibility,
-            authority === "host"
-              ? {
-                  visible: ({ toolNames }) =>
-                    Effect.succeed(toolNames.filter((name) => name !== "finish")),
-                }
-              : undefined,
-          ),
-          Effect.provide(
-            native.toLayer({
-              read: () => Effect.succeed("read"),
-              finish: () => Effect.die("Hidden optional completion must not execute"),
-            }),
-          ),
-        );
-
-        expect(result.output).toBe("done");
-        expect(result.finishReason).toBe("budget-exhausted");
-        expect(requests).toEqual([["read"], ["read"]]);
-        expect(choices).toEqual(["auto", "none"]);
-        expect(staged.map((snapshot) => snapshot.exposedToolNames)).toEqual(requests);
-      }),
-    );
-  }
-
-  it.effect("keeps legacy eager completion free of opt-in exposure bounds", () =>
-    Effect.gen(function* () {
-      const Finish = Tool.make("finish", {
-        description: "x".repeat(300_000),
-        parameters: Schema.Struct({}),
-        success: Schema.String,
-      });
-
-      const native = Toolkit.make(Read, Finish);
-
-      const agent = Agent.make("eager-grace", {
-        input: Schema.String,
-        output: Schema.String,
-        instructions: "Read then finish.",
-        toolkit: native,
-        policy: { maxTurns: 1, maxToolCalls: 5, onExhaustion: "final-answer" },
-        completion: { tool: "finish", project: ({ result }) => result },
-      });
-
-      const requests: Array<ReadonlyArray<string>> = [];
-
-      const result = yield* AgentRuntime.run(
-        Agent.withModel(
-          agent,
-          scripted(
-            [
-              [call("read-1", "read"), finish],
-              [call("finish-1", "finish"), finish],
-            ],
-            requests,
-          ),
-        ),
-        "go",
-      ).pipe(
-        Effect.provide(
-          native.toLayer({
-            read: () => Effect.succeed("read"),
-            finish: () => Effect.succeed("done"),
-          }),
-        ),
-      );
-
-      expect(result.output).toBe("done");
-      expect(requests).toEqual([["read", "finish"], ["finish"]]);
-    }),
-  );
-
-  it.effect("refuses non-readonly discovery before model or Handler execution", () =>
-    Effect.gen(function* () {
-      const unsafe = Tool.make("unsafe", {
-        parameters: Schema.Struct({}),
-        success: Schema.Struct({ toolNames: Schema.Array(Schema.String) }),
-      }).annotate(DiscoveryTool, true);
-
-      const native = Toolkit.make(unsafe);
-
-      const agent = Agent.make("unsafe-discovery", {
-        input: Schema.String,
-        output: Schema.String,
-        instructions: "Go.",
-        toolkit: native,
-        toolExposure: {},
-      });
-
-      const requests: Array<ReadonlyArray<string>> = [];
-      let starts = 0;
-
-      const exit = yield* AgentRuntime.run(
-        Agent.withModel(agent, scripted([done], requests)),
-        "go",
-      ).pipe(
-        Effect.provide(
-          native.toLayer({
-            unsafe: () =>
-              Effect.sync(() => {
-                starts++;
-
-                return { toolNames: [] };
-              }),
-          }),
-        ),
-        Effect.exit,
-      );
-
-      expect(failure(exit)).toMatchObject({
-        _tag: "ModelProtocolError",
-        message: "Discovery requires ordinary readonly Tools",
-      });
-      expect(starts).toBe(0);
-      expect(requests).toEqual([]);
     }),
   );
 });

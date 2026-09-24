@@ -613,15 +613,10 @@ export const makePhase6TravelPlannerBindings: Effect.Effect<ReadonlyArray<Resolv
 // ---------------------------------------------------------------------------
 
 /**
- * The committed cross-platform normalized canonical evidence of ONE uninterrupted Travel
- * Planner planning Submission (the P1/P4 happy path: canonical input, the search Turn, three
- * Tool settlements, the plan Turn, one Settlement). `travel-planner-phase6.test.ts` asserts
- * the DN run equals this value and `travel-planner-dc.test.ts` asserts the DC run equals this
- * value, so the two platforms' canonical outcomes are byte-equivalent transitively — the P6
- * exit gate "Travel Planner produces equivalent canonical outcomes under DN and DC".
+ * Normalized canonical evidence for an uninterrupted Travel Planner planning Submission:
+ * canonical input, the search Turn, three Tool settlements, the plan Turn, and one Settlement.
  *
- * Regenerate ONLY when the Travel Planner scenario or canonical protocol changes, by printing either suite's
- * normalized value; both suites must then agree on the new golden.
+ * Regenerate from the scenario when its canonical protocol changes.
  */
 export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
   {

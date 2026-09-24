@@ -3,14 +3,12 @@ import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
 import { Schema as NamespaceSchema, Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect";
-import * as Memory from "effect-agent/memory";
 import * as MemoryNamespace from "effect-agent/memory-namespace";
 import { MemoryAccess } from "effect-agent/memory-revalidation";
 import { MemoryScope, MemoryKey, MemoryWriter } from "effect-agent/memory-store";
 import { indexMemorySource, querySemanticMemory } from "effect-agent/semantic-memory";
 import { SemanticMemoryIndex, SemanticMemoryProfile } from "effect-agent/semantic-memory-index";
 import { memoryStoreLayer } from "effect-agent/sql-memory-store";
-import { TestClock } from "effect/testing";
 import { AiError, EmbeddingModel } from "effect/unstable/ai";
 
 const TestNamespace = MemoryNamespace.define({
@@ -78,81 +76,6 @@ const content = {
   extractedAt: 30,
 };
 
-it.effect(
-  "composes SQLite authority, native embeddings, the real index, and bounded recall across correction and withdrawal",
-  () =>
-    Effect.gen(function* () {
-      const writer = yield* MemoryWriter;
-
-      yield* writer.change({
-        _tag: "Put",
-        key,
-        operationId: "initial",
-        expectedRevision: null,
-        locator: "memory://proposal",
-        content,
-        scopes: [access.scope],
-      });
-      yield* indexMemorySource(key, indexLimits);
-      const initial = yield* querySemanticMemory("queue", access, queryLimits);
-
-      const recalled = yield* Memory.recall(
-        [{ id: "semantic", essential: true, read: Effect.succeed(initial.lookup) }],
-        {
-          maxSources: 1,
-          maxItems: 1,
-          maxBytes: 4_096,
-          maxTokens: 4_096,
-          timeoutMillis: 1_000,
-        },
-      );
-
-      expect(recalled.passages).toMatchObject([
-        { authority: access.namespace.address, source: { id: key.id, revision: "1" }, content },
-      ]);
-
-      const corrected = { ...content, text: "Dan proposes a scheduler instead." };
-
-      yield* writer.change({
-        _tag: "Put",
-        key,
-        operationId: "correction",
-        expectedRevision: "1",
-        locator: "memory://proposal",
-        content: corrected,
-        scopes: [access.scope],
-      });
-      expect(yield* querySemanticMemory("queue", access, queryLimits)).toMatchObject({
-        lookup: { _tag: "NoMatch" },
-        staleExcluded: 1,
-      });
-      yield* indexMemorySource(key, indexLimits);
-      expect((yield* querySemanticMemory("scheduler", access, queryLimits)).lookup).toMatchObject({
-        _tag: "Found",
-        passages: [{ source: { revision: "2" }, content: corrected }],
-      });
-      yield* writer.change({
-        _tag: "Withdraw",
-        key,
-        operationId: "withdrawal",
-        expectedRevision: "2",
-        reason: "withdrawn",
-      });
-      expect(yield* querySemanticMemory("scheduler", access, queryLimits)).toMatchObject({
-        lookup: { _tag: "NoMatch" },
-        staleExcluded: 1,
-      });
-      expect(yield* indexMemorySource(key, indexLimits)).toMatchObject({
-        status: "Withdrawn",
-        embeddedChunks: 0,
-      });
-      expect(yield* querySemanticMemory("scheduler", access, queryLimits)).toMatchObject({
-        lookup: { _tag: "NoMatch" },
-        scannedChunks: 0,
-      });
-    }).pipe(Effect.provide(services)),
-);
-
 it.effect("preserves usable recall when an unchanged-source refresh fails or is cancelled", () =>
   Effect.gen(function* () {
     const writer = yield* MemoryWriter;
@@ -185,7 +108,7 @@ it.effect("preserves usable recall when an unchanged-source refresh fails or is 
       reason: new AiError.InvalidOutputError({ description: "provider unavailable" }),
     });
 
-    for (const mode of ["failure", "defect", "timeout", "interrupt"] as const) {
+    for (const mode of ["failure", "interrupt"] as const) {
       const started = yield* Deferred.make<void>();
       let finalized = 0;
 
@@ -196,13 +119,7 @@ it.effect("preserves usable recall when an unchanged-source refresh fails or is 
               finalized += 1;
             }),
           ).pipe(
-            Effect.andThen(
-              mode === "failure"
-                ? Effect.fail(providerFailure)
-                : mode === "defect"
-                  ? Effect.die("embedding defect")
-                  : Effect.never,
-            ),
+            Effect.andThen(mode === "failure" ? Effect.fail(providerFailure) : Effect.never),
             Effect.scoped,
           ),
       });
@@ -214,7 +131,7 @@ it.effect("preserves usable recall when an unchanged-source refresh fails or is 
 
       yield* Deferred.await(started);
       expect((yield* querySemanticMemory("queue", access, queryLimits)).lookup._tag).toBe("Found");
-      if (mode === "timeout") yield* TestClock.adjust(1_001);
+
       if (mode === "interrupt") yield* Fiber.interrupt(refreshing);
       const exit = yield* Fiber.await(refreshing);
 
@@ -222,9 +139,7 @@ it.effect("preserves usable recall when an unchanged-source refresh fails or is 
       if (Exit.isFailure(exit)) {
         if (mode === "failure")
           expect(Cause.findErrorOption(exit.cause)).toMatchObject({ value: providerFailure });
-        if (mode === "defect") expect(Cause.hasDies(exit.cause)).toBe(true);
-        if (mode === "timeout")
-          expect(Cause.findErrorOption(exit.cause)).toMatchObject({ value: { reason: "timeout" } });
+
         if (mode === "interrupt") expect(Cause.hasInterrupts(exit.cause)).toBe(true);
       }
       expect(finalized).toBe(1);

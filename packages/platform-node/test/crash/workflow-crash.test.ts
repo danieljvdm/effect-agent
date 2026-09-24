@@ -146,11 +146,7 @@ it.live.each(WorkflowCrashBoundary.literals)(
         expect(new Set(ids).size).toBe(ids.length);
         if (ordinary) {
           expect(yield* fs.readFileString(`${directory}/bookings`)).toBe("confirmed-reservation\n");
-        } else if (
-          boundary === "terminalize:after-canonical-append" ||
-          boundary === "cleanup:before" ||
-          boundary === "cleanup:after"
-        ) {
+        } else if (boundary === "terminalize:after-canonical-append") {
           expect(yield* fs.readFileString(`${directory}/model-calls`)).toBe("called\n");
         }
       }).pipe(

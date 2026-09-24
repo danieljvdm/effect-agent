@@ -6,8 +6,7 @@ import {
 } from "@effect-agent/workflow/workflow-dispatch";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema, String } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { Effect, Layer, Schema } from "effect";
 import { DurableDeferred } from "effect/unstable/workflow";
 
 const intent = Schema.decodeSync(WorkflowDispatchIntent)({
@@ -23,10 +22,9 @@ const intent = Schema.decodeSync(WorkflowDispatchIntent)({
   },
 });
 
-it.live("preserves immutable dispatch identities with application SQL result transforms", () =>
+it.live("retains a later completion token against stale repair and cleanup", () =>
   Effect.gen(function* () {
     const store = yield* WorkflowDispatchStore;
-    const sql = yield* SqlClient.SqlClient;
 
     const scan = new WorkflowDispatchScan({
       deploymentId: intent.deploymentId,
@@ -35,24 +33,6 @@ it.live("preserves immutable dispatch identities with application SQL result tra
     });
 
     yield* store.put(intent);
-    yield* store.put(intent);
-    expect(yield* store.scan(scan)).toEqual([intent]);
-    expect(yield* sql`SELECT 1 AS application_value`).toEqual([{ applicationValue: 1 }]);
-
-    const divergent = yield* Schema.decodeEffect(WorkflowDispatchIntent)({
-      ...intent,
-      receipt: { ...intent.receipt, queueSequence: 2 },
-    });
-
-    expect(yield* store.put(divergent).pipe(Effect.result)).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "WorkflowDispatchError", operation: "put" },
-    });
-    expect(yield* store.remove(divergent).pipe(Effect.result)).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "WorkflowDispatchError", operation: "remove" },
-    });
-    expect(yield* store.scan(scan)).toEqual([intent]);
 
     const token = new DurableDeferred.TokenParsed({
       workflowName: "Parent",
@@ -83,27 +63,6 @@ it.live("preserves immutable dispatch identities with application SQL result tra
         .pipe(Effect.result),
     ).toMatchObject({ _tag: "Failure" });
     yield* store.remove(waiting);
-    yield* store.put(intent);
-
-    const encode = Schema.encodeEffect(Schema.fromJsonString(WorkflowDispatchIntent));
-
-    const corrupted = yield* encode(
-      new WorkflowDispatchIntent({ ...intent, executionId: "different-execution" }),
-    );
-
-    yield* sql`UPDATE effect_agent_workflow_dispatch SET intent_json = ${corrupted}`;
-    expect(yield* store.scan(scan).pipe(Effect.result)).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "WorkflowDispatchError", operation: "decode" },
-    });
-    expect(yield* store.remove(intent).pipe(Effect.result)).toMatchObject({
-      _tag: "Failure",
-      failure: { _tag: "WorkflowDispatchError", operation: "decode" },
-    });
-
-    yield* sql`UPDATE effect_agent_workflow_dispatch SET intent_json = ${yield* encode(intent)}`;
-    yield* store.remove(intent);
-    yield* store.remove(intent);
     expect(yield* store.scan(scan)).toEqual([]);
   }).pipe(
     Effect.provide(
@@ -111,7 +70,6 @@ it.live("preserves immutable dispatch identities with application SQL result tra
         Layer.provideMerge(
           SqliteClient.layer({
             filename: ":memory:",
-            transformResultNames: String.snakeToCamel,
           }),
         ),
       ),

@@ -6,7 +6,7 @@ import { DefinitionDigests, Digest } from "effect-agent/records";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentPolicy } from "effect-agent/subagent";
 import { SubagentReservationsMemoryLive } from "effect-agent/subagent-reservations";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 import {
   TEST_DIGESTS,
@@ -101,21 +101,13 @@ export const COORDINATOR_REPORT = '{"report":"done"}';
 export const PROJECTED_SUMMARY = "finding:child";
 /** Supplier-log operation recorded once per researcher LanguageModel invocation. */
 export const CHILD_MODEL_OP = "child-model";
-/** Supplier-log operation recorded once per sibling lookup handler execution. */
-export const SIBLING_LOOKUP_OP = "sibling-lookup";
 
 /** The one delegation Tool Call id of a coordinator Run on the `ref` lane. */
 export const delegateCallIdFor = (ref: string): string => `delegate-${ref}`;
-/** The sibling ordinary lookup Tool Call id of the mixed-batch coordinator Run. */
-export const siblingCallIdFor = (ref: string): string => `lookup-${ref}`;
 
 /** Exact researcher model invocation count for one `ref` (the never-re-executed currency). */
 export const childModelInvocations = (ref: string): number =>
   supplierCountsFor(ref)[CHILD_MODEL_OP] ?? 0;
-
-/** Exact sibling lookup handler execution count for one `ref`. */
-export const siblingLookupInvocations = (ref: string): number =>
-  supplierCountsFor(ref)[SIBLING_LOOKUP_OP] ?? 0;
 
 /**
  * The child Binding digest strings the delegation declares
@@ -211,19 +203,6 @@ const coordinatorModel = promptAwareModel("cf-s2-coordinator", (promptJson) => {
       ]);
 });
 
-/** Mixed-batch coordinator: the delegation call plus an ordinary sibling lookup in ONE Turn. */
-const siblingCoordinatorModel = promptAwareModel("cf-s2-sibling-coordinator", (promptJson) => {
-  const ref = refFromPrompt(promptJson);
-
-  return promptJson.includes(delegateCallIdFor(ref))
-    ? Stream.fromIterable(finalParts(COORDINATOR_REPORT))
-    : Stream.fromIterable([
-        toolCallPart(delegateCallIdFor(ref), "delegate_research", { topic: ref }),
-        toolCallPart(siblingCallIdFor(ref), "lookup", { key: ref }),
-        { type: "finish", reason: "tool-calls", usage },
-      ]);
-});
-
 /**
  * Researcher model with supplier-log invocation counting: every `streamText` call appends one
  * `child-model` line for its `ref` BEFORE any part is emitted, so invocation counts survive
@@ -306,26 +285,6 @@ export const coordinatorDefinition = Agent.make("cf-s2-coordinator", {
   }),
 });
 
-/** UNANNOTATED sibling lookup — the ordinary uncertain-class call in the mixed batch. */
-const SiblingLookup = Tool.make("lookup", {
-  parameters: Schema.Struct({ key: Schema.String }),
-  success: Schema.Struct({ value: Schema.String }),
-});
-
-export const siblingCoordinatorDefinition = Agent.make("cf-s2-sibling-coordinator", {
-  input: CoordinatorInput,
-  output: CoordinatorOutput,
-  instructions: ({ mission, ref }) =>
-    `Delegate the research for ${mission} and look it up. [ref:${ref}]`,
-  toolkit: Toolkit.make(researchDelegation.tool, SiblingLookup),
-  policy: AgentPolicy.make({
-    maxTurns: 3,
-    maxToolCalls: 3,
-    maxDuration: "30 seconds",
-    toolConcurrency: 2,
-  }),
-});
-
 // ---------------------------------------------------------------------------
 // Registered worker Bindings (SUB-023: exact digest registration)
 // ---------------------------------------------------------------------------
@@ -336,7 +295,7 @@ const mapChildFailure = (failure: { readonly _tag: string }) =>
   CfDelegationFailed.make({ childErrorTag: failure._tag });
 
 /**
- * The three resolvable worker Bindings of the WP4 fixture, registered under EXACTLY the
+ * The coordinator and researcher Bindings of the WP4 fixture, registered under EXACTLY the
  * digest strings the tests submit with (`TEST_DIGESTS`) and the delegation declares
  * (`SUBAGENT_CHILD_DIGEST_STRINGS`). Runs once
  * per Object incarnation during Layer construction; every observable counter lives in the
@@ -350,32 +309,16 @@ export const makeSubagentTestBindings: Effect.Effect<ReadonlyArray<ResolvedBindi
       mapChildFailure,
     }).pipe(Layer.provide([delegationSupport, bookToolLayer]));
 
-    const siblingLookupLayer = Toolkit.make(SiblingLookup).toLayer({
-      lookup: ({ key }) =>
-        Effect.sync(() => {
-          const value = `found-${key}`;
-
-          recordSupplierCall(SIBLING_LOOKUP_OP, key, value);
-
-          return { value };
-        }),
-    });
-
     const coordinator: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(coordinatorDefinition, coordinatorModel),
       TEST_DIGESTS,
     ).pipe(Effect.provide(delegationLayer));
-
-    const sibling: ResolvedBinding = yield* DurableWorkerBinding.make(
-      Agent.withModel(siblingCoordinatorDefinition, siblingCoordinatorModel),
-      TEST_DIGESTS,
-    ).pipe(Effect.provide(Layer.mergeAll(delegationLayer, siblingLookupLayer)));
 
     const researcher: ResolvedBinding = yield* DurableWorkerBinding.make(
       childBinding,
       SUBAGENT_CHILD_DIGESTS,
     ).pipe(Effect.provide(bookToolLayer));
 
-    return [coordinator, sibling, researcher];
+    return [coordinator, researcher];
   },
 );

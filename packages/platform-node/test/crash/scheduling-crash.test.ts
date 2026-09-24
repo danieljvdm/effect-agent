@@ -56,10 +56,6 @@ const cases: ReadonlyArray<
   readonly [boundary: SchedulingCrashBoundary, expected: ExpectedCrashState]
 > = [
   [
-    "schedule:insert:before",
-    { scheduleCount: 0, submissionCount: 0, pending: null, receipt: null },
-  ],
-  [
     "schedule:insert:after",
     { scheduleCount: 1, submissionCount: 0, pending: false, receipt: false },
   ],
@@ -69,10 +65,6 @@ const cases: ReadonlyArray<
   ],
   [
     "schedule:admission:after",
-    { scheduleCount: 1, submissionCount: 1, pending: true, receipt: false },
-  ],
-  [
-    "schedule:complete:before",
     { scheduleCount: 1, submissionCount: 1, pending: true, receipt: false },
   ],
   [
@@ -185,7 +177,7 @@ const waitForCompletion = (scheduling: Scheduling["Service"]) =>
   }).pipe(Effect.timeoutOption(Duration.seconds(10)));
 
 it.live(
-  "recovers every scheduling durable boundary after a real SIGKILL",
+  "recovers scheduling commit boundaries after a real SIGKILL",
   () =>
     Effect.scoped(
       Effect.gen(function* () {

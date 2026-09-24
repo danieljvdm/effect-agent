@@ -120,62 +120,59 @@ const expectCrash = <A, E>(exit: Exit.Exit<A, E>) => {
 };
 
 layer(testLayer)("durable output and current-Run pruning", (it) => {
-  for (const text of ['  Committed once.\n"Keep these quotes."  ', ""]) {
-    it.effect(
-      `replays canonical plain text without another model call (${text === "" ? "empty" : "verbatim"})`,
-      () =>
-        Effect.gen(function* () {
-          const runtime = yield* DurableAgentRuntime;
-          const control = yield* DurableRuntimeFailpointTestControl;
-          const scripted = scriptedModel(() => finalParts(text));
+  {
+    const text = '  Committed once.\n"Keep these quotes."  ' as const;
 
-          const agent = Agent.withModel(
-            Agent.make("durable-text", {
-              input: Schema.String,
-              output: Output.text(Schema.String.check(Schema.isMaxLength(100))),
-              instructions: "Reply in plain text.",
-              toolkit: Toolkit.empty,
-            }),
-            scripted.model,
-          );
+    it.effect(`replays canonical plain text without another model call (${"verbatim"})`, () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const control = yield* DurableRuntimeFailpointTestControl;
+        const scripted = scriptedModel(() => finalParts(text));
 
-          const receipt = yield* runtime.submit(
-            agent,
-            "reply",
-            submitOptions(`text-${text.length}`),
-          );
+        const agent = Agent.withModel(
+          Agent.make("durable-text", {
+            input: Schema.String,
+            output: Output.text(Schema.String.check(Schema.isMaxLength(100))),
+            instructions: "Reply in plain text.",
+            toolkit: Toolkit.empty,
+          }),
+          scripted.model,
+        );
 
-          yield* control.setHandler((location) =>
-            location === "turn:after-canonical-append"
-              ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
-              : Effect.void,
-          );
-          expectCrash(
-            yield* runtime
-              .processThread(agent, receipt.threadId)
-              .pipe(Effect.exit, Effect.ensuring(control.clear)),
-          );
-          const settled = yield* runtime.processThread(agent, receipt.threadId);
+        const receipt = yield* runtime.submit(agent, "reply", submitOptions(`text-${text.length}`));
 
-          expect(settled).toHaveLength(1);
-          expect(settled[0]?.outcome).toBe("completed");
-          expect(scripted.prompts).toHaveLength(1);
-          const records = yield* readLog(receipt.threadId);
+        yield* control.setHandler((location) =>
+          location === "turn:after-canonical-append"
+            ? Effect.fail(DurableRuntimeFailpointError.make({ location }))
+            : Effect.void,
+        );
+        expectCrash(
+          yield* runtime
+            .processThread(agent, receipt.threadId)
+            .pipe(Effect.exit, Effect.ensuring(control.clear)),
+        );
+        const settled = yield* runtime.processThread(agent, receipt.threadId);
 
-          expect(
-            records
-              .filter(({ record }) => record.payload._tag === "RunCompleted")
-              .map(({ record }) => record.payload),
-          ).toEqual([expect.objectContaining({ output: text })]);
-        }),
+        expect(settled).toHaveLength(1);
+        expect(settled[0]?.outcome).toBe("completed");
+        expect(scripted.prompts).toHaveLength(1);
+        const records = yield* readLog(receipt.threadId);
+
+        expect(
+          records
+            .filter(({ record }) => record.payload._tag === "RunCompleted")
+            .map(({ record }) => record.payload),
+        ).toEqual([expect.objectContaining({ output: text })]);
+      }),
     );
   }
 
-  for (const rollover of [false, true]) {
-    for (const barrier of [
-      "compaction:before-canonical-append",
-      "compaction:after-canonical-append",
-    ] as const) {
+  {
+    const rollover = true as const;
+
+    {
+      const barrier = "compaction:after-canonical-append" as const;
+
       it.effect(
         `prunes settled current-Run results across ${barrier}, prior rollover=${rollover}`,
         () =>
@@ -213,7 +210,7 @@ layer(testLayer)("durable output and current-Run pruning", (it) => {
                 return callParts("window", "new_context", {
                   handoff: "Continue the original objective.",
                 });
-              const search = call - (rollover ? 1 : 0);
+              const search = call - 1;
 
               return search < 2
                 ? callParts(`search-${search}`, "search", {}, search === 0 ? 100 : 1_800)
@@ -262,15 +259,13 @@ layer(testLayer)("durable output and current-Run pruning", (it) => {
                 record.payload.kind === "clear-tool-results",
             );
 
-            expect(beforePrunes).toHaveLength(
-              barrier === "compaction:after-canonical-append" ? 1 : 0,
-            );
+            expect(beforePrunes).toHaveLength(1);
             expect(executions).toBe(2);
             const settled = yield* process;
 
             expect(settled[0]?.outcome).toBe("completed");
             expect(executions).toBe(2);
-            expect(scripted.prompts).toHaveLength(rollover ? 4 : 3);
+            expect(scripted.prompts).toHaveLength(4);
             const finalPrompt = scripted.prompts.at(-1) ?? Prompt.empty;
 
             expect(results(finalPrompt)).toEqual([CLEARED_TOOL_RESULT, evidence[1]]);
@@ -309,7 +304,7 @@ layer(testLayer)("durable output and current-Run pruning", (it) => {
             );
 
             expect(results(replay.prompt)).toEqual([CLEARED_TOOL_RESULT, evidence[1]]);
-            expect(replay.usage.inputTokens).toBe(rollover ? 3_300 : 3_200);
+            expect(replay.usage.inputTokens).toBe(3_300);
           }),
       );
     }

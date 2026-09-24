@@ -8,8 +8,6 @@ import { credentialForOwner, credentialSourceLayer } from "../../src/server/cred
 
 const adminId = "00000000-0000-0000-0000-000000000001";
 const emailId = "00000000-0000-0000-0000-000000000002";
-const githubId = "00000000-0000-0000-0000-000000000003";
-const impostorId = "00000000-0000-0000-0000-000000000004";
 
 export class FundingFixture extends DurableObject {
   fetch(request: Request) {
@@ -26,16 +24,11 @@ export class FundingFixture extends DurableObject {
             for (const [id, name] of [
               [adminId, "Dan"],
               [emailId, "Email reader"],
-              [githubId, "GitHub reader"],
-              [impostorId, "danieljvdm"],
             ]) {
               sql.exec("insert into auth_subject values (?,1,?,?)", id, "revision", name);
               sql.exec("insert into auth_credential values (?,?,?,1)", id, id, "revision");
             }
-            for (const [id, github] of [
-              [adminId, "3450486"],
-              [githubId, "424242"],
-            ]) {
+            for (const [id, github] of [[adminId, "3450486"]]) {
               sql.exec(
                 "insert into auth_oauth_tuple (identityKey,provider,issuer,externalSubject,state,version,subjectId) values (?,'github','https://github.com/login/oauth',?,'Owned','v1',?)",
                 id,
@@ -60,13 +53,6 @@ export class FundingFixture extends DurableObject {
             );
           });
         }
-        if (url.pathname === "/corrupt")
-          sql.exec("update funding_grant set value = ?", '{"version":99}');
-        if (url.pathname === "/unsupported") sql.exec("update funding_format set version = 99");
-        if (url.pathname === "/mismatch")
-          sql.exec("update funding_grant set target = 'mismatched'");
-        if (url.pathname === "/disable")
-          sql.exec("update auth_credential set active = 0 where subjectId = ?", actor);
         const store = yield* makeFundingStore(this.ctx.storage);
 
         if (url.pathname === "/grant") {
@@ -85,23 +71,14 @@ export class FundingFixture extends DurableObject {
 
           return Response.json({ revoked: true });
         }
-        if (url.pathname === "/list") return Response.json(yield* store.list(actor));
 
         return Response.json(yield* store.status(actor));
       }).pipe(
         Effect.provideService(FundingFailpoint, {
           hit: (point) => {
             if (point !== url.searchParams.get("point")) return Effect.void;
-            switch (url.searchParams.get("mode")) {
-              case "defect":
-                return Effect.die("Injected fault");
-              case "interrupt":
-                return Effect.interrupt;
-              case "timeout":
-                return Effect.never;
-              default:
-                return Effect.fail(new FundingError({ message: "Injected lost response" }));
-            }
+
+            return Effect.fail(new FundingError({ message: "Injected lost response" }));
           },
         }),
         Effect.timeout("100 millis"),

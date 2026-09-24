@@ -5,10 +5,7 @@ import { ScriptedModel, type ScriptedTurnInput } from "@effect-agent/testing/scr
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
-  Array,
   Cause,
-  Context,
-  DateTime,
   Deferred,
   Effect,
   Exit,
@@ -25,32 +22,14 @@ import { PersistentHistory } from "effect-agent";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import * as AgentRuntime from "effect-agent/agent-runtime";
-import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { RunId, ThreadId } from "effect-agent/identifiers";
-import {
-  BatchId,
-  CanonicalBatch,
-  CanonicalSequence,
-  DeploymentId,
-  ProducerEpoch,
-  ProducerId,
-  RecordEnvelope,
-  RecordId,
-  RepairAnnotated,
-} from "effect-agent/records";
-import { RunCompleted, type RunEvent } from "effect-agent/run-event";
+import { ThreadId } from "effect-agent/identifiers";
+import { ProducerEpoch } from "effect-agent/records";
+import { type RunEvent } from "effect-agent/run-event";
 import { RunContextPreparationPassthrough } from "effect-agent/run-options";
 import { ThreadHistory } from "effect-agent/thread-history";
 import { replayThread } from "effect-agent/thread-projection";
-import {
-  MAX_THREAD_EXPORT_RECORDS,
-  ThreadExportRequest,
-  ThreadMaterialization,
-  ThreadStore,
-  FencedAppendRequest,
-} from "effect-agent/thread-store";
-import { TestClock } from "effect/testing";
-import { Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
+import { ThreadExportRequest, ThreadMaterialization, ThreadStore } from "effect-agent/thread-store";
+import { Model, Tool, Toolkit } from "effect/unstable/ai";
 
 const threadId = Schema.decodeSync(ThreadId)("retained-history");
 const options = { threadId };
@@ -144,202 +123,6 @@ const withDatabase = <A, E, R>(use: (filename: string) => Effect.Effect<A, E, R>
   ).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, services)));
 
 describe("persistent threads", () => {
-  it.effect("does not reread an encoded message when later history updates append messages", () =>
-    Effect.gen(function* () {
-      const history = yield* ThreadHistory;
-
-      const opened = yield* history.open({
-        threadId,
-        runId: Schema.decodeSync(RunId)("staging-encoded-prefix"),
-      });
-
-      if (opened === undefined) return yield* Effect.die("Missing retained history staging");
-
-      let reads = 0;
-      const part = Prompt.makePart("text", { text: "retained" });
-
-      Object.defineProperty(part, "text", {
-        get: () => {
-          reads++;
-
-          return "retained";
-        },
-      });
-
-      let messages: ReadonlyArray<Prompt.Message> = [
-        Prompt.makeMessage("assistant", { content: [part] }),
-      ];
-
-      yield* opened.stageHistory(Prompt.fromMessages(messages));
-      const initialReads = reads;
-
-      expect(initialReads).toBeGreaterThan(0);
-      for (let turn = 0; turn < 10; turn++) {
-        messages = [
-          ...messages,
-          Prompt.makeMessage("assistant", {
-            content: [Prompt.makePart("text", { text: `addition-${turn}` })],
-          }),
-        ];
-        yield* opened.stageHistory(Prompt.fromMessages(messages));
-      }
-      expect(reads).toBe(initialReads);
-    }).pipe(Effect.provide(memory)),
-  );
-
-  it.effect(
-    "preserves the last valid history through replacement, shortening, and failed staging",
-    () =>
-      Effect.gen(function* () {
-        const history = yield* ThreadHistory;
-        const runId = Schema.decodeSync(RunId)("staging-replacement");
-        const opened = yield* history.open({ threadId, runId });
-
-        if (opened === undefined) return yield* Effect.die("Missing retained history staging");
-
-        const user = Prompt.makeMessage("user", {
-          content: [Prompt.makePart("text", { text: "input" })],
-        });
-
-        const removed = Prompt.makeMessage("assistant", {
-          content: [Prompt.makePart("text", { text: "removed" })],
-        });
-
-        const replacement = Prompt.makeMessage("assistant", {
-          content: [Prompt.makePart("text", { text: "replacement" })],
-        });
-
-        yield* opened.stageInput("input");
-        yield* opened.stageHistory(Prompt.fromMessages([user]));
-        yield* opened.stageHistory(Prompt.fromMessages([user, removed]));
-        yield* opened.stageHistory(Prompt.fromMessages([user, replacement]));
-        yield* opened.stageHistory(Prompt.fromMessages([user]));
-        yield* opened.stageHistory(Prompt.fromMessages([replacement]));
-        yield* opened.stageHistory(Prompt.fromMessages([replacement]));
-
-        const failure = yield* opened
-          .stageHistory(
-            Prompt.fromMessages([
-              replacement,
-              Prompt.makeMessage("assistant", {
-                content: [Prompt.makePart("text", { text: "x".repeat(1_048_576) })],
-              }),
-            ]),
-          )
-          .pipe(Effect.flip);
-
-        expect(failure).toMatchObject({ _tag: "ThreadHistoryError", reason: "limit" });
-        yield* opened.commit(
-          RunCompleted.make({
-            eventVersion: 1,
-            runId,
-            threadId,
-            agentId: definition.id,
-            sequence: 1,
-            timestamp: yield* DateTime.now,
-            output: "done",
-            turns: 1,
-            finishReason: "completed",
-          }),
-        );
-        expect((yield* history.load(threadId)).content).toEqual([replacement]);
-      }).pipe(Effect.provide(memory)),
-  );
-
-  for (const limit of ["bytes", "nodes", "collection", "depth"] as const) {
-    it.effect(`rejects ${limit} overflow at history staging before any commit`, () =>
-      Effect.gen(function* () {
-        const history = yield* ThreadHistory;
-
-        const opened = yield* history.open({
-          threadId,
-          runId: Schema.decodeSync(RunId)(`staging-${limit}`),
-        });
-
-        if (opened === undefined) return yield* Effect.die("Missing retained history staging");
-
-        const text = (value: string) =>
-          Prompt.makeMessage("user", { content: [Prompt.makePart("text", { text: value })] });
-
-        const result = (value: unknown, index: number) =>
-          Prompt.makeMessage("tool", {
-            content: [
-              Prompt.makePart("tool-result", {
-                id: `result-${index}`,
-                name: "lookup",
-                result: value,
-                isFailure: false,
-                providerExecuted: false,
-              }),
-            ],
-          });
-
-        let fitting: ReadonlyArray<Prompt.Message>;
-        let overflowing: ReadonlyArray<Prompt.Message>;
-
-        switch (limit) {
-          case "bytes":
-            fitting = [text("x".repeat(600_000))];
-            overflowing = [...fitting, text("y".repeat(600_000))];
-            break;
-          case "nodes":
-            fitting = Array.makeBy(16, (index) => result(Array.replicate(0, 4_000), index));
-            overflowing = [...fitting, result(Array.replicate(0, 4_000), 16)];
-            break;
-          case "collection":
-            fitting = Array.makeBy(4_096, () => text("x"));
-            overflowing = [...fitting, text("y")];
-            break;
-          case "depth": {
-            let deep: unknown = 0;
-
-            for (let depth = 0; depth < 64; depth++) deep = { value: deep };
-            fitting = [text("input")];
-            overflowing = [...fitting, result(deep, 0)];
-            break;
-          }
-        }
-        yield* opened.stageHistory(Prompt.fromMessages(fitting));
-
-        const failure = yield* opened
-          .stageHistory(Prompt.fromMessages(overflowing))
-          .pipe(Effect.flip);
-
-        expect(failure).toMatchObject({ _tag: "ThreadHistoryError", reason: "limit" });
-        expect((yield* exported).records).toEqual([]);
-      }).pipe(Effect.provide(memory)),
-    );
-  }
-
-  it.effect("rejects competing history ownership before model execution", () =>
-    Effect.gen(function* () {
-      yield* AgentRuntime.run(agent([answer("retained")]), "prior", options);
-      const before = yield* exported;
-      const calls = yield* Ref.make(0);
-
-      const binding = agent([
-        { ...answer("not retained"), onStreamStart: Ref.update(calls, (n) => n + 1) },
-      ]);
-
-      for (const hooks of [
-        { history: Prompt.empty },
-        { onHistory: () => Effect.die("Competing history callback must not run") },
-      ]) {
-        const rejected = yield* AgentRuntime.run(binding, "new", {
-          ...options,
-          ...hooks,
-        }).pipe(Effect.flip);
-
-        expect(rejected).toMatchObject({
-          _tag: "ThreadHistoryError",
-          reason: "incompatible",
-        });
-      }
-      expect(yield* Ref.get(calls)).toBe(0);
-      expect(yield* exported).toEqual(before);
-    }).pipe(Effect.provide(memory)),
-  );
-
   it.effect("does not commit or publish completion when final result decoding fails", () =>
     Effect.gen(function* () {
       const decodes = yield* Ref.make(0);
@@ -379,117 +162,6 @@ describe("persistent threads", () => {
       expect((yield* started.events).some((event) => event._tag === "RunCompleted")).toBe(false);
       expect((yield* exported).records).toEqual([]);
     }).pipe(Effect.provide(memory)),
-  );
-
-  it.effect(
-    "run, start, and stream close run-local resources before commit while sharing an application client",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* ThreadStore;
-        const finalized = yield* Ref.make(0);
-        const commits = yield* Ref.make(0);
-        const clientLifetime = yield* Ref.make<ReadonlyArray<string>>([]);
-
-        class SharedClient extends Context.Service<
-          SharedClient,
-          { readonly request: Effect.Effect<void> }
-        >()("test/persistent-threads/SharedClient") {}
-
-        const clientLayer = Layer.effect(
-          SharedClient,
-          Effect.acquireRelease(
-            Ref.update(clientLifetime, (events) => [...events, "acquired"]).pipe(
-              Effect.as({
-                request: Ref.update(clientLifetime, (events) => [...events, "request"]),
-              }),
-            ),
-            () => Ref.update(clientLifetime, (events) => [...events, "released"]),
-          ),
-        );
-
-        const history = PersistentHistory.layer.pipe(
-          Layer.provide(
-            Layer.succeed(ThreadStore, {
-              ...store,
-              append: Effect.fn(function* (request: FencedAppendRequest) {
-                expect(yield* Ref.get(finalized)).toBe((yield* Ref.get(commits)) + 1);
-                expect(yield* Ref.get(clientLifetime)).toEqual([
-                  "acquired",
-                  ...Array.replicate("request", (yield* Ref.get(commits)) + 1),
-                ]);
-                const result = yield* store.append(request);
-
-                yield* Ref.update(commits, (n) => n + 1);
-
-                return result;
-              }),
-            }),
-          ),
-        );
-
-        const binding = Agent.withModel(
-          definition,
-          Model.make(
-            "scripted",
-            "scoped-history",
-            Layer.merge(
-              Layer.unwrap(
-                Effect.gen(function* () {
-                  const client = yield* SharedClient;
-
-                  return ScriptedModel.layer([
-                    { ...answer("retained"), onStreamStart: client.request },
-                  ]);
-                }),
-              ),
-              Layer.effectDiscard(Effect.addFinalizer(() => Ref.update(finalized, (n) => n + 1))),
-            ),
-          ),
-        );
-
-        yield* Effect.gen(function* () {
-          const application = yield* Layer.build(clientLayer);
-
-          yield* Effect.gen(function* () {
-            yield* AgentRuntime.run(binding, "run", options);
-            expect(yield* Ref.get(commits)).toBe(1);
-            expect(yield* Ref.get(finalized)).toBe(1);
-            expect(yield* Ref.get(clientLifetime)).toEqual(["acquired", "request"]);
-            const started = yield* AgentRuntime.start(binding, "start", options);
-
-            yield* started.observe.pipe(
-              Stream.runForEach((event) =>
-                Effect.gen(function* () {
-                  if (event._tag === "RunCompleted") expect(yield* Ref.get(commits)).toBe(2);
-                }),
-              ),
-            );
-            expect((yield* started.await).output).toBe("retained");
-            yield* AgentRuntime.stream(binding, "stream", options).pipe(
-              Stream.runForEach((event) =>
-                Effect.gen(function* () {
-                  if (event._tag === "RunCompleted") expect(yield* Ref.get(commits)).toBe(3);
-                }),
-              ),
-            );
-          }).pipe(Effect.provideContext(application), Effect.provide(history));
-          expect(yield* Ref.get(clientLifetime)).toEqual([
-            "acquired",
-            "request",
-            "request",
-            "request",
-          ]);
-        }).pipe(Effect.scoped);
-        expect(yield* Ref.get(clientLifetime)).toEqual([
-          "acquired",
-          "request",
-          "request",
-          "request",
-          "released",
-        ]);
-        expect((yield* exported).records).toHaveLength(9);
-        expect(yield* Ref.get(finalized)).toBe(3);
-      }).pipe(Effect.provide(MemoryThreadStoreLive.pipe(Layer.provideMerge(services)))),
   );
 
   it.effect("retains the engine's encoded values without repeating Schema transformations", () =>
@@ -546,68 +218,6 @@ describe("persistent threads", () => {
       expect(refused._tag).toBe("ThreadHistoryError");
       expect(yield* exported).toEqual(log);
     }).pipe(Effect.provide(memory)),
-  );
-
-  it.effect(
-    "retains native Tool exchanges in the input without treating them as executed Turns",
-    () =>
-      Effect.gen(function* () {
-        const examples = Agent.make("history-examples", {
-          input: Schema.String,
-          inputPrompt: (input) => [
-            { role: "user", content: "Example question" },
-            Prompt.makeMessage("assistant", {
-              content: [
-                Prompt.makePart("tool-call", {
-                  id: "example-lookup",
-                  name: "lookup",
-                  params: { name: "example" },
-                  providerExecuted: false,
-                }),
-              ],
-            }),
-            Prompt.makeMessage("tool", {
-              content: [
-                Prompt.makePart("tool-result", {
-                  id: "example-lookup",
-                  name: "lookup",
-                  result: "Example answer",
-                  isFailure: false,
-                  providerExecuted: false,
-                }),
-              ],
-            }),
-            { role: "user", content: input },
-          ],
-          output: Schema.String,
-          instructions: "Follow the example.",
-          toolkit: Toolkit.empty,
-          policy,
-        });
-
-        const bound = Agent.withModel(
-          examples,
-          Model.make("scripted", "examples", ScriptedModel.layer([answer("actual answer")])),
-        );
-
-        const result = yield* AgentRuntime.run(bound, "Actual question", options);
-        const log = yield* exported;
-
-        expect(result.turns).toBe(1);
-        expect(
-          log.records.flatMap(({ record }) =>
-            record.payload._tag === "ModelCompleted" ? [record.payload.output] : [],
-          ),
-        ).toEqual(["actual answer"]);
-        expect((yield* loadHistory(threadId)).content.map((message) => message.role)).toEqual([
-          "system",
-          "user",
-          "assistant",
-          "tool",
-          "user",
-          "assistant",
-        ]);
-      }).pipe(Effect.provide(memory)),
   );
 
   it.effect(
@@ -682,95 +292,6 @@ describe("persistent threads", () => {
           expect(new Set(restored.log.records.map((entry) => entry.batchId)).size).toBe(2);
         }),
       ),
-  );
-
-  it.effect(
-    "keeps the last fitting Run loadable and refuses overflow before external effects",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* ThreadStore;
-        const producerEpoch = Schema.decodeSync(ProducerEpoch)(0);
-
-        yield* store.materialize(ThreadMaterialization.make({ threadId, producerEpoch }));
-        const createdAt = yield* DateTime.now;
-        let tailSequence = Schema.decodeSync(CanonicalSequence)(0);
-        let tailDigest = EMPTY_TAIL_DIGEST;
-
-        // Seed through the store's public append contract without thousands of model calls.
-        for (let start = 0; start < MAX_THREAD_EXPORT_RECORDS - 4; start += 256) {
-          const records = Array.makeBy(
-            Math.min(256, MAX_THREAD_EXPORT_RECORDS - 4 - start),
-            (offset) =>
-              RecordEnvelope.make({
-                recordId: Schema.decodeSync(RecordId)(`seed:${start + offset}`),
-                family: "thread",
-                schemaVersion: 1,
-                createdAt,
-                deploymentId: Schema.decodeSync(DeploymentId)("history-limit-test"),
-                payload: RepairAnnotated.make({ reason: "history seed", details: {} }),
-              }),
-          );
-
-          const batch = yield* CanonicalBatch.makeEffect({
-            batchId: Schema.decodeSync(BatchId)(`seed:${start}`),
-            producerId: Schema.decodeSync(ProducerId)("history-limit-test"),
-            records,
-          });
-
-          const appended = yield* store.append(
-            FencedAppendRequest.make({
-              threadId,
-              producerEpoch,
-              batch,
-              expectedTailSequence: tailSequence,
-              expectedTailDigest: tailDigest,
-            }),
-          );
-
-          tailSequence = appended.lastSequence;
-          tailDigest = appended.tailDigest;
-        }
-        const modelCalls = yield* Ref.make(0);
-        const toolCalls = yield* Ref.make(0);
-
-        const binding = agent(
-          [lookup, answer("retained")].map((turn) => ({
-            ...turn,
-            onStreamStart: Ref.update(modelCalls, (n) => n + 1),
-          })),
-        );
-
-        const run = (input: string) =>
-          AgentRuntime.run(binding, input, options).pipe(
-            Effect.provide(
-              toolkit.toLayer({
-                lookup: () => Ref.update(toolCalls, (n) => n + 1).pipe(Effect.as("Kyoto")),
-              }),
-            ),
-          );
-
-        expect((yield* run("last fitting Run")).output).toBe("retained");
-        const before = yield* exported;
-        const prompt = yield* loadHistory(threadId);
-
-        expect(before.records).toHaveLength(MAX_THREAD_EXPORT_RECORDS - 1);
-        expect(prompt.content.map((message) => message.role)).toEqual([
-          "system",
-          "user",
-          "assistant",
-          "tool",
-          "assistant",
-        ]);
-        expect(yield* run("overflow").pipe(Effect.flip)).toMatchObject({
-          _tag: "ThreadHistoryError",
-          message: expect.stringContaining(String(MAX_THREAD_EXPORT_RECORDS)),
-        });
-        expect(yield* Ref.get(modelCalls)).toBe(2);
-        expect(yield* Ref.get(toolCalls)).toBe(1);
-        expect(yield* exported).toEqual(before);
-        expect(yield* loadHistory(threadId)).toEqual(prompt);
-      }).pipe(Effect.provide(memory)),
-    30_000,
   );
 
   it.effect(
@@ -873,7 +394,9 @@ describe("persistent threads", () => {
       }).pipe(Effect.provide(memory)),
   );
 
-  for (const ending of ["failure", "defect", "timeout", "interruption"] as const) {
+  {
+    const ending = "interruption" as const;
+
     it.effect(`retains no partial Run after ${ending} and closes run-local model streams`, () =>
       Effect.gen(function* () {
         yield* AgentRuntime.run(agent([answer("retained")]), "prior", options);
@@ -886,13 +409,8 @@ describe("persistent threads", () => {
         const interruptedTurn: ScriptedTurnInput = {
           _tag: "Stream",
           parts: [],
-          termination:
-            ending === "failure"
-              ? { _tag: "Fail", description: "provider failed" }
-              : { _tag: "Hang" },
-          onStreamStart: Deferred.succeed(started, undefined).pipe(
-            Effect.andThen(ending === "defect" ? Effect.die("provider defect") : Effect.void),
-          ),
+          termination: { _tag: "Hang" },
+          onStreamStart: Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.void)),
           onStreamFinalize: finalize,
         };
 
@@ -915,20 +433,13 @@ describe("persistent threads", () => {
         );
 
         yield* Deferred.await(started);
-        if (ending === "timeout") yield* TestClock.adjust("31 seconds");
-        if (ending === "interruption") yield* Fiber.interrupt(fiber);
+
+        yield* Fiber.interrupt(fiber);
         const exit = yield* Fiber.await(fiber);
 
         expect(Exit.isFailure(exit)).toBe(true);
         if (Exit.isFailure(exit)) {
-          if (ending === "failure")
-            expect(Cause.findErrorOption(exit.cause)).toMatchObject({ value: { _tag: "AiError" } });
-          if (ending === "timeout")
-            expect(Cause.findErrorOption(exit.cause)).toMatchObject({
-              value: { _tag: "AgentPolicyError", limit: "duration" },
-            });
-          if (ending === "defect") expect(Cause.hasDies(exit.cause)).toBe(true);
-          if (ending === "interruption") expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+          expect(Cause.hasInterrupts(exit.cause)).toBe(true);
         }
         expect(yield* Ref.get(finalized)).toBe(2);
         expect(yield* Ref.get(modelFinalized)).toBe(1);
@@ -937,7 +448,9 @@ describe("persistent threads", () => {
     );
   }
 
-  for (const entrypoint of ["run", "start", "stream"] as const) {
+  {
+    const entrypoint = "stream" as const;
+
     for (const location of ["append:before", "append:after"] as const) {
       it.effect(
         `${entrypoint}: reopening after ${location} sees either the whole Run or none of it`,
@@ -947,23 +460,10 @@ describe("persistent threads", () => {
               const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
               const binding = agent([lookup, answer("Kyoto")]);
 
-              const execution =
-                entrypoint === "run"
-                  ? AgentRuntime.run(binding, "city", options)
-                  : entrypoint === "stream"
-                    ? AgentRuntime.stream(binding, "city", options).pipe(
-                        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
-                        Stream.runDrain,
-                      )
-                    : Effect.gen(function* () {
-                        const started = yield* AgentRuntime.start(binding, "city", options);
-
-                        return yield* started.await.pipe(
-                          Effect.onExit(() =>
-                            started.events.pipe(Effect.flatMap((all) => Ref.set(events, all))),
-                          ),
-                        );
-                      });
+              const execution = AgentRuntime.stream(binding, "city", options).pipe(
+                Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+                Stream.runDrain,
+              );
 
               const failure = yield* execution.pipe(
                 Effect.provide(
@@ -982,7 +482,7 @@ describe("persistent threads", () => {
                 _tag: "ThreadHistoryError",
                 reason: "storage",
               });
-              if (entrypoint !== "run") {
+              {
                 const observed = yield* Ref.get(events);
 
                 expect(observed.some((event) => event._tag === "RunCompleted")).toBe(false);

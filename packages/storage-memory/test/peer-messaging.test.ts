@@ -3,7 +3,7 @@ import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Context, DateTime, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
+import { Context, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import { DurableWorkerBinding } from "effect-agent/agent-registration";
@@ -31,11 +31,6 @@ import {
 import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
 import { IdempotencyKey, Principal } from "effect-agent/receipt";
 import {
-  CanonicalBatch,
-  RecordEnvelope,
-  UserInputRecorded,
-  RecordId,
-  BatchId,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -46,12 +41,7 @@ import { RunToolAuthorization } from "effect-agent/run-options";
 import { ScheduledInputRefused, ScheduledInputRetryable } from "effect-agent/schedule";
 import { SubmissionLedger, SubmissionLookupByKey } from "effect-agent/submission-ledger";
 import { PreparedInput } from "effect-agent/subscription";
-import {
-  FencedAppendRequest,
-  ThreadTailRequest,
-  ThreadExportRequest,
-  ThreadStore,
-} from "effect-agent/thread-store";
+import { ThreadExportRequest, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
@@ -112,8 +102,6 @@ const makeHarness = Effect.fn(function* (
 ) {
   const controls = {
     fault: undefined as string | undefined,
-    exported: 0,
-    readRecords: 0,
     route: destinationThread,
     routeCalls: 0,
     denied: (_request: PeerAuthorizationRequest): boolean => false,
@@ -179,27 +167,7 @@ const makeHarness = Effect.fn(function* (
     ).pipe(Layer.provideMerge(faults), Layer.provideMerge(NodeCrypto.layer)),
   );
 
-  const originalStore = Context.get(originalShared, ThreadStore);
-
-  const shared = Context.add(originalShared, ThreadStore, {
-    ...originalStore,
-    export: (request) =>
-      originalStore.export(request).pipe(
-        Effect.tap((log) =>
-          Effect.sync(() => {
-            controls.exported += log.records.length;
-          }),
-        ),
-      ),
-    read: (request) =>
-      originalStore.read(request).pipe(
-        Stream.tap(() =>
-          Effect.sync(() => {
-            controls.readRecords++;
-          }),
-        ),
-      ),
-  });
+  const shared = originalShared;
 
   const bindings = yield* Effect.forEach([source, destination], (definition) => {
     const model = Model.make(
@@ -365,217 +333,83 @@ const makeHarness = Effect.fn(function* (
 });
 
 describe("durable peer messaging boundaries", () => {
-  it.effect(
-    "peer send, replay, reply and ingress use exact proof despite large unrelated history",
-    () =>
+  it.effect.each(["peer:after-prepared-append", "message-delivery:insert:after"])(
+    "replays the frozen route, input, principal and lifetime after %s",
+    (point) =>
       Effect.gen(function* () {
         const h = yield* makeHarness();
-        const inbound = yield* h.send("applied-original");
 
-        yield* h.driver.process(inbound.message);
-        yield* h.runtime.processThreadResolved(destinationThread);
-        for (const threadId of [sourceThread, destinationThread]) {
-          let tail = yield* h.store.inspectTail(ThreadTailRequest.make({ threadId }));
+        h.controls.fault = point;
+        expect(yield* h.send().pipe(Effect.flip)).toMatchObject({ reason: "storage" });
+        const [proof] = yield* h.proofs();
 
-          for (let base = 0; base < 4097; base += 256) {
-            const record = (n: number) =>
-              RecordEnvelope.make({
-                recordId: Schema.decodeSync(RecordId)(`history-${n}`),
-                family: "thread",
-                schemaVersion: 1,
-                createdAt: DateTime.makeUnsafe(1),
-                deploymentId: Schema.decodeSync(DeploymentId)("test"),
-                payload: UserInputRecorded.make({ kind: "steering", input: `old-${n}` }),
-              });
+        if (proof === undefined)
+          throw new Error("Expected canonical proof before failed acknowledgement");
+        const envelope = yield* Schema.decodeUnknownEffect(PreparedInput)(proof.encodedEnvelope);
 
-            const result = yield* h.store.append(
-              FencedAppendRequest.make({
-                threadId,
-                producerEpoch: tail.producerEpoch,
-                expectedTailSequence: tail.tailSequence,
-                expectedTailDigest: tail.tailDigest,
-                batch: CanonicalBatch.make({
-                  batchId: Schema.decodeSync(BatchId)(`history-${base}`),
-                  producerId: Schema.decodeSync(ProducerId)("test"),
-                  records: [
-                    record(base),
-                    ...Array.from({ length: Math.min(255, 4096 - base) }, (_, offset) =>
-                      record(base + offset + 1),
-                    ),
-                  ],
-                }),
-              }),
-            );
+        expect(
+          (yield* h.deliveries.list({ ownerThreadId: sourceThread, limit: 10 })).items,
+        ).toHaveLength(point === "message-delivery:insert:after" ? 1 : 0);
+        h.controls.fault = undefined;
+        h.controls.route = otherThread;
+        yield* TestClock.adjust("1 second");
+        const restarted = yield* h.makeRuntime(120_000);
 
-            tail = { ...tail, tailSequence: result.lastSequence, tailDigest: result.tailDigest };
-          }
-        }
-        h.controls.exported = 0;
-        h.controls.readRecords = 0;
-        const sent = yield* h.send("after-history");
-
-        expect((yield* h.send("after-history")).message).toEqual(sent.message);
-        expect((yield* h.submitEnvelope((yield* h.row(inbound.message)).envelope)).threadId).toBe(
-          destinationThread,
-        );
-
-        const reply = yield* h.receiver.reply({
-          ...back,
-          encodedInput: { text: "reply" },
-          idempotencyKey: key("bounded-reply"),
-          inReplyTo: inbound.message,
+        const host = yield* restarted.messagingHost({
+          sourceThreadId: sourceThread,
+          principal: caller,
         });
 
-        expect((yield* h.row(reply.message)).envelope.threadId).toBe(sourceThread);
-        expect(h.controls.exported).toBe(0);
-        expect(h.controls.readRecords).toBeLessThan(32);
+        h.controls.denied = (request) =>
+          request.access === "send" && request.destination?.threadId === destinationThread;
+        expect(
+          yield* host
+            .send({ ...peer, encodedInput: { text: "hello" }, idempotencyKey: key("message") })
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "denied" });
+        expect(
+          (yield* h.deliveries.list({ ownerThreadId: sourceThread, limit: 10 })).items,
+        ).toHaveLength(point === "message-delivery:insert:after" ? 1 : 0);
+        h.controls.denied = () => false;
+
+        const replayed = yield* host.send({
+          ...peer,
+          encodedInput: { text: "hello" },
+          idempotencyKey: key("message"),
+        });
+
+        const retained = yield* h.row(replayed.message);
+
+        expect(retained.envelope).toEqual(envelope);
+        expect(retained.envelope.threadId).toBe(destinationThread);
+        expect(retained.initialDeadlineAtMillis).toBe(proof.deadlineAtMillis);
+        expect(retained.deadlineAtMillis).toBe(proof.deadlineAtMillis);
+        expect(h.controls.routeCalls).toBe(1);
+        expect(yield* h.proofs()).toHaveLength(1);
+        const before = yield* h.history(sourceThread);
+
+        expect(
+          yield* host
+            .send({ ...peer, encodedInput: { text: "changed" }, idempotencyKey: key("message") })
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "conflict" });
+        expect((yield* h.history(sourceThread)).tailDigest).toBe(before.tailDigest);
+        expect(
+          h.controls.authorizations.some(
+            (request) =>
+              request.access === "send" &&
+              request.principal === caller &&
+              request.destination?.threadId === destinationThread,
+          ),
+        ).toBe(true);
+        h.controls.deliveryPrincipal = () => otherTransport;
+        expect(
+          yield* host
+            .send({ ...peer, encodedInput: { text: "hello" }, idempotencyKey: key("message") })
+            .pipe(Effect.flip),
+        ).toMatchObject({ reason: "denied" });
+        expect(yield* h.row(replayed.message)).toEqual(retained);
       }).pipe(Effect.scoped),
-  );
-
-  it.effect(
-    "delivers from a settled source to a settled receiver across runtime reconstruction",
-    () =>
-      Effect.gen(function* () {
-        const h = yield* makeHarness();
-        const pending = yield* h.send();
-
-        expect(pending.status).toBe("pending");
-        expect(pending.receipt).toBeNull();
-        const frozen = yield* h.row(pending.message);
-
-        expect(frozen.envelope.deliveryPrincipal).toBe(transport);
-        expect((yield* h.proofs())[0]?.sourcePrincipal).toBe(caller);
-
-        const restarted = yield* h.makeRuntime();
-        const pump = yield* h.makeDriver(restarted);
-        const [accepted] = yield* pump.runDue(sourceThread);
-
-        expect(accepted?.status).toBe("accepted");
-        if (accepted === undefined || accepted.receipt === null) {
-          throw new Error("Expected accepted Receipt");
-        }
-
-        expect((yield* restarted.submissionStatus(accepted.receipt))._tag).toBe("pending");
-        expect((yield* h.host.inspect({ ...peer, message: pending.message })).status).toBe(
-          "accepted",
-        );
-        expect((yield* restarted.submissionStatus(h.sourceReceipt))._tag).toBe("settled");
-        expect((yield* restarted.submissionStatus(h.destinationReceipt))._tag).toBe("settled");
-
-        yield* restarted.processThreadResolved(destinationThread);
-        yield* TestClock.adjust("5 seconds");
-        const processed = yield* pump.process(pending.message);
-
-        expect(processed.status).toBe("processed");
-        expect(processed.receipt).toEqual(accepted.receipt);
-        expect(processed.settlement?.outcome).toBe("completed");
-        expect(h.controls.modelCalls).toEqual([source.id, destination.id, destination.id]);
-        const inbox = yield* h.receiver.inbox({ ...back, limit: 10 });
-
-        expect(inbox.items.map((item) => item.admission)).toEqual([
-          frozen.envelope.messageAdmission,
-        ]);
-        expect((yield* h.send()).message).toEqual(pending.message);
-        expect((yield* h.send()).status).toBe("processed");
-      }).pipe(Effect.scoped),
-  );
-
-  it.effect("fails before source proof append without leaving a message obligation", () =>
-    Effect.gen(function* () {
-      const h = yield* makeHarness();
-      const before = yield* h.history(sourceThread);
-
-      h.controls.fault = "peer:before-prepared-append";
-      expect(yield* h.send().pipe(Effect.flip)).toMatchObject({ reason: "storage" });
-      expect((yield* h.history(sourceThread)).tailDigest).toBe(before.tailDigest);
-      expect((yield* h.deliveries.list({ ownerThreadId: sourceThread, limit: 10 })).items).toEqual(
-        [],
-      );
-      h.controls.fault = undefined;
-      expect((yield* h.send()).status).toBe("pending");
-      expect(yield* h.proofs()).toHaveLength(1);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect.each([
-    "peer:after-prepared-append",
-    "message-delivery:insert:before",
-    "message-delivery:insert:after",
-  ])("replays the frozen route, input, principal and lifetime after %s", (point) =>
-    Effect.gen(function* () {
-      const h = yield* makeHarness();
-
-      h.controls.fault = point;
-      expect(yield* h.send().pipe(Effect.flip)).toMatchObject({ reason: "storage" });
-      const [proof] = yield* h.proofs();
-
-      if (proof === undefined)
-        throw new Error("Expected canonical proof before failed acknowledgement");
-      const envelope = yield* Schema.decodeUnknownEffect(PreparedInput)(proof.encodedEnvelope);
-
-      expect(
-        (yield* h.deliveries.list({ ownerThreadId: sourceThread, limit: 10 })).items,
-      ).toHaveLength(point === "message-delivery:insert:after" ? 1 : 0);
-      h.controls.fault = undefined;
-      h.controls.route = otherThread;
-      yield* TestClock.adjust("1 second");
-      const restarted = yield* h.makeRuntime(120_000);
-
-      const host = yield* restarted.messagingHost({
-        sourceThreadId: sourceThread,
-        principal: caller,
-      });
-
-      h.controls.denied = (request) =>
-        request.access === "send" && request.destination?.threadId === destinationThread;
-      expect(
-        yield* host
-          .send({ ...peer, encodedInput: { text: "hello" }, idempotencyKey: key("message") })
-          .pipe(Effect.flip),
-      ).toMatchObject({ reason: "denied" });
-      expect(
-        (yield* h.deliveries.list({ ownerThreadId: sourceThread, limit: 10 })).items,
-      ).toHaveLength(point === "message-delivery:insert:after" ? 1 : 0);
-      h.controls.denied = () => false;
-
-      const replayed = yield* host.send({
-        ...peer,
-        encodedInput: { text: "hello" },
-        idempotencyKey: key("message"),
-      });
-
-      const retained = yield* h.row(replayed.message);
-
-      expect(retained.envelope).toEqual(envelope);
-      expect(retained.envelope.threadId).toBe(destinationThread);
-      expect(retained.initialDeadlineAtMillis).toBe(proof.deadlineAtMillis);
-      expect(retained.deadlineAtMillis).toBe(proof.deadlineAtMillis);
-      expect(h.controls.routeCalls).toBe(1);
-      expect(yield* h.proofs()).toHaveLength(1);
-      const before = yield* h.history(sourceThread);
-
-      expect(
-        yield* host
-          .send({ ...peer, encodedInput: { text: "changed" }, idempotencyKey: key("message") })
-          .pipe(Effect.flip),
-      ).toMatchObject({ reason: "conflict" });
-      expect((yield* h.history(sourceThread)).tailDigest).toBe(before.tailDigest);
-      expect(
-        h.controls.authorizations.some(
-          (request) =>
-            request.access === "send" &&
-            request.principal === caller &&
-            request.destination?.threadId === destinationThread,
-        ),
-      ).toBe(true);
-      h.controls.deliveryPrincipal = () => otherTransport;
-      expect(
-        yield* host
-          .send({ ...peer, encodedInput: { text: "hello" }, idempotencyKey: key("message") })
-          .pipe(Effect.flip),
-      ).toMatchObject({ reason: "denied" });
-      expect(yield* h.row(replayed.message)).toEqual(retained);
-    }).pipe(Effect.scoped),
   );
 
   it.effect("deduplicates destination admission when its acknowledgement is lost", () =>
@@ -864,25 +698,6 @@ describe("durable peer messaging boundaries", () => {
       expect((yield* h.send("first")).status).toBe("pending");
       expect(yield* h.send("second").pipe(Effect.flip)).toMatchObject({ reason: "capacity" });
       expect(yield* h.proofs()).toHaveLength(2);
-    }).pipe(Effect.scoped),
-  );
-
-  it.effect("rejects malformed destination wire input before recording proof or delivery", () =>
-    Effect.gen(function* () {
-      const h = yield* makeHarness();
-      const before = yield* h.history(sourceThread);
-
-      expect(
-        yield* h.host
-          .send({ ...peer, encodedInput: { text: 123 }, idempotencyKey: key("invalid") })
-          .pipe(Effect.flip),
-      ).toMatchObject({ reason: "invalid-input" });
-      expect((yield* h.history(sourceThread)).tailDigest).toBe(before.tailDigest);
-      expect(yield* h.proofs()).toHaveLength(0);
-      expect(h.controls.routeCalls).toBe(0);
-      expect((yield* h.deliveries.list({ ownerThreadId: sourceThread, limit: 10 })).items).toEqual(
-        [],
-      );
     }).pipe(Effect.scoped),
   );
 

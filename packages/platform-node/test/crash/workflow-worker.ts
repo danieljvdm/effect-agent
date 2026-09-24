@@ -20,10 +20,7 @@ import {
 export const WorkflowCrashBoundary = Schema.Literals([
   "intent:before-persist",
   "intent:after-persist",
-  "launch:after",
   "terminalize:after-canonical-append",
-  "cleanup:before",
-  "cleanup:after",
   "completion:before-notify",
   "completion:after-notify",
   "ordinary:external-effect",

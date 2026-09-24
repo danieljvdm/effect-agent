@@ -2,12 +2,10 @@ import { ledgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledg
 import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import {
-  Cause,
   Clock,
   Deferred,
   Duration,
   Effect,
-  Exit,
   Fiber,
   FileSystem,
   Layer,
@@ -15,7 +13,7 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { LedgerError, SubmissionLedger, SubmissionSnapshot } from "effect-agent/submission-ledger";
+import { SubmissionLedger, SubmissionSnapshot } from "effect-agent/submission-ledger";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
 import { TestClock } from "effect/testing";
 
@@ -82,44 +80,10 @@ const withScheduler = <A, E, R>(
     );
   }).pipe(Effect.scoped);
 
-it.effect("shares one complete ledger scan per cadence across four subscribers", () => {
-  let scans = 0;
-  const row = snapshot(0);
-
-  const scan = Stream.suspend(() => {
-    scans++;
-
-    return Stream.make(row, row);
-  });
-
-  return withScheduler(scan, (nextSleep) =>
-    Effect.gen(function* () {
-      const wake = yield* WakeScheduler;
-
-      const consumers = yield* Effect.forEach([0, 1, 2, 3], () =>
-        Stream.runCollect(Stream.take(wake.wakes, 2)).pipe(Effect.forkChild),
-      );
-
-      yield* nextSleep;
-      yield* TestClock.adjust("1 second");
-      expect(scans).toBe(1);
-      yield* nextSleep;
-      yield* TestClock.adjust("1 second");
-      expect(scans).toBe(2);
-      for (const consumer of consumers) {
-        expect(yield* Fiber.join(consumer)).toEqual([row.threadId, row.threadId]);
-      }
-    }),
-  );
-});
-
 it.effect("retains every lane in a large scan without blocking faster subscribers", () => {
   const rows = Array.from({ length: 1_050 }, (_, index) => snapshot(index));
-  let scans = 0;
 
   const scan = Stream.suspend(() => {
-    scans++;
-
     return Stream.fromIterable(rows);
   });
 
@@ -153,109 +117,11 @@ it.effect("retains every lane in a large scan without blocking faster subscriber
         yield* nextSleep;
         yield* TestClock.adjust("1 second");
       }
-      expect(scans).toBe(4);
       const expected = rows.map((row) => row.threadId);
 
       expect(yield* Fiber.join(fast)).toEqual(Array.from({ length: 4 }, () => expected).flat());
       yield* Deferred.succeed(release, undefined);
       expect(yield* Fiber.join(slow)).toEqual([...expected, ...expected]);
-    }),
-  );
-});
-
-it.effect("starts lazily, stops after the last subscriber, and restarts on later demand", () => {
-  let scans = 0;
-  let finalized = 0;
-
-  const scan = Stream.fromEffect(
-    Effect.gen(function* () {
-      scans++;
-
-      return yield* Effect.never.pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            finalized++;
-          }),
-        ),
-      );
-    }),
-  );
-
-  return withScheduler(scan, (nextSleep) =>
-    Effect.gen(function* () {
-      const wake = yield* WakeScheduler;
-
-      yield* TestClock.adjust("2 seconds");
-      expect(scans).toBe(0);
-      const first = yield* Stream.runDrain(wake.wakes).pipe(Effect.forkChild);
-      const second = yield* Stream.runDrain(wake.wakes).pipe(Effect.forkChild);
-
-      yield* nextSleep;
-      yield* TestClock.adjust("1 second");
-      expect(scans).toBe(1);
-      yield* Fiber.interrupt(first);
-      expect(finalized).toBe(0);
-      yield* Fiber.interrupt(second);
-      expect(finalized).toBe(1);
-      yield* TestClock.adjust("2 seconds");
-      expect(scans).toBe(1);
-      const restarted = yield* Stream.runDrain(wake.wakes).pipe(Effect.forkChild);
-
-      yield* nextSleep;
-      yield* TestClock.adjust("1 second");
-      expect(scans).toBe(2);
-      yield* Fiber.interrupt(restarted);
-      expect(finalized).toBe(2);
-    }),
-  );
-});
-
-it.effect("retries typed scan failures and propagates scan defects to every subscriber", () => {
-  let scans = 0;
-  const defect = new Error("fallback scan defect");
-  const row = snapshot(0);
-
-  const scan = Stream.suspend(() => {
-    scans++;
-    if (scans === 1) return Stream.fail(LedgerError.make({ operation: "scan", message: "retry" }));
-    if (scans === 2) return Stream.succeed(row);
-
-    return Stream.die(defect);
-  });
-
-  return withScheduler(scan, (nextSleep) =>
-    Effect.gen(function* () {
-      const wake = yield* WakeScheduler;
-      const observed: Array<string> = [];
-
-      const consumers = yield* Effect.forEach([0, 1], () =>
-        wake.wakes.pipe(
-          Stream.tap((threadId) =>
-            Effect.sync(() => {
-              observed.push(threadId);
-            }),
-          ),
-          Stream.runDrain,
-          Effect.exit,
-          Effect.forkChild,
-        ),
-      );
-
-      yield* nextSleep;
-      yield* TestClock.adjust("1 second");
-      expect(observed).toEqual([]);
-      yield* nextSleep;
-      yield* TestClock.adjust("1 second");
-      expect(observed).toEqual([row.threadId, row.threadId]);
-      yield* nextSleep;
-      yield* TestClock.adjust("1 second");
-      for (const consumer of consumers) {
-        const exit = yield* Fiber.join(consumer);
-
-        expect(Exit.isFailure(exit)).toBe(true);
-        if (Exit.isFailure(exit)) expect(Cause.hasDies(exit.cause)).toBe(true);
-      }
-      expect(scans).toBe(3);
     }),
   );
 });

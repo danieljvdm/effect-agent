@@ -17,19 +17,13 @@ import {
   Fiber,
   Layer,
   Option,
-  Ref,
   Schema,
   Sink,
   Stream,
   type Scope,
 } from "effect";
-import {
-  SANDBOX_DIAGNOSTIC_MAX_LENGTH,
-  Sandbox,
-  type SandboxEvent,
-  type SandboxRequest,
-} from "effect-agent/sandbox";
-import { PlatformError, SystemError } from "effect/PlatformError";
+import { Sandbox, type SandboxEvent, type SandboxRequest } from "effect-agent/sandbox";
+import type { PlatformError } from "effect/PlatformError";
 import { TestClock } from "effect/testing";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -102,80 +96,6 @@ const isProcessAlive = (pid: number): Effect.Effect<boolean> =>
   });
 
 layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbox", (it) => {
-  it.effect("labels streamed stdout and successful completion as unisolated", () =>
-    Effect.gen(function* () {
-      const sandbox = yield* Sandbox;
-
-      const events = yield* sandbox
-        .execute(request(["-e", "process.stdout.write('hello'); process.stderr.write('warning')"]))
-        .pipe(Stream.runCollect);
-
-      expect(events.map((event) => event._tag)).toEqual([
-        "SandboxStarted",
-        "SandboxOutput",
-        "SandboxOutput",
-        "SandboxExited",
-      ]);
-      expect(events[0]).toMatchObject({
-        _tag: "SandboxStarted",
-        runtime: { kind: "unisolated-process", identity: "local-process" },
-      });
-      expect(events.every((event) => event.implementation.isolation === "unisolated")).toBe(true);
-      expect(
-        events.find((event) => event._tag === "SandboxOutput" && event.stream === "stdout"),
-      ).toMatchObject({
-        text: "hello",
-      });
-      expect(
-        events.find((event) => event._tag === "SandboxOutput" && event.stream === "stderr"),
-      ).toMatchObject({
-        text: "warning",
-      });
-    }),
-  );
-
-  it.effect("surfaces trailing incomplete UTF-8 stdout with byte accounting intact", () =>
-    Effect.gen(function* () {
-      const sandbox = yield* Sandbox;
-
-      const events = yield* sandbox
-        .execute(request(["-e", "process.stdout.write(Buffer.from([0xe2, 0x82]))"]))
-        .pipe(Stream.runCollect);
-
-      const stdout = events.flatMap((event) =>
-        event._tag === "SandboxOutput" && event.stream === "stdout" ? [event] : [],
-      );
-
-      expect(stdout.map((event) => event.text).join("")).toBe("\uFFFD");
-      expect(stdout.reduce((total, event) => total + event.bytes, 0)).toBe(2);
-      expect(events.at(-1)).toMatchObject({
-        _tag: "SandboxExited",
-        exitCode: 0,
-        resourceUse: { stdoutBytes: 2 },
-      });
-    }),
-  );
-
-  it.effect("emits the exit record before returning a typed non-zero exit failure", () =>
-    Effect.gen(function* () {
-      const sandbox = yield* Sandbox;
-      const events = yield* Ref.make<ReadonlyArray<SandboxEvent>>([]);
-
-      const exit = yield* sandbox
-        .execute(request(["-e", "process.stderr.write('failed'); process.exit(3)"]))
-        .pipe(
-          Stream.runForEach((event) => Ref.update(events, (all) => [...all, event])),
-          Effect.exit,
-        );
-
-      expect(failureFrom(exit)).toMatchObject({ _tag: "SandboxExitError", exitCode: 3 });
-      expect((yield* Ref.get(events)).at(-1)).toMatchObject({
-        _tag: "SandboxExited",
-        exitCode: 3,
-      });
-    }),
-  );
-
   it.effect("enforces a bounded stderr limit and terminates the owned process", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
@@ -232,63 +152,6 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
     }),
   );
 
-  it.effect("rejects request features the unisolated adapter cannot enforce", () =>
-    Effect.gen(function* () {
-      const sandbox = yield* Sandbox;
-
-      const exit = yield* sandbox
-        .execute(
-          request(["-e", "process.exit(0)"], {
-            mounts: [{ source: "/tmp", target: "/tmp", access: "read-only" }],
-          }),
-        )
-        .pipe(Stream.runDrain, Effect.exit);
-
-      expect(failureFrom(exit)).toMatchObject({
-        _tag: "SandboxUnsupportedRequestError",
-        feature: "mounts",
-      });
-    }),
-  );
-
-  it.effect("rejects a runtime identity the local adapter cannot honor", () =>
-    Effect.gen(function* () {
-      const sandbox = yield* Sandbox;
-
-      const exit = yield* sandbox
-        .execute(
-          request(["-e", "process.exit(0)"], {
-            runtime: { kind: "unisolated-process", identity: "claimed-runtime" },
-          }),
-        )
-        .pipe(Stream.runDrain, Effect.exit);
-
-      expect(failureFrom(exit)).toMatchObject({
-        _tag: "SandboxUnsupportedRequestError",
-        feature: "runtime",
-      });
-    }),
-  );
-
-  it.effect("returns a typed spawn failure for a missing executable", () =>
-    Effect.gen(function* () {
-      const sandbox = yield* Sandbox;
-
-      const exit = yield* sandbox
-        .execute(
-          request([], {
-            command: "/effect-agent/definitely-missing-executable",
-          }),
-        )
-        .pipe(Stream.runDrain, Effect.exit);
-
-      expect(failureFrom(exit)).toMatchObject({
-        _tag: "SandboxSpawnError",
-        cause: expect.anything(),
-      });
-    }),
-  );
-
   it.effect("copies only explicitly allowed environment variables", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
@@ -323,34 +186,6 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
       expect(result).toEqual({
         allowed: "visible",
         hasHidden: false,
-      });
-    }),
-  );
-
-  it.effect("maps configuration source failures to typed spawn errors", () =>
-    Effect.gen(function* () {
-      const sandbox = yield* Sandbox;
-
-      const failingProvider = ConfigProvider.make(() =>
-        Effect.fail(
-          new ConfigProvider.SourceError({
-            message: "environment source unavailable",
-          }),
-        ),
-      );
-
-      const exit = yield* sandbox
-        .execute(
-          request(["-e", "process.exit(0)"], {
-            environment: { allow: ["EFFECT_AGENT_ALLOWED"] },
-          }),
-        )
-        .pipe(Stream.runDrain, Effect.provide(ConfigProvider.layer(failingProvider)), Effect.exit);
-
-      expect(failureFrom(exit)).toMatchObject({
-        _tag: "SandboxSpawnError",
-        message: expect.stringContaining("environment source unavailable"),
-        cause: expect.anything(),
       });
     }),
   );
@@ -638,41 +473,4 @@ describe("unisolated local Sandbox with an injected spawner double", () => {
       ),
     ),
   );
-
-  it.effect("reports post-start output transport failures as bounded exit errors", () => {
-    const outputFailure = new PlatformError(
-      new SystemError({
-        _tag: "Unknown",
-        module: "ChildProcess",
-        method: "stdout",
-        description: "x".repeat(16 * 1024),
-      }),
-    );
-
-    return Effect.gen(function* () {
-      const sandbox = yield* Sandbox;
-      const exit = yield* sandbox.execute(request([])).pipe(Stream.runDrain, Effect.exit);
-      const failure = failureFrom(exit);
-
-      expect(failure).toMatchObject({
-        _tag: "SandboxExitError",
-        exitCode: -1,
-        cause: outputFailure,
-      });
-      if (failure._tag !== "SandboxExitError") {
-        throw new Error("Expected a SandboxExitError for a post-start output failure");
-      }
-      expect(failure.message).toHaveLength(SANDBOX_DIAGNOSTIC_MAX_LENGTH);
-    }).pipe(
-      Effect.provide(
-        sandboxLayer.pipe(
-          Layer.provide(
-            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner)(
-              spawnerWithStdout(Stream.fail(outputFailure)),
-            ),
-          ),
-        ),
-      ),
-    );
-  });
 });

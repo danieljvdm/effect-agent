@@ -5,7 +5,6 @@ import {
 } from "@effect-agent/testing/scripted-model";
 import {
   Clock,
-  Context,
   Deferred,
   Effect,
   Exit,
@@ -72,11 +71,6 @@ const selectSubagentLayer = <BuildLayer>(module: {
 };
 
 const subagentLayer = selectSubagentLayer(Subagent);
-
-/** Faults are test-only fixture inputs; the public diagnostic inventory always uses "none". */
-export const DiagnosticFault = Context.Reference("runtime-benchmark/DiagnosticFault", {
-  defaultValue: (): "none" | "mcp-malformed-discovery" | "mcp-call-failure" => "none",
-});
 
 /** Every mark uses elapsed monotonic wall time from this sample's operation start. */
 const elapsed = (start: bigint) =>
@@ -553,7 +547,6 @@ const rpcResponse = Schema.fromJsonString(
  */
 const mcpCase = Effect.fn("diagnostic.mcp")(function* (workload: DiagnosticCase) {
   const progress = yield* DiagnosticProgress;
-  const fault = yield* DiagnosticFault;
 
   yield* progress.phase("setup");
   const enabled = workload.parameters.enabled === 1;
@@ -623,21 +616,18 @@ const mcpCase = Effect.fn("diagnostic.mcp")(function* (workload: DiagnosticCase)
         return HttpClientResponse.fromWeb(request, new globalThis.Response(null, { status: 202 }));
       if (message.method === "tools/list") {
         discoveries++;
-        result =
-          fault === "mcp-malformed-discovery"
-            ? { tools: [{ name: 12 }] }
-            : {
-                tools: Array.from({ length: 8 }, (_, index) => ({
-                  name: index === 0 ? "echo" : `unused_${index}`,
-                  description: "Fixed diagnostic echo tool",
-                  inputSchema: {
-                    type: "object",
-                    properties: { message: { type: "string" } },
-                    required: ["message"],
-                    additionalProperties: false,
-                  },
-                })),
-              };
+        result = {
+          tools: Array.from({ length: 8 }, (_, index) => ({
+            name: index === 0 ? "echo" : `unused_${index}`,
+            description: "Fixed diagnostic echo tool",
+            inputSchema: {
+              type: "object",
+              properties: { message: { type: "string" } },
+              required: ["message"],
+              additionalProperties: false,
+            },
+          })),
+        };
       }
       if (message.method === "tools/call") {
         const params = yield* Schema.decodeUnknownEffect(
@@ -651,7 +641,6 @@ const mcpCase = Effect.fn("diagnostic.mcp")(function* (workload: DiagnosticCase)
         result = {
           content: [{ type: "text", text: params.arguments.message }],
           structuredContent: { echoed: params.arguments.message },
-          ...(fault === "mcp-call-failure" ? { isError: true } : {}),
         };
       }
 

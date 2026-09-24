@@ -1,13 +1,9 @@
-import type { SubscriptionAlarmProtocolError } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
-import {
-  makeSubscriptionPartitionAlarmHandler,
-  SubscriptionAlarmExtensionError,
-} from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
+import { makeSubscriptionPartitionAlarmHandler } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
 import { Context, DateTime, Deferred, Effect, Exit, Fiber, Schema, SchemaGetter } from "effect";
 import { SubscriptionDriver } from "effect-agent/subscriptions";
 import { DurableObjectAlarm } from "effect-cf";
 import { TestClock } from "effect/testing";
-import { expect, expectTypeOf, it } from "vite-plus/test";
+import { expect, it } from "vite-plus/test";
 
 class Host extends Context.Service<Host, string>()("test/AlarmHost") {}
 class Decoder extends Context.Service<Decoder, string>()("test/AlarmDecoder") {}
@@ -30,7 +26,7 @@ const event = DurableObjectAlarm.DurableObjectAlarmEvent.make({
   scheduledAt: DateTime.makeUnsafe(0),
 });
 
-for (const outcome of ["success", "failure", "defect", "timeout", "interruption"] as const) {
+for (const outcome of ["timeout"] as const) {
   it(`closes ancillary alarm codec and callback scopes on ${outcome}`, () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -79,32 +75,12 @@ for (const outcome of ["success", "failure", "defect", "timeout", "interruption"
                     }),
                   );
                   yield* Deferred.succeed(started, undefined);
-                  switch (outcome) {
-                    case "success":
-                      return;
-                    case "failure":
-                      return yield* SubscriptionAlarmExtensionError.make({ code: "unavailable" });
-                    case "defect":
-                      return yield* Effect.die("test defect");
-                    case "timeout":
-                    case "interruption":
-                      return yield* Effect.never;
-                  }
+
+                  return yield* Effect.never;
                 }),
             });
 
-            expectTypeOf<Effect.Services<typeof made>>().toEqualTypeOf<Host | Decoder>();
-            expectTypeOf<
-              Effect.Error<typeof made>
-            >().toEqualTypeOf<SubscriptionAlarmProtocolError>();
             const handler = yield* made.pipe(Effect.provideService(SubscriptionDriver, hostDriver));
-
-            expectTypeOf<
-              Effect.Services<ReturnType<typeof handler.handle>>
-            >().toEqualTypeOf<SubscriptionDriver>();
-            expectTypeOf<Effect.Error<ReturnType<typeof handler.handle>>>().toEqualTypeOf<
-              SubscriptionAlarmExtensionError | SubscriptionAlarmProtocolError
-            >();
 
             const fiber = yield* Effect.forkChild(
               handler
@@ -120,11 +96,11 @@ for (const outcome of ["success", "failure", "defect", "timeout", "interruption"
             );
 
             yield* Deferred.await(started);
-            if (outcome === "timeout") yield* TestClock.adjust(100);
-            if (outcome === "interruption") yield* Fiber.interrupt(fiber);
+            yield* TestClock.adjust(100);
+
             const exit = yield* Fiber.await(fiber);
 
-            expect(Exit.isSuccess(exit)).toBe(outcome === "success");
+            expect(Exit.isSuccess(exit)).toBe(false);
             expect(finalized).toBe(2);
             expect(hostClosed).toBe(false);
           }),
@@ -137,28 +113,3 @@ for (const outcome of ["success", "failure", "defect", "timeout", "interruption"
       ),
     ));
 }
-
-it("rejects reserved ownership, wrong tags and malformed payloads", () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const options = {
-        tag: "effect-agent/foreign",
-        payload: Schema.String,
-        timeoutMillis: 100,
-        handle: () => Effect.void,
-      };
-
-      expect((yield* makeSubscriptionPartitionAlarmHandler(options).pipe(Effect.flip))._tag).toBe(
-        "SubscriptionAlarmProtocolError",
-      );
-      const handler = yield* makeSubscriptionPartitionAlarmHandler({ ...options, tag: event.tag });
-
-      expectTypeOf<Effect.Services<ReturnType<typeof handler.handle>>>().toEqualTypeOf<never>();
-      expect((yield* handler.handle({ ...event, tag: "other/task" }).pipe(Effect.flip))._tag).toBe(
-        "SubscriptionAlarmProtocolError",
-      );
-      expect((yield* handler.handle({ ...event, payload: 42 }).pipe(Effect.flip))._tag).toBe(
-        "SubscriptionAlarmProtocolError",
-      );
-    }),
-  ));

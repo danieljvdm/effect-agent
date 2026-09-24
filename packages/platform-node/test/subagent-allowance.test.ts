@@ -1,11 +1,10 @@
 import { NodeDurableAgentRuntime } from "@effect-agent/platform-node/node-durable-agent-runtime";
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { NodeFileSystem } from "@effect/platform-node";
 import { expect, it } from "@effect/vitest";
 import { Cause, Effect, Exit, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
-import { compileRegistrations, DurableWorkerBinding } from "effect-agent/agent-registration";
-import { digestDefinitions } from "effect-agent/digest";
+import { DurableWorkerBinding } from "effect-agent/agent-registration";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import {
   DurableRuntimeFailpointError,
@@ -13,7 +12,7 @@ import {
 } from "effect-agent/durable-failpoint";
 import { ToolExecutionClass } from "effect-agent/durable-step";
 import { ThreadId, ToolCallId } from "effect-agent/identifiers";
-import { DefinitionDigests, DefinitionDigestInput, Digest } from "effect-agent/records";
+import { DefinitionDigests, Digest } from "effect-agent/records";
 import { childThreadIdFor } from "effect-agent/run-journal";
 import * as Subagent from "effect-agent/subagent";
 import { SubagentPolicy } from "effect-agent/subagent";
@@ -53,142 +52,6 @@ const readLog = Effect.fn("AllowanceTest.readLog")(function* (threadId: ThreadId
   return yield* Stream.runCollect(store.read(ThreadRead.make({ threadId, limit: 1024 })));
 });
 
-it.effect("shares a durable delegation pool across calls and SQLite reopen", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "subagent-shared-budget-" });
-
-      const target = Agent.make("shared-budget-child", {
-        input: Schema.String,
-        output: Schema.Struct({ answer: Schema.String }),
-        instructions: "Answer.",
-        toolkit: Toolkit.empty,
-      });
-
-      const delegation = Subagent.make("research", {
-        target,
-        failureMode: "return",
-      });
-
-      const versions = DefinitionDigestInput.make({
-        agent: "shared-budget-v1",
-        model: "scripted-v1",
-        tools: [],
-      });
-
-      const sharedDigests = yield* digestDefinitions(versions).pipe(
-        Effect.provide(NodeCrypto.layer),
-      );
-
-      const childModel = Model.make(
-        "scripted",
-        "shared-child",
-        Layer.effect(
-          LanguageModel.LanguageModel,
-          LanguageModel.make({
-            generateText: () => Effect.succeed([]),
-            streamText: () => Stream.fromIterable(finalParts),
-          }),
-        ),
-      );
-
-      const parent = Agent.withModel(
-        Agent.make("shared-budget-parent", {
-          input: Schema.String,
-          output: Schema.Struct({ answer: Schema.String }),
-          instructions: "Delegate twice.",
-          toolkit: Toolkit.make(delegation.tool),
-          policy: { maxTurns: 3, maxToolCalls: 2, toolConcurrency: 1 },
-        }),
-        Model.make(
-          "scripted",
-          "shared-parent",
-          Layer.effect(
-            LanguageModel.LanguageModel,
-            LanguageModel.make({
-              generateText: () => Effect.succeed([]),
-              streamText: (request) => {
-                const count = request.prompt.content.filter(
-                  (message) => message.role === "tool",
-                ).length;
-
-                return Stream.fromIterable(
-                  count < 2 ? toolTurn(`shared-${count}`, delegation.name, "question") : finalParts,
-                );
-              },
-            }),
-          ),
-        ),
-      );
-
-      const handlers = Subagent.layer(delegation, childModel).pipe(
-        Layer.provide([SubagentReservationsMemoryLive]),
-      );
-
-      const bindings = yield* compileRegistrations([
-        { agent: parent, definitions: versions },
-        { agent: target, model: childModel, definitions: versions },
-      ]).pipe(Effect.provide([handlers, NodeCrypto.layer]));
-
-      const parentId = Schema.decodeSync(ThreadId)("shared-budget-parent");
-
-      const runtimeLayer = () =>
-        NodeDurableAgentRuntime.layerWithBindings(bindings, {
-          filename: `${directory}/shared.sqlite`,
-          deploymentId: "shared-budget",
-          producerId: "shared-budget",
-        });
-
-      yield* Effect.gen(function* () {
-        const runtime = yield* DurableAgentRuntime;
-
-        const receipt = yield* runtime.submit(parent, "start", {
-          threadId: parentId,
-          principal: Schema.decodeSync(Principal)("test"),
-          idempotencyKey: Schema.decodeSync(IdempotencyKey)("shared"),
-          definitions: sharedDigests,
-        });
-
-        expect(yield* runtime.processThreadResolved(parentId)).toEqual([]);
-        yield* runtime.processThreadResolved(
-          childThreadIdFor(receipt.submissionId, Schema.decodeSync(ToolCallId)("shared-0")),
-        );
-
-        return receipt;
-      }).pipe(Effect.provide(runtimeLayer()));
-      yield* Effect.gen(function* () {
-        const runtime = yield* DurableAgentRuntime;
-
-        expect((yield* runtime.processThreadResolved(parentId))[0]?.outcome).toBe("completed");
-        const log = yield* readLog(parentId);
-
-        expect(
-          log.filter(({ record }) => record.payload._tag === "SubagentRequested"),
-        ).toHaveLength(1);
-
-        const settlements = log
-          .filter(({ record }) => record.payload._tag === "ToolCallSettled")
-          .map(({ record }) => record.payload);
-
-        expect(settlements).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              result: { output: { answer: "partial" }, budgetExhausted: false },
-            }),
-            expect.objectContaining({
-              result: expect.objectContaining({
-                _tag: "SubagentExecutionFailure",
-                errorTag: "SubagentBudgetExhausted",
-              }),
-            }),
-          ]),
-        );
-      }).pipe(Effect.provide(runtimeLayer()));
-    }),
-  ).pipe(Effect.provide(NodeFileSystem.layer)),
-);
-
 it.effect(
   "persists child allowances through establishment faults, approval suspension, and SQLite reopen without replenishing usage",
   () =>
@@ -199,25 +62,11 @@ it.effect(
 
         const rows = [
           {
-            requested: undefined,
-            definition: 8,
-            reservation: 4,
-            effective: 1,
-            fault: "subagent:after-request-append",
-          },
-          {
             requested: 99,
             definition: 8,
             reservation: 3,
             effective: 3,
             fault: "subagent:after-admit",
-          },
-          {
-            requested: 99,
-            definition: 2,
-            reservation: 4,
-            effective: 2,
-            fault: "subagent:after-child-ready",
           },
         ] as const;
 

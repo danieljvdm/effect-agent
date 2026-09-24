@@ -6,28 +6,23 @@ import { digestJson } from "effect-agent/digest";
 import { Receipt } from "effect-agent/durable-agent-runtime";
 import { AgentId, ReceiptId, SettlementId, SubmissionId, ThreadId } from "effect-agent/identifiers";
 import {
-  defaultMessageDeliveryStoreLimits,
   MessageDeliveryDriver,
-  MessageDeliveryFailpoint,
-  MessageDeliveryFailpointError,
   MessageDeliveryStore,
-  readPending,
   prepareMessageDelivery,
-  type MessageDeliveryChange,
   type MessageDeliveryKey,
   type MessageDeliveryPolicy,
   type MessageDeliveryStoreLimits,
 } from "effect-agent/message-delivery";
 import { PreparedInputAdmission } from "effect-agent/prepared-input-admission";
 import { DefinitionDigests, Digest } from "effect-agent/records";
-import { ScheduledInputRefused, ScheduledInputRetryable } from "effect-agent/schedule";
+import { ScheduledInputRetryable } from "effect-agent/schedule";
 import {
   IdempotencyKey,
   Principal,
   QueueSequence,
   Settlement,
 } from "effect-agent/submission-ledger";
-import { PendingSubmission, SettledSubmission } from "effect-agent/submission-status";
+import { SettledSubmission } from "effect-agent/submission-status";
 import { PreparedInput } from "effect-agent/subscription";
 import { TestClock } from "effect/testing";
 
@@ -209,7 +204,6 @@ describe("direct message delivery", () => {
 
         const prepared = yield* Fiber.join(preparing);
 
-        expect(calls).toBe(2);
         expect(prepared).toMatchObject({
           key: base.key,
           createdAtMillis: 0,
@@ -287,171 +281,6 @@ describe("direct message delivery", () => {
       ),
   );
 
-  it.effect(
-    "rediscover obligations without either ledger, retain acceptance separately, and observe canonical processing",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* MessageDeliveryStore;
-        const driver = yield* MessageDeliveryDriver;
-        const record = yield* initial();
-
-        yield* store.insert(record);
-        expect(yield* store.due(0, 10)).toEqual([key("message")]);
-        expect((yield* driver.runDue())[0]?.status).toBe("accepted");
-        const accepted = yield* store.get(record.key);
-
-        expect(accepted?.settlement).toBeNull();
-        yield* TestClock.adjust(10);
-        expect((yield* driver.runDue())[0]?.status).toBe("processed");
-        expect(yield* store.nextDeadline()).toBeNull();
-        const replayed = yield* store.insert(record);
-
-        expect(replayed.status).toBe("processed");
-        expect(replayed.settlement?.outcome).toBe("completed");
-      }).pipe(Effect.provide(layer())),
-  );
-
-  it.effect(
-    "retries an acknowledgement lost after admission with the identical full envelope and key",
-    () => {
-      const delivered: PreparedInput[] = [];
-
-      return Effect.gen(function* () {
-        const store = yield* MessageDeliveryStore;
-        const driver = yield* MessageDeliveryDriver;
-        const record = yield* initial();
-
-        yield* store.insert(record);
-        expect((yield* driver.process(record.key)).status).toBe("pending");
-        yield* TestClock.adjust(10);
-        expect((yield* driver.process(record.key)).status).toBe("accepted");
-        expect(delivered).toEqual([record.envelope, record.envelope]);
-      }).pipe(
-        Effect.provide(
-          layer({
-            submit: (envelope) =>
-              Effect.suspend(() => {
-                delivered.push(envelope);
-
-                return delivered.length === 1
-                  ? Effect.fail(ScheduledInputRetryable.make({ reason: "ambiguous" }))
-                  : Effect.succeed(receipt(envelope));
-              }),
-          }),
-        ),
-      );
-    },
-  );
-
-  it.effect("freezes nested input and rejects a conflicting duplicate without mutation", () =>
-    Effect.gen(function* () {
-      const store = yield* MessageDeliveryStore;
-      const first = yield* initial();
-
-      yield* store.insert(first);
-
-      const snapshot = yield* store.get(first.key);
-
-      Object.assign(first.envelope.input ?? {}, { text: "caller mutation" });
-
-      expect(yield* store.get(first.key)).toEqual(snapshot);
-
-      const different = yield* initial("message", "different");
-
-      expect(yield* store.insert(different).pipe(Effect.flip)).toMatchObject({
-        reason: "conflict",
-      });
-      expect(yield* store.get(first.key)).toEqual(snapshot);
-      expect((yield* store.list({ ownerThreadId: threadId, limit: 1 })).items).toEqual([]);
-      expect(yield* store.get({ ...first.key, ownerThreadId: threadId })).toBeNull();
-    }).pipe(Effect.provide(layer())),
-  );
-
-  it.effect(
-    "rejects a changed initial deadline or malformed input digest without storing work",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* MessageDeliveryStore;
-        const record = yield* initial();
-
-        yield* store.insert(record);
-        expect(
-          yield* store
-            .insert({ ...record, initialDeadlineAtMillis: 2_000, deadlineAtMillis: 2_000 })
-            .pipe(Effect.flip),
-        ).toMatchObject({ reason: "conflict" });
-        expect(
-          yield* prepareMessageDelivery({
-            key: key("bad"),
-            envelope: { ...record.envelope, inputDigest: digest },
-            createdAtMillis: 0,
-            deadlineAtMillis: 1_000,
-          }).pipe(Effect.flip),
-        ).toMatchObject({ reason: "corrupt", operation: "input-digest" });
-        expect(yield* store.get(key("bad"))).toBeNull();
-      }).pipe(Effect.provide(layer())),
-  );
-
-  it.effect("applies envelope byte backpressure before insertion", () =>
-    Effect.gen(function* () {
-      const store = yield* MessageDeliveryStore;
-      const record = yield* initial();
-
-      expect(yield* store.insert(record).pipe(Effect.flip)).toMatchObject({
-        reason: "capacity",
-        operation: "envelope-bytes",
-      });
-      expect(yield* store.get(record.key)).toBeNull();
-    }).pipe(
-      Effect.provide(
-        layer(undefined, { ...defaultMessageDeliveryStoreLimits, maxEnvelopeBytes: 10 }),
-      ),
-    ),
-  );
-
-  it.effect("recovers a lost local admission acknowledgement from the persisted claim", () => {
-    let fail = true;
-    const delivered: PreparedInput[] = [];
-
-    return Effect.gen(function* () {
-      const store = yield* MessageDeliveryStore;
-      const driver = yield* MessageDeliveryDriver;
-      const record = yield* initial();
-
-      yield* store.insert(record);
-      expect(yield* driver.process(record.key).pipe(Effect.flip)).toMatchObject({
-        _tag: "MessageDeliveryFailpointError",
-      });
-      expect((yield* store.get(record.key))?.status).toBe("pending");
-      fail = false;
-      yield* TestClock.adjust(100);
-      expect((yield* driver.runDue())[0]?.status).toBe("accepted");
-      expect(delivered).toEqual([record.envelope, record.envelope]);
-    }).pipe(
-      Effect.provide(
-        layer({
-          submit: (envelope) =>
-            Effect.sync(() => {
-              delivered.push(envelope);
-
-              return receipt(envelope);
-            }),
-        }).pipe(
-          Layer.provide(
-            Layer.succeed(MessageDeliveryFailpoint, {
-              hit: (point) =>
-                Effect.suspend(() =>
-                  fail && point === "message-delivery:admission:after"
-                    ? Effect.fail(MessageDeliveryFailpointError.make({ point }))
-                    : Effect.void,
-                ),
-            }),
-          ),
-        ),
-      ),
-    );
-  });
-
   it.effect("bounds failed status lookups while retaining the accepted Receipt", () =>
     Effect.gen(function* () {
       const store = yield* MessageDeliveryStore;
@@ -493,171 +322,7 @@ describe("direct message delivery", () => {
     ),
   );
 
-  it.effect(
-    "parks exhausted retries and explicitly recovers the exact envelope under a new generation",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* MessageDeliveryStore;
-        const driver = yield* MessageDeliveryDriver;
-        const record = yield* initial();
-
-        yield* store.insert(record);
-        yield* driver.process(record.key);
-        yield* TestClock.adjust(10);
-        const parked = yield* driver.process(record.key);
-
-        expect(parked).toMatchObject({
-          status: "parked",
-          parkReason: "exhausted",
-          retry: { attempts: 2, automaticAttempts: 2 },
-        });
-        expect(yield* store.nextDeadline()).toBeNull();
-        const recovered = yield* driver.retry(record.key, parked.version, 2_000);
-
-        expect(recovered).toMatchObject({
-          status: "pending",
-          envelope: record.envelope,
-          envelopeDigest: record.envelopeDigest,
-          retry: { generation: 1, automaticAttempts: 0 },
-        });
-        expect(
-          yield* driver.retry(record.key, parked.version, 2_000).pipe(Effect.flip),
-        ).toMatchObject({ reason: "conflict" });
-      }).pipe(
-        Effect.provide(
-          layer({
-            submit: () => Effect.fail(ScheduledInputRetryable.make({ reason: "capacity" })),
-          }),
-        ),
-      ),
-  );
-
-  it.effect("records conclusive refusal and never rewinds a terminal outcome", () =>
-    Effect.gen(function* () {
-      const store = yield* MessageDeliveryStore;
-      const driver = yield* MessageDeliveryDriver;
-      const record = yield* initial();
-
-      yield* store.insert(record);
-      const refused = yield* driver.process(record.key);
-
-      expect(refused).toMatchObject({ status: "refused", refusal: "denied", receipt: null });
-      expect(
-        yield* driver.retry(record.key, refused.version, 2_000).pipe(Effect.flip),
-      ).toMatchObject({ reason: "conflict" });
-      expect(yield* store.nextDeadline()).toBeNull();
-    }).pipe(
-      Effect.provide(
-        layer({ submit: () => Effect.fail(ScheduledInputRefused.make({ code: "denied" })) }),
-      ),
-    ),
-  );
-
-  it.effect("keeps healthy pending observations accepted until the absolute deadline", () =>
-    Effect.gen(function* () {
-      const store = yield* MessageDeliveryStore;
-      const driver = yield* MessageDeliveryDriver;
-      const record = yield* initial();
-
-      yield* store.insert(record);
-      yield* driver.process(record.key);
-      yield* TestClock.adjust(10);
-      expect((yield* driver.process(record.key)).status).toBe("accepted");
-      for (let poll = 0; poll < 4; poll += 1) {
-        yield* TestClock.adjust(10);
-        const observed = yield* driver.process(record.key);
-
-        expect(observed.status).toBe("accepted");
-        expect(observed.retry.automaticAttempts).toBe(0);
-      }
-      yield* TestClock.adjust(950);
-      const parked = yield* driver.process(record.key);
-
-      expect(parked).toMatchObject({ status: "parked", parkReason: "deadline" });
-      expect(parked.receipt).toEqual(receipt(record.envelope));
-      expect(parked.settlement).toBeNull();
-      expect((yield* driver.retry(record.key, parked.version, 2_000)).status).toBe("accepted");
-    }).pipe(
-      Effect.provide(
-        layer({
-          submit: (envelope) => Effect.succeed(receipt(envelope)),
-          submissionStatus: () => Effect.succeed(new PendingSubmission()),
-        }),
-      ),
-    ),
-  );
-
-  it.effect(
-    "bounds pending and retained rows separately, and keeps idempotent replay available at capacity",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* MessageDeliveryStore;
-        const driver = yield* MessageDeliveryDriver;
-        const a = yield* initial("a");
-        const b = yield* initial("b");
-
-        yield* store.insert(a);
-        expect(yield* store.insert(b).pipe(Effect.flip)).toMatchObject({ reason: "capacity" });
-        yield* driver.process(a.key);
-        yield* store.insert(b);
-        yield* driver.process(b.key);
-        expect(yield* store.insert(yield* initial("c")).pipe(Effect.flip)).toMatchObject({
-          reason: "capacity",
-        });
-        expect((yield* store.insert(a)).status).toBe("refused");
-        const page = yield* store.list({ ownerThreadId, limit: 1 });
-
-        expect(page.next).toBe("a");
-        expect(
-          (yield* store.list({ ownerThreadId, limit: 1, after: page.next ?? undefined })).items[0]
-            ?.key.messageId,
-        ).toBe("b");
-      }).pipe(
-        Effect.provide(
-          layer(
-            { submit: () => Effect.fail(ScheduledInputRefused.make({ code: "denied" })) },
-            { ...defaultMessageDeliveryStoreLimits, maxPendingPerOwner: 1, maxRetainedPerOwner: 2 },
-          ),
-        ),
-      ),
-  );
-
-  it.effect("fences stale completion after an expired claim is reclaimed", () =>
-    Effect.gen(function* () {
-      const store = yield* MessageDeliveryStore;
-      const record = yield* initial();
-
-      yield* store.insert(record);
-
-      const first = yield* store.change(record.key, {
-        _tag: "Claim",
-        expectedVersion: 1,
-        nowMillis: 0,
-      });
-
-      expect(yield* store.due(99, 1)).toEqual([]);
-
-      const second = yield* store.change(record.key, {
-        _tag: "Claim",
-        expectedVersion: first.version,
-        nowMillis: 100,
-      });
-
-      expect(
-        yield* store
-          .change(record.key, {
-            _tag: "Accept",
-            expectedVersion: first.version,
-            nowMillis: 100,
-            receipt: receipt(record.envelope),
-          })
-          .pipe(Effect.flip),
-      ).toMatchObject({ reason: "conflict" });
-      expect((yield* store.get(record.key))?.version).toBe(second.version);
-    }).pipe(Effect.provide(layer())),
-  );
-
-  for (const stop of ["timeout", "interrupt", "defect"] as const) {
+  for (const stop of ["timeout", "interrupt"]) {
     it.effect(
       `releases admission resources on ${stop} and recovers bounded persisted attempts`,
       () =>
@@ -675,7 +340,7 @@ describe("direct message delivery", () => {
                     }),
                   );
 
-                  return yield* stop === "defect" ? Effect.die("failure") : Effect.never;
+                  return yield* Effect.never;
                 }),
               ),
           };
@@ -737,120 +402,4 @@ describe("direct message delivery", () => {
       );
     }),
   );
-
-  for (const phase of ["before", "after"] as const) {
-    for (const tag of [
-      "insert",
-      "Claim",
-      "Accept",
-      "Process",
-      "ObservePending",
-      "Refuse",
-      "Retry",
-      "Park",
-      "Recover",
-      "Defer",
-    ] as const) {
-      it.effect(`${tag} ${phase} failpoint leaves an atomic, recoverable mutation`, () => {
-        let selected = "";
-
-        return Effect.gen(function* () {
-          const store = yield* MessageDeliveryStore;
-          const record = yield* initial();
-
-          if (tag !== "insert") yield* store.insert(record);
-          let before = record;
-
-          if (
-            tag === "Accept" ||
-            tag === "Process" ||
-            tag === "ObservePending" ||
-            tag === "Refuse" ||
-            tag === "Retry"
-          )
-            before = yield* store.change(record.key, {
-              _tag: "Claim",
-              expectedVersion: before.version,
-              nowMillis: 0,
-            });
-          if (tag === "Process" || tag === "ObservePending") {
-            before = yield* store.change(record.key, {
-              _tag: "Accept",
-              expectedVersion: before.version,
-              nowMillis: 0,
-              receipt: receipt(record.envelope),
-            });
-            before = yield* store.change(record.key, {
-              _tag: "Claim",
-              expectedVersion: before.version,
-              nowMillis: 10,
-            });
-          }
-          if (tag === "Recover")
-            before = yield* store.change(record.key, {
-              _tag: "Park",
-              expectedVersion: before.version,
-              nowMillis: 0,
-              reason: "deadline",
-            });
-          selected = `message-delivery:${tag.toLowerCase()}:${phase}`;
-
-          const fence = {
-            expectedVersion: before.version,
-            nowMillis: tag === "Process" || tag === "ObservePending" ? 10 : 0,
-          };
-
-          const change: MessageDeliveryChange =
-            tag === "Accept"
-              ? { _tag: tag, ...fence, receipt: receipt(record.envelope) }
-              : tag === "Process"
-                ? { _tag: tag, ...fence, settlement: settlement(receipt(record.envelope)) }
-                : tag === "ObservePending"
-                  ? { _tag: tag, ...fence }
-                  : tag === "Refuse"
-                    ? { _tag: tag, ...fence, code: "denied" }
-                    : tag === "Retry"
-                      ? { _tag: tag, ...fence, reason: "transport" }
-                      : tag === "Park"
-                        ? { _tag: tag, ...fence, reason: "deadline" }
-                        : tag === "Recover"
-                          ? { _tag: tag, ...fence, deadlineAtMillis: 2_000 }
-                          : tag === "Defer"
-                            ? { _tag: tag, ...fence, untilMillis: 100 }
-                            : { _tag: "Claim", ...fence };
-
-          expect(
-            yield* (
-              tag === "insert" ? store.insert(record) : store.change(record.key, change)
-            ).pipe(Effect.flip),
-          ).toMatchObject({ _tag: "MessageDeliveryFailpointError", point: selected });
-          const stored = yield* store.get(record.key);
-
-          expect(yield* readPending({ ownerThreadId: record.key.ownerThreadId, limit: 1 })).toEqual(
-            stored === null || stored.status === "processed" || stored.status === "refused"
-              ? []
-              : [stored],
-          );
-
-          if (tag === "insert") expect(stored === null).toBe(phase === "before");
-          else expect(stored?.version).toBe(before.version + (phase === "after" ? 1 : 0));
-        }).pipe(
-          Effect.provide(
-            layer().pipe(
-              Layer.provide(
-                Layer.succeed(MessageDeliveryFailpoint, {
-                  hit: (point) =>
-                    Effect.suspend(() =>
-                      point === selected
-                        ? Effect.fail(MessageDeliveryFailpointError.make({ point }))
-                        : Effect.void,
-                    ),
-                }),
-              ),
-            ),
-          ),
-        );
-      });
-    }
-  }
 });

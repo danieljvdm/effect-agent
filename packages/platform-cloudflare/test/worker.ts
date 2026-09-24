@@ -13,16 +13,13 @@ import {
 } from "@effect-agent/platform-cloudflare/cloudflare-scheduling";
 import { makeSubscriptionPartitionObjectClass } from "@effect-agent/platform-cloudflare/cloudflare-subscriptions";
 import * as ThreadObject from "@effect-agent/platform-cloudflare/thread-object";
-import { Clock, Config, Context, Crypto, Effect, Layer, Schema } from "effect";
-import * as Agent from "effect-agent/agent";
+import { Clock, Effect, Layer, Schema } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import { RecalledMemory } from "effect-agent/memory";
 import { MemoryLookup } from "effect-agent/memory-reference";
 import { MemoryWrite, MemoryDocument } from "effect-agent/memory-store";
-import { OperationDenied } from "effect-agent/operation-authorizer";
 import { ScheduleAuthorizer, ScheduleFailpoint } from "effect-agent/schedule";
 import { DurableObject, DurableObjectState, RpcTracing, WorkerEnvironment } from "effect-cf";
-import { OtlpExporter } from "effect/unstable/observability";
 
 import { ThreadMaintenance } from "../src/Alarm.ts";
 import { layerFromBindings } from "../src/internal/layers.ts";
@@ -44,9 +41,6 @@ import {
   upgradedBookBinding,
   makeContextCompactorLayer,
   makeContextAuthorizationLayer,
-  plannerDefinition,
-  plannerModel,
-  registrationDefinitions,
   testRuntimeLayer,
   makeTestBindings,
   runtimeEvictionFailpoint,
@@ -58,8 +52,6 @@ import {
 import {
   memoryAuthorizer,
   memoryFailpoints,
-  memoryCalls,
-  memoryReplies,
   memoryAccess,
   memoryPrincipal,
   memoryRecallLimits,
@@ -70,17 +62,8 @@ import {
   messageDeliveryFaultLayer,
   testMessageRecovery,
 } from "./message-delivery-fixture.ts";
-import {
-  failNextFlush,
-  flushCount,
-  observabilityProbeLayer,
-  telemetryProbe,
-} from "./observability-fixture.ts";
-import {
-  hostMaintenanceLayer,
-  makeProjectionBinding,
-  projectionLayer,
-} from "./projection-fixture.ts";
+import { observabilityProbeLayer, telemetryProbe } from "./observability-fixture.ts";
+import { hostMaintenanceLayer, projectionLayer } from "./projection-fixture.ts";
 import { publicationLayer } from "./publication-fixture.ts";
 import { recoveryTestLayer } from "./recovery-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
@@ -93,19 +76,7 @@ import {
 
 export class TestMemoryObject extends MemoryObject.make(memoryAuthorizer, {
   failpoints: memoryFailpoints,
-}) {
-  override memory(encoded: string): Promise<string> {
-    const name = this.ctx.id.name ?? "";
-
-    memoryCalls.set(name, (memoryCalls.get(name) ?? 0) + 1);
-
-    const reply = memoryReplies.get(name);
-
-    if (reply !== undefined) return Promise.resolve(reply);
-
-    return super.memory(encoded);
-  }
-}
+}) {}
 
 /**
  * The WP3 test Worker entry: the REAL `ThreadObject.make` output under three
@@ -206,84 +177,6 @@ export class TestSubscriptionPartitionObject extends makeSubscriptionPartitionOb
   },
 ) {}
 
-interface BindingSourceProbe {
-  readonly evaluationCount: number;
-  readonly incarnation: number;
-  readonly threadId: string;
-  readonly producerId: string;
-  readonly rawEnvHasNamespace: boolean;
-  readonly configuredLabel: string;
-}
-
-let nextBindingSourceIncarnation = 0;
-const bindingSourceProbes = new WeakMap<DurableObjectState, BindingSourceProbe>();
-
-class RegistrationResource extends Context.Service<
-  RegistrationResource,
-  {
-    readonly check: Effect.Effect<void, string>;
-  }
->()("@effect-agent/platform-cloudflare/test/RegistrationResource") {}
-
-const registrationResourceLayer = Layer.effect(
-  RegistrationResource,
-  Effect.gen(function* () {
-    const { raw: ctx } = yield* DurableObjectState.DurableObjectState;
-    const env = yield* WorkerEnvironment;
-    const { threadId, producerId } = yield* ThreadObjectIdentity;
-    const configuredLabel = yield* Config.String("REGISTRATION_LABEL");
-
-    yield* Crypto.Crypto;
-    const previous = bindingSourceProbes.get(ctx);
-
-    bindingSourceProbes.set(ctx, {
-      evaluationCount: (previous?.evaluationCount ?? 0) + 1,
-      incarnation: previous?.incarnation ?? ++nextBindingSourceIncarnation,
-      threadId,
-      producerId,
-      rawEnvHasNamespace: env.DYNAMIC_BINDINGS !== undefined,
-      configuredLabel,
-    });
-
-    const resource = yield* Effect.acquireRelease(
-      Effect.sync(() => ({ open: true })),
-      (resource) =>
-        Effect.sync(() => {
-          resource.open = false;
-        }),
-    );
-
-    return {
-      check: Effect.suspend(() =>
-        resource.open ? Effect.void : Effect.fail("registration resource closed"),
-      ),
-    };
-  }),
-);
-
-const dynamicRuntime = ThreadObject.layer([
-  {
-    agent: Agent.withModel(
-      Agent.make(plannerDefinition.id, {
-        input: plannerDefinition.input,
-        output: plannerDefinition.output,
-        toolkit: plannerDefinition.toolkit,
-        policy: plannerDefinition.policy,
-        instructions: (input: Agent.Input<typeof plannerDefinition>) =>
-          Effect.gen(function* () {
-            const resource = yield* RegistrationResource;
-
-            yield* resource.check;
-
-            return plannerDefinition.instructions(input);
-          }),
-      }),
-      plannerModel,
-    ),
-    definitions: registrationDefinitions,
-  },
-]).pipe(Layer.provideMerge(registrationResourceLayer));
-
 /** The eviction/alarm/chaos suites' Thread Object. */
 const progressWaiterCounts = new WeakMap<DurableObjectState, number>();
 
@@ -369,9 +262,9 @@ export class PublicationThreadObject extends ThreadObject.make(
 
 export class ProjectionThreadObject extends ThreadObject.make(
   Layer.unwrap(
-    Effect.map(Effect.all([makeTestBindings, makeProjectionBinding]), ([bindings, projection]) =>
+    Effect.map(makeTestBindings, (bindings) =>
       Layer.fresh(ThreadMaintenance.layer).pipe(
-        Layer.provideMerge(DurableAgentRuntime.layerWithBindings([...bindings, projection])),
+        Layer.provideMerge(DurableAgentRuntime.layerWithBindings(bindings)),
         Layer.provide(hostMaintenanceLayer),
       ),
     ),
@@ -520,55 +413,6 @@ export class TestThreadObject extends ThreadObject.make(
   }
 }
 
-/** Tight queue-depth and input-size quotas for the admission-limits gate rows. */
-export class LimitedThreadObject extends ThreadObject.make(testRuntimeLayer, {
-  ...baseOptions,
-  namespaceBinding: "LIMITED",
-  maxQueueDepthPerLane: 2,
-  maxInputBytes: 512,
-}) {}
-
-/** A database-size ceiling below any real database: every admission must refuse typed. */
-export class TinyDatabaseThreadObject extends ThreadObject.make(testRuntimeLayer, {
-  ...baseOptions,
-  namespaceBinding: "TINYDB",
-  maxDatabaseBytes: 1,
-}) {}
-
-/** Fail-closed authorization fixture for host-protocol error-tag fidelity. */
-export class DeniedThreadObject extends ThreadObject.make(testRuntimeLayer, {
-  ...baseOptions,
-  namespaceBinding: "DENIED",
-  operationAuthorizer: {
-    authorize: (request) =>
-      Effect.fail(
-        OperationDenied.make({
-          operation: request.operation,
-          reason: "denied by the #94 Cloudflare fixture",
-          ...(request.threadId === undefined ? {} : { threadId: request.threadId }),
-          ...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
-        }),
-      ),
-  },
-}) {}
-
-/** Registration acquisition through yielded effect-cf and platform services. */
-export class DynamicBindingsThreadObject extends ThreadObject.make(dynamicRuntime, {
-  ...baseOptions,
-  namespaceBinding: "DYNAMIC_BINDINGS",
-  eventLayer: Layer.effectDiscard(
-    Effect.flatMap(RegistrationResource, (resource) => resource.check),
-  ),
-}) {
-  async bindingSourceProbe(): Promise<BindingSourceProbe & { readonly stateMatches: boolean }> {
-    const probe = bindingSourceProbes.get(this.ctx);
-
-    if (probe === undefined) throw new Error("Binding source was not evaluated");
-
-    return { ...probe, stateMatches: bindingSourceProbes.has(this.ctx) };
-  }
-}
-
 /** A scoped compactor Layer captured once per Object incarnation. */
 export class ContextCompactorThreadObject extends ThreadObject.make(
   testRuntimeLayer.pipe(
@@ -589,7 +433,7 @@ export class ContextCompactorThreadObject extends ThreadObject.make(
   },
 ) {}
 
-/** Minimal integration proof that effect-cf owns native RPC event scopes and OTLP flushing. */
+/** Native RPC invocation and parent-span observations. */
 const TelemetryThreadObjectBase = ThreadObject.make(testRuntimeLayer, {
   ...baseOptions,
   namespaceBinding: "TELEMETRY",
@@ -613,8 +457,6 @@ export class TelemetryThreadObject extends TelemetryThreadObjectBase {
     const threadId = this.ctx.id.name ?? this.ctx.id.toString();
 
     const observed = Effect.gen(function* () {
-      // Also proves that the factory's public hook retains the event Layer's service type.
-      yield* OtlpExporter.Flusher;
       telemetryProbe(threadId).invocations.push(options);
 
       return yield* effect;
@@ -626,14 +468,6 @@ export class TelemetryThreadObject extends TelemetryThreadObjectBase {
         : RpcTracing.withRpcServerSpan(observed, options.rpc),
       options,
     );
-  }
-
-  failNextFlush(): void {
-    failNextFlush(this.ctx.id.name ?? this.ctx.id.toString());
-  }
-
-  async flushCount(): Promise<number> {
-    return flushCount(this.ctx.id.name ?? this.ctx.id.toString());
   }
 }
 

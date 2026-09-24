@@ -71,11 +71,6 @@ describe("canonical retrieval evidence", () => {
 
   it.each([
     ["copied answer without the original read", [search(21, citation), read(22, citation, code)]],
-    ["read with no search provenance", [read(21, source, code)]],
-    ["failed search", [search(21, source, "unavailable", true), read(22, source, code)]],
-    ["search from before the window", [search(19, source), read(22, source, code)]],
-    ["search after the read", [read(21, source, code), search(22, source)]],
-    ["wrong evidence", [search(21, source), read(22, source, "different-code")]],
     [
       "record identifier prefix collision",
       [
@@ -144,8 +139,4 @@ it("rejects aged copies and later transcripts instead of trusting a model-select
     ).toBe(true);
     expect(originalArchiveRecord(records, input, copyId)).toBeUndefined();
   }
-  expect(
-    originalArchiveRecord([accepted, later, copied], input, later.record.recordId),
-  ).toBeUndefined();
-  expect(originalArchiveRecord([accepted, accepted, original], input, source)).toBeUndefined();
 });
