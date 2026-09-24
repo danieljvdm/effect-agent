@@ -33,6 +33,7 @@ export const AppTools = Toolkit.make(
     parameters: Schema.Struct({ tripId: TripId }),
     success: TripApp,
     failure: PlannerError,
+    failureMode: "return",
     dependencies,
   }),
   Tool.make("get_trip_app", {
@@ -40,6 +41,7 @@ export const AppTools = Toolkit.make(
     parameters: Schema.Struct({ tripId: TripId }),
     success: Schema.NullOr(TripApp),
     failure: PlannerError,
+    failureMode: "return",
     dependencies,
   }),
   Tool.make("read_trip_app_files", {
@@ -55,6 +57,7 @@ export const AppTools = Toolkit.make(
       files: Schema.Array(AppFile),
     }),
     failure: PlannerError,
+    failureMode: "return",
     dependencies,
   }),
   Tool.make("edit_trip_app", {
@@ -69,6 +72,7 @@ export const AppTools = Toolkit.make(
     }),
     success: TripApp,
     failure: PlannerError,
+    failureMode: "return",
     dependencies,
   }),
   Tool.make("add_trip_app_map", {
@@ -77,6 +81,7 @@ export const AppTools = Toolkit.make(
     parameters: Schema.Struct({ tripId: TripId }),
     success: TripApp,
     failure: PlannerError,
+    failureMode: "return",
     dependencies,
   }),
   Tool.make("restore_trip_app", {
@@ -85,6 +90,7 @@ export const AppTools = Toolkit.make(
     parameters: Schema.Struct({ tripId: TripId, commitId: AppCommit }),
     success: TripApp,
     failure: PlannerError,
+    failureMode: "return",
     dependencies,
   }),
   Tool.make("set_trip_places", {
@@ -96,6 +102,7 @@ export const AppTools = Toolkit.make(
     }),
     success: Trip,
     failure: PlannerError,
+    failureMode: "return",
     dependencies,
   }),
 );

@@ -25,7 +25,7 @@ export class AppSourceStore extends Context.Service<
   }
 >()("travel-planner/trip-app/AppSourceStore") {}
 
-const TEMPLATE = "trip-app-template-v1";
+const TEMPLATE_PREFIX = "trip-app-template-";
 const MAX_SOURCE = 2 * 1024 * 1024;
 const MAX_TRANSFER = 8 * 1024 * 1024;
 const encoder = new TextEncoder();
@@ -199,7 +199,7 @@ const bounded = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Effect.timeoutOrElse({ duration: "45 seconds", orElse: () => Effect.fail(failed()) }),
   );
 
-/** Fixed native template forks, parentful main commits, no forced ref updates.
+/** Content-addressed native template forks, parentful main commits, no forced ref updates.
  * An uncertain push is reconciled against the remote tree and immediate parent.
  * All Git filesystem state, credentials, and repository handles belong to the operation scope.
  */
@@ -457,19 +457,40 @@ export const appSourceLayer = (
       Effect.mapError(invalid),
     );
 
-    if (repoName === TEMPLATE) return yield* invalid();
+    if (repoName.startsWith(TEMPLATE_PREFIX)) return yield* invalid();
     const files = yield* normalize(input.files);
 
     yield* Schema.decodeEffect(base)(remoteBase).pipe(Effect.mapError(invalid));
+    let target = yield* getRepo(repoName);
+
+    // Reconcile an accepted fork before consulting the current template. This also
+    // preserves retries of identical starters created under the old template name.
+    if (target !== null) {
+      const stored = yield* loadMain(yield* session(target, repoName, "read"));
+
+      if (stored === null) return yield* failed();
+      if (stored.parent.length !== 0 || !sameFiles(stored.files, files)) return yield* conflict();
+
+      return { commitId: stored.commitId };
+    }
+
+    const digest = yield* operation(() =>
+      crypto.subtle.digest("SHA-256", encoder.encode(JSON.stringify(files))),
+    );
+
+    const templateName =
+      TEMPLATE_PREFIX +
+      Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+
     const failpoint = yield* TripFailpoint;
-    let template = yield* getRepo(TEMPLATE);
+    let template = yield* getRepo(templateName);
 
     if (template === null) {
       yield* failpoint.hit("app-source:repo:before");
 
       const created = yield* operation(async () => {
         try {
-          return await artifacts.create(TEMPLATE, { setDefaultBranch: "main" });
+          return await artifacts.create(templateName, { setDefaultBranch: "main" });
         } catch (error) {
           if (!hasCode("ALREADY_EXISTS")(error)) throw error;
 
@@ -477,44 +498,40 @@ export const appSourceLayer = (
         }
       });
 
-      if (created !== null) yield* discardCreationToken(TEMPLATE, created.token);
+      if (created !== null) yield* discardCreationToken(templateName, created.token);
       yield* failpoint.hit("app-source:repo:after");
-      template = yield* getRepo(TEMPLATE);
+      template = yield* getRepo(templateName);
     }
     if (template === null) return yield* failed();
-    const templateSession = yield* session(template, TEMPLATE, "write");
+    const templateSession = yield* session(template, templateName, "write");
     let seed = yield* loadMain(templateSession);
 
     if (seed === null) {
-      yield* write(templateSession, files, null, TEMPLATE);
+      yield* write(templateSession, files, null, templateName);
       const pushed = yield* push(templateSession).pipe(Effect.result);
 
       seed = yield* loadMain(templateSession);
       if (seed === null) return yield* pushed._tag === "Failure" ? pushed.failure : failed();
     }
     if (seed.parent.length !== 0 || !sameFiles(seed.files, files)) return yield* conflict();
-    let target = yield* getRepo(repoName);
+    yield* failpoint.hit("app-source:fork:before");
 
-    if (target === null) {
-      yield* failpoint.hit("app-source:fork:before");
+    const forked = yield* operation(async () => {
+      try {
+        return await template.fork(repoName, { defaultBranchOnly: true });
+      } catch (error) {
+        if (!hasCode("ALREADY_EXISTS")(error)) throw error;
 
-      const forked = yield* operation(async () => {
-        try {
-          return await template.fork(repoName, { defaultBranchOnly: true });
-        } catch (error) {
-          if (!hasCode("ALREADY_EXISTS")(error)) throw error;
-
-          return null;
-        }
-      }).pipe(Effect.result);
-
-      if (forked._tag === "Success") {
-        if (forked.success !== null) yield* discardCreationToken(repoName, forked.success.token);
-        yield* failpoint.hit("app-source:fork:after");
+        return null;
       }
-      target = yield* getRepo(repoName);
-      if (target === null) return yield* forked._tag === "Failure" ? forked.failure : failed();
+    }).pipe(Effect.result);
+
+    if (forked._tag === "Success") {
+      if (forked.success !== null) yield* discardCreationToken(repoName, forked.success.token);
+      yield* failpoint.hit("app-source:fork:after");
     }
+    target = yield* getRepo(repoName);
+    if (target === null) return yield* forked._tag === "Failure" ? forked.failure : failed();
     const stored = yield* loadMain(yield* session(target, repoName, "read"));
 
     if (stored === null) return yield* failed();
@@ -557,7 +574,7 @@ export const appSourceLayer = (
       Effect.mapError(invalid),
     );
 
-    if (repoName === TEMPLATE) return yield* invalid();
+    if (repoName.startsWith(TEMPLATE_PREFIX)) return yield* invalid();
 
     const parent = yield* Schema.decodeEffect(AppCommit)(input.parentCommit).pipe(
       Effect.mapError(invalid),

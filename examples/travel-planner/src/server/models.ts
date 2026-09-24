@@ -1,4 +1,4 @@
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { OpenAiClient, OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
 import { Config, Effect, Layer, Result, Schema, Stream, Redacted } from "effect";
 import type { Agent } from "effect-agent";
 import { AiError, LanguageModel, Model } from "effect/unstable/ai";
@@ -24,6 +24,7 @@ const PublicProviderEvent = Schema.Union([
         type: Schema.Literal("web_search_call"),
         id: Schema.String,
         status: Schema.String,
+        action: Schema.optionalKey(Schema.Unknown),
       }),
       Schema.Struct({
         type: Schema.Literal("function_call"),
@@ -33,6 +34,8 @@ const PublicProviderEvent = Schema.Union([
     ]),
   }),
 ]);
+
+const searchParameters = OpenAiTool.WebSearch({}).parametersSchema;
 
 /** Observe typed public SSE events without altering the stream consumed by Effect AI. */
 export const observeOpenAi = (
@@ -98,6 +101,18 @@ export const observeOpenAi = (
                             ? "failed"
                             : "incomplete",
                     );
+
+                    // The native provider decoder can reject an action even when OpenAI
+                    // reports success. Retain just this public item, through the existing
+                    // redaction boundary, so the upstream mismatch is diagnosable. Do not
+                    // rewrite it, invent search results, or replay the failed model turn.
+                    if (
+                      visible.type === "response.output_item.done" &&
+                      !Schema.is(searchParameters)({ action: visible.item.action })
+                    )
+                      return recordDiagnostic("OpenAI web search: invalid action", visible, {
+                        toolCallId: visible.item.id,
+                      }).pipe(Effect.andThen(progress));
 
                     return visible.type === "response.output_item.done" &&
                       visible.item.status !== "completed"

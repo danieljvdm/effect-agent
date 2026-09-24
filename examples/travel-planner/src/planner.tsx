@@ -493,11 +493,14 @@ function PlannerContent({ signOut }: { readonly signOut: () => void }) {
               }}
             >
               {!!snapshot?.scouts?.length && (
-                <ResearchScoutCard key={selection.conversationId} scouts={snapshot.scouts} />
+                <ResearchScoutCard
+                  key={`research:${selection.conversationId}`}
+                  scouts={snapshot.scouts}
+                />
               )}
               {(snapshot?.app || snapshot?.editor) && (
                 <TripAppCard
-                  key={selection.conversationId}
+                  key={`app:${selection.conversationId}`}
                   app={snapshot.app ?? null}
                   editor={snapshot.editor ?? null}
                 />
