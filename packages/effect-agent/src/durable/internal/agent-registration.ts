@@ -540,7 +540,9 @@ type AttemptLayerRequirements<Requirements, AttemptLayer> = AttemptLayer extends
 type EntryRequirements<Entry> = Entry extends unknown
   ? AttemptLayerRequirements<
       | EntryWorkerRequirements<Entry>
-      | (Entry extends { readonly decisionTurn: infer D } ? DecisionTurnRequirements<D> : never),
+      | ("decisionTurn" extends keyof Entry
+          ? DecisionTurnRequirements<Entry["decisionTurn"]>
+          : never),
       "attemptLayer" extends keyof Entry ? Entry["attemptLayer"] : undefined
     >
   : never;

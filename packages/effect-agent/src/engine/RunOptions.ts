@@ -494,6 +494,10 @@ export class RunToolAuthorization extends Context.Service<
 export interface RunTurnResponseCommit {
   /** Present only for a native DecisionModel call and validated host projection. */
   readonly decision?: DecisionTurnEvidence | undefined;
+  /** Synthetic rejections covering every call, committed atomically with the response. */
+  readonly rejectedResults?:
+    | ReadonlyArray<Pick<RunTurnResumeSettledCall, "id" | "result" | "budgetRejected">>
+    | undefined;
   /** Rejected fresh arguments; persist atomically with the response and restore on resume. */
   readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;

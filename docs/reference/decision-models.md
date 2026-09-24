@@ -63,6 +63,7 @@ project the answer through an existing Tool. Construct it with
 `decisionTurn` on the agent's durable registration. The definition contains one `route`
 classification; `tool` must be the exact Tool in that agent's Toolkit. The registered
 LanguageModel remains responsible for ordinary generation.
+Turns reserved for required completion or budget finalization stay with the LanguageModel.
 
 `prepare` receives the original Run input and the current assembled Prompt, including steering
 and settled Tool results. It returns only the state the decision provider may receive. Keep it
@@ -76,6 +77,7 @@ acquired only when preparation returns a state and is scoped to the current Atte
 A projection supplies host-authored text and parameters for the fixed Tool. Current Tool
 visibility, parameter validation, authorization, approvals, budgets, and receipts still apply.
 Decision usage counts toward the Run with the actual decision provider and model identity.
+Budget-rejected projections retain the decision and failed Tool result atomically before continuing.
 
 The canonical decision consumes the slot for the rest of the Run, including after checkpoint
 retirement and recovery. A failure before that append may repeat inference. An unresolved

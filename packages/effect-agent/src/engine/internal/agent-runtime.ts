@@ -326,6 +326,7 @@ import {
   type RunSubagentJoinRequest,
   type RunCompactionCommit,
   type RunToolCallDescriptor,
+  type RunTurnResponseCommit,
   RunTurnResumeSettledCallSchema,
   type RunTurnResume,
   type RunUsageDelta,
@@ -5638,14 +5639,14 @@ const makeTurn = <
           priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls ||
           context.tokenExhausted);
 
-      const modelToolChoice = (): LanguageModel.ToolChoice<string> | undefined => {
-        const terminalToolChoiceOnly =
-          finalAnswerOnly ||
-          (agent.definition.completion?.required === true &&
-            policy.onExhaustion === "fail" &&
-            turn === bounds.maxTurns);
+      const terminalToolChoiceOnly = () =>
+        finalAnswerOnly ||
+        (agent.definition.completion?.required === true &&
+          policy.onExhaustion === "fail" &&
+          turn === bounds.maxTurns);
 
-        return terminalToolChoiceOnly
+      const modelToolChoice = (): LanguageModel.ToolChoice<string> | undefined => {
+        return terminalToolChoiceOnly()
           ? agent.definition.completion === undefined ||
             (agent.definition.completion.required !== true &&
               !catalog.some(
@@ -6230,7 +6231,7 @@ const makeTurn = <
       // Preparation sees the exact assembled Prompt, including current steering.
       const decisionTurn =
         context.committedDecisionTurn === undefined &&
-        !finalAnswerOnly &&
+        !terminalToolChoiceOnly() &&
         options.durability !== undefined &&
         options.frameworkMessage === undefined
           ? yield* ConfiguredDecisionTurn
@@ -6721,6 +6722,48 @@ const makeTurn = <
               ...additions,
             ]);
 
+          const commitResponse = Effect.fnUntraced(function* (
+            rejectedResults?: RunTurnResponseCommit["rejectedResults"],
+          ) {
+            if (options.durability === undefined) return;
+            yield* options.durability.commitResponse({
+              turn,
+              turnId,
+              responseMessages: promptFromTurnParts(trace),
+              ...(trace.decision === undefined ? {} : { decision: trace.decision }),
+              ...(rejectedResults === undefined ? {} : { rejectedResults }),
+              calls: trace.applicationCallDescriptors,
+              ...(trace.toolParameterRejections.size === 0
+                ? {}
+                : { toolParameterRejections: [...trace.toolParameterRejections.values()] }),
+              toolExposure: snapshot,
+            });
+            if (trace.decision !== undefined) context.committedDecisionTurn = turn;
+          });
+
+          const rejectBatch = Effect.fnUntraced(function* (
+            error: AgentPolicyError | ModelProtocolError,
+          ) {
+            const events = yield* settleRejectedBatch(context, turnId, trace, error);
+
+            if (trace.decision !== undefined) {
+              const rejectedResults = yield* Effect.forEach(
+                trace.applicationToolResults,
+                Effect.fnUntraced(function* (result) {
+                  return {
+                    id: result.id,
+                    result: yield* decodeEventJson(result.encodedResult, "Rejected Tool result"),
+                    ...(result.budgetRejected === true ? { budgetRejected: true as const } : {}),
+                  };
+                }),
+              );
+
+              yield* commitResponse(rejectedResults);
+            }
+
+            return events;
+          });
+
           /**
            * Post-validation seam: charge the response's usage (RUN-023), stage
            * it for the Turn's canonical commit, emit one-shot `BudgetWarning`
@@ -6827,10 +6870,7 @@ const makeTurn = <
                         // the token-breaching batch never executes a handler,
                         // and `tokenExhausted` (stamped by `consumeUsage`)
                         // constrains every subsequent request.
-                        const rejection = yield* settleRejectedBatch(
-                          context,
-                          turnId,
-                          trace,
+                        const rejection = yield* rejectBatch(
                           AgentPolicyError.make({
                             limit: "tokens",
                             message: `Token budget exhausted: this Run's ${policy.tokenBudget ?? 0} token budget was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
@@ -6956,15 +6996,7 @@ const makeTurn = <
                   return yield* ModelProtocolError.make({
                     message: "Decision Turn requires durable execution",
                   });
-                yield* options.durability.commitResponse({
-                  turn,
-                  turnId,
-                  decision: trace.decision,
-                  responseMessages: Prompt.empty,
-                  calls: [],
-                  toolExposure: snapshot,
-                });
-                context.committedDecisionTurn = turn;
+                yield* commitResponse();
 
                 const turnsBlocked =
                   policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
@@ -7025,16 +7057,13 @@ const makeTurn = <
               );
             }
 
-            // RUN-018: a rejected batch never executes a handler and is
-            // never durably declared — it settles synthetically through the
-            // ordinary batch continuation, so the model sees one failed
+            // RUN-018: a rejected batch never executes a handler. It settles
+            // through the ordinary batch continuation, so the model sees one failed
             // result per rejected call. Budget exhaustion constrains the next
             // Turn; a mixed completion declaration can be corrected within
-            // the remaining budgets. `commitResponse` is deliberately skipped:
-            // without it the Turn stays on the single-batch canonical
-            // commit shape and recovery replays it like any no-tool Turn. The
-            // rejected Turn's usage is still charged via
-            // `afterValidatedResponse` because the Run continues.
+            // the remaining budgets. Ordinary responses use the late single-batch
+            // commit. Decisions commit their response and rejection atomically
+            // so recovery retains the consumed slot and cannot execute the call.
             const batchRejection =
               overToolBudget &&
               trace.applicationToolCalls.length > 0 &&
@@ -7057,12 +7086,7 @@ const makeTurn = <
             if (batchRejection !== undefined) {
               return afterValidatedResponse(
                 Effect.gen(function* () {
-                  const rejection = yield* settleRejectedBatch(
-                    context,
-                    turnId,
-                    trace,
-                    batchRejection,
-                  );
+                  const rejection = yield* rejectBatch(batchRejection);
 
                   return Stream.fromIterable(rejection).pipe(
                     Stream.concat(
@@ -7116,20 +7140,7 @@ const makeTurn = <
                   // this persistence mutation, while approval preflight and preparation still run
                   // afterward. This retains durability §15's provably-safe resume window without
                   // allowing eager continuation work to overtake the append-only event stream.
-                  yield* options.durability.commitResponse({
-                    turn,
-                    turnId,
-                    responseMessages: promptFromTurnParts(trace),
-                    ...(trace.decision === undefined ? {} : { decision: trace.decision }),
-                    calls: trace.applicationCallDescriptors,
-                    ...(trace.toolParameterRejections.size === 0
-                      ? {}
-                      : {
-                          toolParameterRejections: [...trace.toolParameterRejections.values()],
-                        }),
-                    toolExposure: snapshot,
-                  });
-                  if (trace.decision !== undefined) context.committedDecisionTurn = turn;
+                  yield* commitResponse();
                 }
 
                 const toolResults = guardBudgetStream(

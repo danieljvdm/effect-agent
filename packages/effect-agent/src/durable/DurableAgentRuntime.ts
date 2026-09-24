@@ -5687,9 +5687,47 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               // leading messages of this response batch.
               const pendingSlice = history.content.slice(state.lastCommitLen);
               const createdAt = yield* nowUtc;
+              const rejectedResults = commit.rejectedResults;
+
+              if (
+                rejectedResults !== undefined &&
+                (rejectedResults.length !== commit.calls.length ||
+                  new Set(rejectedResults.map((result) => result.id)).size !== commit.calls.length)
+              )
+                return yield* RunJournalError.make({
+                  message: "Rejected response requires one result per declared Tool Call",
+                });
+
+              const rejectedParts =
+                rejectedResults === undefined
+                  ? []
+                  : yield* Effect.forEach(
+                      commit.calls,
+                      Effect.fnUntraced(function* (call) {
+                        const result = rejectedResults.find(
+                          (result) => result.id === call.toolCallId,
+                        );
+
+                        if (result === undefined)
+                          return yield* RunJournalError.make({
+                            message: "Rejected response is missing a declared Tool result",
+                          });
+
+                        return Prompt.makePart("tool-result", {
+                          id: call.toolCallId,
+                          name: call.toolName,
+                          result: result.result,
+                          isFailure: true,
+                          providerExecuted: false,
+                        });
+                      }),
+                    );
+
+              const responseBatch =
+                rejectedResults === undefined ? turnResponseBatch : turnCanonicalBatch;
 
               const batch = yield* withCrypto(
-                turnResponseBatch({
+                responseBatch({
                   decision: commit.decision,
                   toolExposure: commit.toolExposure,
                   toolOperations: commit.calls.map((call) =>
@@ -5705,7 +5743,22 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                   runId,
                   turn: canonicalTurn,
                   turnId: commit.turnId,
-                  appended: [...pendingSlice, ...commit.responseMessages.content],
+                  appended: [
+                    ...pendingSlice,
+                    ...commit.responseMessages.content,
+                    ...(rejectedResults === undefined
+                      ? []
+                      : [Prompt.makeMessage("tool", { content: rejectedParts })]),
+                  ],
+                  ...(rejectedResults === undefined
+                    ? {}
+                    : {
+                        budgetRejectedCalls: new Set(
+                          rejectedResults
+                            .filter((result) => result.budgetRejected === true)
+                            .map((result) => result.id),
+                        ),
+                      }),
                   producerId: config.producerId,
                   deploymentId: config.deploymentId,
                   createdAt,
@@ -5723,8 +5776,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               for (const record of batch.records) knownIds.add(record.recordId);
               yield* hit("turn:after-response-append");
               if (commit.decision !== undefined) {
-                // No Tool-result boundary follows this committed inference. Close only
-                // its canonical prefix now; later drained inputs belong to the next Turn.
+                // Abstentions close their prefix here; Tool projections advance through
+                // their results at the next history boundary, including atomic rejections.
                 yield* Ref.update(stateRef, (current) =>
                   commit.decision?.projection === "continue"
                     ? { ...current, lastCommitLen: history.content.length, pendingTurn: undefined }

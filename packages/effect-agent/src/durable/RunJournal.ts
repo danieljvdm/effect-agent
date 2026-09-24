@@ -1653,7 +1653,8 @@ const runCompletionRecord = Effect.fn("RunJournal.runCompletionRecord")(function
  *
  * Phase 5 keeps this shape for Turns that declare no application Tool calls; their terminal
  * `RunCompleted` marker joins the response in this same atomic batch. Tool-declaring Turns split
- * into `turnResponseBatch` + `turnResultsBatch`.
+ * into `turnResponseBatch` + `turnResultsBatch`, except synthetic rejections whose response
+ * and results can commit atomically without executing a handler.
  */
 export const turnCanonicalBatch = Effect.fn("RunJournal.turnCanonicalBatch")(function* (
   input: TurnCommitInput,
