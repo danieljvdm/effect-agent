@@ -311,6 +311,9 @@ jobs:
         timeout-minutes: 75
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
         with:
+          # In git-cli publish mode, tags are pushed from cwd; the action's
+          # github.sha is used only by its version and github-api tag paths.
+          commitMode: git-cli
           cwd: ${{ github.workspace }}/candidate
           publish: ${{ github.workspace }}/trusted/scripts/release-recover.sh
         env:
