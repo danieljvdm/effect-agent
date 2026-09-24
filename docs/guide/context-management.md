@@ -1019,7 +1019,8 @@ always fail because another model call would add time or cost.
 
 With `contextTokenLimit`, the engine estimates the next prompt before every turn. Ordinary
 append-only history starts from the last provider-reported input and estimates appended content.
-Preparation and transient-context hooks use a fresh estimate. Within a turn, the engine reuses
+Preparation and transient-context hooks use a fresh estimate. Full estimates exclude repeated
+system messages removed from the outgoing request. Within a turn, the engine reuses
 the history view and estimate until compaction changes them. The default compactor then:
 
 1. clears old application tool results outside the preferred `keepRecentTokens` tail while keeping

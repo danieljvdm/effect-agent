@@ -143,24 +143,38 @@ const lookup = Toolkit.make(
 // #651: successful answers and reported usage do not prove a reusable prompt prefix.
 // These assertions compare real wire prefixes, without simulating the provider cache.
 describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651", () => {
-  it.effect.each(["retained", "conversation-only"] as const)(
-    "preserves user-ending prefixes across three runs with %s history",
+  it.effect.each(["retained", "prepared", "conversation-only"] as const)(
+    "preserves user-ending prefixes within the context limit across three runs with %s history",
     (historyMode) =>
       Effect.gen(function* () {
         const { model, requests } = yield* captureOpenAi();
+        const instructionText = "Answer the user's question. ".repeat(120);
 
         const agent = Agent.withModel(
           Agent.make("cache-runs", {
             input: Schema.String,
             output: Schema.String,
-            instructions,
+            instructions: Prompt.fromMessages([
+              Prompt.systemMessage({
+                content: instructionText,
+                options: { openai: { promptCacheBreakpoint: { mode: "explicit" } } },
+              }),
+            ]),
             toolkit: Toolkit.empty,
-            policy,
+            policy: { ...policy, contextTokenLimit: 2_000 },
           }),
           model,
         );
 
-        const first = yield* AgentRuntime.run(agent, "First question");
+        const context =
+          historyMode === "prepared"
+            ? {
+                prepare: ({ source }: { readonly source: Prompt.Prompt }) =>
+                  Effect.succeed({ prompt: source }),
+              }
+            : undefined;
+
+        const first = yield* AgentRuntime.run(agent, "First question", { context });
         const history = yield* ThreadHistory.ThreadHistory;
         let stored = yield* history.load(first.threadId);
 
@@ -168,8 +182,8 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
           const result = yield* AgentRuntime.run(
             agent,
             question,
-            historyMode === "retained"
-              ? { threadId: first.threadId }
+            historyMode !== "conversation-only"
+              ? { threadId: first.threadId, context }
               : {
                   history: Prompt.fromMessages(
                     stored.content.filter((message) => message.role !== "system"),
@@ -186,13 +200,13 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
             content: [
               {
                 type: "input_text",
-                text: "Answer the user's question.",
+                text: instructionText,
                 prompt_cache_breakpoint: { mode: "explicit" },
               },
             ],
           });
           expect(systemText(request)).toEqual([
-            "Answer the user's question.",
+            instructionText,
             expect.stringContaining("Final output contract:"),
           ]);
         }
@@ -205,10 +219,10 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
         expect(stored.content.filter((message) => message.role === "assistant")).toHaveLength(3);
         // Projection must not rewrite persisted instructions or add derived contracts to history.
         expect(stored.content.filter((message) => message.role === "system")).toHaveLength(
-          historyMode === "retained" ? 3 : 1,
+          historyMode === "conversation-only" ? 1 : 3,
         );
         expect(JSON.stringify(stored)).not.toContain("Final output contract:");
-      }).pipe(Effect.provide(InMemory.layer)),
+      }).pipe(Effect.provide(Layer.merge(InMemory.layer, ContextCompactor.layerRollover))),
   );
 
   it.effect("preserves tool-result prefixes and tool schemas across consecutive tool rounds", () =>

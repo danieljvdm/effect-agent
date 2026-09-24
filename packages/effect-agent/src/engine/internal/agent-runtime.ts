@@ -3884,7 +3884,9 @@ const nextContextEstimate = Effect.fn("AgentRuntime.nextContextEstimate")(functi
     );
   }
 
-  return yield* estimateContextTokens(view);
+  return yield* estimateContextTokens(
+    prepareModelPrompt(Prompt.fromMessages(view), undefined).content,
+  );
 });
 
 const snapshotCompactionMessages = Effect.fnUntraced(function* (
@@ -5732,11 +5734,13 @@ const makeTurn = <
 
       // Preparation may replace an existing prefix, and transient context may
       // change independently of history. Only ordinary append-only history can
-      // reuse the last provider-reported input as an estimation anchor.
+      // reuse the last provider-reported input as an estimation anchor. Full
+      // estimates exclude system copies removed by the provider projection;
+      // canonical indices still locate appended content and compaction coverage.
       const estimateSourceContext = (view: ReadonlyArray<Prompt.Message>) =>
         options.context === undefined && options.transientContext === undefined
           ? nextContextEstimate(context, view)
-          : estimateCallTokens(view);
+          : estimateCallTokens(prepareModelPrompt(Prompt.fromMessages(view), undefined).content);
 
       let prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
       let sourceTokens: number | undefined;
