@@ -726,6 +726,7 @@ const executionClassFor = (
 };
 
 const makeMcpTool = (tool: McpSchema.Tool, trustToolAnnotations: boolean): McpTool => {
+  // MCP servers may advertise valid JSON Schemas outside a model provider's strict subset.
   let dynamic: McpTool = Tool.dynamic(tool.name, {
     ...(tool.description === undefined ? {} : { description: tool.description }),
     parameters: tool.inputSchema,
@@ -734,7 +735,7 @@ const makeMcpTool = (tool: McpSchema.Tool, trustToolAnnotations: boolean): McpTo
     // MCP reports tool errors inside results so the model can self-correct;
     // `return` hands the typed failure to the model the same way.
     failureMode: "return",
-  });
+  }).annotate(Tool.Strict, false);
 
   const title = tool.title ?? tool.annotations?.title;
 
