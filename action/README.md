@@ -164,7 +164,7 @@ budget failures include the exhausted limit and observed usage.
 Failure comments on an unchanged head also report budget exhaustion without exposing provider
 diagnostics or model output.
 
-The reviewer sees its actual spending balance before each request. It can explicitly report
+The host enforces the spending allowance before each request. The reviewer can explicitly report
 unfinished coverage while preserving established findings. If turn, tool, or cost limits stop
 research, the Action publishes established findings with an incomplete-coverage warning and fails
 the check, including when no defects were found. Such an attempt cannot become
@@ -271,11 +271,9 @@ retry. Diagnostics report only the preflight phase, attempt, failure category, H
 bounded provider request ID when available.
 Paid inference is never automatically retried.
 
-The spending status is an outgoing-only, uncached suffix included in that token count. It shows
-the balance before dispatch, estimated charges, outstanding reservations, and full cache-miss
-input and output prices. It does not tell the reviewer when to finish or claim an output allowance
-before counting the actual request. The remaining-turn
-and tool counters are not presented as a research target. Their safety limits still apply.
+Spending balances and reservations remain in the host's admission ledger and logs. They are not
+appended to the review conversation as user requests. Remaining-turn and tool counters are not
+presented as a research target. Their safety limits still apply.
 
 The output allowance starts at 32,000 tokens and is reduced before each request when needed to fit
 the remaining balance. Research can continue with that smaller allowance; the model, reasoning
@@ -294,10 +292,17 @@ cost. Provider failures identify the model call, request or stream phase, typed 
 category, HTTP status, and bounded request ID when available. Admission refusals use fixed host
 messages to distinguish invalid usage or pricing contracts from network failures. Raw provider
 failure causes, response bodies, credentials, and repository source are excluded from diagnostics.
+Stream error events log a recognized public provider error code or `unrecognized`, alongside the
+request ID. Error messages and parameters remain excluded. A provider error event can surface as
+`ModelProtocolError` in the review summary; inspect the provider-event log to distinguish it from
+an interpreter protocol failure. Such events do not trigger a paid retry.
 Navigation logs show read offsets, fully repeated pages, discarded reads at rollover, remaining
 coverage, note-update counts, and compaction counts. Policy failures name the exhausted limit;
 deadline stops also identify the five-minute limit in the published review. Logs also count supplied tool
 definitions, returned function calls, and completion calls to diagnose protocol failures.
+Admission logs identify the requested model and reasoning effort. Usage logs retain the returned
+model, reasoning-token count when supplied, and incomplete reason. Missing reasoning counts remain
+unmeasured; the logs never include reasoning content.
 
 Within `.patch` files, the Action replaces single-line source-map JSON payloads in
 valid nested `.map` diffs with explicit omission markers before model input and spending
@@ -330,8 +335,8 @@ deadline and native rollover at a 48,000-token working context still apply; the 
 exact-input admission boundary remains 128,000 tokens.
 
 The Action uses explicit-only caching with a 30-minute TTL and a stable head-based routing key.
-It marks reusable instructions, the diff, and completed tool batches before the ephemeral run-status
-message, retaining earlier boundaries as history grows. Cache fields are added only at the native
+It marks reusable instructions, the diff, and completed tool batches, retaining earlier boundaries
+as history grows. Cache fields are added only at the native
 Effect OpenAI client boundary; canonical history and provider encoding remain unchanged. This works
 with the pinned Effect `4.0.0-rc.117` client, which serializes the additional request fields unchanged.
 Required finalization selects `submit_review` through the native exact-tool choice, preserving

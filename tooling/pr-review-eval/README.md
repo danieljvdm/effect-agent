@@ -52,7 +52,8 @@ immutable case input determine each allowance. Observations without this budget 
 incompatible and must be rerun. One review
 navigates paged diffs and immutable source, including literal code search for definitions and
 callers. It reads source to resolve concrete defect questions and can explicitly report unfinished
-coverage. The provider appends its spending balance before token counting.
+coverage. The provider enforces spending admission without appending balance messages to the
+review conversation.
 
 Frozen source search follows the live adapter's bounds: twenty files per page, five matching lines
 per file, and 200-character snippets. Follow `nextCursor` to search the remaining files;
