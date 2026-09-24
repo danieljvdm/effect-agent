@@ -472,8 +472,8 @@ const reviewPolicy = (costAdmitted: boolean, contextTokenLimit: number) =>
       ? { completionReserveTokens: 0 }
       : { tokenBudget: 416_000, completionReserveTokens: 160_000 }),
     onExhaustion: "final-answer",
-    // Host admission enforces spending; generic counters are not a research target.
-    runStatus: costAdmitted ? "off" : "appended",
+    // Show elapsed time so the reviewer can submit before the hard deadline.
+    runStatus: "appended",
   });
 
 const instructions = (guidance?: string, base = REVIEW_INSTRUCTIONS) =>

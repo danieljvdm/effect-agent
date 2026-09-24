@@ -343,6 +343,20 @@ const matchesIgnore = (path: string, rawPattern: string): boolean => {
 
     return path === prefix || path.startsWith(`${prefix}/`);
   }
+  const nested = pattern.indexOf("/**/");
+
+  if (nested > 0) {
+    const prefix = pattern.slice(0, nested);
+    const suffix = pattern.slice(nested + 4);
+
+    return (
+      suffix.length > 0 &&
+      !prefix.includes("*") &&
+      !suffix.includes("*") &&
+      path.startsWith(`${prefix}/`) &&
+      path.endsWith(`/${suffix}`)
+    );
+  }
   if (pattern.startsWith("**/")) {
     const suffix = pattern.slice(3);
 

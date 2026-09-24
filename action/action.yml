@@ -64,7 +64,7 @@ inputs:
     description: "Optional committed repository guidance file."
     required: false
   ignore:
-    description: "Comma-separated exact paths, prefix/**, **/name, or **/*.suffix patterns."
+    description: "Comma-separated exact paths, prefix/**, prefix/**/name, **/name, or **/*.suffix patterns."
     required: false
 outputs:
   skipped:

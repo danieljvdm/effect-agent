@@ -4,7 +4,12 @@ import { Cause, ConfigProvider, Deferred, Effect, Exit, Fiber, Option, Ref, Sche
 import { TestClock } from "effect/testing";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
-import { reviewActionProgram } from "../src/action.ts";
+import {
+  GeneratedFileClassification,
+  hydrateExactChanges,
+  reviewActionProgram,
+} from "../src/action.ts";
+import type { ChangedFile, RepositorySnapshot } from "../src/github.ts";
 import { reviewMarker } from "../src/selection.ts";
 
 const PublishedReviewBody = Schema.Struct({
@@ -80,6 +85,64 @@ const reviewHistoryWire = (id: number, body: string, commitId: string, submitted
   submitted_at: submittedAt,
   state: "COMMENTED",
   user: { login: "effect-agent[bot]", type: "Bot" },
+});
+
+describe("review input admission", () => {
+  // Regression from b3be98955: the configured nested snapshot pattern admitted a generated file.
+  it.effect("ignores a nested snapshot without ignoring other snapshots", () =>
+    Effect.gen(function* () {
+      const ignoredPath = "packages/db/migrations/postgres/20260924/snapshot.json";
+      const includedPath = "packages/db/fixtures/snapshot.json";
+
+      const content = new Map([
+        [ignoredPath, '{"generated":true}\n'],
+        [includedPath, '{"fixture":true}\n'],
+      ]);
+
+      const base: RepositorySnapshot = {
+        revision: "base",
+        paths: [],
+        entry: () => undefined,
+        readTextFile: () => Effect.succeed(""),
+      };
+
+      const head: RepositorySnapshot = {
+        revision: "head",
+        paths: [ignoredPath, includedPath],
+        entry: (path) => {
+          const text = content.get(path);
+
+          return text === undefined
+            ? undefined
+            : { sha: path, mode: "100644", type: "blob", size: text.length };
+        },
+        readTextFile: (path) => Effect.succeed(content.get(path) ?? ""),
+      };
+
+      const files: ReadonlyArray<ChangedFile> = [ignoredPath, includedPath].map((path) => ({
+        path,
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        patch: undefined,
+      }));
+
+      const surface = yield* hydrateExactChanges({
+        files,
+        changedPaths: [ignoredPath, includedPath],
+        base,
+        head,
+        ignore: ["packages/db/migrations/**/snapshot.json"],
+      }).pipe(
+        Effect.provideService(GeneratedFileClassification, {
+          isGenerated: () => Effect.succeed(false),
+        }),
+      );
+
+      expect(surface.ignoredPaths).toEqual([ignoredPath]);
+      expect(surface.changes.map(({ path }) => path)).toEqual([includedPath]);
+    }),
+  );
 });
 
 describe("stale-head publication", () => {
