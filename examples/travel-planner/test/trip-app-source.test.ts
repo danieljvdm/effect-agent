@@ -260,6 +260,24 @@ it("blocks credential redirects and releases Git tokens", async () => {
   expect(tokens.size).toBe(0);
 }, 30_000);
 
+// d210027c changed the starter's dependencies while every fork still shared template-v1.
+// A fresh deployment must create new apps without rewriting previously saved source.
+it("forks an updated starter while preserving existing apps and retry conflicts", async () => {
+  const original = await fork();
+  const updated = [{ path: "index.html", content: "Updated starter" }];
+  const next = await fork("trip-two", updated);
+
+  expect(await read("trip-two", next.commitId)).toEqual(updated);
+  expect(await fork("trip-two", updated)).toEqual(next);
+  await expect(fork("trip-one", updated)).rejects.toMatchObject({ code: "conflict" });
+  expect(await fork()).toEqual(original);
+  expect(await read("trip-one", original.commitId)).toEqual(
+    [...initial].sort((a, b) => a.path.localeCompare(b.path)),
+  );
+  expect(forks).toEqual(["trip-one", "trip-two"]);
+  expect(tokens.size).toBe(0);
+}, 30_000);
+
 it("allows only one competing main update and never force-overwrites its winner", async () => {
   const seed = await fork();
 

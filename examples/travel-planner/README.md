@@ -16,6 +16,10 @@ It uses Cloudflare:
 The app consumes published Effect Agent packages and uses Effect Atom for client state.
 [alchemy.run.ts](alchemy.run.ts) defines the Cloudflare resources and required configuration.
 
+New trip sites fork an immutable starter identified by its source contents. Updating the
+starter affects new sites; existing app repositories and saved versions remain unchanged.
+Source conflicts are returned to the editor so it can read the current files before editing.
+
 Choose GPT-6 Astra or GPT-6 Luna in Settings. Astra remains the default; Luna also supports
 turning reasoning off. Saved preferences for the previous Luna model select GPT-6 Luna on
 the next message, preserving reasoning effort and processing speed. Already accepted work
@@ -82,6 +86,11 @@ two seconds after each response, and bounds each active read to three seconds. F
 stop polling until a new source request, mutation invalidation, or remount. A stalled or failed
 worker leaves the conversation and other workers usable. Loading updates are distinct from
 starting work or unavailable updates.
+
+Worker activity belongs to its conversation. Switching trips closes its activity dialogs and
+removes its cards. Provider failures remain visible in recorded activity; incompatible OpenAI
+web-search actions are retained through the diagnostic redaction boundary for investigation.
+An already failed scout requires a new user request to continue; observation never restarts it.
 
 Worker query identity includes the signed-in account, conversation, worker, and canonical
 request sequence. Changing conversations or replacing a task releases its subscriptions,
