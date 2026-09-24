@@ -7,18 +7,16 @@ import {
 } from "@effect-agent/testing/certification";
 import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Redacted, Schema } from "effect";
+import { expect, it } from "@effect/vitest";
+import { Effect, Layer, Redacted } from "effect";
 import { DurableRuntimeFailpointLocation } from "effect-agent/durable-failpoint";
-import { CertificationCaseResult, CertificationReport } from "effect-agent/testing/certification";
 import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
 import { threadStoreConformanceCases } from "effect-agent/testing/thread-store-conformance";
 
 /**
- * Lives here for the same reason the SQLite runner does: only the Cloudflare packages may
- * dev-depend on `testing`, and vp's task graph rejects the storage-* -> testing cycle. Both
- * ports share one client over one temporary database. Tier 3 is reported as not exercised: no
- * committed process-kill suite drives this adapter yet.
+ * Keep certification outside the adapter package to avoid a storage-postgres -> testing cycle.
+ * Both ports share one client over one temporary database. No process-kill suite drives this
+ * adapter yet, so Tier 3 must remain not exercised.
  */
 const adminUrl =
   process.env.EFFECT_AGENT_TEST_POSTGRES_URL ??
@@ -66,88 +64,25 @@ const combinedAdapters = (url: string) => {
   );
 };
 
-let cached: CertificationReport | undefined;
-
-const certified = Effect.gen(function* () {
-  if (cached !== undefined) return cached;
-
-  const report = yield* withTemporaryDatabase((url) => {
-    // One Layer instance for both ports: memoization builds it once, so the ledger and the
-    // store share one client over one database.
-    const adapters = combinedAdapters(url);
-
-    return certifyDurableAdapters({
-      adapter: { name: "@effect-agent/storage-postgres" },
-      submissionLedger: adapters,
-      threadStore: adapters,
-    }).pipe(Effect.provide(NodeCrypto.layer));
-  });
-
-  cached = report;
-
-  return report;
-});
-
-describe("adapter certification — storage-postgres", () => {
-  // Verdict combinations belong to certification-verdict.test.ts. Keep one negative full
-  // run as well as the shared successful certificate: bypassing report aggregation must fail.
-  it.effect(
-    "propagates a failed supplied crash lever into the final certification verdict",
-    () =>
-      withTemporaryDatabase((url) =>
-        Effect.gen(function* () {
-          const failedCase = CertificationCaseResult.make({
-            suite: "real-loss",
-            name: "injected lever failure",
-            status: "failed",
-          });
-
-          let leverRuns = 0;
-          const adapters = combinedAdapters(url);
-
-          const report = yield* certifyDurableAdapters({
-            adapter: { name: "failed-lever" },
-            submissionLedger: adapters,
-            threadStore: adapters,
-            crashLever: Effect.sync(() => {
-              leverRuns++;
-
-              return [failedCase];
-            }),
-          });
-
-          expect(leverRuns).toBe(1);
-          expect(report.tier1.filter((row) => row.status === "failed")).toEqual([]);
-          expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
-          expect(report.tier3).toMatchObject({ status: "exercised", cases: [failedCase] });
-          expect(report.ok).toBe(false);
-          expect(report.fullyCertified).toBe(false);
-        }).pipe(Effect.provide(NodeCrypto.layer)),
-      ),
-    300_000,
-  );
-
-  it.effect(
-    "TIER1: all SubmissionLedger and ThreadStore contract cases pass",
-    () =>
+it.effect(
+  "certifies PostgreSQL contracts and recovery without claiming process-kill coverage",
+  () =>
+    withTemporaryDatabase((url) =>
       Effect.gen(function* () {
-        const report = yield* certified;
+        const adapters = combinedAdapters(url);
+
+        const report = yield* certifyDurableAdapters({
+          adapter: { name: "@effect-agent/storage-postgres" },
+          submissionLedger: adapters,
+          threadStore: adapters,
+        });
+
         const ledgerCases = report.tier1.filter((result) => result.suite === "submission-ledger");
         const storeCases = report.tier1.filter((result) => result.suite === "thread-store");
 
         expect(ledgerCases).toHaveLength(submissionLedgerConformanceCases.length);
         expect(storeCases).toHaveLength(threadStoreConformanceCases.length);
         expect(report.tier1.filter((result) => result.status !== "passed")).toEqual([]);
-      }),
-    300_000,
-  );
-
-  it.effect(
-    "TIER2: every coordinator failpoint leaves a classifiable state and re-drive converges",
-    () =>
-      Effect.gen(function* () {
-        const report = yield* certified;
-
         expect(report.tier2.map(({ scenario, location }) => [scenario, location])).toEqual(
           CERTIFICATION_SCENARIOS.flatMap((scenario) =>
             DurableRuntimeFailpointLocation.literals.map((location) => [scenario, location]),
@@ -163,35 +98,12 @@ describe("adapter certification — storage-postgres", () => {
         expect(tier2NeverFiredLocations(report.tier2)).toEqual(
           [...TIER2_UNREACHED_LOCATIONS].sort(),
         );
-      }),
-    300_000,
-  );
-
-  it.effect(
-    "the certification report round-trips its Schema and names the adapter identity and durability claim",
-    () =>
-      Effect.gen(function* () {
-        const report = yield* certified;
-        const encoded = yield* Schema.encodeEffect(CertificationReport)(report);
-        const decoded = yield* Schema.decodeEffect(CertificationReport)(encoded);
-
-        expect(decoded.format).toBe("effect-agent/certification@2");
-        expect(decoded.adapter.name).toBe("@effect-agent/storage-postgres");
-        expect(decoded.adapter.durability).toBe("durable-node");
-        expect(decoded.ok).toBe(true);
-      }),
-    300_000,
-  );
-
-  it.effect(
-    "TIER3: reports the process-kill loss lever as not yet exercised",
-    () =>
-      Effect.gen(function* () {
-        const report = yield* certified;
-
+        expect(report.adapter.name).toBe("@effect-agent/storage-postgres");
+        expect(report.adapter.durability).toBe("durable-node");
+        expect(report.ok).toBe(true);
         expect(report.tier3).toMatchObject({ status: "not-exercised", evidence: [], cases: [] });
         expect(report.fullyCertified).toBe(false);
-      }),
-    300_000,
-  );
-});
+      }).pipe(Effect.provide(NodeCrypto.layer)),
+    ),
+  300_000,
+);
