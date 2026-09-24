@@ -1,5 +1,12 @@
 # effect-agent
 
+## 0.1.0-beta.141
+
+### Patch Changes
+
+- [#661](https://github.com/danieljvdm/effect-agent/pull/661) [`e6127e4`](https://github.com/danieljvdm/effect-agent/commit/e6127e44d10f7103929abe65217f0ad837ce0d9f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve OpenAI implicit prompt-cache boundaries when `runStatus: "appended"` is enabled.
+  Keep discarded status and reference context out of later requests when native response-ID tracking is enabled.
+
 ## 0.1.0-beta.140
 
 ### Patch Changes
