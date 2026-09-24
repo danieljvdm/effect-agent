@@ -367,6 +367,7 @@ export class DecisionTurnRecorded extends Schema.TaggedClass<DecisionTurnRecorde
   "DecisionTurnRecorded",
   Schema.Struct({
     ...TurnResponseFields,
+    modelUsage: Schema.requiredKey(TurnResponseFields.modelUsage),
     decision: DecisionTurnEvidence,
     /** Leading canonical instruction/input messages, distinct from this Turn's projection. */
     projectionStart: Schema.Natural,
@@ -374,11 +375,11 @@ export class DecisionTurnRecorded extends Schema.TaggedClass<DecisionTurnRecorde
     Schema.makeFilter(
       (response) => {
         if (!isPersistedPromptMessages(response.messages)) return false;
-        const calls = response.modelUsage?.filter((usage) => usage.purpose === "decision");
-        const usage = calls?.[0];
+        const calls = response.modelUsage.filter((usage) => usage.purpose === "decision");
+        const usage = calls[0];
 
         if (
-          calls?.length !== 1 ||
+          calls.length !== 1 ||
           usage === undefined ||
           usage.provider !== response.decision.provider ||
           usage.model !== response.decision.model ||
@@ -426,10 +427,6 @@ export class DecisionTurnRecorded extends Schema.TaggedClass<DecisionTurnRecorde
     ),
   ),
 ) {}
-
-/** Both inference sources enter the same canonical Tool batch and replay protocol. */
-export const TurnResponseRecorded = Schema.Union([ModelResponseRecorded, DecisionTurnRecorded]);
-export type TurnResponseRecorded = typeof TurnResponseRecorded.Type;
 
 /**
  * One approved uncertain/idempotent ordinary Tool Call made durable BEFORE any handler starts

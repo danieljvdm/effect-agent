@@ -27,7 +27,6 @@ import {
   CompactionCreated,
   ModelResponseRecorded,
   DecisionTurnRecorded,
-  type TurnResponseRecorded,
   PersistedJson,
   RecordEnvelope,
   RecordId,
@@ -430,7 +429,7 @@ interface ProjectedResponseUsage {
 }
 
 const projectedResponseUsage = (
-  response: TurnResponseRecorded,
+  response: ModelResponseRecorded | DecisionTurnRecorded,
 ): Effect.Effect<ProjectedResponseUsage, RunJournalError> =>
   Effect.gen(function* () {
     const calls = response.modelUsage;
@@ -905,7 +904,7 @@ export const projectRunJournalStream = Effect.fn("RunJournal.projectRunJournalSt
 
   const accountResponse = Effect.fn("RunJournal.accountResponse")(function* (
     envelope: CanonicalRecordEnvelope,
-    payload: TurnResponseRecorded,
+    payload: ModelResponseRecorded | DecisionTurnRecorded,
     messages: Prompt.Prompt,
   ) {
     const record = envelope.record;
@@ -1562,6 +1561,7 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
         ? ModelResponseRecorded.make(fields)
         : DecisionTurnRecorded.make({
             ...fields,
+            modelUsage: modelUsage ?? (yield* journalError("Decision Turn requires model usage")),
             decision: input.decision,
             projectionStart: promptMessages.length - (input.decision.projection === "tool" ? 1 : 0),
           }),

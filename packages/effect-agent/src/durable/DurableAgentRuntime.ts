@@ -1874,7 +1874,6 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
     let lastResponse:
       | {
           readonly turn: number;
-          readonly decision?: DecisionTurnEvidence | undefined;
           readonly messages: PersistedJson;
           readonly toolExposure?: Snapshot | undefined;
         }
