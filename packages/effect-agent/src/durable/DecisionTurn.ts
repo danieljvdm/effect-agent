@@ -132,7 +132,7 @@ export const make = <
 
     const modelServices = yield* Layer.build(options.model);
 
-    const model = yield* Schema.decodeUnknownEffect(DecisionTurnModel)({
+    const model = yield* Schema.decodeEffect(DecisionTurnModel)({
       provider: EffectContext.get(modelServices, Model.ProviderName),
       model: EffectContext.get(modelServices, Model.ModelName),
       purpose: "decision",
@@ -161,7 +161,7 @@ export const make = <
       const project = Effect.gen(function* () {
         const projected = yield* Effect.try({
           try: () => options.project(selected, response.answers, context),
-          catch: (cause) => cause,
+          catch: (cause) => DecisionTurnError.make({ stage: "project", model, cause }),
         });
 
         const call = yield* Option.match(projected, {
@@ -193,7 +193,9 @@ export const make = <
           call,
         };
       }).pipe(
-        Effect.mapError((cause) => DecisionTurnError.make({ stage: "project", model, cause })),
+        Effect.catchTag("SchemaError", (cause) =>
+          Effect.fail(DecisionTurnError.make({ stage: "project", model, cause })),
+        ),
       );
 
       return { result, project };
