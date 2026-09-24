@@ -1,6 +1,7 @@
 import { type Crypto, Context, Effect, Schema, SchemaGetter, Layer } from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
+import type * as DecisionTurn from "effect-agent/decision-turn";
 import { type DurableWorkerRequirements } from "effect-agent/durable-agent-runtime";
 import { Toolkit, type LanguageModel, type Model, Tool } from "effect/unstable/ai";
 
@@ -161,6 +162,11 @@ export const proveRegistrationRequirements = (
       },
     ]);
 
+  // Regression: 39828502 dropped services when the Decision descriptor was optional.
+  const optionalDecisionOptions = (options: {
+    readonly decisionTurn?: DecisionTurn.Definition<never, ReportDependency>;
+  }) => compileRegistrations([{ ...conditionalEntry, ...options }]);
+
   const conditionalRequirements: readonly [
     Assert<
       Equal<
@@ -177,7 +183,13 @@ export const proveRegistrationRequirements = (
         | ReportDependency
       >
     >,
-  ] = [true, true];
+    Assert<
+      Equal<
+        Effect.Services<ReturnType<typeof optionalDecisionOptions>>,
+        Crypto.Crypto | DurableWorkerRequirements<typeof first> | ReportDependency
+      >
+    >,
+  ] = [true, true, true];
 
   void conditionalRequirements;
 

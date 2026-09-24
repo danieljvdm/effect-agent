@@ -5,6 +5,7 @@ import { type AnyDefinition } from "../core/Agent.ts";
 import { type AgentInputError, type AgentToolAuthorizationCheckError } from "../core/AgentError.ts";
 import { type AgentPolicy } from "../core/AgentPolicy.ts";
 import type { Update, UpdateError } from "../core/AgentUpdates.ts";
+import type { DecisionTurnEvidence } from "../core/DecisionTurn.ts";
 import {
   type AgentId,
   type ThreadId,
@@ -346,7 +347,7 @@ export interface RunCostEstimateRequest {
     | undefined;
   /** Native Effect AI provider metadata, runtime-only; HTTP details are excluded. */
   readonly finishMetadata?: Response.FinishPart["metadata"] | undefined;
-  readonly purpose?: "turn" | "summary" | undefined;
+  readonly purpose?: "turn" | "summary" | "decision" | undefined;
 }
 
 /**
@@ -420,6 +421,8 @@ export interface RunToolAuthorizationRequest {
   readonly turn: number;
   readonly input: unknown;
   readonly call: RunToolCallDescriptor;
+  /** Retained provenance for an actual decision-projected Tool invocation. */
+  readonly decision?: DecisionTurnEvidence | undefined;
   /** Present for an ephemeral inner invocation; the outer Tool's approval grants no inner authority. */
   readonly programmatic?:
     | {
@@ -489,6 +492,12 @@ export class RunToolAuthorization extends Context.Service<
  * application Tool Calls; no-tool Turns keep their late single-batch commit.
  */
 export interface RunTurnResponseCommit {
+  /** Present only for a native DecisionModel call and validated host projection. */
+  readonly decision?: DecisionTurnEvidence | undefined;
+  /** Synthetic rejections covering every call, committed atomically with the response. */
+  readonly rejectedResults?:
+    | ReadonlyArray<Pick<RunTurnResumeSettledCall, "id" | "result" | "budgetRejected">>
+    | undefined;
   /** Rejected fresh arguments; persist atomically with the response and restore on resume. */
   readonly toolParameterRejections?: ReadonlyArray<ToolParameterRejection> | undefined;
   readonly toolExposure?: Snapshot | undefined;
@@ -792,6 +801,8 @@ export type RunTurnResumeSettledCall = typeof RunTurnResumeSettledCallSchema.Typ
  */
 export const RunResumeUsageSchema = Schema.Struct({
   ...RunPolicyUsage.fields,
+  /** Restored from canonical Decision records, including any retired checkpoint prefix. */
+  committedDecisionTurn: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   modelCalls: Schema.Natural,
   inputTokens: Schema.Natural,
   outputTokens: Schema.Natural,
@@ -813,10 +824,13 @@ export const RunResumeUsageSchema = Schema.Struct({
   ),
   Schema.makeFilter(
     (usage) =>
-      usage.modelCalls >= usage.committedTurns && usage.consecutiveToolFailures <= usage.toolCalls,
+      usage.modelCalls >= usage.committedTurns &&
+      usage.consecutiveToolFailures <= usage.toolCalls &&
+      (usage.committedDecisionTurn === undefined ||
+        usage.committedDecisionTurn <= usage.committedTurns),
     {
       expected:
-        "model calls covering committed Turns and a failure streak within declared Tool calls",
+        "model calls covering committed Turns, a failure streak within declared Tool calls, and any Decision within committed Turns",
     },
   ),
 );
@@ -837,6 +851,7 @@ export type RunResumeUsage = typeof RunResumeUsageSchema.Type;
  * proceeds through the normal continuation.
  */
 export interface RunTurnResume {
+  readonly decision?: DecisionTurnEvidence | undefined;
   /** A successful settled call whose original operation contract still supports completion projection. */
   readonly settledCompletion?: ToolCallId | undefined;
   /** Canonical rejection evidence, matched to the exact call; never permits handler execution. */

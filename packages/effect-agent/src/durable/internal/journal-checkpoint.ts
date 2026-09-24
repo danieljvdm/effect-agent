@@ -8,14 +8,14 @@ import { RunUsageSummary } from "../../core/Usage.ts";
 import { CanonicalRecordEnvelope, CanonicalSequence, Digest, PersistedJson } from "../Records.ts";
 
 /** Retired accounting is additive; the latest Tool batch always remains replayable verbatim. */
-export class JournalCheckpointSeed extends Schema.Class<JournalCheckpointSeed>(
-  "@effect-agent/thread/internal/JournalCheckpointSeed",
-)({
+const JournalCheckpointSeedFields = Schema.Struct({
   runId: RunId,
   throughSequence: CanonicalSequence,
   firstSequence: Schema.optionalKey(CanonicalSequence),
   toolSelection: Schema.optionalKey(Selection),
   committedTurns: Schema.Natural,
+  /** Derived from retired canonical Decision records, never an independent grant. */
+  committedDecisionTurn: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
   policyUsage: RunPolicyUsage,
   modelCalls: Schema.Natural,
   unobservedModelCalls: Schema.Natural,
@@ -30,12 +30,22 @@ export class JournalCheckpointSeed extends Schema.Class<JournalCheckpointSeed>(
   frontier: Schema.optionalKey(
     Schema.Struct({
       sequence: CanonicalSequence,
-      tag: Schema.Literals(["ModelResponseRecorded", "ToolCallSettled"]),
+      tag: Schema.Literals(["ModelResponseRecorded", "DecisionTurnRecorded", "ToolCallSettled"]),
     }),
   ),
   /** Canonical replacement whose covered batches were validated before retirement. */
   compaction: CanonicalRecordEnvelope,
-}) {}
+}).check(
+  Schema.makeFilter(
+    (seed) =>
+      seed.committedDecisionTurn === undefined || seed.committedDecisionTurn <= seed.committedTurns,
+    { expected: "consumed Decision Turn within the retired committed Turns" },
+  ),
+);
+
+export class JournalCheckpointSeed extends Schema.Class<JournalCheckpointSeed>(
+  "@effect-agent/thread/internal/JournalCheckpointSeed",
+)(JournalCheckpointSeedFields) {}
 
 /** A bounded sparse projection, never a canonical log or a submission-ownership record. */
 export class RecoveryCheckpointState extends Schema.Class<RecoveryCheckpointState>(
@@ -56,7 +66,9 @@ export class RecoveryCheckpointContents extends Schema.Class<RecoveryCheckpointC
   digest: Digest,
 }) {}
 
-export const RECOVERY_ENGINE_VERSION = "effect-agent/recovery@2";
+// Older sparse caches do not prove whether a retired Decision consumed the Run slot.
+// Reject them for every Run and rebuild from canonical records; declaration digests are not a fence.
+export const RECOVERY_ENGINE_VERSION = "effect-agent/recovery@3";
 
 /**
  * Late evidence can invalidate an old compaction. Such histories use full canonical replay;
@@ -76,7 +88,8 @@ export const checkpointSuffixCompatible = (
       return [...retained, ...records].some(
         ({ sequence: declarationSequence, record: { payload: candidate } }) => {
           if (
-            candidate._tag !== "ModelResponseRecorded" ||
+            (candidate._tag !== "ModelResponseRecorded" &&
+              candidate._tag !== "DecisionTurnRecorded") ||
             candidate.runId !== payload.runId ||
             candidate.turn <= seed.committedTurns ||
             seed.compaction.record.payload._tag !== "CompactionCreated" ||

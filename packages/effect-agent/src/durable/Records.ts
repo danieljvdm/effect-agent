@@ -5,6 +5,7 @@ import { InputMessage } from "../capabilities/Messaging.ts";
 import { PolicyLimit } from "../core/AgentError.ts";
 import { AgentPolicy } from "../core/AgentPolicy.ts";
 import { Update } from "../core/AgentUpdates.ts";
+import { DecisionTurnEvidence } from "../core/DecisionTurn.ts";
 import * as FailureDiagnostic from "../core/FailureDiagnostic.ts";
 import {
   AgentId,
@@ -306,7 +307,7 @@ export class ToolUnavailable extends Schema.TaggedClass<ToolUnavailable>()("Tool
  * Turn boundary so a recovering Attempt can rebuild the next Prompt from canonical records alone.
  * `messagesDigest` pins the exact encoded content.
  */
-const ModelResponseRecordedFields = Schema.Struct({
+const TurnResponseFields = {
   /** Original operation identity/semantics, independent of later Agent and toolbox changes. */
   toolOperations: Schema.optionalKey(Schema.Array(ToolOperation)),
   /** Explicit pre-execution failures, committed with the original arguments before any approval. */
@@ -337,7 +338,9 @@ const ModelResponseRecordedFields = Schema.Struct({
   outputTokens: Schema.optionalKey(Schema.Natural),
   /** Estimated spend staged with the usage; recovery re-seeds the cost budget (RUN-023). */
   costMicrousd: Schema.optionalKey(Schema.Natural),
-}).check(
+};
+
+const ModelResponseRecordedFields = Schema.Struct(TurnResponseFields).check(
   Schema.makeFilter(
     (response) =>
       response.runScopedPrefixLength === undefined ||
@@ -356,6 +359,74 @@ const ModelResponseRecordedFields = Schema.Struct({
 export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecorded>(
   "@effect-agent/thread/ModelResponseRecorded",
 )("ModelResponseRecorded", ModelResponseRecordedFields) {}
+
+/** One real DecisionModel inference and its versioned host projection, never a LanguageModel response. */
+export class DecisionTurnRecorded extends Schema.TaggedClass<DecisionTurnRecorded>(
+  "@effect-agent/thread/DecisionTurnRecorded",
+)(
+  "DecisionTurnRecorded",
+  Schema.Struct({
+    ...TurnResponseFields,
+    modelUsage: Schema.requiredKey(TurnResponseFields.modelUsage),
+    decision: DecisionTurnEvidence,
+    /** Leading canonical instruction/input messages, distinct from this Turn's projection. */
+    projectionStart: Schema.Natural,
+  }).check(
+    Schema.makeFilter(
+      (response) => {
+        if (!isPersistedPromptMessages(response.messages)) return false;
+        const calls = response.modelUsage.filter((usage) => usage.purpose === "decision");
+        const usage = calls[0];
+
+        if (
+          calls.length !== 1 ||
+          usage === undefined ||
+          usage.provider !== response.decision.provider ||
+          usage.model !== response.decision.model ||
+          (response.decision.rawUsage.inputTokens !== undefined &&
+            usage.inputTokens.total !== response.decision.rawUsage.inputTokens) ||
+          (response.decision.rawUsage.outputTokens !== undefined &&
+            usage.outputTokens.total !== response.decision.rawUsage.outputTokens)
+        )
+          return false;
+        const prefix = response.projectionStart;
+
+        if (
+          prefix > response.messages.content.length ||
+          (response.runScopedPrefixLength !== undefined &&
+            (response.turn !== 1 || response.runScopedPrefixLength !== prefix)) ||
+          response.messages.content
+            .slice(0, prefix)
+            .some((message) => message.role !== "system" && message.role !== "user")
+        )
+          return false;
+        const projected = response.messages.content.slice(prefix);
+
+        if (response.decision.projection === "continue") return projected.length === 0;
+        if (projected.length !== 1 || projected[0]?.role !== "assistant") return false;
+        const content = projected[0].content;
+
+        if (typeof content === "string") return false;
+        const toolCalls = content.filter((part) => part.type === "tool-call");
+        const text = content.filter((part) => part.type === "text");
+
+        return (
+          toolCalls.length === 1 &&
+          toolCalls[0]?.name === response.decision.toolName &&
+          toolCalls[0]?.providerExecuted !== true &&
+          text.length === 1 &&
+          text[0]?.text.length > 0 &&
+          utf8ByteLength(text[0].text) <= 4_096 &&
+          content.length === 2
+        );
+      },
+      {
+        title:
+          "Decision Turn retains its exact host text and one configured call, or no projected response",
+      },
+    ),
+  ),
+) {}
 
 /**
  * One approved uncertain/idempotent ordinary Tool Call made durable BEFORE any handler starts
@@ -1012,6 +1083,7 @@ export const CanonicalRecordPayload = Schema.Union([
   RunPolicyUsageReserved,
   ModelCompleted,
   ModelResponseRecorded,
+  DecisionTurnRecorded,
   ToolCallPrepared,
   ToolCallSettled,
   ToolCallUnknown,

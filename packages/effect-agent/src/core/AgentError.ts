@@ -1,7 +1,18 @@
 import { Schema } from "effect";
 
+import { DecisionTurnModel } from "./DecisionTurn.ts";
 import * as FailureDiagnostic from "./FailureDiagnostic.ts";
 import { ToolCallId } from "./Identifiers.ts";
+
+/** A configured Decision turn failed before its Tool batch could run. */
+export class DecisionTurnError extends Schema.TaggedError<DecisionTurnError>()(
+  "DecisionTurnError",
+  {
+    stage: Schema.Literals(["prepare", "decide", "project"]),
+    model: Schema.optionalKey(DecisionTurnModel),
+    cause: Schema.Defect(),
+  },
+) {}
 
 /** Run input failed to decode through the agent definition's input Schema. */
 export class AgentInputError extends Schema.TaggedError<AgentInputError>()("AgentInputError", {

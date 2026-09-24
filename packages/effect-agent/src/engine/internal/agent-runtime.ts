@@ -46,10 +46,12 @@ import {
   AgentPolicyError,
   ContextBudgetError,
   ContextOverflowError,
+  DecisionTurnError,
   ModelProtocolError,
 } from "../../core/AgentError.ts";
 import { type AgentPolicy } from "../../core/AgentPolicy.ts";
 import { Emitter, Update, UpdateError } from "../../core/AgentUpdates.ts";
+import { type DecisionTurnEvidence, DecisionTurnModel } from "../../core/DecisionTurn.ts";
 import {
   type AgentId,
   ThreadId,
@@ -131,6 +133,7 @@ import { SubagentHost } from "../SubagentHost.ts";
 import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { CurrentToolCatalog, RunToolVisibility, type CatalogEntry } from "../ToolExposure.ts";
 import { boundedValueFootprint } from "./bounded-value.ts";
+import { ConfiguredDecisionTurn } from "./decision-turn.ts";
 import { insertOutputContract, isTextOutput, outputSchemaContract } from "./output-contract.ts";
 import { ownPrimitiveDelta } from "./primitive-delta.ts";
 import {
@@ -323,6 +326,7 @@ import {
   type RunSubagentJoinRequest,
   type RunCompactionCommit,
   type RunToolCallDescriptor,
+  type RunTurnResponseCommit,
   RunTurnResumeSettledCallSchema,
   type RunTurnResume,
   type RunUsageDelta,
@@ -441,6 +445,7 @@ export type AgentRuntimeFailure<
   | RunContextPreparationError
   | AgentToolAuthorizationCheckError
   | ModelProtocolError
+  | DecisionTurnError
   | AgentApprovalDenied
   | AgentToolAuthorizationDenied
   | AgentApprovalPending
@@ -545,6 +550,7 @@ interface RunContext {
   /** Absolute `maxDuration` rail for this Attempt, optionally tightened by its coordinator. */
   readonly durationDeadlineMillis: number;
   history: Prompt.Prompt;
+  committedDecisionTurn: number | undefined;
   modelCalls: number;
   usageStatus: typeof UsageCompleteness.Type;
   pricingStatus: typeof UsageCompleteness.Type;
@@ -625,6 +631,9 @@ const toolCounter = Metric.counter("effect_agent_tool_calls_total", {
  * value and performs its own decode before invoking the handler.
  */
 interface TurnTrace {
+  decision?: DecisionTurnEvidence;
+  decisionModel?: DecisionTurnModel;
+  projectedResponse?: Prompt.Prompt;
   /** A resumed Turn already has an authoritative model response in canonical history. */
   readonly replayedResponse?: Prompt.Prompt | undefined;
   /** Number of decoded provider parts retained or inspected during this model call. */
@@ -1421,7 +1430,15 @@ const decodeResumeUsage = Effect.fn("AgentRuntime.decodeResumeUsage")((input: un
         };
 
         const optional = Object.fromEntries(
-          (["usageStatus", "pricingStatus", "unobservedModelCalls", "children"] as const)
+          (
+            [
+              "usageStatus",
+              "pricingStatus",
+              "unobservedModelCalls",
+              "children",
+              "committedDecisionTurn",
+            ] as const
+          )
             .map((key) => [key, read(key, true)])
             .filter(([, value]) => value !== undefined),
         );
@@ -1786,6 +1803,7 @@ const preflightToolAuthorization = <HookError, HookRequirements>(
   call: RunToolCallDescriptor,
   options: RunOptions<HookError, HookRequirements>,
   annotations: Context.Context<never>,
+  decision?: DecisionTurnEvidence,
 ): Stream.Stream<
   RunEvent,
   HookError | ModelProtocolError | AgentToolAuthorizationDenied,
@@ -1818,6 +1836,7 @@ const preflightToolAuthorization = <HookError, HookRequirements>(
         turn,
         input: context.input,
         call,
+        ...(decision === undefined ? {} : { decision }),
       })
       .pipe(
         Effect.map((decision) => {
@@ -2559,6 +2578,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                 call,
                 options,
                 toolkit.tools[call.toolName]?.annotations ?? Context.empty(),
+                trace.decision,
               ),
             ),
           ),
@@ -4630,6 +4650,7 @@ const decodeEventJson = Effect.fn("AgentRuntime.decodeEventJson")(
  */
 const promptFromTurnParts = (trace: TurnTrace): Prompt.Prompt => {
   if (trace.replayedResponse !== undefined) return trace.replayedResponse;
+  if (trace.projectedResponse !== undefined) return trace.projectedResponse;
 
   const responsePrompt = Prompt.fromResponseParts(
     trace.parts.filter((part) => !(part.type === "tool-result" && part.providerExecuted)),
@@ -4904,6 +4925,7 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
         toolName: part.name,
         parameters,
         providerExecuted: part.providerExecuted,
+        ...(trace.decision === undefined ? {} : { decision: trace.decision }),
       });
 
       return [declared];
@@ -5595,6 +5617,7 @@ const makeTurn = <
               ...(yield* eventBase(context)),
               turnId,
               turn,
+              ...(trace.decisionModel === undefined ? {} : { decisionModel: trace.decisionModel }),
             }),
           ] satisfies ReadonlyArray<RunEvent>;
         }).pipe(Effect.withLogSpan("AgentRuntime.model")),
@@ -5616,14 +5639,14 @@ const makeTurn = <
           priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls ||
           context.tokenExhausted);
 
-      const modelToolChoice = (): LanguageModel.ToolChoice<string> | undefined => {
-        const terminalToolChoiceOnly =
-          finalAnswerOnly ||
-          (agent.definition.completion?.required === true &&
-            policy.onExhaustion === "fail" &&
-            turn === bounds.maxTurns);
+      const terminalToolChoiceOnly = () =>
+        finalAnswerOnly ||
+        (agent.definition.completion?.required === true &&
+          policy.onExhaustion === "fail" &&
+          turn === bounds.maxTurns);
 
-        return terminalToolChoiceOnly
+      const modelToolChoice = (): LanguageModel.ToolChoice<string> | undefined => {
+        return terminalToolChoiceOnly()
           ? agent.definition.completion === undefined ||
             (agent.definition.completion.required !== true &&
               !catalog.some(
@@ -6133,9 +6156,15 @@ const makeTurn = <
           return consumeUsage(agent, context, trace.usage, toolCallCount, turn, options, {
             response: trace.response,
             finishMetadata: trace.finishMetadata,
-            purpose: "turn",
+            purpose: trace.decisionModel === undefined ? "turn" : "decision",
           }).pipe(
-            withCallModel,
+            (effect) =>
+              trace.decisionModel === undefined
+                ? withCallModel(effect)
+                : effect.pipe(
+                    Effect.provideService(Model.ProviderName, trace.decisionModel.provider),
+                    Effect.provideService(Model.ModelName, trace.decisionModel.model),
+                  ),
             Effect.tapCause(() =>
               context.modelCalls === priorModelCalls
                 ? noteIncompleteUsage(context, turn)
@@ -6155,16 +6184,91 @@ const makeTurn = <
         yield* consumeTurnUsage(0).pipe(Effect.exit);
       });
 
-      const attempt = (basis: Prompt.Prompt) =>
+      const materializePrompt = (basis: Prompt.Prompt) =>
+        outgoingModelPrompt(
+          policy,
+          context,
+          Prompt.fromMessages([...basis.content, ...transientContext.content]),
+          turn,
+          priorToolCalls,
+        ).pipe(
+          Effect.map((outgoing) =>
+            outputContract._tag !== "rendered"
+              ? outgoing
+              : insertOutputContract(outgoing, outputContract.part),
+          ),
+        );
+
+      const checkRequest = (providerPrompt: Prompt.Prompt) =>
+        estimateCallTokens(providerPrompt.content).pipe(
+          Effect.map((tokens) => tokens + toolSchemaTokens),
+          Effect.tap((estimatedTokens) =>
+            contextTokenLimit !== undefined &&
+            (options.context !== undefined || options.transientContext !== undefined) &&
+            estimatedTokens > contextTokenLimit
+              ? ContextBudgetError.make({
+                  message: `Prepared context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
+                  estimatedTokens,
+                  targetTokens: contextTokenLimit,
+                  completionReserveTokens: policy.completionReserveTokens,
+                })
+              : Effect.void,
+          ),
+          Effect.tap((tokens) =>
+            Effect.sync(() => {
+              context.windowTokens = tokens;
+            }),
+          ),
+          Effect.tap(() =>
+            snapshot === undefined || options.durability?.noteToolExposure === undefined
+              ? Effect.void
+              : options.durability.noteToolExposure(turn, snapshot),
+          ),
+        );
+
+      // Fresh ordinary Turns may prepare until a Decision commits. A resumed Tool
+      // batch bypasses this seam; canonical recovery restores the consumed slot.
+      // Preparation sees the exact assembled Prompt, including current steering.
+      const decisionTurn =
+        context.committedDecisionTurn === undefined &&
+        !terminalToolChoiceOnly() &&
+        options.durability !== undefined &&
+        options.frameworkMessage === undefined
+          ? yield* ConfiguredDecisionTurn
+          : undefined;
+
+      const preparedPrompt =
+        decisionTurn === undefined ? undefined : yield* materializePrompt(compactedOutgoing());
+
+      const preparedDecision =
+        decisionTurn === undefined || preparedPrompt === undefined
+          ? Option.none()
+          : yield* decisionTurn({
+              agentId: context.agentId,
+              threadId: context.threadId,
+              runId: context.runId,
+              turnId,
+              turn,
+              input: context.input,
+              prompt: preparedPrompt,
+            });
+
+      if (Option.isSome(preparedDecision)) {
+        if (!Object.hasOwn(modelToolkit.tools, preparedDecision.value.toolName))
+          return yield* ModelProtocolError.make({
+            message: "Decision Tool is not currently eligible and exposed",
+          });
+        trace.decisionModel = preparedDecision.value.model;
+        if (preparedPrompt !== undefined) yield* checkRequest(preparedPrompt);
+      }
+
+      const attempt = (basis: Prompt.Prompt, preparedPrompt?: Prompt.Prompt) =>
         Stream.unwrap(
-          outgoingModelPrompt(
-            policy,
-            context,
-            Prompt.fromMessages([...basis.content, ...transientContext.content]),
-            turn,
-            priorToolCalls,
+          (preparedPrompt === undefined
+            ? materializePrompt(basis)
+            : Effect.succeed(preparedPrompt)
           ).pipe(
-            Effect.flatMap((outgoing) =>
+            Effect.flatMap((providerPrompt) =>
               Effect.gen(function* () {
                 const toolChoice = modelToolChoice();
 
@@ -6208,41 +6312,8 @@ const makeTurn = <
                 }
                 context.toolExposure = snapshot;
 
-                const providerPrompt =
-                  outputContract._tag !== "rendered"
-                    ? outgoing
-                    : insertOutputContract(outgoing, outputContract.part);
-
-                // Prepared and transient context can change at every Turn. A
-                // final full-prompt check closes the per-call boundary for grace
-                // finalization and any future path that bypasses research
-                // compaction admission. Runs without either hook keep their
-                // provider-reported incremental estimate.
-
-                return yield* estimateCallTokens(providerPrompt.content).pipe(
-                  Effect.map((tokens) => tokens + toolSchemaTokens),
-                  Effect.tap((estimatedTokens) =>
-                    contextTokenLimit !== undefined &&
-                    (options.context !== undefined || options.transientContext !== undefined) &&
-                    estimatedTokens > contextTokenLimit
-                      ? ContextBudgetError.make({
-                          message: `Prepared context could not fit the next model prompt inside the ${contextTokenLimit} token context target`,
-                          estimatedTokens,
-                          targetTokens: contextTokenLimit,
-                          completionReserveTokens: policy.completionReserveTokens,
-                        })
-                      : Effect.void,
-                  ),
-                  Effect.tap((tokens) =>
-                    Effect.sync(() => {
-                      context.windowTokens = tokens;
-                    }),
-                  ),
-                  Effect.tap(() =>
-                    snapshot === undefined || options.durability?.noteToolExposure === undefined
-                      ? Effect.void
-                      : options.durability.noteToolExposure(turn, snapshot),
-                  ),
+                // The shared final-prompt check also admits configured Decision inference.
+                return yield* checkRequest(providerPrompt).pipe(
                   Effect.as(
                     guardBudgetStream(
                       LanguageModel.streamText({
@@ -6302,109 +6373,194 @@ const makeTurn = <
       // overflow when compaction is configured; every other provider error
       // propagates unchanged. A response that already streamed parts mutated
       // the trace, so it is never retried.
-      const response = attempt(compactedOutgoing()).pipe(
-        Stream.catch(
-          (
-            error,
-          ): Stream.Stream<
-            RunEvent,
-            AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
-            InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
-          > => {
-            if (
-              !(error instanceof AiError.AiError) ||
-              !isContextOverflowMessage(overflowText(error))
-            ) {
-              return Stream.fail(error);
-            }
-            const message = overflowText(error);
+      const decisionResponse = Option.isNone(preparedDecision)
+        ? undefined
+        : guardBudgetStream(
+            Stream.fromEffect(
+              preparedDecision.value.evaluate.pipe(
+                Effect.flatMap((evaluated) =>
+                  Effect.gen(function* () {
+                    trace.usage = Response.Usage.make({
+                      inputTokens: { total: evaluated.result.rawUsage.inputTokens },
+                      outputTokens: { total: evaluated.result.rawUsage.outputTokens },
+                    });
+                    const result = yield* evaluated.project;
 
-            if (trace.parts.length > 0 || contextTokenLimit === undefined) {
-              return Stream.fail(ContextOverflowError.make({ message, retried: false }));
-            }
-            if (context.compaction.overflowRetryTurn === turn) {
-              return Stream.fail(ContextOverflowError.make({ message, retried: true }));
-            }
-            context.compaction.overflowRetryTurn = turn;
-            context.compaction.lastCompactionTurn = turn;
-            type TurnStream = Stream.Stream<
+                    trace.decision = result.evidence;
+                    if (Option.isNone(result.call)) {
+                      trace.projectedResponse = Prompt.empty;
+                      trace.finished = true;
+                      trace.finishReason = "other";
+                      trace.turnCompletion = { finishReason: "other" };
+
+                      return [];
+                    }
+                    const call = result.call.value;
+                    const id = yield* decodeToolCallId(`decision:${turnId}`);
+
+                    trace.text.push(call.text);
+
+                    const declared = yield* eventsForPart(
+                      context,
+                      turnId,
+                      turn,
+                      agent.definition.toolkit.tools,
+                      trace,
+                      Response.makePart("tool-call", {
+                        id,
+                        name: result.evidence.toolName,
+                        params: call.parameters,
+                        providerExecuted: false,
+                      }),
+                      0,
+                    );
+
+                    // eventsForPart owns parameter decoding/normalization. Reuse its
+                    // canonical call for both execution and retained/replayed history.
+                    trace.projectedResponse = Prompt.fromMessages(
+                      Prompt.fromResponseParts(trace.parts).content.map((message) =>
+                        message.role === "assistant"
+                          ? Prompt.makeMessage("assistant", {
+                              ...message,
+                              content: [
+                                Prompt.makePart("text", { text: call.text }),
+                                ...message.content,
+                              ],
+                            })
+                          : message,
+                      ),
+                    );
+                    trace.finished = true;
+                    trace.finishReason = "tool-calls";
+                    trace.turnCompletion = { finishReason: "tool-calls" };
+
+                    return declared;
+                  }),
+                ),
+                Effect.tapCause(() => retainFailedUsage()),
+              ),
+            ).pipe(
+              Stream.flatMap(Stream.fromIterable),
+              Stream.withSpan("AgentRuntime.decision", {
+                attributes: {
+                  ...agentTelemetryAttributes(context),
+                  agentId: context.agentId,
+                  runId: context.runId,
+                  turnId,
+                  "gen_ai.operation.name": "decision",
+                  "gen_ai.provider.name": preparedDecision.value.model.provider,
+                  "gen_ai.request.model": preparedDecision.value.model.model,
+                },
+              }),
+            ),
+            options.budget,
+          );
+
+      const response =
+        decisionResponse ??
+        attempt(compactedOutgoing(), preparedPrompt).pipe(
+          Stream.catch(
+            (
+              error,
+            ): Stream.Stream<
               RunEvent,
               AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
               InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
-            >;
+            > => {
+              if (
+                !(error instanceof AiError.AiError) ||
+                !isContextOverflowMessage(overflowText(error))
+              ) {
+                return Stream.fail(error);
+              }
+              const message = overflowText(error);
 
-            return Stream.unwrap(
-              Effect.gen(function* () {
-                const outcome = yield* compactContext(
-                  agent,
-                  context,
-                  modelContext.prompt,
-                  turn,
-                  options,
-                  callContext === undefined ? undefined : contextTokenLimit,
-                  messageTokenEstimator,
-                  Math.max(0, contextTokenLimit - derivedPromptTokens()),
-                  "overflow",
-                )
-                  .pipe(withCallModel)
-                  .pipe(
-                    Effect.mapError(
-                      (inner): AgentRuntimeFailure<typeof agent, HookError, InstructionError> =>
-                        inner instanceof AiError.AiError &&
-                        isContextOverflowMessage(overflowText(inner))
-                          ? ContextOverflowError.make({
-                              message: overflowText(inner),
+              if (trace.parts.length > 0 || contextTokenLimit === undefined) {
+                return Stream.fail(ContextOverflowError.make({ message, retried: false }));
+              }
+              if (context.compaction.overflowRetryTurn === turn) {
+                return Stream.fail(ContextOverflowError.make({ message, retried: true }));
+              }
+              context.compaction.overflowRetryTurn = turn;
+              context.compaction.lastCompactionTurn = turn;
+              type TurnStream = Stream.Stream<
+                RunEvent,
+                AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+                InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
+              >;
+
+              return Stream.unwrap(
+                Effect.gen(function* () {
+                  const outcome = yield* compactContext(
+                    agent,
+                    context,
+                    modelContext.prompt,
+                    turn,
+                    options,
+                    callContext === undefined ? undefined : contextTokenLimit,
+                    messageTokenEstimator,
+                    Math.max(0, contextTokenLimit - derivedPromptTokens()),
+                    "overflow",
+                  )
+                    .pipe(withCallModel)
+                    .pipe(
+                      Effect.mapError(
+                        (inner): AgentRuntimeFailure<typeof agent, HookError, InstructionError> =>
+                          inner instanceof AiError.AiError &&
+                          isContextOverflowMessage(overflowText(inner))
+                            ? ContextOverflowError.make({
+                                message: overflowText(inner),
+                                retried: true,
+                              })
+                            : inner,
+                      ),
+                    );
+
+                  if (outcome.events.some((event) => event._tag === "CompactionPerformed"))
+                    refreshPrepared();
+
+                  const retryEstimate = (yield* preparedSourceTokens) + derivedPromptTokens();
+
+                  if (retryEstimate > contextTokenLimit) {
+                    return yield* ContextBudgetError.make({
+                      message: `Overflow compaction could not fit the retry inside the ${contextTokenLimit} token context target`,
+                      estimatedTokens: retryEstimate,
+                      targetTokens: contextTokenLimit,
+                      completionReserveTokens: policy.completionReserveTokens,
+                    });
+                  }
+
+                  // The retried call is outside the outer catch: a second
+                  // classified overflow converts here, typed, no retry.
+                  const retried: TurnStream = attempt(compactedOutgoing()).pipe(
+                    Stream.catch((again): TurnStream =>
+                      again instanceof AiError.AiError &&
+                      isContextOverflowMessage(overflowText(again))
+                        ? Stream.fail(
+                            ContextOverflowError.make({
+                              message: overflowText(again),
                               retried: true,
-                            })
-                          : inner,
+                            }),
+                          )
+                        : Stream.fail(again),
                     ),
                   );
 
-                if (outcome.events.some((event) => event._tag === "CompactionPerformed"))
-                  refreshPrepared();
+                  const events: TurnStream = Stream.fromIterable(outcome.events);
 
-                const retryEstimate = (yield* preparedSourceTokens) + derivedPromptTokens();
-
-                if (retryEstimate > contextTokenLimit) {
-                  return yield* ContextBudgetError.make({
-                    message: `Overflow compaction could not fit the retry inside the ${contextTokenLimit} token context target`,
-                    estimatedTokens: retryEstimate,
-                    targetTokens: contextTokenLimit,
-                    completionReserveTokens: policy.completionReserveTokens,
-                  });
-                }
-
-                // The retried call is outside the outer catch: a second
-                // classified overflow converts here, typed, no retry.
-                const retried: TurnStream = attempt(compactedOutgoing()).pipe(
-                  Stream.catch((again): TurnStream =>
-                    again instanceof AiError.AiError &&
-                    isContextOverflowMessage(overflowText(again))
-                      ? Stream.fail(
-                          ContextOverflowError.make({
-                            message: overflowText(again),
-                            retried: true,
-                          }),
-                        )
-                      : Stream.fail(again),
-                  ),
-                );
-
-                const events: TurnStream = Stream.fromIterable(outcome.events);
-
-                return events.pipe(Stream.concat(retried));
-              }),
-            );
-          },
-        ),
-        Stream.withSpan("AgentRuntime.model", {
-          attributes: {
-            agentId: context.agentId,
-            runId: context.runId,
-            turnId,
-          },
-        }),
-      );
+                  return events.pipe(Stream.concat(retried));
+                }),
+              );
+            },
+          ),
+          Stream.withSpan("AgentRuntime.model", {
+            attributes: {
+              agentId: context.agentId,
+              runId: context.runId,
+              turnId,
+            },
+          }),
+        );
 
       const continuation = Stream.unwrap(
         Effect.sync(() => {
@@ -6525,7 +6681,11 @@ const makeTurn = <
               }),
             );
           }
-          if (agent.definition.completion?.required === true && trace.toolCalls.size === 0) {
+          if (
+            agent.definition.completion?.required === true &&
+            trace.toolCalls.size === 0 &&
+            trace.decision?.projection !== "continue"
+          ) {
             return failRunEventStream(
               ModelProtocolError.make({
                 message: `Model stopped without required completion Tool ${agent.definition.completion.tool}`,
@@ -6545,6 +6705,9 @@ const makeTurn = <
                         turnId,
                         turn,
                         finishReason: turnCompletion.finishReason,
+                        ...(trace.decisionModel === undefined
+                          ? {}
+                          : { decisionModel: trace.decisionModel }),
                       }),
                     ),
                   ),
@@ -6558,6 +6721,48 @@ const makeTurn = <
               ...promptFromTurnParts(trace).content,
               ...additions,
             ]);
+
+          const commitResponse = Effect.fnUntraced(function* (
+            rejectedResults?: RunTurnResponseCommit["rejectedResults"],
+          ) {
+            if (options.durability === undefined) return;
+            yield* options.durability.commitResponse({
+              turn,
+              turnId,
+              responseMessages: promptFromTurnParts(trace),
+              ...(trace.decision === undefined ? {} : { decision: trace.decision }),
+              ...(rejectedResults === undefined ? {} : { rejectedResults }),
+              calls: trace.applicationCallDescriptors,
+              ...(trace.toolParameterRejections.size === 0
+                ? {}
+                : { toolParameterRejections: [...trace.toolParameterRejections.values()] }),
+              toolExposure: snapshot,
+            });
+            if (trace.decision !== undefined) context.committedDecisionTurn = turn;
+          });
+
+          const rejectBatch = Effect.fnUntraced(function* (
+            error: AgentPolicyError | ModelProtocolError,
+          ) {
+            const events = yield* settleRejectedBatch(context, turnId, trace, error);
+
+            if (trace.decision !== undefined) {
+              const rejectedResults = yield* Effect.forEach(
+                trace.applicationToolResults,
+                Effect.fnUntraced(function* (result) {
+                  return {
+                    id: result.id,
+                    result: yield* decodeEventJson(result.encodedResult, "Rejected Tool result"),
+                    ...(result.budgetRejected === true ? { budgetRejected: true as const } : {}),
+                  };
+                }),
+              );
+
+              yield* commitResponse(rejectedResults);
+            }
+
+            return events;
+          });
 
           /**
            * Post-validation seam: charge the response's usage (RUN-023), stage
@@ -6665,10 +6870,7 @@ const makeTurn = <
                         // the token-breaching batch never executes a handler,
                         // and `tokenExhausted` (stamped by `consumeUsage`)
                         // constrains every subsequent request.
-                        const rejection = yield* settleRejectedBatch(
-                          context,
-                          turnId,
-                          trace,
+                        const rejection = yield* rejectBatch(
                           AgentPolicyError.make({
                             limit: "tokens",
                             message: `Token budget exhausted: this Run's ${policy.tokenBudget ?? 0} token budget was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
@@ -6787,6 +6989,29 @@ const makeTurn = <
               );
             });
 
+          if (trace.decision?.projection === "continue") {
+            return afterValidatedResponse(
+              Effect.gen(function* () {
+                if (options.durability === undefined)
+                  return yield* ModelProtocolError.make({
+                    message: "Decision Turn requires durable execution",
+                  });
+                yield* commitResponse();
+
+                const turnsBlocked =
+                  policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
+
+                if (turnsBlocked)
+                  return yield* AgentPolicyError.make({
+                    limit: "turns",
+                    message: `Agent exceeded its ${bounds.maxTurns} Turn limit`,
+                  });
+
+                return yield* continueTurn(historyWithResponse());
+              }),
+            );
+          }
+
           if (providerOnly && trace.finishReason === "stop") {
             if (agent.definition.completion?.required === true) {
               const turnsBlocked =
@@ -6832,16 +7057,13 @@ const makeTurn = <
               );
             }
 
-            // RUN-018: a rejected batch never executes a handler and is
-            // never durably declared — it settles synthetically through the
-            // ordinary batch continuation, so the model sees one failed
+            // RUN-018: a rejected batch never executes a handler. It settles
+            // through the ordinary batch continuation, so the model sees one failed
             // result per rejected call. Budget exhaustion constrains the next
             // Turn; a mixed completion declaration can be corrected within
-            // the remaining budgets. `commitResponse` is deliberately skipped:
-            // without it the Turn stays on the single-batch canonical
-            // commit shape and recovery replays it like any no-tool Turn. The
-            // rejected Turn's usage is still charged via
-            // `afterValidatedResponse` because the Run continues.
+            // the remaining budgets. Ordinary responses use the late single-batch
+            // commit. Decisions commit their response and rejection atomically
+            // so recovery retains the consumed slot and cannot execute the call.
             const batchRejection =
               overToolBudget &&
               trace.applicationToolCalls.length > 0 &&
@@ -6864,12 +7086,7 @@ const makeTurn = <
             if (batchRejection !== undefined) {
               return afterValidatedResponse(
                 Effect.gen(function* () {
-                  const rejection = yield* settleRejectedBatch(
-                    context,
-                    turnId,
-                    trace,
-                    batchRejection,
-                  );
+                  const rejection = yield* rejectBatch(batchRejection);
 
                   return Stream.fromIterable(rejection).pipe(
                     Stream.concat(
@@ -6923,18 +7140,7 @@ const makeTurn = <
                   // this persistence mutation, while approval preflight and preparation still run
                   // afterward. This retains durability §15's provably-safe resume window without
                   // allowing eager continuation work to overtake the append-only event stream.
-                  yield* options.durability.commitResponse({
-                    turn,
-                    turnId,
-                    responseMessages: promptFromTurnParts(trace),
-                    calls: trace.applicationCallDescriptors,
-                    ...(trace.toolParameterRejections.size === 0
-                      ? {}
-                      : {
-                          toolParameterRejections: [...trace.toolParameterRejections.values()],
-                        }),
-                    toolExposure: snapshot,
-                  });
+                  yield* commitResponse();
                 }
 
                 const toolResults = guardBudgetStream(
@@ -7309,6 +7515,9 @@ const makeResumeTurn = <
 
       const trace: TurnTrace = {
         replayedResponse: resume.responseMessages,
+        ...(resume.decision === undefined
+          ? {}
+          : { decision: resume.decision, decisionModel: DecisionTurnModel.make(resume.decision) }),
         responsePartCount: 0,
         responsePartBytes: 0,
         parts: [],
@@ -7650,6 +7859,7 @@ const makeResumeTurn = <
               turnId,
               turn,
               finishReason: "tool-calls",
+              ...(trace.decisionModel === undefined ? {} : { decisionModel: trace.decisionModel }),
             }),
           ] satisfies ReadonlyArray<RunEvent>;
         }).pipe(Effect.withLogSpan("AgentRuntime.resume")),
@@ -8044,6 +8254,7 @@ function streamWithCompletion<
             startedAtMillis,
             durationDeadlineMillis,
             history: options.history ?? Prompt.empty,
+            committedDecisionTurn: resumeUsage?.committedDecisionTurn,
             // RUN-019: a resumed Attempt re-seeds cumulative usage from the
             // canonical response records so token budgets and the compaction
             // trigger keep accounting across ownership changes.
@@ -8525,6 +8736,9 @@ function streamWithCompletion<
                     ...(yield* usageReportOf(context)),
                     errorTag: errorTag(error),
                     message: errorMessage(error),
+                    ...(error instanceof DecisionTurnError && error.model !== undefined
+                      ? { decisionModel: error.model }
+                      : {}),
                   });
                 }),
               );

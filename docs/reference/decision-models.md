@@ -1,6 +1,6 @@
 ---
 title: Decision models
-description: Native Effect decisions, language-model adapters, TypeSafe configuration, and thread-owned model selection.
+description: Native Effect decisions, durable decision turns, model adapters, and thread-owned model selection.
 ---
 
 # Decision models
@@ -50,9 +50,49 @@ const assessment = DecisionModel.decide(Urgency, {
 ```
 
 Results contain `answers` keyed by decision name and `usage.inputTokens` / `usage.outputTokens`.
-Unreported token counts are `undefined`. Usage is separate from an agent Run's language-model
-budgets. Classification and rating confidence is optional, provider-defined evidence, not a
-correctness guarantee. Provider and resolved model identifiers are not part of the response.
+Unreported token counts are `undefined`. Standalone calls do not enter an agent Run's usage
+accounting; [durable decision turns](#durable-decision-turns) do. Classification and rating
+confidence is optional, provider-defined evidence, not a correctness guarantee. Provider and
+resolved model identifiers are not part of the response.
+
+## Durable decision turns
+
+Import `DecisionTurn` from `effect-agent` to let a durable Run classify one eligible Turn and
+project the answer through an existing Tool. Construct it with
+`DecisionTurn.make(agent, { version, decision, model, tool, prepare, project })` and pass it as
+`decisionTurn` on the agent's durable registration. The definition contains one `route`
+classification; `tool` must be the exact Tool in that agent's Toolkit. The registered
+LanguageModel remains responsible for ordinary generation.
+Turns reserved for required completion or budget finalization stay with the LanguageModel.
+
+`prepare` receives the original Run input and the current assembled Prompt, including steering
+and settled Tool results. It returns only the state the decision provider may receive. Keep it
+read-only, and keep `project` pure: actions belong in the Tool handler. The decision model is
+acquired only when preparation returns a state and is scoped to the current Attempt.
+
+- `prepare` returning `None` skips inference and allows preparation on a later ordinary Turn.
+- `project` returning `None` commits a metered abstention and continues with the LanguageModel.
+  An abstention consumes the decision slot, just as a projected Tool call does.
+
+A projection supplies host-authored text and parameters for the fixed Tool. Current Tool
+visibility, parameter validation, authorization, approvals, budgets, and receipts still apply.
+Decision usage counts toward the Run with the actual decision provider and model identity.
+Budget-rejected projections retain the decision and failed Tool result atomically before continuing.
+
+The canonical decision consumes the slot for the rest of the Run, including after checkpoint
+retirement and recovery. A failure before that append may repeat inference. An unresolved
+ordinary Tool operation still requires reconciliation after ownership loss; selecting it through
+a decision does not make its external effects exactly once.
+
+Change `version` when preparation, projection, or model configuration changes their meaning.
+The contract hashes declared schemas and decisions, not callback code or the model Layer.
+Compiled registrations include that contract automatically. With low-level
+`DurableWorkerBinding.make`, include `yield* decisionTurn.contract` in the agent declaration
+before hashing the supplied digests; the constructor does not rewrite them. Construct the
+descriptor against the exact registered Agent Definition, including any policy overrides.
+
+Recovery checkpoints are disposable: an incompatible cache is rebuilt from canonical history.
+This applies to Runs without a decision descriptor too; canonical history is preserved.
 
 ## Probability validation
 
@@ -243,7 +283,7 @@ use `AiError.InvalidOutputError`. TypeSafe maps HTTP failures to typed `AiError`
 including authentication, rate limiting, and provider failures. Configuration can fail with
 `ConfigError`. Defects and interruption propagate.
 
-There are no automatic retries or deadlines. Compose `Effect.retry` and `Effect.timeout`,
+Standalone decision calls have no automatic retries or deadlines. Compose `Effect.retry` and `Effect.timeout`,
 or configure HTTP policies through the client's `transformClient` option or
 `TypeSafeConfig.withClientTransform`. Rate-limit errors retain retry delays when available.
 HTTP error text may include submitted content; the host controls tracing and logging.

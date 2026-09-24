@@ -63,7 +63,7 @@ export class ModelCallUsage extends Schema.Class<ModelCallUsage>(
   serviceTier: Schema.optionalKey(UsageIdentity),
   pricingVersion: Schema.optionalKey(UsageIdentity),
   response: Schema.optionalKey(ModelResponseIdentity),
-  purpose: Schema.optionalKey(Schema.Literals(["turn", "summary"])),
+  purpose: Schema.optionalKey(Schema.Literals(["turn", "summary", "decision"])),
   usageStatus: Schema.optionalKey(UsageCompleteness),
   pricingStatus: Schema.optionalKey(Schema.Literals(["estimated", "unknown"])),
   inputTokens: InputTokenUsage,

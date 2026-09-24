@@ -65,6 +65,7 @@ export * as ActivityStore from "./durable/ActivityStore.ts";
 export * as Admin from "./durable/Admin.ts";
 export * as AgentRegistration from "./durable/AgentRegistration.ts";
 export * as CommittedActivity from "./durable/CommittedActivity.ts";
+export * as DecisionTurn from "./durable/DecisionTurn.ts";
 export * as Digest from "./durable/Digest.ts";
 export * as DurableAgentRuntime from "./durable/DurableAgentRuntime.ts";
 export * as DurableFailpoint from "./durable/DurableFailpoint.ts";
