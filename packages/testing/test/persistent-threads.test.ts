@@ -240,9 +240,15 @@ describe("persistent threads", () => {
               {
                 ...answer("Welcome back to Kyoto"),
                 assertRequest: (request) => {
-                  expect(request.prompt.content.slice(0, before.content.length)).toEqual(
-                    before.content,
+                  const conversation = before.content.filter(
+                    (message) => message.role !== "system",
                   );
+
+                  expect(
+                    request.prompt.content
+                      .filter((message) => message.role !== "system")
+                      .slice(0, conversation.length),
+                  ).toEqual(conversation);
                   expect(before.content.map((message) => message.role)).toEqual([
                     "system",
                     "user",

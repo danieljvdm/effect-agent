@@ -131,7 +131,7 @@ import { SubagentHost } from "../SubagentHost.ts";
 import { ThreadHistory, ThreadHistoryError } from "../ThreadHistory.ts";
 import { CurrentToolCatalog, RunToolVisibility, type CatalogEntry } from "../ToolExposure.ts";
 import { boundedValueFootprint } from "./bounded-value.ts";
-import { insertOutputContract, isTextOutput, outputSchemaContract } from "./output-contract.ts";
+import { isTextOutput, outputSchemaContract, prepareModelPrompt } from "./output-contract.ts";
 import { ownPrimitiveDelta } from "./primitive-delta.ts";
 import {
   boundedCanonicalJsonSnapshot,
@@ -6208,10 +6208,10 @@ const makeTurn = <
                 }
                 context.toolExposure = snapshot;
 
-                const providerPrompt =
-                  outputContract._tag !== "rendered"
-                    ? outgoing
-                    : insertOutputContract(outgoing, outputContract.part);
+                const providerPrompt = prepareModelPrompt(
+                  outgoing,
+                  outputContract._tag === "rendered" ? outputContract.part : undefined,
+                );
 
                 // Prepared and transient context can change at every Turn. A
                 // final full-prompt check closes the per-call boundary for grace

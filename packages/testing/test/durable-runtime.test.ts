@@ -694,7 +694,8 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     }),
   );
 
-  it.effect("#509 retains the complete conversation across consecutive durable Runs", () =>
+  // #651: retained conversation must also preserve the provider's reusable prefix.
+  it.effect("#509/#651 retains the conversation and prompt prefix across durable Runs", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const scripted = yield* makeScriptedModel((call) => finalParts(String(call + 1)));
@@ -704,7 +705,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           input: Schema.String,
           inputPrompt: (message) => message,
           output: Output.text(Schema.String),
-          instructions: Prompt.empty,
+          instructions: "Answer the user.",
           toolkit: Toolkit.empty,
           policy: plannerDefinition.policy,
         }),
@@ -750,6 +751,60 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           { role: "user", text: "Say 3" },
         ],
       ]);
+      for (let index = 1; index < scripted.prompts.length; index++) {
+        const previous = scripted.prompts[index - 1]!.content;
+
+        expect(scripted.prompts[index]!.content.slice(0, previous.length)).toEqual(previous);
+      }
+    }),
+  );
+
+  // Regression: https://github.com/danieljvdm/effect-agent/issues/651
+  it.effect("preserves prompt prefixes through tool-result recovery without replaying tools", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 1 ? toolCallParts : finalParts('{"answer":"done"}'),
+      );
+
+      const agent = Agent.withModel(searchDefinition, scripted.model);
+      const threadId = decodeThreadId("cache-recovery");
+      let executions = 0;
+
+      const process = runtime.processThread(agent, threadId).pipe(
+        Effect.provide(
+          searchTools.toLayer({
+            search: () =>
+              Effect.sync(() => {
+                executions++;
+
+                return { available: true };
+              }),
+          }),
+        ),
+      );
+
+      yield* runtime.submit(agent, { question: "First" }, submitOptions(threadId, "first"));
+      expect((yield* process).map((settlement) => settlement.outcome)).toEqual(["completed"]);
+      yield* runtime.submit(agent, { question: "Second" }, submitOptions(threadId, "second"));
+      yield* armFailpoint("turn:after-results-append");
+      const crashed = yield* process.pipe(Effect.exit, Effect.ensuring(clearFailpoint));
+
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      expect(executions).toBe(1);
+      expect((yield* process).map((settlement) => settlement.outcome)).toEqual(["completed"]);
+      expect(executions).toBe(1);
+      expect(scripted.prompts).toHaveLength(3);
+      for (let index = 1; index < scripted.prompts.length; index++) {
+        const previous = scripted.prompts[index - 1]!.content;
+
+        expect(scripted.prompts[index]!.content.slice(0, previous.length)).toEqual(previous);
+      }
+      expect(scripted.prompts[2]!.content.at(-1)).toMatchObject({
+        role: "tool",
+        content: [{ type: "tool-result", result: { available: true } }],
+      });
     }),
   );
 

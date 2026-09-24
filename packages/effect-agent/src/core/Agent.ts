@@ -151,7 +151,10 @@ export interface Definition<
   readonly input: InputSchema;
   /** Canonical schema used to decode the final model output. */
   readonly output: OutputSchema;
-  /** Instructions evaluated once while preparing each run. */
+  /**
+   * Evaluated once while preparing each Run. Outgoing system messages form a leading block;
+   * exact repeats (including provider options) keep their last occurrence. Stored history is unchanged.
+   */
   readonly instructions: Instructions;
   /** Optional projection from decoded input to model-visible native Effect AI prompt content. */
   readonly inputPrompt?: InputPromptValue | undefined;
