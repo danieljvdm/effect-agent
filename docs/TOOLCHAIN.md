@@ -578,8 +578,7 @@ Publication accepts only the successful exact revision and CI attempt selected b
 It rechecks that evidence before preparation and after the live gate. Later `main` commits can
 advance during the gate if the tested revision remains an ancestor and public package manifests
 and prerelease configuration have not changed; another version release blocks publication.
-The one-off `Recover beta 140` dispatch uses the same checks and exact CI build after an interrupted
-release. Main rebuilds if the PR artifact cannot be restored. Publication fails on
+Main rebuilds if the PR artifact cannot be restored. Publication fails on
 missing, expired, corrupt or mismatched artifacts; they never authorize publication. Artifact
 retention is seven days; rerun main CI to replace expired evidence.
 The fresh paid gate, Changesets registry checks, npm OIDC provenance and Action tag publication

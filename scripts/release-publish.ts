@@ -375,7 +375,6 @@ export const publishRelease = Effect.fn("releasePublish.publishRelease")(functio
   },
 ) {
   const path = yield* Path.Path;
-  const vp = path.join(root, "node_modules", ".bin", "vp");
 
   const publish = Effect.gen(function* () {
     const buildRun = yield* Config.option(Config.Number("RELEASE_BUILD_RUN"));
@@ -405,10 +404,10 @@ export const publishRelease = Effect.fn("releasePublish.publishRelease")(functio
         runAttempt: yield* Config.Number("RELEASE_BUILD_ATTEMPT"),
         commit: (yield* readCommand(root, "git", ["rev-parse", "HEAD"])).trim(),
       });
-      yield* runCommand(root, vp, ["run", "ci:release-packages"]);
-    } else yield* runCommand(root, vp, ["run", "build"]);
+      yield* runCommand(root, "vp", ["run", "ci:release-packages"]);
+    } else yield* runCommand(root, "vp", ["run", "build"]);
     if (checkContinuity && !dryRun)
-      yield* runCommand(root, vp, [
+      yield* runCommand(root, "vp", [
         "run",
         "--no-cache",
         "context-continuity-eval",
@@ -419,7 +418,7 @@ export const publishRelease = Effect.fn("releasePublish.publishRelease")(functio
         "10",
       ]);
     if (checkCheckout && !dryRun)
-      yield* runCommand(root, vp, [
+      yield* runCommand(root, "vp", [
         "run",
         "--no-cache",
         "-F",
@@ -481,11 +480,10 @@ export const command = CliCommand.make(
   Effect.fn("releasePublish.command")(function* (options) {
     const path = yield* Path.Path;
 
-    const sourceRoot = yield* Config.option(Config.String("RELEASE_SOURCE_ROOT"));
-
-    const root = Option.isSome(sourceRoot)
-      ? path.resolve(sourceRoot.value)
-      : path.resolve(path.dirname(yield* path.fromFileUrl(new URL(import.meta.url))), "..");
+    const root = path.resolve(
+      path.dirname(yield* path.fromFileUrl(new URL(import.meta.url))),
+      "..",
+    );
 
     yield* publishRelease(root, options);
   }),
