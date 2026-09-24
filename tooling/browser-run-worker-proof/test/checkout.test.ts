@@ -88,6 +88,7 @@ it.effect("preserves credential acknowledgement through read failure without ret
           BrowserSessions,
           BrowserSessions.of({
             create: unused,
+            createAttached: unused,
             attach: () =>
               Effect.acquireRelease(Effect.succeed(session), () => Effect.sync(() => released++)),
             keepAlive: unused,

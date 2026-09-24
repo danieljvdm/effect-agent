@@ -12,7 +12,7 @@ import {
   Semaphore,
   Scope,
 } from "effect";
-import type { Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
+import type { Browser, Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 import {
   CredentialFillError,
@@ -209,6 +209,16 @@ export class BrowserSessions extends Context.Service<
       options: BrowserSessionOptions,
       retain: (reference: BrowserSessionReference) => Effect.Effect<void, E, R>,
     ) => Effect.Effect<BrowserSessionReference, E | BrowserSessionError, R>;
+    /**
+     * Allocate and retain as create does, keeping the initial attachment in the caller's Scope.
+     * No session is exposed before retain succeeds. Failed acquisition releases its attachment
+     * immediately; after retention the application owns remote cleanup. The 30-second acquisition
+     * timeout ends before use; each command retains its own timeout and the fixed session expiry.
+     */
+    readonly createAttached: <E, R>(
+      options: BrowserSessionOptions,
+      retain: (reference: BrowserSessionReference) => Effect.Effect<void, E, R>,
+    ) => Effect.Effect<BrowserSession, E | BrowserSessionError, R | Scope.Scope>;
     /** Attach only the exact saved context/page. Never recreate missing/expired state. */
     readonly attach: (
       reference: BrowserSessionReference,
@@ -278,63 +288,69 @@ export class BrowserSessions extends Context.Service<
         return { browser, retire };
       });
 
+      const allocate = Effect.fnUntraced(function* <E, R>(
+        input: BrowserSessionOptions,
+        retain: (reference: BrowserSessionReference) => Effect.Effect<void, E, R>,
+      ) {
+        const options = yield* decode(BrowserSessionOptions, input);
+        const expiresAt = (yield* Clock.currentTimeMillis) + options.maxElapsedMillis;
+
+        if (!Number.isSafeInteger(expiresAt)) return yield* failure("invalid");
+        let sessionId: Redacted.Redacted<string> | undefined;
+        let retained = false;
+        const runCleanup = Effect.runPromiseWith(yield* Effect.context<never>());
+
+        yield* Effect.addFinalizer(() =>
+          sessionId === undefined || retained ? Effect.void : cleanup(sessionId),
+        );
+        sessionId = yield* native("session.acquire", async (signal) => {
+          const id = Redacted.make(
+            await binding.acquire(options.keepAliveMillis ?? 600_000, "session.acquire"),
+          );
+
+          if (signal.aborted) {
+            await runCleanup(cleanup(id));
+            signal.throwIfAborted();
+          }
+
+          return id;
+        });
+        const connection = yield* connect(sessionId);
+
+        const page = yield* native("session.page", async () => {
+          const context = await connection.browser.createBrowserContext();
+
+          return await context.newPage();
+        });
+
+        const reference = yield* decode(BrowserSessionReference, {
+          version: 1,
+          sessionId,
+          contextId: Redacted.make(page.browserContext().id ?? ""),
+          targetId: Redacted.make(yield* targetId(page)),
+          expiresAt,
+          commandTimeoutMillis: options.commandTimeoutMillis ?? 30_000,
+        });
+
+        yield* Effect.uninterruptibleMask((restore) =>
+          restore(retain(reference)).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                retained = true;
+              }),
+            ),
+          ),
+        );
+
+        return { reference, page, ...connection };
+      });
+
       const create = <E, R>(
         input: BrowserSessionOptions,
         retain: (reference: BrowserSessionReference) => Effect.Effect<void, E, R>,
       ) =>
-        Effect.gen(function* () {
-          const options = yield* decode(BrowserSessionOptions, input);
-          const expiresAt = (yield* Clock.currentTimeMillis) + options.maxElapsedMillis;
-
-          if (!Number.isSafeInteger(expiresAt)) return yield* failure("invalid");
-          let sessionId: Redacted.Redacted<string> | undefined;
-          let retained = false;
-          const runCleanup = Effect.runPromiseWith(yield* Effect.context<never>());
-
-          yield* Effect.addFinalizer(() =>
-            sessionId === undefined || retained ? Effect.void : cleanup(sessionId),
-          );
-          sessionId = yield* native("session.acquire", async (signal) => {
-            const id = Redacted.make(
-              await binding.acquire(options.keepAliveMillis ?? 600_000, "session.acquire"),
-            );
-
-            if (signal.aborted) {
-              await runCleanup(cleanup(id));
-              signal.throwIfAborted();
-            }
-
-            return id;
-          });
-          const { browser } = yield* connect(sessionId);
-
-          const page = yield* native("session.page", async () => {
-            const context = await browser.createBrowserContext();
-
-            return await context.newPage();
-          });
-
-          const reference = yield* decode(BrowserSessionReference, {
-            version: 1,
-            sessionId,
-            contextId: Redacted.make(page.browserContext().id ?? ""),
-            targetId: Redacted.make(yield* targetId(page)),
-            expiresAt,
-            commandTimeoutMillis: options.commandTimeoutMillis ?? 30_000,
-          });
-
-          yield* Effect.uninterruptibleMask((restore) =>
-            restore(retain(reference)).pipe(
-              Effect.tap(() =>
-                Effect.sync(() => {
-                  retained = true;
-                }),
-              ),
-            ),
-          );
-
-          return reference;
-        }).pipe(
+        allocate(input, retain).pipe(
+          Effect.map(({ reference }) => reference),
           Effect.scoped,
           Effect.timeoutOrElse({
             duration: "30 seconds",
@@ -343,29 +359,13 @@ export class BrowserSessions extends Context.Service<
           Effect.withTracerEnabled(false),
         );
 
-      const attachPage = Effect.fnUntraced(function* (input: BrowserSessionReference) {
-        const reference = yield* decode(BrowserSessionReference, input);
-
-        if (reference.expiresAt <= (yield* Clock.currentTimeMillis))
-          return yield* failure("expired");
+      const makeSession = Effect.fnUntraced(function* (
+        reference: BrowserSessionReference,
+        browser: Browser,
+        currentPage: Page,
+        retire: Effect.Effect<void>,
+      ) {
         const scope = yield* Effect.scope;
-        const { browser, retire } = yield* connect(reference.sessionId);
-
-        const context = browser
-          .browserContexts()
-          .find((value) => value.id === Redacted.value(reference.contextId));
-
-        if (context === undefined) return yield* failure("missing-page");
-        let page: Page | undefined;
-
-        for (const candidate of yield* native("session.pages", () => context.pages())) {
-          if ((yield* targetId(candidate)) === Redacted.value(reference.targetId)) {
-            page = candidate;
-            break;
-          }
-        }
-        if (page === undefined) return yield* failure("missing-page");
-        const currentPage = page;
         const lock = yield* Semaphore.make(1);
         let invalid = false;
 
@@ -566,6 +566,48 @@ export class BrowserSessions extends Context.Service<
         return session;
       });
 
+      const createAttached = Effect.fnUntraced(function* <E, R>(
+        input: BrowserSessionOptions,
+        retain: (reference: BrowserSessionReference) => Effect.Effect<void, E, R>,
+      ) {
+        const scope = yield* Scope.fork(yield* Effect.scope);
+
+        return yield* allocate(input, retain).pipe(
+          Effect.flatMap(({ reference, browser, page, retire }) =>
+            makeSession(reference, browser, page, retire),
+          ),
+          Effect.provideService(Scope.Scope, scope),
+          Effect.timeoutOrElse({
+            duration: "30 seconds",
+            orElse: () => Effect.fail(failure("timeout")),
+          }),
+          Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void)),
+          Effect.withTracerEnabled(false),
+        );
+      });
+
+      const attachPage = Effect.fnUntraced(function* (input: BrowserSessionReference) {
+        const reference = yield* decode(BrowserSessionReference, input);
+
+        if (reference.expiresAt <= (yield* Clock.currentTimeMillis))
+          return yield* failure("expired");
+
+        const { browser, retire } = yield* connect(reference.sessionId);
+
+        const context = browser
+          .browserContexts()
+          .find((value) => value.id === Redacted.value(reference.contextId));
+
+        if (context === undefined) return yield* failure("missing-page");
+
+        for (const page of yield* native("session.pages", () => context.pages())) {
+          if ((yield* targetId(page)) === Redacted.value(reference.targetId))
+            return yield* makeSession(reference, browser, page, retire);
+        }
+
+        return yield* failure("missing-page");
+      });
+
       const attach = Effect.fnUntraced(function* (input: BrowserSessionReference) {
         const reference = yield* decode(BrowserSessionReference, input);
         const scope = yield* Scope.fork(yield* Effect.scope);
@@ -585,6 +627,7 @@ export class BrowserSessions extends Context.Service<
 
       return BrowserSessions.of({
         create,
+        createAttached,
         attach,
         close,
         keepAlive: (sessionId) =>
