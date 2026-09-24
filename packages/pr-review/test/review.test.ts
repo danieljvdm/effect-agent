@@ -182,6 +182,31 @@ const reviewInput = (prompt: Prompt.Prompt): string =>
     )
     .at(0) ?? "";
 
+describe("review deadline visibility", () => {
+  // Regression from bce20c171: cost-admitted reviews had no model-visible deadline.
+  it.effect("shows the deadline to a cost-admitted reviewer", () =>
+    Effect.gen(function* () {
+      const calls = yield* Ref.make(0);
+      let observedPrompt = "";
+
+      const outcome = yield* makeReviewer({
+        costControl: costControl(calls),
+        model: scriptedModel((prompt) => {
+          observedPrompt = JSON.stringify(prompt.content);
+
+          return response({});
+        }),
+      })
+        .review(request)
+        .pipe(Effect.provideService(ReviewRepository, emptyRepository));
+
+      expect(observedPrompt).toContain("<run-status>");
+      expect(observedPrompt).toMatch(/elapsed \d+s\/300s/);
+      expect(outcome.incomplete).toBeUndefined();
+    }),
+  );
+});
+
 describe("review output boundary", () => {
   it.effect(
     "concurrent research retains the same findings regardless of child completion order",
