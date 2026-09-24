@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.138
+
+### Patch Changes
+
+- [#645](https://github.com/danieljvdm/effect-agent/pull/645) [`92e6ae5`](https://github.com/danieljvdm/effect-agent/commit/92e6ae55e287930d9a73144738fc05a209206689) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Let reviews with host spending admission continue beyond the former turn and tool-call limits, retaining generous finite backstops and the five-minute deadline. Preserve the existing limits for hosts without spending admission.
+
+- Updated dependencies [[`00355c1`](https://github.com/danieljvdm/effect-agent/commit/00355c1871e8fdab22ae1dbb1f03c1f35171f357)]:
+  - effect-agent@0.1.0-beta.138
+
 ## 0.1.0-beta.137
 
 ### Patch Changes
