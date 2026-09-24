@@ -7,7 +7,11 @@ import {
   ProducerEpoch,
   RecordId,
 } from "effect-agent/records";
-import { runIdForSubmission, subagentLineageRecordId, workerOriginRecordId } from "effect-agent/run-journal";
+import {
+  runIdForSubmission,
+  subagentLineageRecordId,
+  workerOriginRecordId,
+} from "effect-agent/run-journal";
 import type { ThreadStore } from "effect-agent/thread-store";
 import {
   SelectedThreadRead,

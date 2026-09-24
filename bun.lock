@@ -268,7 +268,7 @@
     },
     "packages/storage-postgres": {
       "name": "@effect-agent/storage-postgres",
-      "version": "0.1.0-beta.109",
+      "version": "0.1.0-beta.140",
       "dependencies": {
         "@effect-agent/storage-sql": "workspace:*",
         "@effect/platform-node": "catalog:",
@@ -282,12 +282,12 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "^4.0.0-rc.115",
+        "effect": "^4.0.0-rc.117",
       },
     },
     "packages/storage-sql": {
       "name": "@effect-agent/storage-sql",
-      "version": "0.1.0-beta.124",
+      "version": "0.1.0-beta.140",
       "dependencies": {
         "effect-agent": "workspace:*",
       },
@@ -298,7 +298,7 @@
         "vite-plus": "catalog:",
       },
       "peerDependencies": {
-        "effect": "^4.0.0-rc.116",
+        "effect": "^4.0.0-rc.117",
       },
     },
     "packages/storage-sqlite": {

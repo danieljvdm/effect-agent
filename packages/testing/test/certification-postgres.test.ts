@@ -14,8 +14,6 @@ import { CertificationCaseResult, CertificationReport } from "effect-agent/testi
 import { submissionLedgerConformanceCases } from "effect-agent/testing/submission-ledger-conformance";
 import { threadStoreConformanceCases } from "effect-agent/testing/thread-store-conformance";
 
-import { maybeWriteReport } from "./certification-report-io.ts";
-
 /**
  * Lives here for the same reason the SQLite runner does: only the Cloudflare packages may
  * dev-depend on `testing`, and vp's task graph rejects the storage-* -> testing cycle. Both
@@ -85,7 +83,6 @@ const certified = Effect.gen(function* () {
     }).pipe(Effect.provide(NodeCrypto.layer));
   });
 
-  yield* maybeWriteReport("storage-postgres", report);
   cached = report;
 
   return report;
