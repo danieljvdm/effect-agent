@@ -1,6 +1,3 @@
-import { execFile } from "node:child_process";
-import { isAbsolute } from "node:path";
-
 import {
   BinaryBlob,
   GitHubApiFailure,
@@ -9,7 +6,8 @@ import {
 } from "@effect-agent/pr-review-action/review-repository";
 import { type ReviewRequest } from "@effect-agent/pr-review/review";
 import { type ReviewRepository } from "@effect-agent/pr-review/review-repository";
-import { Effect, Result, Schema } from "effect";
+import { Effect, Path, Result, Schema, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { EvalConfigurationError, type EvalInputDigest } from "./contracts.ts";
 import { digestText } from "./corpus.ts";
@@ -60,31 +58,54 @@ const gitBytes = Effect.fn("PrReviewEval.gitBytes")(function* (
   operation: string,
   maxBuffer: number,
 ) {
-  return yield* Effect.tryPromise({
-    try: (signal) =>
-      new Promise<Buffer>((resolve, reject) => {
-        execFile(
-          "git",
-          [...args],
-          {
-            cwd: root,
-            encoding: "buffer",
-            env: gitEnvironment,
-            maxBuffer,
-            signal,
-            timeout: 20_000,
-          },
-          (error, stdout) => {
-            if (error !== null) reject(error);
-            else resolve(stdout);
-          },
-        );
-      }),
-    catch: () =>
+  return yield* Effect.gen(function* () {
+    const child = yield* ChildProcess.make("git", args, {
+      cwd: root,
+      env: gitEnvironment,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "ignore",
+      forceKillAfter: "2 seconds",
+    });
+
+    const bytes = new Uint8Array(maxBuffer);
+    let length = 0;
+
+    const [, exitCode] = yield* Effect.all(
+      [
+        child.stdout.pipe(
+          Stream.runForEach((chunk) => {
+            if (length + chunk.length > maxBuffer) {
+              return EvalConfigurationError.make({
+                message: "Pinned Git output exceeds its byte bound",
+              });
+            }
+
+            return Effect.sync(() => {
+              bytes.set(chunk, length);
+              length += chunk.length;
+            });
+          }),
+        ),
+        child.exitCode,
+      ],
+      { concurrency: 2 },
+    );
+
+    if (exitCode !== 0) {
+      return yield* EvalConfigurationError.make({ message: "Pinned Git command failed" });
+    }
+
+    return bytes.subarray(0, length);
+  }).pipe(
+    Effect.scoped,
+    Effect.timeout("20 seconds"),
+    Effect.mapError(() =>
       EvalConfigurationError.make({
         message: `Could not ${operation} in the configured local Git repository`,
       }),
-  });
+    ),
+  );
 });
 
 const decodeUtf8 = (bytes: Uint8Array, operation: string) =>
@@ -199,6 +220,7 @@ const makeSnapshot = (
   revision: string,
   entries: ReadonlyMap<string, GitEntry>,
   textBlobs: Map<string, string>,
+  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ): RepositorySnapshot => {
   const readTextFile = Effect.fn("PrReviewEval.LocalGit.readTextFile")(function* (path: string) {
     const entry = entries.get(path);
@@ -226,6 +248,7 @@ const makeSnapshot = (
       "read pinned Git blob",
       MAX_TEXT_BLOB_BYTES,
     ).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.mapError(() =>
         GitHubApiFailure.make({
           operation: "read Git blob",
@@ -278,7 +301,10 @@ export const openLocalGitRepository = Effect.fn("PrReviewEval.openLocalGitReposi
     /** The Action's source exclusions, distinct from capacity-excluded unreviewed paths. */
     readonly unavailablePaths?: ReadonlySet<string>;
   }) {
-    if (!isAbsolute(input.root)) {
+    const path = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+    if (!path.isAbsolute(input.root)) {
       return yield* EvalConfigurationError.make({
         message: "PR_REVIEW_LOCAL_GIT_REPOSITORY must be an absolute path",
       });
@@ -292,8 +318,8 @@ export const openLocalGitRepository = Effect.fn("PrReviewEval.openLocalGitReposi
     const unavailablePaths = new Set(input.unavailablePaths ?? []);
 
     const service = makeReviewRepository({
-      base: makeSnapshot(input.root, baseCommit.sha, baseEntries, textBlobs),
-      head: makeSnapshot(input.root, headCommit.sha, headEntries, textBlobs),
+      base: makeSnapshot(input.root, baseCommit.sha, baseEntries, textBlobs, spawner),
+      head: makeSnapshot(input.root, headCommit.sha, headEntries, textBlobs, spawner),
       ignore: input.ignore,
       unavailablePaths,
     });

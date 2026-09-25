@@ -481,7 +481,7 @@ describe("PR-review model eval", () => {
       ]) {
         expect(
           Option.isNone(
-            Schema.decodeUnknownOption(EvalSuite)({
+            Schema.decodeOption(EvalSuite)({
               ...encoded,
               cases: [invalidCase],
             }),
@@ -501,7 +501,7 @@ describe("PR-review model eval", () => {
 
       expect(
         Option.isNone(
-          Schema.decodeUnknownOption(EvalSuite)({
+          Schema.decodeOption(EvalSuite)({
             ...encoded,
             cases: [
               {
