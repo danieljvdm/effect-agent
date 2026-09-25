@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.145
+
+### Patch Changes
+
+- [#673](https://github.com/danieljvdm/effect-agent/pull/673) [`54525a6`](https://github.com/danieljvdm/effect-agent/commit/54525a6d72f1b75211cb7443559185ef5db2e435) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Check record selection across pages and separate reads, verify nullable guard states, and describe required behavior without prescribing an exact edit. Use a 128,000-token working context in the GitHub Action to reduce rollovers.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.145
+
 ## 0.1.0-beta.144
 
 ### Patch Changes

@@ -66,6 +66,7 @@
     "capped-review-turns",
     "captured-policy-tool-replay",
     "captured-worker-policy",
+    "check-review-variants",
     "clear-addressed-pr-reviews",
     "clear-durable-run-failures",
     "clear-export-ownership",
