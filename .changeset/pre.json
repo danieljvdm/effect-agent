@@ -78,6 +78,7 @@
     "cloudflare-event-ownership",
     "cloudflare-gateway-web-search",
     "cloudflare-layer-from-bindings",
+    "cloudflare-publication-requirements",
     "cloudflare-shared-memory",
     "code-mode-drop-allow-experimental",
     "code-mode-empty-object",
