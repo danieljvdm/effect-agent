@@ -39,8 +39,6 @@ In your application, install the local adapter:
 bun add @effect-agent/sandbox-local@beta
 ```
 
-Requires `effect@^4.0.0-rc.117`. For the example below, also install
-`effect-agent@beta` and `@effect/platform-node@4.0.0-rc.117`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 
 `@effect-agent/sandbox-local` runs a child process on the current machine. It is useful for local

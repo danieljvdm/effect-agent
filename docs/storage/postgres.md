@@ -24,11 +24,11 @@ const Database = PgClient.layerConfig({
 });
 
 const Persistence = PostgresStorage.layer.pipe(
-  Layer.provide(Database),
+  Layer.provideMerge(Database),
   Layer.provide(NodeCrypto.layer),
 );
 
-const History = PersistentHistory.layer.pipe(Layer.provide(Persistence));
+const History = PersistentHistory.layer.pipe(Layer.provideMerge(Persistence));
 
 const program = AgentRuntime.run(agent, input, { threadId }).pipe(Effect.provide(History));
 ```
@@ -36,8 +36,7 @@ const program = AgentRuntime.run(agent, input, { threadId }).pipe(Effect.provide
 ## Install and connect
 
 ```sh
-bun add effect-agent@beta @effect-agent/storage-postgres@beta \
-  effect@4.0.0-rc.117 @effect/sql-pg@4.0.0-rc.117 @effect/platform-node@4.0.0-rc.117
+bun add @effect-agent/storage-postgres@beta
 ```
 
 Requires PostgreSQL 16 or newer. Create the database and set `DATABASE_URL` to its connection URL.
@@ -47,6 +46,7 @@ Keep framework packages at one release and use compatible
 Here, `agent`, `input`, and `threadId` come from your application.
 `PostgresStorage.layer` provides `ThreadStore` and `SubmissionLedger`;
 `PersistentHistory.layer` connects the thread store to ordinary `AgentRuntime` calls.
+`History` also exposes the same native SQL client for application queries.
 Supply the agent's model and tool Layers at your application boundary. For a server, provide
 `History` once around the application or build one `ManagedRuntime` so requests share the pool.
 Reuse the same thread ID to continue a conversation, including after a process restart.

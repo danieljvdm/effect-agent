@@ -15,8 +15,6 @@ See [Cloudflare storage](../storage/cloudflare) for database ownership and adapt
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Also install `effect@4.0.0-rc.117`, `effect-cf@^0.44.1`, `effect-agent@beta`,
-`@effect/ai-openai@4.0.0-rc.117` for the examples below.
 Keep framework packages at one release and add your [model provider](../guide/getting-started#installation-and-compatibility).
 
 ## AI Gateway {#ai-gateway}

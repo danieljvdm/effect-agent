@@ -31,7 +31,6 @@ In your application, install the browser adapters:
 bun add @effect-agent/platform-cloudflare@beta
 ```
 
-Requires `effect@^4.0.0-rc.117`. For the examples below, also install `effect-agent@beta`.
 Keep framework packages at the [same release](./getting-started#installation-and-compatibility).
 The REST examples need no Puppeteer dependency.
 
@@ -94,8 +93,7 @@ An interactive pass owns one browser, context, and page for one Scope. It is for
 need to inspect an active page, follow a known flow, or perform host-approved UI actions. It is not
 a general browsing session and cannot become an agent Tool.
 
-Install `@effect-agent/platform-cloudflare@beta`, `effect@^4.0.0-rc.117`, and `effect-cf@^0.44.1`.
-The adapter includes its Puppeteer client. Then provide
+The adapter includes its Puppeteer client. Provide
 `CloudflareInteractiveBrowser.layer({ browser: env.BROWSER, accountId, apiToken })` with
 `FetchHttpClient.layer` for browser actions. `CloudflareInteractiveBrowser.hostLayer` opts into
 trusted host controls for Live View and handoff. Both variants assemble the browser binding and
