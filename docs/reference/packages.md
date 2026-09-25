@@ -333,6 +333,8 @@ delivery, and activity progress. SQLite and Postgres supply connections, format 
 and transaction settings. Cloudflare reuses the SQL helpers that fit Durable Objects.
 Applications normally install their database adapter; adapter authors can use these factories
 with Effect's `SqlClient`. The shared package imports no platform runtime.
+`makeSqlThreadStore` and `makeSqlSubmissionLedger` return Effects of service values; install
+them with `Layer.effect(ThreadStore, ...)` and `Layer.effect(SubmissionLedger, ...)`.
 
 ### `@effect-agent/storage-sqlite`
 
@@ -356,9 +358,8 @@ Stores thread history and pending work in one Postgres database, which several N
 share. Rejects incompatible stored versions; no migration path is promised.
 Requires Postgres 16 or newer.
 
-`PostgresStorage.make(options)` returns selectable store Layers requiring an application's
-native Effect `SqlClient`. Thread history and submissions also require `Crypto`. Provide the
-client once at the composition root and reuse the storage instance to share initialization:
+`PostgresStorage.layer` provides `ThreadStore` and `SubmissionLedger`, requiring the application's
+native Effect `SqlClient` and `Crypto`. Provide them at the composition root:
 
 ```ts
 import { PostgresStorage } from "@effect-agent/storage-postgres";
@@ -369,17 +370,28 @@ import { Layer, Redacted } from "effect";
 const Database = PgClient.layer({
   url: Redacted.make("postgres://localhost/effect_agent"),
 });
-const storage = PostgresStorage.make();
-const Persistence = Layer.mergeAll(storage.threadStore, storage.submissionLedger).pipe(
+const Persistence = PostgresStorage.layer.pipe(
   Layer.provide(NodeCrypto.layer),
   Layer.provideMerge(Database),
 );
 ```
 
-`Persistence` exposes the stores and the same native client for application SQL. The storage
-instance also provides `scheduleStore`, `activityStore`, `messageDeliveryStore(limits)`, and
-`subscriptionStore(partition)`. Activity progress remains independent of the journal.
-The `failpoint` and `activityFailpoint` options accept test handlers.
+`Persistence` exposes the stores and the same native client for application SQL. Use
+`PostgresStorage.layerWith(options)` to configure the core pair, or select individual ports:
+
+| Constructor                                       | Provides                 |
+| ------------------------------------------------- | ------------------------ |
+| `threadStoreLayer(options = {})`                  | `ThreadStore`            |
+| `submissionLedgerLayer(options = {})`             | `SubmissionLedger`       |
+| `scheduleStoreLayer(options = {})`                | `ScheduleStore`          |
+| `activityStoreLayer(options = {})`                | `ActivityProcessorStore` |
+| `messageDeliveryStoreLayer(options = {})`         | `MessageDeliveryStore`   |
+| `subscriptionStoreLayer(partition, options = {})` | `SubscriptionStore`      |
+
+These constructors are exported by `PostgresStorage`. Activity progress remains independent of
+the journal; subscriptions require an explicit partition. Message delivery accepts `limits` in
+its options. The `failpoint` and `activityFailpoint`
+options accept test handlers.
 
 The `schema` option qualifies storage tables and defaults to `public`. It leaves the client's
 search path unchanged; pre-provisioned schemas need no database-wide `CREATE` permission.

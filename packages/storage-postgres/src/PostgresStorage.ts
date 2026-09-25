@@ -4,7 +4,7 @@ import { makeSqlScheduleStore } from "@effect-agent/storage-sql/sql-schedule-sto
 import { makeSqlSubmissionLedger } from "@effect-agent/storage-sql/sql-submission-ledger";
 import { makeSqlSubscriptionStore } from "@effect-agent/storage-sql/sql-subscription-store";
 import { makeSqlThreadStore } from "@effect-agent/storage-sql/sql-thread-store";
-import { Duration, Effect, Layer, Schema } from "effect";
+import { Context, Duration, Effect, Layer, Schema } from "effect";
 import {
   ActivityMutationFailpoint,
   ActivityProcessorStore,
@@ -15,8 +15,13 @@ import {
   type MessageDeliveryStoreLimits,
 } from "effect-agent/message-delivery";
 import { ScheduleStore } from "effect-agent/schedule";
-import { DEFAULT_OWNERSHIP_LEASE_DURATION, LedgerError } from "effect-agent/submission-ledger";
+import {
+  DEFAULT_OWNERSHIP_LEASE_DURATION,
+  LedgerError,
+  SubmissionLedger,
+} from "effect-agent/submission-ledger";
 import { SubscriptionError, SubscriptionStore, SourcePartition } from "effect-agent/subscription";
+import { ThreadStore } from "effect-agent/thread-store";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
@@ -65,13 +70,8 @@ export interface PostgresStorageOptions {
   readonly activityFailpoint?: ActivityMutationFailpoint["Service"]["hit"] | undefined;
 }
 
-/**
- * Compose selected storage ports over the application's native PostgreSQL SqlClient.
- * Provide SqlClient and Crypto at the composition root; reuse this result to share format
- * initialization. Activity progress remains independent and does not initialize the Thread journal.
- */
-export const make = (options: PostgresStorageOptions = {}) => {
-  const settings = Schema.decodeEffect(Settings)({
+const settings = (options: PostgresStorageOptions) =>
+  Schema.decodeEffect(Settings)({
     observationPollInterval: options.observationPollInterval ?? 25,
     lockTimeout: options.lockTimeout ?? 5_000,
     ownershipLeaseDuration:
@@ -88,108 +88,143 @@ export const make = (options: PostgresStorageOptions = {}) => {
     ),
   );
 
+const initialize = Effect.fnUntraced(function* (options: PostgresStorageOptions) {
+  const config = yield* settings(options);
+
+  yield* initializePostgresStorage(config);
+
+  return config;
+});
+
+const openJournal = Effect.fnUntraced(function* (options: PostgresStorageOptions) {
+  const config = yield* initialize(options);
   const hitFailpoint: PostgresStorageFailpointHandler = options.failpoint ?? (() => Effect.void);
+  const journal = yield* makePostgresJournal(config.lockTimeout, hitFailpoint, config.schema);
 
-  const initialized = Layer.effectDiscard(Effect.flatMap(settings, initializePostgresStorage));
+  return { config, journal, hitFailpoint };
+});
 
-  const journal = Effect.flatMap(settings, (config) =>
-    makePostgresJournal(config.lockTimeout, hitFailpoint, config.schema),
+type Journal = Effect.Success<ReturnType<typeof openJournal>>;
+
+const makeThreadStore = ({ config, journal, hitFailpoint }: Journal) =>
+  makeSqlThreadStore(journal, {
+    ...config,
+    namespace: config.schema,
+    errors: postgresStorageErrors,
+    hitFailpoint,
+    offsetPrefix: "effect-agent-postgres@1:",
+  });
+
+const makeSubmissionLedger = ({ config, journal, hitFailpoint }: Journal) =>
+  makeSqlSubmissionLedger(journal, {
+    namespace: config.schema,
+    errors: postgresStorageErrors,
+    hitFailpoint,
+    ownershipLeaseDuration: config.ownershipLeaseDuration,
+    sqlFailure: (operation) => (cause) => {
+      const internal = classifyWriteFailure(operation)(cause);
+
+      return LedgerError.make({ operation, message: internal.message, cause: internal });
+    },
+  });
+
+/** Thread history and submissions sharing one initialized journal. Requires SqlClient and Crypto. */
+export const layerWith = (options: PostgresStorageOptions) =>
+  Layer.effectContext(
+    Effect.gen(function* () {
+      const journal = yield* openJournal(options);
+      const threadStore = yield* makeThreadStore(journal);
+      const submissionLedger = yield* makeSubmissionLedger(journal);
+
+      return Context.make(ThreadStore, threadStore).pipe(
+        Context.add(SubmissionLedger, submissionLedger),
+      );
+    }),
   );
 
-  const threadStore = Layer.effectContext(
-    Effect.gen(function* () {
-      const config = yield* settings;
+/** Thread history and submissions with default settings. Requires SqlClient and Crypto. */
+export const layer = layerWith({});
 
-      return yield* makeSqlThreadStore(yield* journal, {
-        ...config,
-        namespace: config.schema,
-        errors: postgresStorageErrors,
-        hitFailpoint,
-        offsetPrefix: "effect-agent-postgres@1:",
-      });
-    }),
-  ).pipe(Layer.provide(initialized));
+/** Standalone thread history over the application's SqlClient and Crypto. */
+export const threadStoreLayer = (options: PostgresStorageOptions = {}) =>
+  Layer.effect(ThreadStore, Effect.flatMap(openJournal(options), makeThreadStore));
 
-  const submissionLedger = Layer.effectContext(
-    Effect.gen(function* () {
-      const config = yield* settings;
+/** Standalone submissions over the application's SqlClient and Crypto. */
+export const submissionLedgerLayer = (options: PostgresStorageOptions = {}) =>
+  Layer.effect(SubmissionLedger, Effect.flatMap(openJournal(options), makeSubmissionLedger));
 
-      return yield* makeSqlSubmissionLedger(yield* journal, {
-        namespace: config.schema,
-        errors: postgresStorageErrors,
-        hitFailpoint,
-        ownershipLeaseDuration: config.ownershipLeaseDuration,
-        sqlFailure: (operation) => (cause) => {
-          const internal = classifyWriteFailure(operation)(cause);
-
-          return LedgerError.make({ operation, message: internal.message, cause: internal });
-        },
-      });
-    }),
-  ).pipe(Layer.provide(initialized));
-
-  const scheduleStore = Layer.effect(
+/** Schedules over the application's SqlClient. */
+export const scheduleStoreLayer = (options: PostgresStorageOptions = {}) =>
+  Layer.effect(
     ScheduleStore,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const config = yield* settings;
+      const config = yield* initialize(options);
 
       return yield* makeSqlScheduleStore(
         withWriterLockTransaction(sql, config.lockTimeout),
         config.schema,
       );
     }),
-  ).pipe(Layer.provide(initialized));
+  );
 
-  const messageDeliveryStore = (limits?: MessageDeliveryStoreLimits) =>
-    Layer.effect(
-      MessageDeliveryStore,
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const config = yield* settings;
+/** Message delivery over the application's SqlClient, with optional retention limits. */
+export const messageDeliveryStoreLayer = (
+  options: PostgresStorageOptions & {
+    readonly limits?: MessageDeliveryStoreLimits | undefined;
+  } = {},
+) =>
+  Layer.effect(
+    MessageDeliveryStore,
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const config = yield* initialize(options);
 
-        return yield* makeSqlMessageDeliveryStore(limits, {
-          namespace: config.schema,
-          transaction: withWriterLockTransaction(sql, config.lockTimeout),
-        });
-      }),
-    ).pipe(Layer.provide(initialized));
+      return yield* makeSqlMessageDeliveryStore(options.limits, {
+        namespace: config.schema,
+        transaction: withWriterLockTransaction(sql, config.lockTimeout),
+      });
+    }),
+  );
 
-  const subscriptionStore = (owned: SourcePartition) =>
-    Layer.unwrap(
-      Schema.decodeEffect(SourcePartition)(owned).pipe(
+/** Subscriptions owned by an explicit partition. Invalid partitions fail before accessing SQL. */
+export const subscriptionStoreLayer = (
+  owned: SourcePartition,
+  options: PostgresStorageOptions = {},
+) =>
+  Layer.effect(
+    SubscriptionStore,
+    Effect.gen(function* () {
+      const partition = yield* Schema.decodeEffect(SourcePartition)(owned).pipe(
         Effect.mapError(() => SubscriptionError.make({ reason: "validation", code: "partition" })),
-        Effect.map((partition) =>
-          Layer.effect(
-            SubscriptionStore,
-            Effect.gen(function* () {
-              const sql = yield* SqlClient.SqlClient;
-              const config = yield* settings;
-              const transaction = withWriterLockTransaction(sql, config.lockTimeout);
+      );
 
-              // Retention DDL must share the writer lock with format initialization.
-              return yield* transaction(
-                makeSqlSubscriptionStore(partition, {
-                  namespace: config.schema,
-                  transaction,
-                  maxStoredJsonLength: 16 * 1024 * 1024,
-                }),
-              ).pipe(
-                Effect.catchTag("SqlError", () =>
-                  SubscriptionError.make({ reason: "storage", code: "initialize" }),
-                ),
-              );
-            }),
-          ).pipe(Layer.provide(initialized)),
+      const config = yield* initialize(options);
+      const sql = yield* SqlClient.SqlClient;
+      const transaction = withWriterLockTransaction(sql, config.lockTimeout);
+
+      // Retention DDL must share the writer lock with format initialization.
+      return yield* transaction(
+        makeSqlSubscriptionStore(partition, {
+          namespace: config.schema,
+          transaction,
+          maxStoredJsonLength: 16 * 1024 * 1024,
+        }),
+      ).pipe(
+        Effect.catchTag("SqlError", () =>
+          SubscriptionError.make({ reason: "storage", code: "initialize" }),
         ),
-      ),
-    );
+      );
+    }),
+  );
 
-  const activityStore = Layer.effect(
+/** Independent activity progress over SqlClient; does not initialize the Thread journal. */
+export const activityStoreLayer = (options: PostgresStorageOptions = {}) =>
+  Layer.effect(
     ActivityProcessorStore,
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const config = yield* settings;
+      const config = yield* settings(options);
 
       return yield* makeSqlActivityStore(
         withWriterLockTransaction(sql, config.lockTimeout),
@@ -211,13 +246,3 @@ export const make = (options: PostgresStorageOptions = {}) => {
         : Layer.succeed(ActivityMutationFailpoint)({ hit: options.activityFailpoint }),
     ),
   );
-
-  return {
-    threadStore,
-    submissionLedger,
-    scheduleStore,
-    messageDeliveryStore,
-    subscriptionStore,
-    activityStore,
-  } as const;
-};

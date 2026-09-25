@@ -2,6 +2,7 @@ import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storag
 import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
 import { Effect, Layer, Redacted } from "effect";
+import type { MessageDeliveryStoreLimits } from "effect-agent/message-delivery";
 
 import { WRITER_LOCK_KEY } from "../src/internal/postgres-storage.ts";
 
@@ -72,20 +73,24 @@ export const storage = (
   options: PostgresStorage.PostgresStorageOptions = {},
   client: Omit<PgClient.PgPoolConfig, "url"> = {},
 ) => {
-  const stores = PostgresStorage.make({ observationPollInterval: 1, ...options });
+  const settings = { observationPollInterval: 1, ...options };
   const clientLayer = PgClient.layer({ ...client, url: Redacted.make(url) });
   const dependencies = Layer.merge(clientLayer, NodeCrypto.layer);
 
   return {
     clientLayer,
-    threadStore: stores.threadStore.pipe(Layer.provide(dependencies)),
-    submissionLedger: stores.submissionLedger.pipe(Layer.provide(dependencies)),
-    scheduleStore: stores.scheduleStore.pipe(Layer.provide(dependencies)),
-    activityStore: stores.activityStore.pipe(Layer.provide(dependencies)),
-    messageDeliveryStore: (...args: Parameters<typeof stores.messageDeliveryStore>) =>
-      stores.messageDeliveryStore(...args).pipe(Layer.provide(dependencies)),
-    subscriptionStore: (...args: Parameters<typeof stores.subscriptionStore>) =>
-      stores.subscriptionStore(...args).pipe(Layer.provide(dependencies)),
+    threadStore: PostgresStorage.threadStoreLayer(settings).pipe(Layer.provide(dependencies)),
+    submissionLedger: PostgresStorage.submissionLedgerLayer(settings).pipe(
+      Layer.provide(dependencies),
+    ),
+    scheduleStore: PostgresStorage.scheduleStoreLayer(settings).pipe(Layer.provide(dependencies)),
+    activityStore: PostgresStorage.activityStoreLayer(settings).pipe(Layer.provide(dependencies)),
+    messageDeliveryStore: (limits?: MessageDeliveryStoreLimits) =>
+      PostgresStorage.messageDeliveryStoreLayer({ ...settings, limits }).pipe(
+        Layer.provide(dependencies),
+      ),
+    subscriptionStore: (partition: Parameters<typeof PostgresStorage.subscriptionStoreLayer>[0]) =>
+      PostgresStorage.subscriptionStoreLayer(partition, settings).pipe(Layer.provide(dependencies)),
   };
 };
 

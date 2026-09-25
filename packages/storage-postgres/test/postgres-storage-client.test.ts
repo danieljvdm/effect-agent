@@ -32,7 +32,7 @@ it.effect(
         // A keyword schema also exercises identifier quoting during the adapter's own DDL.
         yield* Effect.gen(function* () {
           yield* Effect.asVoid(ThreadStore).pipe(
-            Effect.provide(PostgresStorage.make({ schema: "select" }).threadStore),
+            Effect.provide(PostgresStorage.threadStoreLayer({ schema: "select" })),
           );
           const sql = yield* SqlClient.SqlClient;
 
@@ -84,7 +84,7 @@ it.effect(
 it.effect("rejects a zero writer timeout before opening storage", () =>
   Effect.gen(function* () {
     const opened = yield* ThreadStore.pipe(
-      Effect.provide(PostgresStorage.make({ lockTimeout: 0 }).threadStore),
+      Effect.provide(PostgresStorage.threadStoreLayer({ lockTimeout: 0 })),
       Effect.provide([PgClient.layer({ port: 1 }), NodeCrypto.layer]),
       Effect.exit,
     );

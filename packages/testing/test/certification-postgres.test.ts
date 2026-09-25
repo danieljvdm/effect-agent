@@ -50,16 +50,11 @@ const withTemporaryDatabase = <A, E>(
     (database) => admin(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`).pipe(Effect.ignore),
   );
 
-const combinedAdapters = (url: string) => {
-  const storage = PostgresStorage.make({
-    observationPollInterval: 1,
-  });
-
-  return Layer.mergeAll(storage.threadStore, storage.submissionLedger).pipe(
+const combinedAdapters = (url: string) =>
+  PostgresStorage.layerWith({ observationPollInterval: 1 }).pipe(
     Layer.provideMerge(NodeCrypto.layer),
     Layer.provideMerge(PgClient.layer({ url: Redacted.make(url) })),
   );
-};
 
 it.effect(
   "certifies PostgreSQL contracts and recovery without claiming process-kill coverage",

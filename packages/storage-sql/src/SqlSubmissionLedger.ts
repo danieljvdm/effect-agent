@@ -1,4 +1,4 @@
-import { Clock, Context, Crypto, DateTime, Effect, Option, Schema, Stream } from "effect";
+import { Clock, Crypto, DateTime, Effect, Option, Schema, Stream } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { InputMessage } from "effect-agent/messaging";
 import {
@@ -3644,38 +3644,35 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
       );
   });
 
-  return Context.make(
-    SubmissionLedger,
-    SubmissionLedger.of({
-      capabilities,
-      admit,
-      markReady,
-      lookup,
-      resolveAdmission,
-      claim,
-      renewOwnership,
-      releaseOwnership,
-      markInputApplied,
-      reserveSettlement,
-      finalizeSettlement,
-      requestAbort,
-      stopWorker,
-      inspectWorker,
-      claimJoining,
-      markJoined,
-      revertJoining,
-      suspend,
-      recordApprovalDecision,
-      markUnknown,
-      recordUnknownResolution,
-      recordChildSettled,
-      reserveChildBudget,
-      attachChildToReservation,
-      beginChildBudgetRelease,
-      releaseChildBudget,
-      scanNonterminal,
-      loadRecoverySnapshot,
-      readAbortIntent: readAbortIntentForSubmission,
-    }),
-  );
+  return SubmissionLedger.of({
+    capabilities,
+    admit,
+    markReady,
+    lookup,
+    resolveAdmission,
+    claim,
+    renewOwnership,
+    releaseOwnership,
+    markInputApplied,
+    reserveSettlement,
+    finalizeSettlement,
+    requestAbort,
+    stopWorker,
+    inspectWorker,
+    claimJoining,
+    markJoined,
+    revertJoining,
+    suspend,
+    recordApprovalDecision,
+    markUnknown,
+    recordUnknownResolution,
+    recordChildSettled,
+    reserveChildBudget,
+    attachChildToReservation,
+    beginChildBudgetRelease,
+    releaseChildBudget,
+    scanNonterminal,
+    loadRecoverySnapshot,
+    readAbortIntent: readAbortIntentForSubmission,
+  });
 });

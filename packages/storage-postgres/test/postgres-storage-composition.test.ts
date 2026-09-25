@@ -14,13 +14,15 @@ import { withTemporaryDatabase } from "./harness.ts";
 it.effect("opens Activity independently, then composes every port over one pool", () =>
   withTemporaryDatabase((url) =>
     Effect.gen(function* () {
-      const storage = PostgresStorage.make({ schema: "select" });
+      const options = { schema: "select" };
       const sql = yield* SqlClient.SqlClient;
 
       const journalExists = sql`SELECT to_regclass('"select".effect_agent_storage_version') IS NOT NULL AS present`;
 
       expect(yield* journalExists).toEqual([{ present: false }]);
-      yield* ActivityProcessorStore.pipe(Effect.provide(storage.activityStore));
+      yield* ActivityProcessorStore.pipe(
+        Effect.provide(PostgresStorage.activityStoreLayer(options)),
+      );
       expect(yield* journalExists).toEqual([{ present: false }]);
 
       yield* Effect.gen(function* () {
@@ -48,12 +50,11 @@ it.effect("opens Activity independently, then composes every port over one pool"
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            storage.threadStore,
-            storage.submissionLedger,
-            storage.scheduleStore,
-            storage.messageDeliveryStore(),
-            storage.subscriptionStore(subscriptionConformancePartition),
-            storage.activityStore,
+            PostgresStorage.layerWith(options),
+            PostgresStorage.scheduleStoreLayer(options),
+            PostgresStorage.messageDeliveryStoreLayer(options),
+            PostgresStorage.subscriptionStoreLayer(subscriptionConformancePartition, options),
+            PostgresStorage.activityStoreLayer(options),
           ),
         ),
       );
@@ -76,8 +77,6 @@ it.live(
   "rejects a store mutation inside the shared client's transaction without changing state",
   () =>
     withTemporaryDatabase((url) => {
-      const storage = PostgresStorage.make();
-
       return Effect.gen(function* () {
         const store = yield* ThreadStore;
         const sql = yield* SqlClient.SqlClient;
@@ -100,7 +99,7 @@ it.live(
           _tag: "ThreadStoreError",
         });
       }).pipe(
-        Effect.provide(storage.threadStore),
+        Effect.provide(PostgresStorage.layer),
         Effect.provide([
           PgClient.layer({ url: Redacted.make(url), maxConnections: 1 }),
           NodeCrypto.layer,
@@ -111,10 +110,8 @@ it.live(
 
 it.effect("rejects invalid subscription partitions before using the native client", () =>
   Effect.gen(function* () {
-    const storage = PostgresStorage.make();
-
     const result = yield* SubscriptionStore.pipe(
-      Effect.provide(storage.subscriptionStore({ tenantId: "", address: "" })),
+      Effect.provide(PostgresStorage.subscriptionStoreLayer({ tenantId: "", address: "" })),
       Effect.result,
     );
 
