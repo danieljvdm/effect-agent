@@ -14,7 +14,6 @@ import {
 } from "effect-agent/activity-store";
 import { Digest } from "effect-agent/records";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
 
 import { makeSqlQuery, SqlInteger, SqlNumber, type SqlWriteTransaction } from "./SqlStorage.ts";
 
@@ -49,11 +48,6 @@ const storeError = (
   operation: string,
   reason: ActivityStoreError["reason"] = "unavailable",
 ): ActivityStoreError => ActivityStoreError.make({ operation, reason });
-
-const query = <A extends object>(
-  effect: Effect.Effect<ReadonlyArray<A>, SqlError>,
-  operation: string,
-) => effect.pipe(Effect.mapError(() => storeError(operation)));
 
 const decodeRows = Effect.fn("SqlActivityStore.decodeRows")(function* <A, I>(
   schema: Schema.Codec<A, I, never>,
@@ -259,16 +253,16 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
     key: ActivityProcessorKey,
     operation: string,
   ): Effect.fn.Return<ActivityProgress | null, ActivityStoreError> {
-    const rawRows = yield* query(
-      sql<Record<string, unknown>>`
+    const rawRows = yield* sql<Record<string, unknown>>`
         SELECT processor_id, processor_version, thread_id, format_version,
           through_sequence, epoch, owner, lease_expires_at, progress_json
         FROM ${relation("effect_agent_activity_processor_state_v1")}
         WHERE processor_id = ${key.processorId}
           AND processor_version = ${key.processorVersion}
           AND thread_id = ${key.threadId}
-      `.pipe(execute),
-      operation,
+      `.pipe(
+      execute,
+      Effect.mapError(() => storeError(operation)),
     );
 
     const rows = yield* decodeRows(ActivityStateRow, rawRows, operation);

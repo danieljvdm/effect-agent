@@ -30,6 +30,7 @@ import {
 } from "effect-agent/subscription-transition";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
+import type { Statement } from "effect/unstable/sql/Statement";
 
 import { sqliteJsonIsTrue, jsonIsValid } from "./internal/sql-json.ts";
 import { makeSqlQuery, SqlInteger, SqlNumber } from "./SqlStorage.ts";
@@ -110,6 +111,9 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
   const { table: relation, execute } = makeSqlQuery(sql, options.namespace);
   const failpoint = yield* SubscriptionFailpoint;
 
+  const query = <A extends object>(statement: Statement<A>, code: string) =>
+    execute(statement).pipe(Effect.mapError(() => unavailable(code)));
+
   const transaction = <A>(body: Effect.Effect<A, SubscriptionError | SubscriptionFailpointError>) =>
     (options.transaction ?? sql.withTransaction)(body).pipe(
       Effect.catchTag("SqlError", () =>
@@ -161,47 +165,42 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
   const integer = sql.literal(sql.onDialectOrElse({ orElse: () => "INTEGER", pg: () => "BIGINT" }));
 
-  yield* sql`CREATE TABLE IF NOT EXISTS ${relation("effect_agent_event_retention")} (
+  yield* query(
+    sql`CREATE TABLE IF NOT EXISTS ${relation("effect_agent_event_retention")} (
     tenant_id TEXT NOT NULL, source_address TEXT NOT NULL, replay_horizon_millis ${integer} NOT NULL,
     next_maintenance_at_millis ${integer}, tombstone_count ${integer} NOT NULL DEFAULT 0, event_cursor TEXT NOT NULL DEFAULT '', delivery_cursor TEXT NOT NULL DEFAULT '', PRIMARY KEY (tenant_id, source_address)
-  )`.pipe(
-    execute,
-    Effect.mapError(() => unavailable("initialize event retention")),
+  )`,
+    "initialize event retention",
   );
 
-  yield* sql`
+  yield* query(
+    sql`
     INSERT INTO ${relation("effect_agent_subscription_sequences")} (
       tenant_id, source_address, sequence, event_scan_cursor, delivery_scan_cursor, recovery_scan_cursor
     ) VALUES (${partition.tenantId}, ${partition.address}, 0, '', '', 0) ON CONFLICT DO NOTHING
-  `.pipe(
-    execute,
-    Effect.mapError(() => unavailable("initialize subscription partition")),
+  `,
+    "initialize subscription partition",
   );
 
-  yield* sql`CREATE INDEX IF NOT EXISTS effect_agent_events_retention_order ON ${relation("effect_agent_subscription_events")}
+  yield* query(
+    sql`CREATE INDEX IF NOT EXISTS effect_agent_events_retention_order ON ${relation("effect_agent_subscription_events")}
     (tenant_id, source_address, tombstone, event_id)
-  `.pipe(
-    execute,
-    Effect.mapError(() => unavailable("index event retention")),
+  `,
+    "index event retention",
   );
-  yield* sql`CREATE INDEX IF NOT EXISTS effect_agent_subscriptions_recovery_reference ON ${relation("effect_agent_subscriptions")}
+  yield* query(
+    sql`CREATE INDEX IF NOT EXISTS effect_agent_subscriptions_recovery_reference ON ${relation("effect_agent_subscriptions")}
     (tenant_id, source_address, source_name, source_version, matching_key, recovery_present)
     WHERE recovery_present=1
-  `.pipe(
-    execute,
-    Effect.mapError(() => unavailable("index recovery retention")),
+  `,
+    "index recovery retention",
   );
-  yield* sql`CREATE INDEX IF NOT EXISTS effect_agent_deliveries_event ON ${relation("effect_agent_subscription_deliveries")}
+  yield* query(
+    sql`CREATE INDEX IF NOT EXISTS effect_agent_deliveries_event ON ${relation("effect_agent_subscription_deliveries")}
     (tenant_id, source_address, event_id, state)
-  `.pipe(
-    execute,
-    Effect.mapError(() => unavailable("index delivery retention")),
+  `,
+    "index delivery retention",
   );
-
-  const query = <A extends object>(
-    effect: Effect.Effect<ReadonlyArray<A>, SqlError>,
-    code: string,
-  ) => effect.pipe(Effect.mapError(() => unavailable(code)));
 
   const requirePartition = (candidate: SourcePartition, code: string) =>
     sameSourcePartition(candidate, partition)
@@ -229,7 +228,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         expires_at_millis, recovery_at_millis, recovery_present, record_json FROM ${relation("effect_agent_subscriptions")}
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND owner_id=${key.ownerId} AND subscription_id=${key.subscriptionId}
-    `.pipe(execute),
+    `,
       code,
     );
 
@@ -268,7 +267,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       SELECT event_id, source_name, source_version, matching_key, payload_digest, cutoff, cursor,
         routing_complete, tombstone, next_attempt_at_millis, record_json FROM ${relation("effect_agent_subscription_events")}
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id=${eventId}
-    `.pipe(execute),
+    `,
       code,
     );
 
@@ -309,7 +308,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND owner_id=${key.subscription.ownerId} AND subscription_id=${key.subscription.subscriptionId}
         AND event_id=${key.eventId}
-    `.pipe(execute),
+    `,
       code,
     );
 
@@ -336,7 +335,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
   });
 
   const count = Effect.fn("SqlSubscriptionStore.count")(function* (
-    statement: Effect.Effect<ReadonlyArray<Record<string, unknown>>, SqlError>,
+    statement: Statement<Record<string, unknown>>,
     code: string,
   ) {
     const rows = yield* query(statement, code);
@@ -353,7 +352,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       UPDATE ${relation("effect_agent_subscription_sequences")} SET sequence=sequence+1
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
       RETURNING sequence
-    `.pipe(execute),
+    `,
       "advance subscription sequence",
     );
 
@@ -376,7 +375,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         recovery_at_millis=${record.recovery?.nextAttemptAtMillis ?? null}, recovery_present=${record.recovery === null ? 0 : 1}, record_json=${json}
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND owner_id=${record.key.ownerId} AND subscription_id=${record.key.subscriptionId}
-    `.pipe(execute),
+    `,
       "write subscription",
     );
   });
@@ -389,7 +388,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       UPDATE ${relation("effect_agent_subscription_events")} SET cursor=${event.cursor}, routing_complete=${event.routingComplete ? 1 : 0}, tombstone=${event.tombstone === true ? 1 : 0},
         next_attempt_at_millis=${event.nextAttemptAtMillis}, record_json=${json}
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id=${event.eventId}
-    `.pipe(execute),
+    `,
       "write event",
     );
   });
@@ -407,7 +406,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND owner_id=${delivery.key.subscription.ownerId} AND subscription_id=${delivery.key.subscription.subscriptionId}
         AND event_id=${delivery.key.eventId}
-    `.pipe(execute),
+    `,
       "write delivery",
     );
   });
@@ -443,9 +442,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           (yield* count(
             sql<
               Record<string, unknown>
-            >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscriptions")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`.pipe(
-              execute,
-            ),
+            >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscriptions")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
             "count registrations",
           )) >= limits.maxRegistrations
         )
@@ -454,9 +451,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           (yield* count(
             sql<
               Record<string, unknown>
-            >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscriptions")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND owner_id=${record.key.ownerId}`.pipe(
-              execute,
-            ),
+            >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscriptions")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND owner_id=${record.key.ownerId}`,
             "count owner registrations",
           )) >= limits.maxRegistrationsPerOwner
         )
@@ -472,7 +467,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         VALUES (${partition.tenantId}, ${partition.address}, ${assigned.key.ownerId}, ${assigned.key.subscriptionId}, ${assigned.ordinal},
           ${assigned.configuration.source.name}, ${assigned.configuration.source.version}, ${assigned.configuration.matchingKey}, ${assigned.state},
           ${assigned.configuration.expiresAtMillis}, ${assigned.recovery?.nextAttemptAtMillis ?? null}, ${assigned.recovery === null ? 0 : 1}, ${json})
-      `.pipe(execute),
+      `,
           "insert registration",
         );
 
@@ -497,7 +492,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         sql<Record<string, unknown>>`
       SELECT owner_id, subscription_id, ordinal FROM ${relation("effect_agent_subscriptions")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND owner_id=${ownerId} AND ordinal>${after} ORDER BY ordinal LIMIT ${limit}
-    `.pipe(execute),
+    `,
         "list subscriptions",
       );
 
@@ -629,9 +624,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           const retainedPolicies = yield* query(
             sql<
               Record<string, unknown>
-            >`SELECT replay_horizon_millis FROM ${relation("effect_agent_event_retention")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`.pipe(
-              execute,
-            ),
+            >`SELECT replay_horizon_millis FROM ${relation("effect_agent_event_retention")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
             "retained horizon",
           ).pipe(
             Effect.flatMap((rows) => decodeRows(RetentionHorizonRow, rows, "retained horizon")),
@@ -647,18 +640,14 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
               sql<
                 Record<string, unknown>
               >`INSERT INTO ${relation("effect_agent_event_retention")} (tenant_id,source_address,replay_horizon_millis,next_maintenance_at_millis)
-            VALUES (${partition.tenantId},${partition.address},${limits.retention.replayHorizonMillis},${event.acceptedAtMillis}) ON CONFLICT DO NOTHING`.pipe(
-                execute,
-              ),
+            VALUES (${partition.tenantId},${partition.address},${limits.retention.replayHorizonMillis},${event.acceptedAtMillis}) ON CONFLICT DO NOTHING`,
               "retain event horizon",
             );
 
             const policies = yield* query(
               sql<
                 Record<string, unknown>
-              >`SELECT replay_horizon_millis FROM ${relation("effect_agent_event_retention")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`.pipe(
-                execute,
-              ),
+              >`SELECT replay_horizon_millis FROM ${relation("effect_agent_event_retention")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
               "retained event horizon",
             ).pipe(
               Effect.flatMap((rows) =>
@@ -676,9 +665,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
             (yield* count(
               sql<
                 Record<string, unknown>
-              >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscription_events")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND tombstone=0`.pipe(
-                execute,
-              ),
+              >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscription_events")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND tombstone=0`,
               "count events",
             )) >= limits.maxEvents
           )
@@ -701,7 +688,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           matching_key, payload_digest, cutoff, cursor, routing_complete, next_attempt_at_millis, record_json)
         VALUES (${partition.tenantId}, ${partition.address}, ${accepted.eventId}, ${accepted.source.name}, ${accepted.source.version},
           ${accepted.matchingKey}, ${accepted.payloadDigest}, ${accepted.cutoff}, ${accepted.cursor}, 0, ${accepted.nextAttemptAtMillis}, ${json})
-      `.pipe(execute),
+      `,
             "insert event",
           );
 
@@ -726,7 +713,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       sql<Record<string, unknown>>`
       SELECT event_id FROM ${relation("effect_agent_subscription_events")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND routing_complete=0 AND next_attempt_at_millis<=${nowMillis} AND event_id>${after} ORDER BY event_id LIMIT ${limit}
-    `.pipe(execute),
+    `,
       "pending events",
     );
 
@@ -753,7 +740,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       SELECT owner_id, subscription_id, ordinal FROM ${relation("effect_agent_subscriptions")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND source_name=${stored.source.name} AND source_version=${stored.source.version} AND matching_key=${stored.matchingKey}
         AND ordinal>${stored.cursor} AND ordinal<=${stored.cutoff} ORDER BY ordinal LIMIT ${limit}
-    `.pipe(execute),
+    `,
       "subscription candidates",
     );
 
@@ -796,7 +783,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       VALUES (${partition.tenantId}, ${partition.address}, ${delivery.key.subscription.ownerId}, ${delivery.key.subscription.subscriptionId},
         ${delivery.key.eventId}, ${subscriptionDeliveryKeyString(delivery.key)}, ${delivery.state}, ${delivery.retry.nextAttemptAtMillis}, ${json}
         ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, ${delivery.retry.parked === true}, ${delivery.observeSettlement === true}` })})
-    `.pipe(execute),
+    `,
       "insert delivery",
     );
   });
@@ -863,9 +850,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           const total = yield* count(
             sql<
               Record<string, unknown>
-            >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`.pipe(
-              execute,
-            ),
+            >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
             "count deliveries",
           );
 
@@ -875,9 +860,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
             const existing = yield* count(
               sql<
                 Record<string, unknown>
-              >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND owner_id=${ownerId}`.pipe(
-                execute,
-              ),
+              >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND owner_id=${ownerId}`,
               "count owner deliveries",
             );
 
@@ -950,9 +933,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           (yield* count(
             sql<
               Record<string, unknown>
-            >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`.pipe(
-              execute,
-            ),
+            >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
             "count deliveries",
           )) >= limits.maxDeliveries
         )
@@ -961,9 +942,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           (yield* count(
             sql<
               Record<string, unknown>
-            >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND owner_id=${record.key.ownerId}`.pipe(
-              execute,
-            ),
+            >`SELECT COUNT(*) AS count FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND owner_id=${record.key.ownerId}`,
             "count owner deliveries",
           )) >= limits.maxDeliveriesPerOwner
         )
@@ -1020,7 +999,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           ((state NOT IN ('delivered','refused') AND NOT ${sql.onDialectOrElse({ orElse: () => sqliteJsonIsTrue(sql, "record_json", ["retry", "parked"]), pg: () => sql`retry_parked` })}) OR (state='delivered' AND ${sql.onDialectOrElse({ orElse: () => sqliteJsonIsTrue(sql, "record_json", ["observeSettlement"]), pg: () => sql`observe_settlement` })}))
           ELSE state<>'refused' END
         AND next_attempt_at_millis<=${nowMillis} AND delivery_key>${after} ORDER BY delivery_key LIMIT ${limit}
-    `.pipe(execute),
+    `,
       "pending deliveries",
     );
 
@@ -1049,7 +1028,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       sql<Record<string, unknown>>`
       SELECT record_json FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND owner_id=${key.ownerId} AND subscription_id=${key.subscriptionId} AND delivery_key>${after} ORDER BY delivery_key LIMIT ${limit}
-    `.pipe(execute),
+    `,
       "list deliveries",
     );
 
@@ -1113,7 +1092,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND state='active'
         AND recovery_at_millis IS NOT NULL AND recovery_at_millis<=${nowMillis} AND ordinal>${after}
       ORDER BY ordinal LIMIT ${limit}
-    `.pipe(execute),
+    `,
       "recovering subscriptions",
     );
 
@@ -1160,7 +1139,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       SELECT event_scan_cursor, delivery_scan_cursor, recovery_scan_cursor
       FROM ${relation("effect_agent_subscription_sequences")}
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
-    `.pipe(execute),
+    `,
       "read subscription scan cursors",
     );
 
@@ -1188,7 +1167,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         UPDATE ${relation("effect_agent_subscription_sequences")}
         SET event_scan_cursor=${cursors.events}, delivery_scan_cursor=${cursors.deliveries}, recovery_scan_cursor=${cursors.recovery}
         WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
-      `.pipe(execute),
+      `,
           "advance subscription scan cursors",
         );
       }),
@@ -1210,7 +1189,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       UNION ALL SELECT recovery_at_millis FROM ${relation("effect_agent_subscriptions")}
         WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND state='active' AND recovery_at_millis IS NOT NULL
     )
-  `.pipe(execute),
+  `,
     "next subscription deadline",
   ).pipe(
     Effect.flatMap((rows) =>
@@ -1253,18 +1232,14 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         yield* query(
           sql<
             Record<string, unknown>
-          >`INSERT INTO ${relation("effect_agent_event_retention")} (tenant_id, source_address, replay_horizon_millis) VALUES (${partition.tenantId}, ${partition.address}, ${policy.replayHorizonMillis}) ON CONFLICT DO NOTHING`.pipe(
-            execute,
-          ),
+          >`INSERT INTO ${relation("effect_agent_event_retention")} (tenant_id, source_address, replay_horizon_millis) VALUES (${partition.tenantId}, ${partition.address}, ${policy.replayHorizonMillis}) ON CONFLICT DO NOTHING`,
           "initialize maintenance",
         );
 
         const progress = yield* query(
           sql<
             Record<string, unknown>
-          >`SELECT replay_horizon_millis, tombstone_count, event_cursor, delivery_cursor FROM ${relation("effect_agent_event_retention")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`.pipe(
-            execute,
-          ),
+          >`SELECT replay_horizon_millis, tombstone_count, event_cursor, delivery_cursor FROM ${relation("effect_agent_event_retention")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
           "maintenance progress",
         ).pipe(
           Effect.flatMap((rows) =>
@@ -1291,9 +1266,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         const deliveryRows = yield* query(
           sql<
             Record<string, unknown>
-          >`SELECT delivery_key, record_json FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND delivery_key>${cursor.delivery_cursor} ORDER BY delivery_key LIMIT ${limit}`.pipe(
-            execute,
-          ),
+          >`SELECT delivery_key, record_json FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND delivery_key>${cursor.delivery_cursor} ORDER BY delivery_key LIMIT ${limit}`,
           "maintenance deliveries",
         ).pipe(
           Effect.flatMap((rows) =>
@@ -1308,9 +1281,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         const eventRows = yield* query(
           sql<
             Record<string, unknown>
-          >`SELECT event_id, record_json FROM ${relation("effect_agent_subscription_events")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id>${cursor.event_cursor} ORDER BY event_id LIMIT ${limit}`.pipe(
-            execute,
-          ),
+          >`SELECT event_id, record_json FROM ${relation("effect_agent_subscription_events")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id>${cursor.event_cursor} ORDER BY event_id LIMIT ${limit}`,
           "maintenance events",
         ).pipe(
           Effect.flatMap((rows) =>
@@ -1326,9 +1297,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           query(
             sql<
               Record<string, unknown>
-            >`SELECT 1 FROM ${relation("effect_agent_subscriptions")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND source_name=${event.source.name} AND source_version=${event.source.version} AND matching_key=${event.matchingKey} AND recovery_present=1 LIMIT 1`.pipe(
-              execute,
-            ),
+            >`SELECT 1 FROM ${relation("effect_agent_subscriptions")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND source_name=${event.source.name} AND source_version=${event.source.version} AND matching_key=${event.matchingKey} AND recovery_present=1 LIMIT 1`,
             "maintenance recovery reference",
           ).pipe(Effect.map((rows) => rows.length > 0));
 
@@ -1391,9 +1360,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           yield* query(
             sql<
               Record<string, unknown>
-            >`DELETE FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND delivery_key=${row.delivery_key}`.pipe(
-              execute,
-            ),
+            >`DELETE FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND delivery_key=${row.delivery_key}`,
             "reclaim delivery",
           );
         }
@@ -1430,9 +1397,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
             (yield* query(
               sql<
                 Record<string, unknown>
-              >`SELECT 1 FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id=${event.eventId} LIMIT 1`.pipe(
-                execute,
-              ),
+              >`SELECT 1 FROM ${relation("effect_agent_subscription_deliveries")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id=${event.eventId} LIMIT 1`,
               "maintenance delivery reference",
             )).length > 0 ||
             (yield* protectedByRecovery(event))
@@ -1442,9 +1407,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
             yield* query(
               sql<
                 Record<string, unknown>
-              >`DELETE FROM ${relation("effect_agent_subscription_events")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id=${event.eventId}`.pipe(
-                execute,
-              ),
+              >`DELETE FROM ${relation("effect_agent_subscription_events")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND event_id=${event.eventId}`,
               "expire event identity",
             );
             if (event.tombstone === true) tombstones--;
@@ -1460,18 +1423,14 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
           (yield* query(
             sql<
               Record<string, unknown>
-            >`SELECT 1 FROM ${relation("effect_agent_subscription_events")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} LIMIT 1`.pipe(
-              execute,
-            ),
+            >`SELECT 1 FROM ${relation("effect_agent_subscription_events")} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} LIMIT 1`,
             "remaining maintenance",
           )).length > 0;
 
         yield* query(
           sql<
             Record<string, unknown>
-          >`UPDATE ${relation("effect_agent_event_retention")} SET tombstone_count=${tombstones}, event_cursor=${eventRows.length < limit ? "" : (eventRows.at(-1)?.event_id ?? "")}, delivery_cursor=${deliveryRows.length < limit ? "" : (deliveryRows.at(-1)?.delivery_key ?? "")}, next_maintenance_at_millis=${remaining ? nowMillis + 60_000 : null} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`.pipe(
-            execute,
-          ),
+          >`UPDATE ${relation("effect_agent_event_retention")} SET tombstone_count=${tombstones}, event_cursor=${eventRows.length < limit ? "" : (eventRows.at(-1)?.event_id ?? "")}, delivery_cursor=${deliveryRows.length < limit ? "" : (deliveryRows.at(-1)?.delivery_key ?? "")}, next_maintenance_at_millis=${remaining ? nowMillis + 60_000 : null} WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}`,
           "advance maintenance",
         );
 

@@ -530,7 +530,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           yield* failpoint("upgrade:before-version");
           yield* createNativeReadIndexes();
           yield* createMessageDeliveryPendingIndex();
-          yield* seedNativeReadIndexes().pipe(
+          yield* seedNativeReadIndexes.pipe(
             Effect.catchTag("ThreadStoreError", (error) =>
               SqliteStorageCorruptionError.make({
                 table: "effect_agent_canonical_records",
@@ -641,7 +641,7 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           yield* failpoint("upgrade:before-mutation");
           yield* createNativeReadIndexes();
           yield* createMessageDeliveryPendingIndex();
-          yield* seedNativeReadIndexes().pipe(
+          yield* seedNativeReadIndexes.pipe(
             Effect.catchTag("ThreadStoreError", (error) =>
               SqliteStorageCorruptionError.make({
                 table: "effect_agent_canonical_records",

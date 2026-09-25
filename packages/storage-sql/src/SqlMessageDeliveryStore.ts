@@ -22,6 +22,7 @@ import { ScheduleInstant } from "effect-agent/schedule";
 import { IdempotencyKey } from "effect-agent/submission-ledger";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
+import type { Statement } from "effect/unstable/sql/Statement";
 
 import { sqliteJsonText, queryIdentifier } from "./internal/sql-json.ts";
 import { makeSqlQuery, SqlInteger } from "./SqlStorage.ts";
@@ -142,9 +143,6 @@ const corrupt = (operation: string, cause?: unknown) =>
     ...(cause === undefined ? {} : { cause }),
   });
 
-const query = <A>(operation: string, effect: Effect.Effect<A, SqlError>) =>
-  effect.pipe(Effect.mapError((cause) => storage(operation, cause)));
-
 /**
  * Shared SQL implementation over the adapter-owned effect_agent_message_deliveries table.
  * Required columns: owner_thread_id, message_id (composite primary key), version, state,
@@ -166,6 +164,9 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
   const sql = yield* SqlClient.SqlClient;
   const { table: relation, execute } = makeSqlQuery(sql, options.namespace);
+
+  const query = <A extends object>(operation: string, statement: Statement<A>) =>
+    execute(statement).pipe(Effect.mapError((cause) => storage(operation, cause)));
 
   const transaction = <A>(body: Effect.Effect<A, MessageDeliveryFailure>) =>
     (options.transaction ?? sql.withTransaction)(body).pipe(
@@ -222,9 +223,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
       const rows = yield* query(
         "get",
-        sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM ${relation("effect_agent_message_deliveries")} WHERE owner_thread_id = ${input.ownerThreadId} AND message_id = ${input.messageId}`.pipe(
-          execute,
-        ),
+        sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM ${relation("effect_agent_message_deliveries")} WHERE owner_thread_id = ${input.ownerThreadId} AND message_id = ${input.messageId}`,
       );
 
       return (yield* decodeRows(rows))[0] ?? null;
@@ -274,9 +273,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
         const counts = yield* query(
           "count",
-          sql`SELECT COUNT(*) AS retained, COALESCE(SUM(CASE WHEN state IN ('pending', 'accepted', 'parked') THEN 1 ELSE 0 END), 0) AS pending FROM ${relation("effect_agent_message_deliveries")} WHERE owner_thread_id = ${input.key.ownerThreadId} AND ${sql.onDialectOrElse({ orElse: () => sql`COALESCE(${sqliteJsonText(sql, "record_json", ["envelope", "messageAdmission", "_tag"])}, '') ${update ? sql`= 'WorkerUpdate'` : sql`<> 'WorkerUpdate'`}`, pg: () => sql`(read_metadata ->> 'workerUpdate') = ${String(update)}` })}`.pipe(
-            execute,
-          ),
+          sql`SELECT COUNT(*) AS retained, COALESCE(SUM(CASE WHEN state IN ('pending', 'accepted', 'parked') THEN 1 ELSE 0 END), 0) AS pending FROM ${relation("effect_agent_message_deliveries")} WHERE owner_thread_id = ${input.key.ownerThreadId} AND ${sql.onDialectOrElse({ orElse: () => sql`COALESCE(${sqliteJsonText(sql, "record_json", ["envelope", "messageAdmission", "_tag"])}, '') ${update ? sql`= 'WorkerUpdate'` : sql`<> 'WorkerUpdate'`}`, pg: () => sql`(read_metadata ->> 'workerUpdate') = ${String(update)}` })}`,
         );
 
         const count = (yield* Schema.decodeUnknownEffect(Schema.Array(Count))(counts).pipe(
@@ -288,9 +285,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
           return yield* MessageDeliveryError.make({ reason: "capacity", operation: "insert" });
         yield* query(
           "insert",
-          sql`INSERT INTO ${relation("effect_agent_message_deliveries")} (owner_thread_id, message_id, version, state, deadline_at_millis, record_json ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata` })}) VALUES (${input.key.ownerThreadId}, ${input.key.messageId}, ${input.version}, ${input.status}, ${messageDeliveryDeadline(input)}, ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, ${deliveryMetadata(input)}::jsonb` })})`.pipe(
-            execute,
-          ),
+          sql`INSERT INTO ${relation("effect_agent_message_deliveries")} (owner_thread_id, message_id, version, state, deadline_at_millis, record_json ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata` })}) VALUES (${input.key.ownerThreadId}, ${input.key.messageId}, ${input.version}, ${input.status}, ${messageDeliveryDeadline(input)}, ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, ${deliveryMetadata(input)}::jsonb` })})`,
         );
 
         return input;
@@ -322,9 +317,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
         const updated = yield* query(
           "change",
-          sql`UPDATE ${relation("effect_agent_message_deliveries")} SET version = ${next.version}, state = ${next.status}, deadline_at_millis = ${messageDeliveryDeadline(next)}, record_json = ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata = ${deliveryMetadata(next)}::jsonb` })} WHERE owner_thread_id = ${decodedKey.ownerThreadId} AND message_id = ${decodedKey.messageId} AND version = ${input.expectedVersion} RETURNING owner_thread_id, message_id, version, state, deadline_at_millis, record_json`.pipe(
-            execute,
-          ),
+          sql`UPDATE ${relation("effect_agent_message_deliveries")} SET version = ${next.version}, state = ${next.status}, deadline_at_millis = ${messageDeliveryDeadline(next)}, record_json = ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata = ${deliveryMetadata(next)}::jsonb` })} WHERE owner_thread_id = ${decodedKey.ownerThreadId} AND message_id = ${decodedKey.messageId} AND version = ${input.expectedVersion} RETURNING owner_thread_id, message_id, version, state, deadline_at_millis, record_json`,
         );
 
         const rows = yield* decodeRows(updated);
@@ -366,7 +359,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
             : sql`AND ${workerField(sql, "threadId")} = ${queryIdentifier(sql, input.pendingWorker)}
           AND state IN ('pending', 'parked') AND ${withoutReceipt(sql)}`
         }
-        ORDER BY message_id LIMIT ${input.limit + 1}`.pipe(execute),
+        ORDER BY message_id LIMIT ${input.limit + 1}`,
       );
 
       const records = yield* decodeRows(rows);
@@ -386,9 +379,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
       const rows = yield* query(
         "due",
-        sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM ${relation("effect_agent_message_deliveries")} WHERE deadline_at_millis IS NOT NULL AND deadline_at_millis <= ${input.nowMillis} ${input.ownerThreadId === undefined ? sql`` : sql`AND owner_thread_id = ${input.ownerThreadId}`} ORDER BY deadline_at_millis, owner_thread_id, message_id LIMIT ${input.limit}`.pipe(
-          execute,
-        ),
+        sql`SELECT owner_thread_id, message_id, version, state, deadline_at_millis, record_json FROM ${relation("effect_agent_message_deliveries")} WHERE deadline_at_millis IS NOT NULL AND deadline_at_millis <= ${input.nowMillis} ${input.ownerThreadId === undefined ? sql`` : sql`AND owner_thread_id = ${input.ownerThreadId}`} ORDER BY deadline_at_millis, owner_thread_id, message_id LIMIT ${input.limit}`,
       );
 
       return (yield* decodeRows(rows)).map((record) => record.key);
@@ -399,9 +390,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 
       const rows = yield* query(
         "next-deadline",
-        sql`SELECT MIN(deadline_at_millis) AS deadline FROM ${relation("effect_agent_message_deliveries")} ${ownerThreadId === undefined ? sql`` : sql`WHERE owner_thread_id = ${ownerThreadId}`}`.pipe(
-          execute,
-        ),
+        sql`SELECT MIN(deadline_at_millis) AS deadline FROM ${relation("effect_agent_message_deliveries")} ${ownerThreadId === undefined ? sql`` : sql`WHERE owner_thread_id = ${ownerThreadId}`}`,
       );
 
       const decoded = yield* Schema.decodeUnknownEffect(Schema.Array(Deadline))(rows).pipe(

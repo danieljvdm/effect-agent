@@ -675,7 +675,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             yield* failpoint("upgrade:before-version");
             yield* createNativeReadIndexes();
             yield* createMessageDeliveryPendingIndex();
-            yield* seedNativeReadIndexes().pipe(
+            yield* seedNativeReadIndexes.pipe(
               Effect.catchTag("ThreadStoreError", (error) =>
                 DoStorageCorruptionError.make({
                   table: "effect_agent_canonical_records",
@@ -742,7 +742,7 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             yield* failpoint("upgrade:before-mutation");
             yield* createNativeReadIndexes();
             yield* createMessageDeliveryPendingIndex();
-            yield* seedNativeReadIndexes().pipe(
+            yield* seedNativeReadIndexes.pipe(
               Effect.catchTag("ThreadStoreError", (error) =>
                 DoStorageCorruptionError.make({
                   table: "effect_agent_canonical_records",

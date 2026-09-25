@@ -173,61 +173,57 @@ export const indexCanonicalRecord = Effect.fnUntraced(function* (
   }
 });
 
-/** One-time native index construction during the atomic supported-format upgrade. */
-export const seedNativeReadIndexes = (namespace?: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const { table: relation, execute } = makeSqlQuery(sql, namespace);
+/** One-time native index construction during the atomic SQLite supported-format upgrade. */
+export const seedNativeReadIndexes = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
 
-    // This is the one supported-format upgrade, in the adapter transaction. Decode in
-    // bounded pages; malformed rows or gaps roll back both metadata and version.
-    const gaps =
-      yield* sql`SELECT t.thread_id FROM ${relation("effect_agent_threads")} t LEFT JOIN ${relation("effect_agent_canonical_records")} r ON r.thread_id = t.thread_id
-    GROUP BY t.thread_id HAVING count(r.sequence) <> t.tail_sequence OR coalesce(max(r.sequence), 0) <> t.tail_sequence
-    UNION ALL SELECT r.thread_id FROM ${relation("effect_agent_canonical_records")} r LEFT JOIN ${relation("effect_agent_threads")} t ON t.thread_id = r.thread_id WHERE t.thread_id IS NULL LIMIT 1`.pipe(
-        execute,
-      );
+  // This is the one supported-format upgrade, in the adapter transaction. Decode in
+  // bounded pages; malformed rows or gaps roll back both metadata and version.
+  const gaps =
+    yield* sql`SELECT t.thread_id FROM effect_agent_threads t LEFT JOIN effect_agent_canonical_records r ON r.thread_id = t.thread_id
+  GROUP BY t.thread_id HAVING count(r.sequence) <> t.tail_sequence OR coalesce(max(r.sequence), 0) <> t.tail_sequence
+  UNION ALL SELECT r.thread_id FROM effect_agent_canonical_records r LEFT JOIN effect_agent_threads t ON t.thread_id = r.thread_id WHERE t.thread_id IS NULL LIMIT 1`
+      .withoutTransform;
 
-    if (gaps.length > 0) return yield* failure("native index upgrade canonical gap");
-    let afterThread = "";
-    let afterSequence = 0;
+  if (gaps.length > 0) return yield* failure("native index upgrade canonical gap");
+  let afterThread = "";
+  let afterSequence = 0;
 
-    while (true) {
-      const rows =
-        yield* sql`SELECT thread_id, record_id, sequence, record_json FROM ${relation("effect_agent_canonical_records")}
-      WHERE (thread_id, sequence) > (${afterThread}, ${afterSequence}) ORDER BY thread_id, sequence LIMIT 100`.pipe(
-          execute,
-          Effect.flatMap(
-            Schema.decodeUnknownEffect(
-              Schema.Array(
-                Schema.Struct({
-                  thread_id: Schema.String,
-                  record_id: Schema.String,
-                  sequence: SqlInteger,
-                  record_json: Schema.String,
-                }),
-              ),
+  while (true) {
+    const rows =
+      yield* sql`SELECT thread_id, record_id, sequence, record_json FROM effect_agent_canonical_records
+    WHERE (thread_id, sequence) > (${afterThread}, ${afterSequence}) ORDER BY thread_id, sequence LIMIT 100`.withoutTransform.pipe(
+        Effect.flatMap(
+          Schema.decodeUnknownEffect(
+            Schema.Array(
+              Schema.Struct({
+                thread_id: Schema.String,
+                record_id: Schema.String,
+                sequence: SqlInteger,
+                record_json: Schema.String,
+              }),
             ),
           ),
-        );
+        ),
+      );
 
-      if (rows.length === 0) break;
-      for (const row of rows) {
-        const record = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
-          row.record_json,
-        );
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const record = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
+        row.record_json,
+      );
 
-        if (
-          record.recordId !== row.record_id ||
-          row.sequence !== (row.thread_id === afterThread ? afterSequence : 0) + 1
-        )
-          return yield* failure("native index upgrade canonical identity");
-        yield* indexCanonicalRecord(row.thread_id, record, namespace);
-        afterThread = row.thread_id;
-        afterSequence = row.sequence;
-      }
+      if (
+        record.recordId !== row.record_id ||
+        row.sequence !== (row.thread_id === afterThread ? afterSequence : 0) + 1
+      )
+        return yield* failure("native index upgrade canonical identity");
+      yield* indexCanonicalRecord(row.thread_id, record);
+      afterThread = row.thread_id;
+      afterSequence = row.sequence;
     }
-  });
+  }
+});
 
 const Row = Schema.Struct({
   thread_id: SelectedThreadRead.fields.threadId,
