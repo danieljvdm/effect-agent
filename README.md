@@ -117,7 +117,8 @@ Use this in place of the earlier `BunRuntime.runMain` call.
 - [Travel planner](docs/snippets/travel-planner/) — complete agent, tools, and provider setup.
 - [Subagents](docs/guide/subagents.md), [browser tools](docs/guide/browser.md), and
   [Code Mode](docs/guide/code-mode.md) — delegate research, browse pages, and execute code.
-- [Persistent threads](docs/guide/threads.md), [durable execution](docs/concepts/durability.md), and
+- [Storage backends](docs/storage/index.md), [persistent threads](docs/guide/threads.md),
+  [durable execution](docs/concepts/durability.md), and
   [Effect Workflows](docs/guide/workflows.md) — keep history and resume work.
 - [Cloudflare travel planner](examples/travel-planner/) and the [PR reviewer](packages/pr-review/README.md).
 

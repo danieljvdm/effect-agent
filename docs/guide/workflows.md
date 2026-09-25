@@ -20,8 +20,8 @@ Cluster runner.
 bun add @effect-agent/workflow@beta
 ```
 
-Install the runtime and platform adapters for your host separately. Keep framework packages
-at one release and use compatible [Effect and provider packages](./getting-started#installation-and-compatibility).
+Keep framework packages at one release and use compatible
+[Effect and provider packages](./getting-started#installation-and-compatibility).
 
 ## Compose agents in a Workflow
 
@@ -162,10 +162,9 @@ Closing the host Scope stops its repair trigger and closes acquired resources.
 
 ## Node.js with SQLite {#node}
 
-Install `@effect-agent/platform-node@beta`, `effect-agent@beta`,
-`@effect/ai-openai@4.0.0-rc.117`,
-`@effect/platform-node@4.0.0-rc.117`, and `@effect/sql-sqlite-node@4.0.0-rc.117` alongside
-`effect@4.0.0-rc.117` and the Workflow package.
+```sh
+bun add @effect-agent/platform-node@beta
+```
 
 This example reuses `node-agent.ts` from the [Node.js guide](../platforms/node#create-an-agent),
 including its model client and registration versions.

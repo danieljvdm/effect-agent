@@ -15,6 +15,7 @@ Build an agent, give it tools, and run it in your application. Start with
 - [Tools and layers](./tools): connect models to your application services.
 - [Run and stream](./run-agents): execute an agent and observe its progress.
 - [Threads](./threads): keep conversation history across runs.
+- [Storage](../storage/): choose in-memory, SQLite, PostgreSQL, or Durable Object storage.
 - [Context management](./context-management): manage long conversations and retrieved context.
 
 ## Add capabilities
