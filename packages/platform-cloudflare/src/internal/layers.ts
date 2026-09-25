@@ -62,7 +62,6 @@ import {
   operationAuthorizerLayer,
   type OperationAuthorizerService,
 } from "effect-agent/operation-authorizer";
-import { type PreparedInputAdmission } from "effect-agent/prepared-input-admission";
 import { ProducerId } from "effect-agent/records";
 import {
   type RunContextPreparation,
@@ -100,7 +99,6 @@ import {
   ThreadObjectIdentity,
   ThreadObjectPlacement,
   DurableObjectContext,
-  type ThreadObjectNamespace,
 } from "../CloudflareBindings.ts";
 import {
   CLOUDFLARE_RUNTIME_DEFAULTS,
@@ -532,14 +530,7 @@ export function layerFromBindings<E = never, R = never>(
 const boundLayer = <E = never, R = never>(
   bindings: ReadonlyArray<ResolvedBinding>,
   options: ThreadPublicationOptions<E, R> = {},
-): Layer.Layer<
-  CloudflareDurableRuntimeServices,
-  DoStorageInitializationError | MessageDeliveryError | E,
-  | DurableObjectContext
-  | ThreadObjectNamespace
-  | CloudflareBootstrapServices
-  | Exclude<R, ThreadStore | SubmissionLedger | SqlClient>
-> =>
+) =>
   Layer.unwrap(
     Effect.map(DurableObjectContext, ({ ctx }) =>
       sharedLayer(DurableAgentRuntime.layerWithBindings(bindings), options).pipe(
@@ -578,24 +569,10 @@ export function layerInHost<A, E, R, PE = never, PR = never>(
   return sharedLayer(application, options);
 }
 
-type HostRuntimeServices = Exclude<
-  CloudflareDurableRuntimeServices,
-  DurableAgentRuntime | ThreadMaintenance
->;
-
 const sharedLayer = <A, E, R, PE = never, PR = never>(
   application: Layer.Layer<DurableAgentRuntime | A, E, R>,
   options: ThreadPublicationOptions<PE, PR> = {},
-): Layer.Layer<
-  CloudflareDurableRuntimeServices | A,
-  DoStorageInitializationError | MessageDeliveryError | E | PE,
-  | DurableObjectContext
-  | ThreadObjectNamespace
-  | Exclude<CloudflareBootstrapServices, ThreadObjectIdentity>
-  | SqlClient
-  | Exclude<R, HostRuntimeServices | PreparedInputAdmission>
-  | Exclude<PR, ThreadStore | SubmissionLedger | SqlClient>
-> =>
+) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const { ctx } = yield* DurableObjectContext;
