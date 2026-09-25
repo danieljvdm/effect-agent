@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "version": 1,
+      "id": "assay-panel-interleaved-read",
+      "kind": "known-defects",
+      "provenance": "Fictional lab dashboard with two independent live reads and schema-defined pending and terminal assay states.",
+      "inputDigest": "a0cd0248983b09e175461fade15c167a19a2bf5e1fa6cf2c7903c9669edfd266",
+      "request": {
+        "title": "Reuse sampled assay IDs for pending labels",
+        "description": "The panel shows an earlier sampled analyzing count and pending labels from the complete later batch read. Calls observe independent instants. A missing verdict remains pending, including with null lifecycle; a final verdict settles the assay even with null lifecycle.",
+        "baseRevision": "fictional-assay-panel-base",
+        "headRevision": "fictional-assay-panel-prefilter",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/lab/batch-display.ts",
+            "patch": "@@ -7,9 +7,15 @@\n   batchId: string,\n ) {\n   const sampled = yield* feed.currentlyAnalyzing(batchId);\n+  const sampledIds = new Set(sampled.map(({ id }) => id));\n   const records = yield* feed.batchRecords(batchId);\n   return {\n     sampledAnalyzing: sampled.length,\n-    pendingLabels: records.filter(({ verdict }) => verdict === null).map(({ id }) => id),\n+    pendingLabels: records\n+      .filter(\n+        ({ id, lifecycle, verdict }) =>\n+          verdict === null && (lifecycle !== \"analyzing\" || sampledIds.has(id)),\n+      )\n+      .map(({ id }) => id),\n   };\n });"
+          }
+        ],
+        "unreviewedPaths": []
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/lab/batch-display.ts",
+            "revision": "base",
+            "content": "import { Effect } from \"effect\";\nimport type { AssayFeed } from \"./assay-feed.js\";\n\n/** The sampled count describes the first read; labels describe the later complete read. */\nexport const loadBatchDisplay = Effect.fn(\"loadBatchDisplay\")(function* (\n  feed: AssayFeed,\n  batchId: string,\n) {\n  const sampled = yield* feed.currentlyAnalyzing(batchId);\n  const records = yield* feed.batchRecords(batchId);\n  return {\n    sampledAnalyzing: sampled.length,\n    pendingLabels: records.filter(({ verdict }) => verdict === null).map(({ id }) => id),\n  };\n});\n"
+          },
+          {
+            "path": "src/lab/assay-feed.ts",
+            "revision": "base",
+            "content": "import { Effect, Schema } from \"effect\";\n\n/** A missing verdict remains pending, including when lifecycle is null. */\nconst PendingAssay = Schema.Struct({\n  id: Schema.String,\n  lifecycle: Schema.NullOr(Schema.Literals([\"submitted\", \"analyzing\"])),\n  verdict: Schema.Null,\n});\n\n/** A final verdict settles an assay even when lifecycle is null. */\nconst FinishedAssay = Schema.Struct({\n  id: Schema.String,\n  lifecycle: Schema.NullOr(Schema.Literal(\"archived\")),\n  verdict: Schema.Literals([\"passed\", \"rejected\"]),\n});\n\nexport const AssayRecord = Schema.Union([PendingAssay, FinishedAssay]);\nexport type AssayRecord = typeof AssayRecord.Type;\n\nexport interface AssayFeed {\n  /** All analyzing assays for this batch at the instant this call reads. */\n  readonly currentlyAnalyzing: (batchId: string) => Effect.Effect<ReadonlyArray<AssayRecord>>;\n  /** Every assay in the batch at this call's own instant; the calls share no snapshot. */\n  readonly batchRecords: (batchId: string) => Effect.Effect<ReadonlyArray<AssayRecord>>;\n}\n"
+          },
+          {
+            "path": "src/lab/batch-display.ts",
+            "revision": "head",
+            "content": "import { Effect } from \"effect\";\nimport type { AssayFeed } from \"./assay-feed.js\";\n\n/** The sampled count describes the first read; labels describe the later complete read. */\nexport const loadBatchDisplay = Effect.fn(\"loadBatchDisplay\")(function* (\n  feed: AssayFeed,\n  batchId: string,\n) {\n  const sampled = yield* feed.currentlyAnalyzing(batchId);\n  const sampledIds = new Set(sampled.map(({ id }) => id));\n  const records = yield* feed.batchRecords(batchId);\n  return {\n    sampledAnalyzing: sampled.length,\n    pendingLabels: records\n      .filter(\n        ({ id, lifecycle, verdict }) =>\n          verdict === null && (lifecycle !== \"analyzing\" || sampledIds.has(id)),\n      )\n      .map(({ id }) => id),\n  };\n});\n"
+          },
+          {
+            "path": "src/lab/assay-feed.ts",
+            "revision": "head",
+            "content": "import { Effect, Schema } from \"effect\";\n\n/** A missing verdict remains pending, including when lifecycle is null. */\nconst PendingAssay = Schema.Struct({\n  id: Schema.String,\n  lifecycle: Schema.NullOr(Schema.Literals([\"submitted\", \"analyzing\"])),\n  verdict: Schema.Null,\n});\n\n/** A final verdict settles an assay even when lifecycle is null. */\nconst FinishedAssay = Schema.Struct({\n  id: Schema.String,\n  lifecycle: Schema.NullOr(Schema.Literal(\"archived\")),\n  verdict: Schema.Literals([\"passed\", \"rejected\"]),\n});\n\nexport const AssayRecord = Schema.Union([PendingAssay, FinishedAssay]);\nexport type AssayRecord = typeof AssayRecord.Type;\n\nexport interface AssayFeed {\n  /** All analyzing assays for this batch at the instant this call reads. */\n  readonly currentlyAnalyzing: (batchId: string) => Effect.Effect<ReadonlyArray<AssayRecord>>;\n  /** Every assay in the batch at this call's own instant; the calls share no snapshot. */\n  readonly batchRecords: (batchId: string) => Effect.Effect<ReadonlyArray<AssayRecord>>;\n}\n"
+          }
+        ],
+        "digest": "78774d357a698d57a8a3850e00a54b7dbab36d9fca47f127d9ed8fa32af63305"
+      },
+      "expectedDefects": [
+        {
+          "id": "newly-analyzing-assay-omitted",
+          "severity": "important",
+          "invariant": "The complete later batchRecords result determines pendingLabels. An assay can be submitted during the first narrow read and analyzing without a verdict during the later broad read. It must remain in pendingLabels even though its ID was absent from the earlier sample.",
+          "evidence": [
+            {
+              "path": "src/lab/batch-display.ts",
+              "line": 17,
+              "description": "The membership check drops an assay that became analyzing between the independent reads, although the later complete result still shows a missing verdict."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "id": "assay-panel-later-read-control",
+      "kind": "clean-control",
+      "provenance": "Fictional correction retains the historical count while deriving labels only from the later complete read.",
+      "inputDigest": "2e8a9358d97b7d868256ecca4e7d6c156eacc208564b5d40a98d2063b52fa40e",
+      "request": {
+        "title": "Build pending labels from the later batch read",
+        "description": "The panel shows an earlier sampled analyzing count and pending labels from the complete later batch read. Calls observe independent instants. A missing verdict remains pending, including with null lifecycle; a final verdict settles the assay even with null lifecycle.",
+        "baseRevision": "fictional-assay-panel-prefilter",
+        "headRevision": "fictional-assay-panel-corrected",
+        "scope": "incremental",
+        "changes": [
+          {
+            "path": "src/lab/batch-display.ts",
+            "patch": "@@ -7,15 +7,9 @@\n   batchId: string,\n ) {\n   const sampled = yield* feed.currentlyAnalyzing(batchId);\n-  const sampledIds = new Set(sampled.map(({ id }) => id));\n   const records = yield* feed.batchRecords(batchId);\n   return {\n     sampledAnalyzing: sampled.length,\n-    pendingLabels: records\n-      .filter(\n-        ({ id, lifecycle, verdict }) =>\n-          verdict === null && (lifecycle !== \"analyzing\" || sampledIds.has(id)),\n-      )\n-      .map(({ id }) => id),\n+    pendingLabels: records.filter(({ verdict }) => verdict === null).map(({ id }) => id),\n   };\n });"
+          }
+        ],
+        "unreviewedPaths": []
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/lab/batch-display.ts",
+            "revision": "base",
+            "content": "import { Effect } from \"effect\";\nimport type { AssayFeed } from \"./assay-feed.js\";\n\n/** The sampled count describes the first read; labels describe the later complete read. */\nexport const loadBatchDisplay = Effect.fn(\"loadBatchDisplay\")(function* (\n  feed: AssayFeed,\n  batchId: string,\n) {\n  const sampled = yield* feed.currentlyAnalyzing(batchId);\n  const sampledIds = new Set(sampled.map(({ id }) => id));\n  const records = yield* feed.batchRecords(batchId);\n  return {\n    sampledAnalyzing: sampled.length,\n    pendingLabels: records\n      .filter(\n        ({ id, lifecycle, verdict }) =>\n          verdict === null && (lifecycle !== \"analyzing\" || sampledIds.has(id)),\n      )\n      .map(({ id }) => id),\n  };\n});\n"
+          },
+          {
+            "path": "src/lab/assay-feed.ts",
+            "revision": "base",
+            "content": "import { Effect, Schema } from \"effect\";\n\n/** A missing verdict remains pending, including when lifecycle is null. */\nconst PendingAssay = Schema.Struct({\n  id: Schema.String,\n  lifecycle: Schema.NullOr(Schema.Literals([\"submitted\", \"analyzing\"])),\n  verdict: Schema.Null,\n});\n\n/** A final verdict settles an assay even when lifecycle is null. */\nconst FinishedAssay = Schema.Struct({\n  id: Schema.String,\n  lifecycle: Schema.NullOr(Schema.Literal(\"archived\")),\n  verdict: Schema.Literals([\"passed\", \"rejected\"]),\n});\n\nexport const AssayRecord = Schema.Union([PendingAssay, FinishedAssay]);\nexport type AssayRecord = typeof AssayRecord.Type;\n\nexport interface AssayFeed {\n  /** All analyzing assays for this batch at the instant this call reads. */\n  readonly currentlyAnalyzing: (batchId: string) => Effect.Effect<ReadonlyArray<AssayRecord>>;\n  /** Every assay in the batch at this call's own instant; the calls share no snapshot. */\n  readonly batchRecords: (batchId: string) => Effect.Effect<ReadonlyArray<AssayRecord>>;\n}\n"
+          },
+          {
+            "path": "src/lab/batch-display.ts",
+            "revision": "head",
+            "content": "import { Effect } from \"effect\";\nimport type { AssayFeed } from \"./assay-feed.js\";\n\n/** The sampled count describes the first read; labels describe the later complete read. */\nexport const loadBatchDisplay = Effect.fn(\"loadBatchDisplay\")(function* (\n  feed: AssayFeed,\n  batchId: string,\n) {\n  const sampled = yield* feed.currentlyAnalyzing(batchId);\n  const records = yield* feed.batchRecords(batchId);\n  return {\n    sampledAnalyzing: sampled.length,\n    pendingLabels: records.filter(({ verdict }) => verdict === null).map(({ id }) => id),\n  };\n});\n"
+          },
+          {
+            "path": "src/lab/assay-feed.ts",
+            "revision": "head",
+            "content": "import { Effect, Schema } from \"effect\";\n\n/** A missing verdict remains pending, including when lifecycle is null. */\nconst PendingAssay = Schema.Struct({\n  id: Schema.String,\n  lifecycle: Schema.NullOr(Schema.Literals([\"submitted\", \"analyzing\"])),\n  verdict: Schema.Null,\n});\n\n/** A final verdict settles an assay even when lifecycle is null. */\nconst FinishedAssay = Schema.Struct({\n  id: Schema.String,\n  lifecycle: Schema.NullOr(Schema.Literal(\"archived\")),\n  verdict: Schema.Literals([\"passed\", \"rejected\"]),\n});\n\nexport const AssayRecord = Schema.Union([PendingAssay, FinishedAssay]);\nexport type AssayRecord = typeof AssayRecord.Type;\n\nexport interface AssayFeed {\n  /** All analyzing assays for this batch at the instant this call reads. */\n  readonly currentlyAnalyzing: (batchId: string) => Effect.Effect<ReadonlyArray<AssayRecord>>;\n  /** Every assay in the batch at this call's own instant; the calls share no snapshot. */\n  readonly batchRecords: (batchId: string) => Effect.Effect<ReadonlyArray<AssayRecord>>;\n}\n"
+          }
+        ],
+        "digest": "31689f7f9aaa9b8f6e5ac53c73bccf37a60d201f112450f4bdb21f5f63dcb154"
+      },
+      "expectedDefects": []
+    }
+  ]
+}

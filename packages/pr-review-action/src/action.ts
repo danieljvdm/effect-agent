@@ -1164,6 +1164,7 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
         reasoning: { effort },
       }),
       costControl: provider.costControl,
+      contextTokenLimit: 128_000,
       ...(guidance === undefined ? {} : { guidance }),
     });
 

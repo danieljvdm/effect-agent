@@ -18,7 +18,12 @@ import { Config, Effect, Layer, Option, Schema } from "effect";
 import { AiError } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { EvalReviewerFailure, EvalVariantConfiguration, type EvalVariantId } from "./contracts.ts";
+import {
+  EvalReviewerFailure,
+  EvalServiceTier,
+  EvalVariantConfiguration,
+  type EvalVariantId,
+} from "./contracts.ts";
 import { digestText } from "./corpus.ts";
 import { type EvalVariant } from "./runner.ts";
 
@@ -64,6 +69,10 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
     const model = yield* reviewModel;
     const reasoningEffort = yield* reviewReasoningEffort;
 
+    const serviceTier = yield* Config.schema(EvalServiceTier, "PR_REVIEW_PRIORITY").pipe(
+      Config.withDefault("default"),
+    );
+
     const compaction = yield* Config.schema(ReviewCompaction, "PR_REVIEW_COMPACTION").pipe(
       Config.withDefault("rollover"),
     );
@@ -71,7 +80,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
     const contextTokenLimit = yield* Config.schema(
       ReviewContextTokenLimit,
       "PR_REVIEW_CONTEXT_TOKENS",
-    ).pipe(Config.withDefault(48_000));
+    ).pipe(Config.withDefault(128_000));
 
     const researchConcurrency = yield* Config.schema(
       Schema.Literals([0, 1, 2]),
@@ -90,6 +99,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
       provider: "openai",
       model,
       reasoningEffort,
+      serviceTier,
       compaction,
       contextTokenLimit,
       ...(researchConcurrency === 0
@@ -108,7 +118,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
         max_output_tokens: maxOutputTokens,
         reasoning: { effort: configuration.reasoningEffort },
         store: configuration.store,
-        service_tier: "default",
+        service_tier: configuration.serviceTier,
         strictJsonSchema: configuration.strictJsonSchema,
       });
 
@@ -118,6 +128,7 @@ export const makeCurrentOpenAiVariant = Effect.fn("PrReviewEval.makeCurrentOpenA
         // Allocate the shipping ledger per invocation, including concurrent/repeated trials.
         const provider = yield* makeReviewOpenAi({
           model: configuration.model,
+          serviceTier: configuration.serviceTier,
           cacheKey: `pr-review:${request.headRevision}`,
           costLimitMicrousd: reviewCostLimitMicrousd(request, maxCostUsd, baseCostUsd),
         }).pipe(Effect.mapError((error) => reviewerFailure(error)));

@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "version": 1,
+      "id": "media-export-phase-regression",
+      "kind": "known-defects",
+      "provenance": "Fictional media-export row classifier. The working-only base misses waiting jobs; its broad phase repair handles waiting/no-receipt but misclassifies final receipts with null phase.",
+      "inputDigest": "68541589d763e40dc3e7aaacb98b3f6e5ba746d09b7876ad26d86482dcef91a5",
+      "request": {
+        "title": "Include waiting exports in job admission",
+        "description": "Classify only the supplied export jobs. A job without a receipt is unresolved even when its phase is stale; a final receipt is settled.",
+        "baseRevision": "fictional-media-working-base",
+        "headRevision": "fictional-media-broad-phase",
+        "scope": "incremental",
+        "changes": [
+          {
+            "path": "src/media/export-gate.ts",
+            "patch": "@@ -2,4 +2,4 @@\n \n /** Classify the supplied media-export jobs before starting another export. */\n export const canStartExport = (jobs: ReadonlyArray<ExportJob>): boolean =>\n-  jobs.filter(({ phase }) => phase === \"working\").length === 0;\n+  jobs.filter(({ phase }) => phase !== \"done\").length === 0;"
+          }
+        ],
+        "unreviewedPaths": [],
+        "followUps": [
+          {
+            "id": "prior-waiting-job",
+            "description": "Prior review of the working-only classifier: a waiting export job with no receipt is unresolved and must make canStartExport return false."
+          }
+        ]
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/media/export-gate.ts",
+            "revision": "base",
+            "content": "import type { ExportJob } from \"./export-job.js\";\n\n/** Classify the supplied media-export jobs before starting another export. */\nexport const canStartExport = (jobs: ReadonlyArray<ExportJob>): boolean =>\n  jobs.filter(({ phase }) => phase === \"working\").length === 0;\n"
+          },
+          {
+            "path": "src/media/export-job.ts",
+            "revision": "base",
+            "content": "import { Schema } from \"effect\";\n\n/**\n * Phase and receipt settle independently. A non-null receipt finishes a job\n * even if phase is stale or null. A null receipt is unresolved for any phase.\n * The classifier only considers the rows supplied by its caller.\n */\nexport const ExportJob = Schema.Struct({\n  id: Schema.Int.check(Schema.isGreaterThan(0)),\n  phase: Schema.NullOr(Schema.Literals([\"waiting\", \"working\", \"done\"])),\n  receipt: Schema.NullOr(Schema.Literals([\"ok\", \"failed\"])),\n});\nexport type ExportJob = typeof ExportJob.Type;\n"
+          },
+          {
+            "path": "src/media/export-gate.ts",
+            "revision": "head",
+            "content": "import type { ExportJob } from \"./export-job.js\";\n\n/** Classify the supplied media-export jobs before starting another export. */\nexport const canStartExport = (jobs: ReadonlyArray<ExportJob>): boolean =>\n  jobs.filter(({ phase }) => phase !== \"done\").length === 0;\n"
+          },
+          {
+            "path": "src/media/export-job.ts",
+            "revision": "head",
+            "content": "import { Schema } from \"effect\";\n\n/**\n * Phase and receipt settle independently. A non-null receipt finishes a job\n * even if phase is stale or null. A null receipt is unresolved for any phase.\n * The classifier only considers the rows supplied by its caller.\n */\nexport const ExportJob = Schema.Struct({\n  id: Schema.Int.check(Schema.isGreaterThan(0)),\n  phase: Schema.NullOr(Schema.Literals([\"waiting\", \"working\", \"done\"])),\n  receipt: Schema.NullOr(Schema.Literals([\"ok\", \"failed\"])),\n});\nexport type ExportJob = typeof ExportJob.Type;\n"
+          }
+        ],
+        "digest": "49bb55b8546c81915af1493981054ae177e63ba91c7311128e16f38fd48e61c2"
+      },
+      "expectedDefects": [
+        {
+          "id": "final-receipt-blocked-by-null-phase",
+          "severity": "blocking",
+          "invariant": "A sole job with null phase and ok receipt has finished and must permit another export. Waiting/null and null/null jobs still deny admission.",
+          "evidence": [
+            {
+              "path": "src/media/export-gate.ts",
+              "line": 5,
+              "description": "The new phase-only filter includes a finished null/ok job as unresolved, while a done/null job would be excluded despite having no receipt."
+            }
+          ]
+        }
+      ],
+      "expectedResolvedFollowUpIds": ["prior-waiting-job"],
+      "expectedUnresolvedFollowUpIds": []
+    },
+    {
+      "version": 1,
+      "id": "media-export-prior-review-audit",
+      "kind": "clean-control",
+      "provenance": "Fictional later follow-up: the final-receipt finding can arise from the broad-phase base, and the equivalent every-by-phase rewrite leaves it unresolved.",
+      "inputDigest": "02558d6e0a23a251ac09d758626a96db1f8065a2a7882855dc9a5be7f61d5ca3",
+      "request": {
+        "title": "Simplify export phase classification",
+        "description": "Express the existing phase rule as an every check. The prior final-receipt review remains open until the classifier uses the receipt contract.",
+        "baseRevision": "fictional-media-broad-phase",
+        "headRevision": "fictional-media-explicit-phase",
+        "scope": "incremental",
+        "changes": [
+          {
+            "path": "src/media/export-gate.ts",
+            "patch": "@@ -2,4 +2,4 @@\n \n /** Classify the supplied media-export jobs before starting another export. */\n export const canStartExport = (jobs: ReadonlyArray<ExportJob>): boolean =>\n-  jobs.filter(({ phase }) => phase !== \"done\").length === 0;\n+  jobs.every(({ phase }) => phase === \"done\");"
+          }
+        ],
+        "unreviewedPaths": [],
+        "followUps": [
+          {
+            "id": "prior-waiting-job",
+            "description": "Prior review of the working-only classifier: a waiting export job with no receipt is unresolved and must make canStartExport return false."
+          },
+          {
+            "id": "prior-final-receipt",
+            "description": "Prior review of the broad phase classifier: a job with null phase and ok receipt has finished and must let canStartExport return true when it is the only row. Jobs without a receipt remain unresolved."
+          }
+        ]
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/media/export-gate.ts",
+            "revision": "base",
+            "content": "import type { ExportJob } from \"./export-job.js\";\n\n/** Classify the supplied media-export jobs before starting another export. */\nexport const canStartExport = (jobs: ReadonlyArray<ExportJob>): boolean =>\n  jobs.filter(({ phase }) => phase !== \"done\").length === 0;\n"
+          },
+          {
+            "path": "src/media/export-job.ts",
+            "revision": "base",
+            "content": "import { Schema } from \"effect\";\n\n/**\n * Phase and receipt settle independently. A non-null receipt finishes a job\n * even if phase is stale or null. A null receipt is unresolved for any phase.\n * The classifier only considers the rows supplied by its caller.\n */\nexport const ExportJob = Schema.Struct({\n  id: Schema.Int.check(Schema.isGreaterThan(0)),\n  phase: Schema.NullOr(Schema.Literals([\"waiting\", \"working\", \"done\"])),\n  receipt: Schema.NullOr(Schema.Literals([\"ok\", \"failed\"])),\n});\nexport type ExportJob = typeof ExportJob.Type;\n"
+          },
+          {
+            "path": "src/media/export-gate.ts",
+            "revision": "head",
+            "content": "import type { ExportJob } from \"./export-job.js\";\n\n/** Classify the supplied media-export jobs before starting another export. */\nexport const canStartExport = (jobs: ReadonlyArray<ExportJob>): boolean =>\n  jobs.every(({ phase }) => phase === \"done\");\n"
+          },
+          {
+            "path": "src/media/export-job.ts",
+            "revision": "head",
+            "content": "import { Schema } from \"effect\";\n\n/**\n * Phase and receipt settle independently. A non-null receipt finishes a job\n * even if phase is stale or null. A null receipt is unresolved for any phase.\n * The classifier only considers the rows supplied by its caller.\n */\nexport const ExportJob = Schema.Struct({\n  id: Schema.Int.check(Schema.isGreaterThan(0)),\n  phase: Schema.NullOr(Schema.Literals([\"waiting\", \"working\", \"done\"])),\n  receipt: Schema.NullOr(Schema.Literals([\"ok\", \"failed\"])),\n});\nexport type ExportJob = typeof ExportJob.Type;\n"
+          }
+        ],
+        "digest": "b09f9f77c4e9963a1b08ed2beb33801d84ad9573d989bf9372a2bf823e535b40"
+      },
+      "expectedDefects": [],
+      "expectedResolvedFollowUpIds": ["prior-waiting-job"],
+      "expectedUnresolvedFollowUpIds": ["prior-final-receipt"]
+    },
+    {
+      "version": 1,
+      "id": "media-export-receipt-control",
+      "kind": "clean-control",
+      "provenance": "Fictional corrected media-export classifier. The receipt-based rule covers all phase/receipt pairs admitted by the source Schema.",
+      "inputDigest": "3e48a11a80d52b3739f00c7a052e5c84dfefcd7f4e5ced4032044a45ad497f21",
+      "request": {
+        "title": "Classify export jobs by final receipts",
+        "description": "A non-null receipt settles a job even when phase is stale; a null receipt is unresolved for every phase.",
+        "baseRevision": "fictional-media-explicit-phase",
+        "headRevision": "fictional-media-receipt-corrected",
+        "scope": "incremental",
+        "changes": [
+          {
+            "path": "src/media/export-gate.ts",
+            "patch": "@@ -2,4 +2,4 @@\n \n /** Classify the supplied media-export jobs before starting another export. */\n export const canStartExport = (jobs: ReadonlyArray<ExportJob>): boolean =>\n-  jobs.every(({ phase }) => phase === \"done\");\n+  jobs.every(({ receipt }) => receipt !== null);"
+          }
+        ],
+        "unreviewedPaths": [],
+        "followUps": [
+          {
+            "id": "prior-waiting-job",
+            "description": "Prior review of the working-only classifier: a waiting export job with no receipt is unresolved and must make canStartExport return false."
+          },
+          {
+            "id": "prior-final-receipt",
+            "description": "Prior review of the broad phase classifier: a job with null phase and ok receipt has finished and must let canStartExport return true when it is the only row. Jobs without a receipt remain unresolved."
+          }
+        ]
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/media/export-gate.ts",
+            "revision": "base",
+            "content": "import type { ExportJob } from \"./export-job.js\";\n\n/** Classify the supplied media-export jobs before starting another export. */\nexport const canStartExport = (jobs: ReadonlyArray<ExportJob>): boolean =>\n  jobs.every(({ phase }) => phase === \"done\");\n"
+          },
+          {
+            "path": "src/media/export-job.ts",
+            "revision": "base",
+            "content": "import { Schema } from \"effect\";\n\n/**\n * Phase and receipt settle independently. A non-null receipt finishes a job\n * even if phase is stale or null. A null receipt is unresolved for any phase.\n * The classifier only considers the rows supplied by its caller.\n */\nexport const ExportJob = Schema.Struct({\n  id: Schema.Int.check(Schema.isGreaterThan(0)),\n  phase: Schema.NullOr(Schema.Literals([\"waiting\", \"working\", \"done\"])),\n  receipt: Schema.NullOr(Schema.Literals([\"ok\", \"failed\"])),\n});\nexport type ExportJob = typeof ExportJob.Type;\n"
+          },
+          {
+            "path": "src/media/export-gate.ts",
+            "revision": "head",
+            "content": "import type { ExportJob } from \"./export-job.js\";\n\n/** Classify the supplied media-export jobs before starting another export. */\nexport const canStartExport = (jobs: ReadonlyArray<ExportJob>): boolean =>\n  jobs.every(({ receipt }) => receipt !== null);\n"
+          },
+          {
+            "path": "src/media/export-job.ts",
+            "revision": "head",
+            "content": "import { Schema } from \"effect\";\n\n/**\n * Phase and receipt settle independently. A non-null receipt finishes a job\n * even if phase is stale or null. A null receipt is unresolved for any phase.\n * The classifier only considers the rows supplied by its caller.\n */\nexport const ExportJob = Schema.Struct({\n  id: Schema.Int.check(Schema.isGreaterThan(0)),\n  phase: Schema.NullOr(Schema.Literals([\"waiting\", \"working\", \"done\"])),\n  receipt: Schema.NullOr(Schema.Literals([\"ok\", \"failed\"])),\n});\nexport type ExportJob = typeof ExportJob.Type;\n"
+          }
+        ],
+        "digest": "b27981a7a7086bb1d280db43b02f2e8df6efab72f6164d7fe484879018bb8b15"
+      },
+      "expectedDefects": [],
+      "expectedResolvedFollowUpIds": ["prior-waiting-job", "prior-final-receipt"],
+      "expectedUnresolvedFollowUpIds": []
+    }
+  ]
+}

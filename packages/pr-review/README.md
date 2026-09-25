@@ -26,6 +26,10 @@ optional feature expansion. Before recording a defect, it checks the
 strongest relevant guard, documented exception, or alternative interpretation and establishes
 why the supported trigger still causes concrete impact. It checks base/head causation, boundary
 values, cleanup, concurrency, and whether changed tests would detect the claimed failure.
+For changed decisions over fetched records, it checks producers, filters, page limits, ordering,
+older qualifying records, and records that become eligible between reads. It checks nullable guard
+states and traces error fallbacks to reporting sinks. Findings state the required behavior without
+prescribing an exact edit.
 New features must satisfy their stated contracts, including validation, limits, isolation,
 and aggregation; a bypass can be a defect even when the old code also accepted that input.
 Unrelated old bugs, speculation, style, compiler diagnostics, and generic test requests are

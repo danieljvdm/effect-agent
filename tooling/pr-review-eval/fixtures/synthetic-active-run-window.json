@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "version": 1,
+      "id": "tenant-task-window-regression",
+      "kind": "known-defects",
+      "provenance": "Fictional task-queue regression with an immutable source snapshot and a documented complete tenant query.",
+      "inputDigest": "9f57bf58088cedf131ee333c5b045c902b01bffccf6eb84d774e9e846ae71f2a",
+      "request": {
+        "title": "Use one newest-task page for enqueue admission",
+        "description": "An asset-pack task for tenant-a may be queued only when that tenant has no unfinished asset-pack task. Other tenants and completed tasks do not affect admission. The caller holds the tenant admission lock through this check and enqueue.",
+        "baseRevision": "task-complete-tenant-query",
+        "headRevision": "task-global-page-candidate",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/tasks/admission.ts",
+            "patch": "@@ -5,7 +5,12 @@\n \n /** The caller holds this tenant's admission lock through the eventual enqueue. */\n export const mayQueueAssetPack = Effect.fnUntraced(function* (feed: TaskFeed) {\n-  const unfinished = yield* feed.unfinishedForTenant(selectedTenant);\n-  const duplicates = unfinished.filter((task) => task.kind === \"asset-pack\");\n+  const page = yield* feed.newest(10);\n+  const duplicates = page.filter(\n+    (task) =>\n+      task.tenantId === selectedTenant &&\n+      task.kind === \"asset-pack\" &&\n+      (task.state === \"waiting\" || task.state === \"running\"),\n+  );\n   return duplicates.length === 0;\n });"
+          }
+        ],
+        "unreviewedPaths": []
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/tasks/admission.ts",
+            "revision": "base",
+            "content": "import { Effect } from \"effect\";\nimport type { TaskFeed } from \"./task-feed\";\n\nconst selectedTenant = \"tenant-a\";\n\n/** The caller holds this tenant's admission lock through the eventual enqueue. */\nexport const mayQueueAssetPack = Effect.fnUntraced(function* (feed: TaskFeed) {\n  const unfinished = yield* feed.unfinishedForTenant(selectedTenant);\n  const duplicates = unfinished.filter((task) => task.kind === \"asset-pack\");\n  return duplicates.length === 0;\n});\n"
+          },
+          {
+            "path": "src/tasks/admission.ts",
+            "revision": "head",
+            "content": "import { Effect } from \"effect\";\nimport type { TaskFeed } from \"./task-feed\";\n\nconst selectedTenant = \"tenant-a\";\n\n/** The caller holds this tenant's admission lock through the eventual enqueue. */\nexport const mayQueueAssetPack = Effect.fnUntraced(function* (feed: TaskFeed) {\n  const page = yield* feed.newest(10);\n  const duplicates = page.filter(\n    (task) =>\n      task.tenantId === selectedTenant &&\n      task.kind === \"asset-pack\" &&\n      (task.state === \"waiting\" || task.state === \"running\"),\n  );\n  return duplicates.length === 0;\n});\n"
+          },
+          {
+            "path": "src/tasks/task-feed.ts",
+            "revision": "base",
+            "content": "import { Effect, Schema } from \"effect\";\n\nexport const TenantId = Schema.String.check(\n  Schema.isPattern(/^tenant-[a-z]+$/),\n);\nexport type TenantId = typeof TenantId.Type;\n\nexport const TaskState = Schema.Literals([\"waiting\", \"running\", \"done\"]);\nexport type TaskState = typeof TaskState.Type;\n\nexport const TaskRecord = Schema.Struct({\n  id: Schema.String,\n  tenantId: TenantId,\n  kind: Schema.Literals([\"asset-pack\", \"thumbnail\"]),\n  state: TaskState,\n  outcome: Schema.NullOr(Schema.Literals([\"succeeded\", \"failed\", \"canceled\"])),\n  createdAt: Schema.Number,\n});\nexport type TaskRecord = typeof TaskRecord.Type;\n\nexport interface TaskFeed {\n  /** Newest createdAt first across all tenants, kinds, and states; returns at most limit rows. */\n  readonly newest: (limit: number) => Effect.Effect<ReadonlyArray<TaskRecord>>;\n  /** Traverses every cursor page; returns all waiting or running tasks for exactly this tenant. */\n  readonly unfinishedForTenant: (tenant: TenantId) => Effect.Effect<ReadonlyArray<TaskRecord>>;\n}\n"
+          },
+          {
+            "path": "src/tasks/task-feed.ts",
+            "revision": "head",
+            "content": "import { Effect, Schema } from \"effect\";\n\nexport const TenantId = Schema.String.check(\n  Schema.isPattern(/^tenant-[a-z]+$/),\n);\nexport type TenantId = typeof TenantId.Type;\n\nexport const TaskState = Schema.Literals([\"waiting\", \"running\", \"done\"]);\nexport type TaskState = typeof TaskState.Type;\n\nexport const TaskRecord = Schema.Struct({\n  id: Schema.String,\n  tenantId: TenantId,\n  kind: Schema.Literals([\"asset-pack\", \"thumbnail\"]),\n  state: TaskState,\n  outcome: Schema.NullOr(Schema.Literals([\"succeeded\", \"failed\", \"canceled\"])),\n  createdAt: Schema.Number,\n});\nexport type TaskRecord = typeof TaskRecord.Type;\n\nexport interface TaskFeed {\n  /** Newest createdAt first across all tenants, kinds, and states; returns at most limit rows. */\n  readonly newest: (limit: number) => Effect.Effect<ReadonlyArray<TaskRecord>>;\n  /** Traverses every cursor page; returns all waiting or running tasks for exactly this tenant. */\n  readonly unfinishedForTenant: (tenant: TenantId) => Effect.Effect<ReadonlyArray<TaskRecord>>;\n}\n"
+          }
+        ],
+        "digest": "da8523a16662a8296354073a4293da207968370460c2ede3ce03575f00ec34c3"
+      },
+      "expectedDefects": [
+        {
+          "id": "bounded-task-page-hides-unfinished-tenant-task",
+          "severity": "blocking",
+          "invariant": "A running asset-pack task for tenant-a must prevent another enqueue even if ten newer canceled tasks for tenant-b fill the first unfiltered page. The target task at position eleven remains unfinished.",
+          "evidence": [
+            {
+              "path": "src/tasks/admission.ts",
+              "line": 8,
+              "description": "newest(10) returns only the ten most recent tasks across all tenants and states. Ten newer done/canceled tenant-b tasks can hide an older running tenant-a asset-pack task before the filter checks it."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "id": "tenant-task-window-control",
+      "kind": "clean-control",
+      "provenance": "Fictional correction that uses the complete tenant-scoped unfinished query rather than a larger global page.",
+      "inputDigest": "42c4fa8327191c0a913b12ca38927bb9b0c2f62f7e1b996d68ee4030289b2284",
+      "request": {
+        "title": "Restore complete tenant task admission",
+        "description": "An asset-pack task for tenant-a may be queued only when that tenant has no unfinished asset-pack task. Other tenants and completed tasks do not affect admission. The caller holds the tenant admission lock through this check and enqueue.",
+        "baseRevision": "task-global-page-candidate",
+        "headRevision": "task-complete-tenant-correction",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/tasks/admission.ts",
+            "patch": "@@ -5,12 +5,7 @@\n \n /** The caller holds this tenant's admission lock through the eventual enqueue. */\n export const mayQueueAssetPack = Effect.fnUntraced(function* (feed: TaskFeed) {\n-  const page = yield* feed.newest(10);\n-  const duplicates = page.filter(\n-    (task) =>\n-      task.tenantId === selectedTenant &&\n-      task.kind === \"asset-pack\" &&\n-      (task.state === \"waiting\" || task.state === \"running\"),\n-  );\n+  const unfinished = yield* feed.unfinishedForTenant(selectedTenant);\n+  const duplicates = unfinished.filter((task) => task.kind === \"asset-pack\");\n   return duplicates.length === 0;\n });"
+          }
+        ],
+        "unreviewedPaths": []
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/tasks/admission.ts",
+            "revision": "base",
+            "content": "import { Effect } from \"effect\";\nimport type { TaskFeed } from \"./task-feed\";\n\nconst selectedTenant = \"tenant-a\";\n\n/** The caller holds this tenant's admission lock through the eventual enqueue. */\nexport const mayQueueAssetPack = Effect.fnUntraced(function* (feed: TaskFeed) {\n  const page = yield* feed.newest(10);\n  const duplicates = page.filter(\n    (task) =>\n      task.tenantId === selectedTenant &&\n      task.kind === \"asset-pack\" &&\n      (task.state === \"waiting\" || task.state === \"running\"),\n  );\n  return duplicates.length === 0;\n});\n"
+          },
+          {
+            "path": "src/tasks/admission.ts",
+            "revision": "head",
+            "content": "import { Effect } from \"effect\";\nimport type { TaskFeed } from \"./task-feed\";\n\nconst selectedTenant = \"tenant-a\";\n\n/** The caller holds this tenant's admission lock through the eventual enqueue. */\nexport const mayQueueAssetPack = Effect.fnUntraced(function* (feed: TaskFeed) {\n  const unfinished = yield* feed.unfinishedForTenant(selectedTenant);\n  const duplicates = unfinished.filter((task) => task.kind === \"asset-pack\");\n  return duplicates.length === 0;\n});\n"
+          },
+          {
+            "path": "src/tasks/task-feed.ts",
+            "revision": "base",
+            "content": "import { Effect, Schema } from \"effect\";\n\nexport const TenantId = Schema.String.check(\n  Schema.isPattern(/^tenant-[a-z]+$/),\n);\nexport type TenantId = typeof TenantId.Type;\n\nexport const TaskState = Schema.Literals([\"waiting\", \"running\", \"done\"]);\nexport type TaskState = typeof TaskState.Type;\n\nexport const TaskRecord = Schema.Struct({\n  id: Schema.String,\n  tenantId: TenantId,\n  kind: Schema.Literals([\"asset-pack\", \"thumbnail\"]),\n  state: TaskState,\n  outcome: Schema.NullOr(Schema.Literals([\"succeeded\", \"failed\", \"canceled\"])),\n  createdAt: Schema.Number,\n});\nexport type TaskRecord = typeof TaskRecord.Type;\n\nexport interface TaskFeed {\n  /** Newest createdAt first across all tenants, kinds, and states; returns at most limit rows. */\n  readonly newest: (limit: number) => Effect.Effect<ReadonlyArray<TaskRecord>>;\n  /** Traverses every cursor page; returns all waiting or running tasks for exactly this tenant. */\n  readonly unfinishedForTenant: (tenant: TenantId) => Effect.Effect<ReadonlyArray<TaskRecord>>;\n}\n"
+          },
+          {
+            "path": "src/tasks/task-feed.ts",
+            "revision": "head",
+            "content": "import { Effect, Schema } from \"effect\";\n\nexport const TenantId = Schema.String.check(\n  Schema.isPattern(/^tenant-[a-z]+$/),\n);\nexport type TenantId = typeof TenantId.Type;\n\nexport const TaskState = Schema.Literals([\"waiting\", \"running\", \"done\"]);\nexport type TaskState = typeof TaskState.Type;\n\nexport const TaskRecord = Schema.Struct({\n  id: Schema.String,\n  tenantId: TenantId,\n  kind: Schema.Literals([\"asset-pack\", \"thumbnail\"]),\n  state: TaskState,\n  outcome: Schema.NullOr(Schema.Literals([\"succeeded\", \"failed\", \"canceled\"])),\n  createdAt: Schema.Number,\n});\nexport type TaskRecord = typeof TaskRecord.Type;\n\nexport interface TaskFeed {\n  /** Newest createdAt first across all tenants, kinds, and states; returns at most limit rows. */\n  readonly newest: (limit: number) => Effect.Effect<ReadonlyArray<TaskRecord>>;\n  /** Traverses every cursor page; returns all waiting or running tasks for exactly this tenant. */\n  readonly unfinishedForTenant: (tenant: TenantId) => Effect.Effect<ReadonlyArray<TaskRecord>>;\n}\n"
+          }
+        ],
+        "digest": "3525fdf4479c7af4fa99221bc40e776f1d497e58933f094e927a5bde2bf1e382"
+      },
+      "expectedDefects": []
+    }
+  ]
+}

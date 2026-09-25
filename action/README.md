@@ -331,7 +331,7 @@ the allowance, because admission must cover a cache miss. Refusal logs report th
 balance, and minimum possible request reservation. The Action's spending admission replaces the
 reviewer's cumulative token quota, so reusing cached context does not force early finalization.
 Spending admission is the primary budget for diff navigation and research. The five-minute
-deadline and native rollover at a 48,000-token working context still apply; the provider's separate
+deadline and native rollover at a 128,000-token working context still apply; the provider's separate
 exact-input admission boundary remains 128,000 tokens.
 
 The Action uses explicit-only caching with a 30-minute TTL and a stable head-based routing key.

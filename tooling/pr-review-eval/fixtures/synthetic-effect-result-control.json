@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "version": 1,
+      "id": "synthetic-effect-result-conflict-control",
+      "kind": "clean-control",
+      "provenance": "Fictional typed-error control using pinned Effect v4 result semantics: Failure.failure is the typed GatewayFailure. The gateway contract defines 409 as an existing identical registration with no partial write; other failures remain typed.",
+      "inputDigest": "9dba5bf54dfef0829873f99e20edbe733c1fef41cab0e4e6b12f34a04ce944ae",
+      "request": {
+        "title": "Make duplicate registration idempotent",
+        "description": "Treat an existing registration response as success while preserving other typed failures.",
+        "baseRevision": "fixture-register-before",
+        "headRevision": "fixture-register-correct",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/registration.ts",
+            "patch": "--- a/src/registration.ts\n+++ b/src/registration.ts\n@@ -3,5 +3,7 @@\n \n export const register = Effect.fn(\"Registration.register\")(function* (address: string) {\n   const gateway = yield* RegistrationGateway;\n-  return yield* gateway.create(address);\n+  const result = yield* Effect.result(gateway.create(address));\n+  if (result._tag === \"Failure\" && result.failure.cause.status === 409) return;\n+  return yield* Effect.fromResult(result);\n });\n"
+          }
+        ],
+        "unreviewedPaths": []
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/registration-gateway.ts",
+            "revision": "base",
+            "content": "import { Context, Effect, Schema } from \"effect\";\n\nexport class GatewayFailure extends Schema.TaggedError<GatewayFailure>()(\"GatewayFailure\", {\n  cause: Schema.Struct({ status: Schema.Int }),\n}) {}\n\nexport class RegistrationGateway extends Context.Service<\n  RegistrationGateway,\n  {\n    /** 409 means this exact address is already registered and no write occurred; other statuses are failures. */\n    readonly create: (address: string) => Effect.Effect<void, GatewayFailure>;\n  }\n>()(\"fiction/RegistrationGateway\") {}\n"
+          },
+          {
+            "path": "src/registration.ts",
+            "revision": "base",
+            "content": "import { Effect } from \"effect\";\nimport { RegistrationGateway } from \"./registration-gateway.ts\";\n\nexport const register = Effect.fn(\"Registration.register\")(function* (address: string) {\n  const gateway = yield* RegistrationGateway;\n  return yield* gateway.create(address);\n});\n"
+          },
+          {
+            "path": "src/registration-gateway.ts",
+            "revision": "head",
+            "content": "import { Context, Effect, Schema } from \"effect\";\n\nexport class GatewayFailure extends Schema.TaggedError<GatewayFailure>()(\"GatewayFailure\", {\n  cause: Schema.Struct({ status: Schema.Int }),\n}) {}\n\nexport class RegistrationGateway extends Context.Service<\n  RegistrationGateway,\n  {\n    /** 409 means this exact address is already registered and no write occurred; other statuses are failures. */\n    readonly create: (address: string) => Effect.Effect<void, GatewayFailure>;\n  }\n>()(\"fiction/RegistrationGateway\") {}\n"
+          },
+          {
+            "path": "src/registration.ts",
+            "revision": "head",
+            "content": "import { Effect } from \"effect\";\nimport { RegistrationGateway } from \"./registration-gateway.ts\";\n\nexport const register = Effect.fn(\"Registration.register\")(function* (address: string) {\n  const gateway = yield* RegistrationGateway;\n  const result = yield* Effect.result(gateway.create(address));\n  if (result._tag === \"Failure\" && result.failure.cause.status === 409) return;\n  return yield* Effect.fromResult(result);\n});\n"
+          }
+        ],
+        "digest": "5f2d853fd5ee3d7b63df8c0ff951363473cc8021a8cae3977a00313cbfa322e7"
+      },
+      "expectedDefects": []
+    }
+  ]
+}

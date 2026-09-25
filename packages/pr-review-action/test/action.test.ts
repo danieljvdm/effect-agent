@@ -337,6 +337,102 @@ describe("PR commit review checks", () => {
     };
   };
 
+  it.effect("pauses after five automatic attempts without blocking a manual full review", () =>
+    Effect.gen(function* () {
+      const history = Array.from({ length: 5 }, (_, index) => ({
+        ...reviewHistoryWire(
+          index + 1,
+          `Prior review ${String(index + 1)}\n${index < 4 ? "<!-- effect-agent-review:v3 automatic=true completed=true -->" : "<!-- effect-agent-review:v3 automatic=true completed=false -->"}`,
+          `prior-head-${String(index + 1)}`,
+          `2026-09-01T00:00:0${String(index + 1)}Z`,
+        ),
+        state: index < 4 ? "CHANGES_REQUESTED" : "COMMENTED",
+      }));
+
+      const published: Array<typeof PublishedReviewBody.Type> = [];
+      let sourceReads = 0;
+
+      const test = fixture(history, (request, url) => {
+        if (request.method === "POST" && url.pathname.endsWith("/reviews")) {
+          const review = decodePublishedReview(request);
+
+          published.push(review);
+          history.push(
+            reviewHistoryWire(
+              100 + published.length,
+              review.body,
+              review.commit_id,
+              `2026-09-02T00:00:0${String(published.length)}Z`,
+            ),
+          );
+
+          return Effect.succeed(jsonResponse(request, { html_url: "https://github.test/review" }));
+        }
+        if (request.method !== "GET") return undefined;
+        if (url.pathname.endsWith("/files")) {
+          sourceReads += 1;
+
+          return Effect.succeed(jsonResponse(request, []));
+        }
+        if (url.pathname.includes("/compare/")) {
+          sourceReads += 1;
+
+          return Effect.succeed(jsonResponse(request, { merge_base_commit: { sha: "base" } }));
+        }
+        if (url.pathname.includes("/git/commits/")) {
+          sourceReads += 1;
+          const revision = url.pathname.split("/").at(-1) ?? "";
+
+          return Effect.succeed(
+            jsonResponse(request, { sha: revision, tree: { sha: `${revision}-tree` } }),
+          );
+        }
+        if (url.pathname.includes("/git/trees/")) {
+          sourceReads += 1;
+          const tree = url.pathname.split("/").at(-1) ?? "";
+
+          return Effect.succeed(jsonResponse(request, { sha: tree, tree: [], truncated: false }));
+        }
+
+        return undefined;
+      });
+
+      const options = { PR_REVIEW_AUTOMATIC_LIMIT: "5" };
+
+      yield* test.run(options);
+      expect(published).toEqual([
+        expect.objectContaining({
+          commit_id: "head",
+          event: "COMMENT",
+          body: expect.stringContaining("Automatic reviews are paused for this pull request"),
+          comments: [],
+        }),
+      ]);
+      expect(sourceReads).toBe(0);
+      expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "failure" });
+
+      yield* test.run(options);
+      expect(published).toHaveLength(1);
+      expect(sourceReads).toBe(0);
+      expect(test.writes).toHaveLength(2);
+
+      yield* test.run({
+        ...options,
+        PR_REVIEW_COMMAND: "@effect-agent review full",
+        PR_REVIEW_COMMENT_ID: "42",
+      });
+      expect(sourceReads).toBeGreaterThan(0);
+      expect(published[1]).toEqual({
+        commit_id: "head",
+        event: "COMMENT",
+        body: expect.stringContaining(reviewMarker(false)),
+        comments: [],
+      });
+      expect(published).toHaveLength(2);
+      expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "failure" });
+    }),
+  );
+
   it.effect("keeps an uncertain completion write failing the job without replaying it", () =>
     Effect.gen(function* () {
       const started = yield* Deferred.make<void>();

@@ -1,5 +1,6 @@
 import { type ReviewOutcome, type ReviewRequest } from "@effect-agent/pr-review/review";
-import { Clock, DateTime, Effect, Result, Schema, Stream } from "effect";
+import { ReviewRepository } from "@effect-agent/pr-review/review-repository";
+import { Clock, DateTime, Effect, Layer, Result, Schema, Stream } from "effect";
 
 import {
   CURRENT_RUNNER_VERSION,
@@ -14,6 +15,7 @@ import {
   EvalTrialSucceeded,
   type EvalVariantConfiguration,
 } from "./contracts.ts";
+import { type LocalGitRepository } from "./local-git-repository.ts";
 import { repositoryLayer } from "./repository.ts";
 
 const RunnerOptions = Schema.Struct({
@@ -33,12 +35,14 @@ export interface EvalRunnerOptions {
   readonly trials: number;
   readonly concurrency: number;
   readonly caseIds: ReadonlyArray<EvalCaseId>;
+  readonly localGitRepositories?: ReadonlyMap<EvalCaseId, LocalGitRepository>;
 }
 
 interface EvalJob<Requirements> {
   readonly evalCase: EvalCase;
   readonly variant: EvalVariant<Requirements>;
   readonly trial: number;
+  readonly localGitRepository: LocalGitRepository | undefined;
 }
 
 const decodeRunnerOptions = Schema.decodeUnknownEffect(RunnerOptions);
@@ -77,10 +81,13 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
   const recordedAt = yield* DateTime.now;
   const startedAt = yield* clock.monotonicTimeNanos;
 
+  const sourceLayer =
+    job.localGitRepository === undefined
+      ? repositoryLayer(job.evalCase.repository)
+      : Layer.succeed(ReviewRepository, job.localGitRepository.service);
+
   const result = yield* Effect.result(
-    job.variant
-      .review(job.evalCase.request)
-      .pipe(Effect.provide(repositoryLayer(job.evalCase.repository))),
+    job.variant.review(job.evalCase.request).pipe(Effect.provide(sourceLayer)),
   );
 
   const finishedAt = yield* clock.monotonicTimeNanos;
@@ -94,6 +101,14 @@ const runJob = Effect.fn("PrReviewEval.runJob")(function* <Requirements>(
     ...(job.evalCase.repository === undefined
       ? {}
       : { repositoryDigest: job.evalCase.repository.digest }),
+    ...(job.localGitRepository === undefined
+      ? {}
+      : {
+          repositorySource: {
+            mode: "pinned-git" as const,
+            digest: job.localGitRepository.digest,
+          },
+        }),
     variant: job.variant.configuration,
     trial: job.trial,
     recordedAt,
@@ -139,7 +154,12 @@ export const runEvalSuite = Effect.fn("PrReviewEval.runEvalSuite")(function* <Re
   for (const evalCase of selectedCases) {
     for (const variant of variants) {
       for (let trial = 1; trial <= decodedOptions.trials; trial += 1) {
-        jobs.push({ evalCase, variant, trial });
+        jobs.push({
+          evalCase,
+          variant,
+          trial,
+          localGitRepository: options.localGitRepositories?.get(evalCase.id),
+        });
       }
     }
   }
