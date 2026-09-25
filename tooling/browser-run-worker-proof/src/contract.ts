@@ -1,4 +1,4 @@
-import { Effect, Option, Schema, Stream } from "effect";
+import { Data, Effect, Option, Schema, Stream } from "effect";
 
 export const PROOF_SOURCE_URL = "https://example.com/";
 export const PROOF_FACT = "Example Domain";
@@ -57,6 +57,10 @@ export const describeBrowserRunProofFailure = (status: number, body: unknown): s
   return `${prefix}; stage=${detail.stage}${cleanup}${cleanupStatus}; invocation was not retried`;
 };
 
+class ProofFailureBodyTooLarge extends Data.TaggedError("ProofFailureBodyTooLarge")<{
+  readonly limit: number;
+}> {}
+
 export const describeBrowserRunProofFailureFromStream = <E, R>(
   status: number,
   stream: Stream.Stream<Uint8Array, E, R>,
@@ -66,7 +70,7 @@ export const describeBrowserRunProofFailureFromStream = <E, R>(
     () => new Uint8Array(),
     (body, chunk) => {
       if (body.byteLength + chunk.byteLength > 4_096)
-        return Effect.fail(new Error("Proof failure body exceeds 4096 bytes"));
+        return Effect.fail(new ProofFailureBodyTooLarge({ limit: 4_096 }));
       const combined = new Uint8Array(body.byteLength + chunk.byteLength);
 
       combined.set(body);
@@ -77,10 +81,9 @@ export const describeBrowserRunProofFailureFromStream = <E, R>(
   ).pipe(
     Effect.timeout("2 seconds"),
     Effect.flatMap((bytes) =>
-      Effect.try(
-        () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown,
-      ),
+      Effect.try(() => new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
     ),
+    Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))),
     Effect.map((body) => describeBrowserRunProofFailure(status, body)),
     Effect.orElseSucceed(() => describeBrowserRunProofFailure(status, null)),
   );
