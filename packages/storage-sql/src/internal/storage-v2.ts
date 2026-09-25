@@ -1,18 +1,17 @@
 import { Schema } from "effect";
-
 import {
   ScheduleConfiguration,
   ScheduledEnvelope,
   ScheduleRecord,
   ScheduleRetry,
   ScheduleInstant,
-} from "../Schedule.ts";
+} from "effect-agent/schedule";
 import {
   PreparedInput,
   SubscriptionConfiguration,
   SubscriptionDelivery,
   SubscriptionRecord,
-} from "../Subscription.ts";
+} from "effect-agent/subscription";
 
 // Frozen beta49/beta50 persisted shapes, before 75898aef (#341). Decode with
 // onExcessProperty:error: a patched or partially upgraded v2 store is not this contract.

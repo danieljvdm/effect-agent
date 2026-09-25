@@ -29,8 +29,7 @@
   },
   "scripts": {
     "build": "vp pack",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "test": "vp test --passWithNoTests"
+    "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "effect-agent": "workspace:*"
@@ -39,8 +38,10 @@
     "@effect-agent/ai-decision": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/storage-memory": "workspace:*",
+    "@effect-agent/storage-postgres": "workspace:*",
     "@effect-agent/storage-sqlite": "workspace:*",
     "@effect/platform-node": "catalog:",
+    "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "effect": "catalog:",

@@ -155,6 +155,8 @@ checker as the administrative `verify` operation.
 
 - `@effect-agent/storage-memory` reports `not-applicable` because it declares non-durable state.
 - `@effect-agent/storage-sqlite` records the platform Node process-kill suites.
+- `@effect-agent/storage-postgres` reports `not-exercised` because no committed process-kill
+  suite drives it yet.
 - `@effect-agent/storage-cloudflare` records Durable Object eviction, cross-object subagent, and
   Miniflare restart suites.
 - A third-party adapter may pass `crashLever` to kill or evict its runtime and reopen storage for

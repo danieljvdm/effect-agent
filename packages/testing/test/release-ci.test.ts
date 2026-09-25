@@ -148,7 +148,7 @@ const run: typeof Run.Type = {
 };
 
 const jobs: typeof Jobs.Type = {
-  total_count: 10,
+  total_count: 12,
   jobs: [
     ["Static checks", "Format, lint, and type checks"],
     ["Tests (workspace)", "Run workspace test suites"],
@@ -159,6 +159,8 @@ const jobs: typeof Jobs.Type = {
     ["Tests (testing)", "Run workspace test suites"],
     ["Tests (platform-cloudflare)", "Run workspace test suites"],
     ["Tests (storage-cloudflare)", "Run workspace test suites"],
+    ["Tests (storage-postgres-16)", "Run workspace test suites"],
+    ["Tests (storage-postgres-18)", "Run workspace test suites"],
     ["Build", "Build packages, examples, and docs"],
   ].map(([name, command]) => ({
     name: name!,

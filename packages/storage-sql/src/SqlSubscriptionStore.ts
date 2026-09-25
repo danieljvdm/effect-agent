@@ -1,8 +1,5 @@
-import { Clock, Context, Effect, Result, Schema } from "effect";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import type { SqlError } from "effect/unstable/sql/SqlError";
-
-import { Digest } from "./Records.ts";
+import { Clock, Effect, Result, Schema } from "effect";
+import { Digest } from "effect-agent/records";
 import {
   AcceptedEvent,
   DeliveryChange,
@@ -21,7 +18,7 @@ import {
   SubscriptionScanCursors,
   SubscriptionStore,
   subscriptionDeliveryKeyString,
-} from "./Subscription.ts";
+} from "effect-agent/subscription";
 import {
   applySubscriptionDeliveryChange,
   applySubscriptionChange,
@@ -30,7 +27,11 @@ import {
   sameSourcePartition,
   subscriptionCanSelect,
   subscriptionDeliveryCanSelect,
-} from "./SubscriptionTransition.ts";
+} from "effect-agent/subscription-transition";
+import * as SqlClientService from "effect/unstable/sql/SqlClient";
+import type { SqlError } from "effect/unstable/sql/SqlError";
+
+import { sqliteJsonIsTrue, jsonIsValid } from "./internal/sql-json.ts";
 
 const CountRow = Schema.Struct({ count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) });
 const SequenceRow = Schema.Struct({ sequence: Schema.Natural });
@@ -78,39 +79,35 @@ const sameDeliveryIdentity = (left: SubscriptionDelivery, right: SubscriptionDel
 export interface SqlSubscriptionStoreOptions {
   /** Stored JSON decoder ceiling in UTF-16 code units; admission byte limits remain separate. */
   readonly maxStoredJsonLength: number;
+  /**
+   * Defaults to the client's transaction. The adapter may include its native alarm update;
+   * return only after commit, and leave failed bodies uncommitted.
+   */
+  readonly transaction?: <A>(
+    body: Effect.Effect<A, SubscriptionError | SubscriptionFailpointError>,
+  ) => Effect.Effect<A, SubscriptionError | SubscriptionFailpointError | SqlError>;
 }
 
 /**
- * Adapter-owned atomic transaction on the store's SqlClient, including any native alarm update.
- * Return only after commit; a failed body must leave its writes uncommitted. Before-mutation
- * failpoints run inside the body, and after-mutation failpoints run after this operation returns.
- */
-export class SqlSubscriptionTransaction extends Context.Service<
-  SqlSubscriptionTransaction,
-  {
-    readonly run: <A>(
-      body: Effect.Effect<A, SubscriptionError | SubscriptionFailpointError>,
-    ) => Effect.Effect<A, SubscriptionError | SubscriptionFailpointError>;
-  }
->()("@effect-agent/thread/SqlSubscriptionTransaction") {}
-
-/**
- * Shared SQLite subscription operations over an existing SqlClient. The adapter validates the
- * partition, initializes its tables, and provides SqlSubscriptionTransaction at construction.
- * The returned methods capture the SQL client, transaction service, and failpoint handler.
+ * Shared SQL subscription operations over an existing SqlClient. The adapter validates the
+ * partition, initializes its tables, and selects the transaction at construction.
+ * The returned methods capture the SQL client, transaction, and failpoint handler.
  * Cloudflare's transaction also updates its native alarm before committing.
  */
 export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(function* (
   partition: SourcePartition,
   options: SqlSubscriptionStoreOptions,
-): Effect.fn.Return<
-  SubscriptionStore["Service"],
-  SubscriptionError,
-  SqlClientService.SqlClient | SqlSubscriptionTransaction
-> {
+): Effect.fn.Return<SubscriptionStore["Service"], SubscriptionError, SqlClientService.SqlClient> {
   const sql = yield* SqlClientService.SqlClient;
   const failpoint = yield* SubscriptionFailpoint;
-  const transactions = yield* SqlSubscriptionTransaction;
+
+  const transaction = <A>(body: Effect.Effect<A, SubscriptionError | SubscriptionFailpointError>) =>
+    (options.transaction ?? sql.withTransaction)(body).pipe(
+      Effect.catchTag("SqlError", () =>
+        SubscriptionError.make({ reason: "storage", code: "transaction" }),
+      ),
+    );
+
   const StoredJson = Schema.String.check(Schema.isMaxLength(options.maxStoredJsonLength));
 
   const JsonRow = Schema.Struct({ record_json: StoredJson });
@@ -153,9 +150,11 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     record_json: StoredJson,
   });
 
+  const integer = sql.literal(sql.onDialectOrElse({ orElse: () => "INTEGER", pg: () => "BIGINT" }));
+
   yield* sql`CREATE TABLE IF NOT EXISTS effect_agent_event_retention (
-    tenant_id TEXT NOT NULL, source_address TEXT NOT NULL, replay_horizon_millis INTEGER NOT NULL,
-    next_maintenance_at_millis INTEGER, tombstone_count INTEGER NOT NULL DEFAULT 0, event_cursor TEXT NOT NULL DEFAULT '', delivery_cursor TEXT NOT NULL DEFAULT '', PRIMARY KEY (tenant_id, source_address)
+    tenant_id TEXT NOT NULL, source_address TEXT NOT NULL, replay_horizon_millis ${integer} NOT NULL,
+    next_maintenance_at_millis ${integer}, tombstone_count ${integer} NOT NULL DEFAULT 0, event_cursor TEXT NOT NULL DEFAULT '', delivery_cursor TEXT NOT NULL DEFAULT '', PRIMARY KEY (tenant_id, source_address)
   )`.pipe(Effect.mapError(() => unavailable("initialize event retention")));
 
   yield* sql`
@@ -380,6 +379,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       sql<Record<string, unknown>>`
       UPDATE effect_agent_subscription_deliveries SET state=${delivery.state},
         next_attempt_at_millis=${delivery.retry.nextAttemptAtMillis}, record_json=${json}
+        ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, retry_parked=${delivery.retry.parked === true}, observe_settlement=${delivery.observeSettlement === true}` })}
       WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
         AND owner_id=${delivery.key.subscription.ownerId} AND subscription_id=${delivery.key.subscription.subscriptionId}
         AND event_id=${delivery.key.eventId}
@@ -396,7 +396,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
     yield* requirePartition(record.key.partition, "register-partition");
 
-    const result = yield* transactions.run(
+    const result = yield* transaction(
       Effect.gen(function* () {
         const existing = yield* readRegistration(record.key, "register-existing");
 
@@ -507,7 +507,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
       yield* validate(Schema.Int.check(Schema.isGreaterThan(0)), expectedRevision, "revision");
 
-      const updated = yield* transactions.run(
+      const updated = yield* transaction(
         Effect.gen(function* () {
           const existing = yield* readRegistration(key, "change-registration");
 
@@ -536,7 +536,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     function* (input, expectedRevision) {
       const key = yield* requireKey(input, "cancel-key");
 
-      const result = yield* transactions.run(
+      const result = yield* transaction(
         Effect.gen(function* () {
           const current = yield* readRegistration(key, "cancel subscription");
 
@@ -584,7 +584,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
       yield* requirePartition(event.partition, "accept-partition");
 
-      const result = yield* transactions.run(
+      const result = yield* transaction(
         Effect.gen(function* () {
           const existing = yield* readEvent(event.eventId, "accept event");
 
@@ -749,9 +749,11 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     yield* query(
       sql<Record<string, unknown>>`
       INSERT INTO effect_agent_subscription_deliveries (tenant_id, source_address, owner_id, subscription_id, event_id,
-        delivery_key, state, next_attempt_at_millis, record_json)
+        delivery_key, state, next_attempt_at_millis, record_json
+        ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, retry_parked, observe_settlement` })})
       VALUES (${partition.tenantId}, ${partition.address}, ${delivery.key.subscription.ownerId}, ${delivery.key.subscription.subscriptionId},
-        ${delivery.key.eventId}, ${subscriptionDeliveryKeyString(delivery.key)}, ${delivery.state}, ${delivery.retry.nextAttemptAtMillis}, ${json})
+        ${delivery.key.eventId}, ${subscriptionDeliveryKeyString(delivery.key)}, ${delivery.state}, ${delivery.retry.nextAttemptAtMillis}, ${json}
+        ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, ${delivery.retry.parked === true}, ${delivery.observeSettlement === true}` })})
     `,
       "insert delivery",
     );
@@ -773,7 +775,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       for (const candidate of deliveries)
         yield* requirePartition(candidate.key.subscription.partition, "select-delivery-partition");
 
-      const changed = yield* transactions.run(
+      const changed = yield* transaction(
         Effect.gen(function* () {
           const accepted = yield* readEvent(supplied.eventId, "select event");
 
@@ -869,7 +871,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     yield* requirePartition(supplied.partition, "catch-up-partition");
     yield* requirePartition(delivery.key.subscription.partition, "catch-up-delivery-partition");
 
-    const changed = yield* transactions.run(
+    const changed = yield* transaction(
       Effect.gen(function* () {
         const accepted = yield* readEvent(supplied.eventId, "catch-up event");
         const record = yield* readRegistration(delivery.key.subscription, "catch-up subscription");
@@ -934,7 +936,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
         ? "routing-failed"
         : yield* validate(SubscriptionName, code, "routing-failure");
 
-    yield* transactions.run(
+    yield* transaction(
       Effect.gen(function* () {
         const accepted = yield* readEvent(eventId, "defer event");
 
@@ -964,8 +966,8 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
     const rows = yield* query(
       sql<Record<string, unknown>>`
       SELECT owner_id, subscription_id, event_id FROM effect_agent_subscription_deliveries
-      WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN json_valid(record_json) THEN
-          ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+      WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN ${jsonIsValid(sql, "record_json")} THEN
+          ((state NOT IN ('delivered','refused') AND NOT ${sql.onDialectOrElse({ orElse: () => sqliteJsonIsTrue(sql, "record_json", ["retry", "parked"]), pg: () => sql`retry_parked` })}) OR (state='delivered' AND ${sql.onDialectOrElse({ orElse: () => sqliteJsonIsTrue(sql, "record_json", ["observeSettlement"]), pg: () => sql`observe_settlement` })}))
           ELSE state<>'refused' END
         AND next_attempt_at_millis<=${nowMillis} AND delivery_key>${after} ORDER BY delivery_key LIMIT ${limit}
     `,
@@ -1017,7 +1019,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
 
     yield* requirePartition(key.subscription.partition, "change-delivery-partition");
 
-    const result = yield* transactions.run(
+    const result = yield* transaction(
       Effect.gen(function* () {
         const existing = yield* readDelivery(key, "change delivery");
         const record = yield* readRegistration(key.subscription, "change delivery subscription");
@@ -1086,7 +1088,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
   )(function* (input, expectedRevision, recovery) {
     const key = yield* requireKey(input, "defer-recovery-key");
 
-    yield* transactions.run(
+    yield* transaction(
       Effect.gen(function* () {
         const record = yield* readRegistration(key, "defer recovery");
 
@@ -1128,7 +1130,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
   )(function* (input) {
     const cursors = yield* validate(SubscriptionScanCursors, input, "scan-cursors");
 
-    yield* transactions.run(
+    yield* transaction(
       Effect.gen(function* () {
         yield* failpoint.hit("subscription:advance-scan-cursors:before");
         yield* query(
@@ -1150,8 +1152,8 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       SELECT next_attempt_at_millis AS deadline FROM effect_agent_subscription_events
         WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND routing_complete=0
       UNION ALL SELECT next_attempt_at_millis FROM effect_agent_subscription_deliveries
-        WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN json_valid(record_json) THEN
-          ((state NOT IN ('delivered','refused') AND COALESCE(json_extract(record_json, '$.retry.parked'), 0)=0) OR (state='delivered' AND json_extract(record_json, '$.observeSettlement')=1))
+        WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address} AND CASE WHEN ${jsonIsValid(sql, "record_json")} THEN
+          ((state NOT IN ('delivered','refused') AND NOT ${sql.onDialectOrElse({ orElse: () => sqliteJsonIsTrue(sql, "record_json", ["retry", "parked"]), pg: () => sql`retry_parked` })}) OR (state='delivered' AND ${sql.onDialectOrElse({ orElse: () => sqliteJsonIsTrue(sql, "record_json", ["observeSettlement"]), pg: () => sql`observe_settlement` })}))
           ELSE state<>'refused' END
       UNION ALL SELECT next_maintenance_at_millis FROM effect_agent_event_retention
           WHERE tenant_id=${partition.tenantId} AND source_address=${partition.address}
@@ -1195,7 +1197,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
       "maintenance-limit",
     );
 
-    const removed = yield* transactions.run(
+    const removed = yield* transaction(
       Effect.gen(function* () {
         yield* failpoint.hit("subscription:compact:before");
         yield* query(

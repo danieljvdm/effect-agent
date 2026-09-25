@@ -326,10 +326,18 @@ Scoped in-memory thread and submission stores for tests. The ledger is non-durab
 The independent `inMemorySemanticIndexLayer` supplies a bounded exact cosine derivative index.
 It is disposable and must be rebuilt from authoritative sources after its Scope closes.
 
+### `@effect-agent/storage-sql`
+
+Shared SQL implementations of thread history, submissions, schedules, subscriptions, message
+delivery, and activity progress. SQLite and Postgres supply connections, format initialization,
+and transaction settings. Cloudflare reuses the SQL helpers that fit Durable Objects.
+Applications normally install their database adapter; adapter authors can use these factories
+with Effect's `SqlClient`. The shared package imports no platform runtime.
+
 ### `@effect-agent/storage-sqlite`
 
 Stores thread history and pending work in one Node SQLite database.
-Rejects incompatible stored versions; no migration path is promised.
+Upgrades supported predecessor formats atomically and rejects incompatible stored versions.
 `CurrentSqliteStorageVersion` identifies the supported version.
 Test failpoints are in `@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing`.
 
@@ -341,6 +349,36 @@ Use `memoryReaderLayer` when the application needs no writer. See
 `activityProcessorStoreLayer` provides independent leases, prepared output, and per-Thread
 progress for finite committed-activity passes. Its tables and fencing epochs are separate from
 the Thread journal and submission ledger.
+
+### `@effect-agent/storage-postgres`
+
+Stores thread history and pending work in one Postgres database, which several Node processes may
+share. Rejects incompatible stored versions; no migration path is promised.
+Requires Postgres 16 or newer.
+
+`PostgresStorage.make(options)` returns selectable store Layers sharing one connection pool and
+journal initialization. Merge only the stores the application needs:
+
+```ts
+import { PostgresStorage } from "@effect-agent/storage-postgres";
+import { Layer, Redacted } from "effect";
+
+const storage = PostgresStorage.make({
+  client: { url: Redacted.make("postgres://localhost/effect_agent") },
+});
+const Persistence = Layer.mergeAll(storage.threadStore, storage.submissionLedger);
+```
+
+The same instance provides `scheduleStore`, `activityStore`, `messageDeliveryStore(limits)`,
+and `subscriptionStore(partition)`. Activity progress remains independent of the journal.
+The `failpoint` and `activityFailpoint` options accept test handlers.
+
+Writers serialize on one transaction-scoped advisory lock; a blocked writer fails with the
+retryable `PostgresWriteContention`. The `schema` option selects the schema on every pooled
+connection through Postgres startup settings. `storage.clientLayer` exposes the same client Layer for
+application SQL. `PostgresStorageClient.layer` also supports standalone client composition,
+decoding `BIGINT` to safe integers as the stored row schemas require.
+The `effect-agent/sql-memory-store` ports stay SQLite-only.
 
 ### `@effect-agent/platform-node`
 

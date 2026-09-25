@@ -1,12 +1,8 @@
 import { Effect, Schema } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-
-import { digestJson } from "./Digest.ts";
-import { v2Columns } from "./internal/storage-v2-layout.ts";
-import { V2Delivery, V2Schedule, V2Subscription } from "./internal/storage-v2.ts";
-import { DefinitionDigests } from "./Records.ts";
-import { ScheduleRecord, ScheduleFailpoint } from "./Schedule.ts";
-import { scheduleDeadline } from "./ScheduleTransition.ts";
+import { digestJson } from "effect-agent/digest";
+import { DefinitionDigests } from "effect-agent/records";
+import { ScheduleRecord, ScheduleFailpoint } from "effect-agent/schedule";
+import { scheduleDeadline } from "effect-agent/schedule-transition";
 import {
   SubscriptionConfiguration,
   SubscriptionFailpoint,
@@ -14,7 +10,11 @@ import {
   SubscriptionDelivery,
   PreparedInput,
   subscriptionDeliveryKeyString,
-} from "./Subscription.ts";
+} from "effect-agent/subscription";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import { v2Columns } from "./internal/storage-v2-layout.ts";
+import { V2Delivery, V2Schedule, V2Subscription } from "./internal/storage-v2.ts";
 
 /** Adapter initialization preserves this diagnosis; no payloads are included in diagnostics. */
 export class StorageUpgradeError extends Schema.TaggedError<StorageUpgradeError>()(

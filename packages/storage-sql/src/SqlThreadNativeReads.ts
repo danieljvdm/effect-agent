@@ -1,6 +1,4 @@
 import { Effect, Schema } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
-
 import {
   CanonicalRecord,
   CanonicalRecordEnvelope,
@@ -8,9 +6,13 @@ import {
   Digest,
   ProducerEpoch,
   RecordId,
-} from "./Records.ts";
-import { runIdForSubmission, subagentLineageRecordId, workerOriginRecordId } from "./RunJournal.ts";
-import type { ThreadStore } from "./ThreadStore.ts";
+} from "effect-agent/records";
+import {
+  runIdForSubmission,
+  subagentLineageRecordId,
+  workerOriginRecordId,
+} from "effect-agent/run-journal";
+import type { ThreadStore } from "effect-agent/thread-store";
 import {
   SelectedThreadRead,
   ThreadPeerCountRequest,
@@ -18,7 +20,60 @@ import {
   ThreadIdentityRequest,
   ThreadNotMaterialized,
   ThreadStoreError,
-} from "./ThreadStore.ts";
+} from "effect-agent/thread-store";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import { sqliteJsonText, nullSafeEquals, queryIdentifier } from "./internal/sql-json.ts";
+import { makeSqlTransaction } from "./SqlStorage.ts";
+
+const canonicalPaths = {
+  tag: ["payload", "_tag"],
+  runId: ["payload", "runId"],
+  toolCallId: ["payload", "toolCallId"],
+  kind: ["payload", "kind"],
+  sourceSubmissionId: ["payload", "sourceSubmissionId"],
+  messageId: ["payload", "admission", "messageId"],
+} as const;
+
+const canonicalField = (sql: SqlClient.SqlClient, field: keyof typeof canonicalPaths) =>
+  sql.onDialectOrElse({
+    orElse: () => sqliteJsonText(sql, "record_json", canonicalPaths[field]),
+    pg: () => sql.literal(`(read_metadata ->> '${field}')`),
+  });
+
+const encodeMetadata = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      tag: Schema.String,
+      runId: Schema.NullOr(Schema.String),
+      toolCallId: Schema.NullOr(Schema.String),
+      kind: Schema.NullOr(Schema.String),
+      sourceSubmissionId: Schema.NullOr(Schema.String),
+      messageId: Schema.NullOr(Schema.String),
+    }),
+  ),
+);
+
+/**
+ * Postgres jsonb rejects NUL and lone surrogates in JSON strings. Index only these decoded
+ * fields, escaping identifiers as JSON strings, and leave canonical payload/digest bytes intact.
+ */
+export const canonicalRecordMetadata = (record: CanonicalRecord): string => {
+  const payload = record.payload;
+
+  return encodeMetadata({
+    tag: payload._tag,
+    runId: "runId" in payload ? JSON.stringify(payload.runId) : null,
+    toolCallId: "toolCallId" in payload ? JSON.stringify(payload.toolCallId) : null,
+    kind: "kind" in payload ? payload.kind : null,
+    sourceSubmissionId:
+      "sourceSubmissionId" in payload && payload.sourceSubmissionId !== undefined
+        ? JSON.stringify(payload.sourceSubmissionId)
+        : null,
+    messageId:
+      payload._tag === "WorkerInputRequested" ? JSON.stringify(payload.admission.messageId) : null,
+  });
+};
 
 const failure = (operation: string, cause?: unknown) =>
   ThreadStoreError.make({
@@ -31,12 +86,22 @@ const failure = (operation: string, cause?: unknown) =>
 export const createNativeReadIndexes = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
+  yield* sql.onDialectOrElse({
+    orElse: () => Effect.void,
+    pg: () =>
+      sql`ALTER TABLE effect_agent_canonical_records ADD COLUMN read_metadata JSONB NOT NULL`,
+  });
   yield* sql`ALTER TABLE effect_agent_canonical_records ADD COLUMN outstanding INTEGER NOT NULL DEFAULT 0`;
   yield* sql`CREATE INDEX effect_agent_records_outstanding ON effect_agent_canonical_records(thread_id, sequence) WHERE outstanding <> 0`;
-  yield* sql`CREATE INDEX effect_agent_records_call ON effect_agent_canonical_records(thread_id, json_extract(record_json, '$.payload._tag'), json_extract(record_json, '$.payload.runId'), json_extract(record_json, '$.payload.toolCallId'))`;
-  yield* sql`CREATE INDEX effect_agent_records_run_input ON effect_agent_canonical_records(thread_id, json_extract(record_json, '$.payload.runId')) WHERE json_extract(record_json, '$.payload._tag') = 'UserInputRecorded' AND json_extract(record_json, '$.payload.kind') = 'user'`;
-  yield* sql`CREATE INDEX effect_agent_records_subtree ON effect_agent_canonical_records(thread_id, json_extract(record_json, '$.payload.sourceSubmissionId'), sequence) WHERE json_extract(record_json, '$.payload._tag') = 'SubtreeBudgetReserved'`;
-  yield* sql`CREATE INDEX effect_agent_records_worker_input ON effect_agent_canonical_records(thread_id, json_extract(record_json, '$.payload.admission.messageId')) WHERE json_extract(record_json, '$.payload._tag') = 'WorkerInputRequested'`;
+  yield* sql`CREATE INDEX effect_agent_records_call ON effect_agent_canonical_records(thread_id, ${canonicalField(sql, "tag")}, ${canonicalField(sql, "runId")}, ${canonicalField(sql, "toolCallId")})`;
+  yield* sql`CREATE INDEX effect_agent_records_run_input ON effect_agent_canonical_records(thread_id, ${canonicalField(sql, "runId")}) WHERE ${canonicalField(sql, "tag")} = 'UserInputRecorded' AND ${canonicalField(sql, "kind")} = 'user'`;
+  yield* sql`CREATE INDEX effect_agent_records_subtree ON effect_agent_canonical_records(thread_id, ${canonicalField(sql, "sourceSubmissionId")}, sequence) WHERE ${canonicalField(sql, "tag")} = 'SubtreeBudgetReserved'`;
+  yield* sql`CREATE INDEX effect_agent_records_worker_input ON effect_agent_canonical_records(thread_id, ${canonicalField(sql, "messageId")}) WHERE ${canonicalField(sql, "tag")} = 'WorkerInputRequested'`;
+  yield* sql.onDialectOrElse({
+    orElse: () => Effect.void,
+    pg: () =>
+      sql`CREATE INDEX effect_agent_worker_execution ON effect_agent_canonical_records(thread_id, ${canonicalField(sql, "tag")}, sequence) WHERE ${canonicalField(sql, "runId")} IS NOT NULL`,
+  });
 });
 
 /** Must run in the canonical append/upgrade transaction, after inserting this record. */
@@ -53,9 +118,9 @@ export const indexCanonicalRecord = Effect.fnUntraced(function* (
       if (payload._tag === "ToolCallUnknown")
         yield* sql`
         UPDATE effect_agent_canonical_records SET outstanding = 0
-        WHERE thread_id = ${threadId} AND json_extract(record_json, '$.payload._tag') = 'ToolCallPrepared'
-          AND json_extract(record_json, '$.payload.runId') = ${payload.runId}
-          AND json_extract(record_json, '$.payload.toolCallId') = ${payload.toolCallId}`;
+        WHERE thread_id = ${threadId} AND ${canonicalField(sql, "tag")} = 'ToolCallPrepared'
+          AND ${canonicalField(sql, "runId")} = ${queryIdentifier(sql, payload.runId)}
+          AND ${canonicalField(sql, "toolCallId")} = ${queryIdentifier(sql, payload.toolCallId)}`;
       yield* sql`UPDATE effect_agent_canonical_records SET outstanding = ${payload._tag === "ToolCallPrepared" ? 1 : 2}
         WHERE thread_id = ${threadId} AND record_id = ${record.recordId}`;
       break;
@@ -64,9 +129,9 @@ export const indexCanonicalRecord = Effect.fnUntraced(function* (
       for (const tag of ["ToolCallPrepared", "ToolCallUnknown"])
         yield* sql`
         UPDATE effect_agent_canonical_records SET outstanding = 0
-        WHERE thread_id = ${threadId} AND json_extract(record_json, '$.payload._tag') = ${tag}
-          AND json_extract(record_json, '$.payload.runId') = ${payload.runId}
-          AND json_extract(record_json, '$.payload.toolCallId') = ${payload.toolCallId}`;
+        WHERE thread_id = ${threadId} AND ${canonicalField(sql, "tag")} = ${tag}
+          AND ${canonicalField(sql, "runId")} = ${queryIdentifier(sql, payload.runId)}
+          AND ${canonicalField(sql, "toolCallId")} = ${queryIdentifier(sql, payload.toolCallId)}`;
       break;
     case "WorkerInputRequested":
       yield* sql`UPDATE effect_agent_canonical_records SET outstanding = 3 WHERE thread_id = ${threadId} AND record_id = ${record.recordId}`;
@@ -74,8 +139,8 @@ export const indexCanonicalRecord = Effect.fnUntraced(function* (
     case "WorkerInputCompleted":
       yield* sql`
         UPDATE effect_agent_canonical_records SET outstanding = ${payload.effectsResolved ? 0 : 4}
-        WHERE thread_id = ${threadId} AND json_extract(record_json, '$.payload._tag') = 'WorkerInputRequested'
-          AND json_extract(record_json, '$.payload.admission.messageId') = ${payload.messageId}`;
+        WHERE thread_id = ${threadId} AND ${canonicalField(sql, "tag")} = 'WorkerInputRequested'
+          AND ${canonicalField(sql, "messageId")} = ${queryIdentifier(sql, payload.messageId)}`;
       break;
   }
 });
@@ -136,6 +201,11 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
 ) {
   const sql = yield* SqlClient.SqlClient;
 
+  const snapshot = sql.onDialectOrElse({
+    orElse: () => sql.withTransaction,
+    pg: () => makeSqlTransaction(sql, { begin: "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" }),
+  });
+
   const requireThread = Effect.fnUntraced(function* (threadId: SelectedThreadRead["threadId"]) {
     const rows =
       yield* sql`SELECT tail_sequence, tail_digest FROM effect_agent_threads WHERE thread_id = ${threadId}`;
@@ -154,7 +224,7 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
 
   const read = Effect.fnUntraced(
     function* (request: SelectedThreadRead) {
-      return yield* sql.withTransaction(
+      return yield* snapshot(
         Effect.gen(function* () {
           const tail = yield* requireThread(request.threadId);
           const selection = request.selection;
@@ -175,7 +245,7 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
               break;
             case "RunInput":
               rows =
-                yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = 'UserInputRecorded' AND json_extract(record_json, '$.payload.kind') = 'user' AND json_extract(record_json, '$.payload.runId') = ${selection.runId} LIMIT 2`;
+                yield* sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND ${canonicalField(sql, "tag")} = 'UserInputRecorded' AND ${canonicalField(sql, "kind")} = 'user' AND ${canonicalField(sql, "runId")} = ${queryIdentifier(sql, selection.runId)} LIMIT 2`;
               break;
             case "Outstanding":
               rows =
@@ -186,8 +256,8 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
                 ["UserInputRecorded", "RunStarted"],
                 (tag) =>
                   sql`SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
-                  WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = ${tag}
-                    AND json_extract(record_json, '$.payload.runId') IS NOT NULL
+                  WHERE thread_id = ${request.threadId} AND ${canonicalField(sql, "tag")} = ${tag}
+                    AND ${canonicalField(sql, "runId")} IS NOT NULL
                   ORDER BY sequence DESC LIMIT 1`,
               ))
                 .flat()
@@ -203,13 +273,13 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
 
               rows = yield* sql`
             SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
-            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND json_extract(record_json, '$.payload._tag') IN ('ThreadCreated', 'WorkerOriginRecorded', 'SubagentLineageRecorded', 'WorkerInputRequested', 'WorkerInputCompleted', 'WorkerStopRequested')
+            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND ${canonicalField(sql, "tag")} IN ('ThreadCreated', 'WorkerOriginRecorded', 'SubagentLineageRecorded', 'WorkerInputRequested', 'WorkerInputCompleted', 'WorkerStopRequested')
             UNION ALL
             SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
-            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND json_extract(record_json, '$.payload._tag') = 'SubtreeBudgetReserved' AND json_extract(record_json, '$.payload.sourceSubmissionId') IS ${selection.sourceSubmissionId ?? null}
+            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND ${canonicalField(sql, "tag")} = 'SubtreeBudgetReserved' AND ${nullSafeEquals(sql, canonicalField(sql, "sourceSubmissionId"), queryIdentifier(sql, selection.sourceSubmissionId ?? null))}
             UNION ALL
             SELECT thread_id, sequence, record_id, batch_id, record_json FROM effect_agent_canonical_records
-            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND json_extract(record_json, '$.payload._tag') = 'SubagentJoined' AND json_extract(record_json, '$.payload.runId') = ${runId}
+            WHERE thread_id = ${request.threadId} AND sequence > ${after} AND ${canonicalField(sql, "tag")} = 'SubagentJoined' AND ${canonicalField(sql, "runId")} = ${queryIdentifier(sql, runId)}
             ORDER BY sequence LIMIT ${request.page.limit}`;
               break;
             }
@@ -255,7 +325,7 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
     function* (request) {
       yield* Schema.decodeEffect(Schema.toType(ThreadIdentityRequest))(request);
 
-      return yield* sql.withTransaction(
+      return yield* snapshot(
         Effect.gen(function* () {
           const tails = yield* sql`SELECT tail_sequence, tail_digest, producer_epoch
             FROM effect_agent_threads WHERE thread_id = ${request.threadId}`;
@@ -328,7 +398,7 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
         yield* requireThread(request.threadId);
 
         const rows =
-          yield* sql`SELECT 1 FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND json_extract(record_json, '$.payload._tag') = 'PeerMessagePrepared' LIMIT ${request.limit}`;
+          yield* sql`SELECT 1 FROM effect_agent_canonical_records WHERE thread_id = ${request.threadId} AND ${canonicalField(sql, "tag")} = 'PeerMessagePrepared' LIMIT ${request.limit}`;
 
         return rows.length;
       },

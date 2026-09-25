@@ -1,10 +1,7 @@
+import { upgradeV2Subscriptions } from "@effect-agent/storage-sql/sql-storage-v2-upgrade";
+import { makeSqlSubscriptionStore } from "@effect-agent/storage-sql/sql-subscription-store";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { Context, Effect, Layer, Schema } from "effect";
-import { upgradeV2Subscriptions } from "effect-agent/sql-storage-v2-upgrade";
-import {
-  makeSqlSubscriptionStore,
-  SqlSubscriptionTransaction,
-} from "effect-agent/sql-subscription-store";
 import {
   SourcePartition,
   SubscriptionError,
@@ -299,7 +296,8 @@ const makeSubscriptionStore = Effect.fn("DoSubscriptionStore.make")(function* (
 
   const store = yield* makeSqlSubscriptionStore(partition, {
     maxStoredJsonLength: 1_900_000,
-  }).pipe(Effect.provideService(SqlSubscriptionTransaction, { run: transact }));
+    transaction: transact,
+  });
 
   const prearm = Effect.fn("DoSubscriptionStore.prearm")(function* (deadlineAtMillis: number) {
     yield* transactions.run((replace) => replaceAlarm(replace, deadlineAtMillis));

@@ -1,6 +1,15 @@
 import { defineConfig } from "vite-plus";
 
 export default defineConfig({
+  run: {
+    tasks: {
+      test: {
+        // Postgres certification requires a live database and its configured URL.
+        cache: false,
+        command: "vp test --passWithNoTests",
+      },
+    },
+  },
   pack: {
     entry: [
       "src/index.ts",

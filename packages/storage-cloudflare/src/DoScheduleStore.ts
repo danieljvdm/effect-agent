@@ -1,3 +1,4 @@
+import { upgradeV2Schedules } from "@effect-agent/storage-sql/sql-storage-v2-upgrade";
 import { Context, Effect, Layer, Result, Schema } from "effect";
 import {
   ScheduleCapacityError,
@@ -23,7 +24,6 @@ import {
   scheduleUsesCapacity,
   scheduleDeadline,
 } from "effect-agent/schedule-transition";
-import { upgradeV2Schedules } from "effect-agent/sql-storage-v2-upgrade";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 const CURRENT_SCHEDULE_STORE_VERSION = 3;

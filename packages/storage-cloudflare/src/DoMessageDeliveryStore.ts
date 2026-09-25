@@ -1,36 +1,14 @@
+import { makeSqlMessageDeliveryStore } from "@effect-agent/storage-sql/sql-message-delivery-store";
 import { Effect, Layer } from "effect";
 import {
-  MessageDeliveryError,
   MessageDeliveryStore,
   type MessageDeliveryStoreLimits,
 } from "effect-agent/message-delivery";
-import {
-  makeSqlMessageDeliveryStore,
-  SqlMessageDeliveryTransaction,
-} from "effect-agent/sql-message-delivery-store";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { DoStorageConfig } from "./DoStorageConfig.ts";
 import { DoStorageFailpoint } from "./DoStorageFailpoint.ts";
 import { initializeDoJournal } from "./internal/do-journal.ts";
-
-const transactions = Layer.effect(
-  SqlMessageDeliveryTransaction,
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-
-    return SqlMessageDeliveryTransaction.of({
-      run: (body) =>
-        sql
-          .withTransaction(body)
-          .pipe(
-            Effect.catchTag("SqlError", () =>
-              MessageDeliveryError.make({ reason: "storage", operation: "transaction" }),
-            ),
-          ),
-    });
-  }),
-);
 
 /**
  * Message obligations in a Thread Object's own SQL storage. The platform must prearm
@@ -50,4 +28,4 @@ export const doMessageDeliveryStoreLayer = (limits?: MessageDeliveryStoreLimits)
         maxStoredValueBytes: config.maxStoredValueBytes,
       });
     }),
-  ).pipe(Layer.provide(transactions));
+  );

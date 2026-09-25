@@ -1,14 +1,14 @@
-import { SqliteMigrator } from "@effect/sql-sqlite-do";
-import { Effect, Schema, Stream } from "effect";
-import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
-import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
-import { createMessageDeliveryPendingIndex } from "effect-agent/sql-message-delivery-store";
-import { checkV2ThreadLayout } from "effect-agent/sql-storage-v2-upgrade";
+import { createMessageDeliveryPendingIndex } from "@effect-agent/storage-sql/sql-message-delivery-store";
+import { checkV2ThreadLayout } from "@effect-agent/storage-sql/sql-storage-v2-upgrade";
 import {
   createNativeReadIndexes,
   seedNativeReadIndexes,
   indexCanonicalRecord,
-} from "effect-agent/sql-thread-native-reads";
+} from "@effect-agent/storage-sql/sql-thread-native-reads";
+import { SqliteMigrator } from "@effect/sql-sqlite-do";
+import { Effect, Schema, Stream } from "effect";
+import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
 import {
   MAX_THREAD_EXPORT_RECORDS,
   CheckpointRejected,

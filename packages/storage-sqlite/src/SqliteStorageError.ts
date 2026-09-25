@@ -1,3 +1,4 @@
+import { SqlStorageFailpointLocation as SqliteStorageFailpointLocation } from "@effect-agent/storage-sql/sql-storage-failpoint";
 import { Schema } from "effect";
 import { CanonicalSequence, ProducerEpoch } from "effect-agent/records";
 
@@ -95,68 +96,7 @@ export class SqliteCheckpointConflict extends Schema.TaggedError<SqliteCheckpoin
   },
 ) {}
 
-export const SqliteStorageFailpointLocation = Schema.Literals([
-  "upgrade:before-mutation",
-  "upgrade:after-mutation",
-  "upgrade:before-version",
-  "upgrade:after-version",
-  "materialize:before",
-  "materialize:after",
-  "append:before",
-  "append:after-batch-insert",
-  "append:after-record-insert",
-  "append:after-tail-update",
-  "append:after",
-  "export:after-thread-read",
-  "save-checkpoint:before",
-  "save-checkpoint:after",
-  "save-recovery-checkpoint:before",
-  "save-recovery-checkpoint:after",
-  "ledger:admit:before",
-  "ledger:admit:after",
-  "ledger:mark-ready:before",
-  "ledger:mark-ready:after",
-  "ledger:claim:before",
-  "ledger:claim:after",
-  "ledger:mark-input-applied:before",
-  "ledger:mark-input-applied:after",
-  "ledger:renew:before",
-  "ledger:renew:after",
-  "ledger:reserve-settlement:before",
-  "ledger:reserve-settlement:after",
-  "ledger:finalize-settlement:before",
-  "ledger:finalize-settlement:after",
-  "ledger:request-abort:before",
-  "ledger:request-abort:after",
-  "ledger:release:before",
-  "ledger:release:after",
-  "ledger:claim-joining:before",
-  "ledger:claim-joining:after",
-  "ledger:mark-joined:before",
-  "ledger:mark-joined:after",
-  "ledger:revert-joining:before",
-  "ledger:revert-joining:after",
-  "ledger:suspend:before",
-  "ledger:suspend:after",
-  "ledger:approval-decision:before",
-  "ledger:approval-decision:after",
-  "ledger:mark-unknown:before",
-  "ledger:mark-unknown:after",
-  "ledger:unknown-resolution:before",
-  "ledger:unknown-resolution:after",
-  "ledger:child-reservation:before",
-  "ledger:child-reservation:after",
-  "ledger:child-attach:before",
-  "ledger:child-attach:after",
-  "ledger:child-release-pending:before",
-  "ledger:child-release-pending:after",
-  "ledger:child-release:before",
-  "ledger:child-release:after",
-  "ledger:child-settled:before",
-  "ledger:child-settled:after",
-]);
-
-export type SqliteStorageFailpointLocation = typeof SqliteStorageFailpointLocation.Type;
+export { SqlStorageFailpointLocation as SqliteStorageFailpointLocation } from "@effect-agent/storage-sql/sql-storage-failpoint";
 
 /** Deterministic test-only fault or pause injected at a SQLite operation boundary. */
 export class SqliteStorageFailpointError extends Schema.TaggedError<SqliteStorageFailpointError>()(

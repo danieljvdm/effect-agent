@@ -225,6 +225,8 @@ const sourceGates = [
     "testing",
     "platform-cloudflare",
     "storage-cloudflare",
+    "storage-postgres-16",
+    "storage-postgres-18",
   ].map((suite) => [`Tests (${suite})`, "Run workspace test suites"]),
   ["Build", "Build packages, examples, and docs"],
 ] as const;
