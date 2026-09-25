@@ -553,10 +553,7 @@ layer(baseLayer)("lifecycle publication handoff gate", (it) => {
         blocked = false;
         yield* runtime.processThread(agent, first.threadId);
         expect(calls).toBeGreaterThan(1);
-      }).pipe(
-        Effect.provide(runtimeLayer),
-        Effect.provide(toolkit.toLayer({ inspect: () => Effect.void })),
-      );
+      }).pipe(Effect.provide([runtimeLayer, toolkit.toLayer({ inspect: () => Effect.void })]));
     }),
   );
 });
