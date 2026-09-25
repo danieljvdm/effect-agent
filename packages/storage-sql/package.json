@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/storage-sql",
-  "version": "0.1.0-beta.143",
+  "version": "0.1.0-beta.144",
   "description": "Shared SQL persistence implementations for Effect Agent storage adapters.",
   "license": "MIT",
   "repository": {

@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.144
+
+### Patch Changes
+
+- [#671](https://github.com/danieljvdm/effect-agent/pull/671) [`9610ec4`](https://github.com/danieljvdm/effect-agent/commit/9610ec49a6ba71dc8208c6bcd1185f3d9a7bbb0e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Remove the host-provided mutation gate from publication Layer requirements while preserving application dependencies and setup errors.
+
+- Updated dependencies []:
+  - @effect-agent/storage-cloudflare@0.1.0-beta.144
+  - effect-agent@0.1.0-beta.144
+
 ## 0.1.0-beta.143
 
 ### Patch Changes
