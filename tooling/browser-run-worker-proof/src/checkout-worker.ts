@@ -13,6 +13,7 @@ import {
   AgentOutput,
   AgentRun,
   BrowserObservation,
+  browserSessionFailure,
   CheckoutSpans,
   Control,
   Decision,
@@ -415,6 +416,9 @@ export class CheckoutRun extends DurableObject<CheckoutEnv> {
 
   private diagnostic(cause: Cause.Cause<unknown>) {
     let text = Cause.pretty(cause);
+    const detail = browserSessionFailure(cause);
+
+    if (detail !== undefined) text = `${detail}\n${text}`;
 
     for (const secret of [
       this.env.OPENAI_API_KEY,

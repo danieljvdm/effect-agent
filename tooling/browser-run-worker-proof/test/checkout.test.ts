@@ -8,13 +8,42 @@ import {
   type BrowserSession,
 } from "@effect-agent/platform-cloudflare/browser-session";
 import { assert, it } from "@effect/vitest";
-import { Effect, Exit, Redacted, Schema, Stream } from "effect";
+import { Cause, Effect, Exit, Redacted, Schema, Stream } from "effect";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 
 import { buyerTools, CheckoutOwner, tools } from "../src/checkout-agent.ts";
-import { RunEvidence, savedAddress } from "../src/checkout-contract.ts";
+import { browserSessionFailure, RunEvidence, savedAddress } from "../src/checkout-contract.ts";
 import { assertPurchase, makeShop, quote, transition } from "../src/checkout-store.ts";
+import { describeBrowserRunProofFailure } from "../src/contract.ts";
+
+it("retains safe failure stages and browser session reasons in checkout evidence", () => {
+  assert.strictEqual(
+    describeBrowserRunProofFailure(502, {
+      error: "The Browser Run binding proof failed",
+      stage: "handoff",
+      cleanupReason: "timeout",
+      cleanupStatus: 504,
+    }),
+    "HTTP 502; stage=handoff; cleanup=timeout (504); invocation was not retried",
+  );
+  assert.strictEqual(
+    describeBrowserRunProofFailure(502, { error: "private provider response" }),
+    "HTTP 502; invocation was not retried",
+  );
+  assert.strictEqual(
+    browserSessionFailure(
+      Cause.fail(
+        BrowserSessionError.make({
+          reason: "busy",
+          dispatch: "not-dispatched",
+          cleanup: "unconfirmed",
+        }),
+      ),
+    ),
+    "BrowserSessionError reason=busy dispatch=not-dispatched cleanup=unconfirmed",
+  );
+});
 
 it.effect("preserves credential acknowledgement through read failure without retrying input", () =>
   Effect.gen(function* () {

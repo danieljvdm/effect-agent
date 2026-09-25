@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 
 export const PROOF_SOURCE_URL = "https://example.com/";
 export const PROOF_FACT = "Example Domain";
@@ -39,6 +39,23 @@ export class BrowserRunWorkerProofFailure extends Schema.Class<BrowserRunWorkerP
   ),
   cleanupStatus: Schema.optionalKey(Schema.Int),
 }) {}
+
+export const describeBrowserRunProofFailure = (status: number, body: unknown): string => {
+  const prefix = `HTTP ${status}`;
+
+  const failure = Schema.decodeUnknownOption(BrowserRunWorkerProofFailure)(body);
+
+  if (Option.isNone(failure)) return `${prefix}; invocation was not retried`;
+
+  const detail = failure.value;
+
+  const cleanup =
+    detail.cleanupReason === undefined
+      ? ""
+      : `; cleanup=${detail.cleanupReason}${detail.cleanupStatus === undefined ? "" : ` (${detail.cleanupStatus})`}`;
+
+  return `${prefix}; stage=${detail.stage}${cleanup}; invocation was not retried`;
+};
 
 const ScreenshotProof = Schema.Struct({
   mediaType: Schema.Literal("image/png"),
