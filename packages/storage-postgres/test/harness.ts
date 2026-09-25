@@ -1,7 +1,8 @@
 import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
-import * as PostgresStorageClient from "@effect-agent/storage-postgres/postgres-storage-client";
+import { NodeCrypto } from "@effect/platform-node";
 import { PgClient } from "@effect/sql-pg";
-import { Effect, Redacted } from "effect";
+import { Effect, Layer, Redacted } from "effect";
+import type { MessageDeliveryStoreLimits } from "effect-agent/message-delivery";
 
 import { WRITER_LOCK_KEY } from "../src/internal/postgres-storage.ts";
 
@@ -21,7 +22,7 @@ const admin = <A, E>(effect: Effect.Effect<A, E, PgClient.PgClient>) =>
     Effect.catchTag("SqlError", (error) =>
       Effect.die(
         new Error(
-          `The storage-postgres tests need a reachable Postgres at ${adminUrl} ` +
+          "The storage-postgres tests need a reachable configured Postgres server " +
             "(set EFFECT_AGENT_TEST_POSTGRES_URL, or run one with " +
             "`docker run -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=effect_agent postgres:17-alpine`).",
           { cause: error },
@@ -64,27 +65,38 @@ export const withTemporaryDatabase = <A, E>(
       ).pipe(Effect.ignore),
   );
 
-export const clientLayer = (url: string) =>
-  PostgresStorageClient.layer({ url: Redacted.make(url) });
+export const clientLayer = (url: string) => PgClient.layer({ url: Redacted.make(url) });
+
+/** Supply the real native client at the test composition root. */
+export const storage = (
+  url: string,
+  options: PostgresStorage.PostgresStorageOptions = {},
+  client: Omit<PgClient.PgPoolConfig, "url"> = {},
+) => {
+  const settings = { observationPollInterval: 1, ...options };
+  const clientLayer = PgClient.layer({ ...client, url: Redacted.make(url) });
+  const dependencies = Layer.merge(clientLayer, NodeCrypto.layer);
+
+  return {
+    clientLayer,
+    threadStore: PostgresStorage.threadStoreLayer(settings).pipe(Layer.provide(dependencies)),
+    submissionLedger: PostgresStorage.submissionLedgerLayer(settings).pipe(
+      Layer.provide(dependencies),
+    ),
+    scheduleStore: PostgresStorage.scheduleStoreLayer(settings).pipe(Layer.provide(dependencies)),
+    activityStore: PostgresStorage.activityStoreLayer(settings).pipe(Layer.provide(dependencies)),
+    messageDeliveryStore: (limits?: MessageDeliveryStoreLimits) =>
+      PostgresStorage.messageDeliveryStoreLayer({ ...settings, limits }).pipe(
+        Layer.provide(dependencies),
+      ),
+    subscriptionStore: (partition: Parameters<typeof PostgresStorage.subscriptionStoreLayer>[0]) =>
+      PostgresStorage.subscriptionStoreLayer(partition, settings).pipe(Layer.provide(dependencies)),
+  };
+};
 
 /** One pool connection makes subsequent operations verify failed-transaction cleanup. */
 export const singleConnectionStorage = (url: string, lockTimeout: number) =>
-  PostgresStorage.make({
-    client: { url: Redacted.make(url), maxConnections: 1 },
-    observationPollInterval: 1,
-    lockTimeout,
-    ownershipLeaseDuration: 30_000,
-  });
-
-export const storage = (
-  url: string,
-  options: Omit<PostgresStorage.PostgresStorageOptions, "client"> = {},
-) =>
-  PostgresStorage.make({
-    client: { url: Redacted.make(url) },
-    observationPollInterval: 1,
-    ...options,
-  });
+  storage(url, { lockTimeout, ownershipLeaseDuration: 30_000 }, { maxConnections: 1 });
 
 /**
  * Holds the adapter's writer lock from an unrelated client for the duration of `use`, as a

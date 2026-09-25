@@ -271,11 +271,11 @@
       "version": "0.1.0-beta.140",
       "dependencies": {
         "@effect-agent/storage-sql": "workspace:*",
-        "@effect/platform-node": "catalog:",
-        "@effect/sql-pg": "catalog:",
         "effect-agent": "workspace:*",
       },
       "devDependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/sql-pg": "catalog:",
         "@effect/vitest": "catalog:",
         "effect": "catalog:",
         "typescript": "catalog:",

@@ -1,4 +1,4 @@
-import { Clock, Context, Crypto, Effect, Option, Ref, Schema, Stream } from "effect";
+import { Clock, Crypto, Effect, Option, Ref, Schema, Stream } from "effect";
 import { digestCanonicalBatch, EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import {
   CanonicalBatch,
@@ -43,6 +43,7 @@ export interface SqlThreadStoreOptions<
   C extends Diagnostic,
   F extends Diagnostic,
 > {
+  readonly namespace?: string;
   readonly errors: SqlStorageErrors<S, C>;
   readonly hitFailpoint: SqlStorageFailpoint<F>;
   readonly observationPollInterval: number;
@@ -847,9 +848,9 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     return Option.some(checkpoint);
   });
 
-  const selectedReads = yield* makeSelectedReads(decodeEnvelope);
+  const selectedReads = yield* makeSelectedReads(decodeEnvelope, options.namespace);
 
-  const threadStore = ThreadStore.of({
+  return ThreadStore.of({
     countPeerMessages: selectedReads.countPeerMessages,
     readIdentity: selectedReads.readIdentity,
     append,
@@ -861,6 +862,4 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     checkpoints: { save: saveCheckpoint, load: loadCheckpoint },
     recoveryCheckpoints: { save: saveRecoveryCheckpoint, load: loadRecoveryCheckpoint },
   });
-
-  return Context.make(ThreadStore, threadStore);
 });

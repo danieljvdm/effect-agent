@@ -1,4 +1,4 @@
-import { Clock, Context, Crypto, DateTime, Effect, Option, Schema, Stream } from "effect";
+import { Clock, Crypto, DateTime, Effect, Option, Schema, Stream } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { InputMessage } from "effect-agent/messaging";
 import {
@@ -94,6 +94,8 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 import type { SqlJournal } from "./SqlJournal.ts";
 import {
   makeRowDecoder,
+  makeSqlQuery,
+  SqlInteger,
   type Diagnostic,
   type SqlStorageErrors,
   type SqlStorageFailpoint,
@@ -116,7 +118,7 @@ const WOKEN: ChildSettledOutcome = "woken";
 class SubmissionRow extends Schema.Class<SubmissionRow>("SubmissionRow")({
   submission_id: BoundedIdentifier,
   thread_id: BoundedIdentifier,
-  queue_sequence: QueueSequence,
+  queue_sequence: SqlInteger.pipe(Schema.decodeTo(QueueSequence)),
   principal: BoundedIdentifier,
   idempotency_key: BoundedIdentifier,
   agent_id: BoundedIdentifier,
@@ -130,7 +132,7 @@ class SubmissionRow extends Schema.Class<SubmissionRow>("SubmissionRow")({
   created_at: BoundedTimestamp,
   ready_at: Schema.NullOr(BoundedTimestamp),
   input_applied_record_id: Schema.NullOr(BoundedIdentifier),
-  input_applied_sequence: Schema.NullOr(CanonicalSequence),
+  input_applied_sequence: Schema.NullOr(SqlInteger.pipe(Schema.decodeTo(CanonicalSequence))),
   joined_host_submission_id: Schema.NullOr(BoundedIdentifier),
   suspended_reason_json: Schema.NullOr(BoundedStoredText),
   suspended_at: Schema.NullOr(BoundedTimestamp),
@@ -180,7 +182,7 @@ class OwnershipRow extends Schema.Class<OwnershipRow>("OwnershipRow")({
   submission_id: BoundedIdentifier,
   attempt_id: BoundedIdentifier,
   ownership_token: BoundedIdentifier,
-  producer_epoch: ProducerEpoch,
+  producer_epoch: SqlInteger.pipe(Schema.decodeTo(ProducerEpoch)),
   owner_producer_id: BoundedIdentifier,
   lease_expires_at: BoundedTimestamp,
 }) {}
@@ -205,8 +207,13 @@ class AbortIntentRow extends Schema.Class<AbortIntentRow>("AbortIntentRow")({
 }) {}
 
 class MaxQueueSequenceRow extends Schema.Class<MaxQueueSequenceRow>("MaxQueueSequenceRow")({
-  max_queue_sequence: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  max_queue_sequence: SqlInteger.check(Schema.isGreaterThanOrEqualTo(0)),
 }) {}
+
+const SubmissionWorkItemRow = Schema.Struct({
+  ...SubmissionWorkItem.fields,
+  queueSequence: SqlInteger.pipe(Schema.decodeTo(QueueSequence)),
+}).pipe(Schema.decodeTo(SubmissionWorkItem));
 
 class AbortIntentLookupRow extends Schema.Class<AbortIntentLookupRow>("AbortIntentLookupRow")({
   submission_id: BoundedIdentifier,
@@ -316,6 +323,7 @@ export interface SqlSubmissionLedgerOptions<
   C extends Diagnostic,
   F extends Diagnostic,
 > {
+  readonly namespace?: string;
   readonly errors: SqlStorageErrors<S, C>;
   readonly hitFailpoint: SqlStorageFailpoint<F>;
   readonly ownershipLeaseDuration: number;
@@ -338,6 +346,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
   const config = options;
   const failpoint = { hit: options.hitFailpoint };
   const sql = yield* SqlClientService.SqlClient;
+  const { table: relation, execute } = yield* makeSqlQuery(options.namespace);
   const crypto = yield* Crypto.Crypto;
   const admissionFence = yield* SubmissionAdmissionFence;
 
@@ -407,9 +416,9 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
   ): Effect.fn.Return<Option.Option<SubmissionRow>, LedgerError> {
     const rows = yield* sql<Record<string, unknown>>`
       SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-      FROM effect_agent_submissions
+      FROM ${relation("effect_agent_submissions")}
       WHERE submission_id = ${submissionId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     const decoded = yield* decodeSubmissionRows(operation, submissionId, rows);
 
@@ -453,9 +462,9 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         producer_epoch,
         owner_producer_id,
         lease_expires_at
-      FROM effect_agent_submission_ownership
+      FROM ${relation("effect_agent_submission_ownership")}
       WHERE submission_id = ${submissionId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     const decoded = yield* decodeRows(
       Schema.Array(OwnershipRow),
@@ -624,9 +633,9 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         record_digest,
         reserved_at,
         finalized_at
-      FROM effect_agent_settlement_reservations
+      FROM ${relation("effect_agent_settlement_reservations")}
       WHERE submission_id = ${submissionId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     const decoded = yield* decodeRows(
       Schema.Array(ReservationRow),
@@ -658,9 +667,9 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         reason,
         requested_at,
         canonical_record_id
-      FROM effect_agent_abort_intents
+      FROM ${relation("effect_agent_abort_intents")}
       WHERE submission_id = ${submissionId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     const decoded = yield* decodeRows(
       Schema.Array(AbortIntentRow),
@@ -695,9 +704,9 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
   ): Effect.fn.Return<Option.Option<ChildReservationRow>, LedgerError> {
     const rows = yield* sql<Record<string, unknown>>`
       SELECT ${sql.literal(CHILD_RESERVATION_COLUMNS)}
-      FROM effect_agent_child_reservations
+      FROM ${relation("effect_agent_child_reservations")}
       WHERE reservation_id = ${reservationId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     const decoded = yield* decodeChildReservationRows(operation, reservationId, rows);
 
@@ -721,10 +730,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
     ): Effect.fn.Return<Option.Option<ChildReservationRow>, LedgerError> {
       const rows = yield* sql<Record<string, unknown>>`
       SELECT ${sql.literal(CHILD_RESERVATION_COLUMNS)}
-      FROM effect_agent_child_reservations
+      FROM ${relation("effect_agent_child_reservations")}
       WHERE parent_submission_id = ${parentSubmissionId}
         AND parent_tool_call_id = ${parentToolCallId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
       const decoded = yield* decodeChildReservationRows(
         operation,
@@ -795,10 +804,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           resolver,
           reason,
           decided_at
-        FROM effect_agent_approval_decisions
+        FROM ${relation("effect_agent_approval_decisions")}
         WHERE submission_id = ${submissionId}
         ORDER BY tool_call_id ASC
-      `.pipe(Effect.mapError(sqlFailure(operation)));
+      `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     return yield* decodeRows(
       Schema.Array(ApprovalDecisionRow),
@@ -843,10 +852,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           reason,
           resolution_json,
           resolved_at
-        FROM effect_agent_unknown_resolutions
+        FROM ${relation("effect_agent_unknown_resolutions")}
         WHERE submission_id = ${submissionId}
         ORDER BY tool_call_id ASC
-      `.pipe(Effect.mapError(sqlFailure(operation)));
+      `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     return yield* decodeRows(
       Schema.Array(UnknownResolutionRow),
@@ -927,10 +936,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
     const rows = yield* sql<Record<string, unknown>>`
         SELECT record_id
-        FROM effect_agent_canonical_records
+        FROM ${relation("effect_agent_canonical_records")}
         WHERE thread_id = ${threadId}
           AND record_id = ${recordId}
-      `.pipe(Effect.mapError(sqlFailure(operation)));
+      `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     const decoded = yield* decodeRows(
       Schema.Array(CanonicalRecordIdRow),
@@ -1036,11 +1045,11 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
           const existingRows = yield* sql<Record<string, unknown>>`
             SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-            FROM effect_agent_submissions
+            FROM ${relation("effect_agent_submissions")}
             WHERE thread_id = ${validated.threadId}
               AND principal = ${validated.principal}
               AND idempotency_key = ${validated.idempotencyKey}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           const existing = yield* decodeSubmissionRows(operation, keyRowKey, existingRows);
 
@@ -1126,7 +1135,8 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           }
 
           const stopped =
-            yield* sql`SELECT thread_id FROM effect_agent_worker_stops WHERE thread_id = ${validated.threadId}`.pipe(
+            yield* sql`SELECT thread_id FROM ${relation("effect_agent_worker_stops")} WHERE thread_id = ${validated.threadId}`.pipe(
+              execute,
               Effect.mapError(sqlFailure(operation)),
             );
 
@@ -1136,9 +1146,9 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           // The first accepted input fixes ordinary/worker lane identity atomically with admission.
           // Canonical origin materialization can lag admission; a log scan cannot fence that race.
           const firstRows = yield* sql<Record<string, unknown>>`
-            SELECT worker_admission_json FROM effect_agent_submissions
+            SELECT worker_admission_json FROM ${relation("effect_agent_submissions")}
             WHERE thread_id=${validated.threadId} ORDER BY queue_sequence LIMIT 1
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           const first = yield* Schema.decodeUnknownEffect(
             Schema.Array(
@@ -1171,9 +1181,9 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           yield* admissionFence.check(validated);
           if (validated.admissionGroup !== undefined) {
             const occupied = yield* sql<Record<string, unknown>>`
-              SELECT submission_id FROM effect_agent_submissions
+              SELECT submission_id FROM ${relation("effect_agent_submissions")}
               WHERE thread_id=${validated.threadId} AND admission_group=${validated.admissionGroup} AND state<>'settled' LIMIT 1
-            `.pipe(Effect.mapError(sqlFailure(operation)));
+            `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
             if (occupied.length > 0)
               return yield* AdmissionPolicyError.make({
@@ -1184,9 +1194,9 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
           const maxRows = yield* sql<Record<string, unknown>>`
             SELECT COALESCE(MAX(queue_sequence), 0) AS max_queue_sequence
-            FROM effect_agent_submissions
+            FROM ${relation("effect_agent_submissions")}
             WHERE thread_id = ${validated.threadId}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           const decodedMax = yield* decodeRows(
             Schema.Array(MaxQueueSequenceRow),
@@ -1202,7 +1212,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           const now = yield* currentInstant;
 
           yield* sql`
-            INSERT INTO effect_agent_submissions (
+            INSERT INTO ${relation("effect_agent_submissions")} (
               submission_id,
               thread_id,
               queue_sequence,
@@ -1243,7 +1253,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
               ${workerAdmissionJson},
               ${messageAdmissionJson}
             )
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           return yield* decodeAdmissionResult({
             submissionId: mintedSubmissionId,
@@ -1280,10 +1290,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         const now = yield* currentInstant;
 
         yield* sql`
-          UPDATE effect_agent_submissions
+          UPDATE ${relation("effect_agent_submissions")}
           SET state = 'ready', ready_at = ${now.iso}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
       }),
     );
     yield* hitFailpoint("ledger:mark-ready:after", operation);
@@ -1307,11 +1317,11 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
       const rows = yield* sql<Record<string, unknown>>`
       SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-      FROM effect_agent_submissions
+      FROM ${relation("effect_agent_submissions")}
       WHERE thread_id = ${validated.threadId}
         AND principal = ${validated.principal}
         AND idempotency_key = ${validated.idempotencyKey}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
       const decoded = yield* decodeSubmissionRows(
         operation,
@@ -1347,11 +1357,11 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
     const rows = yield* sql<Record<string, unknown>>`
       SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-      FROM effect_agent_submissions
+      FROM ${relation("effect_agent_submissions")}
       WHERE thread_id = ${validated.threadId}
         AND principal = ${validated.principal}
         AND idempotency_key = ${validated.idempotencyKey}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     const decoded = yield* decodeSubmissionRows(
       operation,
@@ -1397,13 +1407,13 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           // every live lease. This check and the epoch grant share one write transaction.
           const ownershipRows = yield* sql<Record<string, unknown>>`
             SELECT ownership.*
-            FROM effect_agent_submission_ownership AS ownership
-            JOIN effect_agent_submissions AS submission
+            FROM ${relation("effect_agent_submission_ownership")} AS ownership
+            JOIN ${relation("effect_agent_submissions")} AS submission
               ON submission.submission_id = ownership.submission_id
             WHERE submission.thread_id = ${validated.threadId}
             ORDER BY ownership.lease_expires_at DESC
             LIMIT 1
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           const ownership = yield* decodeRows(
             Schema.Array(OwnershipRow),
@@ -1423,18 +1433,18 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
           const headRows = yield* sql<Record<string, unknown>>`
             SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-            FROM effect_agent_submissions
+            FROM ${relation("effect_agent_submissions")}
             WHERE thread_id = ${validated.threadId}
               AND state <> 'settled'
               AND (
                 state <> 'unknown' OR EXISTS (
-                  SELECT 1 FROM effect_agent_abort_intents
-                  WHERE submission_id = effect_agent_submissions.submission_id
+                  SELECT 1 FROM ${relation("effect_agent_abort_intents")}
+                  WHERE submission_id = ${relation("effect_agent_submissions")}.submission_id
                 )
               )
             ORDER BY queue_sequence ASC
             LIMIT ${validated.handoff === undefined ? 1 : validated.handoff.deferredSubmissionIds.length + 1}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           const heads = yield* decodeSubmissionRows(operation, validated.threadId, headRows);
 
@@ -1494,7 +1504,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           if (threads.length === 0) {
             producerEpoch = 1;
             yield* sql`
-              INSERT INTO effect_agent_threads (
+              INSERT INTO ${relation("effect_agent_threads")} (
                 thread_id,
                 created_at,
                 tail_sequence,
@@ -1507,20 +1517,20 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
                 ${EMPTY_TAIL_DIGEST},
                 ${producerEpoch}
               )
-            `.pipe(Effect.mapError(sqlFailure(operation)));
+            `.pipe(execute, Effect.mapError(sqlFailure(operation)));
           } else {
             producerEpoch = threads[0].producer_epoch + 1;
             yield* sql`
-              UPDATE effect_agent_threads
+              UPDATE ${relation("effect_agent_threads")}
               SET producer_epoch = ${producerEpoch}
               WHERE thread_id = ${head.thread_id}
-            `.pipe(Effect.mapError(sqlFailure(operation)));
+            `.pipe(execute, Effect.mapError(sqlFailure(operation)));
           }
 
           const leaseExpiresAt = new Date(now.millis + config.ownershipLeaseDuration).toISOString();
 
           yield* sql`
-            INSERT INTO effect_agent_submission_ownership (
+            INSERT INTO ${relation("effect_agent_submission_ownership")} (
               submission_id,
               attempt_id,
               ownership_token,
@@ -1541,10 +1551,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
               producer_epoch = excluded.producer_epoch,
               owner_producer_id = excluded.owner_producer_id,
               lease_expires_at = excluded.lease_expires_at
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           yield* sql`
-            INSERT INTO effect_agent_attempts (
+            INSERT INTO ${relation("effect_agent_attempts")} (
               attempt_id,
               submission_id,
               thread_id,
@@ -1559,14 +1569,14 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
               ${producerEpoch},
               ${now.iso}
             )
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           if (head.state === "ready") {
             yield* sql`
-              UPDATE effect_agent_submissions
+              UPDATE ${relation("effect_agent_submissions")}
               SET state = 'running'
               WHERE submission_id = ${head.submission_id}
-            `.pipe(Effect.mapError(sqlFailure(operation)));
+            `.pipe(execute, Effect.mapError(sqlFailure(operation)));
           }
 
           const inputPayload = yield* parseStoredJsonText(head.input_json).pipe(
@@ -1620,10 +1630,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         const leaseExpiresAt = new Date(now.millis + config.ownershipLeaseDuration).toISOString();
 
         yield* sql`
-          UPDATE effect_agent_submission_ownership
+          UPDATE ${relation("effect_agent_submission_ownership")}
           SET lease_expires_at = ${leaseExpiresAt}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
         return yield* decodeOwnershipRenewal({
           ownershipToken: validated.ownershipToken,
@@ -1654,15 +1664,15 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
         yield* requireOwnership(operation, submission, validated.ownershipToken);
         yield* sql`
-          DELETE FROM effect_agent_submission_ownership
+          DELETE FROM ${relation("effect_agent_submission_ownership")}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
         if (submission.state === "running") {
           yield* sql`
-            UPDATE effect_agent_submissions
+            UPDATE ${relation("effect_agent_submissions")}
             SET state = 'ready'
             WHERE submission_id = ${validated.submissionId}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
         }
       }),
     );
@@ -1701,7 +1711,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           );
         }
         yield* sql`
-          UPDATE effect_agent_submissions
+          UPDATE ${relation("effect_agent_submissions")}
           SET
             input_applied_record_id = ${validated.recordId},
             input_applied_sequence = ${validated.sequence},
@@ -1710,7 +1720,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
               ELSE state
             END
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
       }),
     );
     yield* hitFailpoint("ledger:mark-input-applied:after", operation);
@@ -1817,7 +1827,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         const now = yield* currentInstant;
 
         yield* sql`
-          INSERT INTO effect_agent_settlement_reservations (
+          INSERT INTO ${relation("effect_agent_settlement_reservations")} (
             submission_id,
             settlement_id,
             outcome,
@@ -1834,12 +1844,12 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
             ${validated.recordDigest},
             ${now.iso}
           )
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
         yield* sql`
-          UPDATE effect_agent_submissions
+          UPDATE ${relation("effect_agent_submissions")}
           SET state = 'terminalizing'
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
         return ReservedSettlement.make({
           submissionId: validated.submissionId,
@@ -1944,11 +1954,11 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
       SELECT submission.*, reservation.settlement_id, reservation.outcome,
         reservation.record_id, reservation.record_json, reservation.record_digest,
         reservation.reserved_at, reservation.finalized_at
-      FROM effect_agent_submissions AS submission
-      INNER JOIN effect_agent_settlement_reservations AS reservation
+      FROM ${relation("effect_agent_submissions")} AS submission
+      INNER JOIN ${relation("effect_agent_settlement_reservations")} AS reservation
         ON reservation.submission_id = submission.submission_id
       WHERE submission.submission_id = ${validated.submissionId} AND submission.state = 'settled'
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     if (replayRows.length > 1) {
       return yield* corruptionFailure(
@@ -2016,45 +2026,48 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           // has not applied vetoes its completion, including admission after RunCompleted.
           const pending =
             terminal === "completed"
-              ? yield* sql`SELECT submission_id FROM effect_agent_submissions
+              ? yield* sql`SELECT submission_id FROM ${relation("effect_agent_submissions")}
                 WHERE thread_id = ${submission.thread_id} AND queue_sequence > ${submission.queue_sequence}
-                AND queue_sequence = (SELECT MAX(queue_sequence) FROM effect_agent_submissions WHERE thread_id = ${submission.thread_id})
+                AND queue_sequence = (SELECT MAX(queue_sequence) FROM ${relation("effect_agent_submissions")} WHERE thread_id = ${submission.thread_id})
                 AND (joined_host_submission_id IS NULL OR joined_host_submission_id <> ${submission.submission_id}
                   OR input_applied_record_id IS NULL) LIMIT 1`.pipe(
+                  execute,
                   Effect.mapError(sqlFailure(operation)),
                 )
               : [];
 
           if (pending.length === 0) {
-            yield* sql`INSERT INTO effect_agent_worker_stops (thread_id, terminal)
+            yield* sql`INSERT INTO ${relation("effect_agent_worker_stops")} (thread_id, terminal)
               VALUES (${submission.thread_id}, ${terminal}) ON CONFLICT DO NOTHING`.pipe(
+              execute,
               Effect.mapError(sqlFailure(operation)),
             );
-            yield* sql`INSERT INTO effect_agent_abort_intents (submission_id, author, reason, requested_at)
+            yield* sql`INSERT INTO ${relation("effect_agent_abort_intents")} (submission_id, author, reason, requested_at)
               SELECT submission_id, ${submission.principal}, ${`Worker assignment ${terminal}`}, ${now.iso}
-              FROM effect_agent_submissions WHERE thread_id = ${submission.thread_id} AND state <> 'settled'
+              FROM ${relation("effect_agent_submissions")} WHERE thread_id = ${submission.thread_id} AND state <> 'settled'
               AND submission_id <> ${submission.submission_id}
               AND (joined_host_submission_id IS NULL OR joined_host_submission_id <> ${submission.submission_id}
                 OR input_applied_record_id IS NULL) ON CONFLICT DO NOTHING`.pipe(
+              execute,
               Effect.mapError(sqlFailure(operation)),
             );
           }
         }
 
         yield* sql`
-          UPDATE effect_agent_submissions
+          UPDATE ${relation("effect_agent_submissions")}
           SET state = 'settled', settled_outcome = ${reservation.outcome}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
         yield* sql`
-          UPDATE effect_agent_settlement_reservations
+          UPDATE ${relation("effect_agent_settlement_reservations")}
           SET finalized_at = ${now.iso}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
         yield* sql`
-          DELETE FROM effect_agent_submission_ownership
+          DELETE FROM ${relation("effect_agent_submission_ownership")}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
         return yield* decodeSettlement({
           submissionId: validated.submissionId,
@@ -2077,14 +2090,15 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
   ) {
     const operation = "inspect worker";
 
-    return yield* sql
-      .withTransaction(
+    return yield* journal
+      .withReadTransaction(operation)(
         Effect.gen(function* () {
           const read = Effect.fnUntraced(function* (active: boolean) {
             const rows =
-              yield* sql`SELECT ${sql.literal(SUBMISSION_COLUMNS)} FROM effect_agent_submissions
+              yield* sql`SELECT ${sql.literal(SUBMISSION_COLUMNS)} FROM ${relation("effect_agent_submissions")}
           WHERE thread_id = ${threadId} ${active ? sql`AND state <> 'settled'` : sql``}
           ORDER BY queue_sequence ${active ? sql`ASC` : sql`DESC`} LIMIT 1`.pipe(
+                execute,
                 Effect.mapError(sqlFailure(operation)),
               );
 
@@ -2099,7 +2113,8 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           const active = yield* read(true);
 
           const stops =
-            yield* sql`SELECT terminal FROM effect_agent_worker_stops WHERE thread_id = ${threadId}`.pipe(
+            yield* sql`SELECT terminal FROM ${relation("effect_agent_worker_stops")} WHERE thread_id = ${threadId}`.pipe(
+              execute,
               Effect.mapError(sqlFailure(operation)),
             );
 
@@ -2113,7 +2128,11 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           }).pipe(Effect.mapError(internalFailure(operation)));
         }),
       )
-      .pipe(Effect.catchTag("SqlError", (cause) => sqlFailure(operation)(cause)));
+      .pipe(
+        Effect.mapError((error) =>
+          journal.isTransactionFailure(error) ? internalFailure(operation)(error) : error,
+        ),
+      );
   });
 
   const stopWorker = Effect.fn("SqlSubmissionLedger.stopWorker")(function* (
@@ -2130,20 +2149,24 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
       Effect.gen(function* () {
         const now = yield* currentInstant;
 
-        yield* sql`INSERT INTO effect_agent_worker_stops (thread_id) VALUES (${validated.threadId}) ON CONFLICT DO NOTHING`.pipe(
+        yield* sql`INSERT INTO ${relation("effect_agent_worker_stops")} (thread_id) VALUES (${validated.threadId}) ON CONFLICT DO NOTHING`.pipe(
+          execute,
           Effect.mapError(sqlFailure(operation)),
         );
-        yield* sql`INSERT INTO effect_agent_abort_intents (submission_id, author, reason, requested_at)
+        yield* sql`INSERT INTO ${relation("effect_agent_abort_intents")} (submission_id, author, reason, requested_at)
         SELECT submission_id, ${validated.author}, 'Worker owner stopped the worker', ${now.iso}
-        FROM effect_agent_submissions WHERE thread_id = ${validated.threadId} AND state <> 'settled' ON CONFLICT DO NOTHING`.pipe(
+        FROM ${relation("effect_agent_submissions")} WHERE thread_id = ${validated.threadId} AND state <> 'settled' ON CONFLICT DO NOTHING`.pipe(
+          execute,
           Effect.mapError(sqlFailure(operation)),
         );
 
-        const rows = yield* sql`SELECT o.submission_id FROM effect_agent_submission_ownership o
-        JOIN effect_agent_submissions s ON s.submission_id = o.submission_id
+        const rows =
+          yield* sql`SELECT o.submission_id FROM ${relation("effect_agent_submission_ownership")} o
+        JOIN ${relation("effect_agent_submissions")} s ON s.submission_id = o.submission_id
         WHERE s.thread_id = ${validated.threadId} AND s.state <> 'settled'`.pipe(
-          Effect.mapError(sqlFailure(operation)),
-        );
+            execute,
+            Effect.mapError(sqlFailure(operation)),
+          );
 
         return rows.length;
       }),
@@ -2216,7 +2239,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         const now = yield* currentInstant;
 
         yield* sql`
-          INSERT INTO effect_agent_abort_intents (
+          INSERT INTO ${relation("effect_agent_abort_intents")} (
             submission_id,
             author,
             reason,
@@ -2227,7 +2250,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
             ${validated.reason},
             ${now.iso}
           )
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
         const canonicalRecordId = yield* canonicalAbortRecordId(
           operation,
@@ -2276,7 +2299,8 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         yield* requireOwnership(operation, host, validated.ownershipToken);
 
         const stopped =
-          yield* sql`SELECT thread_id FROM effect_agent_worker_stops WHERE thread_id = ${validated.threadId}`.pipe(
+          yield* sql`SELECT thread_id FROM ${relation("effect_agent_worker_stops")} WHERE thread_id = ${validated.threadId}`.pipe(
+            execute,
             Effect.mapError(sqlFailure(operation)),
           );
 
@@ -2284,11 +2308,11 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
         const laterRows = yield* sql<Record<string, unknown>>`
           SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-          FROM effect_agent_submissions
+          FROM ${relation("effect_agent_submissions")}
           WHERE thread_id = ${validated.threadId}
             AND queue_sequence > ${host.queue_sequence}
           ORDER BY queue_sequence ASC
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
         const later = yield* decodeSubmissionRows(operation, validated.threadId, laterRows);
         const claimed: Array<JoiningClaim> = [];
@@ -2311,10 +2335,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           // contiguous ready prefix (plan §2.5); later ready work stays queued (DUR-004).
           if (row.state !== "ready") break;
           yield* sql`
-            UPDATE effect_agent_submissions
+            UPDATE ${relation("effect_agent_submissions")}
             SET state = 'joining', joined_host_submission_id = ${validated.hostSubmissionId}
             WHERE submission_id = ${row.submission_id}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           const inputPayload = yield* parseStoredJsonText(row.input_json).pipe(
             Effect.mapError((error) =>
@@ -2393,13 +2417,13 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           });
         }
         yield* sql`
-          UPDATE effect_agent_submissions
+          UPDATE ${relation("effect_agent_submissions")}
           SET
             input_applied_record_id = ${validated.recordId},
             input_applied_sequence = ${validated.sequence},
             state = 'joined'
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
       }),
     );
     yield* hitFailpoint("ledger:mark-joined:after", operation);
@@ -2424,10 +2448,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         // already-joined (or already-reverted) Submission is a no-op (DUR-016).
         if (submission.state !== "joining") return;
         yield* sql`
-          UPDATE effect_agent_submissions
+          UPDATE ${relation("effect_agent_submissions")}
           SET state = 'ready', joined_host_submission_id = NULL
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
       }),
     );
     yield* hitFailpoint("ledger:revert-joining:after", operation);
@@ -2506,19 +2530,19 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           const now = yield* currentInstant;
 
           yield* sql`
-          UPDATE effect_agent_submissions
+          UPDATE ${relation("effect_agent_submissions")}
           SET
             state = 'suspended',
             suspended_reason_json = ${reasonJson},
             suspended_at = ${now.iso}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
           // Suspension ends the ownership period WITHOUT settling: the accepted-work
           // obligation stays owed while the lane consumes no worker permit (plan §2.6).
           yield* sql`
-          DELETE FROM effect_agent_submission_ownership
+          DELETE FROM ${relation("effect_agent_submission_ownership")}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           return SUSPENDED;
         }),
@@ -2561,13 +2585,13 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
     if (!reason.toolCallIds.every((toolCallId) => decided.has(toolCallId))) return;
     yield* sql`
-        UPDATE effect_agent_submissions
+        UPDATE ${relation("effect_agent_submissions")}
         SET
           state = 'input-applied',
           suspended_reason_json = NULL,
           suspended_at = NULL
         WHERE submission_id = ${submission.submission_id}
-      `.pipe(Effect.mapError(sqlFailure(operation)));
+      `.pipe(execute, Effect.mapError(sqlFailure(operation)));
   });
 
   const recordApprovalDecision: SubmissionLedger["Service"]["recordApprovalDecision"] = Effect.fn(
@@ -2620,7 +2644,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         const now = yield* currentInstant;
 
         yield* sql`
-          INSERT INTO effect_agent_approval_decisions (
+          INSERT INTO ${relation("effect_agent_approval_decisions")} (
             submission_id,
             tool_call_id,
             decision,
@@ -2635,7 +2659,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
             ${validated.reason},
             ${now.iso}
           )
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
         yield* wakeSuspendedIfCovered(operation, submission);
 
         return yield* decodeApprovalDecisionIntent({
@@ -2709,13 +2733,13 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         );
 
         yield* sql`
-          UPDATE effect_agent_submissions
+          UPDATE ${relation("effect_agent_submissions")}
           SET
             state = 'unknown',
             unknown_reason = ${submission.unknown_reason ?? validated.reason},
             unknown_tool_call_ids_json = ${idsJson}
           WHERE submission_id = ${validated.submissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
       }),
     );
     yield* hitFailpoint("ledger:mark-unknown:after", operation);
@@ -2783,7 +2807,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           const now = yield* currentInstant;
 
           yield* sql`
-            INSERT INTO effect_agent_unknown_resolutions (
+            INSERT INTO ${relation("effect_agent_unknown_resolutions")} (
               submission_id,
               tool_call_id,
               author,
@@ -2798,7 +2822,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
               ${resolutionJson},
               ${now.iso}
             )
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           const resolution = yield* parseStoredJsonText(resolutionJson).pipe(
             Effect.mapError(internalFailure(operation)),
@@ -2823,13 +2847,13 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
           if (markedIds.every((toolCallId) => coveredIds.has(toolCallId))) {
             yield* sql`
-              UPDATE effect_agent_submissions
+              UPDATE ${relation("effect_agent_submissions")}
               SET
                 state = 'input-applied',
                 unknown_reason = NULL,
                 unknown_tool_call_ids_json = NULL
               WHERE submission_id = ${validated.submissionId}
-            `.pipe(Effect.mapError(sqlFailure(operation)));
+            `.pipe(execute, Effect.mapError(sqlFailure(operation)));
           }
         }
 
@@ -2915,13 +2939,13 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           }
         }
         yield* sql`
-          UPDATE effect_agent_submissions
+          UPDATE ${relation("effect_agent_submissions")}
           SET
             state = 'input-applied',
             suspended_reason_json = NULL,
             suspended_at = NULL
           WHERE submission_id = ${validated.parentSubmissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
         return WOKEN;
       }),
@@ -3002,7 +3026,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         const now = yield* currentInstant;
 
         yield* sql`
-          INSERT INTO effect_agent_child_reservations (
+          INSERT INTO ${relation("effect_agent_child_reservations")} (
             reservation_id,
             parent_submission_id,
             parent_tool_call_id,
@@ -3019,7 +3043,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
             ${validated.allocationDigest},
             ${now.iso}
           )
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
         const inserted = yield* readChildReservation(operation, validated.reservationId);
 
         if (Option.isNone(inserted)) {
@@ -3099,10 +3123,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
             });
           }
           yield* sql`
-            UPDATE effect_agent_child_reservations
+            UPDATE ${relation("effect_agent_child_reservations")}
             SET child_submission_id = ${validated.childSubmissionId}
             WHERE reservation_id = ${validated.reservationId}
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
           const updated = yield* readChildReservation(operation, validated.reservationId);
 
           if (Option.isNone(updated)) {
@@ -3173,13 +3197,13 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         const now = yield* currentInstant;
 
         yield* sql`
-          UPDATE effect_agent_child_reservations
+          UPDATE ${relation("effect_agent_child_reservations")}
           SET
             status = 'releasePending',
             accounting_json = ${accountingJson},
             release_began_at = ${now.iso}
           WHERE reservation_id = ${validated.reservationId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
         const updated = yield* readChildReservation(operation, validated.reservationId);
 
         if (Option.isNone(updated)) {
@@ -3237,10 +3261,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         const now = yield* currentInstant;
 
         yield* sql`
-          UPDATE effect_agent_child_reservations
+          UPDATE ${relation("effect_agent_child_reservations")}
           SET status = 'released', released_at = ${now.iso}
           WHERE reservation_id = ${validated.reservationId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
+        `.pipe(execute, Effect.mapError(sqlFailure(operation)));
         const updated = yield* readChildReservation(operation, validated.reservationId);
 
         if (Option.isNone(updated)) {
@@ -3280,25 +3304,25 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           SELECT submission_id AS "submissionId", thread_id AS "threadId",
             queue_sequence AS "queueSequence", principal, idempotency_key AS "idempotencyKey",
             deployment_id AS "deploymentId", receipt_id AS "receiptId", state
-          FROM effect_agent_submissions
+          FROM ${relation("effect_agent_submissions")}
           WHERE state <> 'settled'
           ORDER BY thread_id ASC, queue_sequence ASC
           LIMIT ${SCAN_PAGE_SIZE}
-        `
+        `.pipe(execute)
         : sql<Record<string, unknown>>`
           SELECT submission_id AS "submissionId", thread_id AS "threadId",
             queue_sequence AS "queueSequence", principal, idempotency_key AS "idempotencyKey",
             deployment_id AS "deploymentId", receipt_id AS "receiptId", state
-          FROM effect_agent_submissions
+          FROM ${relation("effect_agent_submissions")}
           WHERE state <> 'settled'
             AND (thread_id, queue_sequence) > (${cursor.threadId}, ${cursor.queueSequence})
           ORDER BY thread_id ASC, queue_sequence ASC
           LIMIT ${SCAN_PAGE_SIZE}
-        `
+        `.pipe(execute)
     ).pipe(Effect.mapError(sqlFailure(operation)));
 
     const decoded = yield* decodeRows(
-      Schema.Array(SubmissionWorkItem),
+      Schema.Array(SubmissionWorkItemRow),
       "effect_agent_submissions",
       "nonterminal_scan",
       rows,
@@ -3342,14 +3366,14 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
         abort.reason,
         abort.requested_at,
         canonical.record_id AS canonical_record_id
-      FROM effect_agent_submissions AS submission
-      LEFT JOIN effect_agent_abort_intents AS abort
+      FROM ${relation("effect_agent_submissions")} AS submission
+      LEFT JOIN ${relation("effect_agent_abort_intents")} AS abort
         ON abort.submission_id = submission.submission_id
-      LEFT JOIN effect_agent_canonical_records AS canonical
+      LEFT JOIN ${relation("effect_agent_canonical_records")} AS canonical
         ON canonical.thread_id = submission.thread_id
           AND canonical.record_id = ${recordId}
       WHERE submission.submission_id = ${validated.submissionId}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
     const decoded = yield* decodeRows(
       Schema.Array(AbortIntentLookupRow),
@@ -3477,10 +3501,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           // (the terminalize loop settles them with the host outcome, DUR-002).
           const joinRows = yield* sql<Record<string, unknown>>`
             SELECT ${sql.literal(SUBMISSION_COLUMNS)}
-            FROM effect_agent_submissions
+            FROM ${relation("effect_agent_submissions")}
             WHERE joined_host_submission_id = ${validated.submissionId}
             ORDER BY queue_sequence ASC
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           const joinSubmissions = yield* decodeSubmissionRows(
             operation,
@@ -3550,10 +3574,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           // derived view; canonical records stay the recovery truth, DUR-015).
           const childReservationRows = yield* sql<Record<string, unknown>>`
             SELECT ${sql.literal(CHILD_RESERVATION_COLUMNS)}
-            FROM effect_agent_child_reservations
+            FROM ${relation("effect_agent_child_reservations")}
             WHERE parent_submission_id = ${validated.submissionId}
             ORDER BY parent_tool_call_id ASC
-          `.pipe(Effect.mapError(sqlFailure(operation)));
+          `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
           const decodedChildReservations = yield* decodeChildReservationRows(
             operation,
@@ -3620,38 +3644,35 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
       );
   });
 
-  return Context.make(
-    SubmissionLedger,
-    SubmissionLedger.of({
-      capabilities,
-      admit,
-      markReady,
-      lookup,
-      resolveAdmission,
-      claim,
-      renewOwnership,
-      releaseOwnership,
-      markInputApplied,
-      reserveSettlement,
-      finalizeSettlement,
-      requestAbort,
-      stopWorker,
-      inspectWorker,
-      claimJoining,
-      markJoined,
-      revertJoining,
-      suspend,
-      recordApprovalDecision,
-      markUnknown,
-      recordUnknownResolution,
-      recordChildSettled,
-      reserveChildBudget,
-      attachChildToReservation,
-      beginChildBudgetRelease,
-      releaseChildBudget,
-      scanNonterminal,
-      loadRecoverySnapshot,
-      readAbortIntent: readAbortIntentForSubmission,
-    }),
-  );
+  return SubmissionLedger.of({
+    capabilities,
+    admit,
+    markReady,
+    lookup,
+    resolveAdmission,
+    claim,
+    renewOwnership,
+    releaseOwnership,
+    markInputApplied,
+    reserveSettlement,
+    finalizeSettlement,
+    requestAbort,
+    stopWorker,
+    inspectWorker,
+    claimJoining,
+    markJoined,
+    revertJoining,
+    suspend,
+    recordApprovalDecision,
+    markUnknown,
+    recordUnknownResolution,
+    recordChildSettled,
+    reserveChildBudget,
+    attachChildToReservation,
+    beginChildBudgetRelease,
+    releaseChildBudget,
+    scanNonterminal,
+    loadRecoverySnapshot,
+    readAbortIntent: readAbortIntentForSubmission,
+  });
 });

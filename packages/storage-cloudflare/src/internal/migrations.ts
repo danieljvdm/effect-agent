@@ -283,10 +283,10 @@ export const doMigrations = SqliteMigrator.fromRecord({
       )
     `.withoutTransform;
 
-    yield* createNativeReadIndexes;
+    yield* createNativeReadIndexes();
     yield* createNonterminalIndex;
     yield* createMessageDeliveryTables;
-    yield* createMessageDeliveryPendingIndex;
+    yield* createMessageDeliveryPendingIndex();
     yield* createRecoveryCheckpointTable;
     yield* createWorkerStops;
     yield* sql`

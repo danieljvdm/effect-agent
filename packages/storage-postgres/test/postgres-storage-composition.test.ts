@@ -1,10 +1,12 @@
 import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
+import { NodeCrypto } from "@effect/platform-node";
+import { PgClient } from "@effect/sql-pg";
 import { expect, it } from "@effect/vitest";
-import { Effect, Layer, Redacted, Result, Schema } from "effect";
+import { Effect, Layer, Redacted, Result, Schema, String } from "effect";
 import { ActivityProcessorStore } from "effect-agent/activity-store";
 import { SubscriptionStore } from "effect-agent/subscription";
 import { subscriptionConformancePartition } from "effect-agent/testing/subscription-store-conformance";
-import { ThreadStore } from "effect-agent/thread-store";
+import { ThreadMaterialization, ThreadStore } from "effect-agent/thread-store";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { withTemporaryDatabase } from "./harness.ts";
@@ -12,61 +14,104 @@ import { withTemporaryDatabase } from "./harness.ts";
 it.effect("opens Activity independently, then composes every port over one pool", () =>
   withTemporaryDatabase((url) =>
     Effect.gen(function* () {
-      const storage = PostgresStorage.make({
-        client: { url: Redacted.make(url), maxConnections: 1 },
-      });
+      const options = { schema: "select" };
+      const sql = yield* SqlClient.SqlClient;
 
-      const journalExists = Effect.flatMap(
-        SqlClient.SqlClient,
-        (sql) => sql`SELECT to_regclass('effect_agent_storage_version') IS NOT NULL AS present`,
+      const journalExists = sql`SELECT to_regclass('"select".effect_agent_storage_version') IS NOT NULL AS present`;
+
+      expect(yield* journalExists).toEqual([{ present: false }]);
+      yield* ActivityProcessorStore.pipe(
+        Effect.provide(PostgresStorage.activityStoreLayer(options)),
       );
-
-      expect(yield* journalExists.pipe(Effect.provide(storage.clientLayer))).toEqual([
-        { present: false },
-      ]);
-      yield* ActivityProcessorStore.pipe(Effect.provide(storage.activityStore));
-      expect(yield* journalExists.pipe(Effect.provide(storage.clientLayer))).toEqual([
-        { present: false },
-      ]);
+      expect(yield* journalExists).toEqual([{ present: false }]);
 
       yield* Effect.gen(function* () {
-        yield* ThreadStore;
+        const store = yield* ThreadStore;
         const subscriptions = yield* SubscriptionStore;
 
         expect(yield* subscriptions.nextDeadline).toBeNull();
-        const sql = yield* SqlClient.SqlClient;
-
-        const connections = yield* Schema.decodeUnknownEffect(
-          Schema.Array(Schema.Struct({ count: Schema.Int })),
-        )(
-          yield* sql`SELECT COUNT(*) AS count FROM pg_stat_activity WHERE datname = current_database()`,
+        yield* store.materialize(
+          yield* Schema.decodeEffect(ThreadMaterialization)({
+            threadId: "native-composition",
+            producerEpoch: 1,
+          }),
         );
 
-        expect(connections).toEqual([{ count: 1 }]);
+        expect(
+          yield* sql`SELECT COUNT(*) AS connection_count FROM ${sql("pgStatActivity")} WHERE datname = current_database()`,
+        ).toEqual([{ connectionCount: 1n }]);
+        expect(yield* sql`SELECT current_schema() AS current_schema`).toEqual([
+          { currentSchema: "public" },
+        ]);
+        expect(yield* sql`SELECT thread_id FROM "select".effect_agent_threads`).toEqual([
+          { threadId: "native-composition" },
+        ]);
         expect(yield* journalExists).toEqual([{ present: true }]);
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            storage.clientLayer,
-            storage.threadStore,
-            storage.submissionLedger,
-            storage.scheduleStore,
-            storage.messageDeliveryStore(),
-            storage.subscriptionStore(subscriptionConformancePartition),
-            storage.activityStore,
+            PostgresStorage.layerWith(options),
+            PostgresStorage.scheduleStoreLayer(options),
+            PostgresStorage.messageDeliveryStoreLayer(options),
+            PostgresStorage.subscriptionStoreLayer(subscriptionConformancePartition, options),
+            PostgresStorage.activityStoreLayer(options),
           ),
         ),
       );
-    }),
+    }).pipe(
+      Effect.provide([
+        PgClient.layer({
+          url: Redacted.make(url),
+          maxConnections: 1,
+          transformQueryNames: String.camelToSnake,
+          transformResultNames: String.snakeToCamel,
+        }),
+        NodeCrypto.layer,
+      ]),
+    ),
   ),
 );
 
-it.effect("rejects invalid subscription partitions before acquiring a client", () =>
-  Effect.gen(function* () {
-    const storage = PostgresStorage.make({ client: { port: 1 } });
+// Regression introduced in 6df51d36: nested storage must fail before reserving another connection.
+it.live(
+  "rejects a store mutation inside the shared client's transaction without changing state",
+  () =>
+    withTemporaryDatabase((url) => {
+      return Effect.gen(function* () {
+        const store = yield* ThreadStore;
+        const sql = yield* SqlClient.SqlClient;
 
+        const materialization = yield* Schema.decodeEffect(ThreadMaterialization)({
+          threadId: "nested-transaction",
+          producerEpoch: 1,
+        });
+
+        const result = yield* sql
+          .withTransaction(store.materialize(materialization))
+          .pipe(Effect.timeout("1 second"), Effect.result);
+
+        const rows = yield* sql`
+          SELECT thread_id FROM effect_agent_threads WHERE thread_id = ${materialization.threadId}
+        `;
+
+        expect(rows).toEqual([]);
+        expect(Result.isFailure(result) && result.failure).toMatchObject({
+          _tag: "ThreadStoreError",
+        });
+      }).pipe(
+        Effect.provide(PostgresStorage.layer),
+        Effect.provide([
+          PgClient.layer({ url: Redacted.make(url), maxConnections: 1 }),
+          NodeCrypto.layer,
+        ]),
+      );
+    }),
+);
+
+it.effect("rejects invalid subscription partitions before using the native client", () =>
+  Effect.gen(function* () {
     const result = yield* SubscriptionStore.pipe(
-      Effect.provide(storage.subscriptionStore({ tenantId: "", address: "" })),
+      Effect.provide(PostgresStorage.subscriptionStoreLayer({ tenantId: "", address: "" })),
       Effect.result,
     );
 
@@ -75,5 +120,5 @@ it.effect("rejects invalid subscription partitions before acquiring a client", (
       reason: "validation",
       code: "partition",
     });
-  }),
+  }).pipe(Effect.provide(PgClient.layer({ port: 1 }))),
 );

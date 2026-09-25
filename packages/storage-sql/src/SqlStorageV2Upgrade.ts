@@ -72,7 +72,7 @@ const checkColumns = Effect.fn("SqlStorageV2Upgrade.checkColumns")(function* (
   for (const table of tables) {
     const columns = yield* rows(
       Schema.Struct({ name: Schema.String }),
-      yield* sql.unsafe(`PRAGMA table_info(${table})`),
+      yield* sql.unsafe(`PRAGMA table_info(${table})`).withoutTransform,
       table,
     );
 
@@ -85,7 +85,7 @@ const checkColumns = Effect.fn("SqlStorageV2Upgrade.checkColumns")(function* (
   }
 });
 
-/** Native SQL only; callers own one transaction, recheck the version inside it, and advance it last. */
+/** SQLite-only upgrade; callers own one transaction, recheck the version inside it, and advance it last. */
 export const upgradeV2Schedules = Effect.fn("SqlStorageV2Upgrade.schedules")(function* (
   maxBytes: number,
 ) {
@@ -108,7 +108,9 @@ export const upgradeV2Schedules = Effect.fn("SqlStorageV2Upgrade.schedules")(fun
       }),
       yield* after === undefined
         ? sql`SELECT rowid AS storage_rowid, * FROM effect_agent_schedules ORDER BY rowid LIMIT 16`
-        : sql`SELECT rowid AS storage_rowid, * FROM effect_agent_schedules WHERE rowid > ${after} ORDER BY rowid LIMIT 16`,
+            .withoutTransform
+        : sql`SELECT rowid AS storage_rowid, * FROM effect_agent_schedules WHERE rowid > ${after} ORDER BY rowid LIMIT 16`
+            .withoutTransform,
       table,
     );
 
@@ -160,7 +162,8 @@ export const upgradeV2Schedules = Effect.fn("SqlStorageV2Upgrade.schedules")(fun
             "Translated schedule exceeds the adapter value bound; original data was retained.",
           );
         yield* hit("upgrade:before-mutation");
-        yield* sql`UPDATE effect_agent_schedules SET record_json=${value} WHERE tenant_id=${row.tenant_id} AND owner_id=${row.owner_id} AND schedule_id=${row.schedule_id}`;
+        yield* sql`UPDATE effect_agent_schedules SET record_json=${value} WHERE tenant_id=${row.tenant_id} AND owner_id=${row.owner_id} AND schedule_id=${row.schedule_id}`
+          .withoutTransform;
         yield* hit("upgrade:after-mutation");
       }
     }
@@ -196,11 +199,14 @@ export const upgradeV2Subscriptions = Effect.fn("SqlStorageV2Upgrade.subscriptio
       return result;
     });
 
-  yield* mutate(sql`CREATE TABLE effect_agent_subscriptions_v3 (
+  yield* mutate(
+    sql`CREATE TABLE effect_agent_subscriptions_v3 (
     tenant_id TEXT NOT NULL, source_address TEXT NOT NULL, owner_id TEXT NOT NULL, subscription_id TEXT NOT NULL,
     ordinal INTEGER NOT NULL, source_name TEXT NOT NULL, source_version TEXT NOT NULL, matching_key TEXT NOT NULL,
     state TEXT NOT NULL, expires_at_millis INTEGER, recovery_at_millis INTEGER, recovery_present INTEGER NOT NULL DEFAULT 0, record_json TEXT NOT NULL,
-    PRIMARY KEY (tenant_id, source_address, owner_id, subscription_id), UNIQUE (tenant_id, source_address, ordinal))`);
+    PRIMARY KEY (tenant_id, source_address, owner_id, subscription_id), UNIQUE (tenant_id, source_address, ordinal))`
+      .withoutTransform,
+  );
 
   let registrationAfter: number | undefined;
 
@@ -223,7 +229,9 @@ export const upgradeV2Subscriptions = Effect.fn("SqlStorageV2Upgrade.subscriptio
       }),
       yield* registrationAfter === undefined
         ? sql`SELECT rowid AS storage_rowid, * FROM effect_agent_subscriptions ORDER BY rowid LIMIT 16`
-        : sql`SELECT rowid AS storage_rowid, * FROM effect_agent_subscriptions WHERE rowid > ${registrationAfter} ORDER BY rowid LIMIT 16`,
+            .withoutTransform
+        : sql`SELECT rowid AS storage_rowid, * FROM effect_agent_subscriptions WHERE rowid > ${registrationAfter} ORDER BY rowid LIMIT 16`
+            .withoutTransform,
       registrationTable,
     );
 
@@ -301,7 +309,8 @@ export const upgradeV2Subscriptions = Effect.fn("SqlStorageV2Upgrade.subscriptio
           "Adding the creation configuration exceeds the adapter value bound; original data was retained.",
         );
       yield* mutate(
-        sql`INSERT INTO effect_agent_subscriptions_v3 VALUES (${row.tenant_id}, ${row.source_address}, ${row.owner_id}, ${row.subscription_id}, ${row.ordinal}, ${row.source_name}, ${row.source_version}, ${row.matching_key}, ${row.state}, ${row.expires_at_millis}, ${row.recovery_at_millis}, ${record.recovery === null ? 0 : 1}, ${value})`,
+        sql`INSERT INTO effect_agent_subscriptions_v3 VALUES (${row.tenant_id}, ${row.source_address}, ${row.owner_id}, ${row.subscription_id}, ${row.ordinal}, ${row.source_name}, ${row.source_version}, ${row.matching_key}, ${row.state}, ${row.expires_at_millis}, ${row.recovery_at_millis}, ${record.recovery === null ? 0 : 1}, ${value})`
+          .withoutTransform,
       );
     }
   }
@@ -323,7 +332,9 @@ export const upgradeV2Subscriptions = Effect.fn("SqlStorageV2Upgrade.subscriptio
       }),
       yield* deliveryAfter === undefined
         ? sql`SELECT rowid AS storage_rowid, * FROM effect_agent_subscription_deliveries ORDER BY rowid LIMIT 16`
-        : sql`SELECT rowid AS storage_rowid, * FROM effect_agent_subscription_deliveries WHERE rowid > ${deliveryAfter} ORDER BY rowid LIMIT 16`,
+            .withoutTransform
+        : sql`SELECT rowid AS storage_rowid, * FROM effect_agent_subscription_deliveries WHERE rowid > ${deliveryAfter} ORDER BY rowid LIMIT 16`
+            .withoutTransform,
       deliveryTable,
     );
 
@@ -335,7 +346,8 @@ export const upgradeV2Subscriptions = Effect.fn("SqlStorageV2Upgrade.subscriptio
 
       const registrations = yield* rows(
         JsonRow,
-        yield* sql`SELECT record_json FROM effect_agent_subscriptions_v3 WHERE tenant_id=${row.tenant_id} AND source_address=${row.source_address} AND owner_id=${row.owner_id} AND subscription_id=${row.subscription_id}`,
+        yield* sql`SELECT record_json FROM effect_agent_subscriptions_v3 WHERE tenant_id=${row.tenant_id} AND source_address=${row.source_address} AND owner_id=${row.owner_id} AND subscription_id=${row.subscription_id}`
+          .withoutTransform,
         registrationTable,
       );
 
@@ -347,7 +359,8 @@ export const upgradeV2Subscriptions = Effect.fn("SqlStorageV2Upgrade.subscriptio
           source_version: Schema.String,
           payload_digest: Schema.String,
         }),
-        yield* sql`SELECT event_id, source_name, source_version, payload_digest FROM effect_agent_subscription_events WHERE tenant_id=${row.tenant_id} AND source_address=${row.source_address} AND event_id=${row.event_id}`,
+        yield* sql`SELECT event_id, source_name, source_version, payload_digest FROM effect_agent_subscription_events WHERE tenant_id=${row.tenant_id} AND source_address=${row.source_address} AND event_id=${row.event_id}`
+          .withoutTransform,
         eventTable,
       );
 
@@ -459,25 +472,31 @@ export const upgradeV2Subscriptions = Effect.fn("SqlStorageV2Upgrade.subscriptio
           "Adding the immutable configuration exceeds the adapter value bound; original data was retained.",
         );
       yield* mutate(
-        sql`UPDATE effect_agent_subscription_deliveries SET record_json=${value} WHERE tenant_id=${row.tenant_id} AND source_address=${row.source_address} AND owner_id=${row.owner_id} AND subscription_id=${row.subscription_id} AND event_id=${row.event_id}`,
+        sql`UPDATE effect_agent_subscription_deliveries SET record_json=${value} WHERE tenant_id=${row.tenant_id} AND source_address=${row.source_address} AND owner_id=${row.owner_id} AND subscription_id=${row.subscription_id} AND event_id=${row.event_id}`
+          .withoutTransform,
       );
     }
   }
-  yield* mutate(sql`DROP TABLE effect_agent_subscriptions`);
+  yield* mutate(sql`DROP TABLE effect_agent_subscriptions`.withoutTransform);
   yield* mutate(
-    sql`ALTER TABLE effect_agent_subscriptions_v3 RENAME TO effect_agent_subscriptions`,
+    sql`ALTER TABLE effect_agent_subscriptions_v3 RENAME TO effect_agent_subscriptions`
+      .withoutTransform,
   );
   yield* mutate(
-    sql`CREATE INDEX effect_agent_subscriptions_owner ON effect_agent_subscriptions (tenant_id, source_address, owner_id, ordinal)`,
+    sql`CREATE INDEX effect_agent_subscriptions_owner ON effect_agent_subscriptions (tenant_id, source_address, owner_id, ordinal)`
+      .withoutTransform,
   );
   yield* mutate(
-    sql`CREATE INDEX effect_agent_subscriptions_candidates ON effect_agent_subscriptions (tenant_id, source_address, source_name, source_version, matching_key, ordinal)`,
+    sql`CREATE INDEX effect_agent_subscriptions_candidates ON effect_agent_subscriptions (tenant_id, source_address, source_name, source_version, matching_key, ordinal)`
+      .withoutTransform,
   );
   yield* mutate(
-    sql`CREATE INDEX effect_agent_subscriptions_recovery ON effect_agent_subscriptions (tenant_id, source_address, recovery_at_millis, ordinal) WHERE recovery_at_millis IS NOT NULL`,
+    sql`CREATE INDEX effect_agent_subscriptions_recovery ON effect_agent_subscriptions (tenant_id, source_address, recovery_at_millis, ordinal) WHERE recovery_at_millis IS NOT NULL`
+      .withoutTransform,
   );
   yield* mutate(
-    sql`ALTER TABLE effect_agent_subscription_events ADD COLUMN tombstone INTEGER NOT NULL DEFAULT 0`,
+    sql`ALTER TABLE effect_agent_subscription_events ADD COLUMN tombstone INTEGER NOT NULL DEFAULT 0`
+      .withoutTransform,
   );
 });
 

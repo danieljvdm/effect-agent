@@ -17,7 +17,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./postgres-storage": "./src/PostgresStorage.ts",
-    "./postgres-storage-client": "./src/PostgresStorageClient.ts",
     "./postgres-storage-error": "./src/PostgresStorageError.ts"
   },
   "publishConfig": {
@@ -29,11 +28,11 @@
   },
   "dependencies": {
     "@effect-agent/storage-sql": "workspace:*",
-    "@effect/platform-node": "catalog:",
-    "@effect/sql-pg": "catalog:",
     "effect-agent": "workspace:*"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-pg": "catalog:",
     "@effect/vitest": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",

@@ -383,7 +383,7 @@ const predecessorColumns = {
 const checkPredecessorLayout = Effect.fn("DoJournal.checkPredecessorLayout")(function* (
   version: 3 | 4 | 5 | 7,
 ) {
-  const sql = yield* SqlClient.SqlClient;
+  const sql = (yield* SqlClient.SqlClient).withoutTransforms();
 
   const messageColumns =
     version === 3
@@ -673,8 +673,8 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
             yield* createNonterminalIndex;
             yield* failpoint("upgrade:after-mutation");
             yield* failpoint("upgrade:before-version");
-            yield* createNativeReadIndexes;
-            yield* createMessageDeliveryPendingIndex;
+            yield* createNativeReadIndexes();
+            yield* createMessageDeliveryPendingIndex();
             yield* seedNativeReadIndexes.pipe(
               Effect.catchTag("ThreadStoreError", (error) =>
                 DoStorageCorruptionError.make({
@@ -740,8 +740,8 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
                 message: "Predecessor storage is missing its required nonterminal index",
               });
             yield* failpoint("upgrade:before-mutation");
-            yield* createNativeReadIndexes;
-            yield* createMessageDeliveryPendingIndex;
+            yield* createNativeReadIndexes();
+            yield* createMessageDeliveryPendingIndex();
             yield* seedNativeReadIndexes.pipe(
               Effect.catchTag("ThreadStoreError", (error) =>
                 DoStorageCorruptionError.make({

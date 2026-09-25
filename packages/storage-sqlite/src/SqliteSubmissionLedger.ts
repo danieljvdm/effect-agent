@@ -3,8 +3,7 @@ import { NodeCrypto } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import type { Crypto } from "effect";
 import { Effect, Layer } from "effect";
-import type { SubmissionLedger } from "effect-agent/submission-ledger";
-import { LedgerError } from "effect-agent/submission-ledger";
+import { LedgerError, SubmissionLedger } from "effect-agent/submission-ledger";
 import type * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
@@ -67,7 +66,7 @@ export const submissionLedgerLayer: Layer.Layer<
   SubmissionLedger,
   SqliteStorageInitializationError,
   SqliteStorageConfig | SqliteStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
-> = Layer.effectContext(makeServices());
+> = Layer.effect(SubmissionLedger, makeServices());
 
 /**
  * A composition-root convenience Layer for the durable Submission Ledger. Point it at the

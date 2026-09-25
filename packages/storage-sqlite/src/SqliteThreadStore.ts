@@ -4,7 +4,7 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import type { Crypto } from "effect";
 import { Duration, Effect, Layer, Schema } from "effect";
 import { DEFAULT_OWNERSHIP_LEASE_DURATION } from "effect-agent/submission-ledger";
-import type { ThreadStore } from "effect-agent/thread-store";
+import { ThreadStore } from "effect-agent/thread-store";
 import type * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { initializeSqliteJournal, sqliteErrors } from "./internal/sqlite-journal.ts";
@@ -64,7 +64,7 @@ export const threadStoreLayer: Layer.Layer<
   ThreadStore,
   SqliteStorageInitializationError,
   SqliteStorageConfig | SqliteStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
-> = Layer.effectContext(makeServices());
+> = Layer.effect(ThreadStore, makeServices());
 
 /**
  * Validated SQLite storage configuration Layer with the documented defaults applied. Shared

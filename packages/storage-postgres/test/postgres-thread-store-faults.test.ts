@@ -1,4 +1,3 @@
-import * as PostgresStorage from "@effect-agent/storage-postgres/postgres-storage";
 import {
   PostgresStorageCompatibilityError,
   PostgresStorageCorruptionError,
@@ -16,7 +15,6 @@ import {
   Fiber,
   Layer,
   Option,
-  Redacted,
   Ref,
   Schema,
   Stream,
@@ -53,6 +51,7 @@ import * as Statement from "effect/unstable/sql/Statement";
 import { WRITER_LOCK_KEY } from "../src/internal/postgres-storage.ts";
 import {
   clientLayer,
+  storage as makeStorage,
   singleConnectionStorage,
   whileHoldingWriterLock,
   withTemporaryDatabase,
@@ -132,17 +131,12 @@ const append = (
   );
 
 const withStorage = <A, E>(url: string, effect: Effect.Effect<A, E, ThreadStore>) =>
-  Effect.provide(
-    effect,
-    PostgresStorage.make({ client: { url: Redacted.make(url) }, observationPollInterval: 1 })
-      .threadStore,
-  );
+  Effect.provide(effect, makeStorage(url).threadStore);
 
 const withVerifiedStorage = <A, E>(url: string, effect: Effect.Effect<A, E, ThreadStore>) =>
   Effect.provide(
     effect,
-    PostgresStorage.make({
-      client: { url: Redacted.make(url) },
+    makeStorage(url, {
       observationPollInterval: 1,
       verifyOnOpen: true,
     }).threadStore,
@@ -340,6 +334,86 @@ describe("PostgresThreadStore faults", () => {
       }),
   );
 
+  // Regression introduced in 6df51d36: UTF-8 replacement must not alias another thread's identity.
+  it.effect("rejects malformed thread IDs without reading or fencing a valid Unicode thread", () =>
+    withTemporaryDatabase((url) =>
+      withStorage(
+        url,
+        Effect.gen(function* () {
+          const store = yield* ThreadStore;
+          const validId = id(ThreadMaterialization.fields.threadId, "thread-😀-\ufffd");
+          const first = inputRecord("unicode-identity-first", "private input");
+          const second = inputRecord("unicode-identity-second", "valid owner input");
+
+          yield* store.materialize(
+            ThreadMaterialization.make({ threadId: validId, producerEpoch: epoch(1) }),
+          );
+
+          const tail = yield* store.append(
+            FencedAppendRequest.make({
+              threadId: validId,
+              batch: batch("unicode-identity-first", [first]),
+              expectedTailSequence: sequence(0),
+              expectedTailDigest: EMPTY_TAIL_DIGEST,
+              producerEpoch: epoch(1),
+            }),
+          );
+
+          const rejected = [];
+
+          for (const malformed of ["thread-😀-\ud800", "thread-😀-\udc00"]) {
+            const malformedId = id(ThreadMaterialization.fields.threadId, malformed);
+
+            const mutation = yield* store
+              .materialize(
+                ThreadMaterialization.make({ threadId: malformedId, producerEpoch: epoch(2) }),
+              )
+              .pipe(Effect.exit);
+
+            const read = yield* store
+              .read(ThreadRead.make({ threadId: malformedId, limit: 10 }))
+              .pipe(Stream.runCollect, Effect.exit);
+
+            rejected.push({
+              mutation:
+                Exit.isFailure(mutation) && isThreadStoreError(Cause.squash(mutation.cause)),
+              read: Exit.isFailure(read) && isThreadStoreError(Cause.squash(read.cause)),
+            });
+          }
+
+          const validAppend = yield* store
+            .append(
+              FencedAppendRequest.make({
+                threadId: validId,
+                batch: batch("unicode-identity-second", [second]),
+                expectedTailSequence: tail.lastSequence,
+                expectedTailDigest: tail.tailDigest,
+                producerEpoch: epoch(1),
+              }),
+            )
+            .pipe(Effect.exit);
+
+          const exported = yield* store.export(ThreadExportRequest.make({ threadId: validId }));
+
+          expect({
+            rejected,
+            validAppend: Exit.isSuccess(validAppend),
+            threadId: exported.threadId,
+            records: exported.records.map((envelope) => envelope.record),
+          }).toEqual({
+            rejected: [
+              { mutation: true, read: true },
+              { mutation: true, read: true },
+            ],
+            validAppend: true,
+            threadId: validId,
+            records: [first, second],
+          });
+        }),
+      ),
+    ),
+  );
+
   it.live(
     "interrupts a blocked writer before its lock timeout and reuses the rolled-back connection",
     () =>
@@ -415,8 +489,7 @@ describe("PostgresThreadStore faults", () => {
       Effect.gen(function* () {
         const active = yield* Ref.make(false);
 
-        const storage = PostgresStorage.make({
-          client: { url: Redacted.make(url) },
+        const storage = makeStorage(url, {
           failpoint: (location) =>
             Ref.get(active).pipe(
               Effect.flatMap((enabled) =>
@@ -486,7 +559,7 @@ describe("PostgresThreadStore faults", () => {
               `;
             }),
           ),
-        ).toEqual([{ version: 999 }]);
+        ).toEqual([{ version: 999n }]);
       }),
     ),
   );
@@ -591,7 +664,7 @@ describe("PostgresThreadStore faults", () => {
           }),
         );
 
-        expect(rows).toEqual([{ sequence: 1, record_json: '{"schemaVersion":2}' }]);
+        expect(rows).toEqual([{ sequence: 1n, record_json: '{"schemaVersion":2}' }]);
       }),
     ),
   );
@@ -665,8 +738,7 @@ describe("PostgresThreadStore faults", () => {
         const withFailpoints = <A, E>(effect: Effect.Effect<A, E, ThreadStore>) =>
           Effect.provide(
             effect,
-            PostgresStorage.make({
-              client: { url: Redacted.make(url) },
+            makeStorage(url, {
               observationPollInterval: 1,
               failpoint: (location) =>
                 Ref.get(active).pipe(

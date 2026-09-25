@@ -333,6 +333,8 @@ delivery, and activity progress. SQLite and Postgres supply connections, format 
 and transaction settings. Cloudflare reuses the SQL helpers that fit Durable Objects.
 Applications normally install their database adapter; adapter authors can use these factories
 with Effect's `SqlClient`. The shared package imports no platform runtime.
+`makeSqlThreadStore` and `makeSqlSubmissionLedger` return Effects of service values; install
+them with `Layer.effect(ThreadStore, ...)` and `Layer.effect(SubmissionLedger, ...)`.
 
 ### `@effect-agent/storage-sqlite`
 
@@ -356,29 +358,53 @@ Stores thread history and pending work in one Postgres database, which several N
 share. Rejects incompatible stored versions; no migration path is promised.
 Requires Postgres 16 or newer.
 
-`PostgresStorage.make(options)` returns selectable store Layers sharing one connection pool and
-journal initialization. Merge only the stores the application needs:
+`PostgresStorage.layer` provides `ThreadStore` and `SubmissionLedger`, requiring the application's
+native Effect `SqlClient` and `Crypto`. Provide them at the composition root:
 
 ```ts
 import { PostgresStorage } from "@effect-agent/storage-postgres";
+import { NodeCrypto } from "@effect/platform-node";
+import { PgClient } from "@effect/sql-pg";
 import { Layer, Redacted } from "effect";
 
-const storage = PostgresStorage.make({
-  client: { url: Redacted.make("postgres://localhost/effect_agent") },
+const Database = PgClient.layer({
+  url: Redacted.make("postgres://localhost/effect_agent"),
 });
-const Persistence = Layer.mergeAll(storage.threadStore, storage.submissionLedger);
+const Persistence = PostgresStorage.layer.pipe(
+  Layer.provide(NodeCrypto.layer),
+  Layer.provideMerge(Database),
+);
 ```
 
-The same instance provides `scheduleStore`, `activityStore`, `messageDeliveryStore(limits)`,
-and `subscriptionStore(partition)`. Activity progress remains independent of the journal.
-The `failpoint` and `activityFailpoint` options accept test handlers.
+`Persistence` exposes the stores and the same native client for application SQL. Use
+`PostgresStorage.layerWith(options)` to configure the core pair, or select individual ports:
 
-Writers serialize on one transaction-scoped advisory lock; a blocked writer fails with the
-retryable `PostgresWriteContention`. The `schema` option selects the schema on every pooled
-connection through Postgres startup settings. `storage.clientLayer` exposes the same client Layer for
-application SQL. `PostgresStorageClient.layer` also supports standalone client composition,
-decoding `BIGINT` to safe integers as the stored row schemas require.
-The `effect-agent/sql-memory-store` ports stay SQLite-only.
+| Constructor                                       | Provides                 |
+| ------------------------------------------------- | ------------------------ |
+| `threadStoreLayer(options = {})`                  | `ThreadStore`            |
+| `submissionLedgerLayer(options = {})`             | `SubmissionLedger`       |
+| `scheduleStoreLayer(options = {})`                | `ScheduleStore`          |
+| `activityStoreLayer(options = {})`                | `ActivityProcessorStore` |
+| `messageDeliveryStoreLayer(options = {})`         | `MessageDeliveryStore`   |
+| `subscriptionStoreLayer(partition, options = {})` | `SubscriptionStore`      |
+
+These constructors are exported by `PostgresStorage`. Activity progress remains independent of
+the journal; subscriptions require an explicit partition. Message delivery accepts `limits` in
+its options. The `failpoint` and `activityFailpoint`
+options accept test handlers.
+
+The `schema` option qualifies storage tables and defaults to `public`. It leaves the client's
+search path unchanged; pre-provisioned schemas need no database-wide `CREATE` permission.
+Storage decodes native `BIGINT` values to safe integers and uses its persisted column names,
+while application queries keep the client's codecs and name transformations.
+
+Writes use `READ COMMITTED` and serialize on one transaction-scoped advisory lock. A lock timeout
+appears as a retryable `PostgresWriteContention` cause in thread and submission errors; other stores
+report their own storage errors. Invoke storage writes and snapshot reads outside an existing
+SQL transaction: they own top-level transactions and reject nesting with a typed failure.
+Identifiers and other text parameters must contain valid Unicode without NUL; canonical JSON
+payloads still preserve arbitrary strings. The `effect-agent/sql-memory-store` ports stay
+SQLite-only.
 
 ### `@effect-agent/platform-node`
 

@@ -12,12 +12,7 @@ export default defineConfig({
     },
   },
   pack: {
-    entry: [
-      "src/index.ts",
-      "src/PostgresStorage.ts",
-      "src/PostgresStorageClient.ts",
-      "src/PostgresStorageError.ts",
-    ],
+    entry: ["src/index.ts", "src/PostgresStorage.ts", "src/PostgresStorageError.ts"],
     dts: true,
     sourcemap: true,
   },

@@ -25,12 +25,12 @@ import {
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
 import { sqliteJsonText } from "./internal/sql-json.ts";
-import type { SqlWriteTransaction } from "./SqlStorage.ts";
+import { makeSqlQuery, SqlInteger, type SqlWriteTransaction } from "./SqlStorage.ts";
 
 // Configuration and the immutable pending envelope may each carry the canonical input. Leave
 // room for JSON escaping and bounded status while rejecting an unreadable oversized row.
 const StoredScheduleJson = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
-const StoredDeadline = Schema.NullOr(ScheduleInstant);
+const StoredDeadline = Schema.NullOr(SqlInteger.pipe(Schema.decodeTo(ScheduleInstant)));
 
 class ScheduleRow extends Schema.Class<ScheduleRow>("@effect-agent/storage-sql/ScheduleRow")({
   tenant_id: ScheduleOwner.fields.tenantId,
@@ -44,13 +44,13 @@ const ScheduleDueRow = Schema.Struct({
   tenant_id: ScheduleOwner.fields.tenantId,
   owner_id: ScheduleOwner.fields.ownerId,
   schedule_id: ScheduleId,
-  deadline_at_millis: ScheduleInstant,
+  deadline_at_millis: SqlInteger.pipe(Schema.decodeTo(ScheduleInstant)),
 });
 
 class ScheduleCountRow extends Schema.Class<ScheduleCountRow>(
   "@effect-agent/storage-sql/ScheduleCountRow",
 )({
-  schedule_count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  schedule_count: SqlInteger.check(Schema.isGreaterThanOrEqualTo(0)),
 }) {}
 
 class ScheduleDeadlineRow extends Schema.Class<ScheduleDeadlineRow>(
@@ -114,8 +114,10 @@ const decodeInput = Effect.fn("SqlScheduleStore.decodeInput")(function* <A, I>(
 
 export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function* (
   withWriteTransaction: SqlWriteTransaction,
+  namespace?: string,
 ) {
   const sql = yield* SqlClientService.SqlClient;
+  const { table: relation, execute } = yield* makeSqlQuery(namespace);
   const scheduleFailpoint = yield* ScheduleFailpoint;
 
   const usesCapacity = sql.onDialectOrElse({
@@ -130,11 +132,14 @@ export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function*
   ): Effect.fn.Return<ReadonlyArray<ScheduleRow>, ScheduleStorageError> {
     const rows = yield* sql<Record<string, unknown>>`
       SELECT tenant_id, owner_id, schedule_id, deadline_at_millis, record_json
-      FROM effect_agent_schedules
+      FROM ${relation("effect_agent_schedules")}
       WHERE tenant_id = ${key.owner.tenantId}
         AND owner_id = ${key.owner.ownerId}
         AND schedule_id = ${key.scheduleId}
-    `.pipe(Effect.mapError(() => unavailable(operation)));
+    `.pipe(
+      execute,
+      Effect.mapError(() => unavailable(operation)),
+    );
 
     return yield* decodeRows(Schema.Array(ScheduleRow), rows, operation);
   });
@@ -174,11 +179,14 @@ export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function*
 
           const rawCounts = yield* sql<Record<string, unknown>>`
             SELECT COUNT(*) AS schedule_count
-            FROM effect_agent_schedules
+            FROM ${relation("effect_agent_schedules")}
             WHERE tenant_id = ${canonical.owner.tenantId}
               AND owner_id = ${canonical.owner.ownerId}
               AND ${usesCapacity}
-          `.pipe(Effect.mapError(() => unavailable(operation)));
+          `.pipe(
+            execute,
+            Effect.mapError(() => unavailable(operation)),
+          );
 
           const counts = yield* decodeRows(Schema.Array(ScheduleCountRow), rawCounts, operation);
 
@@ -188,7 +196,7 @@ export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function*
           }
           yield* scheduleFailpoint.hit("schedule:insert:before");
           yield* sql`
-            INSERT INTO effect_agent_schedules (
+            INSERT INTO ${relation("effect_agent_schedules")} (
               tenant_id, owner_id, schedule_id, deadline_at_millis, record_json${sql.onDialectOrElse({ pg: () => sql`, uses_capacity`, orElse: () => sql`` })}
             ) VALUES (
               ${canonical.owner.tenantId},
@@ -197,7 +205,10 @@ export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function*
               ${scheduleDeadline(canonical)},
               ${recordJson}${sql.onDialectOrElse({ pg: () => sql`, ${scheduleUsesCapacity(canonical)}`, orElse: () => sql`` })}
             )
-          `.pipe(Effect.mapError(() => unavailable(operation)));
+          `.pipe(
+            execute,
+            Effect.mapError(() => unavailable(operation)),
+          );
 
           return { record: canonical, inserted: true } as const;
         }),
@@ -225,21 +236,27 @@ export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function*
       decodedRequest.after === undefined
         ? yield* sql<Record<string, unknown>>`
             SELECT tenant_id, owner_id, schedule_id, deadline_at_millis, record_json
-            FROM effect_agent_schedules
+            FROM ${relation("effect_agent_schedules")}
             WHERE tenant_id = ${decodedRequest.owner.tenantId}
               AND owner_id = ${decodedRequest.owner.ownerId}
             ORDER BY schedule_id
             LIMIT ${decodedRequest.limit + 1}
-          `.pipe(Effect.mapError(() => unavailable(operation)))
+          `.pipe(
+            execute,
+            Effect.mapError(() => unavailable(operation)),
+          )
         : yield* sql<Record<string, unknown>>`
             SELECT tenant_id, owner_id, schedule_id, deadline_at_millis, record_json
-            FROM effect_agent_schedules
+            FROM ${relation("effect_agent_schedules")}
             WHERE tenant_id = ${decodedRequest.owner.tenantId}
               AND owner_id = ${decodedRequest.owner.ownerId}
               AND schedule_id > ${decodedRequest.after}
             ORDER BY schedule_id
             LIMIT ${decodedRequest.limit + 1}
-          `.pipe(Effect.mapError(() => unavailable(operation)));
+          `.pipe(
+            execute,
+            Effect.mapError(() => unavailable(operation)),
+          );
 
     const decoded = yield* decodeRows(Schema.Array(ScheduleRow), rows, operation);
     const records = yield* Effect.forEach(decoded, decodeRecord);
@@ -267,10 +284,13 @@ export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function*
 
           if (!scheduleUsesCapacity(current) && scheduleUsesCapacity(next)) {
             const rawCounts = yield* sql<Record<string, unknown>>`
-              SELECT COUNT(*) AS schedule_count FROM effect_agent_schedules
+              SELECT COUNT(*) AS schedule_count FROM ${relation("effect_agent_schedules")}
               WHERE tenant_id = ${key.owner.tenantId} AND owner_id = ${key.owner.ownerId}
                 AND ${usesCapacity}
-            `.pipe(Effect.mapError(() => unavailable(operation)));
+            `.pipe(
+              execute,
+              Effect.mapError(() => unavailable(operation)),
+            );
 
             const counts = yield* decodeRows(Schema.Array(ScheduleCountRow), rawCounts, operation);
 
@@ -283,12 +303,15 @@ export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function*
 
           yield* scheduleFailpoint.hit(`schedule:${decodedChange._tag.toLowerCase()}:before`);
           yield* sql`
-            UPDATE effect_agent_schedules
+            UPDATE ${relation("effect_agent_schedules")}
             SET deadline_at_millis = ${scheduleDeadline(next)}, record_json = ${recordJson}${sql.onDialectOrElse({ pg: () => sql`, uses_capacity = ${scheduleUsesCapacity(next)}`, orElse: () => sql`` })}
             WHERE tenant_id = ${decodedKey.owner.tenantId}
               AND owner_id = ${decodedKey.owner.ownerId}
               AND schedule_id = ${decodedKey.scheduleId}
-          `.pipe(Effect.mapError(() => unavailable(operation)));
+          `.pipe(
+            execute,
+            Effect.mapError(() => unavailable(operation)),
+          );
 
           return { record: next, changed: true } as const;
         }),
@@ -331,20 +354,26 @@ export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function*
       decodedOwner === undefined
         ? yield* sql<Record<string, unknown>>`
             SELECT tenant_id, owner_id, schedule_id, deadline_at_millis
-            FROM effect_agent_schedules
+            FROM ${relation("effect_agent_schedules")}
             WHERE deadline_at_millis <= ${nowMillis} AND ${continuation}
             ORDER BY deadline_at_millis, tenant_id, owner_id, schedule_id
             LIMIT ${limit}
-          `.pipe(Effect.mapError(() => unavailable(operation)))
+          `.pipe(
+            execute,
+            Effect.mapError(() => unavailable(operation)),
+          )
         : yield* sql<Record<string, unknown>>`
             SELECT tenant_id, owner_id, schedule_id, deadline_at_millis
-            FROM effect_agent_schedules
+            FROM ${relation("effect_agent_schedules")}
             WHERE tenant_id = ${decodedOwner.tenantId}
               AND owner_id = ${decodedOwner.ownerId}
               AND deadline_at_millis <= ${nowMillis} AND ${continuation}
             ORDER BY deadline_at_millis, schedule_id
             LIMIT ${limit}
-          `.pipe(Effect.mapError(() => unavailable(operation)));
+          `.pipe(
+            execute,
+            Effect.mapError(() => unavailable(operation)),
+          );
 
     const decoded = yield* decodeRows(Schema.Array(ScheduleDueRow), rows, operation);
 
@@ -367,16 +396,22 @@ export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function*
       decodedOwner === undefined
         ? yield* sql<Record<string, unknown>>`
           SELECT MIN(deadline_at_millis) AS deadline_at_millis
-          FROM effect_agent_schedules
+          FROM ${relation("effect_agent_schedules")}
           WHERE deadline_at_millis IS NOT NULL
-        `.pipe(Effect.mapError(() => unavailable(operation)))
+        `.pipe(
+            execute,
+            Effect.mapError(() => unavailable(operation)),
+          )
         : yield* sql<Record<string, unknown>>`
           SELECT MIN(deadline_at_millis) AS deadline_at_millis
-          FROM effect_agent_schedules
+          FROM ${relation("effect_agent_schedules")}
           WHERE tenant_id = ${decodedOwner.tenantId}
             AND owner_id = ${decodedOwner.ownerId}
             AND deadline_at_millis IS NOT NULL
-        `.pipe(Effect.mapError(() => unavailable(operation)));
+        `.pipe(
+            execute,
+            Effect.mapError(() => unavailable(operation)),
+          );
 
     const decoded = yield* decodeRows(Schema.Array(ScheduleDeadlineRow), rows, operation);
 
