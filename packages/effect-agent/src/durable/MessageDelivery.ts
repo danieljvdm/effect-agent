@@ -5,6 +5,7 @@ import { AgentId, DelegationId, ThreadId } from "../core/Identifiers.ts";
 import { Receipt } from "../core/Receipt.ts";
 import { WorkerUpdate } from "../core/Worker.ts";
 import { digestJson } from "./Digest.ts";
+import type { LifecyclePublicationStorage } from "./LifecyclePublication.ts";
 import { admitPreparedInput, PreparedInputAdmission } from "./PreparedInputAdmission.ts";
 import { Digest } from "./Records.ts";
 import { ScheduleInstant, ScheduleRetry, ScheduleRetryReason } from "./Schedule.ts";
@@ -222,6 +223,7 @@ export type MessageDeliveryPage = typeof MessageDeliveryPage.Type;
 export class MessageDeliveryStore extends Context.Service<
   MessageDeliveryStore,
   {
+    readonly lifecyclePublications?: LifecyclePublicationStorage;
     readonly limits: MessageDeliveryStoreLimits;
     readonly maxStoredValueBytes: number;
     readonly insert: (

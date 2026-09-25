@@ -33,7 +33,7 @@ import {
   Layer,
   Schema,
   Semaphore,
-  type Option,
+  Option,
 } from "effect";
 import {
   compileRegistrations,
@@ -47,6 +47,11 @@ import {
   type DurableRuntimeFailpointHandler,
 } from "effect-agent/durable-failpoint";
 import { ThreadId, type SubmissionId } from "effect-agent/identifiers";
+import type { LifecyclePublicationHandler } from "effect-agent/lifecycle-publication";
+import {
+  drainLifecyclePublications,
+  lifecyclePublicationLayer,
+} from "effect-agent/lifecycle-publication";
 import {
   type MessageDeliveryStore,
   MessageDeliveryDriver,
@@ -81,6 +86,7 @@ import { type WakeScheduler } from "effect-agent/wake-scheduler";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import {
+  DurableAlarmError,
   ThreadMaintenance,
   ThreadMutationGate,
   ThreadPublication,
@@ -416,6 +422,11 @@ export const layerHostConfig = (
   );
 
 export interface ThreadPublicationOptions<E = never, R = never, P = never> {
+  /** Typed native facts, retained atomically and retried by the existing publication gate.
+   * Return only after the idempotent application command and its receipt commit. No journal
+   * scan is needed. The handler receives private native evidence, not pre-authorized UI data.
+   */
+  readonly lifecyclePublication?: Layer.Layer<LifecyclePublicationHandler, E, R>;
   /**
    * Optional host outbox consumer, built once per incarnation with RAW LOCAL ThreadStore and
    * SubmissionLedger services. Yield DurableObjectContext and ThreadObjectIdentity for native
@@ -599,6 +610,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
       };
 
       const infrastructure = Layer.mergeAll(
+        options.lifecyclePublication === undefined ? Layer.empty : lifecyclePublicationLayer,
         storageConfigLayer(storageOptions),
         Layer.effect(SqlClient)(SqlClient),
       );
@@ -627,16 +639,70 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
         Layer.provide(wakes),
       );
 
-      const publication = (options.publication ?? ThreadPublication.layer).pipe(
-        Layer.provide(Layer.mergeAll(rawLocalPorts, Layer.effect(SqlClient)(SqlClient))),
-      );
+      const legacyPublication = options.publication ?? ThreadPublication.layer;
+
+      const publication = (
+        options.lifecyclePublication === undefined
+          ? legacyPublication
+          : Layer.effect(ThreadPublication)(
+              Effect.gen(function* () {
+                const previous = yield* ThreadPublication;
+                const store = yield* ThreadStore;
+                const storage = store.lifecyclePublications;
+
+                const context = yield* Effect.context<
+                  LifecyclePublicationHandler | ThreadStore | SubmissionLedger
+                >();
+
+                const failure = (cause: unknown) =>
+                  DurableAlarmError.make({
+                    operation: "publish native lifecycle",
+                    message: "Native lifecycle publication remains pending",
+                    cause,
+                  });
+
+                const deadline =
+                  storage === undefined
+                    ? Effect.fail(failure("Native lifecycle storage unavailable"))
+                    : storage.pendingDeadline.pipe(Effect.mapError(failure));
+
+                return ThreadPublication.of({
+                  invalidate: previous.invalidate,
+                  prepareGeneration: previous.prepareGeneration,
+                  drain: previous.drain.pipe(
+                    Effect.andThen(
+                      storage === undefined
+                        ? Effect.fail(failure("Native lifecycle storage unavailable"))
+                        : drainLifecyclePublications(storage).pipe(
+                            Effect.provide(context),
+                            Effect.asVoid,
+                            Effect.mapError(failure),
+                          ),
+                    ),
+                  ),
+                  pendingDeadline: Effect.gen(function* () {
+                    const left = yield* previous.pendingDeadline;
+                    const right = yield* deadline;
+
+                    return Option.isNone(left)
+                      ? right
+                      : Option.isNone(right)
+                        ? left
+                        : Option.some(Math.min(left.value, right.value));
+                  }),
+                });
+              }),
+            ).pipe(Layer.provide(legacyPublication), Layer.provide(options.lifecyclePublication))
+      ).pipe(Layer.provide(Layer.mergeAll(rawLocalPorts, Layer.effect(SqlClient)(SqlClient))));
 
       const projection = (options.projection ?? ThreadProjectionMaintenance.layer).pipe(
         Layer.provide(Layer.mergeAll(rawLocalPorts, Layer.effect(SqlClient)(SqlClient))),
       );
 
       const localPorts =
-        options.publication === undefined && options.projection === undefined
+        options.publication === undefined &&
+        options.projection === undefined &&
+        options.lifecyclePublication === undefined
           ? rawLocalPorts
           : Layer.effectContext(
               Effect.gen(function* () {

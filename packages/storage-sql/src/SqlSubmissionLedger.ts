@@ -1,5 +1,6 @@
 import { Clock, Crypto, DateTime, Effect, Option, Schema, Stream } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import type { LifecyclePublicationFact } from "effect-agent/lifecycle-publication";
 import { InputMessage } from "effect-agent/messaging";
 import {
   ApprovalDecision,
@@ -348,6 +349,21 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
   const sql = yield* SqlClientService.SqlClient;
   const { table: relation, execute } = yield* makeSqlQuery(options.namespace);
   const crypto = yield* Crypto.Crypto;
+  const lifecycle = journal.lifecycle;
+
+  const retainLifecycle = (submission: SubmissionRow, fact: LifecyclePublicationFact) =>
+    lifecycle === undefined
+      ? Effect.void
+      : Effect.gen(function* () {
+          const ownerThreadId = yield* Schema.decodeUnknownEffect(
+            SubmissionSnapshot.fields.threadId,
+          )(submission.thread_id).pipe(Effect.mapError(internalFailure("lifecycle owner")));
+
+          yield* lifecycle
+            .retain({ ownerThreadId, createdAt: yield* DateTime.now, fact })
+            .pipe(Effect.mapError(internalFailure("retain lifecycle publication")));
+        });
+
   const admissionFence = yield* SubmissionAdmissionFence;
 
   const hitFailpoint = (
@@ -1294,6 +1310,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           SET state = 'ready', ready_at = ${now.iso}
           WHERE submission_id = ${validated.submissionId}
         `.pipe(execute, Effect.mapError(sqlFailure(operation)));
+        yield* retainLifecycle(submission, {
+          _tag: "SubmissionReady",
+          submissionId: validated.submissionId,
+        });
       }),
     );
     yield* hitFailpoint("ledger:mark-ready:after", operation);
@@ -2149,10 +2169,12 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
       Effect.gen(function* () {
         const now = yield* currentInstant;
 
-        yield* sql`INSERT INTO ${relation("effect_agent_worker_stops")} (thread_id) VALUES (${validated.threadId}) ON CONFLICT DO NOTHING`.pipe(
-          execute,
-          Effect.mapError(sqlFailure(operation)),
-        );
+        const sealed =
+          yield* sql`INSERT INTO ${relation("effect_agent_worker_stops")} (thread_id) VALUES (${validated.threadId}) ON CONFLICT DO NOTHING RETURNING thread_id`.pipe(
+            execute,
+            Effect.mapError(sqlFailure(operation)),
+          );
+
         yield* sql`INSERT INTO ${relation("effect_agent_abort_intents")} (submission_id, author, reason, requested_at)
         SELECT submission_id, ${validated.author}, 'Worker owner stopped the worker', ${now.iso}
         FROM ${relation("effect_agent_submissions")} WHERE thread_id = ${validated.threadId} AND state <> 'settled' ON CONFLICT DO NOTHING`.pipe(
@@ -2167,6 +2189,31 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
             execute,
             Effect.mapError(sqlFailure(operation)),
           );
+
+        if (sealed.length > 0 && lifecycle !== undefined) {
+          const active =
+            yield* sql`SELECT submission_id FROM ${relation("effect_agent_submissions")} WHERE thread_id = ${validated.threadId} AND state <> 'settled' ORDER BY queue_sequence`.pipe(
+              execute,
+              Effect.mapError(sqlFailure(operation)),
+            );
+
+          const activeSubmissionIds = yield* Effect.forEach(active, (row) =>
+            decodeSubmissionId(row.submission_id).pipe(Effect.mapError(internalFailure(operation))),
+          );
+
+          yield* lifecycle
+            .retain({
+              id: JSON.stringify([validated.threadId, "inbox-sealed"]),
+              ownerThreadId: validated.threadId,
+              createdAt: yield* DateTime.now,
+              fact: {
+                _tag: "WorkerInboxSealed",
+                threadId: validated.threadId,
+                activeSubmissionIds,
+              },
+            })
+            .pipe(Effect.mapError(internalFailure(operation)));
+        }
 
         return rows.length;
       }),
@@ -2258,13 +2305,17 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           validated.submissionId,
         );
 
-        return yield* decodeAbortIntent({
+        const intent = yield* decodeAbortIntent({
           submissionId: validated.submissionId,
           author: validated.author,
           reason: validated.reason,
           requestedAt: now.iso,
           ...(canonicalRecordId === undefined ? {} : { canonicalRecordId }),
         }).pipe(Effect.mapError(internalFailure(operation)));
+
+        yield* retainLifecycle(submission, { _tag: "AbortIntentRecorded", intent });
+
+        return intent;
       }),
     );
 
@@ -2544,6 +2595,12 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           WHERE submission_id = ${validated.submissionId}
         `.pipe(execute, Effect.mapError(sqlFailure(operation)));
 
+          yield* retainLifecycle(submission, {
+            _tag: "SubmissionSuspended",
+            submissionId: validated.submissionId,
+            reason: validated.reason,
+          });
+
           return SUSPENDED;
         }),
       );
@@ -2592,6 +2649,12 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
           suspended_at = NULL
         WHERE submission_id = ${submission.submission_id}
       `.pipe(execute, Effect.mapError(sqlFailure(operation)));
+    yield* retainLifecycle(submission, {
+      _tag: "SubmissionResumed",
+      submissionId: yield* decodeSubmissionId(submission.submission_id).pipe(
+        Effect.mapError(internalFailure(operation)),
+      ),
+    });
   });
 
   const recordApprovalDecision: SubmissionLedger["Service"]["recordApprovalDecision"] = Effect.fn(
@@ -2740,6 +2803,11 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
             unknown_tool_call_ids_json = ${idsJson}
           WHERE submission_id = ${validated.submissionId}
         `.pipe(execute, Effect.mapError(sqlFailure(operation)));
+        if (submission.state !== "unknown")
+          yield* retainLifecycle(submission, {
+            _tag: "SubmissionUnknown",
+            submissionId: validated.submissionId,
+          });
       }),
     );
     yield* hitFailpoint("ledger:mark-unknown:after", operation);
@@ -2854,6 +2922,10 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
                 unknown_tool_call_ids_json = NULL
               WHERE submission_id = ${validated.submissionId}
             `.pipe(execute, Effect.mapError(sqlFailure(operation)));
+            yield* retainLifecycle(submission, {
+              _tag: "SubmissionResumed",
+              submissionId: validated.submissionId,
+            });
           }
         }
 
@@ -2946,6 +3018,11 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
             suspended_at = NULL
           WHERE submission_id = ${validated.parentSubmissionId}
         `.pipe(execute, Effect.mapError(sqlFailure(operation)));
+
+        yield* retainLifecycle(parent, {
+          _tag: "SubmissionResumed",
+          submissionId: validated.parentSubmissionId,
+        });
 
         return WOKEN;
       }),

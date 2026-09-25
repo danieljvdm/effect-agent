@@ -25,7 +25,7 @@ type LedgerConstruction = ReturnType<
   typeof makeSqlSubmissionLedger<StorageFailure, Corruption, Contention, InjectedFailure>
 >;
 
-expectTypeOf<Effect.Error<JournalConstruction>>().toEqualTypeOf<never>();
+expectTypeOf<Effect.Error<JournalConstruction>>().toEqualTypeOf<StorageFailure>();
 expectTypeOf<Effect.Services<JournalConstruction>>().toEqualTypeOf<SqlClient>();
 expectTypeOf<Effect.Error<ReturnType<Journal["append"]>>>().toEqualTypeOf<
   StorageFailure | Corruption | Contention | InjectedFailure | AppendConflict | FenceRejected

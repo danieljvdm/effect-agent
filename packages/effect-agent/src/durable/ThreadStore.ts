@@ -1,6 +1,7 @@
 import { Context, Effect, Option, Schema, Stream } from "effect";
 
 import { RunId, SubmissionId, ThreadId } from "../core/Identifiers.ts";
+import type { LifecyclePublicationStorage } from "./LifecyclePublication.ts";
 import type { ToolCallPrepared, WorkerInputRequested } from "./Records.ts";
 import {
   BatchId,
@@ -598,6 +599,7 @@ export interface ThreadRecoveryCheckpoints {
 export class ThreadStore extends Context.Service<
   ThreadStore,
   {
+    readonly lifecyclePublications?: LifecyclePublicationStorage;
     readonly materialize: (
       request: ThreadMaterialization,
     ) => Effect.Effect<void, ThreadStoreError | FenceRejected>;

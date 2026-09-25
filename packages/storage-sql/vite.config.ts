@@ -14,6 +14,7 @@ export default defineConfig({
       "src/SqlStorageSchema.ts",
       "src/SqlThreadNativeReads.ts",
       "src/SqlMessageDeliveryStore.ts",
+      "src/SqlLifecyclePublication.ts",
       "src/SqlSubscriptionStore.ts",
       "src/SqlStorageV2Upgrade.ts",
     ],

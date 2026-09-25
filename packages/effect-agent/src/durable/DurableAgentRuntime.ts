@@ -1265,6 +1265,21 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   const ledger = yield* SubmissionLedger;
   const submissionScheduling = yield* SubmissionScheduling;
   const store = yield* ThreadStore;
+
+  const publicationPending = (threadId: ThreadId) =>
+    store.lifecyclePublications === undefined
+      ? Effect.succeed(false)
+      : store.lifecyclePublications.pendingDeadlineFor(threadId).pipe(
+          Effect.map(Option.isSome),
+          Effect.mapError((cause) =>
+            ThreadStoreError.make({
+              operation: "read lifecycle publication gate",
+              message: "Native lifecycle publication state is unavailable",
+              cause,
+            }),
+          ),
+        );
+
   const wake = yield* WakeScheduler;
   const failpoint = yield* DurableRuntimeFailpoint;
   const config = yield* DurableRuntimeConfig;
@@ -4609,6 +4624,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
   ) =>
     Effect.gen(function* () {
       const submissionId = submission.submissionId;
+
+      if (yield* publicationPending(submission.threadId)) return { _tag: "yielded" as const };
       const runId = runIdForSubmission(submissionId);
       const boundaries: Array<JournalBoundary> = [];
 
@@ -6234,6 +6251,16 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
           return yield* renderInputPrompt(inputPrompt, decodedInput, encodedInput);
         });
 
+      const yieldForPublication = Effect.gen(function* () {
+        if (!(yield* recordHalt(publicationPending(submission.threadId)))) return;
+        // A completed plain-text response may not yet have reached beforeTurn. Retain it
+        // before closing the Attempt, exactly as the existing voluntary yield checkpoint does.
+        yield* recordHalt(commitPendingTurn);
+        yield* Deferred.succeed(yieldSignal, undefined);
+
+        return yield* Effect.never;
+      });
+
       const input: RunInputHook<
         CoordinatorHalt | Agent.Failure<typeof agent>,
         Agent.DefinitionRequirements<(typeof agent)["definition"]>
@@ -6251,6 +6278,8 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
               knownIds.has(modelResponseRecordId(runId, state.pendingTurn.turn))
             )
               yield* recordHalt(commitPendingTurn);
+
+            yield* yieldForPublication;
 
             const joinedInputs = yield* recordHalt(
               Effect.gen(function* () {
@@ -6389,6 +6418,10 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
                 return joinedInputs;
               }),
             );
+
+            // Appending a canonical joined input may retain a new publication. Its native
+            // receipt remains successful; recovery reattaches it after acknowledgement.
+            yield* yieldForPublication;
 
             return yield* Effect.forEach(joinedInputs, (joinedInput) =>
               renderJoinedInput(joinedInput).pipe(
@@ -7072,6 +7105,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
             // Preparation may resolve the next Model from canonical Tool results or invoke
             // a compaction Model. Publish the completed Turn before either can observe it.
             yield* recordHalt(commitPendingTurn);
+            yield* yieldForPublication;
 
             if (
               yieldAfter !== undefined &&
@@ -7655,7 +7689,9 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
       const execution = Effect.raceFirst(consume, Effect.raceFirst(abortWatcher, renewal));
 
       const raced = (
-        yieldAfter === undefined && submissionScheduling.yieldTo === undefined
+        yieldAfter === undefined &&
+        submissionScheduling.yieldTo === undefined &&
+        store.lifecyclePublications === undefined
           ? execution
           : Effect.raceFirst(
               execution,
@@ -8533,6 +8569,7 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
 
       const attempt = Effect.scoped(
         Effect.gen(function* () {
+          if (yield* publicationPending(threadId)) return Option.none();
           const claimed = yield* acquireClaim(threadId, handoff);
 
           if (Option.isNone(claimed)) return Option.none();

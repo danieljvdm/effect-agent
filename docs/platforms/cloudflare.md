@@ -408,6 +408,45 @@ gate instance when rebuilding maintenance or runtime services. Migrate consumer 
 an actual published release containing this API, keeping the framework packages on one matching
 release; do not pin an unpublished branch or patch installed dependencies.
 
+### Publish native lifecycle facts
+
+Use `lifecyclePublication` when native worker admissions, progress, controls, waiting, and
+settlement must commit an application record before dependent execution continues:
+
+```ts
+import { LifecyclePublicationHandler } from "effect-agent/lifecycle-publication";
+
+const RuntimeLive = ThreadObject.layer(registrations, {
+  lifecyclePublication: Layer.effect(LifecyclePublicationHandler)(makeLifecycleHandler),
+});
+```
+
+The handler's `publish(publication)` returns an Effect only after an idempotent application
+command commits its authorization decision, record, receipt, and delivery intent. The native
+adapter retains each typed fact in the source transaction. Existing maintenance retries that
+exact identity after interruption or a lost acknowledgement; no journal cursor is needed.
+Publication failure never repeats a model or Tool operation. A destination deletion or revoked
+authority is a committed domain decision that can be acknowledged.
+
+Pending owner facts also gate active input joins and internal input handoffs at native safe
+checkpoints. A yielded Attempt retains its completed Turn and joined input receipts before
+recovery waits for acknowledgement. `AbortIntentRecorded` reports the ledger's exact accepted
+abort intent even when execution has not yet appended its canonical abort record.
+
+`source` contains immutable private admission evidence, resolved by exact native identities.
+Delivery facts carry their retained envelope and accepted receipt. Select declared public fields;
+input, private results, and report payloads are not automatically safe to display. `ordinal` orders
+facts within `ownerThreadId`; `source.queueSequence` orders accepted inputs within the worker's
+Thread. These are separate orders. The handler must deduplicate `id` and reject superseded inputs.
+
+Pending obligations retain their private payload until acknowledgement, then keep only identity
+and fingerprint. Native source admissions and Run-input records must remain retained while debt
+exists. Do not delete an Object before its publication debt is acknowledged. Enabling the option
+starts with new commits; it does not backfill old history. Keep the handler enabled until all debt
+is drained. In-memory/custom adapters do not retain these obligations. SQL adapter assemblies
+outside Cloudflare can provide `lifecyclePublicationLayer` and call
+`drainLifecyclePublications` from their existing durable maintenance coordinator.
+
 ### Publish durable host activity
 
 Use the optional publication Layer when canonical records or durable approval, abort, and

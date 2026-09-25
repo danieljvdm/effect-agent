@@ -851,6 +851,9 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
   const selectedReads = yield* makeSelectedReads(decodeEnvelope, options.namespace);
 
   return ThreadStore.of({
+    ...(journal.lifecycle === undefined
+      ? {}
+      : { lifecyclePublications: journal.lifecycle.storage }),
     countPeerMessages: selectedReads.countPeerMessages,
     readIdentity: selectedReads.readIdentity,
     append,
