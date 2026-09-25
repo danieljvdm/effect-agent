@@ -24,7 +24,9 @@
     "@effect-agent/example-durable-orchestration": "0.0.0",
     "@effect-agent/example-context-continuity-eval": "0.0.0",
     "@effect-agent/example-runtime-benchmark": "0.0.0",
-    "@effect-agent/ai-decision": "0.1.0-beta.102"
+    "@effect-agent/ai-decision": "0.1.0-beta.102",
+    "@effect-agent/storage-postgres": "0.1.0-beta.140",
+    "@effect-agent/storage-sql": "0.1.0-beta.140"
   },
   "changesets": [
     "activity-progress-integrity",
@@ -170,6 +172,7 @@
     "native-empty-context-tools",
     "native-outstanding-reads",
     "native-port-tracing",
+    "native-postgres-composition",
     "native-scheduling-during-delivery",
     "native-subscription-alarm-services",
     "native-tool-observability",
@@ -188,6 +191,7 @@
     "persistent-conversations",
     "pin-internal-dependency-versions",
     "plain-text-durable-pruning",
+    "postgres-storage-adapter",
     "preserve-first-pass-findings",
     "preserve-required-delivery",
     "preserve-resumed-model-response",
@@ -278,6 +282,7 @@
     "shared-effect-peer",
     "shared-node-recovery-scans",
     "shared-publication-gate",
+    "shared-sql-storage",
     "shared-subagent-defaults",
     "shorter-durable-history-reads",
     "silent-web-capture-errors",
