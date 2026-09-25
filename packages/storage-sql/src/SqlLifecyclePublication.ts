@@ -131,7 +131,7 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
   const storage: LifecyclePublicationStorage = {
     pending: (nowMillis, limit) =>
       Effect.gen(function* () {
-        yield* Schema.decodeUnknownEffect(
+        yield* Schema.decodeEffect(
           Schema.Struct({
             nowMillis: Schema.Natural,
             limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
@@ -171,9 +171,7 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
       }),
     defer: (publication, untilMillis) =>
       Effect.gen(function* () {
-        yield* Schema.decodeUnknownEffect(Schema.Natural)(untilMillis).pipe(
-          Effect.mapError(failure),
-        );
+        yield* Schema.decodeEffect(Schema.Natural)(untilMillis).pipe(Effect.mapError(failure));
         yield* verify(publication);
         yield* sql`UPDATE ${relation} SET due_at_millis = ${untilMillis} WHERE id = ${publication.id} AND payload_json IS NOT NULL`.pipe(
           execute,

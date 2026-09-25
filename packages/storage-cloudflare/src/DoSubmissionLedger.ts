@@ -370,9 +370,9 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     lifecycle === undefined
       ? Effect.void
       : Effect.gen(function* () {
-          const ownerThreadId = yield* Schema.decodeUnknownEffect(
-            SubmissionSnapshot.fields.threadId,
-          )(submission.thread_id).pipe(Effect.mapError(internalFailure("lifecycle owner")));
+          const ownerThreadId = yield* Schema.decodeEffect(SubmissionSnapshot.fields.threadId)(
+            submission.thread_id,
+          ).pipe(Effect.mapError(internalFailure("lifecycle owner")));
 
           yield* lifecycle
             .retain({ ownerThreadId, createdAt: yield* DateTime.now, fact })
@@ -388,9 +388,9 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       : Effect.gen(function* () {
           const operation = "retain worker inbox seal";
 
-          const ownerThreadId = yield* Schema.decodeUnknownEffect(
-            SubmissionSnapshot.fields.threadId,
-          )(threadId).pipe(Effect.mapError(internalFailure(operation)));
+          const ownerThreadId = yield* Schema.decodeEffect(SubmissionSnapshot.fields.threadId)(
+            threadId,
+          ).pipe(Effect.mapError(internalFailure(operation)));
 
           const active =
             yield* sql`SELECT submission_id FROM effect_agent_submissions WHERE thread_id = ${threadId} AND state <> 'settled' ORDER BY queue_sequence`.pipe(
@@ -2155,6 +2155,8 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
                 reservationRecord,
               );
 
+        let sealedTerminal: typeof terminal;
+
         if (terminal !== undefined) {
           // Admission and finalization serialize here. An accepted correction that this Run
           // has not applied vetoes its completion, including admission after RunCompleted.
@@ -2182,7 +2184,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               AND submission_id <> ${submission.submission_id}
               AND (joined_host_submission_id IS NULL OR joined_host_submission_id <> ${submission.submission_id}
                 OR input_applied_record_id IS NULL)`.pipe(Effect.mapError(sqlFailure(operation)));
-            if (sealed.length > 0) yield* retainWorkerSeal(submission.thread_id, terminal);
+            if (sealed.length > 0) sealedTerminal = terminal;
           }
         }
 
@@ -2200,6 +2202,9 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           DELETE FROM effect_agent_submission_ownership
           WHERE submission_id = ${validated.submissionId}
         `.pipe(Effect.mapError(sqlFailure(operation)));
+
+        if (sealedTerminal !== undefined)
+          yield* retainWorkerSeal(submission.thread_id, sealedTerminal);
 
         return yield* decodeSettlement({
           submissionId: validated.submissionId,

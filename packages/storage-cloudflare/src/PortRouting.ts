@@ -1,4 +1,5 @@
 import { Context, Effect, Layer, Option, Predicate, Schema, Stream } from "effect";
+import { LifecyclePublicationError } from "effect-agent/lifecycle-publication";
 import { MessageDeliveryStore, MessageDeliveryError } from "effect-agent/message-delivery";
 import {
   AdmissionIndeterminate,
@@ -800,6 +801,7 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
   const local = yield* ThreadStore;
   const checkpoints = local.checkpoints;
   const recoveryCheckpoints = local.recoveryCheckpoints;
+  const lifecyclePublications = local.lifecyclePublications;
   const transport = yield* ThreadPortTransport;
   const transportCall: TransportCall = makeTransportCall(transport);
 
@@ -971,6 +973,26 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
         ? local.observe(request)
         : Stream.unwrap(Effect.fail(crossThreadStoreError("thread observe", request.threadId))),
 
+    // Publication obligations stay with their native owner; execution must retain its gate.
+    ...(lifecyclePublications === undefined
+      ? {}
+      : {
+          lifecyclePublications: {
+            ...lifecyclePublications,
+            pendingDeadlineFor: (ownerThreadId) =>
+              options.ownsThread(ownerThreadId)
+                ? lifecyclePublications.pendingDeadlineFor(ownerThreadId)
+                : Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" })),
+            acknowledge: (publication) =>
+              options.ownsThread(publication.ownerThreadId)
+                ? lifecyclePublications.acknowledge(publication)
+                : Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" })),
+            defer: (publication, untilMillis) =>
+              options.ownsThread(publication.ownerThreadId)
+                ? lifecyclePublications.defer(publication, untilMillis)
+                : Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" })),
+          },
+        }),
     ...(recoveryCheckpoints === undefined
       ? {}
       : {
