@@ -1,4 +1,4 @@
-import { Option, Schema } from "effect";
+import { Effect, Option, Schema, Stream } from "effect";
 
 export const PROOF_SOURCE_URL = "https://example.com/";
 export const PROOF_FACT = "Example Domain";
@@ -49,13 +49,41 @@ export const describeBrowserRunProofFailure = (status: number, body: unknown): s
 
   const detail = failure.value;
 
-  const cleanup =
-    detail.cleanupReason === undefined
-      ? ""
-      : `; cleanup=${detail.cleanupReason}${detail.cleanupStatus === undefined ? "" : ` (${detail.cleanupStatus})`}`;
+  const cleanup = detail.cleanupReason === undefined ? "" : `; cleanup=${detail.cleanupReason}`;
 
-  return `${prefix}; stage=${detail.stage}${cleanup}; invocation was not retried`;
+  const cleanupStatus =
+    detail.cleanupStatus === undefined ? "" : `; cleanupStatus=${detail.cleanupStatus}`;
+
+  return `${prefix}; stage=${detail.stage}${cleanup}${cleanupStatus}; invocation was not retried`;
 };
+
+export const describeBrowserRunProofFailureFromStream = <E, R>(
+  status: number,
+  stream: Stream.Stream<Uint8Array, E, R>,
+): Effect.Effect<string, never, R> =>
+  Stream.runFoldEffect(
+    stream,
+    () => new Uint8Array(),
+    (body, chunk) => {
+      if (body.byteLength + chunk.byteLength > 4_096)
+        return Effect.fail(new Error("Proof failure body exceeds 4096 bytes"));
+      const combined = new Uint8Array(body.byteLength + chunk.byteLength);
+
+      combined.set(body);
+      combined.set(chunk, body.byteLength);
+
+      return Effect.succeed(combined);
+    },
+  ).pipe(
+    Effect.timeout("2 seconds"),
+    Effect.flatMap((bytes) =>
+      Effect.try(
+        () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown,
+      ),
+    ),
+    Effect.map((body) => describeBrowserRunProofFailure(status, body)),
+    Effect.orElseSucceed(() => describeBrowserRunProofFailure(status, null)),
+  );
 
 const ScreenshotProof = Schema.Struct({
   mediaType: Schema.Literal("image/png"),

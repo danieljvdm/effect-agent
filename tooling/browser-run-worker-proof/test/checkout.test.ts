@@ -15,7 +15,10 @@ import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { buyerTools, CheckoutOwner, tools } from "../src/checkout-agent.ts";
 import { browserSessionFailure, RunEvidence, savedAddress } from "../src/checkout-contract.ts";
 import { assertPurchase, makeShop, quote, transition } from "../src/checkout-store.ts";
-import { describeBrowserRunProofFailure } from "../src/contract.ts";
+import {
+  describeBrowserRunProofFailure,
+  describeBrowserRunProofFailureFromStream,
+} from "../src/contract.ts";
 
 it("retains safe failure stages and browser session reasons in checkout evidence", () => {
   assert.strictEqual(
@@ -25,7 +28,15 @@ it("retains safe failure stages and browser session reasons in checkout evidence
       cleanupReason: "timeout",
       cleanupStatus: 504,
     }),
-    "HTTP 502; stage=handoff; cleanup=timeout (504); invocation was not retried",
+    "HTTP 502; stage=handoff; cleanup=timeout; cleanupStatus=504; invocation was not retried",
+  );
+  assert.strictEqual(
+    describeBrowserRunProofFailure(502, {
+      error: "The Browser Run binding proof failed",
+      stage: "handoff",
+      cleanupStatus: 504,
+    }),
+    "HTTP 502; stage=handoff; cleanupStatus=504; invocation was not retried",
   );
   assert.strictEqual(
     describeBrowserRunProofFailure(502, { error: "private provider response" }),
@@ -44,6 +55,24 @@ it("retains safe failure stages and browser session reasons in checkout evidence
     "BrowserSessionError reason=busy dispatch=not-dispatched cleanup=unconfirmed",
   );
 });
+
+it.effect("bounds the binding failure response body", () =>
+  Effect.gen(function* () {
+    const response = (body: string) =>
+      describeBrowserRunProofFailureFromStream(502, Stream.make(new TextEncoder().encode(body)));
+
+    const fallback = "HTTP 502; invocation was not retried";
+
+    assert.strictEqual(
+      yield* response(
+        JSON.stringify({ error: "The Browser Run binding proof failed", stage: "handoff" }),
+      ),
+      "HTTP 502; stage=handoff; invocation was not retried",
+    );
+    assert.strictEqual(yield* response("x".repeat(4_097)), fallback);
+    assert.strictEqual(yield* response("{"), fallback);
+  }),
+);
 
 it.effect("preserves credential acknowledgement through read failure without retrying input", () =>
   Effect.gen(function* () {
