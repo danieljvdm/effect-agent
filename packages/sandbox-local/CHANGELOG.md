@@ -1,5 +1,12 @@
 # @effect-agent/sandbox-local
 
+## 0.1.0-beta.143
+
+### Patch Changes
+
+- Updated dependencies [[`c68edc7`](https://github.com/danieljvdm/effect-agent/commit/c68edc7aa1cdedb92ad6f31b63ba048bb718b2c6)]:
+  - effect-agent@0.1.0-beta.143
+
 ## 0.1.0-beta.142
 
 ### Patch Changes
