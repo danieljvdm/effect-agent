@@ -1,7 +1,7 @@
 import { DurableAlarmService, ThreadMutationGate } from "@effect-agent/platform-cloudflare/alarm";
 import { CloudflareThreadClient } from "@effect-agent/platform-cloudflare/cloudflare-thread-client";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Schema } from "effect";
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Scheduler, Schema } from "effect";
 import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
 import {
   AbortCommand,
@@ -129,13 +129,21 @@ describe("DC alarm semantics", () => {
                 .pipe(Effect.forkChild);
 
               yield* Deferred.await(entered);
-              const update = yield* operation.pipe(Effect.forkChild);
 
-              for (let index = 0; index < 20; index++) yield* Effect.yieldNow;
+              // Reach the reserved SQL connection before rolling back its owner.
+              // Scheduler turns are not a barrier and native timers can be held
+              // behind the transaction's Durable Object input gate.
+              const update = yield* operation.pipe(
+                Effect.provideService(Scheduler.PreventSchedulerYield, true),
+                Effect.forkChild({ startImmediately: true }),
+              );
+
               yield* Fiber.interrupt(transaction);
 
               return yield* Fiber.join(update);
-            });
+            }).pipe(
+              Effect.provideService(Scheduler.Scheduler, new Scheduler.MixedScheduler("sync")),
+            );
 
           const later = Date.now() + 172_800_000;
           const earlier = later - 86_400_000;
