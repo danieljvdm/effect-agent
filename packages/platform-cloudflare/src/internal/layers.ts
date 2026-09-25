@@ -30,6 +30,7 @@ import {
   Context,
   Duration,
   Effect,
+  ErrorReporter,
   Layer,
   Schema,
   Semaphore,
@@ -654,12 +655,17 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                   LifecyclePublicationHandler | ThreadStore | SubmissionLedger
                 >();
 
-                const failure = (cause: unknown) =>
-                  DurableAlarmError.make({
+                const failure = (cause: unknown) => {
+                  const error = DurableAlarmError.make({
                     operation: "publish native lifecycle",
                     message: "Native lifecycle publication remains pending",
                     cause,
                   });
+
+                  return ErrorReporter.isIgnored(cause)
+                    ? Object.assign(error, { [ErrorReporter.ignore]: true })
+                    : error;
+                };
 
                 const deadline =
                   storage === undefined
