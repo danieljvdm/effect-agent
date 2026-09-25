@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
 import { ThreadId } from "effect-agent/identifiers";
+import { LifecyclePublicationFact } from "effect-agent/lifecycle-publication";
 import {
   BatchId,
   CanonicalRecord,
@@ -19,6 +20,7 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
+import { makeSqlLifecyclePublication } from "./SqlLifecyclePublication.ts";
 import {
   makeRowDecoder,
   makeSqlQuery,
@@ -145,6 +147,17 @@ export const makeSqlJournal = Effect.fn("SqlJournal.make")(function* <
 >(options: SqlJournalOptions<S, C, W, F>) {
   const sql = yield* SqlClient.SqlClient;
   const { table: relation, execute } = yield* makeSqlQuery(options.namespace);
+
+  const lifecycle = yield* makeSqlLifecyclePublication(options.namespace).pipe(
+    Effect.mapError((cause) =>
+      options.errors.storage({
+        operation: "initialize lifecycle publication",
+        message: "Native publication storage unavailable",
+        cause,
+      }),
+    ),
+  );
+
   const failpoint = options.hitFailpoint;
   const { withReadTransaction, withWriteTransaction } = options.transactions;
   const { decodeRows, decodeSingleRow } = makeRowDecoder(options.errors.corruption);
@@ -483,6 +496,27 @@ export const makeSqlJournal = Effect.fn("SqlJournal.make")(function* <
                 Effect.provideService(SqlClient.SqlClient, sql),
                 Effect.mapError(storageError("index canonical record")),
               );
+              if (
+                lifecycle !== undefined &&
+                Schema.is(Schema.toType(LifecyclePublicationFact))(canonical.payload)
+              )
+                yield* lifecycle
+                  .retain({
+                    id: JSON.stringify([request.threadId, "record", record.recordId]),
+                    ownerThreadId: request.threadId,
+                    canonicalSequence: Schema.decodeSync(CanonicalSequence)(firstSequence + index),
+                    createdAt: canonical.createdAt,
+                    fact: canonical.payload,
+                  })
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      options.errors.storage({
+                        operation: "retain lifecycle publication",
+                        message: "Native publication storage unavailable",
+                        cause,
+                      }),
+                    ),
+                  );
               yield* failpoint("append:after-record-insert");
             }),
           { discard: true },
@@ -919,6 +953,7 @@ export const makeSqlJournal = Effect.fn("SqlJournal.make")(function* <
   });
 
   return {
+    lifecycle,
     append,
     exportThread,
     getThread,

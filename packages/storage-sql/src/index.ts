@@ -10,3 +10,4 @@ export * as SqlThreadNativeReads from "./SqlThreadNativeReads.ts";
 export * as SqlMessageDeliveryStore from "./SqlMessageDeliveryStore.ts";
 export * as SqlSubscriptionStore from "./SqlSubscriptionStore.ts";
 export * as SqlStorageV2Upgrade from "./SqlStorageV2Upgrade.ts";
+export * as SqlLifecyclePublication from "./SqlLifecyclePublication.ts";

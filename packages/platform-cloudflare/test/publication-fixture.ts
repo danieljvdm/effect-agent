@@ -1,4 +1,8 @@
 import { Clock, Effect, Layer, Option, Schema, Stream } from "effect";
+import {
+  LifecyclePublicationError,
+  LifecyclePublicationHandler,
+} from "effect-agent/lifecycle-publication";
 import { RecoverySnapshotRequest, SubmissionLedger } from "effect-agent/submission-ledger";
 import { ThreadStore, ThreadTailRequest } from "effect-agent/thread-store";
 
@@ -133,3 +137,14 @@ export const publicationLayer = Layer.effect(ThreadPublication)(
     });
   }),
 );
+
+/** Destination failure only; admission, routed execution and native retry storage remain real. */
+export const failedLifecycleThreads = new Set<string>();
+
+export const lifecyclePublicationTestLayer = Layer.succeed(LifecyclePublicationHandler)({
+  publish: (publication) =>
+    publication.fact._tag === "SubmissionReady" &&
+    failedLifecycleThreads.has(publication.ownerThreadId)
+      ? Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" }))
+      : Effect.void,
+});

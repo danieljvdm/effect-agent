@@ -78,6 +78,7 @@ export default defineConfig({
       "src/durable/GitHubWorkflowSource.ts",
       "src/durable/OperationAuthorizer.ts",
       "src/durable/MessageDelivery.ts",
+      "src/durable/LifecyclePublication.ts",
       "src/durable/PersistentHistory.ts",
       "src/durable/PreparedInputAdmission.ts",
       "src/durable/Records.ts",

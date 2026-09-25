@@ -121,7 +121,8 @@
     "./web-capture": "./src/capabilities/WebCapture.ts",
     "./web-search": "./src/capabilities/WebSearch.ts",
     "./worker": "./src/core/Worker.ts",
-    "./worker-host": "./src/durable/WorkerHost.ts"
+    "./worker-host": "./src/durable/WorkerHost.ts",
+    "./lifecycle-publication": "./src/durable/LifecyclePublication.ts"
   },
   "publishConfig": {
     "access": "public"

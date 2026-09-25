@@ -1,8 +1,29 @@
 import { MemorySubmissionLedgerLive } from "@effect-agent/storage-memory/memory-submission-ledger";
 import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import { NodeCrypto } from "@effect/platform-node";
+import { SqliteStorageFailpoint } from "@effect-agent/storage-sqlite/sqlite-storage-failpoint";
+import { submissionLedgerLayer } from "@effect-agent/storage-sqlite/sqlite-submission-ledger";
+import {
+  storageConfigLayer,
+  threadStoreLayer,
+} from "@effect-agent/storage-sqlite/sqlite-thread-store";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { SqliteClient } from "@effect/sql-sqlite-node";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  Clock,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import * as Agent from "effect-agent/agent";
 import { AgentPolicy } from "effect-agent/agent-policy";
 import {
@@ -16,6 +37,12 @@ import {
 } from "effect-agent/durable-failpoint";
 import { ThreadId, type SubmissionId } from "effect-agent/identifiers";
 import {
+  drainLifecyclePublications,
+  LifecyclePublicationError,
+  LifecyclePublicationHandler,
+  lifecyclePublicationLayer,
+} from "effect-agent/lifecycle-publication";
+import {
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -28,13 +55,21 @@ import {
   IdempotencyKey,
   Principal,
   SubmissionLedger,
+  SubmissionScheduling,
   SubmissionLookupById,
 } from "effect-agent/submission-ledger";
 import { DurableRuntimeFailpointTestControl } from "effect-agent/testing/durable-failpoint-test-control";
 import { ThreadRead, ThreadStore } from "effect-agent/thread-store";
 import { ToolReconciler } from "effect-agent/tool-reconciler";
 import { WakeScheduler } from "effect-agent/wake-scheduler";
-import { LanguageModel, Model, Toolkit, type Prompt, type Response } from "effect/unstable/ai";
+import {
+  LanguageModel,
+  Model,
+  Tool,
+  Toolkit,
+  type Prompt,
+  type Response,
+} from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-join");
@@ -209,6 +244,319 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 const promptOccurrences = (prompt: Prompt.Prompt, needle: string): number =>
   JSON.stringify(prompt).split(needle).length - 1;
 
+const publicationStorageLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "lifecycle-join-" });
+    const filename = `${directory}/native.sqlite`;
+
+    return Layer.mergeAll(threadStoreLayer, submissionLedgerLayer).pipe(
+      Layer.provide(lifecyclePublicationLayer),
+      Layer.provide([
+        SqliteClient.layer({ filename }),
+        storageConfigLayer({ filename }),
+        SqliteStorageFailpoint.layer,
+      ]),
+      Layer.provide(NodeCrypto.layer),
+    );
+  }),
+).pipe(Layer.provide(NodeFileSystem.layer));
+
+// A live Attempt can accept another Submission without returning to the host alarm. Both
+// admission and canonical join publication must commit before that input reaches a Model.
+layer(Layer.mergeAll(baseLayer, publicationStorageLayer))(
+  "lifecycle publication join gate",
+  (it) => {
+    it.effect(
+      "pauses active joins through failed publication without replaying the completed turn",
+      () =>
+        Effect.gen(function* () {
+          const store = yield* ThreadStore;
+          const ledger = yield* SubmissionLedger;
+          const publications = store.lifecyclePublications;
+
+          if (publications === undefined) return yield* Effect.fail("Missing lifecycle storage");
+          const entered = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const prompts: Array<Prompt.Prompt> = [];
+          let blocked: "SubmissionReady" | "UserInputRecorded" | undefined;
+          let joinedId: SubmissionId | undefined;
+          let failGateRead = false;
+          const gateReadFailure = LifecyclePublicationError.make({ reason: "unavailable" });
+          const failures: Array<string> = [];
+
+          const handler = LifecyclePublicationHandler.of({
+            publish: (publication) => {
+              if (
+                publication.source?.submissionId === joinedId &&
+                publication.fact._tag === blocked
+              ) {
+                failures.push(publication.id);
+
+                return LifecyclePublicationError.make({ reason: "unavailable" });
+              }
+
+              return Effect.void;
+            },
+          });
+
+          const drain = Effect.gen(function* () {
+            while ((yield* drainLifecyclePublications(publications)) > 0) {
+              /* native finite queue */
+            }
+          }).pipe(
+            Effect.provideService(LifecyclePublicationHandler, handler),
+            Effect.provideService(ThreadStore, store),
+            Effect.provideService(SubmissionLedger, ledger),
+          );
+
+          const retry = Effect.gen(function* () {
+            const pending = yield* publications.pending(Number.MAX_SAFE_INTEGER, 100);
+
+            for (const publication of pending)
+              yield* publications.defer(publication, yield* Clock.currentTimeMillis);
+            yield* drain;
+          });
+
+          const model = Model.make(
+            "scripted",
+            "publication-join",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: (request) =>
+                  Stream.unwrap(
+                    Effect.gen(function* () {
+                      prompts.push(request.prompt);
+                      if (prompts.length === 1) {
+                        yield* Deferred.succeed(entered, undefined);
+                        yield* Deferred.await(release);
+                      }
+
+                      return Stream.fromIterable(
+                        finalParts(prompts.length === 1 ? "continue" : '{"answer":"done"}'),
+                      );
+                    }),
+                  ),
+              }),
+            ),
+          );
+
+          const agent = Agent.withModel(joinDefinition, model);
+
+          const runtimeLayer = DurableAgentRuntime.layer.pipe(
+            Layer.provide(
+              Layer.succeed(ThreadStore, {
+                ...store,
+                lifecyclePublications: {
+                  ...publications,
+                  pendingDeadlineFor: (threadId) =>
+                    failGateRead
+                      ? Effect.fail(gateReadFailure)
+                      : publications.pendingDeadlineFor(threadId),
+                },
+                append: (request) =>
+                  store
+                    .append(request)
+                    .pipe(
+                      Effect.tap(() =>
+                        drain.pipe(Effect.catchTag("LifecyclePublicationError", () => Effect.void)),
+                      ),
+                    ),
+              }),
+            ),
+          );
+
+          yield* Effect.gen(function* () {
+            const runtime = yield* DurableAgentRuntime;
+
+            const host = yield* runtime.submit(
+              agent,
+              { question: "host question" },
+              submitOptions("publication-join", "host"),
+            );
+
+            yield* drain;
+
+            const worker = yield* Effect.forkChild(
+              Effect.exit(runtime.processThread(agent, host.threadId)),
+            );
+
+            yield* Deferred.await(entered);
+
+            const joined = yield* runtime.submit(
+              agent,
+              { question: "queued question" },
+              submitOptions("publication-join", "joined"),
+            );
+
+            joinedId = joined.submissionId;
+            blocked = "SubmissionReady";
+            expect(Exit.isFailure(yield* Effect.exit(drain))).toBe(true);
+            failGateRead = true;
+            yield* Deferred.succeed(release, undefined);
+            expect(failureOf(yield* Fiber.join(worker))).toMatchObject({
+              _tag: "ThreadStoreError",
+              cause: gateReadFailure,
+            });
+            expect(
+              (yield* readLog("publication-join")).filter(
+                ({ record }) => record.payload._tag === "ModelResponseRecorded",
+              ),
+            ).toHaveLength(1);
+            expect(prompts).toHaveLength(1);
+            failGateRead = false;
+            expect(yield* runtime.processThread(agent, host.threadId)).toEqual([]);
+            blocked = "UserInputRecorded";
+            yield* retry;
+            expect(yield* runtime.processThread(agent, host.threadId)).toEqual([]);
+            expect(prompts).toHaveLength(1);
+            expect(yield* lookupState(joined.submissionId)).toBe("joined");
+            expect(failures).toHaveLength(2);
+            blocked = undefined;
+            yield* retry;
+            const settled = yield* runtime.processThread(agent, host.threadId);
+
+            expect(settled[0]?.outcome).toBe("completed");
+            expect(prompts).toHaveLength(2);
+            expect(promptOccurrences(prompts[1]!, "queued question")).toBe(1);
+            expect(
+              (yield* readLog("publication-join")).filter(
+                ({ record }) => record.recordId === `input:${joined.submissionId}`,
+              ),
+            ).toHaveLength(1);
+          }).pipe(Effect.provide(runtimeLayer));
+        }),
+    );
+  },
+);
+
+layer(baseLayer)("lifecycle publication handoff gate", (it) => {
+  it.effect("checks publication debt again before an internal input handoff claims work", () =>
+    Effect.gen(function* () {
+      const store = yield* ThreadStore;
+      const ledger = yield* SubmissionLedger;
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let blocked = false;
+      let retained = false;
+      let claims = 0;
+      let calls = 0;
+      const deadline = Effect.sync(() => (blocked ? Option.some(1) : Option.none<number>()));
+
+      const model = Model.make(
+        "scripted",
+        "publication-handoff",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () =>
+              Stream.unwrap(
+                Effect.gen(function* () {
+                  calls++;
+                  if (calls === 1) {
+                    yield* Deferred.succeed(entered, undefined);
+                    yield* Deferred.await(release);
+                  }
+
+                  return Stream.fromIterable<Response.StreamPartEncoded>(
+                    calls === 1
+                      ? [
+                          {
+                            type: "tool-call",
+                            id: "inspect-1",
+                            name: "inspect",
+                            params: {},
+                            providerExecuted: false,
+                          },
+                          { type: "finish", reason: "tool-calls", usage },
+                        ]
+                      : finalParts('{"answer":"done"}'),
+                  );
+                }),
+              ),
+          }),
+        ),
+      );
+
+      const toolkit = Toolkit.make(
+        Tool.make("inspect", { parameters: Schema.Struct({}), success: Schema.Void }),
+      );
+
+      const definition = Agent.make("publication-handoff", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Inspect then answer as JSON.",
+        toolkit,
+        policy: { maxTurns: 4, maxToolCalls: 2, maxDuration: "30 seconds" },
+      });
+
+      const agent = Agent.withModel(definition, model);
+
+      const runtimeLayer = DurableAgentRuntime.layer.pipe(
+        Layer.provide([
+          Layer.succeed(ThreadStore, {
+            ...store,
+            lifecyclePublications: {
+              pending: () => Effect.succeed([]),
+              acknowledge: () => Effect.void,
+              defer: () => Effect.void,
+              pendingDeadline: deadline,
+              pendingDeadlineFor: () => deadline,
+            },
+          }),
+          Layer.succeed(SubmissionLedger, {
+            ...ledger,
+            claimJoining: () => Effect.succeed([]),
+            claim: (request) =>
+              Effect.sync(() => {
+                claims++;
+              }).pipe(Effect.andThen(ledger.claim(request))),
+          }),
+          Layer.succeed(SubmissionScheduling, {
+            yieldTo: () =>
+              Effect.sync(() => {
+                if (!retained) {
+                  retained = true;
+                  blocked = true;
+                }
+
+                return true;
+              }),
+          }),
+        ]),
+      );
+
+      yield* Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+
+        const first = yield* runtime.submit(
+          agent,
+          { question: "first" },
+          submitOptions("publication-handoff", "first"),
+        );
+
+        const worker = yield* Effect.forkChild(runtime.processThread(agent, first.threadId));
+
+        yield* Deferred.await(entered);
+        yield* runtime.submit(
+          agent,
+          { question: "second" },
+          submitOptions("publication-handoff", "second"),
+        );
+        yield* Deferred.succeed(release, undefined);
+        expect(yield* Fiber.join(worker)).toEqual([]);
+        expect(claims).toBe(1);
+        expect(calls).toBe(1);
+        blocked = false;
+        yield* runtime.processThread(agent, first.threadId);
+        expect(calls).toBeGreaterThan(1);
+      }).pipe(Effect.provide([runtimeLayer, toolkit.toLayer({ inspect: () => Effect.void })]));
+    }),
+  );
+});
 layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
   it.effect("a lost join marker is repaired by the resuming host Attempt without recovery", () =>
     Effect.gen(function* () {

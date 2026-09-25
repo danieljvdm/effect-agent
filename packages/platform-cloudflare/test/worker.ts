@@ -64,7 +64,7 @@ import {
 } from "./message-delivery-fixture.ts";
 import { observabilityProbeLayer, telemetryProbe } from "./observability-fixture.ts";
 import { hostMaintenanceLayer, projectionLayer } from "./projection-fixture.ts";
-import { publicationLayer } from "./publication-fixture.ts";
+import { publicationLayer, lifecyclePublicationTestLayer } from "./publication-fixture.ts";
 import { recoveryTestLayer } from "./recovery-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
 import {
@@ -254,7 +254,18 @@ export class PublicationThreadObject extends ThreadObject.make(
       ),
     ),
   ).pipe(
-    Layer.provideMerge(ThreadObject.layer([], { publication: publicationLayer })),
+    Layer.provideMerge(
+      Layer.unwrap(
+        Effect.map(ThreadObjectIdentity, ({ threadId }) =>
+          ThreadObject.layer([], {
+            publication: publicationLayer,
+            ...(threadId.startsWith("lifecycle-publication-")
+              ? { lifecyclePublication: lifecyclePublicationTestLayer }
+              : {}),
+          }),
+        ),
+      ),
+    ),
     Layer.provideMerge(maintenanceClockLayer),
   ),
   { ...baseOptions, namespaceBinding: "PUBLICATIONS" },

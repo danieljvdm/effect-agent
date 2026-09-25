@@ -1,3 +1,4 @@
+import { makeSqlLifecyclePublication } from "@effect-agent/storage-sql/sql-lifecycle-publication";
 import { createMessageDeliveryPendingIndex } from "@effect-agent/storage-sql/sql-message-delivery-store";
 import { checkV2ThreadLayout } from "@effect-agent/storage-sql/sql-storage-v2-upgrade";
 import {
@@ -8,6 +9,8 @@ import {
 import { SqliteMigrator } from "@effect/sql-sqlite-do";
 import { Effect, Schema, Stream } from "effect";
 import { EMPTY_TAIL_DIGEST } from "effect-agent/digest";
+import { ThreadId } from "effect-agent/identifiers";
+import { LifecyclePublicationFact } from "effect-agent/lifecycle-publication";
 import { CanonicalRecord, CanonicalSequence, ProducerEpoch } from "effect-agent/records";
 import {
   MAX_THREAD_EXPORT_RECORDS,
@@ -873,13 +876,25 @@ const ensureCurrentStorage = Effect.fn("DoJournal.ensureCurrentStorage")(functio
 
   yield* verifyWorkerPredecessor(true);
 
-  return makeJournal(sql, failpoint, maxStoredValueBytes);
+  const lifecycle = yield* makeSqlLifecyclePublication(undefined, maxStoredValueBytes).pipe(
+    Effect.provideService(SqlClient.SqlClient, sql),
+    Effect.mapError((cause) =>
+      DoStorageError.make({
+        operation: "initialize lifecycle publication",
+        message: "Native publication storage unavailable",
+        cause,
+      }),
+    ),
+  );
+
+  return makeJournal(sql, failpoint, maxStoredValueBytes, lifecycle);
 });
 
 const makeJournal = (
   sql: SqlClient.SqlClient,
   failpoint: DoJournalFailpoint,
   maxStoredValueBytes: number,
+  lifecycle: Effect.Success<ReturnType<typeof makeSqlLifecyclePublication>>,
 ) => {
   /** Typed pre-write refusal for any single value over the configured byte bound. */
   const checkValueBound = (
@@ -1255,6 +1270,27 @@ const makeJournal = (
                 Effect.provideService(SqlClient.SqlClient, sql),
                 Effect.mapError(storageError("index canonical record")),
               );
+              if (
+                lifecycle !== undefined &&
+                Schema.is(Schema.toType(LifecyclePublicationFact))(canonical.payload)
+              )
+                yield* lifecycle
+                  .retain({
+                    id: JSON.stringify([request.threadId, "record", record.recordId]),
+                    ownerThreadId: Schema.decodeSync(ThreadId)(request.threadId),
+                    canonicalSequence: Schema.decodeSync(CanonicalSequence)(firstSequence + index),
+                    createdAt: canonical.createdAt,
+                    fact: canonical.payload,
+                  })
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      DoStorageError.make({
+                        operation: "retain lifecycle publication",
+                        message: "Native publication storage unavailable",
+                        cause,
+                      }),
+                    ),
+                  );
               yield* failpoint("append:after-record-insert");
             }),
           { discard: true },
@@ -1768,6 +1804,7 @@ const makeJournal = (
   });
 
   return {
+    lifecycle,
     append,
     checkValueBound,
     exportThread,

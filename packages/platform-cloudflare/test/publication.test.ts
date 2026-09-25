@@ -1,6 +1,9 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Clock, Effect, Schema } from "effect";
+import { Clock, Effect, Option, Schema } from "effect";
+import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { ThreadId } from "effect-agent/identifiers";
 import { ApprovalDecisionCommand, SubmissionLedger } from "effect-agent/submission-ledger";
+import { ThreadStore } from "effect-agent/thread-store";
 import { DurableObject } from "effect-cf";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
@@ -12,6 +15,7 @@ import {
   plannerDefinition,
   submitOptions,
   maintenanceClocks,
+  modelRequestHolds,
   armMaintenancePause,
   awaitMaintenancePause,
   releaseMaintenancePause,
@@ -35,6 +39,7 @@ import {
   SOURCE_KEY,
   publicationControls,
   publicationResources,
+  failedLifecycleThreads,
 } from "./publication-fixture.ts";
 
 const namespace = "PUBLICATIONS";
@@ -88,10 +93,11 @@ const quiesce = (thread: string) =>
 
 const withThread = (
   test: (thread: string, now: number, advance: (millis: number) => Promise<void>) => Promise<void>,
+  lifecycle = false,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const thread = `publication-${crypto.randomUUID()}`;
+      const thread = `${lifecycle ? "lifecycle-publication" : "publication"}-${crypto.randomUUID()}`;
       const now = Date.now() + 86_400_000;
 
       yield* TestClock.setTime(now);
@@ -100,6 +106,8 @@ const withThread = (
 
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
+          failedLifecycleThreads.delete(thread);
+          modelRequestHolds.delete(thread);
           publicationControls.delete(thread);
           publicationResources.delete(thread);
           maintenanceClocks.delete(thread);
@@ -123,6 +131,52 @@ const latch = () => {
 };
 
 describe("durable host publication", () => {
+  it("gates the actual routed runtime on retained lifecycle debt before invoking a provider", () =>
+    withThread(async (thread, _now, advance) => {
+      let providerCalls = 0;
+
+      modelRequestHolds.set(
+        thread,
+        Effect.sync(() => {
+          providerCalls++;
+        }),
+      );
+      failedLifecycleThreads.add(thread);
+      const receipt = await submit(thread);
+      const threadId = Schema.decodeSync(ThreadId)(thread);
+      const foreignId = Schema.decodeSync(ThreadId)("foreign-owner");
+
+      const result = await runInDurableObject(stub(thread), (instance) =>
+        instance[DurableObject.RunSymbol](
+          DurableAgentRuntime.use((runtime) => runtime.processThreadHead(threadId)),
+        ),
+      );
+
+      expect(providerCalls).toBe(0);
+      expect(Option.isNone(result)).toBe(true);
+      expect((await laneRows(thread, namespace))[0]?.submission_id).toBe(receipt.submissionId);
+
+      const foreignDeadline = await runInDurableObject(stub(thread), (instance) =>
+        instance[DurableObject.RunSymbol](
+          ThreadStore.use((store) =>
+            store.lifecyclePublications === undefined
+              ? Effect.die("Missing lifecycle storage")
+              : store.lifecyclePublications.pendingDeadlineFor(foreignId).pipe(Effect.flip),
+          ),
+        ),
+      );
+
+      expect(foreignDeadline).toMatchObject({
+        _tag: "LifecyclePublicationError",
+        reason: "unavailable",
+      });
+      failedLifecycleThreads.delete(thread);
+      await advance(11_000);
+      await drainAlarmsUntil(thread, allSettled(thread, namespace), { namespace });
+      expect(providerCalls).toBe(1);
+      expect((await laneRows(thread, namespace))[0]?.submission_id).toBe(receipt.submissionId);
+    }, true));
+
   it("rebuilt maintenance observes an in-flight native ledger producer through the exported gate", () =>
     withThread(async (thread) => {
       const receipt = await submit(thread, approvalDefinition);

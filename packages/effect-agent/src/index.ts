@@ -95,3 +95,4 @@ export * as WakeScheduler from "./durable/WakeScheduler.ts";
 export * as WorkerHost from "./durable/WorkerHost.ts";
 export * as ThreadContextHistory from "./durable/ThreadContextHistory.ts";
 export * as ThreadContextHistoryProjection from "./durable/ThreadContextHistoryProjection.ts";
+export * as LifecyclePublication from "./durable/LifecyclePublication.ts";

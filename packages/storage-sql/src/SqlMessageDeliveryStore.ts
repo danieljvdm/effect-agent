@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { DateTime, Effect, Schema } from "effect";
 import { ThreadId } from "effect-agent/identifiers";
 import {
   applyMessageDeliveryChange,
@@ -25,6 +25,7 @@ import type { SqlError } from "effect/unstable/sql/SqlError";
 import type { Statement } from "effect/unstable/sql/Statement";
 
 import { sqliteJsonText, queryIdentifier } from "./internal/sql-json.ts";
+import { makeSqlLifecyclePublication } from "./SqlLifecyclePublication.ts";
 import { makeSqlQuery, SqlInteger } from "./SqlStorage.ts";
 
 const workerPaths = {
@@ -173,6 +174,10 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
       Effect.catchTag("SqlError", () => storage("transaction")),
     );
 
+  const lifecycle = yield* makeSqlLifecyclePublication(options.namespace, maxStoredValueBytes).pipe(
+    Effect.mapError((cause) => storage("lifecycle", cause)),
+  );
+
   const failpoint = yield* MessageDeliveryFailpoint;
 
   const encode = Effect.fn("SqlMessageDeliveryStore.encode")(function* (
@@ -288,6 +293,26 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
           sql`INSERT INTO ${relation("effect_agent_message_deliveries")} (owner_thread_id, message_id, version, state, deadline_at_millis, record_json ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, read_metadata` })}) VALUES (${input.key.ownerThreadId}, ${input.key.messageId}, ${input.version}, ${input.status}, ${messageDeliveryDeadline(input)}, ${text} ${sql.onDialectOrElse({ orElse: () => sql``, pg: () => sql`, ${deliveryMetadata(input)}::jsonb` })})`,
         );
 
+        if (lifecycle !== undefined)
+          yield* lifecycle
+            .retain({
+              id: JSON.stringify([
+                input.key.ownerThreadId,
+                "delivery",
+                input.key.messageId,
+                input.version,
+              ]),
+              ownerThreadId: input.key.ownerThreadId,
+              createdAt: DateTime.makeUnsafe(input.createdAtMillis),
+              fact: {
+                _tag: "DeliveryRetained",
+                key: input.key,
+                envelope: input.envelope,
+                createdAtMillis: input.createdAtMillis,
+              },
+            })
+            .pipe(Effect.mapError((cause) => storage("retain lifecycle", cause)));
+
         return input;
       }),
     );
@@ -325,6 +350,34 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
         if (rows.length !== 1 || rows[0] === undefined)
           return yield* MessageDeliveryError.make({ reason: "conflict", operation: "change" });
 
+        if (
+          lifecycle !== undefined &&
+          (current.status !== next.status ||
+            current.receipt !== next.receipt ||
+            current.settlement !== next.settlement)
+        )
+          yield* lifecycle
+            .retain({
+              id: JSON.stringify([
+                next.key.ownerThreadId,
+                "delivery",
+                next.key.messageId,
+                next.version,
+              ]),
+              ownerThreadId: next.key.ownerThreadId,
+              createdAt: yield* DateTime.now,
+              fact: {
+                _tag: "DeliveryChanged",
+                key: next.key,
+                envelope: next.envelope,
+                status: next.status,
+                receipt: next.receipt,
+                settlement: next.settlement,
+                version: next.version,
+              },
+            })
+            .pipe(Effect.mapError((cause) => storage("retain lifecycle", cause)));
+
         return rows[0];
       }),
     );
@@ -335,6 +388,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
   });
 
   return MessageDeliveryStore.of({
+    ...(lifecycle === undefined ? {} : { lifecyclePublications: lifecycle.storage }),
     limits: config,
     maxStoredValueBytes,
     insert,
