@@ -204,7 +204,8 @@ The project is in prerelease mode. Leaving it requires an explicit release decis
 `vp run changeset pre exit`.
 
 Use `vp run changeset` to describe a consumer-visible change.
-On each `main` push, `.github/workflows/release.yml` maintains the version PR without waiting for CI.
+After successful CI on the current `main` revision, `.github/workflows/release.yml` maintains the
+version PR. Its source baseline is already complete when the PR's release metadata proof runs.
 After that PR merges and its exact main revision passes CI, the workflow publishes through npm
 trusted publishing with provenance. PR updates and publication use separate queues.
 
@@ -528,8 +529,7 @@ dependencies run from that base, with read-only contents, Actions and pull-reque
 Candidate files are read as Git objects; the proof does not execute candidate code.
 
 ```text
-main push -> ordinary source CI
-          -> version PR: proof or ordinary CI + build + package checks
+main push -> ordinary source CI -> version PR: proof or ordinary CI + build + package checks
 successful source + PR CI -> version merge: proof + restore PR build + package checks
 successful main CI -> publication: restore main build + package checks + live gate -> npm
 ```

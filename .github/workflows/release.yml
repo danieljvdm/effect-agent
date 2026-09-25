@@ -1,25 +1,23 @@
 name: Release
 
 on:
-  # PR generation starts immediately; only publication waits for successful CI.
-  push:
-    branches: [main]
+  # Version PRs need the completed source baseline for release equivalence.
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [main]
-
-concurrency:
-  # A paid publication must not delay updates to the next version PR.
-  group: release-${{ github.event_name }}
-  cancel-in-progress: false
 
 permissions: {}
 
 jobs:
   version:
     name: Update release pull request
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    # Never execute an untrusted workflow_run revision with the release App token.
+    if: ${{ github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.repository.full_name == github.repository && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.path == '.github/workflows/ci.yml' && github.event.workflow_run.head_sha == github.sha }}
+    concurrency:
+      # Preserve queue identity across the move from push to workflow_run.
+      group: release-push
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -72,6 +70,10 @@ jobs:
 
   release:
     name: Release
+    # Keep paid publication independent of updates to the next version PR.
+    concurrency:
+      group: release-workflow_run
+      cancel-in-progress: false
     # workflow_run has write authority: accept only this repo's successful main
     # push. Changesets uses github.sha internally, so it MUST equal the tested
     # head (workflow_run's default-branch SHA can otherwise have moved ahead).
@@ -116,7 +118,7 @@ jobs:
       - name: Patch Effect TypeScript-Go
         run: ./node_modules/.bin/vp run patch:tsgo
 
-      # Only the push job owns PR updates. Changesets status excludes changesets
+      # Only the version job owns PR updates. Changesets status excludes changesets
       # already consumed by pre.json, unlike counting the retained Markdown files.
       - name: Check for pending changesets
         id: pending
