@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "version": 1,
+      "id": "inventory-http-failure-bypass",
+      "kind": "known-defects",
+      "provenance": "Fictional inventory lookup. The client contract exposes typed 404 and 500 failures; the new broad HTTP fallback omits the audit side effect for unexpected 500.",
+      "inputDigest": "d5fc4f09275559e8bc77729438b7e43104d58c19254877fc00eab57bb2078901",
+      "request": {
+        "title": "Treat missing inventory SKUs as unknown",
+        "description": "An HTTP 404 lookup miss may return unknown stock without audit. Unexpected typed failures, including HTTP 500, must reach AuditSink before stockFor returns the unknown fallback.",
+        "baseRevision": "fictional-inventory-report-all",
+        "headRevision": "fictional-inventory-broad-http-fallback",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/inventory/stock.ts",
+            "patch": "@@ -6,6 +6,9 @@\n   const audit = yield* AuditSink;\n   const result = yield* Effect.result(client.lookup(sku));\n   if (result._tag === \"Failure\") {\n+    if (result.failure._tag === \"InventoryHttpFailure\") {\n+      return { state: \"unknown\" as const };\n+    }\n     yield* audit.record(result.failure);\n     return { state: \"unknown\" as const };\n   }"
+          }
+        ],
+        "unreviewedPaths": []
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/inventory/stock.ts",
+            "revision": "base",
+            "content": "import { Effect } from \"effect\";\nimport { AuditSink, InventoryClient } from \"./contracts.js\";\n\nexport const stockFor = Effect.fn(\"Inventory.stockFor\")(function* (sku: string) {\n  const client = yield* InventoryClient;\n  const audit = yield* AuditSink;\n  const result = yield* Effect.result(client.lookup(sku));\n  if (result._tag === \"Failure\") {\n    yield* audit.record(result.failure);\n    return { state: \"unknown\" as const };\n  }\n  return { state: \"known\" as const, units: result.success };\n});\n"
+          },
+          {
+            "path": "src/inventory/contracts.ts",
+            "revision": "base",
+            "content": "import { Context, Effect, Schema } from \"effect\";\n\nexport class InventoryHttpFailure extends Schema.TaggedError<InventoryHttpFailure>()(\n  \"InventoryHttpFailure\",\n  { status: Schema.Int, sku: Schema.String },\n) {}\nexport class InventoryTransportFailure extends Schema.TaggedError<InventoryTransportFailure>()(\n  \"InventoryTransportFailure\",\n  { message: Schema.String },\n) {}\nexport type InventoryFailure = InventoryHttpFailure | InventoryTransportFailure;\n\nexport class InventoryClient extends Context.Service<\n  InventoryClient,\n  {\n    /** Non-2xx responses, including 404 and 500, fail with InventoryHttpFailure. */\n    readonly lookup: (sku: string) => Effect.Effect<number, InventoryFailure>;\n  }\n>()(\"fiction/InventoryClient\") {}\n\nexport class AuditSink extends Context.Service<\n  AuditSink,\n  {\n    /** Record unexpected lookup failures. Missing SKU (404) is expected; 500 is not. */\n    readonly record: (failure: InventoryFailure) => Effect.Effect<void>;\n  }\n>()(\"fiction/AuditSink\") {}\n"
+          },
+          {
+            "path": "src/inventory/stock.ts",
+            "revision": "head",
+            "content": "import { Effect } from \"effect\";\nimport { AuditSink, InventoryClient } from \"./contracts.js\";\n\nexport const stockFor = Effect.fn(\"Inventory.stockFor\")(function* (sku: string) {\n  const client = yield* InventoryClient;\n  const audit = yield* AuditSink;\n  const result = yield* Effect.result(client.lookup(sku));\n  if (result._tag === \"Failure\") {\n    if (result.failure._tag === \"InventoryHttpFailure\") {\n      return { state: \"unknown\" as const };\n    }\n    yield* audit.record(result.failure);\n    return { state: \"unknown\" as const };\n  }\n  return { state: \"known\" as const, units: result.success };\n});\n"
+          },
+          {
+            "path": "src/inventory/contracts.ts",
+            "revision": "head",
+            "content": "import { Context, Effect, Schema } from \"effect\";\n\nexport class InventoryHttpFailure extends Schema.TaggedError<InventoryHttpFailure>()(\n  \"InventoryHttpFailure\",\n  { status: Schema.Int, sku: Schema.String },\n) {}\nexport class InventoryTransportFailure extends Schema.TaggedError<InventoryTransportFailure>()(\n  \"InventoryTransportFailure\",\n  { message: Schema.String },\n) {}\nexport type InventoryFailure = InventoryHttpFailure | InventoryTransportFailure;\n\nexport class InventoryClient extends Context.Service<\n  InventoryClient,\n  {\n    /** Non-2xx responses, including 404 and 500, fail with InventoryHttpFailure. */\n    readonly lookup: (sku: string) => Effect.Effect<number, InventoryFailure>;\n  }\n>()(\"fiction/InventoryClient\") {}\n\nexport class AuditSink extends Context.Service<\n  AuditSink,\n  {\n    /** Record unexpected lookup failures. Missing SKU (404) is expected; 500 is not. */\n    readonly record: (failure: InventoryFailure) => Effect.Effect<void>;\n  }\n>()(\"fiction/AuditSink\") {}\n"
+          }
+        ],
+        "digest": "4c520385a981ef788bd3205c583437cf2f27e17f650dbc9f4be31e4f815c2d82"
+      },
+      "expectedDefects": [
+        {
+          "id": "inventory-500-unrecorded",
+          "severity": "important",
+          "invariant": "A typed InventoryHttpFailure with status 500 is unexpected and must reach AuditSink before stockFor returns unknown stock. Only HTTP 404 is an expected lookup miss.",
+          "evidence": [
+            {
+              "path": "src/inventory/stock.ts",
+              "line": 10,
+              "description": "The new early return swallows every typed inventory HTTP failure, including 500, before audit.record runs."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "version": 1,
+      "id": "inventory-http-failure-control",
+      "kind": "clean-control",
+      "provenance": "Fictional correction that restricts the quiet inventory fallback to 404 and records 500 before returning unknown stock.",
+      "inputDigest": "7869c043f82c929799b5dc6bb361f3871a730fedc85283f981668e0bd1fd9860",
+      "request": {
+        "title": "Audit unexpected inventory service failures",
+        "description": "Only HTTP 404 is an expected missing-SKU lookup. Unexpected typed failures, including HTTP 500, must reach AuditSink before stockFor returns unknown stock.",
+        "baseRevision": "fictional-inventory-broad-http-fallback",
+        "headRevision": "fictional-inventory-status-specific",
+        "scope": "full",
+        "changes": [
+          {
+            "path": "src/inventory/stock.ts",
+            "patch": "@@ -6,7 +6,7 @@\n   const audit = yield* AuditSink;\n   const result = yield* Effect.result(client.lookup(sku));\n   if (result._tag === \"Failure\") {\n-    if (result.failure._tag === \"InventoryHttpFailure\") {\n+    if (result.failure._tag === \"InventoryHttpFailure\" && result.failure.status === 404) {\n       return { state: \"unknown\" as const };\n     }\n     yield* audit.record(result.failure);"
+          }
+        ],
+        "unreviewedPaths": []
+      },
+      "repository": {
+        "version": 1,
+        "files": [
+          {
+            "path": "src/inventory/stock.ts",
+            "revision": "base",
+            "content": "import { Effect } from \"effect\";\nimport { AuditSink, InventoryClient } from \"./contracts.js\";\n\nexport const stockFor = Effect.fn(\"Inventory.stockFor\")(function* (sku: string) {\n  const client = yield* InventoryClient;\n  const audit = yield* AuditSink;\n  const result = yield* Effect.result(client.lookup(sku));\n  if (result._tag === \"Failure\") {\n    if (result.failure._tag === \"InventoryHttpFailure\") {\n      return { state: \"unknown\" as const };\n    }\n    yield* audit.record(result.failure);\n    return { state: \"unknown\" as const };\n  }\n  return { state: \"known\" as const, units: result.success };\n});\n"
+          },
+          {
+            "path": "src/inventory/contracts.ts",
+            "revision": "base",
+            "content": "import { Context, Effect, Schema } from \"effect\";\n\nexport class InventoryHttpFailure extends Schema.TaggedError<InventoryHttpFailure>()(\n  \"InventoryHttpFailure\",\n  { status: Schema.Int, sku: Schema.String },\n) {}\nexport class InventoryTransportFailure extends Schema.TaggedError<InventoryTransportFailure>()(\n  \"InventoryTransportFailure\",\n  { message: Schema.String },\n) {}\nexport type InventoryFailure = InventoryHttpFailure | InventoryTransportFailure;\n\nexport class InventoryClient extends Context.Service<\n  InventoryClient,\n  {\n    /** Non-2xx responses, including 404 and 500, fail with InventoryHttpFailure. */\n    readonly lookup: (sku: string) => Effect.Effect<number, InventoryFailure>;\n  }\n>()(\"fiction/InventoryClient\") {}\n\nexport class AuditSink extends Context.Service<\n  AuditSink,\n  {\n    /** Record unexpected lookup failures. Missing SKU (404) is expected; 500 is not. */\n    readonly record: (failure: InventoryFailure) => Effect.Effect<void>;\n  }\n>()(\"fiction/AuditSink\") {}\n"
+          },
+          {
+            "path": "src/inventory/stock.ts",
+            "revision": "head",
+            "content": "import { Effect } from \"effect\";\nimport { AuditSink, InventoryClient } from \"./contracts.js\";\n\nexport const stockFor = Effect.fn(\"Inventory.stockFor\")(function* (sku: string) {\n  const client = yield* InventoryClient;\n  const audit = yield* AuditSink;\n  const result = yield* Effect.result(client.lookup(sku));\n  if (result._tag === \"Failure\") {\n    if (result.failure._tag === \"InventoryHttpFailure\" && result.failure.status === 404) {\n      return { state: \"unknown\" as const };\n    }\n    yield* audit.record(result.failure);\n    return { state: \"unknown\" as const };\n  }\n  return { state: \"known\" as const, units: result.success };\n});\n"
+          },
+          {
+            "path": "src/inventory/contracts.ts",
+            "revision": "head",
+            "content": "import { Context, Effect, Schema } from \"effect\";\n\nexport class InventoryHttpFailure extends Schema.TaggedError<InventoryHttpFailure>()(\n  \"InventoryHttpFailure\",\n  { status: Schema.Int, sku: Schema.String },\n) {}\nexport class InventoryTransportFailure extends Schema.TaggedError<InventoryTransportFailure>()(\n  \"InventoryTransportFailure\",\n  { message: Schema.String },\n) {}\nexport type InventoryFailure = InventoryHttpFailure | InventoryTransportFailure;\n\nexport class InventoryClient extends Context.Service<\n  InventoryClient,\n  {\n    /** Non-2xx responses, including 404 and 500, fail with InventoryHttpFailure. */\n    readonly lookup: (sku: string) => Effect.Effect<number, InventoryFailure>;\n  }\n>()(\"fiction/InventoryClient\") {}\n\nexport class AuditSink extends Context.Service<\n  AuditSink,\n  {\n    /** Record unexpected lookup failures. Missing SKU (404) is expected; 500 is not. */\n    readonly record: (failure: InventoryFailure) => Effect.Effect<void>;\n  }\n>()(\"fiction/AuditSink\") {}\n"
+          }
+        ],
+        "digest": "7dbb95a412cd61e6c5e2598b9b0de1fa6dc51d9eaf95c12ece68bcd1eb551436"
+      },
+      "expectedDefects": []
+    }
+  ]
+}

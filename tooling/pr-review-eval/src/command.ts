@@ -2,6 +2,7 @@ import { Config, Console, Effect, FileSystem, Option, Schema } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 
 import {
+  type EvalCase,
   EvalCaseId,
   EvalConfigurationError,
   EvalDataError,
@@ -10,6 +11,7 @@ import {
   EvalVariantId,
 } from "./contracts.ts";
 import { loadEvalSuite, writeObservations } from "./corpus.ts";
+import { openLocalGitRepository, type LocalGitRepository } from "./local-git-repository.ts";
 import { makeCurrentOpenAiVariant, openAiClientLayer } from "./openai-variant.ts";
 import { loadJudgmentSet, loadObservationFiles, writeQualityReport } from "./report-files.ts";
 import { makeQualityReport, renderQualityReport } from "./report.ts";
@@ -45,6 +47,27 @@ const decodeSelectedCases = (values: ReadonlyArray<string>) =>
     ),
   );
 
+const localGitRepositories = Effect.fn("PrReviewEval.localGitRepositories")(function* (
+  cases: ReadonlyArray<EvalCase>,
+) {
+  const root = yield* Config.String("PR_REVIEW_LOCAL_GIT_REPOSITORY").pipe(Config.withDefault(""));
+
+  if (root.length === 0) return undefined;
+
+  const ignore = (yield* Config.String("PR_REVIEW_IGNORE").pipe(Config.withDefault("")))
+    .split(",")
+    .map((pattern) => pattern.trim())
+    .filter((pattern) => pattern.length > 0);
+
+  const sources = yield* Effect.forEach(cases, (evalCase) =>
+    openLocalGitRepository({ root, request: evalCase.request, ignore }).pipe(
+      Effect.map((repository) => [evalCase.id, repository] as const),
+    ),
+  );
+
+  return new Map<EvalCaseId, LocalGitRepository>(sources);
+});
+
 const validateCommand = Command.make(
   "validate",
   { selectedCases },
@@ -53,8 +76,11 @@ const validateCommand = Command.make(
     const suite = yield* loadEvalSuite(shared.casesFile);
     const selected = yield* decodeSelectedCases(options.selectedCases);
     const cases = yield* selectEvalCases(suite, selected);
+    const localSources = yield* localGitRepositories(cases);
 
-    yield* Console.log(`Validated ${cases.length} eval case(s).`);
+    yield* Console.log(
+      `Validated ${cases.length} eval case(s)${localSources === undefined ? "" : " against pinned local Git source"}.`,
+    );
   }),
 ).pipe(
   Command.withDescription("Decode cases and verify their input digests without calling a model."),
@@ -102,7 +128,8 @@ const runCommand = Command.make(
     const suite = yield* loadEvalSuite(shared.casesFile);
     const caseIds = yield* decodeSelectedCases(options.selectedCases);
 
-    yield* selectEvalCases(suite, caseIds);
+    const cases = yield* selectEvalCases(suite, caseIds);
+    const localSources = yield* localGitRepositories(cases);
     const fs = yield* FileSystem.FileSystem;
 
     const guidanceText = yield* Option.match(options.guidance, {
@@ -141,6 +168,7 @@ const runCommand = Command.make(
         trials: options.trials,
         concurrency: options.concurrency,
         caseIds,
+        ...(localSources === undefined ? {} : { localGitRepositories: localSources }),
       }),
     ).pipe(Effect.provide(openAiClientLayer));
 

@@ -261,17 +261,18 @@ Trace definitions, guards, callers, consumers, and tests across file boundaries,
 
 Before filtering candidate issues, construct concrete counterexamples to the guarantees changed by this PR, using admitted inputs and supported execution paths. Then test those counterexamples against the supplied guards and base behavior, and report only the defects that survive those checks.
 
-Before recording a candidate, actively try to disprove it. Inspect the strongest relevant guard, documented exception, or alternative interpretation. Establish why the trigger survives that counterevidence. Discard intentional behavior that satisfies the stated contract, unsupported assumptions, and demands for rigor beyond the repository's requirements. Stop pursuing disproved hypotheses. Prefer no findings to weak claims; omit speculation, style, generic test requests, compiler diagnostics, and failures requiring ill-typed callers. There is no finding quota.
+Before recording a candidate, actively try to disprove it. Inspect the strongest relevant guard, documented exception, or alternative interpretation. Establish why the trigger survives that counterevidence. For a guard or predicate, test a supported input that must pass and one that must fail, including nullable values admitted by the input Schema. Discard intentional behavior that satisfies the stated contract, unsupported assumptions, and demands for rigor beyond the repository's requirements. Stop pursuing disproved hypotheses. Prefer no findings to weak claims; omit speculation, style, generic test requests, compiler diagnostics, and failures requiring ill-typed callers. There is no finding quota.
 
 For a repository-policy defect, cite the specific supplied rule and its instruction path/lines when available; explain the changed violation and why applicable exceptions do not cover it. Distinguish the policy breach from a runtime failure. An explicitly reviewable architecture contract need not cause a crash; follow its stated severity.
 
-Report every established independent root cause once. Explain trigger or policy violation, impact, and correction concisely. P0 is unconditional and critical; P1 is a core failure, lost required work, or unsafe supported operation; P2 is an actionable nonblocking defect; P3 is minor. Anchor to the causative changed path and a short RIGHT-side added/context line in its diff; omit line when no inline anchor is valid.`;
+Report every established independent root cause once. Explain the trigger or policy violation, observed impact, and required behavior concisely. Do not prescribe a replacement predicate, helper call, or exact edit; those suggestions can be wrong for other supported states. P0 is unconditional and critical; P1 is a core failure, lost required work, or unsafe supported operation; P2 is an actionable nonblocking defect; P3 is minor. Anchor to the causative changed path and a short RIGHT-side added/context line in its diff; omit line when no inline anchor is valid.`;
 
 const REVIEW_INSTRUCTIONS = `${REVIEW_RUBRIC}
 
 Review procedure:
 1. Start with the complete change index and read every admitted patch, including deletions, reverts, and metadata. Use inline patches or read_diff pages; batch independent reads. Reading establishes access to evidence, not correctness.
 2. Identify the consumer outcome promised by the PR description, documentation, and changed contracts. Trace it through the relevant supported execution paths to its consumers, including unchanged code. Keep material, falsifiable questions about paths where that promise may fail; seek evidence for and against them before submitting. Distinguish incomplete fulfillment of the promise from optional feature expansion.
+For a changed decision over fetched records, check every relevant producer, filter, page limit, and ordering rule. Test whether a qualifying older record can sit behind newer records that do not qualify. When a decision combines separate reads, test a record becoming eligible between them and appearing in a later broader result; include terminal and indeterminate states admitted by the Schema. For a changed path that turns a typed failure into a successful fallback or unavailable state, trace whether the failure reaches the installed reporting sink. Keep material unchecked variants in review_status notes and resolve them against source; a filtered or bounded page alone cannot prove absence.
 3. Keep the claimed outcome, checked paths, exact base/head evidence references, disproved hypotheses, and next checks in review_status notes during investigation. Avoid copying source or saved findings. If context fills, call new_context alone with a concise handoff. After any rollover, recover review_status before resuming at its unread offsets; delivered ranges remain covered. When pendingCount is zero, continue the material questions in your notes and use targeted source reads as needed, then submit. Do not restart a full diff sweep after rollover.
 4. After the counterevidence check, save each established finding promptly with record_finding so it survives interruption. The ledger cannot retract or revise findings; recover it when unsure and never re-record a root cause with different wording, severity, or symptoms.
 5. Verify EVERY blocker in a supplied follow-up against current head before resolving its exact ID. Name the fixing code and why the original trigger no longer fails. A touched file, resolved conversation, or absence of new findings is insufficient; omit uncertain resolutions. Do not report supplied prior blockers as new findings.
@@ -377,7 +378,7 @@ export class ReviewVerificationError extends Schema.TaggedError<ReviewVerificati
 const reviewRecording = Toolkit.make(
   Tool.make("record_finding", {
     description:
-      "Save one established finding after checking counterevidence. This is the only way to add findings; records cannot be retracted or revised. Check saved findings and record each root cause once. At most 24 findings are retained. This does not finish the review or publish externally.",
+      "Save one established finding after checking counterevidence. State the failing scenario, observed impact, and required behavior without prescribing a replacement predicate or exact edit. This is the only way to add findings; records cannot be retracted or revised. Check saved findings and record each root cause once. At most 24 findings are retained. This does not finish the review or publish externally.",
     parameters: RecordedFinding,
     success: Schema.Null,
     failure: ReviewVerificationError,
@@ -634,7 +635,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
     function* (request: ReviewRequest) {
       const configuration = yield* Schema.decodeEffect(ReviewContextOptions)({
         compaction: options.compaction ?? "rollover",
-        contextTokenLimit: options.contextTokenLimit ?? 48_000,
+        contextTokenLimit: options.contextTokenLimit ?? 128_000,
         researchConcurrency: options.research?.concurrency ?? 2,
       }).pipe(
         Effect.mapError(() =>

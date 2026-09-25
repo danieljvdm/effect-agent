@@ -1,4 +1,4 @@
-import { ReviewFinding, type ReviewOutcome } from "@effect-agent/pr-review/review";
+import { ReviewFinding, ReviewFollowUp, type ReviewOutcome } from "@effect-agent/pr-review/review";
 import { Effect, Schema } from "effect";
 
 import {
@@ -6,9 +6,11 @@ import {
   EvalCaseId,
   EvalCaseKind,
   EvalDefectId,
+  EvalExpectedDefect,
   EvalInputDigest,
   EvalObservation,
   EvalObservationSetDigest,
+  EvalOracleSetDigest,
   EvalRunnerVersion,
   type EvalSuite,
   EvalTrialCount,
@@ -217,6 +219,14 @@ export class EvalCaseQualityReport extends Schema.Class<EvalCaseQualityReport>(
   blockerDetection: EvalRate,
   blockerRecall: EvalRate,
   blockerStatus: EvalBlockerCaseStatus,
+  /** A later trial cannot repair an incorrect first-pass decision about prior feedback. */
+  resolutionRecall: EvalRate,
+  unresolvedRetention: EvalRate,
+  resolutionStatus: EvalBlockerCaseStatus,
+  missedResolvedFollowUpIds: Schema.Array(ReviewFollowUp.fields.id).check(Schema.isMaxLength(8)),
+  erroneouslyResolvedFollowUpIds: Schema.Array(ReviewFollowUp.fields.id).check(
+    Schema.isMaxLength(8),
+  ),
   cleanControlPassed: Schema.optionalKey(Schema.Boolean),
   laterOnlyBlockingDefects: Schema.Array(EvalLaterBlocker),
   firstTrialFindings: EvalFindingQuality,
@@ -264,6 +274,9 @@ export class EvalVariantQualityReport extends Schema.Class<EvalVariantQualityRep
   blockerDetection: EvalRate,
   blockerRecall: EvalRate,
   blockerCases: EvalCaseCompletionSummary,
+  resolutionRecall: EvalRate,
+  unresolvedRetention: EvalRate,
+  resolutionCases: EvalCaseCompletionSummary,
   cleanControls: EvalCleanControlSummary,
   laterOnlyBlockingDefects: Schema.Array(EvalLaterBlocker),
   firstTrialFindings: EvalFindingQuality,
@@ -286,8 +299,10 @@ export class EvalCaseIdentity extends Schema.Class<EvalCaseIdentity>(
 export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
   "@effect-agent/example-pr-review-eval/EvalQualityReport",
 )({
-  version: Schema.Literal(5),
+  version: Schema.Literal(7),
   observationSetDigest: EvalObservationSetDigest,
+  /** Binds scores and human judgments to the case oracle, independently of model inputs. */
+  oracleSetDigest: EvalOracleSetDigest,
   runnerVersion: EvalRunnerVersion,
   trialCount: Schema.Int.check(Schema.isGreaterThan(0)),
   caseSet: Schema.Array(EvalCaseIdentity).check(Schema.isMinLength(1)),
@@ -298,6 +313,24 @@ export class EvalQualityReport extends Schema.Class<EvalQualityReport>(
 
 const encodeObservationArray = Schema.encodeEffect(
   Schema.fromJsonString(Schema.Array(EvalObservation)),
+);
+
+const encodeOracleSet = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      version: Schema.Literal(1),
+      cases: Schema.Array(
+        Schema.Struct({
+          id: EvalCaseId,
+          version: Schema.Literal(1),
+          kind: EvalCaseKind,
+          expectedDefects: Schema.Array(EvalExpectedDefect),
+          expectedResolvedFollowUpIds: Schema.optionalKey(Schema.Array(ReviewFollowUp.fields.id)),
+          expectedUnresolvedFollowUpIds: Schema.optionalKey(Schema.Array(ReviewFollowUp.fields.id)),
+        }),
+      ),
+    }),
+  ),
 );
 
 const trialKey = (caseId: EvalCaseId, variantId: EvalVariantId, trial: number): string =>
@@ -339,6 +372,38 @@ export const digestObservationSet = Effect.fn("PrReviewEval.digestObservationSet
     Effect.mapError(() =>
       EvalReportError.make({ message: "Observation set digest failed validation" }),
     ),
+  );
+});
+
+export const digestEvalSuiteOracles = Effect.fn("PrReviewEval.digestEvalSuiteOracles")(function* (
+  suite: EvalSuite,
+) {
+  const encoded = yield* encodeOracleSet({
+    version: 1,
+    cases: [...suite.cases]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((evalCase) => ({
+        id: evalCase.id,
+        version: evalCase.version,
+        kind: evalCase.kind,
+        expectedDefects: evalCase.expectedDefects,
+        ...(evalCase.expectedResolvedFollowUpIds === undefined
+          ? {}
+          : { expectedResolvedFollowUpIds: evalCase.expectedResolvedFollowUpIds }),
+        ...(evalCase.expectedUnresolvedFollowUpIds === undefined
+          ? {}
+          : { expectedUnresolvedFollowUpIds: evalCase.expectedUnresolvedFollowUpIds }),
+      })),
+  }).pipe(
+    Effect.mapError(() =>
+      EvalReportError.make({ message: "Eval suite oracle failed canonical encoding" }),
+    ),
+  );
+
+  const digest = yield* digestText(encoded);
+
+  return yield* Schema.decodeEffect(EvalOracleSetDigest)(digest).pipe(
+    Effect.mapError(() => EvalReportError.make({ message: "Oracle set digest failed validation" })),
   );
 });
 
@@ -552,6 +617,7 @@ interface IndexedFinding {
 
 interface ValidatedInputs {
   readonly observationSetDigest: EvalObservationSetDigest;
+  readonly oracleSetDigest: EvalOracleSetDigest;
   readonly runnerVersion: EvalRunnerVersion;
   readonly trialCount: number;
   readonly cases: ReadonlyArray<EvalCase>;
@@ -580,6 +646,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
   const byKey = new Map<string, EvalObservation>();
   const configurations = new Map<EvalVariantId, EvalVariantConfiguration>();
   const encodedConfigurations = new Map<EvalVariantId, string>();
+  const sourceIdentities = new Map<EvalCaseId, string>();
   const runnerVersions = new Set<EvalRunnerVersion>();
 
   for (const observation of observations) {
@@ -596,6 +663,15 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
       });
     }
     const key = observationKey(observation);
+    const sourceIdentity = JSON.stringify(observation.repositorySource ?? null);
+    const priorSource = sourceIdentities.get(observation.caseId);
+
+    if (priorSource !== undefined && priorSource !== sourceIdentity) {
+      return yield* EvalReportError.make({
+        message: `Case ${observation.caseId} has incompatible repository sources across variants`,
+      });
+    }
+    sourceIdentities.set(observation.caseId, sourceIdentity);
 
     if (byKey.has(key)) {
       return yield* EvalReportError.make({ message: `Duplicate eval observation ${key}` });
@@ -643,10 +719,17 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
   }
 
   const observationSetDigest = yield* digestObservationSet(observations);
+  const oracleSetDigest = yield* digestEvalSuiteOracles(suite);
 
   if (judgmentSet !== undefined && judgmentSet.observationSetDigest !== observationSetDigest) {
     return yield* EvalReportError.make({
       message: "Judgments do not match the exact eval observation set",
+    });
+  }
+
+  if (judgmentSet !== undefined && judgmentSet.oracleSetDigest !== oracleSetDigest) {
+    return yield* EvalReportError.make({
+      message: "Judgments do not match the current eval suite oracle",
     });
   }
 
@@ -705,6 +788,7 @@ const validateInputs = Effect.fn("PrReviewEval.validateReportInputs")(function* 
 
   return {
     observationSetDigest,
+    oracleSetDigest,
     runnerVersion,
     trialCount,
     cases: suite.cases,
@@ -815,6 +899,34 @@ const caseReport = (
     firstObservation.result._tag === "Succeeded" &&
     isIncompleteReview(firstObservation.result.outcome);
 
+  const expectedResolved = evalCase.expectedResolvedFollowUpIds;
+  const expectedUnresolved = evalCase.expectedUnresolvedFollowUpIds;
+  const hasResolutionOracle = expectedResolved !== undefined && expectedUnresolved !== undefined;
+
+  const observedResolutions =
+    firstObservation.result._tag === "Succeeded"
+      ? (firstObservation.result.outcome.resolutions ?? []).map(({ id }) => id)
+      : [];
+
+  const observedIds = new Set(observedResolutions);
+  const resolvedIds = new Set(expectedResolved ?? []);
+  const missedResolvedFollowUpIds = (expectedResolved ?? []).filter((id) => !observedIds.has(id));
+
+  const erroneouslyResolvedFollowUpIds = hasResolutionOracle
+    ? [...new Set(observedResolutions.filter((id) => !resolvedIds.has(id)))]
+    : [];
+
+  const canCreditResolutions =
+    hasResolutionOracle && firstObservation.result._tag === "Succeeded" && !firstIncomplete;
+
+  const resolutionStatus: EvalBlockerCaseStatus = !hasResolutionOracle
+    ? "not-applicable"
+    : !canCreditResolutions ||
+        missedResolvedFollowUpIds.length > 0 ||
+        erroneouslyResolvedFollowUpIds.length > 0
+      ? "incomplete"
+      : "complete";
+
   const blockerStatus: EvalBlockerCaseStatus =
     expectedBlockers.length === 0
       ? "not-applicable"
@@ -886,6 +998,21 @@ const caseReport = (
     ),
     blockerRecall: makeRate(firstMatched.size, expectedBlockers.length, firstUnresolved),
     blockerStatus,
+    resolutionRecall: makeRate(
+      canCreditResolutions ? (expectedResolved?.length ?? 0) - missedResolvedFollowUpIds.length : 0,
+      expectedResolved?.length ?? 0,
+      false,
+    ),
+    unresolvedRetention: makeRate(
+      canCreditResolutions
+        ? (expectedUnresolved ?? []).filter((id) => !observedIds.has(id)).length
+        : 0,
+      expectedUnresolved?.length ?? 0,
+      false,
+    ),
+    resolutionStatus,
+    missedResolvedFollowUpIds,
+    erroneouslyResolvedFollowUpIds,
     ...(evalCase.kind === "clean-control"
       ? {
           cleanControlPassed:
@@ -1019,7 +1146,18 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
 
     const eligibleCases = cases.filter((report) => report.blockerStatus !== "not-applicable");
     const defectCases = cases.filter((report) => report.defectStatus !== "not-applicable");
+    const resolutionCases = cases.filter((report) => report.resolutionStatus !== "not-applicable");
     const cleanControls = cases.filter((report) => report.kind === "clean-control");
+
+    const resolutionExpected = cases.reduce(
+      (total, report) => total + report.resolutionRecall.denominator,
+      0,
+    );
+
+    const unresolvedExpected = cases.reduce(
+      (total, report) => total + report.unresolvedRetention.denominator,
+      0,
+    );
 
     variants.push(
       EvalVariantQualityReport.make({
@@ -1041,6 +1179,24 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
             .length,
           total: eligibleCases.length,
         }),
+        resolutionRecall: makeRate(
+          cases.reduce((total, report) => total + report.resolutionRecall.numerator, 0),
+          resolutionExpected,
+          false,
+        ),
+        unresolvedRetention: makeRate(
+          cases.reduce((total, report) => total + report.unresolvedRetention.numerator, 0),
+          unresolvedExpected,
+          false,
+        ),
+        resolutionCases: EvalCaseCompletionSummary.make({
+          complete: resolutionCases.filter((report) => report.resolutionStatus === "complete")
+            .length,
+          incomplete: resolutionCases.filter((report) => report.resolutionStatus === "incomplete")
+            .length,
+          unresolved: 0,
+          total: resolutionCases.length,
+        }),
         cleanControls: EvalCleanControlSummary.make({
           passed: cleanControls.filter((report) => report.cleanControlPassed === true).length,
           total: cleanControls.length,
@@ -1058,8 +1214,9 @@ export const makeQualityReport = Effect.fn("PrReviewEval.makeQualityReport")(fun
   }
 
   return EvalQualityReport.make({
-    version: 5,
+    version: 7,
     observationSetDigest: validated.observationSetDigest,
+    oracleSetDigest: validated.oracleSetDigest,
     runnerVersion: validated.runnerVersion,
     trialCount: validated.trialCount,
     caseSet: validated.cases.map((evalCase) =>
@@ -1095,6 +1252,9 @@ export const renderQualityReport = (report: EvalQualityReport): string =>
         `blocking-recall ${renderRate(variant.blockerRecall)}`,
         `detected ${renderRate(variant.blockerDetection)}`,
         `complete ${variant.blockerCases.complete}/${variant.blockerCases.total}`,
+        `resolution-recall ${renderRate(variant.resolutionRecall)}`,
+        `unresolved-retention ${renderRate(variant.unresolvedRetention)}`,
+        `resolution-cases ${variant.resolutionCases.complete}/${variant.resolutionCases.total}`,
         `precision ${renderRate(quality.precision)}`,
         `blocking-precision ${renderRate(blockingQuality.precision)}`,
         `overstated-blocking ${blockingQuality.overstated}`,

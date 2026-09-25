@@ -5,6 +5,7 @@ import {
   EvalDefectId,
   EvalInputDigest,
   EvalObservationSetDigest,
+  EvalOracleSetDigest,
   EvalVariantId,
 } from "./contracts.ts";
 
@@ -57,8 +58,10 @@ export class EvalFindingJudgment extends Schema.Class<EvalFindingJudgment>(
 )(FindingJudgmentFields) {}
 
 const JudgmentSetFields = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   observationSetDigest: EvalObservationSetDigest,
+  /** A corpus oracle edit invalidates prior finding labels even when observations are unchanged. */
+  oracleSetDigest: EvalOracleSetDigest,
   judgments: Schema.Array(EvalFindingJudgment).check(Schema.isMaxLength(100_000)),
 }).check(
   Schema.makeFilter(

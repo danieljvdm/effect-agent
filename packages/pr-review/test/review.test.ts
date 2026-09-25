@@ -334,7 +334,7 @@ describe("review output boundary", () => {
   );
 
   it.effect.each([false, true])(
-    "default 48k rollover preserves notes and findings while requiring unseen pages again: reread=%s",
+    "48k rollover preserves notes and findings while requiring unseen pages again: reread=%s",
     (reread) =>
       Effect.gen(function* () {
         const logs: Array<unknown> = [];
@@ -456,6 +456,7 @@ describe("review output boundary", () => {
           model,
           guidance: "Keep the exact source contracts.",
           estimateCostMicrousd: () => Effect.succeed(123),
+          contextTokenLimit: 48_000,
         })
           .review(input)
           .pipe(
@@ -627,6 +628,7 @@ describe("review output boundary", () => {
 
       const outcome = yield* makeReviewer({
         costControl: costControl(calls),
+        contextTokenLimit: 48_000,
         model: scriptedModel(() =>
           Stream.unwrap(
             Effect.gen(function* () {

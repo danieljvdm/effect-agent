@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./review-openai": "./src/review-openai.ts"
+    "./review-openai": "./src/review-openai.ts",
+    "./review-repository": "./src/review-repository.ts"
   },
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json",

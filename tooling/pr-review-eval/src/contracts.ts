@@ -2,6 +2,7 @@ import { ReviewReasoningEffort } from "@effect-agent/pr-review-action/review-ope
 import {
   ReviewCompaction,
   ReviewContextTokenLimit,
+  ReviewFollowUp,
   ReviewOutcome,
   ReviewRequest,
   ReviewSeverity,
@@ -23,7 +24,7 @@ export const EvalRunnerVersion = Schema.String.check(
 
 export type EvalRunnerVersion = typeof EvalRunnerVersion.Type;
 
-export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.6");
+export const CURRENT_RUNNER_VERSION = Schema.decodeSync(EvalRunnerVersion)("0.1.7");
 
 export const EvalCaseId = BoundedIdentifier.pipe(
   Schema.brand("@effect-agent/example-pr-review-eval/EvalCaseId"),
@@ -50,6 +51,12 @@ export const EvalObservationSetDigest = Schema.String.check(
 ).pipe(Schema.brand("@effect-agent/example-pr-review-eval/EvalObservationSetDigest"));
 
 export type EvalObservationSetDigest = typeof EvalObservationSetDigest.Type;
+
+export const EvalOracleSetDigest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)).pipe(
+  Schema.brand("@effect-agent/example-pr-review-eval/EvalOracleSetDigest"),
+);
+
+export type EvalOracleSetDigest = typeof EvalOracleSetDigest.Type;
 
 export const EvalVariantId = BoundedIdentifier;
 export type EvalVariantId = typeof EvalVariantId.Type;
@@ -109,6 +116,12 @@ const EvalCaseFields = Schema.Struct({
   ),
   repository: Schema.optionalKey(EvalRepositorySnapshot),
   expectedDefects: Schema.Array(EvalExpectedDefect).check(Schema.isMaxLength(12)),
+  expectedResolvedFollowUpIds: Schema.optionalKey(
+    Schema.Array(ReviewFollowUp.fields.id).check(Schema.isMaxLength(8)),
+  ),
+  expectedUnresolvedFollowUpIds: Schema.optionalKey(
+    Schema.Array(ReviewFollowUp.fields.id).check(Schema.isMaxLength(8)),
+  ),
 }).check(
   Schema.makeFilter(
     (evalCase) => {
@@ -136,6 +149,28 @@ const EvalCaseFields = Schema.Struct({
         "Defect IDs and repository files are unique, case kind matches expected defects, and evidence uses admitted paths",
     },
   ),
+  Schema.makeFilter(
+    (evalCase) => {
+      const resolved = evalCase.expectedResolvedFollowUpIds;
+      const unresolved = evalCase.expectedUnresolvedFollowUpIds;
+
+      if (resolved === undefined && unresolved === undefined) return true;
+      if (resolved === undefined || unresolved === undefined) return false;
+
+      const supplied = (evalCase.request.followUps ?? []).map(({ id }) => id);
+      const expected = [...resolved, ...unresolved];
+      const suppliedIds = new Set(supplied);
+
+      return (
+        supplied.length > 0 &&
+        suppliedIds.size === supplied.length &&
+        expected.length === supplied.length &&
+        new Set(expected).size === expected.length &&
+        expected.every((id) => suppliedIds.has(id))
+      );
+    },
+    { title: "Resolution oracle arrays must partition nonempty distinct supplied follow-up IDs" },
+  ),
 );
 
 export class EvalCase extends Schema.Class<EvalCase>(
@@ -159,6 +194,9 @@ export class EvalSuite extends Schema.Class<EvalSuite>(
 export const EvalReasoningEffort = ReviewReasoningEffort;
 export type EvalReasoningEffort = typeof EvalReasoningEffort.Type;
 
+export const EvalServiceTier = Schema.Literals(["default", "fast"]);
+export type EvalServiceTier = typeof EvalServiceTier.Type;
+
 export class EvalVariantConfiguration extends Schema.Class<EvalVariantConfiguration>(
   "@effect-agent/example-pr-review-eval/EvalVariantConfiguration",
 )({
@@ -167,6 +205,7 @@ export class EvalVariantConfiguration extends Schema.Class<EvalVariantConfigurat
   provider: Schema.Literal("openai"),
   model: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   reasoningEffort: EvalReasoningEffort,
+  serviceTier: EvalServiceTier,
   compaction: ReviewCompaction,
   contextTokenLimit: ReviewContextTokenLimit,
   research: Schema.optionalKey(
@@ -206,6 +245,11 @@ export class EvalTrialFailed extends Schema.TaggedClass<EvalTrialFailed>()("Fail
 export const EvalTrialResult = Schema.Union([EvalTrialSucceeded, EvalTrialFailed]);
 export type EvalTrialResult = typeof EvalTrialResult.Type;
 
+export const EvalRepositorySource = Schema.Struct({
+  mode: Schema.Literal("pinned-git"),
+  digest: EvalInputDigest,
+});
+
 export class EvalObservation extends Schema.Class<EvalObservation>(
   "@effect-agent/example-pr-review-eval/EvalObservation",
 )({
@@ -214,7 +258,10 @@ export class EvalObservation extends Schema.Class<EvalObservation>(
   caseId: EvalCaseId,
   caseVersion: Schema.Literal(1),
   inputDigest: EvalInputDigest,
+  /** Digest of the optional frozen case fixture, whether or not it was used as source. */
   repositoryDigest: Schema.optionalKey(EvalInputDigest),
+  /** Exact trees and ignore policy used by a local Git source replay. */
+  repositorySource: Schema.optionalKey(EvalRepositorySource),
   variant: EvalVariantConfiguration,
   trial: Schema.Int.check(Schema.isGreaterThan(0)),
   recordedAt: Schema.DateTimeUtcFromString,

@@ -26,6 +26,10 @@ optional feature expansion. Before recording a defect, it checks the
 strongest relevant guard, documented exception, or alternative interpretation and establishes
 why the supported trigger still causes concrete impact. It checks base/head causation, boundary
 values, cleanup, concurrency, and whether changed tests would detect the claimed failure.
+For changed decisions over fetched records, it checks producers, filters, page limits, ordering,
+older qualifying records, and records that become eligible between reads. It checks nullable guard
+states and traces error fallbacks to reporting sinks. Findings state the required behavior without
+prescribing an exact edit.
 New features must satisfy their stated contracts, including validation, limits, isolation,
 and aggregation; a bypass can be a defect even when the old code also accepted that input.
 Unrelated old bugs, speculation, style, compiler diagnostics, and generic test requests are
@@ -88,7 +92,7 @@ retains limits of 128 model turns and 512 tool calls. A cost estimator alone doe
 The in-memory history store also limits retained history to 1,024 messages and 4 MiB of content.
 Context rollover does not reset those memory limits.
 
-The default `compaction: "rollover"` strategy uses a 48,000-token working context to bound
+The default `compaction: "rollover"` strategy uses a 128,000-token working context to bound
 context growth during large reviews. Hosts can select `compaction: "prune"`
 and an integer `contextTokenLimit` from 16,000 to 128,000. These settings do not widen host input
 admission or create new spending, turn, or tool allowances. Invalid options fail before model work.
