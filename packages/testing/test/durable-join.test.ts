@@ -281,6 +281,8 @@ layer(Layer.mergeAll(baseLayer, publicationStorageLayer))(
           const prompts: Array<Prompt.Prompt> = [];
           let blocked: "SubmissionReady" | "UserInputRecorded" | undefined;
           let joinedId: SubmissionId | undefined;
+          let failGateRead = false;
+          const gateReadFailure = LifecyclePublicationError.make({ reason: "unavailable" });
           const failures: Array<string> = [];
 
           const handler = LifecyclePublicationHandler.of({
@@ -347,6 +349,13 @@ layer(Layer.mergeAll(baseLayer, publicationStorageLayer))(
             Layer.provide(
               Layer.succeed(ThreadStore, {
                 ...store,
+                lifecyclePublications: {
+                  ...publications,
+                  pendingDeadlineFor: (threadId) =>
+                    failGateRead
+                      ? Effect.fail(gateReadFailure)
+                      : publications.pendingDeadlineFor(threadId),
+                },
                 append: (request) =>
                   store
                     .append(request)
@@ -369,7 +378,10 @@ layer(Layer.mergeAll(baseLayer, publicationStorageLayer))(
             );
 
             yield* drain;
-            const worker = yield* Effect.forkChild(runtime.processThread(agent, host.threadId));
+
+            const worker = yield* Effect.forkChild(
+              Effect.exit(runtime.processThread(agent, host.threadId)),
+            );
 
             yield* Deferred.await(entered);
 
@@ -382,9 +394,20 @@ layer(Layer.mergeAll(baseLayer, publicationStorageLayer))(
             joinedId = joined.submissionId;
             blocked = "SubmissionReady";
             expect(Exit.isFailure(yield* Effect.exit(drain))).toBe(true);
+            failGateRead = true;
             yield* Deferred.succeed(release, undefined);
-            expect(yield* Fiber.join(worker)).toEqual([]);
+            expect(failureOf(yield* Fiber.join(worker))).toMatchObject({
+              _tag: "ThreadStoreError",
+              cause: gateReadFailure,
+            });
+            expect(
+              (yield* readLog("publication-join")).filter(
+                ({ record }) => record.payload._tag === "ModelResponseRecorded",
+              ),
+            ).toHaveLength(1);
             expect(prompts).toHaveLength(1);
+            failGateRead = false;
+            expect(yield* runtime.processThread(agent, host.threadId)).toEqual([]);
             blocked = "UserInputRecorded";
             yield* retry;
             expect(yield* runtime.processThread(agent, host.threadId)).toEqual([]);

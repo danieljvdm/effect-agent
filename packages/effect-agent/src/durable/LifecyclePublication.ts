@@ -2,6 +2,7 @@ import { Clock, Context, Crypto, Effect, Layer, Option, Schema, type Scope } fro
 
 import { SubmissionId, ThreadId } from "../core/Identifiers.ts";
 import { Receipt } from "../core/Receipt.ts";
+import { AssignmentTerminal } from "../core/Worker.ts";
 import { MessageDeliveryKey } from "./MessageDelivery.ts";
 import {
   AbortRequested,
@@ -68,6 +69,8 @@ export const LifecyclePublicationFact = Schema.Union([
   Schema.TaggedStruct("WorkerInboxSealed", {
     threadId: ThreadId,
     activeSubmissionIds: Schema.Array(SubmissionId),
+    /** First native seal winner; null is an explicit stop rather than assignment completion. */
+    terminal: Schema.NullOr(AssignmentTerminal),
   }),
   Schema.TaggedStruct("SubmissionReady", { submissionId: SubmissionId }),
   Schema.TaggedStruct("SubmissionSuspended", {

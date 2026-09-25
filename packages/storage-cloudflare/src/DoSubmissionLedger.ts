@@ -379,6 +379,43 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             .pipe(Effect.mapError(internalFailure("retain lifecycle publication")));
         });
 
+  const retainWorkerSeal = (
+    threadId: string,
+    terminal: Extract<LifecyclePublicationFact, { readonly _tag: "WorkerInboxSealed" }>["terminal"],
+  ) =>
+    lifecycle === undefined
+      ? Effect.void
+      : Effect.gen(function* () {
+          const operation = "retain worker inbox seal";
+
+          const ownerThreadId = yield* Schema.decodeUnknownEffect(
+            SubmissionSnapshot.fields.threadId,
+          )(threadId).pipe(Effect.mapError(internalFailure(operation)));
+
+          const active =
+            yield* sql`SELECT submission_id FROM effect_agent_submissions WHERE thread_id = ${threadId} AND state <> 'settled' ORDER BY queue_sequence`.pipe(
+              Effect.mapError(sqlFailure(operation)),
+            );
+
+          const activeSubmissionIds = yield* Effect.forEach(active, (row) =>
+            decodeSubmissionId(row.submission_id).pipe(Effect.mapError(internalFailure(operation))),
+          );
+
+          yield* lifecycle
+            .retain({
+              id: JSON.stringify([threadId, "inbox-sealed"]),
+              ownerThreadId,
+              createdAt: yield* DateTime.now,
+              fact: {
+                _tag: "WorkerInboxSealed",
+                threadId: ownerThreadId,
+                activeSubmissionIds,
+                terminal,
+              },
+            })
+            .pipe(Effect.mapError(internalFailure(operation)));
+        });
+
   const hitFailpoint = (
     location: DoStorageFailpointLocation,
     operation: string,
@@ -2133,16 +2170,19 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               : [];
 
           if (pending.length === 0) {
-            yield* sql`INSERT OR IGNORE INTO effect_agent_worker_stops (thread_id, terminal)
-              VALUES (${submission.thread_id}, ${terminal})`.pipe(
-              Effect.mapError(sqlFailure(operation)),
-            );
+            const sealed =
+              yield* sql`INSERT OR IGNORE INTO effect_agent_worker_stops (thread_id, terminal)
+              VALUES (${submission.thread_id}, ${terminal}) RETURNING thread_id`.pipe(
+                Effect.mapError(sqlFailure(operation)),
+              );
+
             yield* sql`INSERT OR IGNORE INTO effect_agent_abort_intents (submission_id, author, reason, requested_at)
               SELECT submission_id, ${submission.principal}, ${`Worker assignment ${terminal}`}, ${now.iso}
               FROM effect_agent_submissions WHERE thread_id = ${submission.thread_id} AND state <> 'settled'
               AND submission_id <> ${submission.submission_id}
               AND (joined_host_submission_id IS NULL OR joined_host_submission_id <> ${submission.submission_id}
                 OR input_applied_record_id IS NULL)`.pipe(Effect.mapError(sqlFailure(operation)));
+            if (sealed.length > 0) yield* retainWorkerSeal(submission.thread_id, terminal);
           }
         }
 
@@ -2252,29 +2292,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           Effect.mapError(sqlFailure(operation)),
         );
 
-        if (sealed.length > 0 && lifecycle !== undefined) {
-          const active =
-            yield* sql`SELECT submission_id FROM effect_agent_submissions WHERE thread_id = ${validated.threadId} AND state <> 'settled' ORDER BY queue_sequence`.pipe(
-              Effect.mapError(sqlFailure(operation)),
-            );
-
-          const activeSubmissionIds = yield* Effect.forEach(active, (row) =>
-            decodeSubmissionId(row.submission_id).pipe(Effect.mapError(internalFailure(operation))),
-          );
-
-          yield* lifecycle
-            .retain({
-              id: JSON.stringify([validated.threadId, "inbox-sealed"]),
-              ownerThreadId: validated.threadId,
-              createdAt: yield* DateTime.now,
-              fact: {
-                _tag: "WorkerInboxSealed",
-                threadId: validated.threadId,
-                activeSubmissionIds,
-              },
-            })
-            .pipe(Effect.mapError(internalFailure(operation)));
-        }
+        if (sealed.length > 0) yield* retainWorkerSeal(validated.threadId, null);
 
         return rows.length;
       }),

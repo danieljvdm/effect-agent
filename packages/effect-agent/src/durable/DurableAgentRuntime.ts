@@ -6252,10 +6252,13 @@ const make = Effect.fn("DurableAgentRuntime.make")(function* (
         });
 
       const yieldForPublication = Effect.gen(function* () {
-        if (!(yield* recordHalt(publicationPending(submission.threadId)))) return;
+        const pending = yield* Effect.exit(publicationPending(submission.threadId));
+
+        if (Exit.isSuccess(pending) && !pending.value) return;
         // A completed plain-text response may not yet have reached beforeTurn. Retain it
-        // before closing the Attempt, exactly as the existing voluntary yield checkpoint does.
+        // before either a publication wait or its failed state read closes the Attempt.
         yield* recordHalt(commitPendingTurn);
+        if (Exit.isFailure(pending)) return yield* recordHalt(Effect.failCause(pending.cause));
         yield* Deferred.succeed(yieldSignal, undefined);
 
         return yield* Effect.never;

@@ -432,6 +432,9 @@ Pending owner facts also gate active input joins and internal input handoffs at 
 checkpoints. A yielded Attempt retains its completed Turn and joined input receipts before
 recovery waits for acknowledgement. `AbortIntentRecorded` reports the ledger's exact accepted
 abort intent even when execution has not yet appended its canonical abort record.
+`WorkerInboxSealed.terminal` retains the first actual native seal decision: an assignment's
+`completed`, `failed`, or `cancelled` outcome, or `null` for an explicit stop. A newer unapplied
+input can veto a completion, so a Run's settlement alone does not establish an inbox seal.
 
 `source` contains immutable private admission evidence, resolved by exact native identities.
 Delivery facts carry their retained envelope and accepted receipt. Select declared public fields;

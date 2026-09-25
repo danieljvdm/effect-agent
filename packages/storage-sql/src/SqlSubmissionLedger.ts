@@ -366,6 +366,44 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
 
   const admissionFence = yield* SubmissionAdmissionFence;
 
+  const retainWorkerSeal = (
+    threadId: string,
+    terminal: Extract<LifecyclePublicationFact, { readonly _tag: "WorkerInboxSealed" }>["terminal"],
+  ) =>
+    lifecycle === undefined
+      ? Effect.void
+      : Effect.gen(function* () {
+          const operation = "retain worker inbox seal";
+
+          const ownerThreadId = yield* Schema.decodeUnknownEffect(
+            SubmissionSnapshot.fields.threadId,
+          )(threadId).pipe(Effect.mapError(internalFailure(operation)));
+
+          const active =
+            yield* sql`SELECT submission_id FROM ${relation("effect_agent_submissions")} WHERE thread_id = ${threadId} AND state <> 'settled' ORDER BY queue_sequence`.pipe(
+              execute,
+              Effect.mapError(sqlFailure(operation)),
+            );
+
+          const activeSubmissionIds = yield* Effect.forEach(active, (row) =>
+            decodeSubmissionId(row.submission_id).pipe(Effect.mapError(internalFailure(operation))),
+          );
+
+          yield* lifecycle
+            .retain({
+              id: JSON.stringify([threadId, "inbox-sealed"]),
+              ownerThreadId,
+              createdAt: yield* DateTime.now,
+              fact: {
+                _tag: "WorkerInboxSealed",
+                threadId: ownerThreadId,
+                activeSubmissionIds,
+                terminal,
+              },
+            })
+            .pipe(Effect.mapError(internalFailure(operation)));
+        });
+
   const hitFailpoint = (
     location: SqlStorageFailpointLocation,
     operation: string,
@@ -2057,11 +2095,13 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
               : [];
 
           if (pending.length === 0) {
-            yield* sql`INSERT INTO ${relation("effect_agent_worker_stops")} (thread_id, terminal)
-              VALUES (${submission.thread_id}, ${terminal}) ON CONFLICT DO NOTHING`.pipe(
-              execute,
-              Effect.mapError(sqlFailure(operation)),
-            );
+            const sealed =
+              yield* sql`INSERT INTO ${relation("effect_agent_worker_stops")} (thread_id, terminal)
+              VALUES (${submission.thread_id}, ${terminal}) ON CONFLICT DO NOTHING RETURNING thread_id`.pipe(
+                execute,
+                Effect.mapError(sqlFailure(operation)),
+              );
+
             yield* sql`INSERT INTO ${relation("effect_agent_abort_intents")} (submission_id, author, reason, requested_at)
               SELECT submission_id, ${submission.principal}, ${`Worker assignment ${terminal}`}, ${now.iso}
               FROM ${relation("effect_agent_submissions")} WHERE thread_id = ${submission.thread_id} AND state <> 'settled'
@@ -2071,6 +2111,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
               execute,
               Effect.mapError(sqlFailure(operation)),
             );
+            if (sealed.length > 0) yield* retainWorkerSeal(submission.thread_id, terminal);
           }
         }
 
@@ -2190,30 +2231,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
             Effect.mapError(sqlFailure(operation)),
           );
 
-        if (sealed.length > 0 && lifecycle !== undefined) {
-          const active =
-            yield* sql`SELECT submission_id FROM ${relation("effect_agent_submissions")} WHERE thread_id = ${validated.threadId} AND state <> 'settled' ORDER BY queue_sequence`.pipe(
-              execute,
-              Effect.mapError(sqlFailure(operation)),
-            );
-
-          const activeSubmissionIds = yield* Effect.forEach(active, (row) =>
-            decodeSubmissionId(row.submission_id).pipe(Effect.mapError(internalFailure(operation))),
-          );
-
-          yield* lifecycle
-            .retain({
-              id: JSON.stringify([validated.threadId, "inbox-sealed"]),
-              ownerThreadId: validated.threadId,
-              createdAt: yield* DateTime.now,
-              fact: {
-                _tag: "WorkerInboxSealed",
-                threadId: validated.threadId,
-                activeSubmissionIds,
-              },
-            })
-            .pipe(Effect.mapError(internalFailure(operation)));
-        }
+        if (sealed.length > 0) yield* retainWorkerSeal(validated.threadId, null);
 
         return rows.length;
       }),
