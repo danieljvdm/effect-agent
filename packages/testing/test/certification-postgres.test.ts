@@ -52,15 +52,12 @@ const withTemporaryDatabase = <A, E>(
 
 const combinedAdapters = (url: string) => {
   const storage = PostgresStorage.make({
-    client: { url: Redacted.make(url) },
     observationPollInterval: 1,
   });
 
-  return Layer.mergeAll(
-    storage.threadStore,
-    storage.submissionLedger,
-    storage.clientLayer,
-    NodeCrypto.layer,
+  return Layer.mergeAll(storage.threadStore, storage.submissionLedger).pipe(
+    Layer.provideMerge(NodeCrypto.layer),
+    Layer.provideMerge(PgClient.layer({ url: Redacted.make(url) })),
   );
 };
 

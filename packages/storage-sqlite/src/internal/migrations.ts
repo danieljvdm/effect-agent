@@ -34,7 +34,7 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
   "1_current_thread_storage": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
 
-    yield* createStorageSchema;
+    yield* createStorageSchema();
     yield* createWorkerStops;
     yield* sql`PRAGMA user_version = 14`.withoutTransform;
   }),

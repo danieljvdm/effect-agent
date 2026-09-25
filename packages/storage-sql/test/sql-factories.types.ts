@@ -1,7 +1,6 @@
 import { expectTypeOf } from "@effect/vitest";
 import { Context, Effect, Schema, type Crypto } from "effect";
-import type { SubmissionLedger } from "effect-agent/submission-ledger";
-import type { AppendConflict, FenceRejected, ThreadStore } from "effect-agent/thread-store";
+import type { AppendConflict, FenceRejected } from "effect-agent/thread-store";
 import type { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import type { makeSqlJournal, SqlJournal } from "../src/SqlJournal.ts";
@@ -35,12 +34,6 @@ expectTypeOf<Effect.Services<ThreadConstruction>>().toEqualTypeOf<SqlClient | Cr
 expectTypeOf<Effect.Error<ThreadConstruction>>().toEqualTypeOf<StorageFailure | Corruption>();
 expectTypeOf<Effect.Services<LedgerConstruction>>().toEqualTypeOf<SqlClient | Crypto.Crypto>();
 expectTypeOf<Effect.Error<LedgerConstruction>>().toEqualTypeOf<never>();
-expectTypeOf<
-  Effect.Services<ReturnType<ThreadStore["Service"]["append"]>>
->().toEqualTypeOf<never>();
-expectTypeOf<
-  Effect.Services<ReturnType<SubmissionLedger["Service"]["claim"]>>
->().toEqualTypeOf<never>();
 
 export const preservesTransactionChannels = (journal: Journal) => {
   const transaction = journal.withWriteTransaction("typed body")(

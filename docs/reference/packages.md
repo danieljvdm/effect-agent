@@ -356,29 +356,43 @@ Stores thread history and pending work in one Postgres database, which several N
 share. Rejects incompatible stored versions; no migration path is promised.
 Requires Postgres 16 or newer.
 
-`PostgresStorage.make(options)` returns selectable store Layers sharing one connection pool and
-journal initialization. Merge only the stores the application needs:
+`PostgresStorage.make(options)` returns selectable store Layers requiring an application's
+native Effect `SqlClient`. Thread history and submissions also require `Crypto`. Provide the
+client once at the composition root and reuse the storage instance to share initialization:
 
 ```ts
 import { PostgresStorage } from "@effect-agent/storage-postgres";
+import { NodeCrypto } from "@effect/platform-node";
+import { PgClient } from "@effect/sql-pg";
 import { Layer, Redacted } from "effect";
 
-const storage = PostgresStorage.make({
-  client: { url: Redacted.make("postgres://localhost/effect_agent") },
+const Database = PgClient.layer({
+  url: Redacted.make("postgres://localhost/effect_agent"),
 });
-const Persistence = Layer.mergeAll(storage.threadStore, storage.submissionLedger);
+const storage = PostgresStorage.make();
+const Persistence = Layer.mergeAll(storage.threadStore, storage.submissionLedger).pipe(
+  Layer.provide(NodeCrypto.layer),
+  Layer.provideMerge(Database),
+);
 ```
 
-The same instance provides `scheduleStore`, `activityStore`, `messageDeliveryStore(limits)`,
-and `subscriptionStore(partition)`. Activity progress remains independent of the journal.
+`Persistence` exposes the stores and the same native client for application SQL. The storage
+instance also provides `scheduleStore`, `activityStore`, `messageDeliveryStore(limits)`, and
+`subscriptionStore(partition)`. Activity progress remains independent of the journal.
 The `failpoint` and `activityFailpoint` options accept test handlers.
 
-Writers serialize on one transaction-scoped advisory lock; a blocked writer fails with the
-retryable `PostgresWriteContention`. The `schema` option selects the schema on every pooled
-connection through Postgres startup settings. `storage.clientLayer` exposes the same client Layer for
-application SQL. `PostgresStorageClient.layer` also supports standalone client composition,
-decoding `BIGINT` to safe integers as the stored row schemas require.
-The `effect-agent/sql-memory-store` ports stay SQLite-only.
+The `schema` option qualifies storage tables and defaults to `public`. It leaves the client's
+search path unchanged; pre-provisioned schemas need no database-wide `CREATE` permission.
+Storage decodes native `BIGINT` values to safe integers and uses its persisted column names,
+while application queries keep the client's codecs and name transformations.
+
+Writes use `READ COMMITTED` and serialize on one transaction-scoped advisory lock. A lock timeout
+appears as a retryable `PostgresWriteContention` cause in thread and submission errors; other stores
+report their own storage errors. Invoke storage writes and snapshot reads outside an existing
+SQL transaction: they own top-level transactions and reject nesting with a typed failure.
+Identifiers and other text parameters must contain valid Unicode without NUL; canonical JSON
+payloads still preserve arbitrary strings. The `effect-agent/sql-memory-store` ports stay
+SQLite-only.
 
 ### `@effect-agent/platform-node`
 

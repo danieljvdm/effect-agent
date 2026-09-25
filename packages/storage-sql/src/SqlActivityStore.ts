@@ -16,7 +16,7 @@ import { Digest } from "effect-agent/records";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 
-import type { SqlWriteTransaction } from "./SqlStorage.ts";
+import { makeSqlQuery, SqlInteger, SqlNumber, type SqlWriteTransaction } from "./SqlStorage.ts";
 
 const STORAGE_VERSION = 1 as const;
 const StoredJson = Schema.String.check(Schema.isMaxLength(16 * 1024 * 1024));
@@ -29,18 +29,18 @@ class ActivityStateRow extends Schema.Class<ActivityStateRow>(
   processor_id: ActivityProcessorKey.fields.processorId,
   processor_version: ActivityProcessorKey.fields.processorVersion,
   thread_id: ActivityProcessorKey.fields.threadId,
-  format_version: Schema.Int,
-  through_sequence: ActivityProgress.fields.throughSequence,
-  epoch: ActivityProgress.fields.epoch,
+  format_version: SqlInteger,
+  through_sequence: SqlInteger.pipe(Schema.decodeTo(ActivityProgress.fields.throughSequence)),
+  epoch: SqlInteger.pipe(Schema.decodeTo(ActivityProgress.fields.epoch)),
   owner: ActivityProgress.fields.owner,
-  lease_expires_at: ActivityProgress.fields.leaseExpiresAt,
+  lease_expires_at: SqlNumber.pipe(Schema.decodeTo(ActivityProgress.fields.leaseExpiresAt)),
   progress_json: StoredJson,
 }) {}
 
 class ActivityChangeCountRow extends Schema.Class<ActivityChangeCountRow>(
   "@effect-agent/storage-sql/ActivityChangeCountRow",
 )({
-  changed: Schema.Int,
+  changed: SqlInteger,
 }) {}
 
 const StoredVersionHeader = Schema.Struct({ version: Schema.Int });
@@ -155,8 +155,10 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
     ActivityStoreError,
     SqlClientService.SqlClient
   > = Effect.void,
+  namespace?: string,
 ) {
   const sql = yield* SqlClientService.SqlClient;
+  const { table: relation, execute } = makeSqlQuery(sql, namespace);
   const failpoint = yield* ActivityMutationFailpoint;
 
   yield* failpoint.hit("activity:initialize:before");
@@ -173,19 +175,19 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
       );
 
       yield* sql`
-        CREATE TABLE IF NOT EXISTS effect_agent_activity_metadata (
+        CREATE TABLE IF NOT EXISTS ${relation("effect_agent_activity_metadata")} (
           component TEXT PRIMARY KEY NOT NULL,
           version ${integer} NOT NULL
         )
-      `;
+      `.pipe(execute);
 
       const metadataRows = yield* sql<Record<string, unknown>>`
-        SELECT version FROM effect_agent_activity_metadata
+        SELECT version FROM ${relation("effect_agent_activity_metadata")}
         WHERE component = ${"activity"}
-      `;
+      `.pipe(execute);
 
       const metadata = yield* decodeRows(
-        StoredVersionHeader,
+        Schema.Struct({ version: SqlInteger }),
         metadataRows,
         "decode activity schema version",
       );
@@ -200,17 +202,19 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
       }
       if (currentVersion === undefined) {
         const tableRows = yield* sql.onDialectOrElse({
-          pg: () => sql<Record<string, unknown>>`
+          pg: () =>
+            sql<Record<string, unknown>>`
             SELECT c.relname AS name FROM pg_class c
             JOIN pg_namespace n ON n.oid = c.relnamespace
             WHERE c.relkind IN ('r', 'p')
               AND c.relname = 'effect_agent_activity_processor_state_v1'
-              AND n.nspname = ANY (current_schemas(FALSE))
-          `,
-          orElse: () => sql<Record<string, unknown>>`
+              AND n.nspname = ${namespace ?? sql`current_schema()`}
+          `.pipe(execute),
+          orElse: () =>
+            sql<Record<string, unknown>>`
             SELECT name FROM sqlite_master
             WHERE type = 'table' AND name = 'effect_agent_activity_processor_state_v1'
-          `,
+          `.pipe(execute),
         });
 
         const existing = yield* decodeRows(
@@ -223,7 +227,7 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
           return yield* storeError("initialize activity schema", "incompatible");
         }
         yield* sql`
-          CREATE TABLE effect_agent_activity_processor_state_v1 (
+          CREATE TABLE ${relation("effect_agent_activity_processor_state_v1")} (
             processor_id TEXT NOT NULL,
             processor_version TEXT NOT NULL,
             thread_id TEXT NOT NULL,
@@ -235,18 +239,18 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
             progress_json TEXT NOT NULL,
             PRIMARY KEY (processor_id, processor_version, thread_id)
           )
-        `;
+        `.pipe(execute);
         yield* sql`
-          INSERT INTO effect_agent_activity_metadata (component, version)
+          INSERT INTO ${relation("effect_agent_activity_metadata")} (component, version)
           VALUES (${"activity"}, ${STORAGE_VERSION})
-        `;
+        `.pipe(execute);
       }
       yield* sql`
         SELECT processor_id, processor_version, thread_id, format_version,
           through_sequence, epoch, owner, lease_expires_at, progress_json
-        FROM effect_agent_activity_processor_state_v1
+        FROM ${relation("effect_agent_activity_processor_state_v1")}
         LIMIT 0
-      `;
+      `.pipe(execute);
     }),
   ).pipe(Effect.catchTag("SqlError", () => Effect.fail(storeError("initialize activity schema"))));
   yield* failpoint.hit("activity:initialize:after");
@@ -259,11 +263,11 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
       sql<Record<string, unknown>>`
         SELECT processor_id, processor_version, thread_id, format_version,
           through_sequence, epoch, owner, lease_expires_at, progress_json
-        FROM effect_agent_activity_processor_state_v1
+        FROM ${relation("effect_agent_activity_processor_state_v1")}
         WHERE processor_id = ${key.processorId}
           AND processor_version = ${key.processorVersion}
           AND thread_id = ${key.threadId}
-      `,
+      `.pipe(execute),
       operation,
     );
 
@@ -313,7 +317,7 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
     const progressJson = yield* encodeProgress(progress, operation);
 
     const changed = yield* sql<Record<string, unknown>>`
-      INSERT INTO effect_agent_activity_processor_state_v1 (
+      INSERT INTO ${relation("effect_agent_activity_processor_state_v1")} (
         processor_id, processor_version, thread_id, format_version, through_sequence,
         epoch, owner, lease_expires_at, progress_json
       ) VALUES (
@@ -322,7 +326,7 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
         ${progress.leaseExpiresAt}, ${progressJson}
       )
       RETURNING 1 AS changed
-    `;
+    `.pipe(execute);
 
     yield* checkChanged(changed, operation);
   });
@@ -335,7 +339,7 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
     const progressJson = yield* encodeProgress(next, operation);
 
     const changed = yield* sql<Record<string, unknown>>`
-      UPDATE effect_agent_activity_processor_state_v1
+      UPDATE ${relation("effect_agent_activity_processor_state_v1")}
       SET format_version = ${STORAGE_VERSION},
           through_sequence = ${next.throughSequence},
           epoch = ${next.epoch},
@@ -348,7 +352,7 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
         AND through_sequence = ${current.throughSequence}
         AND epoch = ${current.epoch}
       RETURNING 1 AS changed
-    `;
+    `.pipe(execute);
 
     yield* checkChanged(changed, operation);
   });

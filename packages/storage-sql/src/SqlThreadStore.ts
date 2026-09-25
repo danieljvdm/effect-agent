@@ -43,6 +43,7 @@ export interface SqlThreadStoreOptions<
   C extends Diagnostic,
   F extends Diagnostic,
 > {
+  readonly namespace?: string;
   readonly errors: SqlStorageErrors<S, C>;
   readonly hitFailpoint: SqlStorageFailpoint<F>;
   readonly observationPollInterval: number;
@@ -847,7 +848,7 @@ export const makeSqlThreadStore = Effect.fn("SqlThreadStore.make")(function* <
     return Option.some(checkpoint);
   });
 
-  const selectedReads = yield* makeSelectedReads(decodeEnvelope);
+  const selectedReads = yield* makeSelectedReads(decodeEnvelope, options.namespace);
 
   const threadStore = ThreadStore.of({
     countPeerMessages: selectedReads.countPeerMessages,

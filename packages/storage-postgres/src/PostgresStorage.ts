@@ -4,7 +4,6 @@ import { makeSqlScheduleStore } from "@effect-agent/storage-sql/sql-schedule-sto
 import { makeSqlSubmissionLedger } from "@effect-agent/storage-sql/sql-submission-ledger";
 import { makeSqlSubscriptionStore } from "@effect-agent/storage-sql/sql-subscription-store";
 import { makeSqlThreadStore } from "@effect-agent/storage-sql/sql-thread-store";
-import { NodeCrypto } from "@effect/platform-node";
 import { Duration, Effect, Layer, Schema } from "effect";
 import {
   ActivityMutationFailpoint,
@@ -28,7 +27,6 @@ import {
   postgresStorageErrors,
   withWriterLockTransaction,
 } from "./internal/postgres-storage.ts";
-import * as PostgresStorageClient from "./PostgresStorageClient.ts";
 import {
   PostgresStorageError,
   type PostgresStorageFailpointError,
@@ -46,12 +44,14 @@ const Settings = Schema.Struct({
   lockTimeout: Schema.Int.check(Schema.isGreaterThan(0)),
   ownershipLeaseDuration: Schema.Int.check(Schema.isGreaterThan(0)),
   verifyOnOpen: Schema.Boolean,
-  schema: PostgresStorageClient.SchemaName,
+  schema: Schema.NonEmptyString.check(
+    Schema.isMaxLength(63),
+    Schema.isPattern(/^[a-z_][a-z0-9_]*$/),
+  ),
 });
 
 export interface PostgresStorageOptions {
-  readonly client: PostgresStorageClient.PostgresClientOptions;
-  /** Selected on every connection and created under the writer lock when absent. Defaults to public. */
+  /** Namespace for qualified storage tables, created under the writer lock when absent. Defaults to public. */
   readonly schema?: string | undefined;
   /** Journal observation polling interval in milliseconds. Defaults to 25. */
   readonly observationPollInterval?: number | undefined;
@@ -66,11 +66,11 @@ export interface PostgresStorageOptions {
 }
 
 /**
- * Compose selected storage ports over one pool. Reuse this result when merging its Layers:
- * Effect memoizes their shared connection and format initialization for the composition's Scope.
- * Activity progress remains independent and does not initialize the Thread journal.
+ * Compose selected storage ports over the application's native PostgreSQL SqlClient.
+ * Provide SqlClient and Crypto at the composition root; reuse this result to share format
+ * initialization. Activity progress remains independent and does not initialize the Thread journal.
  */
-export const make = (options: PostgresStorageOptions) => {
+export const make = (options: PostgresStorageOptions = {}) => {
   const settings = Schema.decodeEffect(Settings)({
     observationPollInterval: options.observationPollInterval ?? 25,
     lockTimeout: options.lockTimeout ?? 5_000,
@@ -90,18 +90,10 @@ export const make = (options: PostgresStorageOptions) => {
 
   const hitFailpoint: PostgresStorageFailpointHandler = options.failpoint ?? (() => Effect.void);
 
-  const clientLayer = Layer.unwrap(
-    Effect.map(settings, (config) => PostgresStorageClient.layer(options.client, config.schema)),
-  );
-
-  const initialized = Layer.effectDiscard(Effect.flatMap(settings, initializePostgresStorage)).pipe(
-    Layer.provide(clientLayer),
-  );
-
-  const ready = Layer.mergeAll(clientLayer, initialized);
+  const initialized = Layer.effectDiscard(Effect.flatMap(settings, initializePostgresStorage));
 
   const journal = Effect.flatMap(settings, (config) =>
-    makePostgresJournal(config.lockTimeout, hitFailpoint),
+    makePostgresJournal(config.lockTimeout, hitFailpoint, config.schema),
   );
 
   const threadStore = Layer.effectContext(
@@ -110,18 +102,20 @@ export const make = (options: PostgresStorageOptions) => {
 
       return yield* makeSqlThreadStore(yield* journal, {
         ...config,
+        namespace: config.schema,
         errors: postgresStorageErrors,
         hitFailpoint,
         offsetPrefix: "effect-agent-postgres@1:",
       });
     }),
-  ).pipe(Layer.provide(ready), Layer.provide(NodeCrypto.layer));
+  ).pipe(Layer.provide(initialized));
 
   const submissionLedger = Layer.effectContext(
     Effect.gen(function* () {
       const config = yield* settings;
 
       return yield* makeSqlSubmissionLedger(yield* journal, {
+        namespace: config.schema,
         errors: postgresStorageErrors,
         hitFailpoint,
         ownershipLeaseDuration: config.ownershipLeaseDuration,
@@ -132,7 +126,7 @@ export const make = (options: PostgresStorageOptions) => {
         },
       });
     }),
-  ).pipe(Layer.provide(ready), Layer.provide(NodeCrypto.layer));
+  ).pipe(Layer.provide(initialized));
 
   const scheduleStore = Layer.effect(
     ScheduleStore,
@@ -140,9 +134,12 @@ export const make = (options: PostgresStorageOptions) => {
       const sql = yield* SqlClient.SqlClient;
       const config = yield* settings;
 
-      return yield* makeSqlScheduleStore(withWriterLockTransaction(sql, config.lockTimeout));
+      return yield* makeSqlScheduleStore(
+        withWriterLockTransaction(sql, config.lockTimeout),
+        config.schema,
+      );
     }),
-  ).pipe(Layer.provide(ready));
+  ).pipe(Layer.provide(initialized));
 
   const messageDeliveryStore = (limits?: MessageDeliveryStoreLimits) =>
     Layer.effect(
@@ -152,10 +149,11 @@ export const make = (options: PostgresStorageOptions) => {
         const config = yield* settings;
 
         return yield* makeSqlMessageDeliveryStore(limits, {
+          namespace: config.schema,
           transaction: withWriterLockTransaction(sql, config.lockTimeout),
         });
       }),
-    ).pipe(Layer.provide(ready));
+    ).pipe(Layer.provide(initialized));
 
   const subscriptionStore = (owned: SourcePartition) =>
     Layer.unwrap(
@@ -172,6 +170,7 @@ export const make = (options: PostgresStorageOptions) => {
               // Retention DDL must share the writer lock with format initialization.
               return yield* transaction(
                 makeSqlSubscriptionStore(partition, {
+                  namespace: config.schema,
                   transaction,
                   maxStoredJsonLength: 16 * 1024 * 1024,
                 }),
@@ -181,7 +180,7 @@ export const make = (options: PostgresStorageOptions) => {
                 ),
               );
             }),
-          ).pipe(Layer.provide(ready)),
+          ).pipe(Layer.provide(initialized)),
         ),
       ),
     );
@@ -202,10 +201,10 @@ export const make = (options: PostgresStorageOptions) => {
             }),
           ),
         ),
+        config.schema,
       );
     }),
   ).pipe(
-    Layer.provide(clientLayer),
     Layer.provide(
       options.activityFailpoint === undefined
         ? ActivityMutationFailpoint.layer
@@ -214,7 +213,6 @@ export const make = (options: PostgresStorageOptions) => {
   );
 
   return {
-    clientLayer,
     threadStore,
     submissionLedger,
     scheduleStore,

@@ -239,7 +239,7 @@ const predecessorColumns = {
 const checkPredecessorLayout = Effect.fn("SqliteJournal.checkPredecessorLayout")(function* (
   version: 8 | 9 | 10 | 12,
 ) {
-  const sql = yield* SqlClient.SqlClient;
+  const sql = (yield* SqlClient.SqlClient).withoutTransforms();
 
   const messageColumns =
     version === 8
@@ -303,7 +303,7 @@ const checkPredecessorLayout = Effect.fn("SqliteJournal.checkPredecessorLayout")
 });
 
 export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(function* () {
-  const sql = yield* SqlClient.SqlClient;
+  const sql = (yield* SqlClient.SqlClient).withoutTransforms();
   const { hit: failpoint } = yield* SqliteStorageFailpoint;
   const { busyTimeout } = yield* SqliteStorageConfig;
 
@@ -528,9 +528,9 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
           yield* createNonterminalIndex;
           yield* failpoint("upgrade:after-mutation");
           yield* failpoint("upgrade:before-version");
-          yield* createNativeReadIndexes;
-          yield* createMessageDeliveryPendingIndex;
-          yield* seedNativeReadIndexes.pipe(
+          yield* createNativeReadIndexes();
+          yield* createMessageDeliveryPendingIndex();
+          yield* seedNativeReadIndexes().pipe(
             Effect.catchTag("ThreadStoreError", (error) =>
               SqliteStorageCorruptionError.make({
                 table: "effect_agent_canonical_records",
@@ -639,9 +639,9 @@ export const initializeSqliteJournal = Effect.fn("SqliteJournal.initialize")(fun
               message: "Predecessor storage is missing its required nonterminal index",
             });
           yield* failpoint("upgrade:before-mutation");
-          yield* createNativeReadIndexes;
-          yield* createMessageDeliveryPendingIndex;
-          yield* seedNativeReadIndexes.pipe(
+          yield* createNativeReadIndexes();
+          yield* createMessageDeliveryPendingIndex();
+          yield* seedNativeReadIndexes().pipe(
             Effect.catchTag("ThreadStoreError", (error) =>
               SqliteStorageCorruptionError.make({
                 table: "effect_agent_canonical_records",

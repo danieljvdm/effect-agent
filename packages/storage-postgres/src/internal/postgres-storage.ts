@@ -1,7 +1,9 @@
 import { makeSqlJournal } from "@effect-agent/storage-sql/sql-journal";
 import {
   makeRowDecoder,
+  makeSqlQuery,
   makeSqlTransaction,
+  SqlInteger,
   type StorageErrorFields,
   type CorruptionErrorFields,
 } from "@effect-agent/storage-sql/sql-storage";
@@ -52,13 +54,18 @@ export const classifyWriteFailure =
         })
       : storageError(operation)(cause);
 
-/** The lock wait is interruptible; the shared transaction rolls back before releasing its connection. */
+/**
+ * READ COMMITTED observes the preceding writer's changes after the interruptible lock wait.
+ * The shared transaction rolls back before releasing its connection on failure.
+ */
 export const withWriterLockTransaction = (sql: SqlClient.SqlClient, lockTimeout: number) =>
   makeSqlTransaction(sql, {
-    begin: "BEGIN",
+    begin: "BEGIN ISOLATION LEVEL READ COMMITTED",
     prelude: Effect.gen(function* () {
-      yield* sql`SELECT set_config('lock_timeout', ${`${lockTimeout}ms`}, true)`;
-      yield* sql`SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`;
+      const { execute } = makeSqlQuery(sql);
+
+      yield* execute(sql`SELECT set_config('lock_timeout', ${`${lockTimeout}ms`}, true)`);
+      yield* execute(sql`SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`);
     }),
   });
 
@@ -69,50 +76,37 @@ const withReadTransaction = (sql: SqlClient.SqlClient) =>
 /** Run while holding the writer transaction, including when this schema does not yet exist. */
 export const ensurePostgresSchema = Effect.fnUntraced(function* (schema: string) {
   const sql = yield* SqlClient.SqlClient;
+  const { execute } = makeSqlQuery(sql);
 
-  yield* sql`CREATE SCHEMA IF NOT EXISTS ${sql(schema)}`.withoutTransform;
-  const rows = yield* sql`SELECT current_schema() AS name`;
+  const existing = yield* execute(sql`SELECT 1 FROM pg_namespace WHERE nspname = ${schema}`);
 
-  const decoded = yield* Schema.decodeUnknownEffect(
-    Schema.Array(Schema.Struct({ name: Schema.NullOr(Schema.String) })),
-  )(rows).pipe(
-    Effect.mapError((cause) =>
-      PostgresStorageError.make({
-        operation: "verify storage schema",
-        cause,
-        message: cause.message,
-      }),
-    ),
-  );
-
-  if (decoded.length !== 1 || decoded[0]?.name !== schema) {
-    return yield* PostgresStorageError.make({
-      operation: "verify storage schema",
-      message: `The client must select schema ${schema} for every pooled connection. Use PostgresStorageClient.layer(client, schema).`,
-    });
+  // Even IF NOT EXISTS requires database-wide CREATE permission.
+  if (existing.length === 0) {
+    yield* execute(sql`CREATE SCHEMA IF NOT EXISTS ${sql(schema)}`);
   }
 });
 
 export const CurrentPostgresStorageVersion = 1;
 
 /** Initialize empty storage with the complete current schema. */
-const createPostgresStorageSchema = Effect.gen(function* () {
+const createPostgresStorageSchema = Effect.fnUntraced(function* (namespace: string) {
   const sql = yield* SqlClient.SqlClient;
+  const { execute, table } = makeSqlQuery(sql, namespace);
 
   // The boolean primary key is what keeps the version marker single-row: no second value can
   // satisfy the constraint. SQLite records its format in `PRAGMA user_version` instead.
-  yield* sql`
-    CREATE TABLE effect_agent_storage_version (
+  yield* execute(sql`
+    CREATE TABLE ${table("effect_agent_storage_version")} (
       id BOOLEAN PRIMARY KEY NOT NULL,
       version BIGINT NOT NULL,
       CONSTRAINT effect_agent_storage_version_single_row CHECK (id)
     )
-  `;
-  yield* createStorageSchema;
-  yield* sql`
-    INSERT INTO effect_agent_storage_version (id, version)
+  `);
+  yield* createStorageSchema(namespace);
+  yield* execute(sql`
+    INSERT INTO ${table("effect_agent_storage_version")} (id, version)
     VALUES (TRUE, ${CurrentPostgresStorageVersion})
-  `;
+  `);
 });
 
 const VERSION_TABLE = "effect_agent_storage_version";
@@ -151,7 +145,7 @@ const REQUIRED_OBJECTS = [
 ] as const;
 
 const PostgresVersionRow = Schema.Struct({
-  version: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  version: SqlInteger.check(Schema.isGreaterThanOrEqualTo(0)),
 });
 
 const PostgresNameRow = Schema.Struct({ name: Schema.NonEmptyString });
@@ -177,13 +171,14 @@ export const initializePostgresStorage = Effect.fn("PostgresStorage.initialize")
   readonly schema: string;
 }) {
   const sql = yield* SqlClient.SqlClient;
+  const { execute, table } = makeSqlQuery(sql, schema);
   const write = withWriterLockTransaction(sql, lockTimeout);
 
   yield* write(
     Effect.gen(function* () {
       yield* ensurePostgresSchema(schema);
 
-      const existingRows = yield* sql<Record<string, unknown>>`
+      const existingRows = yield* execute(sql<Record<string, unknown>>`
         SELECT c.relname AS name
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -192,7 +187,7 @@ export const initializePostgresStorage = Effect.fn("PostgresStorage.initialize")
           AND starts_with(c.relname, 'effect_agent_')
           AND c.relname NOT IN ('effect_agent_activity_metadata', 'effect_agent_activity_processor_state_v1')
         ORDER BY c.relname
-      `.pipe(Effect.mapError(storageError("inspect storage schema")));
+      `).pipe(Effect.mapError(storageError("inspect storage schema")));
 
       const existing = yield* decodeRows(
         Schema.Array(PostgresNameRow),
@@ -212,15 +207,15 @@ export const initializePostgresStorage = Effect.fn("PostgresStorage.initialize")
           });
         }
 
-        yield* createPostgresStorageSchema.pipe(
+        yield* createPostgresStorageSchema(schema).pipe(
           Effect.mapError(storageError("initialize current storage")),
         );
       } else {
-        const versionRows = yield* sql<Record<string, unknown>>`
+        const versionRows = yield* execute(sql<Record<string, unknown>>`
           SELECT version
-          FROM effect_agent_storage_version
+          FROM ${table("effect_agent_storage_version")}
           WHERE id
-        `.pipe(Effect.mapError(storageError("read storage version")));
+        `).pipe(Effect.mapError(storageError("read storage version")));
 
         const version = yield* decodeSingleRow(
           Schema.Array(PostgresVersionRow),
@@ -242,7 +237,7 @@ export const initializePostgresStorage = Effect.fn("PostgresStorage.initialize")
         }
       }
 
-      const requiredRows = yield* sql<Record<string, unknown>>`
+      const requiredRows = yield* execute(sql<Record<string, unknown>>`
     SELECT c.relname AS name
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -250,7 +245,7 @@ export const initializePostgresStorage = Effect.fn("PostgresStorage.initialize")
       AND c.relkind IN ('r', 'p', 'i')
       AND c.relname IN ${sql.in(REQUIRED_OBJECTS)}
     ORDER BY c.relname
-  `.pipe(Effect.mapError(storageError("verify storage tables")));
+  `).pipe(Effect.mapError(storageError("verify storage tables")));
 
       const required = yield* decodeRows(
         Schema.Array(PostgresNameRow),
@@ -282,12 +277,14 @@ export const makePostgresJournal = Effect.fnUntraced(function* (
   hitFailpoint: (
     location: PostgresStorageFailpointLocation,
   ) => Effect.Effect<void, PostgresStorageFailpointError>,
+  namespace: string,
 ) {
   const sql = yield* SqlClient.SqlClient;
   const write = withWriterLockTransaction(sql, lockTimeout);
   const read = withReadTransaction(sql);
 
   return yield* makeSqlJournal({
+    namespace,
     errors: postgresStorageErrors,
     hitFailpoint,
     transactions: {
@@ -295,9 +292,14 @@ export const makePostgresJournal = Effect.fnUntraced(function* (
         (operation) =>
         <A, E, R>(body: Effect.Effect<A, E, R>) =>
           write(body).pipe(
-            Effect.mapError((error) =>
-              isSqlError(error) ? classifyWriteFailure(operation)(error) : error,
-            ),
+            Effect.mapError((error) => {
+              if (isSqlError(error)) return classifyWriteFailure(operation)(error);
+              if (Schema.is(PostgresStorageError)(error) && isSqlError(error.cause)) {
+                return classifyWriteFailure(error.operation)(error.cause);
+              }
+
+              return error;
+            }),
           ),
       withReadTransaction:
         (operation) =>
