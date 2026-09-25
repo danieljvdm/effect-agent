@@ -38,7 +38,7 @@ jobs:
         with:
           bun-version: 1.4.2
       - name: Install dependencies
-        run: bunx --package vite-plus@0.3.2 vp install --frozen-lockfile --ignore-scripts
+        run: bunx --package vite-plus@0.3.3 vp install --frozen-lockfile --ignore-scripts
       - name: Patch Effect TypeScript-Go
         run: ./node_modules/.bin/vp run patch:tsgo
       - name: Prepare isolated checkout attempt

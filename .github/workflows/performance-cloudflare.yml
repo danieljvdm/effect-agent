@@ -74,7 +74,7 @@ jobs:
         shell: bash
         run: |
           cd candidate
-          bunx --package vite-plus@0.3.2 vp install --frozen-lockfile --ignore-scripts
+          bunx --package vite-plus@0.3.3 vp install --frozen-lockfile --ignore-scripts
           if [[ -n "$REFERENCE_SHA" ]]; then
             cd ../reference
             ../candidate/node_modules/.bin/vp install --frozen-lockfile --ignore-scripts

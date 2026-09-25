@@ -4,7 +4,7 @@ FROM docker.io/cloudflare/sandbox:0.13.0-next.738.2
 
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 ENV VP_HOME=/opt/vite-plus
-ENV VP_VERSION=0.3.2
+ENV VP_VERSION=0.3.3
 ENV CI=true
 ENV PATH="/opt/vite-plus/bin:/usr/local/bin:${PATH}"
 
