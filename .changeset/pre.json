@@ -107,6 +107,7 @@
     "durable-api-audit",
     "durable-event-subscriptions",
     "durable-host-publication",
+    "durable-lifecycle-publication",
     "durable-progress-wait",
     "durable-run-duration",
     "durable-subagent-capabilities",
