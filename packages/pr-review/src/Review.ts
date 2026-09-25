@@ -635,7 +635,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
     function* (request: ReviewRequest) {
       const configuration = yield* Schema.decodeEffect(ReviewContextOptions)({
         compaction: options.compaction ?? "rollover",
-        contextTokenLimit: options.contextTokenLimit ?? 128_000,
+        contextTokenLimit: options.contextTokenLimit ?? 48_000,
         researchConcurrency: options.research?.concurrency ?? 2,
       }).pipe(
         Effect.mapError(() =>
