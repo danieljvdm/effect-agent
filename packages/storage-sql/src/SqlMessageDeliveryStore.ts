@@ -82,7 +82,7 @@ const deliveryMetadata = (record: MessageDeliveryRecord): string => {
 export const createWorkerControlIndexes = (namespace?: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const { table: relation, execute } = makeSqlQuery(sql, namespace);
+    const { table: relation, execute } = yield* makeSqlQuery(namespace);
 
     yield* sql`CREATE INDEX effect_agent_worker_starts ON ${relation("effect_agent_message_deliveries")}(owner_thread_id, ${workerField(sql, "delegationId")}, ${workerField(sql, "targetAgentId")}, message_id) WHERE ${workerStart(sql)}`.pipe(
       execute,
@@ -163,7 +163,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
   );
 
   const sql = yield* SqlClient.SqlClient;
-  const { table: relation, execute } = makeSqlQuery(sql, options.namespace);
+  const { table: relation, execute } = yield* makeSqlQuery(options.namespace);
 
   const query = <A extends object>(operation: string, statement: Statement<A>) =>
     execute(statement).pipe(Effect.mapError((cause) => storage(operation, cause)));
@@ -406,7 +406,7 @@ export const makeSqlMessageDeliveryStore = Effect.fn("SqlMessageDeliveryStore.ma
 export const createMessageDeliveryPendingIndex = (namespace?: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const { table: relation, execute } = makeSqlQuery(sql, namespace);
+    const { table: relation, execute } = yield* makeSqlQuery(namespace);
 
     yield* sql`CREATE INDEX effect_agent_message_deliveries_pending ON ${relation("effect_agent_message_deliveries")}(owner_thread_id, message_id) WHERE state NOT IN ('processed', 'refused')`.pipe(
       execute,

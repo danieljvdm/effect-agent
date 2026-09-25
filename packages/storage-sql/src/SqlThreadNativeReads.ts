@@ -86,7 +86,7 @@ const failure = (operation: string, cause?: unknown) =>
 export const createNativeReadIndexes = (namespace?: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const { table: relation, execute } = makeSqlQuery(sql, namespace);
+    const { table: relation, execute } = yield* makeSqlQuery(namespace);
 
     yield* sql.onDialectOrElse({
       orElse: () => Effect.void,
@@ -129,7 +129,7 @@ export const indexCanonicalRecord = Effect.fnUntraced(function* (
   namespace?: string,
 ) {
   const sql = yield* SqlClient.SqlClient;
-  const { table: relation, execute } = makeSqlQuery(sql, namespace);
+  const { table: relation, execute } = yield* makeSqlQuery(namespace);
   const payload = record.payload;
 
   switch (payload._tag) {
@@ -239,7 +239,7 @@ export const makeSelectedReads = Effect.fnUntraced(function* (
   namespace?: string,
 ) {
   const sql = yield* SqlClient.SqlClient;
-  const { table: relation, execute } = makeSqlQuery(sql, namespace);
+  const { table: relation, execute } = yield* makeSqlQuery(namespace);
 
   const snapshot = sql.onDialectOrElse({
     orElse: () => sql.withTransaction,

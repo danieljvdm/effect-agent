@@ -1,6 +1,6 @@
 import { Effect, Exit, Option, Schema, SchemaTransformation } from "effect";
 import type { Cause } from "effect";
-import type { SqlClient } from "effect/unstable/sql/SqlClient";
+import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { SqlError, UnknownError } from "effect/unstable/sql/SqlError";
 import type { Statement } from "effect/unstable/sql/Statement";
 
@@ -28,6 +28,7 @@ export const SqlNumber = Schema.Union([
 /** Apply persisted integer constraints after native numeric decoding. */
 export const SqlInteger = SqlNumber.pipe(Schema.decodeTo(Schema.Int));
 
+// The Unicode flag matches code points, so valid surrogate pairs are accepted.
 const PostgresText = Schema.String.check(
   Schema.makeFilter((value) => !value.includes("\0") && !/[\uD800-\uDFFF]/u.test(value), {
     expected: "PostgreSQL text without NUL or unpaired UTF-16 surrogates",
@@ -38,7 +39,8 @@ const PostgresText = Schema.String.check(
  * Qualify storage relations and execute native statements without application name transforms.
  * PostgreSQL validates text parameters after compilation; escaped canonical JSON stays intact.
  */
-export const makeSqlQuery = (sql: SqlClient, namespace?: string) => {
+export const makeSqlQuery = Effect.fnUntraced(function* (namespace?: string) {
+  const sql = yield* SqlClient;
   const postgres = sql.onDialectOrElse({ pg: () => true, orElse: () => false });
 
   const execute = Effect.fnUntraced(function* <A extends object>(statement: Statement<A>) {
@@ -67,7 +69,7 @@ export const makeSqlQuery = (sql: SqlClient, namespace?: string) => {
     table: (name: string) => sql(namespace === undefined ? name : `${namespace}.${name}`),
     execute,
   };
-};
+});
 
 /** Adapter-owned Schema errors remain concrete in shared operation error channels. */
 export interface Diagnostic extends Cause.YieldableError {

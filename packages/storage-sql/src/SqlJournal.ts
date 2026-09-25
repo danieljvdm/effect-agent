@@ -144,7 +144,7 @@ export const makeSqlJournal = Effect.fn("SqlJournal.make")(function* <
   F extends Diagnostic,
 >(options: SqlJournalOptions<S, C, W, F>) {
   const sql = yield* SqlClient.SqlClient;
-  const { table: relation, execute } = makeSqlQuery(sql, options.namespace);
+  const { table: relation, execute } = yield* makeSqlQuery(options.namespace);
   const failpoint = options.hitFailpoint;
   const { withReadTransaction, withWriteTransaction } = options.transactions;
   const { decodeRows, decodeSingleRow } = makeRowDecoder(options.errors.corruption);

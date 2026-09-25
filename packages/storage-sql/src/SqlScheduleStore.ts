@@ -117,7 +117,7 @@ export const makeSqlScheduleStore = Effect.fn("SqlScheduleStore.make")(function*
   namespace?: string,
 ) {
   const sql = yield* SqlClientService.SqlClient;
-  const { table: relation, execute } = makeSqlQuery(sql, namespace);
+  const { table: relation, execute } = yield* makeSqlQuery(namespace);
   const scheduleFailpoint = yield* ScheduleFailpoint;
 
   const usesCapacity = sql.onDialectOrElse({

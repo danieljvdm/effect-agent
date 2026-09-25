@@ -62,10 +62,8 @@ export const withWriterLockTransaction = (sql: SqlClient.SqlClient, lockTimeout:
   makeSqlTransaction(sql, {
     begin: "BEGIN ISOLATION LEVEL READ COMMITTED",
     prelude: Effect.gen(function* () {
-      const { execute } = makeSqlQuery(sql);
-
-      yield* execute(sql`SELECT set_config('lock_timeout', ${`${lockTimeout}ms`}, true)`);
-      yield* execute(sql`SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`);
+      yield* sql`SELECT set_config('lock_timeout', ${`${lockTimeout}ms`}, true)`.withoutTransform;
+      yield* sql`SELECT pg_advisory_xact_lock(${WRITER_LOCK_KEY})`.withoutTransform;
     }),
   });
 
@@ -76,7 +74,7 @@ const withReadTransaction = (sql: SqlClient.SqlClient) =>
 /** Run while holding the writer transaction, including when this schema does not yet exist. */
 export const ensurePostgresSchema = Effect.fnUntraced(function* (schema: string) {
   const sql = yield* SqlClient.SqlClient;
-  const { execute } = makeSqlQuery(sql);
+  const { execute } = yield* makeSqlQuery();
 
   const existing = yield* execute(sql`SELECT 1 FROM pg_namespace WHERE nspname = ${schema}`);
 
@@ -91,7 +89,7 @@ export const CurrentPostgresStorageVersion = 1;
 /** Initialize empty storage with the complete current schema. */
 const createPostgresStorageSchema = Effect.fnUntraced(function* (namespace: string) {
   const sql = yield* SqlClient.SqlClient;
-  const { execute, table } = makeSqlQuery(sql, namespace);
+  const { execute, table } = yield* makeSqlQuery(namespace);
 
   // The boolean primary key is what keeps the version marker single-row: no second value can
   // satisfy the constraint. SQLite records its format in `PRAGMA user_version` instead.
@@ -171,7 +169,7 @@ export const initializePostgresStorage = Effect.fn("PostgresStorage.initialize")
   readonly schema: string;
 }) {
   const sql = yield* SqlClient.SqlClient;
-  const { execute, table } = makeSqlQuery(sql, schema);
+  const { execute, table } = yield* makeSqlQuery(schema);
   const write = withWriterLockTransaction(sql, lockTimeout);
 
   yield* write(

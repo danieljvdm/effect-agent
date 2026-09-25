@@ -108,7 +108,7 @@ export const makeSqlSubscriptionStore = Effect.fn("SqlSubscriptionStore.make")(f
   options: SqlSubscriptionStoreOptions,
 ): Effect.fn.Return<SubscriptionStore["Service"], SubscriptionError, SqlClientService.SqlClient> {
   const sql = yield* SqlClientService.SqlClient;
-  const { table: relation, execute } = makeSqlQuery(sql, options.namespace);
+  const { table: relation, execute } = yield* makeSqlQuery(options.namespace);
   const failpoint = yield* SubscriptionFailpoint;
 
   const query = <A extends object>(statement: Statement<A>, code: string) =>

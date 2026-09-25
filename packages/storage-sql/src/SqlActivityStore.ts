@@ -152,7 +152,7 @@ export const makeSqlActivityStore = Effect.fn("SqlActivityStore.make")(function*
   namespace?: string,
 ) {
   const sql = yield* SqlClientService.SqlClient;
-  const { table: relation, execute } = makeSqlQuery(sql, namespace);
+  const { table: relation, execute } = yield* makeSqlQuery(namespace);
   const failpoint = yield* ActivityMutationFailpoint;
 
   yield* failpoint.hit("activity:initialize:before");

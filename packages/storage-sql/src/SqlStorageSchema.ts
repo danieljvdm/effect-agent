@@ -15,7 +15,7 @@ import { createNativeReadIndexes } from "./SqlThreadNativeReads.ts";
 export const createStorageSchema = (namespace?: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    const { table: relation, execute } = makeSqlQuery(sql, namespace);
+    const { table: relation, execute } = yield* makeSqlQuery(namespace);
 
     // A bound parameter cannot name a column type, so the dialect's spelling is inlined.
     const integer = sql.literal(

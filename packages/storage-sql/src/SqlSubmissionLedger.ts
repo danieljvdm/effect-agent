@@ -346,7 +346,7 @@ export const makeSqlSubmissionLedger = Effect.fn("SqlSubmissionLedger.make")(fun
   const config = options;
   const failpoint = { hit: options.hitFailpoint };
   const sql = yield* SqlClientService.SqlClient;
-  const { table: relation, execute } = makeSqlQuery(sql, options.namespace);
+  const { table: relation, execute } = yield* makeSqlQuery(options.namespace);
   const crypto = yield* Crypto.Crypto;
   const admissionFence = yield* SubmissionAdmissionFence;
 
