@@ -207,7 +207,7 @@ const withSource = Effect.fn("LifecyclePublication.withSource")(
     if (Option.isNone(found))
       return yield* LifecyclePublicationError.make({ reason: "unavailable" });
 
-    const source = yield* Schema.decodeUnknownEffect(Schema.toType(LifecyclePublicationSource))(
+    const source = yield* Schema.decodeEffect(Schema.toType(LifecyclePublicationSource))(
       found.value,
     );
 
