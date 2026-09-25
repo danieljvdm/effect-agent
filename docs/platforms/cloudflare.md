@@ -7,6 +7,7 @@ description: Run durable agents on Cloudflare Workers and Durable Objects.
 
 `@effect-agent/platform-cloudflare` stores each thread and its pending work in a
 SQLite-backed Durable Object. RPC calls and alarms drive execution and recovery.
+See [Cloudflare storage](../storage/cloudflare) for database ownership and adapter composition.
 
 ## Install
 

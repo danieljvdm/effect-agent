@@ -33,7 +33,7 @@ with provider and tool Layers plus `InMemory.layer` from `effect-agent`.
 Provide a `RunContextPreparation` Layer only when you need host context loading.
 
 To retain completed history without recovering unfinished work, provide
-[`PersistentHistory.layer`](../guide/threads#retain-completed-runs) with a storage adapter.
+`PersistentHistory.layer` with a [storage adapter](../storage/).
 
 ## What your application supplies
 

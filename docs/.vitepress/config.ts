@@ -106,6 +106,7 @@ export default defineConfig({
     nav: [
       { text: "Guide", link: "/guide/", activeMatch: "/guide/" },
       { text: "Platforms", link: "/platforms/", activeMatch: "/platforms/" },
+      { text: "Storage", link: "/storage/", activeMatch: "/storage/" },
       { text: "Architecture", link: "/concepts/", activeMatch: "/concepts/" },
       { text: "Reference", link: "/reference/", activeMatch: "/reference/" },
     ],
@@ -165,6 +166,18 @@ export default defineConfig({
             { text: "Overview", link: "/platforms/" },
             { text: "Node.js", link: "/platforms/node" },
             { text: "Cloudflare", link: "/platforms/cloudflare" },
+          ],
+        },
+      ],
+      "/storage/": [
+        {
+          text: "Storage",
+          items: [
+            { text: "Overview", link: "/storage/" },
+            { text: "In-memory", link: "/storage/memory" },
+            { text: "SQLite", link: "/storage/sqlite" },
+            { text: "PostgreSQL", link: "/storage/postgres" },
+            { text: "Cloudflare", link: "/storage/cloudflare" },
           ],
         },
       ],

@@ -66,26 +66,13 @@ the latter also stores execution records needed for persistence and recovery.
 
 ## Retain completed runs
 
-For history backed by an explicit store, use `PersistentHistory.layer`. It commits whole
-successful Runs; its memory adapter is also useful when you need the canonical ThreadStore APIs.
-Use SQLite when the history must survive a Node process restart.
-
-Provide `PersistentHistory.layer` with a memory or SQLite `ThreadStore` layer. The same agent
-can serve many thread IDs.
+`PersistentHistory.layer` connects a `ThreadStore` to ordinary agent Runs and commits each
+successful Run as a whole. The [SQLite](../storage/sqlite) and [PostgreSQL](../storage/postgres)
+guides show how to build its `History` Layer. With that Layer, one agent can serve many thread IDs:
 
 ```ts
-import { AgentRuntime, PersistentHistory, ThreadHistory } from "effect-agent";
-import { MemoryThreadStoreLive } from "@effect-agent/storage-memory/memory-thread-store";
-import { SqliteThreadStore } from "@effect-agent/storage-sqlite";
-import { Effect, Layer } from "effect";
-
-const MemoryHistoryLive = PersistentHistory.layer.pipe(Layer.provide(MemoryThreadStoreLive));
-
-const SqliteHistoryLive = PersistentHistory.layer.pipe(
-  Layer.provide(SqliteThreadStore.layer({ filename: "./history.sqlite" })),
-);
-
-const HistoryLive = MemoryHistoryLive;
+import { AgentRuntime, ThreadHistory } from "effect-agent";
+import { Effect } from "effect";
 
 const program = Effect.gen(function* () {
   const first = yield* AgentRuntime.run(agent, firstInput, { threadId });
@@ -93,7 +80,7 @@ const program = Effect.gen(function* () {
   const history = yield* ThreadHistory.ThreadHistory;
   const prompt = yield* history.load(threadId);
   return { first, second, prompt };
-}).pipe(Effect.provide(HistoryLive));
+}).pipe(Effect.provide(History));
 ```
 
 Provide the history layer around the complete program, including any `start` handle. Also provide
@@ -131,7 +118,7 @@ restarts.
 Other reasons include `"fenced"`, `"incompatible"`, `"not-found"`, `"limit"`, `"encoding"`, and
 `"storage"`. The adapter error remains available as the diagnostic cause.
 
-Use separate thread IDs for retained interaction and durable admission. SQLite-backed history
+Use separate thread IDs for retained interaction and durable admission. Database-backed history
 survives restart, but it does not provide receipts, attempt ownership, recovery, or settlement.
 Authorize tenant and thread access before execution.
 
@@ -186,16 +173,10 @@ preserving one captured snapshot; the returned export still contains the complet
 
 ## Choose storage {#storage-layers}
 
-| Package                            | Use                                                 |
-| ---------------------------------- | --------------------------------------------------- |
-| `@effect-agent/storage-memory`     | Tests and process-local development                 |
-| `@effect-agent/storage-sqlite`     | History that survives a Node process restart        |
-| `@effect-agent/storage-postgres`   | History shared by several Node processes            |
-| `@effect-agent/storage-cloudflare` | Durable Object SQLite history and routed operations |
-
-Persistent adapters upgrade supported predecessor formats atomically while preserving stored
-history and accepted work. Unsupported or ambiguous formats fail without resetting the store.
-See [supported storage upgrades](./operations#adopting-these-contracts) before adopting a new
+The [Storage guides](../storage/) compare backends and show how to connect each one.
+SQLite and Cloudflare adapters upgrade supported predecessor formats atomically;
+PostgreSQL rejects incompatible stored versions. See
+[supported storage upgrades](./operations#adopting-these-contracts) before adopting a new
 version, and [Persistence & durability](../concepts/durability) for execution recovery guarantees.
 
 For a custom adapter, follow the [store contract and certification guide](./certify-adapters#store-contract).

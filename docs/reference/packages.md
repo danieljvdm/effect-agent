@@ -323,6 +323,7 @@ Install it separately from `effect-agent`.
 ### `@effect-agent/storage-memory`
 
 Scoped in-memory thread and submission stores for tests. The ledger is non-durable.
+For ordinary conversations, use [`InMemory.layer`](../storage/memory) from `effect-agent`.
 The independent `inMemorySemanticIndexLayer` supplies a bounded exact cosine derivative index.
 It is disposable and must be rebuilt from authoritative sources after its Scope closes.
 
@@ -342,6 +343,7 @@ Stores thread history and pending work in one Node SQLite database.
 Upgrades supported predecessor formats atomically and rejects incompatible stored versions.
 `CurrentSqliteStorageVersion` identifies the supported version.
 Test failpoints are in `@effect-agent/storage-sqlite/testing/sqlite-storage-failpoint-testing`.
+See the [SQLite storage guide](../storage/sqlite) for installation and agent wiring.
 
 The independent `memoryStoreLayer` from `effect-agent/sql-memory-store` supplies optional `MemoryReader` and `MemoryWriter` ports
 for conditional document updates and terminal withdrawal. It initializes only memory tables.
@@ -359,25 +361,9 @@ share. Rejects incompatible stored versions; no migration path is promised.
 Requires Postgres 16 or newer.
 
 `PostgresStorage.layer` provides `ThreadStore` and `SubmissionLedger`, requiring the application's
-native Effect `SqlClient` and `Crypto`. Provide them at the composition root:
-
-```ts
-import { PostgresStorage } from "@effect-agent/storage-postgres";
-import { NodeCrypto } from "@effect/platform-node";
-import { PgClient } from "@effect/sql-pg";
-import { Layer, Redacted } from "effect";
-
-const Database = PgClient.layer({
-  url: Redacted.make("postgres://localhost/effect_agent"),
-});
-const Persistence = PostgresStorage.layer.pipe(
-  Layer.provide(NodeCrypto.layer),
-  Layer.provideMerge(Database),
-);
-```
-
-`Persistence` exposes the stores and the same native client for application SQL. Use
-`PostgresStorage.layerWith(options)` to configure the core pair, or select individual ports:
+native Effect `SqlClient` and `Crypto`. See the [PostgreSQL storage guide](../storage/postgres)
+for client composition and agent wiring. Use `PostgresStorage.layerWith(options)` to configure
+the core pair, or select individual ports:
 
 | Constructor                                       | Provides                 |
 | ------------------------------------------------- | ------------------------ |
@@ -431,6 +417,7 @@ Stores history and pending work in each Durable Object's SQLite database.
 Accepts injected Object handles without importing `cloudflare:workers`.
 Rejects incompatible stored versions; `CurrentDoStorageVersion` identifies the supported version.
 Failpoints and eviction helpers are in `@effect-agent/storage-cloudflare/testing/do-storage-failpoint-testing`.
+See [Cloudflare storage](../storage/cloudflare) for host ownership and direct adapter use.
 
 `doMemoryStoreLayer` supplies optional memory ports using storage-backed SQLite transactions.
 The separate memory protocol defines bounded batch requests, responses, and typed errors.
