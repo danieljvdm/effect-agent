@@ -1,5 +1,6 @@
 import { CredentialFieldRole } from "@effect-agent/platform-cloudflare/browser-credentials";
-import { Schema, Struct } from "effect";
+import { BrowserSessionError } from "@effect-agent/platform-cloudflare/browser-session";
+import { Cause, Result, Schema, Struct } from "effect";
 import { RunTotals } from "effect-agent/usage";
 
 export const CheckoutFlow = Schema.Literals(["embedded-card", "accelerated"]);
@@ -359,6 +360,16 @@ export class CheckoutError extends Schema.TaggedError<CheckoutError>()("Checkout
 }) {}
 
 export const failure = (stage: string, message: string) => CheckoutError.make({ stage, message });
+
+export const browserSessionFailure = (cause: Cause.Cause<unknown>): string | undefined => {
+  const error = Cause.findError(cause);
+
+  if (!Result.isSuccess(error) || !Schema.is(BrowserSessionError)(error.success)) return undefined;
+
+  const { reason, dispatch, cleanup } = error.success;
+
+  return `BrowserSessionError reason=${reason} dispatch=${dispatch} cleanup=${cleanup}`;
+};
 
 export const policy = {
   maxTurns: 60,

@@ -24,7 +24,10 @@ import {
 } from "../src/checkout-lifecycle.ts";
 import { checkoutStack } from "../src/checkout-stack.ts";
 import { assertPurchase, expectedQuote, sameQuote } from "../src/checkout-store.ts";
-import { BrowserRunWorkerProofResult } from "../src/contract.ts";
+import {
+  BrowserRunWorkerProofResult,
+  describeBrowserRunProofFailureFromStream,
+} from "../src/contract.ts";
 
 // Only prove:live collects this file. The same stage is reusable only for explicit retirement.
 const lifecycle = Test.make({ providers: Cloudflare.providers(), dev: false });
@@ -333,11 +336,15 @@ const proof = Effect.gen(function* () {
     Effect.gen(function* () {
       const bindingResponse = yield* client.get(bindingUrl).pipe(Effect.timeout("150 seconds"));
 
-      if (bindingResponse.status !== 200)
+      if (bindingResponse.status !== 200) {
         return yield* failure(
           "binding-proof",
-          `HTTP ${bindingResponse.status}; invocation was not retried`,
+          yield* describeBrowserRunProofFailureFromStream(
+            bindingResponse.status,
+            bindingResponse.stream,
+          ),
         );
+      }
       yield* bindingResponse.json.pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(BrowserRunWorkerProofResult)),
       );
