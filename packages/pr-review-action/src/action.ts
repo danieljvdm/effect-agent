@@ -219,8 +219,10 @@ const reviewCheckCompletion = (
 
   return result(
     "success",
-    "Review complete",
-    "The reviewed commit has no unresolved blocking findings.",
+    selection._tag === "reconcile" ? "Review status refreshed" : "Review complete",
+    selection._tag === "reconcile"
+      ? "This commit has a completed review and no unresolved blocking findings. No new model review was run."
+      : "The reviewed commit has no unresolved blocking findings.",
   );
 };
 
@@ -988,7 +990,7 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
 
   let unresolvedChangeRequests = unresolvedChangeRequestCount({ reviewAuthor, history });
 
-  if (selection._tag === "skip") {
+  if (selection._tag === "skip" || selection._tag === "reconcile") {
     yield* skip(selection.reason, undefined, unresolvedChangeRequests);
     if (selection.reason === "head-review-incomplete") {
       return yield* ReviewAttemptIncomplete.make({});
@@ -1472,7 +1474,14 @@ export const reviewActionProgram = Effect.gen(function* () {
   if (checkName.length === 0) return yield* review;
 
   const identity = { name: checkName, headRevision: pull.headRevision };
-  const existing = selection._tag !== "review" && (yield* github.hasReviewCheck(identity));
+
+  // An explicit request on a completed head refreshes status after dismissals
+  // without paying for another audit. Automatic duplicate events preserve it.
+  const existing =
+    selection._tag !== "review" &&
+    selection._tag !== "reconcile" &&
+    (yield* github.hasReviewCheck(identity));
+
   const runId = yield* Config.schema(Schema.Natural, "GITHUB_RUN_ID").pipe(Config.option);
 
   const serverUrl = yield* Config.NonEmptyString("GITHUB_SERVER_URL").pipe(

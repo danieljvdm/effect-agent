@@ -65,8 +65,12 @@ prefix with `contains(github.event.comment.body, '@effect-agent')`. Pass the raw
 The Action skips unsupported mentions before making GitHub or model requests.
 
 Complete reviews without unresolved blockers pass. Blockers and incomplete coverage fail;
-a paused, unreviewed commit requires action. Skipped events preserve an existing check or
-report trusted review history when no check exists. Published review outcomes no longer fail
+a paused, unreviewed commit requires action. Automatic skipped events preserve an existing check or
+report trusted review history when no check exists. After dismissing a blocker, request
+`@effect-agent review` on the unchanged head to refresh its check without another model call
+or published review. This requires the latest attempt on that head to be complete; an older
+completed attempt cannot clear a later incomplete one. `@effect-agent review full` always starts
+a fresh assessment. Published review outcomes no longer fail
 the workflow job; setup, execution, and check API failures still do.
 
 Cancellation closes the attempt's check when cleanup can run. A push during publication cancels
@@ -131,7 +135,9 @@ bots' reviews are never dismissed.
 Incremental passes revisit unresolved reviews, including body-only findings and findings on paths
 outside the latest delta. A fix retained because its pass found a new blocker can be verified again
 on a later pass even when the original path no longer changes. This verification does not expand
-new-defect discovery beyond the delta. Use `@effect-agent review full` for a manual same-head retry.
+new-defect discovery beyond the delta. New findings must identify a change since the last completed
+review that introduced or newly exposed the defect; a missed older issue is outside that scope.
+Use `@effect-agent review full` to request a fresh assessment of the whole admitted PR diff.
 At most eight prior reviews are considered, each with its complete review body and bot comments
 within 32,000 characters. Oversized feedback stays blocking; it is never truncated for verification.
 Follow-up verification shares the same conversation and spending and execution
@@ -147,7 +153,7 @@ Automatic waves use the configured limit, defaulting to two; this repository all
 Zero disables automatic reviews. Rerunning the workflow can retry an incomplete review on the same
 head while automatic attempts remain. Each published attempt consumes that allowance; incomplete
 attempts never become incremental baselines. Once the allowance is exhausted, an incomplete head
-continues to fail until a manual review completes. Completed heads are still skipped.
+continues to fail until a manual review completes. Automatic mode still skips completed heads.
 Only trusted bot-authored terminal markers count. Failed attempts count but cannot become diff
 baselines. An owner, member, or collaborator can request `@effect-agent review` for incremental
 review or `@effect-agent review full` for the whole admitted diff. Manual waves do not consume the

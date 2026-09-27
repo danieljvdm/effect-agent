@@ -33,7 +33,10 @@ prescribing an exact edit.
 New features must satisfy their stated contracts, including validation, limits, isolation,
 and aggregation; a bypass can be a defect even when the old code also accepted that input.
 Unrelated old bugs, speculation, style, compiler diagnostics, and generic test requests are
-excluded. Incremental reviews limit new findings to their exact delta.
+excluded. Incremental reviews limit new findings to defects introduced or newly exposed by their
+exact delta. Each finding must explain the causative follow-up change; an older issue does not
+qualify because it was missed earlier or lies in a touched file. Earlier blockers are verified
+against current source, including unchanged paths, without being reported as new findings.
 
 The shared finding rubric, parent review procedure, and host-supplied repository policy are
 separate instructions. Policy findings identify the specific rule and applicable exceptions,

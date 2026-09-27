@@ -116,6 +116,7 @@ export class ReviewRequest extends Schema.Class<ReviewRequest>(
   description: Schema.String.check(Schema.isMaxLength(20_000)),
   baseRevision: Revision,
   headRevision: Revision,
+  /** Incremental discovery is limited to this delta; prior blockers may require unchanged source. */
   scope: Schema.optionalKey(Schema.Literals(["full", "incremental"])),
   changes: Schema.Array(ReviewChange).check(
     Schema.isMaxLength(MAX_REVIEW_FILES),
@@ -271,7 +272,7 @@ const REVIEW_INSTRUCTIONS = `${REVIEW_RUBRIC}
 
 Review procedure:
 1. Start with the complete change index and read every admitted patch, including deletions, reverts, and metadata. Use inline patches or read_diff pages; batch independent reads. Reading establishes access to evidence, not correctness.
-2. Identify the consumer outcome promised by the PR description, documentation, and changed contracts. Trace it through the relevant supported execution paths to its consumers, including unchanged code. Keep material, falsifiable questions about paths where that promise may fail; seek evidence for and against them before submitting. Distinguish incomplete fulfillment of the promise from optional feature expansion.
+2. Identify the consumer outcome promised by the change under review, using the PR description, documentation, and changed contracts as context. Trace it through the relevant supported execution paths to its consumers, including unchanged code. Keep material, falsifiable questions about paths where that promise may fail; seek evidence for and against them before submitting. Distinguish incomplete fulfillment of the promise from optional feature expansion.
 For a changed decision over fetched records, check every relevant producer, filter, page limit, and ordering rule. Test whether a qualifying older record can sit behind newer records that do not qualify. When a decision combines separate reads, test a record becoming eligible between them and appearing in a later broader result; include terminal and indeterminate states admitted by the Schema. For a changed path that turns a typed failure into a successful fallback or unavailable state, trace whether the failure reaches the installed reporting sink. Keep material unchecked variants in review_status notes and resolve them against source; a filtered or bounded page alone cannot prove absence.
 3. Keep the claimed outcome, checked paths, exact base/head evidence references, disproved hypotheses, and next checks in review_status notes during investigation. Avoid copying source or saved findings. If context fills, call new_context alone with a concise handoff. After any rollover, recover review_status before resuming at its unread offsets; delivered ranges remain covered. When pendingCount is zero, continue the material questions in your notes and use targeted source reads as needed, then submit. Do not restart a full diff sweep after rollover.
 4. After the counterevidence check, save each established finding promptly with record_finding so it survives interruption. The ledger cannot retract or revise findings; recover it when unsure and never re-record a root cause with different wording, severity, or symptoms.
@@ -477,8 +478,17 @@ const reviewPolicy = (costAdmitted: boolean, contextTokenLimit: number) =>
     runStatus: "appended",
   });
 
-const instructions = (guidance?: string, base = REVIEW_INSTRUCTIONS) =>
-  `${base}${guidance === undefined || guidance.trim().length === 0 ? "" : `\n\nRepository guidance:\n${guidance.trim()}`}`;
+const INCREMENTAL_INSTRUCTIONS = `Follow-up scope (applies to all review criteria above):
+Review only baseRevision..headRevision; baseRevision is the last completed review, not the PR target branch. The PR description and earlier changes are background, not permission to re-audit the original PR.
+Verify supplied prior blockers against current source, including unchanged paths. Resolve only with concrete fixing evidence; do not report an unresolved prior blocker as a new finding.
+Report a new issue only when this delta introduces it or newly exposes it through a changed caller or contract. Each finding must identify the causative follow-up change and explain why the issue did not apply at baseRevision. If it already existed or causation is uncertain, omit it, even if missed earlier, severe, or in a touched file. These limits also apply to repository-policy findings and delegated research.`;
+
+const instructions = (
+  scope: ReviewRequest["scope"],
+  guidance?: string,
+  base = REVIEW_INSTRUCTIONS,
+) =>
+  `${base}${guidance === undefined || guidance.trim().length === 0 ? "" : `\n\nRepository guidance:\n${guidance.trim()}`}${scope === "incremental" ? `\n\n${INCREMENTAL_INSTRUCTIONS}` : ""}`;
 
 const reviewCompletion = Toolkit.make(
   Tool.make("submit_review", {
@@ -821,7 +831,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
       const researcher = Agent.make("pr-review-research", {
         input: ResearchInput,
         output: ResearchResult,
-        instructions: instructions(options.guidance, researchInstructions),
+        instructions: instructions(request.scope, options.guidance, researchInstructions),
         toolkit: Toolkit.merge(reviewToolkit, reviewRecording, researchCompletion),
         completion: {
           tool: "finish_research",
@@ -920,7 +930,7 @@ export const makeReviewer = <Provider, ModelProvides, ModelRequires>(
           inputPrompt: formatRequest,
           output: ReviewSubmission,
           instructions:
-            instructions(options.guidance) +
+            instructions(request.scope, options.guidance) +
             (options.research === undefined
               ? ""
               : "\n\nDelegate only independent unresolved questions whose answers could change a finding, within the remaining budget; do not request a generic second review. Children save findings directly, so consult review_status after joining them and never rewrite their findings. You remain responsible for all parent diff coverage and the whole change. A failed or incomplete child makes the review incomplete."),

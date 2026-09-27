@@ -31,6 +31,10 @@ export interface ReviewHistoryItem {
 
 export type ReviewSelection =
   | {
+      readonly _tag: "reconcile";
+      readonly reason: "head-already-reviewed";
+    }
+  | {
       readonly _tag: "skip";
       readonly reason:
         | "head-already-reviewed"
@@ -129,7 +133,7 @@ export const unresolvedChangeRequestCount = (input: {
   readonly history: ReadonlyArray<ReviewHistoryItem>;
 }): number => unresolvedChangeRequests(input).length;
 
-/** Select scope from trusted GitHub reviews without persisting model context. */
+/** Select scope or an explicit status refresh from trusted GitHub reviews. */
 export const selectReview = (input: {
   readonly mode: ReviewMode;
   readonly currentHead: string;
@@ -162,14 +166,20 @@ export const selectReview = (input: {
   }
 
   const currentHeadAttempts = attempts.filter(({ item }) => item.commitId === input.currentHead);
+  const latestHeadAttempt = currentHeadAttempts.at(-1);
 
-  if (currentHeadAttempts.some(({ marker }) => marker.version === 3 && marker.completed)) {
-    return { _tag: "skip", reason: "head-already-reviewed" };
+  if (latestHeadAttempt?.marker.version === 3 && latestHeadAttempt.marker.completed) {
+    return {
+      _tag: input.mode === "incremental" ? "reconcile" : "skip",
+      reason: "head-already-reviewed",
+    };
   }
+
   if (
-    input.mode === "auto" &&
-    currentHeadAttempts.length > 0 &&
-    automaticAttempts >= input.automaticReviewLimit
+    currentHeadAttempts.some(({ marker }) => marker.version === 3 && marker.completed) ||
+    (input.mode === "auto" &&
+      currentHeadAttempts.length > 0 &&
+      automaticAttempts >= input.automaticReviewLimit)
   ) {
     return { _tag: "skip", reason: "head-review-incomplete" };
   }
