@@ -78,7 +78,12 @@ const pullRequestWire = (title: string, base: string, head: string, draft = fals
   head: { sha: head },
 });
 
-const reviewHistoryWire = (id: number, body: string, commitId: string, submittedAt: string) => ({
+const reviewHistoryWire = (
+  id: number,
+  body: string,
+  commitId: string,
+  submittedAt: string | null,
+) => ({
   id,
   body,
   commit_id: commitId,
@@ -366,6 +371,9 @@ describe("PR commit review checks", () => {
       expect(test.writes).toHaveLength(4);
       expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "success" });
 
+      yield* test.run();
+      expect(test.writes).toHaveLength(4);
+
       history.push(
         reviewHistoryWire(
           3,
@@ -375,12 +383,37 @@ describe("PR commit review checks", () => {
         ),
       );
       yield* test.run(manual);
-      expect(test.writes).toHaveLength(4);
+      // Regression in https://github.com/danieljvdm/effect-agent/commit/e2c70b01952088acaf73fbf4a5de86bf22d548ad:
+      // preserving the existing check left the earlier success visible.
+      expect(test.writes.at(-1)?.body).toMatchObject({
+        conclusion: "failure",
+        output: { title: "Review incomplete" },
+      });
 
       const withoutCheck = fixture(history);
 
       yield* withoutCheck.run(manual);
       expect(withoutCheck.writes.at(-1)?.body).toMatchObject({ conclusion: "failure" });
+    }),
+  );
+
+  // Regression in https://github.com/danieljvdm/effect-agent/commit/e2c70b01952088acaf73fbf4a5de86bf22d548ad:
+  // sorting an undated incomplete attempt first allowed a successful status refresh.
+  it.effect("blocks a status refresh when an incomplete attempt has no timestamp", () =>
+    Effect.gen(function* () {
+      const test = fixture([
+        reviewHistoryWire(1, reviewMarker(false), "head", "2026-09-02T00:00:00Z"),
+        reviewHistoryWire(2, reviewMarker(false, false), "head", null),
+      ]);
+
+      yield* test.run({
+        PR_REVIEW_COMMAND: "@effect-agent review",
+        PR_REVIEW_COMMENT_ID: "42",
+      });
+      expect(test.writes.at(-1)?.body).toMatchObject({
+        conclusion: "failure",
+        output: { title: "Review incomplete" },
+      });
     }),
   );
 

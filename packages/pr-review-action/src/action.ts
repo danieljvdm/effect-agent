@@ -1475,11 +1475,12 @@ export const reviewActionProgram = Effect.gen(function* () {
 
   const identity = { name: checkName, headRevision: pull.headRevision };
 
-  // An explicit request on a completed head refreshes status after dismissals
-  // without paying for another audit. Automatic duplicate events preserve it.
+  // Refresh explicit requests and incomplete history without another audit.
+  // Automatic duplicate events preserve checks for completed heads.
   const existing =
     selection._tag !== "review" &&
     selection._tag !== "reconcile" &&
+    selection.reason !== "head-review-incomplete" &&
     (yield* github.hasReviewCheck(identity));
 
   const runId = yield* Config.schema(Schema.Natural, "GITHUB_RUN_ID").pipe(Config.option);

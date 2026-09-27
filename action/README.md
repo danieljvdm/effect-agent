@@ -65,8 +65,9 @@ prefix with `contains(github.event.comment.body, '@effect-agent')`. Pass the raw
 The Action skips unsupported mentions before making GitHub or model requests.
 
 Complete reviews without unresolved blockers pass. Blockers and incomplete coverage fail;
-a paused, unreviewed commit requires action. Automatic skipped events preserve an existing check or
-report trusted review history when no check exists. After dismissing a blocker, request
+a paused, unreviewed commit requires action. Automatic skipped events preserve an existing check
+unless trusted history requires an incomplete result; missing checks report trusted review history.
+After dismissing a blocker, request
 `@effect-agent review` on the unchanged head to refresh its check without another model call
 or published review. This requires the latest attempt on that head to be complete; an older
 completed attempt cannot clear a later incomplete one. `@effect-agent review full` always starts

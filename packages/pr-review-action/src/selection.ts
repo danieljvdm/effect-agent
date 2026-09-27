@@ -101,22 +101,18 @@ const trustedHistory = (input: {
 }) => {
   const author = input.reviewAuthor.toLowerCase();
 
-  return input.history
-    .flatMap((item) => {
-      const marker = markerKind(item.body);
+  // Preserve GitHub's chronological list order, including undated entries:
+  // https://docs.github.com/en/rest/pulls/reviews#list-reviews-for-a-pull-request
+  return input.history.flatMap((item) => {
+    const marker = markerKind(item.body);
 
-      return marker !== undefined &&
-        item.authorType === "Bot" &&
-        item.authorLogin.toLowerCase() === author &&
-        item.commitId !== undefined
-        ? [{ item, marker }]
-        : [];
-    })
-    .sort((left, right) => {
-      const byTime = (left.item.submittedAt ?? "").localeCompare(right.item.submittedAt ?? "");
-
-      return byTime === 0 ? left.item.id - right.item.id : byTime;
-    });
+    return marker !== undefined &&
+      item.authorType === "Bot" &&
+      item.authorLogin.toLowerCase() === author &&
+      item.commitId !== undefined
+      ? [{ item, marker }]
+      : [];
+  });
 };
 
 /** Select only this channel's terminal, bot-authored change requests. */
