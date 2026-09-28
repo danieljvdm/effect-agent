@@ -4,13 +4,13 @@ import { TestClock } from "effect/testing";
 import { AiError, DecisionModel } from "effect/unstable/ai";
 
 import { type LabError } from "../src/contract.ts";
-import { makeTrace } from "../src/telemetry.ts";
+import { makeTrace, Trace } from "../src/telemetry.ts";
 import { chooseRoute, type RoutePage } from "../src/wiki-routing.ts";
 
 expectTypeOf<Effect.Error<ReturnType<typeof chooseRoute>>>().toEqualTypeOf<LabError>();
-expectTypeOf<
-  Effect.Services<ReturnType<typeof chooseRoute>>
->().toEqualTypeOf<DecisionModel.DecisionModel>();
+expectTypeOf<Effect.Services<ReturnType<typeof chooseRoute>>>().toEqualTypeOf<
+  DecisionModel.DecisionModel | Trace
+>();
 
 const trace = () =>
   makeTrace(
@@ -100,7 +100,10 @@ it.effect(
         }),
       );
 
-      const chosen = yield* chooseRoute(page, telemetry).pipe(Effect.provide(model));
+      const chosen = yield* chooseRoute(page).pipe(
+        Effect.provide(model),
+        Effect.provideService(Trace, telemetry),
+      );
 
       assert.strictEqual(chosen.href, "https://en.wikipedia.org/wiki/Article_255");
       assert.strictEqual(seen.size, 256);
@@ -115,7 +118,8 @@ it.effect(
         ],
       );
 
-      const only = yield* chooseRoute({ ...page, links: page.links.slice(0, 1) }, telemetry).pipe(
+      const only = yield* chooseRoute({ ...page, links: page.links.slice(0, 1) }).pipe(
+        Effect.provideService(Trace, telemetry),
         Effect.provide(model),
       );
 
@@ -150,10 +154,11 @@ it.effect(
           }),
         );
 
-        const result = yield* chooseRoute(
-          { ...page, links: page.links.slice(0, 2) },
-          telemetry,
-        ).pipe(Effect.provide(model), Effect.result);
+        const result = yield* chooseRoute({ ...page, links: page.links.slice(0, 2) }).pipe(
+          Effect.provide(model),
+          Effect.provideService(Trace, telemetry),
+          Effect.result,
+        );
 
         assert.strictEqual(result._tag, "Failure", label);
       }
@@ -197,7 +202,7 @@ it.effect(
         );
 
         const fiber = yield* Effect.forkChild(
-          chooseRoute(page, telemetry).pipe(Effect.provide(model)),
+          chooseRoute(page).pipe(Effect.provide(model), Effect.provideService(Trace, telemetry)),
         );
 
         if (outcome === "timeout" || outcome === "interruption") {

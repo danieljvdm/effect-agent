@@ -8,14 +8,7 @@ import { Effect, Layer, Redacted, Schema } from "effect";
 import { Agent, AgentRuntime, InMemory } from "effect-agent";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
-import {
-  batchTools,
-  singleTools,
-  scripted,
-  Observation,
-  TaskResult,
-  type Browser,
-} from "./browser.ts";
+import { batchTools, singleTools, scripted, Observation, TaskResult, Browser } from "./browser.ts";
 import {
   defaultChallenge,
   LabError,
@@ -26,8 +19,8 @@ import {
 } from "./contract.ts";
 import { groundedSingleTools, groundedBatchTools, makeGroundedLayers } from "./grounding.ts";
 import { routeDecisionLayer } from "./route-probabilities.ts";
-import { traceModels, traceOpenAiClient, type Trace } from "./telemetry.ts";
-import { makeWikipedia, runWikipedia, runJevWikipedia } from "./wikipedia.ts";
+import { traceModels, traceOpenAiClient, Trace } from "./telemetry.ts";
+import { makeWikipedia, runWikipedia, runJevWikipedia, Wikipedia } from "./wikipedia.ts";
 
 const definition = {
   input: Schema.String,
@@ -113,8 +106,6 @@ const cloudflareChatClient = (client: HttpClient.HttpClient) =>
   );
 
 export const executeTask = Effect.fnUntraced(function* (
-  browser: Browser,
-  trace: Trace,
   input: RunInput,
   model: string,
   apiKey: string,
@@ -122,14 +113,12 @@ export const executeTask = Effect.fnUntraced(function* (
   apiType: typeof ModelApi.Type = "responses",
   jevApiKey = "",
 ) {
+  const browser = yield* Browser;
+  const trace = yield* Trace;
+
   const wiki =
     input.scenario === "wikipedia"
-      ? yield* makeWikipedia(
-          browser,
-          trace,
-          input.wikipedia ?? defaultChallenge,
-          input.wikiDriver === "jev",
-        )
+      ? yield* makeWikipedia(input.wikipedia ?? defaultChallenge, input.wikiDriver === "jev")
       : undefined;
 
   if (!wiki) yield* browser.prepare;
@@ -144,7 +133,10 @@ export const executeTask = Effect.fnUntraced(function* (
 
   if (wiki && input.wikiDriver === "jev") {
     trace.update({ message: "Jev is choosing the route from all article links…" });
-    yield* runJevWikipedia(wiki, trace).pipe(Effect.provide(routeDecisionLayer(jevApiKey, trace)));
+    yield* runJevWikipedia.pipe(
+      Effect.provideService(Wikipedia, wiki),
+      Effect.provide(routeDecisionLayer(jevApiKey)),
+    );
 
     return;
   }
@@ -152,7 +144,7 @@ export const executeTask = Effect.fnUntraced(function* (
   trace.update({
     message: input.mode === "scripted" ? "Running browser sequence…" : "Agent is working…",
   });
-  if (input.mode === "scripted") yield* scripted(browser, input.scenario);
+  if (input.mode === "scripted") yield* scripted(input.scenario);
   else {
     const prompt =
       input.scenario === "custom"
@@ -181,21 +173,19 @@ export const executeTask = Effect.fnUntraced(function* (
             reasoning: { effort: input.reasoning ?? "none", summary: "auto" },
           }).pipe(
             Layer.provide(
-              Layer.effect(
-                OpenAiClient.OpenAiClient,
-                OpenAiClient.make(clientOptions).pipe(
-                  Effect.map((client) => traceOpenAiClient(client, trace)),
-                ),
+              Layer.effect(OpenAiClient.OpenAiClient, traceOpenAiClient).pipe(
+                Layer.provide(OpenAiClient.layer(clientOptions)),
               ),
             ),
           )
     ).pipe(Layer.provide(FetchHttpClient.layer));
 
-    const grounded = makeGroundedLayers(browser, trace, initial);
+    const grounded = yield* makeGroundedLayers(initial);
 
     // Supply only DecisionModel: Model's shared identity services belong to the planner.
     const run = wiki
-      ? runWikipedia(wiki, input.wikipedia ?? defaultChallenge, input.grounding === "jev").pipe(
+      ? runWikipedia(input.wikipedia ?? defaultChallenge, input.grounding === "jev").pipe(
+          Effect.provideService(Wikipedia, wiki),
           Effect.provide(decisionLayer),
         )
       : input.grounding === "jev"
@@ -209,10 +199,7 @@ export const executeTask = Effect.fnUntraced(function* (
           ? AgentRuntime.run(batchedAgent, message).pipe(Effect.provide(browser.batchLayer))
           : AgentRuntime.run(individualAgent, message).pipe(Effect.provide(browser.singleLayer));
 
-    const result = yield* traceModels(
-      trace,
-      run.pipe(Effect.provide([InMemory.layer, modelLayer])),
-    ).pipe(
+    const result = yield* traceModels(run.pipe(Effect.provide([InMemory.layer, modelLayer]))).pipe(
       Effect.mapError(
         (error) =>
           new LabError({

@@ -123,15 +123,18 @@ matching retains its strict distributions and 0.6 threshold.
 
 Compare these three strategies: **model route + model element**, **model route + Jev element**,
 and **Jev-only route + element**. Jev-only sees all links at once; planner modes see 80 per page.
+Both modes stop explicitly above 10,000 source anchors instead of returning incomplete observations.
 This compares complete navigation strategies, not model latency on identical observations.
 The trace shows candidate/question counts, selected refs, probabilities, tokens, and separate
 planner/Jev call counts. History keeps the route driver in its cohort settings.
 
 Select a model, or **Compare configured models** to run the same task with each available model.
 Each repetition rotates the starting model/browser configuration; runs execute sequentially and return to the starting article or reset the board.
-The comparison table separates model, element selection, reasoning, requested tier, and served
-tier cohorts, includes failures in the
-flow success count, lists preparation failures separately, and shows median ready-to-verified latency and successful race hop counts. A few runs do not establish a speed advantage.
+The comparison table separates model, element selection, reasoning, and requested tier,
+includes failures in the flow success count, lists preparation failures separately, and shows
+median ready-to-verified latency and successful race hop counts. Served tiers are reported
+across the entire configuration, including `unknown` when no tier was returned. A few runs
+do not establish a speed advantage.
 
 **Element selection → Jev** keeps the selected language model as the planner. It describes
 targets in plain language; native Effect `DecisionModel` asks `jev-latest` to select from visible,
@@ -177,9 +180,11 @@ additive, and uninstrumented gaps remain visible rather than assigned to a compo
 Repeat 1, 3, or 10 times. History retains failures. A single-model failure stops repetitions;
 comparison runs continue to the next sample after an ordinary failure. Cancellation or failed
 browser cleanup stops either sequence. Statistics compare the same preset, mode, timing protocol, model,
-element selector, reasoning, requested/served tier, and capture settings. Older reports with
+element selector, reasoning, requested tier, and capture settings. Older reports with
 unspecified model settings stay in separate provider-default cohorts. Latency
 percentiles use verified successes, with flow failures retained in the started-flow denominator.
+Actual served tiers do not split that denominator; mixed tiers remain visible in the table and
+individual model spans, so configuration medians may include different served tiers.
 Preparation failures are counted separately; older admission-timed reports stay in separate cohorts. p95 appears
 after 20 successes. Export JSON before reloading: history lives in the tab, while the owner retains
 only its latest report. Record the tested commit and environment alongside exports for comparisons.
@@ -225,5 +230,8 @@ execution, Chromium, and independent verification. It does not establish hosted 
 For a hosted lab, configure the same values as Worker secrets using the repository's credential
 workflow, then run `vp run -F @effect-agent/example-browser-speed deploy`. The Worker is named
 `effect-agent-browser-speed`; its assets and browser-owner Durable Object are declared in
-`wrangler.jsonc`. Protect its entire hostname with Cloudflare Access before deploying; this demo
-has no application authentication. Preview URLs are disabled so they cannot bypass that policy.
+`wrangler.jsonc`. This configuration serves the lab on its `workers.dev` hostname: protect that
+entire hostname with Cloudflare Access before deploying, including `/api/*`. The demo has no
+application authentication. If using a custom domain instead, set `workers_dev: false` and
+protect the custom hostname; an Access policy on a custom domain does not protect `workers.dev`.
+Preview URLs are disabled so they cannot bypass that policy.

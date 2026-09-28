@@ -1,10 +1,10 @@
-import { Effect, Option, Schema } from "effect";
+import { Context, Effect, Option, Schema } from "effect";
 import { Agent, AgentRuntime } from "effect-agent";
 import { CompactionPolicy } from "effect-agent/agent-policy";
 import { DecisionModel, Tool, Toolkit } from "effect/unstable/ai";
 import type { HTTPRequest } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
-import { TaskResult, type Browser } from "./browser.ts";
+import { TaskResult, Browser } from "./browser.ts";
 import {
   ArticleTitle,
   LabError,
@@ -13,7 +13,7 @@ import {
   type WikiHop,
 } from "./contract.ts";
 import { selectTargets } from "./grounding.ts";
-import type { Trace } from "./telemetry.ts";
+import { Trace } from "./telemetry.ts";
 import { chooseRoute, type RoutePage } from "./wiki-routing.ts";
 
 const origin = "https://en.wikipedia.org";
@@ -175,11 +175,11 @@ export const wikiJevAgent = Agent.make("wikipedia-race-jev", { ...definition, to
 
 /** Scoped navigation guard, observed-link capabilities and host verification; no arbitrary navigation tool. */
 export const makeWikipedia = Effect.fnUntraced(function* (
-  browser: Browser,
-  trace: Trace,
   challenge: WikipediaChallenge,
   fullLinks = false,
 ) {
+  const browser = yield* Browser;
+  const trace = yield* Trace;
   const startUrl = articleUrl(challenge.start);
   let approved = startUrl;
   let target = normalizeTitle(challenge.target);
@@ -389,11 +389,11 @@ export const makeWikipedia = Effect.fnUntraced(function* (
 
     const title = articleTitle(data.url);
 
-    if (fullLinks && data.linkCount > 10_000)
+    if (data.linkCount > 10_000)
       return yield* new LabError({
         code: "invalid",
         message:
-          "This article exceeds the 10,000-anchor observation limit. Jev routing stopped rather than dropping links.",
+          "This article exceeds the 10,000-anchor observation limit. The race stopped rather than dropping links.",
       });
 
     if (!data.article || !title || articleTitle(data.canonical) !== title || !data.title)
@@ -652,55 +652,59 @@ export const makeWikipedia = Effect.fnUntraced(function* (
   };
 });
 
+export class Wikipedia extends Context.Service<
+  Wikipedia,
+  Effect.Success<ReturnType<typeof makeWikipedia>>
+>()("browser-speed/Wikipedia") {}
+
 /** A bounded DecisionModel loop: no planner, LanguageModel layer, or fallback call. */
-export const runJevWikipedia = (
-  wiki: Effect.Success<ReturnType<typeof makeWikipedia>>,
-  trace: Trace,
-) =>
-  Effect.gen(function* () {
-    for (let hop = 0; hop < maxHops; hop++) {
-      const used = trace
-        .snapshot()
-        .spans.filter((span) => span.phase === "decision")
-        .reduce((sum, span) => sum + (span.inputTokens ?? 0) + (span.outputTokens ?? 0), 0);
+export const runJevWikipedia = Effect.gen(function* () {
+  const wiki = yield* Wikipedia;
+  const trace = yield* Trace;
 
-      if (used >= 300_000)
-        return yield* new LabError({
-          code: "invalid",
-          message: "Jev routing reached its 300,000 reported-token budget.",
-        });
-      const page = yield* wiki.routePage;
-      const selected = yield* chooseRoute(page, trace);
-      const next = yield* wiki.follow(selected.ref);
+  for (let hop = 0; hop < maxHops; hop++) {
+    const used = trace
+      .snapshot()
+      .spans.filter((span) => span.phase === "decision")
+      .reduce((sum, span) => sum + (span.inputTokens ?? 0) + (span.outputTokens ?? 0), 0);
 
-      if (next.reached) return;
-    }
+    if (used >= 300_000)
+      return yield* new LabError({
+        code: "invalid",
+        message: "Jev routing reached its 300,000 reported-token budget.",
+      });
+    const page = yield* wiki.routePage;
+    const selected = yield* chooseRoute(page);
+    const next = yield* wiki.follow(selected.ref);
 
-    return yield* new LabError({
-      code: "invalid",
-      message: "Jev routing reached the 20-hop limit without arriving.",
-    });
-  }).pipe(
-    Effect.timeoutOrElse({
-      duration: "3 minutes",
-      orElse: () =>
-        Effect.fail(
-          new LabError({
-            code: "browser",
-            message: "Jev routing reached its three-minute deadline.",
-          }),
-        ),
-    }),
-  );
+    if (next.reached) return;
+  }
 
-export const runWikipedia = (
-  wiki: Effect.Success<ReturnType<typeof makeWikipedia>>,
+  return yield* new LabError({
+    code: "invalid",
+    message: "Jev routing reached the 20-hop limit without arriving.",
+  });
+}).pipe(
+  Effect.timeoutOrElse({
+    duration: "3 minutes",
+    orElse: () =>
+      Effect.fail(
+        new LabError({
+          code: "browser",
+          message: "Jev routing reached its three-minute deadline.",
+        }),
+      ),
+  }),
+);
+
+export const runWikipedia = Effect.fnUntraced(function* (
   challenge: WikipediaChallenge,
   grounded: boolean,
-) => {
+) {
+  const wiki = yield* Wikipedia;
   const message = `${racePrompt(challenge)}\n\nInitial browser observation:\n${Schema.encodeSync(Schema.fromJsonString(WikiObservation))(wiki.initial)}`;
 
-  return grounded
+  return yield* grounded
     ? AgentRuntime.run(wikiJevAgent, message).pipe(Effect.provide(wiki.jev))
     : AgentRuntime.run(wikiAgent, message).pipe(Effect.provide(wiki.direct));
-};
+});

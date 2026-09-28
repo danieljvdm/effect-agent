@@ -4,7 +4,7 @@ import { AiError } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import type { Span } from "./contract.ts";
-import type { Trace } from "./telemetry.ts";
+import { Trace } from "./telemetry.ts";
 
 /** Jev has returned two-decimal distributions totaling 0.99. Tolerate at most
  * two percentage points of rounding, only on the route-only path (no threshold).
@@ -67,28 +67,29 @@ export const routeProbabilities = Effect.fnUntraced(function* (
   return { response: { ...response, answers }, distributions };
 });
 
-export const routeDecisionLayer = (apiKey: string, trace: Trace) =>
+export const routeDecisionLayer = (apiKey: string) =>
   TypeSafeDecisionModel.layer({ model: "jev-latest" }).pipe(
     Layer.provide(
       Layer.effect(
         TypeSafeClient.TypeSafeClient,
-        TypeSafeClient.make({ apiKey: Redacted.make(apiKey) }).pipe(
-          Effect.map((client) =>
-            TypeSafeClient.TypeSafeClient.of({
-              ...client,
-              systemOne: (request) =>
-                client.systemOne(request).pipe(
-                  Effect.flatMap((response) => routeProbabilities(request, response)),
-                  Effect.tap(({ distributions }) =>
-                    Effect.sync(() =>
-                      trace.annotateDecision({ decisionDistributions: distributions }),
-                    ),
+        Effect.gen(function* () {
+          const trace = yield* Trace;
+          const client = yield* TypeSafeClient.make({ apiKey: Redacted.make(apiKey) });
+
+          return TypeSafeClient.TypeSafeClient.of({
+            ...client,
+            systemOne: (request) =>
+              client.systemOne(request).pipe(
+                Effect.flatMap((response) => routeProbabilities(request, response)),
+                Effect.tap(({ distributions }) =>
+                  Effect.sync(() =>
+                    trace.annotateDecision({ decisionDistributions: distributions }),
                   ),
-                  Effect.map(({ response }) => response),
                 ),
-            }),
-          ),
-        ),
+                Effect.map(({ response }) => response),
+              ),
+          });
+        }),
       ),
     ),
     Layer.provide(FetchHttpClient.layer),

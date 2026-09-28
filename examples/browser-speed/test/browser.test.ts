@@ -13,7 +13,7 @@ import browserPuppeteer from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-br
 import { makeBrowser, type Action } from "../src/browser.ts";
 import { scenarios, seed, type RunInput } from "../src/contract.ts";
 import { emptyControl, makeOwner, type Control } from "../src/owner.ts";
-import { makeTrace } from "../src/telemetry.ts";
+import { makeTrace, Trace } from "../src/telemetry.ts";
 
 const request = (
   scenario: RunInput["scenario"],
@@ -582,7 +582,10 @@ it.live(
       }).pipe(Effect.provideService(BrowserSessions, services));
 
       const trace = yield* makeTrace(request("create"), "none");
-      const browser = makeBrowser(session, trace, false, () => {});
+
+      const browser = yield* makeBrowser(session, false, () => {}).pipe(
+        Effect.provideService(Trace, trace),
+      );
 
       yield* browser.prepare;
       yield* browser.observe();

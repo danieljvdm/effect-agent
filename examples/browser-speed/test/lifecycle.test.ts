@@ -8,16 +8,19 @@ import type { Scope } from "effect";
 import { Deferred, Effect, Exit, Fiber, Redacted, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
+import type { Browser } from "../src/browser.ts";
 import { LabError, seed, verify, type RunInput } from "../src/contract.ts";
 import type { connectKitesurf } from "../src/kitesurf.ts";
 import { emptyControl, makeOwner, Control } from "../src/owner.ts";
 import type { executeTask } from "../src/runner.ts";
 import { fromReady, runOutcome, verifiedMillis } from "../src/state.ts";
-import type { traceModels } from "../src/telemetry.ts";
+import type { traceModels, Trace } from "../src/telemetry.ts";
 import { makeTrace } from "../src/telemetry.ts";
 
 expectTypeOf<Effect.Error<ReturnType<typeof executeTask>>>().toEqualTypeOf<LabError>();
-expectTypeOf<Effect.Services<ReturnType<typeof executeTask>>>().toEqualTypeOf<Scope.Scope>();
+expectTypeOf<Effect.Services<ReturnType<typeof executeTask>>>().toEqualTypeOf<
+  Scope.Scope | Browser | Trace
+>();
 expectTypeOf<Effect.Error<ReturnType<typeof connectKitesurf>>>().toEqualTypeOf<LabError>();
 expectTypeOf<Effect.Services<ReturnType<typeof connectKitesurf>>>().toEqualTypeOf<Scope.Scope>();
 expectTypeOf<
@@ -25,7 +28,7 @@ expectTypeOf<
 >().toEqualTypeOf<"expected">();
 expectTypeOf<
   Effect.Services<ReturnType<typeof traceModels<string, "expected", BrowserSessions>>>
->().toEqualTypeOf<BrowserSessions>();
+>().toEqualTypeOf<BrowserSessions | Trace>();
 
 const request = (): RunInput => ({
   id: crypto.randomUUID(),

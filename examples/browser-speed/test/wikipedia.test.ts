@@ -13,15 +13,23 @@ import { FetchHttpClient } from "effect/unstable/http";
 import puppeteer from "puppeteer-core";
 import browserPuppeteer from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
-import { makeBrowser } from "../src/browser.ts";
+import { makeBrowser, Browser } from "../src/browser.ts";
 import { defaultChallenge, LabError, racePrompt, type RunInput } from "../src/contract.ts";
 import { executeTask } from "../src/runner.ts";
 import { cohort, comparisons } from "../src/state.ts";
-import { makeTrace } from "../src/telemetry.ts";
-import { articleTitle, articleUrl, makeWikipedia, runWikipedia } from "../src/wikipedia.ts";
+import { makeTrace, Trace } from "../src/telemetry.ts";
+import {
+  articleTitle,
+  articleUrl,
+  makeWikipedia,
+  runWikipedia,
+  Wikipedia,
+} from "../src/wikipedia.ts";
 
 expectTypeOf<Effect.Error<ReturnType<typeof makeWikipedia>>>().toEqualTypeOf<LabError>();
-expectTypeOf<Effect.Services<ReturnType<typeof makeWikipedia>>>().toEqualTypeOf<Scope.Scope>();
+expectTypeOf<Effect.Services<ReturnType<typeof makeWikipedia>>>().toEqualTypeOf<
+  Scope.Scope | Browser | Trace
+>();
 expectTypeOf<
   Effect.Services<ReturnType<Effect.Success<ReturnType<typeof makeWikipedia>>["follow"]>>
 >().toEqualTypeOf<never>();
@@ -258,15 +266,17 @@ it.live(
       for (const failure of ["unavailable", "missing", "malformed"] as const) {
         lookupFailure = failure;
         const setupTrace = yield* makeTrace(request(), "jev-latest");
-        const setupBrowser = makeBrowser(session, setupTrace, false, () => {});
 
-        const result = yield* executeTask(
-          setupBrowser,
-          setupTrace,
-          { ...request(), wikiDriver: "jev" },
-          "unused",
-          "",
-        ).pipe(Effect.scoped, Effect.result);
+        const setupBrowser = yield* makeBrowser(session, false, () => {}).pipe(
+          Effect.provideService(Trace, setupTrace),
+        );
+
+        const result = yield* executeTask({ ...request(), wikiDriver: "jev" }, "unused", "").pipe(
+          Effect.provideService(Browser, setupBrowser),
+          Effect.provideService(Trace, setupTrace),
+          Effect.scoped,
+          Effect.result,
+        );
 
         assert.strictEqual(result._tag, "Failure");
         if (result._tag === "Failure")
@@ -300,11 +310,16 @@ it.live(
 
       const fencedTrace = yield* makeTrace(request(), "jev-latest");
 
-      const fencedFailure = yield* makeWikipedia(
-        makeBrowser(fenced, fencedTrace, false, () => {}),
-        fencedTrace,
-        defaultChallenge,
-      ).pipe(Effect.scoped, Effect.result);
+      const fencedBrowser = yield* makeBrowser(fenced, false, () => {}).pipe(
+        Effect.provideService(Trace, fencedTrace),
+      );
+
+      const fencedFailure = yield* makeWikipedia(defaultChallenge).pipe(
+        Effect.provideService(Browser, fencedBrowser),
+        Effect.provideService(Trace, fencedTrace),
+        Effect.scoped,
+        Effect.result,
+      );
 
       assert.strictEqual(
         fencedFailure._tag,
@@ -326,7 +341,11 @@ it.live(
 
       for (const grounded of [false, true]) {
         const trace = yield* makeTrace(request(), "test-model");
-        const browser = makeBrowser(session, trace, false, () => {});
+
+        const browser = yield* makeBrowser(session, false, () => {}).pipe(
+          Effect.provideService(Trace, trace),
+        );
+
         let modelCalls = 0;
         let decisions = 0;
 
@@ -374,9 +393,10 @@ it.live(
         );
 
         yield* Effect.gen(function* () {
-          const wiki = yield* makeWikipedia(browser, trace, defaultChallenge);
+          const wiki = yield* makeWikipedia(defaultChallenge);
 
-          const result = yield* runWikipedia(wiki, defaultChallenge, grounded).pipe(
+          const result = yield* runWikipedia(defaultChallenge, grounded).pipe(
+            Effect.provideService(Wikipedia, wiki),
             Effect.provide([InMemory.layer, planner, selector]),
             Effect.provideService(FetchHttpClient.Fetch, async () => {
               modelCalls++;
@@ -399,7 +419,11 @@ it.live(
           assert.strictEqual(trace.snapshot().status, "passed");
           assert.strictEqual(trace.snapshot().race?.path.at(-1)?.via?.url, articleUrl("Madiba"));
           assert.strictEqual(decisions, grounded ? 2 : 0);
-        }).pipe(Effect.scoped);
+        }).pipe(
+          Effect.provideService(Browser, browser),
+          Effect.provideService(Trace, trace),
+          Effect.scoped,
+        );
         assert.strictEqual(
           page.listenerCount("request"),
           listenerCount,
@@ -411,9 +435,11 @@ it.live(
       const routeTrace = yield* makeTrace(jevInput, "jev-latest");
       let routeCalls = 0;
 
+      const routeBrowser = yield* makeBrowser(session, false, () => {}).pipe(
+        Effect.provideService(Trace, routeTrace),
+      );
+
       yield* executeTask(
-        makeBrowser(session, routeTrace, false, () => {}),
-        routeTrace,
         jevInput,
         "unused-planner",
         "",
@@ -421,6 +447,8 @@ it.live(
         "responses",
         "test-not-a-key",
       ).pipe(
+        Effect.provideService(Browser, routeBrowser),
+        Effect.provideService(Trace, routeTrace),
         Effect.provideService(FetchHttpClient.Fetch, async (url, init) => {
           const endpoint = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
 
@@ -503,10 +531,13 @@ it.live(
       );
 
       const trace = yield* makeTrace(request(), "test-model");
-      const browser = makeBrowser(session, trace, false, () => {});
+
+      const browser = yield* makeBrowser(session, false, () => {}).pipe(
+        Effect.provideService(Trace, trace),
+      );
 
       yield* Effect.gen(function* () {
-        const wiki = yield* makeWikipedia(browser, trace, defaultChallenge);
+        const wiki = yield* makeWikipedia(defaultChallenge);
 
         assert.strictEqual(
           wiki.initial.totalLinks,
@@ -549,18 +580,57 @@ it.live(
           "URL alone cannot override a mismatched canonical page",
         );
         wrongLanding = false;
-      }).pipe(Effect.scoped);
+      }).pipe(
+        Effect.provideService(Browser, browser),
+        Effect.provideService(Trace, trace),
+        Effect.scoped,
+      );
       assert.strictEqual(page.listenerCount("request"), listenerCount);
+
+      // 894818e5 silently omitted a destination after anchor 10,000 for planner runs.
+      for (const fullLinks of [false, true]) {
+        yield* Effect.gen(function* () {
+          const wiki = yield* makeWikipedia(defaultChallenge, fullLinks);
+
+          yield* Effect.promise(() =>
+            page.$eval(".mw-parser-output", (body) => {
+              body.innerHTML =
+                '<a href="/wiki/Earth">Earth</a>'.repeat(10_000) +
+                '<a href="/wiki/Nelson_Mandela">Nelson Mandela</a>';
+            }),
+          );
+          const result = yield* wiki.read().pipe(Effect.result);
+
+          assert.strictEqual(
+            result._tag,
+            "Failure",
+            "An incomplete link set must never be presented as complete",
+          );
+          if (result._tag === "Failure") {
+            assert.strictEqual(result.failure.code, "invalid");
+            assert.include(result.failure.message, "10,000-anchor");
+          }
+        }).pipe(
+          Effect.provideService(Browser, browser),
+          Effect.provideService(Trace, trace),
+          Effect.scoped,
+        );
+        assert.strictEqual(page.listenerCount("request"), listenerCount);
+      }
 
       for (const exit of ["failure", "defect", "timeout", "interruption"] as const) {
         const work = Effect.gen(function* () {
-          yield* makeWikipedia(browser, trace, defaultChallenge);
+          yield* makeWikipedia(defaultChallenge);
           if (exit === "failure")
             return yield* new LabError({ code: "browser", message: "Expected failure" });
           if (exit === "defect") return yield* Effect.die("Expected defect");
 
           return yield* Effect.never;
-        }).pipe(Effect.scoped);
+        }).pipe(
+          Effect.provideService(Browser, browser),
+          Effect.provideService(Trace, trace),
+          Effect.scoped,
+        );
 
         if (exit === "interruption") {
           const fiber = yield* Effect.forkChild(work);

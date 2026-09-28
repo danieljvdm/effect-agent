@@ -104,15 +104,28 @@ it.effect(
         { ...fast, input: { ...fast.input, reasoning: "max" as const } },
         { ...fast, input: { ...fast.input, serviceTier: "default" as const } },
         { ...fast, spans: fast.spans.map((span) => ({ ...span, serviceTier: "default" })) },
+        // 894818e5 split a pre-response failure out of its requested Fast cohort.
+        { ...fast, status: "failed" as const, verifiedAt: null, spans: [] },
         report,
       ].map((report) => ({ report, clientElapsedMillis: 100 }));
 
       assert.strictEqual(
         cohort(settingsSamples, fast).length,
-        1,
-        "Reasoning, requested tier, served tier and legacy defaults must not be pooled",
+        3,
+        "Requested settings own the denominator, including missing or different served tiers",
       );
-      assert.strictEqual(comparisons(settingsSamples, fast).length, 5);
+      const settingsGroups = comparisons(settingsSamples, fast);
+
+      assert.strictEqual(settingsGroups.length, 4);
+      assert.deepStrictEqual(
+        settingsGroups.map(({ started, passed, median, servedTier }) => ({
+          started,
+          passed,
+          median,
+          servedTier,
+        }))[0],
+        { started: 3, passed: 2, median: 10, servedTier: "default+fast+unknown" },
+      );
 
       const engines = [
         fast,

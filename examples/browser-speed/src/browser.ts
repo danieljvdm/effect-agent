@@ -1,11 +1,11 @@
 import type { BrowserSession } from "@effect-agent/platform-cloudflare/browser-session";
-import { Effect, Schema } from "effect";
+import { Context, Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import type { Page } from "puppeteer-core/lib/esm/puppeteer/puppeteer-core-browser.js";
 
 import { Board, LabError, type Scenario } from "./contract.ts";
 import { fixtureHtml } from "./fixture.ts";
-import type { Trace } from "./telemetry.ts";
+import { Trace } from "./telemetry.ts";
 
 const Ref = Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,50}$/));
 
@@ -93,12 +93,12 @@ export const batchTools = Toolkit.make(
   }),
 );
 
-export const makeBrowser = (
+export const makeBrowser = Effect.fnUntraced(function* (
   session: Pick<BrowserSession, "run">,
-  trace: Trace,
   screenshots: boolean,
   image: (value: string) => void,
-) => {
+) {
+  const trace = yield* Trace;
   let observed = new Set<string>();
   let actions = 0;
 
@@ -301,12 +301,17 @@ export const makeBrowser = (
       act: ({ actions }) => act(actions),
     }),
   };
-};
+});
 
-export type Browser = ReturnType<typeof makeBrowser>;
+export class Browser extends Context.Service<
+  Browser,
+  Effect.Success<ReturnType<typeof makeBrowser>>
+>()("browser-speed/Browser") {}
 
 /** A fixed diagnostic baseline uses the same input and observation path as individual tools. */
-export const scripted = Effect.fnUntraced(function* (browser: Browser, scenario: Scenario) {
+export const scripted = Effect.fnUntraced(function* (scenario: Scenario) {
+  const browser = yield* Browser;
+
   const step = Effect.fnUntraced(function* (action: Action) {
     const result = yield* browser.act([action]);
 

@@ -217,19 +217,21 @@ export const cohort = (samples: ReadonlyArray<ClientSample>, report: Report) =>
       (value.input.grounding ?? "direct") === (report.input.grounding ?? "direct"),
   );
 
-export const servedTier = (report: Report) =>
+const servedTiers = (reports: ReadonlyArray<Report>) =>
   [
     ...new Set(
-      report.spans
-        .filter((span) => span.phase === "model")
-        .map((span) => span.serviceTier ?? "unknown"),
+      reports.flatMap((report) => {
+        const spans = report.spans.filter((span) => span.phase === "model");
+
+        return spans.length ? spans.map((span) => span.serviceTier ?? "unknown") : ["unknown"];
+      }),
     ),
   ]
     .sort()
     .join("+") || "unknown";
 
 const settingsKey = (report: Report) =>
-  `${report.input.engine ?? "chromium"}/${report.browserVersion ?? "unrecorded"}/${report.browserRevision ?? "unrecorded"}/${report.commandTimeoutMillis ?? 15_000}/${report.input.wikiDriver ?? "model"}/${report.input.reasoning ?? "provider-default"}/${report.input.serviceTier ?? "provider-default"}/${servedTier(report)}`;
+  `${report.input.engine ?? "chromium"}/${report.browserVersion ?? "unrecorded"}/${report.browserRevision ?? "unrecorded"}/${report.commandTimeoutMillis ?? 15_000}/${report.input.wikiDriver ?? "model"}/${report.input.reasoning ?? "provider-default"}/${report.input.serviceTier ?? "provider-default"}`;
 
 export const comparisons = (samples: ReadonlyArray<ClientSample>, report: Report) => {
   const groups = new Map<string, Array<Report>>();
@@ -260,12 +262,7 @@ export const comparisons = (samples: ReadonlyArray<ClientSample>, report: Report
       reports[0]?.input.wikiDriver === "jev"
         ? "n/a"
         : (reports[0]?.input.serviceTier ?? "provider-default"),
-    servedTier:
-      reports[0]?.input.wikiDriver === "jev"
-        ? "n/a"
-        : reports[0] === undefined
-          ? "unknown"
-          : servedTier(reports[0]),
+    servedTier: reports[0]?.input.wikiDriver === "jev" ? "n/a" : servedTiers(reports),
     count: reports.length,
     started: reports.filter(flowStarted).length,
     preparationFailed: reports.filter((value) => !flowStarted(value) && value.status !== "running")

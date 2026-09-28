@@ -1,5 +1,16 @@
-import type { OpenAiClient } from "@effect/ai-openai";
-import { Cause, Clock, DateTime, Effect, Exit, Option, Schema, Stream, Tracer } from "effect";
+import { OpenAiClient } from "@effect/ai-openai";
+import {
+  Cause,
+  Clock,
+  Context,
+  DateTime,
+  Effect,
+  Exit,
+  Option,
+  Schema,
+  Stream,
+  Tracer,
+} from "effect";
 import { Telemetry } from "effect/unstable/ai";
 
 import {
@@ -144,7 +155,9 @@ export const makeTrace = Effect.fnUntraced(function* (input: RunInput, model: st
   };
 });
 
-export type Trace = Effect.Success<ReturnType<typeof makeTrace>>;
+export class Trace extends Context.Service<Trace, Effect.Success<ReturnType<typeof makeTrace>>>()(
+  "browser-speed/Trace",
+) {}
 
 const decodeServedTier = Schema.decodeUnknownOption(
   Schema.Struct({
@@ -154,49 +167,49 @@ const decodeServedTier = Schema.decodeUnknownOption(
 );
 
 /** Preserve the raw served tier: the pinned provider omits the new "fast" alias from finish metadata. */
-export const traceOpenAiClient = (
-  client: OpenAiClient.Service,
-  trace: Trace,
-): OpenAiClient.Service => ({
-  ...client,
-  createResponse: (input) =>
-    client.createResponse(input).pipe(
-      Effect.tap(([response]) =>
-        Effect.sync(() => {
-          if (response.service_tier !== undefined)
-            trace.annotateModel({ serviceTier: response.service_tier });
-        }),
-      ),
-    ),
-  createResponseStream: (input) =>
-    client.createResponseStream(input).pipe(
-      Effect.map(
-        ([response, events]) =>
-          [
-            response,
-            events.pipe(
-              Stream.tap((event) =>
-                Effect.sync(() => {
-                  const evidence = decodeServedTier(event);
+export const traceOpenAiClient = Effect.gen(function* () {
+  const client = yield* OpenAiClient.OpenAiClient;
+  const trace = yield* Trace;
 
-                  if (Option.isSome(evidence))
-                    trace.annotateModel({ serviceTier: evidence.value.response.service_tier });
-                }),
-              ),
-            ),
-          ] as const,
+  return OpenAiClient.OpenAiClient.of({
+    ...client,
+    createResponse: (input) =>
+      client.createResponse(input).pipe(
+        Effect.tap(([response]) =>
+          Effect.sync(() => {
+            if (response.service_tier !== undefined)
+              trace.annotateModel({ serviceTier: response.service_tier });
+          }),
+        ),
       ),
-    ),
+    createResponseStream: (input) =>
+      client.createResponseStream(input).pipe(
+        Effect.map(
+          ([response, events]) =>
+            [
+              response,
+              events.pipe(
+                Stream.tap((event) =>
+                  Effect.sync(() => {
+                    const evidence = decodeServedTier(event);
+
+                    if (Option.isSome(evidence))
+                      trace.annotateModel({ serviceTier: evidence.value.response.service_tier });
+                  }),
+                ),
+              ),
+            ] as const,
+        ),
+      ),
+  });
 });
 
 /** Tap native model spans and metadata without replacing the LanguageModel service. */
-export const traceModels = Effect.fnUntraced(function* <A, E, R>(
-  trace: Trace,
-  effect: Effect.Effect<A, E, R>,
-) {
+export const traceModels = Effect.fnUntraced(function* <A, E, R>(effect: Effect.Effect<A, E, R>) {
+  const trace = yield* Trace;
   const delegate = yield* Tracer.Tracer;
   const parentTransformer = yield* Effect.serviceOption(Telemetry.CurrentSpanTransformer);
-  const handles = new Map<string, ReturnType<Trace["begin"]>>();
+  const handles = new Map<string, ReturnType<typeof trace.begin>>();
 
   const tracer = Tracer.make({
     span(options) {

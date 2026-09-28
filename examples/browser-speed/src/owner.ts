@@ -4,7 +4,7 @@ import {
 } from "@effect-agent/platform-cloudflare/browser-session";
 import { Cause, Clock, Effect, Exit, Fiber, Option, Redacted, Schema } from "effect";
 
-import { makeBrowser } from "./browser.ts";
+import { Browser, makeBrowser } from "./browser.ts";
 import {
   LabError,
   browserCommandTimeoutMillis,
@@ -19,7 +19,7 @@ import {
 } from "./contract.ts";
 import type { connectKitesurf } from "./kitesurf.ts";
 import { executeTask } from "./runner.ts";
-import { makeTrace, type Trace } from "./telemetry.ts";
+import { makeTrace, Trace } from "./telemetry.ts";
 import { normalizeTitle } from "./wikipedia.ts";
 
 export const Control = Schema.Struct({
@@ -71,7 +71,7 @@ export const makeOwner = (
     ) => ReturnType<typeof connectKitesurf>;
   },
 ) => {
-  let trace: Trace | undefined;
+  let trace: Trace["Service"] | undefined;
   let running: Fiber.Fiber<void, LabError> | undefined;
   let liveViewUrl: string | null = null;
   let image: string | null = null;
@@ -371,7 +371,7 @@ export const makeOwner = (
         );
       });
 
-      const browser = makeBrowser(session, current, input.screenshots, (value) => {
+      const browser = yield* makeBrowser(session, input.screenshots, (value) => {
         image = value;
       });
 
@@ -428,22 +428,24 @@ export const makeOwner = (
         notice =
           "Kitesurf has no persistent Live View. Enable screenshots to see action snapshots.";
       yield* executeTask(
-        browser,
-        current,
         input,
         selectedModel.model,
         selectedModel.apiKey,
         selectedModel.apiUrl,
         selectedModel.apiType,
         config.jevApiKey,
-      );
+      ).pipe(Effect.provideService(Browser, browser));
       current.update({ finishedAt: current.now() });
       yield* browser.capture(true).pipe(Effect.catch(() => Effect.void));
     });
 
     const work = Effect.gen(function* () {
       for (const ordinal of [1, 2]) {
-        const result = yield* attempt(ordinal).pipe(Effect.scoped, Effect.result);
+        const result = yield* attempt(ordinal).pipe(
+          Effect.provideService(Trace, current),
+          Effect.scoped,
+          Effect.result,
+        );
 
         if (result._tag === "Success") return;
         // Only host preparation can retry, on a fresh browser after confirmed closure.

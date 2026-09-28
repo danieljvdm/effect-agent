@@ -1,9 +1,9 @@
 import { Effect, Schema } from "effect";
 import { Decision, DecisionModel, Tool, Toolkit } from "effect/unstable/ai";
 
-import { ActionResult, finishTool, Observation, type Action, type Browser } from "./browser.ts";
+import { ActionResult, finishTool, Observation, type Action, Browser } from "./browser.ts";
 import { LabError } from "./contract.ts";
-import type { Trace } from "./telemetry.ts";
+import { Trace } from "./telemetry.ts";
 
 const Target = Schema.NonEmptyString.check(Schema.isMaxLength(300));
 const Value = Schema.String.check(Schema.isMaxLength(120));
@@ -149,11 +149,9 @@ export const selectTargets = Effect.fnUntraced(function* (
   return { actions, choices, usage: result.usage };
 });
 
-export const makeGroundedLayers = (
-  browser: Browser,
-  trace: Trace,
-  initial: typeof Observation.Type,
-) => {
+export const makeGroundedLayers = Effect.fnUntraced(function* (initial: typeof Observation.Type) {
+  const browser = yield* Browser;
+  const trace = yield* Trace;
   let observation: typeof Observation.Type | null = initial;
 
   const observe = () =>
@@ -204,4 +202,4 @@ export const makeGroundedLayers = (
       act: ({ actions }) => act(actions),
     }),
   };
-};
+});
