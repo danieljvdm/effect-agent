@@ -169,8 +169,18 @@ export const prepareModelPrompt = (
   if (provider === "openai") {
     const content: Array<Prompt.Message> = [];
     let lastSystem: Prompt.SystemMessage | undefined;
+    let ordered = prompt.content;
 
-    if (prompt.content[0]?.role !== "system" && staticInstructions !== undefined) {
+    if (staticInstructions !== undefined) {
+      const firstConversation = prompt.content.findIndex((message) => message.role !== "system");
+
+      const leading = prompt.content.slice(
+        0,
+        firstConversation === -1 ? prompt.content.length : firstConversation,
+      );
+
+      const restored: Array<Prompt.Message> = [];
+
       const instructions =
         typeof staticInstructions === "string"
           ? [Prompt.systemMessage({ content: staticInstructions })]
@@ -178,18 +188,25 @@ export const prepareModelPrompt = (
 
       for (const message of instructions) {
         if (message.role !== "system") break;
+        if (
+          leading.some(
+            (candidate) => candidate.role === "system" && sameSystemMessage(candidate, message),
+          )
+        )
+          break;
 
         const original = prompt.content.find(
           (candidate) => candidate.role === "system" && sameSystemMessage(candidate, message),
         );
 
         if (original === undefined) break;
-        content.push(original);
-        lastSystem = message;
+        restored.push(original);
       }
+      if (restored.length > 0)
+        ordered = [...leading, ...restored, ...prompt.content.slice(leading.length)];
     }
 
-    for (const message of prompt.content) {
+    for (const message of ordered) {
       if (message.role === "system") {
         if (lastSystem !== undefined && sameSystemMessage(lastSystem, message)) continue;
         lastSystem = message;

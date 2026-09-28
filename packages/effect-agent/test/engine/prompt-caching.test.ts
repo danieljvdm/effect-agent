@@ -168,10 +168,20 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
         );
 
         const context =
-          historyMode === "prepared"
+          historyMode !== "retained"
             ? {
                 prepare: ({ source }: { readonly source: Prompt.Prompt }) =>
-                  Effect.succeed({ prompt: source }),
+                  Effect.succeed({
+                    prompt:
+                      historyMode === "conversation-only"
+                        ? Prompt.concat(
+                            Prompt.make([
+                              { role: "system", content: "Prepared application policy" },
+                            ]),
+                            source,
+                          )
+                        : source,
+                  }),
               }
             : undefined;
 
@@ -186,6 +196,7 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
             historyMode !== "conversation-only"
               ? { threadId: first.threadId, context }
               : {
+                  context,
                   history: Prompt.fromMessages(
                     stored.content.filter((message) => message.role !== "system"),
                   ),
@@ -196,7 +207,7 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
         }
         expect(requests).toHaveLength(3);
         for (const request of requests) {
-          expect(request.input[0]).toEqual({
+          expect(request.input[historyMode === "conversation-only" ? 1 : 0]).toEqual({
             role: "developer",
             content: [
               {
@@ -207,6 +218,7 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
             ],
           });
           expect(systemText(request)).toEqual([
+            ...(historyMode === "conversation-only" ? ["Prepared application policy"] : []),
             instructionText,
             expect.stringContaining("Final output contract:"),
           ]);
