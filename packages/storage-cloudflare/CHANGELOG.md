@@ -1,5 +1,17 @@
 # @effect-agent/storage-cloudflare
 
+## 0.1.0-beta.146
+
+### Patch Changes
+
+- [#681](https://github.com/danieljvdm/effect-agent/pull/681) [`9252c1a`](https://github.com/danieljvdm/effect-agent/commit/9252c1ad4707035308ff72527ed303a685027a28) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Publish retained lifecycle facts asynchronously in ordered owner batches without delaying model attempts, with atomic receipts and bounded retries that park exhausted work.
+
+  BEHAVIOR CHANGE: Implement `LifecyclePublicationHandler.publish(batch)` for a nonempty array of at most eight facts and commit the entire batch idempotently in one host transaction; custom lifecycle storage implementations must return bounded owner batches, replace `defer` with `claim`, and implement `retryParked` instead of `pendingDeadlineFor`.
+
+- Updated dependencies [[`9252c1a`](https://github.com/danieljvdm/effect-agent/commit/9252c1ad4707035308ff72527ed303a685027a28), [`c2fc81a`](https://github.com/danieljvdm/effect-agent/commit/c2fc81a2882deec908868955d1325fdec400b979)]:
+  - effect-agent@0.1.0-beta.146
+  - @effect-agent/storage-sql@0.1.0-beta.146
+
 ## 0.1.0-beta.145
 
 ### Patch Changes

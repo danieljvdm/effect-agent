@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.146
+
+### Patch Changes
+
+- [#676](https://github.com/danieljvdm/effect-agent/pull/676) [`7165d18`](https://github.com/danieljvdm/effect-agent/commit/7165d181cc666f8932deac3da1cf00c7f8408317) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Constrain follow-up reviews to defects introduced or newly exposed since the last completed review while continuing to verify prior blockers against current source.
+
+- Updated dependencies [[`9252c1a`](https://github.com/danieljvdm/effect-agent/commit/9252c1ad4707035308ff72527ed303a685027a28), [`c2fc81a`](https://github.com/danieljvdm/effect-agent/commit/c2fc81a2882deec908868955d1325fdec400b979)]:
+  - effect-agent@0.1.0-beta.146
+
 ## 0.1.0-beta.145
 
 ### Patch Changes
