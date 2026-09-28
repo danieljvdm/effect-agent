@@ -6,7 +6,7 @@ import {
 } from "@effect-agent/storage-cloudflare/do-thread-store";
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Cause, Clock, Deferred, Effect, Fiber, Layer, Logger, Option, Stream } from "effect";
-import { DurableAgentRuntime } from "effect-agent/durable-agent-runtime";
+import { DurableAgentRuntime, type RecoveryFailure } from "effect-agent/durable-agent-runtime";
 import {
   type OperationAuthorizerService,
   operationAuthorizerLayer,
@@ -27,8 +27,11 @@ import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  DurableAlarmError,
   ThreadMaintenance,
   ThreadMaintenanceFailpoint,
+  ThreadRecoveryEvents,
+  type ThreadRecoveryFaultEvent,
   type ThreadMaintenanceFailpointHandler,
 } from "../src/Alarm.ts";
 import { CloudflareDurableRuntimeConfig } from "../src/CloudflareConfig.ts";
@@ -59,6 +62,10 @@ const localRun =
       readonly withoutBinding?: string;
       readonly authorizer?: OperationAuthorizerService;
       readonly readFailureDefect?: Error;
+      readonly publish?: (
+        event: ThreadRecoveryFaultEvent,
+      ) => Effect.Effect<void, DurableAlarmError>;
+      readonly notify?: WakeScheduler["Service"]["notify"];
       readonly readAbortIntent?: (
         read: SubmissionLedger["Service"]["readAbortIntent"],
       ) => SubmissionLedger["Service"]["readAbortIntent"];
@@ -135,7 +142,18 @@ const localRun =
                 ),
               ),
               Layer.provideMerge(ports),
-              Layer.provide(WakeScheduler.layerNoop),
+              Layer.provide(
+                Layer.succeed(WakeScheduler, {
+                  notify: options.notify ?? (() => Effect.void),
+                  subscribe: () => Effect.succeed(Effect.never),
+                  wakes: Stream.never,
+                }),
+              ),
+              Layer.provide(
+                Layer.succeed(ThreadRecoveryEvents, {
+                  publish: options.publish ?? (() => Effect.void),
+                }),
+              ),
               Layer.provide(
                 operationAuthorizerLayer(options.authorizer ?? possessionOperationAuthorizer),
               ),
@@ -155,9 +173,16 @@ const localRun =
 const storage = <A>(owner: string, body: (state: DurableObjectState) => A | Promise<A>) =>
   Effect.promise(() => runInDurableObject(stubFor(owner), (_instance, state) => body(state)));
 
-const status = (thread: string) =>
-  Effect.flatMap(ThreadMaintenance, (maintenance) =>
-    maintenance.recoveryStatus(decodeThreadId(thread)),
+// Fixture-only inspection of private retry state; hosts consume transitions instead.
+const retainedFault = (owner: string, thread: string) =>
+  storage(owner, async (state) =>
+    Option.fromUndefinedOr(
+      await state.storage.get<{
+        readonly retryAt: number;
+        readonly attempts: number;
+        readonly failure: RecoveryFailure;
+      }>(`effect-agent:thread-recovery-fault:v1:${thread}`),
+    ),
   );
 
 const pass = Effect.flatMap(ThreadMaintenance, (maintenance) => maintenance.pass);
@@ -434,6 +459,151 @@ it(
 );
 
 describe("recovery faults independent of execution history", () => {
+  // Regression: https://github.com/danieljvdm/effect-agent/commit/ab5030d
+  // Real SQLite plus controlled interruption distinguishes a committed transition from
+  // a wake hint and proves delivery without rereading corrupt execution history.
+  it("delivers submission fault transitions across interruption and keeps retries silent", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const owner = `recovery-events-${crypto.randomUUID()}`;
+        const thread = `${owner}-blocked`;
+        const events: Array<ThreadRecoveryFaultEvent> = [];
+        const notifications: Array<string> = [];
+        let rejectDelivery = false;
+
+        const options = {
+          publish: (event: ThreadRecoveryFaultEvent) =>
+            Effect.gen(function* () {
+              events.push(event);
+              if (rejectDelivery)
+                return yield* DurableAlarmError.make({
+                  operation: "fixture delivery",
+                  message: "Host acknowledgement unavailable",
+                });
+            }),
+          notify: (id: string) =>
+            Effect.sync(() => {
+              notifications.push(id);
+            }),
+        };
+
+        const run = localRun(owner, [], options);
+
+        yield* TestClock.setTime(Date.now() + 86_400_000);
+        maintenanceClocks.set(owner, yield* Clock.Clock);
+        yield* Effect.addFinalizer(() => Effect.sync(() => maintenanceClocks.delete(owner)));
+
+        yield* run(submit(thread, "healthy"));
+        yield* run(pass);
+        expect(events).toEqual([]);
+        const first = yield* run(submit(thread, "first"));
+        const second = yield* run(submit(thread, "second"));
+        const original = yield* corruptHistory(owner, thread, 2);
+
+        // Interrupt after fault commit but before notification, then reconstruct maintenance.
+        yield* localRun(owner, [], {
+          ...options,
+          hit: (location) =>
+            location === "maintenance:recovery-status:after"
+              ? Effect.die(new Error("fixture restart after commit"))
+              : Effect.void,
+        })(pass).pipe(Effect.exit);
+        expect(events).toEqual([]);
+        yield* TestClock.adjust(5_000);
+        yield* run(pass);
+        expect(
+          events.map((event) => [event.transition, event.threadId, event.submissionId]),
+        ).toEqual([
+          ["created", thread, first.submissionId],
+          ["created", thread, second.submissionId],
+        ]);
+        expect(events[0]?.failure).toMatchObject({ phase: "history", reason: "failure" });
+        expect(
+          JSON.stringify(events, (_key, value) =>
+            typeof value === "bigint" ? String(value) : value,
+          ),
+        ).not.toContain("private_fixture_payload");
+
+        const retained = yield* retainedFault(owner, thread);
+
+        if (Option.isNone(retained)) throw new Error("Expected retained fault");
+        notifications.length = 0;
+        yield* TestClock.adjust(retained.value.retryAt - (yield* Clock.currentTimeMillis));
+        yield* run(pass);
+        expect(events).toHaveLength(2);
+        expect(notifications).toEqual([]);
+        const retried = yield* retainedFault(owner, thread);
+
+        expect(retried).toMatchObject({
+          _tag: "Some",
+          value: { attempts: retained.value.attempts + 1 },
+        });
+
+        const later = yield* run(submit(thread, "during-backoff"));
+
+        yield* run(pass);
+        expect(events.at(-1)).toMatchObject({
+          transition: "created",
+          submissionId: later.submissionId,
+        });
+        expect(events).toHaveLength(3);
+        const next = yield* retainedFault(owner, thread);
+
+        if (Option.isNone(next)) throw new Error("Expected retained retry");
+        yield* TestClock.adjust(next.value.retryAt - (yield* Clock.currentTimeMillis));
+        yield* localRun(owner, [], { ...options, readFailureDefect: new Error("private defect") })(
+          pass,
+        );
+        expect(
+          events
+            .slice(3)
+            .map((event) => [event.transition, event.submissionId, event.failure.reason]),
+        ).toEqual([
+          ["changed", first.submissionId, "defect"],
+          ["changed", second.submissionId, "defect"],
+          ["changed", later.submissionId, "defect"],
+        ]);
+
+        yield* storage(owner, (state) =>
+          state.storage.sql
+            .exec(
+              "UPDATE effect_agent_canonical_records SET record_json = ? WHERE thread_id = ? AND sequence = 2",
+              original,
+              thread,
+            )
+            .toArray(),
+        );
+        const changed = yield* retainedFault(owner, thread);
+
+        if (Option.isNone(changed)) throw new Error("Expected changed fault");
+        yield* TestClock.adjust(changed.value.retryAt - (yield* Clock.currentTimeMillis));
+        rejectDelivery = true;
+        yield* run(pass).pipe(Effect.exit);
+        // Delivery failure must not prevent repaired native work from settling.
+        expect(
+          yield* run(DurableAgentRuntime.use((runtime) => runtime.submissionStatus(first))),
+        ).toMatchObject({ _tag: "settled" });
+        const unacknowledged = events.at(-1);
+
+        expect(unacknowledged).toMatchObject({
+          transition: "cleared",
+          submissionId: first.submissionId,
+        });
+        rejectDelivery = false;
+        yield* TestClock.adjust(5_000);
+        yield* run(pass);
+        expect(events.slice(7)).toEqual([
+          unacknowledged,
+          expect.objectContaining({ transition: "cleared", submissionId: second.submissionId }),
+          expect.objectContaining({ transition: "cleared", submissionId: later.submissionId }),
+        ]);
+        expect(yield* retainedFault(owner, thread)).toEqual(Option.none());
+        expect(events.every((event) => event.firstFailedAt === events[0]?.firstFailedAt)).toBe(
+          true,
+        );
+      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    ));
+
   // https://reve-r6.sentry.io/issues/KOMMUNIKASIE-API-AA
   it("does not attach an old recovery deadline to an admission still becoming ready", () =>
     Effect.runPromise(
@@ -469,7 +639,7 @@ describe("recovery faults independent of execution history", () => {
         expect(supplierCountsFor(old)).toEqual({ book: 1 });
         yield* corruptHistory(owner, old, 2);
         yield* run(pass);
-        const fault = yield* run(status(old));
+        const fault = yield* retainedFault(owner, old);
 
         expect(Option.isSome(fault)).toBe(true);
         if (Option.isNone(fault)) return;
@@ -519,7 +689,7 @@ describe("recovery faults independent of execution history", () => {
 
         expect(yield* Clock.currentTimeMillis).toBeLessThan(fault.value.retryAt);
         expect(reads).not.toContain(old);
-        expect(yield* run(status(old))).toEqual(fault);
+        expect(yield* retainedFault(owner, old)).toEqual(fault);
         // The deadline is a recovery retry for the old Thread, never a prerequisite for
         // the fresh one. Also observe its expiry to distinguish postponement from lost work.
         yield* TestClock.adjust(fault.value.retryAt - (yield* Clock.currentTimeMillis));
@@ -732,9 +902,9 @@ describe("recovery faults independent of execution history", () => {
         // Timeout closes the read resource without settling or replaying the old work.
         expect(await alarm).toBe(true);
         expect(activeReads).toBe(0);
-        const retainedFault = await run(status(old));
+        const fault = await Effect.runPromise(retainedFault(owner, old));
 
-        expect(retainedFault).toMatchObject({
+        expect(fault).toMatchObject({
           _tag: "Some",
           value: { failure: { reason: "timeout" } },
         });
@@ -751,7 +921,7 @@ describe("recovery faults independent of execution history", () => {
         await evictDurableObject(stubFor(owner));
         expect(await incarnation()).not.toBe(previous);
         await run(ensure);
-        expect(await run(status(old))).toEqual(retainedFault);
+        expect(await Effect.runPromise(retainedFault(owner, old))).toEqual(fault);
         expect(
           await run(
             SubmissionLedger.use((ledger) =>
@@ -787,7 +957,7 @@ describe("recovery faults independent of execution history", () => {
 
         epochOffset += 5_000;
         expect(await runDurableObjectAlarm(stubFor(owner))).toBe(true);
-        expect(await run(status(old))).toMatchObject({
+        expect(await Effect.runPromise(retainedFault(owner, old))).toMatchObject({
           _tag: "Some",
           value: {
             failure: {
@@ -903,7 +1073,7 @@ describe("recovery faults independent of execution history", () => {
           expect(active).toBe(0);
           expect(abortReads).toBe(1);
           expect(reads).not.toContain(old);
-          const fault = yield* run(status(old));
+          const fault = yield* retainedFault(owner, old);
 
           expect(fault).toMatchObject({
             _tag: "Some",
@@ -934,7 +1104,7 @@ describe("recovery faults independent of execution history", () => {
             settlement: { outcome: "completed" },
           });
           expect(abortReads).toBe(1);
-          expect(yield* run(status(old))).toEqual(fault);
+          expect(yield* retainedFault(owner, old)).toEqual(fault);
           expect(yield* run(submit(old, "retained"))).toEqual(receipt);
           expect(
             yield* run(

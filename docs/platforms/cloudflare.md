@@ -305,31 +305,51 @@ runs sequentially in the event Scope with a 30-second bound per Thread; the same
 wake loop can dispatch fresh Threads and publish their replies while old history is stalled.
 Unfinished cleanup retains its fences and settlement obligations across eviction.
 
-Unreadable retained payloads, history or a failed child recovery block only their Thread. Maintenance stores a
-bounded `ThreadRecoveryFault` outside canonical history and retries after 5, 10, 20, 40, then
-60 seconds. New admissions retain their receipts and do not bypass that Thread's deadline;
-other Threads remain eligible. A successful recovery clears the fault without changing history
-or resolving uncertain external effects. Creating, updating or clearing a fault notifies
-`WakeScheduler` after commit, so status observers can refresh while other maintenance remains active.
+Unreadable retained payloads, history or a failed child recovery block only their Thread.
+Maintenance retains the fault outside canonical history and retries after 5, 10, 20, 40, then
+60 seconds. New admissions retain their receipts and do not bypass that deadline; other Threads
+remain eligible. Successful recovery clears the fault without resolving uncertain external effects.
 
-After a native pass, an authenticated host can inspect the local fault without decoding history:
+Hosts consume per-Submission fault transitions through `ThreadRecoveryEvents`:
 
 ```ts
-import { ThreadMaintenance } from "@effect-agent/platform-cloudflare/alarm";
-import { ThreadId } from "effect-agent/identifiers";
+import { ThreadRecoveryEvents } from "@effect-agent/platform-cloudflare/alarm";
+import { Layer } from "effect";
 
-const status = ThreadMaintenance.use((maintenance) =>
-  maintenance.recoveryStatus(ThreadId.make("thread-1")),
-);
-// Effect<Option<ThreadRecoveryFault>, DurableAlarmError | OperationDenied, ThreadMaintenance>
+const recoveryEvents = Layer.succeed(ThreadRecoveryEvents, {
+  publish: (event) =>
+    failures.apply({
+      threadId: event.threadId,
+      submissionId: event.submissionId,
+      sequence: event.sequence,
+      failed: event.transition !== "cleared",
+      failure: event.failure,
+    }),
+});
+// Supply { recoveryEvents } to ThreadObject.layer or ThreadObject.layerInHost.
 ```
 
-`recoveryStatus` authorizes `explain` before reading storage, using the `OperationAuthorizer`
-provided when constructing `ThreadMaintenance.layer`. The host verifies local Thread membership
-before exposing it over RPC. `Some` carries failure phase, content-free diagnostics,
-first/last failure time, retry time and attempt count; `None` means no recorded fault. Neither
-proves settlement or health. Source-owned accepted-message notices must not wait for native
-settlement: a pre-claim fault can occur before any reply obligation or binding attempt exists.
+`created` marks each affected Submission, including new admissions during backoff. `changed`
+means the failure classification or content-free diagnostic changed. `cleared` names every
+previously affected Submission, even if recovery has since settled it. Events carry Thread and
+Submission IDs, first-failure and transition times, and the bounded `RecoveryFailure` details.
+Retry counters and deadlines are private: bookkeeping emits no event or wake. Healthy execution
+performs no host recovery-status checks.
+
+Transitions commit atomically with fault state, then an independent maintenance lane delivers
+them in order. The lane has a 30-second allowance per wave; a failed or interrupted delivery
+remains pending across eviction and does not gate native execution. Return success only after
+durably applying the event or retaining it in an application outbox. Delivery is at least once:
+deduplicate by physical Object and `sequence`, including when the host commit succeeds but its
+acknowledgement is lost. Capture application services when constructing the handler Layer.
+
+These are private host events; authorize recipients before exposing a user-facing failure flag.
+A fault is not a Settlement, and a clear does not prove completion. Source-owned accepted-message
+notices must not wait for native settlement: a pre-claim fault can precede any reply obligation.
+Install the handler from the first maintenance pass; an omitted handler discards transitions.
+Existing retained faults announce their pending Submissions on the next native scan without
+resetting history or retry deadlines. This replaces `ThreadMaintenance.recoveryStatus`; hosts
+must remove their status polling and consume these transitions instead.
 
 Application outboxes supply finite, independent lanes through `ThreadHostMaintenance`:
 
