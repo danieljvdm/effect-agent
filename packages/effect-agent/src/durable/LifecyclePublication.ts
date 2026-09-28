@@ -122,37 +122,65 @@ export class LifecyclePublicationError extends Schema.TaggedError<LifecyclePubli
   },
 ) {}
 
-/** Native recovery state, not a second application record or launch queue. */
+/** One owner's pending facts, strictly ordered by its durable ordinals. */
+export const LifecyclePublicationBatch = Schema.NonEmptyArray(LifecyclePublication).check(
+  Schema.makeFilter(
+    (facts) =>
+      facts.every((fact, index) => {
+        const previous = facts[index - 1];
+
+        return (
+          fact.ownerThreadId === facts[0].ownerThreadId &&
+          (previous === undefined || fact.ordinal > previous.ordinal)
+        );
+      }),
+    { expected: "One owner with strictly increasing publication ordinals" },
+  ),
+);
+
+export type LifecyclePublicationBatch = typeof LifecyclePublicationBatch.Type;
+
+/** Native recovery state, independent of Attempts. Hosts serialize drains per storage owner. */
 export interface LifecyclePublicationStorage {
+  /** Select up to `limit` due owners, with all pending facts for each selected owner. */
   readonly pending: (
     nowMillis: number,
     limit: number,
-  ) => Effect.Effect<ReadonlyArray<LifecyclePublication>, LifecyclePublicationError>;
+  ) => Effect.Effect<ReadonlyArray<LifecyclePublicationBatch>, LifecyclePublicationError>;
+  /** Atomically acknowledge the exact batch, retaining its identities and fingerprints. */
   readonly acknowledge: (
-    publication: LifecyclePublication,
+    publications: LifecyclePublicationBatch,
   ) => Effect.Effect<void, LifecyclePublicationError>;
-  readonly defer: (
-    publication: LifecyclePublication,
-    untilMillis: number,
-  ) => Effect.Effect<void, LifecyclePublicationError>;
+  /**
+   * Claim a due owner batch and persist its retry before dispatch. Eight automatic attempts;
+   * 1s exponential backoff capped at 60s, after the dispatch timeout. The final attempt parks
+   * the payload before dispatch so process loss cannot renew its budget. False means not due.
+   */
+  readonly claim: (
+    publications: LifecyclePublicationBatch,
+    nowMillis: number,
+    timeoutMillis: number,
+  ) => Effect.Effect<boolean, LifecyclePublicationError>;
   readonly pendingDeadline: Effect.Effect<Option.Option<number>, LifecyclePublicationError>;
-  /** Earliest retained owner obligation, including deferred facts that still gate execution. */
-  readonly pendingDeadlineFor: (
+  /** Explicit operator retry after repairing a parked owner's destination. */
+  readonly retryParked: (
     ownerThreadId: ThreadId,
-  ) => Effect.Effect<Option.Option<number>, LifecyclePublicationError>;
+    nowMillis: number,
+  ) => Effect.Effect<void, LifecyclePublicationError>;
 }
 
 /**
- * Publish an idempotent domain command, including its authorization, exact receipt and delivery
- * intent. Return only after that command commits. Treat private input/update/result fields as
- * private; the application must select its declared public fields. Revocation/deletion is an
- * acknowledged domain decision, not an indefinitely retryable infrastructure failure.
+ * Publish one owner's ordered batch in one idempotent host transaction, including authorization,
+ * records, receipts and delivery intents. Return only after the entire batch commits. Retries
+ * may include already committed identities plus later facts; deduplicate each fact's `id`.
+ * Private input/update/result fields remain private; select declared public fields explicitly.
+ * Revocation/deletion is an acknowledged domain decision, not an infrastructure retry.
  */
 export class LifecyclePublicationHandler extends Context.Service<
   LifecyclePublicationHandler,
   {
     readonly publish: (
-      publication: LifecyclePublication,
+      publications: LifecyclePublicationBatch,
     ) => Effect.Effect<void, LifecyclePublicationError, Scope.Scope>;
   }
 >()("@effect-agent/thread/LifecyclePublicationHandler") {}
@@ -218,7 +246,7 @@ const withSource = Effect.fn("LifecyclePublication.withSource")(
 
 /**
  * One finite wave for the host's existing maintenance coordinator. Persist the next deadline
- * before dispatch, so interruption and process loss retain the same fact without another timer.
+ * before dispatch, so interruption and process loss retain the same facts without another timer.
  * Acknowledgements are exact and idempotent. No producer or external Tool is re-executed here.
  */
 export const drainLifecyclePublications = Effect.fn("LifecyclePublication.drain")(function* (
@@ -229,15 +257,21 @@ export const drainLifecyclePublications = Effect.fn("LifecyclePublication.drain"
   const handler = yield* LifecyclePublicationHandler;
   const pending = yield* storage.pending(yield* Clock.currentTimeMillis, limit);
 
-  for (const publication of pending) {
-    yield* storage.defer(publication, (yield* Clock.currentTimeMillis) + timeoutMillis);
-    yield* Effect.scoped(withSource(publication).pipe(Effect.flatMap(handler.publish))).pipe(
+  for (const batch of pending) {
+    if (!(yield* storage.claim(batch, yield* Clock.currentTimeMillis, timeoutMillis))) continue;
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const publications = yield* Effect.forEach(batch, withSource);
+
+        yield* handler.publish(publications);
+      }),
+    ).pipe(
       Effect.timeoutOrElse({
         duration: timeoutMillis,
         orElse: () => LifecyclePublicationError.make({ reason: "unavailable" }),
       }),
     );
-    yield* storage.acknowledge(publication);
+    yield* storage.acknowledge(batch);
   }
 
   return pending.length;

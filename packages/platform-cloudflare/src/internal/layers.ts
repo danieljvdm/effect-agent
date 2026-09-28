@@ -27,6 +27,7 @@ import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   type Crypto,
   Cause,
+  Clock,
   Context,
   Duration,
   Effect,
@@ -88,6 +89,7 @@ import { SqlClient } from "effect/unstable/sql/SqlClient";
 import {
   DurableAlarmError,
   ThreadMaintenance,
+  ThreadHostMaintenance,
   ThreadMutationGate,
   ThreadPublication,
   publishCommitted,
@@ -205,8 +207,8 @@ export type CloudflareDurableRuntimeInitializationError =
 
 /**
  * The services `ThreadObject.layer` provides, including its single owner SQL client.
- * Its Context also supplies ThreadMessageDelivery (a defaulted Reference, with no required R)
- * so application-composed maintenance retains the same native message recovery capability.
+ * Its Context also supplies the defaulted ThreadMessageDelivery and ThreadHostMaintenance
+ * references so rebuilt maintenance retains message recovery and lifecycle publication lanes.
  */
 export type CloudflareDurableRuntimeServices =
   | DurableAgentRuntime
@@ -421,8 +423,8 @@ export const layerHostConfig = (
   );
 
 export interface ThreadPublicationOptions<E = never, R = never, P = never> {
-  /** Typed native facts, retained atomically and retried by the existing publication gate.
-   * Return only after the idempotent application command and its receipt commit. No journal
+  /** Typed native facts, retained atomically and published asynchronously in owner batches.
+   * The handler returns after the application batch and its receipts commit. No journal
    * scan is needed. The handler receives private native evidence, not pre-authorized UI data.
    */
   readonly lifecyclePublication?: Layer.Layer<LifecyclePublicationHandler, E, R>;
@@ -617,66 +619,9 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
         Layer.provide(wakes),
       );
 
-      const legacyPublication = options.publication ?? ThreadPublication.layer;
-
-      const publication = (
-        options.lifecyclePublication === undefined
-          ? legacyPublication
-          : Layer.effect(ThreadPublication)(
-              Effect.gen(function* () {
-                const previous = yield* ThreadPublication;
-                const store = yield* ThreadStore;
-                const storage = store.lifecyclePublications;
-
-                const context = yield* Effect.context<
-                  LifecyclePublicationHandler | ThreadStore | SubmissionLedger
-                >();
-
-                const failure = (cause: unknown) => {
-                  const error = DurableAlarmError.make({
-                    operation: "publish native lifecycle",
-                    message: "Native lifecycle publication remains pending",
-                    cause,
-                  });
-
-                  return ErrorReporter.isIgnored(cause)
-                    ? Object.assign(error, { [ErrorReporter.ignore]: true })
-                    : error;
-                };
-
-                const deadline =
-                  storage === undefined
-                    ? Effect.fail(failure("Native lifecycle storage unavailable"))
-                    : storage.pendingDeadline.pipe(Effect.mapError(failure));
-
-                return ThreadPublication.of({
-                  invalidate: previous.invalidate,
-                  prepareGeneration: previous.prepareGeneration,
-                  drain: previous.drain.pipe(
-                    Effect.andThen(
-                      storage === undefined
-                        ? Effect.fail(failure("Native lifecycle storage unavailable"))
-                        : drainLifecyclePublications(storage).pipe(
-                            Effect.provide(context),
-                            Effect.asVoid,
-                            Effect.mapError(failure),
-                          ),
-                    ),
-                  ),
-                  pendingDeadline: Effect.gen(function* () {
-                    const left = yield* previous.pendingDeadline;
-                    const right = yield* deadline;
-
-                    return Option.isNone(left)
-                      ? right
-                      : Option.isNone(right)
-                        ? left
-                        : Option.some(Math.min(left.value, right.value));
-                  }),
-                });
-              }),
-            ).pipe(Layer.provide(legacyPublication), Layer.provide(options.lifecyclePublication))
-      ).pipe(Layer.provide(Layer.mergeAll(rawLocalPorts, Layer.effect(SqlClient)(SqlClient))));
+      const publication = (options.publication ?? ThreadPublication.layer).pipe(
+        Layer.provide(Layer.mergeAll(rawLocalPorts, Layer.effect(SqlClient)(SqlClient))),
+      );
 
       const projection = (options.projection ?? ThreadProjectionMaintenance.layer).pipe(
         Layer.provide(Layer.mergeAll(rawLocalPorts, Layer.effect(SqlClient)(SqlClient))),
@@ -809,9 +754,85 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
         Layer.provideMerge(portsEndpointLayer),
       );
 
+      const maintenanceRuntime =
+        options.lifecyclePublication === undefined
+          ? runtimeStack
+          : Layer.merge(
+              runtimeStack,
+              Layer.effect(ThreadHostMaintenance)(
+                Effect.gen(function* () {
+                  const previous = yield* ThreadHostMaintenance;
+                  const store = yield* ThreadStore;
+                  const storage = store.lifecyclePublications;
+
+                  const context = yield* Effect.context<
+                    LifecyclePublicationHandler | ThreadStore | SubmissionLedger
+                  >();
+
+                  const failure = (cause: unknown) => {
+                    const error = DurableAlarmError.make({
+                      operation: "publish native lifecycle",
+                      message: "Native lifecycle publication remains pending",
+                      cause,
+                    });
+
+                    return ErrorReporter.isIgnored(cause)
+                      ? Object.assign(error, { [ErrorReporter.ignore]: true })
+                      : error;
+                  };
+
+                  const deadline =
+                    storage === undefined
+                      ? Effect.fail(failure("Native lifecycle storage unavailable"))
+                      : storage.pendingDeadline.pipe(Effect.mapError(failure));
+
+                  return {
+                    lanes: [
+                      ...previous.lanes,
+                      {
+                        // Four owner batches, each with a 10s host timeout, plus local commits/cleanup.
+                        dispatchTimeoutMillis: 60_000,
+                        run:
+                          storage === undefined
+                            ? Effect.fail(failure("Native lifecycle storage unavailable"))
+                            : drainLifecyclePublications(storage).pipe(
+                                Effect.provide(context),
+                                Effect.asVoid,
+                                Effect.mapError(failure),
+                              ),
+                        pendingDeadline: deadline.pipe(
+                          Effect.catchCauseIf(
+                            (cause) => !Cause.hasInterrupts(cause),
+                            (cause) =>
+                              Effect.logError(
+                                "Lifecycle publication deadline unavailable",
+                                cause,
+                              ).pipe(
+                                Effect.andThen(
+                                  Effect.map(Clock.currentTimeMillis, (now) =>
+                                    Option.some(now + 60_000),
+                                  ),
+                                ),
+                              ),
+                          ),
+                        ),
+                      },
+                    ],
+                  };
+                }),
+              ).pipe(
+                Layer.provide(rawLocalPorts),
+                Layer.provide(options.lifecyclePublication.pipe(Layer.provide(rawLocalPorts))),
+                Layer.provide(runtimeStack),
+              ),
+            );
+
       return Layer.mergeAll(
-        runtimeStack,
-        ThreadMaintenance.layer.pipe(Layer.provide(runtimeStack), Layer.provide(messageRecovery)),
+        maintenanceRuntime,
+        ThreadMaintenance.layer.pipe(
+          Layer.provide(maintenanceRuntime),
+          Layer.provide(messageRecovery),
+        ),
         portsEndpointLayer,
         routedMessages,
         messageRecovery,

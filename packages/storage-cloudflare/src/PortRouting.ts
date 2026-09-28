@@ -973,23 +973,23 @@ const makeRoutedStoreServices = Effect.fn("DoPortRouting.makeRoutedStoreServices
         ? local.observe(request)
         : Stream.unwrap(Effect.fail(crossThreadStoreError("thread observe", request.threadId))),
 
-    // Publication obligations stay with their native owner; execution must retain its gate.
+    // Publication obligations and operator retries stay with their native owner.
     ...(lifecyclePublications === undefined
       ? {}
       : {
           lifecyclePublications: {
             ...lifecyclePublications,
-            pendingDeadlineFor: (ownerThreadId) =>
+            acknowledge: (batch) =>
+              batch.every((publication) => options.ownsThread(publication.ownerThreadId))
+                ? lifecyclePublications.acknowledge(batch)
+                : Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" })),
+            claim: (batch, nowMillis, timeoutMillis) =>
+              batch.every((publication) => options.ownsThread(publication.ownerThreadId))
+                ? lifecyclePublications.claim(batch, nowMillis, timeoutMillis)
+                : Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" })),
+            retryParked: (ownerThreadId, nowMillis) =>
               options.ownsThread(ownerThreadId)
-                ? lifecyclePublications.pendingDeadlineFor(ownerThreadId)
-                : Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" })),
-            acknowledge: (publication) =>
-              options.ownsThread(publication.ownerThreadId)
-                ? lifecyclePublications.acknowledge(publication)
-                : Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" })),
-            defer: (publication, untilMillis) =>
-              options.ownsThread(publication.ownerThreadId)
-                ? lifecyclePublications.defer(publication, untilMillis)
+                ? lifecyclePublications.retryParked(ownerThreadId, nowMillis)
                 : Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" })),
           },
         }),

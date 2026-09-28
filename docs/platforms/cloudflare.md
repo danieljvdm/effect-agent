@@ -410,8 +410,8 @@ release; do not pin an unpublished branch or patch installed dependencies.
 
 ### Publish native lifecycle facts
 
-Use `lifecyclePublication` when native worker admissions, progress, controls, waiting, and
-settlement must commit an application record before dependent execution continues:
+Use `lifecyclePublication` to publish native admissions, progress, controls, waiting, and
+settlement to an eventually consistent application view:
 
 ```ts
 import { LifecyclePublicationHandler } from "effect-agent/lifecycle-publication";
@@ -421,34 +421,41 @@ const RuntimeLive = ThreadObject.layer(registrations, {
 });
 ```
 
-The handler's `publish(publication)` returns an Effect only after an idempotent application
-command commits its authorization decision, record, receipt, and delivery intent. The native
-adapter retains each typed fact in the source transaction. Existing maintenance retries that
-exact identity after interruption or a lost acknowledgement; no journal cursor is needed.
-Publication failure never repeats a model or Tool operation. A destination deletion or revoked
-authority is a committed domain decision that can be acknowledged.
+The adapter retains each typed fact in the source transaction. The existing alarm publishes
+pending facts asynchronously through an independent maintenance lane. Attempts, model calls,
+input joins, and handoffs continue while publication is pending or failing.
 
-Pending owner facts also gate active input joins and internal input handoffs at native safe
-checkpoints. A yielded Attempt retains its completed Turn and joined input receipts before
-recovery waits for acknowledgement. `AbortIntentRecorded` reports the ledger's exact accepted
-abort intent even when execution has not yet appended its canonical abort record.
-`WorkerInboxSealed.terminal` retains the first actual native seal decision: an assignment's
-`completed`, `failed`, or `cancelled` outcome, or `null` for an explicit stop. A newer unapplied
-input can veto a completion, so a Run's settlement alone does not establish an inbox seal.
+Implement `publish(batch)` for a nonempty, ordinal-ordered array from one `ownerThreadId`.
+Commit the whole batch's authorization decisions, records, receipts, and delivery intents in one
+idempotent host transaction before returning. Each call includes all pending facts for its
+selected owner; facts committed during delivery belong to a later batch. Retries can include
+already committed identities, so deduplicate each fact's `id`. Acknowledgement is atomic for the
+selected batch and preserves its identity/fingerprint receipts. Publication never replays a model
+or Tool operation. Destination deletion or revoked authority is an acknowledged domain decision.
 
 `source` contains immutable private admission evidence, resolved by exact native identities.
 Delivery facts carry their retained envelope and accepted receipt. Select declared public fields;
 input, private results, and report payloads are not automatically safe to display. `ordinal` orders
 facts within `ownerThreadId`; `source.queueSequence` orders accepted inputs within the worker's
-Thread. These are separate orders. The handler must deduplicate `id` and reject superseded inputs.
+Thread. These are separate orders. The handler must reject superseded inputs.
+`AbortIntentRecorded` reports the ledger's accepted abort intent. `WorkerInboxSealed.terminal`
+retains the first native seal decision: an assignment outcome, or `null` for an explicit stop.
+A Run settlement alone does not establish an inbox seal.
 
-Pending obligations retain their private payload until acknowledgement, then keep only identity
-and fingerprint. Native source admissions and Run-input records must remain retained while debt
-exists. Do not delete an Object before its publication debt is acknowledged. Enabling the option
-starts with new commits; it does not backfill old history. Keep the handler enabled until all debt
-is drained. In-memory/custom adapters do not retain these obligations. SQL adapter assemblies
-outside Cloudflare can provide `lifecyclePublicationLayer` and call
-`drainLifecyclePublications` from their existing durable maintenance coordinator.
+Each batch has a 10-second delivery deadline. Retry state persists before dispatch, with eight
+automatic attempts and exponential backoff from 1 second to a 60-second cap after the dispatch
+deadline. An exhausted owner parks with its payload retained; later facts for that owner wait
+behind it, while execution and other owners continue. After repairing the destination, an operator
+can call `ThreadStore.lifecyclePublications.retryParked(ownerThreadId, nowMillis)` and wake the
+existing maintenance coordinator. Serialize publication drains and operator retries per owner.
+
+Pending and parked obligations retain private payloads until acknowledgement. Keep native source
+admissions and Run-input records, and do not delete their Object, until publication debt is
+acknowledged. Enabling the option starts with new commits without backfilling history; keep the
+handler enabled until all debt drains. Existing SQL publication payloads and receipts are preserved
+when upgrading. In-memory/custom adapters do not retain these obligations. SQL assemblies outside
+Cloudflare can provide `lifecyclePublicationLayer` and call `drainLifecyclePublications` from their
+existing durable maintenance coordinator; its limit counts owners, not individual facts.
 
 ### Publish durable host activity
 
@@ -496,7 +503,8 @@ The platform prearms a native generation before ingress mutations and publicatio
 runtime writes. It prepares a generation only after its producers have returned, drains publication
 before recovery or potentially slow Agent work, and keeps the earliest publication/runtime alarm.
 Pending publication defers runtime work, including when its retry deadline is in the future.
-A post-commit publication failure is logged without changing the committed source result; the
+After commit, only local invalidation runs inline. An invalidation failure is logged without
+changing the committed source result; the
 new generation repairs missed invalidation after a crash. Alarm failures propagate for Workerd
 retry, and interruption remains interruption. Custom host facts must be committed through
 `ThreadMaintenance.withMutation` to get the same prearm and post-commit hooks.

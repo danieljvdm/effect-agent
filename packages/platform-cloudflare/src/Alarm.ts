@@ -353,11 +353,11 @@ const earliestDeadline = (
       : left
     : right;
 
-/** @internal A committed source operation must not become a failed operation because delivery failed. */
+/** @internal Invalidate locally after commit; maintenance owns all delivery work. */
 export const publishCommitted = Effect.gen(function* () {
   const publication = yield* ThreadPublication;
 
-  yield* publication.invalidate.pipe(Effect.andThen(publication.drain));
+  yield* publication.invalidate;
 }).pipe(
   Effect.catchCause((cause) =>
     Cause.hasInterrupts(cause)

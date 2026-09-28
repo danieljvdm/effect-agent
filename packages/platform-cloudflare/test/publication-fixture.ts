@@ -1,5 +1,6 @@
 import { Clock, Effect, Layer, Option, Schema, Stream } from "effect";
 import {
+  type LifecyclePublication,
   LifecyclePublicationError,
   LifecyclePublicationHandler,
 } from "effect-agent/lifecycle-publication";
@@ -140,11 +141,18 @@ export const publicationLayer = Layer.effect(ThreadPublication)(
 
 /** Destination failure only; admission, routed execution and native retry storage remain real. */
 export const failedLifecycleThreads = new Set<string>();
+export const lifecycleBatches = new Map<string, Array<ReadonlyArray<LifecyclePublication>>>();
 
 export const lifecyclePublicationTestLayer = Layer.succeed(LifecyclePublicationHandler)({
-  publish: (publication) =>
-    publication.fact._tag === "SubmissionReady" &&
-    failedLifecycleThreads.has(publication.ownerThreadId)
-      ? Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" }))
-      : Effect.void,
+  publish: (publications) =>
+    Effect.gen(function* () {
+      const owner = publications[0].ownerThreadId;
+
+      const batches = lifecycleBatches.get(owner) ?? [];
+
+      batches.push(publications);
+      lifecycleBatches.set(owner, batches);
+      if (failedLifecycleThreads.has(owner))
+        return yield* LifecyclePublicationError.make({ reason: "unavailable" });
+    }),
 });
