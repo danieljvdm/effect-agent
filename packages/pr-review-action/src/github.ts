@@ -98,6 +98,18 @@ const DismissedReviewWire = Schema.Struct({
   state: Schema.Literal("DISMISSED"),
 });
 
+const IssueCommentWire = Schema.Struct({
+  id: Schema.Natural,
+  body: Schema.String.check(Schema.isMaxLength(100_000)),
+  issue_url: ShortString,
+  user: ReviewWire.fields.user,
+});
+
+const CollaboratorPermissionWire = Schema.Struct({
+  permission: Schema.Literals(["admin", "write", "read", "none"]),
+  user: Schema.Struct({ login: ReviewWire.fields.user.fields.login }),
+});
+
 const reviewFromWire = (wire: typeof ReviewWire.Type): ReviewHistoryItem => ({
   id: wire.id,
   authorLogin: wire.user.login,
@@ -579,15 +591,29 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
   /** Recheck ownership, feedback, and head before each dismissal. GitHub has no conditional PUT. */
   const dismissReview = Effect.fn("GitHubClient.dismissReview")(function* (input: {
     readonly review: ReviewHistoryItem;
-    readonly followUp: ReviewFollowUp;
     readonly reviewAuthor: string;
     readonly commitId: string;
-    readonly evidence: string;
+    readonly decision:
+      | { readonly _tag: "verified"; readonly followUp: ReviewFollowUp; readonly evidence: string }
+      | {
+          readonly _tag: "maintainer";
+          readonly commentId: number;
+          readonly command: string;
+          readonly reason: string;
+        };
   }) {
+    const { decision } = input;
+
     if (
-      input.followUp.id !== String(input.review.id) ||
-      unresolvedChangeRequests({ reviewAuthor: input.reviewAuthor, history: [input.review] })
-        .length !== 1
+      (decision._tag === "verified" && decision.followUp.id !== String(input.review.id)) ||
+      unresolvedChangeRequests({
+        reviewAuthor: input.reviewAuthor,
+        history: [
+          input.review.state === "DISMISSED"
+            ? { ...input.review, state: "CHANGES_REQUESTED" }
+            : input.review,
+        ],
+      }).length !== 1
     ) {
       return yield* GitHubApiFailure.make({
         operation: "dismiss review",
@@ -614,25 +640,74 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
         reason: "Review changed after verification",
       });
     }
-    if (currentReview.state === "DISMISSED") return;
-    if (currentReview.state !== "CHANGES_REQUESTED") {
+    if (currentReview.state !== "CHANGES_REQUESTED" && currentReview.state !== "DISMISSED") {
       return yield* GitHubApiFailure.make({
         operation: "dismiss review",
         reason: "Review is no longer a change request",
       });
     }
 
-    const [currentFollowUp] = yield* loadReviewFollowUps({
-      reviewAuthor: input.reviewAuthor,
-      history: [currentReview],
-    });
+    let message: string;
 
-    if (currentFollowUp?.description !== input.followUp.description) {
-      return yield* GitHubApiFailure.make({
-        operation: "dismiss review",
-        reason: "Review comments changed after verification",
+    if (decision._tag === "verified") {
+      if (currentReview.state === "DISMISSED") return;
+
+      const [currentFollowUp] = yield* loadReviewFollowUps({
+        reviewAuthor: input.reviewAuthor,
+        history: [currentReview],
       });
+
+      if (currentFollowUp?.description !== decision.followUp.description) {
+        return yield* GitHubApiFailure.make({
+          operation: "dismiss review",
+          reason: "Review comments changed after verification",
+        });
+      }
+      message = `Verified addressed at ${input.commitId}.\n\n${decision.evidence}`;
+    } else {
+      // Re-read the event's comment; workflow association alone is not write authority.
+      const comment = yield* readJson(
+        "authorize review dismissal command",
+        HttpClientRequest.get(
+          `${apiUrl}/repos/${options.repository}/issues/comments/${String(decision.commentId)}`,
+        ),
+        IssueCommentWire,
+      );
+
+      if (
+        comment.id !== decision.commentId ||
+        comment.body !== decision.command ||
+        comment.issue_url !==
+          `${apiUrl}/repos/${options.repository}/issues/${String(options.pullRequest)}`
+      ) {
+        return yield* GitHubApiFailure.make({
+          operation: "dismiss review",
+          reason: "Dismissal command changed or belongs to another pull request",
+        });
+      }
+
+      const permission = yield* readJson(
+        "authorize review dismissal author",
+        HttpClientRequest.get(
+          `${apiUrl}/repos/${options.repository}/collaborators/${encodeURIComponent(comment.user.login)}/permission`,
+        ),
+        CollaboratorPermissionWire,
+      );
+
+      if (
+        permission.user.login.toLowerCase() !== comment.user.login.toLowerCase() ||
+        (permission.permission !== "write" && permission.permission !== "admin")
+      ) {
+        return yield* GitHubApiFailure.make({
+          operation: "dismiss review",
+          reason: "Dismissing a review requires repository write permission",
+        });
+      }
+      const pull = yield* getPullRequest;
+
+      message = `Dismissed by @${comment.user.login} at ${input.commitId}.\nCommand: ${pull.url}#issuecomment-${String(comment.id)}\n\n${decision.reason}`;
     }
+    if (currentReview.state === "DISMISSED") return;
     const current = yield* getPullRequest;
 
     if (current.headRevision !== input.commitId) {
@@ -643,7 +718,7 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
     }
 
     const body = yield* Schema.encodeEffect(DismissReviewWire)({
-      message: `Verified addressed at ${input.commitId}.\n\n${input.evidence}`,
+      message,
     }).pipe(Effect.mapError((cause) => failure("encode review dismissal", cause)));
 
     const request = yield* HttpClientRequest.put(`${reviewUrl}/dismissals`).pipe(
@@ -651,8 +726,8 @@ export const makeGitHubClient = Effect.fn("makeGitHubClient")(function* (options
       Effect.mapError((cause) => failure("encode review dismissal", cause)),
     );
 
-    const dismissed = yield* execute("dismiss addressed review", request).pipe(
-      Effect.flatMap(decode(DismissedReviewWire, "dismiss addressed review")),
+    const dismissed = yield* execute("dismiss review", request).pipe(
+      Effect.flatMap(decode(DismissedReviewWire, "dismiss review")),
     );
 
     if (dismissed.id !== input.review.id) {

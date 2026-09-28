@@ -48,6 +48,7 @@ import {
 } from "./github.ts";
 import {
   type ReviewCostEstimate,
+  renderDismissalHelp,
   renderFindingBody,
   renderReviewBody,
   renderReviewFailureBody,
@@ -67,6 +68,7 @@ import {
   reviewReasoningEffort,
 } from "./review-openai.ts";
 import {
+  dismissalFromCommand,
   reviewModeFromCommand,
   selectReview,
   type ReviewSelection,
@@ -184,11 +186,16 @@ const reviewCheckCompletion = (
         if (isReviewResult(error)) {
           switch (error._tag) {
             case "BlockingFindings":
-              return result("failure", `${String(error.count)} blocking finding(s)`);
+              return result(
+                "failure",
+                `${String(error.count)} blocking finding(s)`,
+                renderDismissalHelp(reviewUrl),
+              );
             case "UnresolvedChangeRequests":
               return result(
                 "failure",
                 `${String(error.count)} earlier change request(s) unresolved`,
+                renderDismissalHelp(),
               );
             case "IncompleteReview":
             case "ReviewAttemptIncomplete":
@@ -870,9 +877,23 @@ const prepareReview = Effect.gen(function* () {
   ).pipe(Config.withDefault("auto"));
 
   const command = yield* Config.String("PR_REVIEW_COMMAND").pipe(Config.withDefault(""));
-  const mode = command.trim().length === 0 ? configuredMode : reviewModeFromCommand(command);
+  const dismissal = dismissalFromCommand(command);
+
+  const mode =
+    dismissal !== undefined
+      ? "reconcile"
+      : command.trim().length === 0
+        ? configuredMode
+        : reviewModeFromCommand(command);
 
   if (mode === undefined) {
+    if (/^@effect-agent[ \t]+dismiss(?:\s|$)/i.test(command.trimStart())) {
+      return yield* ActionConfigurationError.make({
+        message:
+          "Use @effect-agent dismiss <review-id-or-url> on the first line and a reason (1–1000 characters) on subsequent lines.",
+      });
+    }
+
     return yield* skip("unsupported-review-command");
   }
 
@@ -940,7 +961,46 @@ const prepareReview = Effect.gen(function* () {
     return yield* skip("stale-event-head");
   }
 
-  const history = yield* github.listReviews;
+  let history = yield* github.listReviews;
+
+  if (dismissal !== undefined) {
+    const review = history.find(({ id }) => id === dismissal.reviewId);
+
+    if (
+      review === undefined ||
+      (dismissal.reviewUrl !== undefined &&
+        dismissal.reviewUrl !== `${pull.url}#pullrequestreview-${String(review.id)}`)
+    ) {
+      return yield* ActionConfigurationError.make({
+        message: "The dismissal must link to a review on this pull request.",
+      });
+    }
+    yield* github
+      .dismissReview({
+        review,
+        reviewAuthor,
+        commitId: pull.headRevision,
+        decision: { _tag: "maintainer", commentId, command, reason: dismissal.reason },
+      })
+      .pipe(
+        Effect.tapErrorTag("GitHubApiFailure", (error) =>
+          Effect.logError("Review dismissal failed", { operation: error.operation }),
+        ),
+      );
+    history = yield* github.listReviews;
+    const current = yield* github.getPullRequest;
+
+    if (current.headRevision !== pull.headRevision) {
+      return yield* StaleReviewHead.make({
+        inspectedHead: pull.headRevision,
+        currentHead: current.headRevision,
+      });
+    }
+    yield* Effect.logInfo("Review dismissal accepted; refreshing status", {
+      reviewId: review.id,
+      headRevision: pull.headRevision,
+    });
+  }
 
   const selection = selectReview({
     mode,
@@ -1331,10 +1391,9 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
           }
           yield* github.dismissReview({
             review,
-            followUp,
             reviewAuthor,
             commitId: pull.headRevision,
-            evidence: resolution.evidence,
+            decision: { _tag: "verified", followUp, evidence: resolution.evidence },
           });
           yield* Effect.logInfo("Dismissed addressed review", {
             reviewId: review.id,
@@ -1460,7 +1519,9 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
 });
 
 export const reviewActionProgram = Effect.gen(function* () {
-  const setup = yield* prepareReview;
+  const setup = yield* prepareReview.pipe(
+    Effect.tapErrorTag("ActionConfigurationError", (error) => Effect.logError(error.message)),
+  );
 
   if (setup === undefined) return;
   const { github, ...prepared } = setup;
@@ -1481,6 +1542,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     selection._tag !== "review" &&
     selection._tag !== "reconcile" &&
     selection.reason !== "head-review-incomplete" &&
+    selection.reason !== "head-not-reviewed" &&
     (yield* github.hasReviewCheck(identity));
 
   const runId = yield* Config.schema(Schema.Natural, "GITHUB_RUN_ID").pipe(Config.option);

@@ -119,10 +119,13 @@ describe("addressed review verification", () => {
         const result = yield* github
           .dismissReview({
             review: mode === "untrusted" ? { ...priorReview, authorType: "User" } : priorReview,
-            followUp: priorFollowUp,
             reviewAuthor: priorReview.authorLogin,
             commitId: headRevision,
-            evidence: "All candidate retention is now bounded.",
+            decision: {
+              _tag: "verified",
+              followUp: priorFollowUp,
+              evidence: "All candidate retention is now bounded.",
+            },
           })
           .pipe(Effect.exit);
 

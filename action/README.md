@@ -54,7 +54,7 @@ between words are ignored; explanation can follow on later lines:
 The production bootstrap finding is now resolved.
 ```
 
-Later lines do not change the review mode or supply instructions to the reviewer. Quoted
+For review commands, later lines do not change the mode or supply instructions to the reviewer. Quoted
 commands, fenced examples, and commands embedded in prose do not start reviews. The workflow
 listens for newly created comments, so editing an existing comment does not start another review.
 
@@ -67,7 +67,8 @@ The Action skips unsupported mentions before making GitHub or model requests.
 Complete reviews without unresolved blockers pass. Blockers and incomplete coverage fail;
 a paused, unreviewed commit requires action. Automatic skipped events preserve an existing check
 unless trusted history requires an incomplete result; missing checks report trusted review history.
-After dismissing a blocker, request
+The [dismiss command](#dismissing-a-review) records a reason and refreshes the check in one run.
+After using GitHub's **Dismiss review** UI instead, request
 `@effect-agent review` on the unchanged head to refresh its check without another model call
 or published review. This requires the latest attempt on that head to be complete; an older
 completed attempt cannot clear a later incomplete one. `@effect-agent review full` always starts
@@ -81,6 +82,45 @@ runner loss or an uncertain write can leave a check in progress until another re
 For required reviews, configure branch protection to require this check from its publishing app.
 Enabling it does not change branch protection or rewrite old workflow results. A new push after
 the workflow upgrade refreshes the PR's workflow job; later manual reviews update the shared check.
+
+### Dismissing a review
+
+Humans and authorized coding agents use the same new PR comment:
+
+```text
+@effect-agent dismiss 123456789
+The finding assumes a released schema, but that field exists only in an unreleased commit of this PR. The target branch never persisted it.
+```
+
+Use the numeric review ID or its full `#pullrequestreview-…` URL. The reason is required on
+subsequent lines, up to 1,000 characters. Verify every blocker in the selected review first:
+dismissal applies to the **whole review**, including findings with no inline thread. A reason
+can establish a fix, refute a finding, or record explicitly accepted risk. Resolving a conversation
+does not dismiss its review.
+
+Agents can discover review IDs and findings through the GitHub API and post a file containing
+the command above with the CLI:
+
+```sh
+gh api repos/OWNER/REPO/pulls/NUMBER/reviews --paginate \
+  --jq '.[] | select(.user.login == "effect-agent[bot]" and .state == "CHANGES_REQUESTED") | {id, html_url, body}'
+gh pr comment NUMBER --repo OWNER/REPO --body-file /tmp/review-dismissal.txt
+```
+
+Use the configured `review-author` login in the query. Read any inline findings through
+`repos/OWNER/REPO/pulls/NUMBER/reviews/ID/comments` as needed. The workflow acknowledges the
+command with an eyes reaction; confirm the review's `DISMISSED` state and the resulting check.
+The check passes only if the latest attempt on the current head is complete and no bot change
+requests remain. An unreviewed or incomplete head still needs review. No model call, new review,
+or automatic-review allowance is consumed. Repeating the command safely refreshes the status.
+
+The Action verifies the live comment belongs to this PR, still matches the command, and was
+posted by an identity with current repository write access (including maintain/admin). Agents
+using a maintainer's authorized GitHub identity need no browser interaction. The existing workflow
+must admit that comment. Only this channel's marker-bearing bot reviews can be dismissed; human
+and other bots' reviews are untouched. GitHub retains the posting identity, command link, reason,
+and inspected commit in the dismissal. A failed API call fails the workflow; if dismissal succeeded
+but the check could not refresh, repeat the command or use `@effect-agent review` on a completed head.
 
 ## Review behavior
 

@@ -182,6 +182,13 @@ Use [open-pull-request](.agents/skills/open-pull-request/SKILL.md) for concise
 PR descriptions. Add diagrams only for meaningful architecture changes and code
 examples only when they clarify the change.
 
+When a bot review blocks a PR, verify its findings against the current code before
+changing anything. Authorized agents can clear a fully fixed, refuted, or explicitly
+accepted review by commenting `@effect-agent dismiss <review-id-or-url>` with evidence
+on subsequent lines. This dismisses the whole review and refreshes its check without
+inference. See the [agent/CLI instructions](action/README.md#dismissing-a-review).
+Resolving an inline conversation alone does not clear a blocking review.
+
 ## Parallel work
 
 Parallel agents must own disjoint packages or documents. Shared domain schemas, error unions,

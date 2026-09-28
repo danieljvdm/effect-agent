@@ -342,6 +342,102 @@ describe("PR commit review checks", () => {
     };
   };
 
+  // PR #679: fixed/refuted bot reviews stayed blocking. Exercise dismissal and
+  // reconciliation together; live GitHub cannot reliably reproduce command edits
+  // and permission revocation between event admission and execution.
+  it.effect.each(["authorized", "read-only", "edited", "different-pr"] as const)(
+    "reconciles a maintainer dismissal using current authority: %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const history = [{ ...blocked }, { ...blocked, id: 2, commit_id: "head" }];
+
+        const dismissed: Array<Schema.Json> = [];
+        let command = "";
+
+        const test = fixture(history, (request, url) => {
+          if (url.pathname.endsWith("/issues/comments/42"))
+            return Effect.succeed(
+              jsonResponse(request, {
+                id: 42,
+                body: mode === "edited" ? `${command}\nEdited` : command,
+                issue_url: `https://api.github.test/repos/reve-ai/example/issues/${mode === "different-pr" ? "13" : "12"}`,
+                html_url: "https://github.test/reve-ai/example/pull/12#issuecomment-42",
+                user: { login: "maintainer", type: "User" },
+              }),
+            );
+          if (url.pathname.endsWith("/collaborators/maintainer/permission"))
+            return Effect.succeed(
+              jsonResponse(request, {
+                permission: mode === "read-only" ? "read" : "write",
+                user: { login: "maintainer" },
+              }),
+            );
+
+          const review = history.find(
+            ({ id }) =>
+              url.pathname === `/repos/reve-ai/example/pulls/12/reviews/${String(id)}` ||
+              url.pathname === `/repos/reve-ai/example/pulls/12/reviews/${String(id)}/dismissals`,
+          );
+
+          if (review === undefined) return undefined;
+          if (request.method === "PUT") {
+            dismissed.push(decodeCheckBody(request));
+            review.state = "DISMISSED";
+          }
+
+          return Effect.succeed(jsonResponse(request, review));
+        });
+
+        const dismiss = (id: number, reason = "The finding does not apply.") => {
+          const target =
+            id === 1
+              ? `https://github.test/reve-ai/example/pull/12#pullrequestreview-${String(id)}`
+              : String(id);
+
+          command = `@effect-agent dismiss ${target}\n${reason}`;
+
+          return test.run({ PR_REVIEW_COMMAND: command, PR_REVIEW_COMMENT_ID: "42" });
+        };
+
+        if (mode !== "authorized") {
+          const exit = yield* dismiss(1).pipe(Effect.exit);
+
+          expect(Exit.isFailure(exit)).toBe(true);
+          expect(dismissed).toEqual([]);
+          expect(test.writes).toEqual([]);
+
+          return;
+        }
+
+        yield* dismiss(1, "Fixed by individually keyed recipients.");
+        expect(dismissed).toEqual([
+          { message: expect.stringContaining("Fixed by individually keyed recipients.") },
+        ]);
+        expect(dismissed[0]).toEqual({ message: expect.stringContaining("maintainer") });
+        expect(dismissed[0]).toEqual({ message: expect.stringContaining("#issuecomment-42") });
+        expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "failure" });
+
+        yield* dismiss(2, "The intermediate schema was never released.");
+        expect(dismissed).toHaveLength(2);
+        expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "success" });
+
+        yield* dismiss(2);
+        expect(dismissed).toHaveLength(2);
+        expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "success" });
+
+        history.push({ ...blocked, id: 3, commit_id: "head", body: reviewMarker(false, false) });
+        yield* dismiss(3);
+        expect(test.writes.at(-1)?.body).toMatchObject({
+          conclusion: "failure",
+          output: { title: "Review incomplete" },
+        });
+
+        for (const review of history) review.commit_id = "old-head";
+        yield* dismiss(3);
+        expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "action_required" });
+      }),
+  );
+
   // Regression in https://github.com/danieljvdm/effect-agent/commit/b66bdf89726c48f108c10172500c992e4ddf7686:
   // preserving every skipped check forced a fresh full audit after a blocker was dismissed.
   it.effect("reconciles a completed head after dismissal without another review", () =>

@@ -1,4 +1,33 @@
-export type ReviewMode = "auto" | "incremental" | "full";
+import { Option, Schema } from "effect";
+
+export type ReviewMode = "auto" | "incremental" | "full" | "reconcile";
+
+const ReviewDismissal = Schema.Struct({
+  reviewUrl: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(2_048))),
+  reviewId: Schema.Int.check(
+    Schema.isGreaterThan(0),
+    Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+  ),
+  reason: Schema.NonEmptyString.check(Schema.isMaxLength(1_000)),
+});
+
+/** A dismissal names one review and requires an explanation on subsequent lines. */
+export const dismissalFromCommand = (command: string) => {
+  const match =
+    /^@effect-agent[ \t]+dismiss[ \t]+(?:(https:\/\/\S+#pullrequestreview-([1-9][0-9]*))|([1-9][0-9]*))[ \t]*\r?\n([\s\S]*)$/i.exec(
+      command.trimStart(),
+    );
+
+  return match === null
+    ? undefined
+    : Option.getOrUndefined(
+        Schema.decodeOption(ReviewDismissal)({
+          ...(match[1] === undefined ? {} : { reviewUrl: match[1] }),
+          reviewId: Number(match[2] ?? match[3]),
+          reason: match[4]?.trim(),
+        }),
+      );
+};
 
 /** Read the first nonblank line of a trusted comment; later lines may contain explanation. */
 export const reviewModeFromCommand = (command: string): "incremental" | "full" | undefined => {
@@ -39,6 +68,7 @@ export type ReviewSelection =
       readonly reason:
         | "head-already-reviewed"
         | "head-review-incomplete"
+        | "head-not-reviewed"
         | "automatic-reviews-paused"
         | "incremental-baseline-unavailable";
     }
@@ -166,8 +196,16 @@ export const selectReview = (input: {
 
   if (latestHeadAttempt?.marker.version === 3 && latestHeadAttempt.marker.completed) {
     return {
-      _tag: input.mode === "incremental" ? "reconcile" : "skip",
+      _tag: input.mode === "incremental" || input.mode === "reconcile" ? "reconcile" : "skip",
       reason: "head-already-reviewed",
+    };
+  }
+
+  // A human disposition changes feedback, never supplies missing review coverage.
+  if (input.mode === "reconcile") {
+    return {
+      _tag: "skip",
+      reason: latestHeadAttempt === undefined ? "head-not-reviewed" : "head-review-incomplete",
     };
   }
 

@@ -489,6 +489,10 @@ It publishes the shared `Effect Agent review` check on the inspected PR head usi
 token's `checks: write` permission. Automatic and manual reviews use the same check name;
 manual retries show progress in the PR checks panel. Published findings and incomplete coverage
 fail that check, while setup, execution, and check publication failures also fail the workflow job.
+Maintainers and authorized coding agents can clear a fixed or refuted bot review by commenting
+`@effect-agent dismiss <review-id-or-url>` with evidence on subsequent lines. The command records
+the disposition and refreshes the check without inference; other blockers and incomplete coverage
+remain blocking. See [dismissal and CLI usage](../action/README.md#dismissing-a-review).
 See the [Action check configuration](../action/README.md#pr-check-status) for consumer setup.
 Fork reviews wait for approval before checkout, token creation, or model execution.
 Open the PR Review run from the PR's checks, select **Review deployments**, select
