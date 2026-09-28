@@ -38,6 +38,7 @@ import {
 import { ThreadId, type SubmissionId } from "effect-agent/identifiers";
 import {
   drainLifecyclePublications,
+  LifecyclePublicationError,
   LifecyclePublicationHandler,
   lifecyclePublicationLayer,
 } from "effect-agent/lifecycle-publication";
@@ -296,6 +297,13 @@ layer(Layer.mergeAll(baseLayer, publicationStorageLayer))("asynchronous lifecycl
       yield* Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
 
+        // Regression: 50ec5514 let an unavailable owner abort the entire delivery wave.
+        const blocked = yield* runtime.submit(
+          agent,
+          { question: "unavailable destination" },
+          submitOptions("a-unavailable-publication", "blocked"),
+        );
+
         const host = yield* runtime.submit(
           agent,
           { question: "host question" },
@@ -323,21 +331,29 @@ layer(Layer.mergeAll(baseLayer, publicationStorageLayer))("asynchronous lifecycl
             ({ record }) => record.recordId === `input:${joined.submissionId}`,
           ),
         ).toHaveLength(1);
-        const pending = yield* publications.pending(yield* Clock.currentTimeMillis, 1);
+        const pending = yield* publications.pending(yield* Clock.currentTimeMillis, 2);
 
-        expect(pending).toHaveLength(1);
+        expect(pending.map((batch) => batch[0].ownerThreadId)).toEqual([
+          blocked.threadId,
+          host.threadId,
+        ]);
         const delivered: Array<string> = [];
 
-        yield* drainLifecyclePublications(publications).pipe(
+        const result = yield* drainLifecyclePublications(publications).pipe(
           Effect.provideService(LifecyclePublicationHandler, {
             publish: (batch) =>
-              Effect.sync(() => {
-                delivered.push(...batch.map((fact) => fact.id));
-              }),
+              batch[0].ownerThreadId === blocked.threadId
+                ? Effect.fail(LifecyclePublicationError.make({ reason: "unavailable" }))
+                : Effect.sync(() => {
+                    delivered.push(...batch.map((fact) => fact.id));
+                  }),
           }),
+          Effect.exit,
         );
-        expect(delivered).toEqual(pending[0]?.map((fact) => fact.id));
-        expect(yield* publications.pendingDeadline).toEqual(Option.none());
+
+        expect(delivered).toEqual(pending[1]?.map((fact) => fact.id));
+        expect(failureTag(result)).toBe("LifecyclePublicationError");
+        expect(yield* publications.pending(Number.MAX_SAFE_INTEGER, 2)).toEqual([pending[0]]);
       }).pipe(Effect.provide(DurableAgentRuntime.layer));
     }),
   );

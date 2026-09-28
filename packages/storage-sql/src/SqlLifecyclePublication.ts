@@ -27,8 +27,9 @@ const failure = (cause: unknown) =>
 
 /**
  * Optional native recovery obligations. Retain runs inside the caller's existing source write
- * transaction. Acknowledgement only drops the private payload; the stable identity/fingerprint
- * remains. These rows must never be cascade-deleted with a Thread or its projections.
+ * transaction. Acknowledgement clears private payloads and retry state; the stable
+ * identity/fingerprint remains. Receipts must never be cascade-deleted with a Thread or its
+ * projections.
  * The additive table has its own closed Schema; it does not change a native format in place.
  */
 export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.make")(function* (
@@ -218,6 +219,10 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
             execute,
             Effect.mapError(failure),
           );
+          yield* sql`DELETE FROM ${retries} WHERE id IN (
+            SELECT id FROM ${relation} WHERE owner_thread_id = ${batch[0].ownerThreadId}
+            AND ordinal BETWEEN ${batch[0].ordinal} AND ${Array.lastNonEmpty(batch).ordinal}
+          )`.pipe(execute, Effect.mapError(failure));
         }),
       ),
     claim: (batch, nowMillis, timeoutMillis) =>

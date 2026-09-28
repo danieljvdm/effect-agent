@@ -1,4 +1,4 @@
-import { Clock, Context, Crypto, Effect, Layer, Option, Schema, type Scope } from "effect";
+import { Cause, Clock, Context, Crypto, Effect, Layer, Option, Schema, type Scope } from "effect";
 
 import { SubmissionId, ThreadId } from "../core/Identifiers.ts";
 import { Receipt } from "../core/Receipt.ts";
@@ -247,6 +247,7 @@ const withSource = Effect.fn("LifecyclePublication.withSource")(
 /**
  * One finite wave for the host's existing maintenance coordinator. Persist the next deadline
  * before dispatch, so interruption and process loss retain the same facts without another timer.
+ * Finish independent owner batches before surfacing failures; interruption stops the wave.
  * Acknowledgements are exact and idempotent. No producer or external Tool is re-executed here.
  */
 export const drainLifecyclePublications = Effect.fn("LifecyclePublication.drain")(function* (
@@ -257,22 +258,36 @@ export const drainLifecyclePublications = Effect.fn("LifecyclePublication.drain"
   const handler = yield* LifecyclePublicationHandler;
   const pending = yield* storage.pending(yield* Clock.currentTimeMillis, limit);
 
-  for (const batch of pending) {
-    if (!(yield* storage.claim(batch, yield* Clock.currentTimeMillis, timeoutMillis))) continue;
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const publications = yield* Effect.forEach(batch, withSource);
+  let failures: Cause.Cause<LifecyclePublicationError> = Cause.empty;
 
-        yield* handler.publish(publications);
-      }),
-    ).pipe(
-      Effect.timeoutOrElse({
-        duration: timeoutMillis,
-        orElse: () => LifecyclePublicationError.make({ reason: "unavailable" }),
-      }),
+  for (const batch of pending) {
+    yield* Effect.gen(function* () {
+      if (!(yield* storage.claim(batch, yield* Clock.currentTimeMillis, timeoutMillis))) return;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const publications = yield* Effect.forEach(batch, withSource);
+
+          yield* handler.publish(publications);
+        }),
+      ).pipe(
+        Effect.timeoutOrElse({
+          duration: timeoutMillis,
+          orElse: () => LifecyclePublicationError.make({ reason: "unavailable" }),
+        }),
+      );
+      yield* storage.acknowledge(batch);
+    }).pipe(
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterrupts(cause),
+        (cause) => {
+          failures = Cause.combine(failures, cause);
+
+          return Effect.void;
+        },
+      ),
     );
-    yield* storage.acknowledge(batch);
   }
+  if (failures.reasons.length > 0) return yield* Effect.failCause(failures);
 
   return pending.length;
 });

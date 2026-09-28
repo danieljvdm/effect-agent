@@ -801,6 +801,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
                                 Effect.mapError(failure),
                               ),
                         pendingDeadline: deadline.pipe(
+                          Effect.withErrorReporting,
                           Effect.catchCauseIf(
                             (cause) => !Cause.hasInterrupts(cause),
                             (cause) =>
