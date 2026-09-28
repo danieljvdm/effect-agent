@@ -111,7 +111,8 @@ Use the configured `review-author` login in the query. Read any inline findings 
 `repos/OWNER/REPO/pulls/NUMBER/reviews/ID/comments` as needed. The workflow acknowledges the
 command with an eyes reaction; confirm the review's `DISMISSED` state and the resulting check.
 The check passes only if the latest attempt on the current head is complete and no bot change
-requests remain. An unreviewed or incomplete head still needs review. No model call, new review,
+requests remain. An unreviewed or incomplete head still needs review; without `check-name`,
+it fails the workflow job instead. No model call, new review,
 or automatic-review allowance is consumed. Repeating the command safely refreshes the status.
 
 The Action verifies the live comment belongs to this PR, still matches the command, and was

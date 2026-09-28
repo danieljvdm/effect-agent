@@ -353,8 +353,16 @@ describe("PR commit review checks", () => {
 
         const dismissed: Array<Schema.Json> = [];
         let command = "";
+        let pullUrl = "https://github.test/reve-ai/example/pull/12";
 
         const test = fixture(history, (request, url) => {
+          if (url.pathname.endsWith("/pulls/12"))
+            return Effect.succeed(
+              jsonResponse(request, {
+                ...pullRequestWire("Review status", "base", "head"),
+                html_url: pullUrl,
+              }),
+            );
           if (url.pathname.endsWith("/issues/comments/42"))
             return Effect.succeed(
               jsonResponse(request, {
@@ -388,7 +396,11 @@ describe("PR commit review checks", () => {
           return Effect.succeed(jsonResponse(request, review));
         });
 
-        const dismiss = (id: number, reason = "The finding does not apply.") => {
+        const dismiss = (
+          id: number,
+          reason = "The finding does not apply.",
+          overrides: Record<string, string> = {},
+        ) => {
           const target =
             id === 1
               ? `https://github.test/reve-ai/example/pull/12#pullrequestreview-${String(id)}`
@@ -396,7 +408,7 @@ describe("PR commit review checks", () => {
 
           command = `@effect-agent dismiss ${target}\n${reason}`;
 
-          return test.run({ PR_REVIEW_COMMAND: command, PR_REVIEW_COMMENT_ID: "42" });
+          return test.run({ PR_REVIEW_COMMAND: command, PR_REVIEW_COMMENT_ID: "42", ...overrides });
         };
 
         if (mode !== "authorized") {
@@ -435,6 +447,24 @@ describe("PR commit review checks", () => {
         for (const review of history) review.commit_id = "old-head";
         yield* dismiss(3);
         expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "action_required" });
+
+        // Regression in 98280c38: coverage was enforced only by the optional check.
+        const withoutCheck = yield* dismiss(3, "Already dismissed.", {
+          PR_REVIEW_CHECK_NAME: "",
+        }).pipe(Effect.exit);
+
+        // The same commit admitted these inputs but could not publish their record.
+        pullUrl = `https://github.test/${"p".repeat(2_000)}/pull/12`;
+        const reason = "Evidence. ".repeat(100);
+
+        history.push({ ...blocked, id: 4, commit_id: "head" });
+        yield* dismiss(4, reason);
+        expect(dismissed.at(-1)).toEqual({ message: expect.stringContaining(reason.trim()) });
+        expect(dismissed.at(-1)).toEqual({
+          message: expect.stringContaining(`${pullUrl}#issuecomment-42`),
+        });
+        expect(test.writes.at(-1)?.body).toMatchObject({ conclusion: "success" });
+        expect(Exit.isFailure(withoutCheck)).toBe(true);
       }),
   );
 

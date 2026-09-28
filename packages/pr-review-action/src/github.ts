@@ -90,7 +90,8 @@ const ReviewCommentWire = Schema.Struct({
 });
 
 const DismissReviewWire = Schema.Struct({
-  message: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
+  // Accommodate the bounded reason, PR URL, login, revision, and command attribution.
+  message: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
 });
 
 const DismissedReviewWire = Schema.Struct({
@@ -105,6 +106,8 @@ const IssueCommentWire = Schema.Struct({
   user: ReviewWire.fields.user,
 });
 
+// GitHub normalizes maintain to write and triage to read; role_name carries the specific role.
+// https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user
 const CollaboratorPermissionWire = Schema.Struct({
   permission: Schema.Literals(["admin", "write", "read", "none"]),
   user: Schema.Struct({ login: ReviewWire.fields.user.fields.login }),

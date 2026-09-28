@@ -136,6 +136,8 @@ export class ReviewAttemptIncomplete extends Schema.TaggedError<ReviewAttemptInc
   {},
 ) {}
 
+export class ReviewRequired extends Schema.TaggedError<ReviewRequired>()("ReviewRequired", {}) {}
+
 export class IncrementalScopeUnavailable extends Schema.TaggedError<IncrementalScopeUnavailable>()(
   "IncrementalScopeUnavailable",
   {
@@ -150,6 +152,7 @@ const isReviewResult = Schema.is(
     UnresolvedChangeRequests,
     IncompleteReview,
     ReviewAttemptIncomplete,
+    ReviewRequired,
     IncrementalScopeUnavailable,
   ]),
 );
@@ -202,6 +205,8 @@ const reviewCheckCompletion = (
               return result("failure", "Review incomplete");
             case "IncrementalScopeUnavailable":
               return result("action_required", "Full review required");
+            case "ReviewRequired":
+              return result("action_required", "Review required");
           }
         }
         if (Schema.is(StaleReviewHead)(error)) {
@@ -1054,6 +1059,9 @@ const reviewPullRequest = Effect.fn("reviewPullRequest")(function* (
     yield* skip(selection.reason, undefined, unresolvedChangeRequests);
     if (selection.reason === "head-review-incomplete") {
       return yield* ReviewAttemptIncomplete.make({});
+    }
+    if (selection.reason === "head-not-reviewed") {
+      return yield* ReviewRequired.make({});
     }
     if (unresolvedChangeRequests > 0) {
       return yield* UnresolvedChangeRequests.make({ count: unresolvedChangeRequests });
