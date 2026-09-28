@@ -152,8 +152,10 @@ export interface Definition<
   /** Canonical schema used to decode the final model output. */
   readonly output: OutputSchema;
   /**
-   * Evaluated once while preparing each Run. Outgoing system messages form a leading block;
-   * exact repeats (including provider options) keep their last occurrence. Stored history is unchanged.
+   * Evaluated once while preparing each Run. OpenAI preserves chronological system messages,
+   * omitting exact repeats only when no distinct system instruction intervenes. Other providers
+   * group system messages first and keep the last exact repeat, including provider options.
+   * Stored history is unchanged.
    */
   readonly instructions: Instructions;
   /** Optional projection from decoded input to model-visible native Effect AI prompt content. */

@@ -31,11 +31,6 @@ import {
 } from "effect-agent/durable-agent-runtime";
 import { ThreadId, SubmissionId } from "effect-agent/identifiers";
 import {
-  OperationAuthorizationRequest,
-  OperationAuthorizer,
-  type OperationDenied,
-} from "effect-agent/operation-authorizer";
-import {
   AbortIntentRequest,
   SubmissionLedger,
   type SubmissionWorkItem,
@@ -370,6 +365,38 @@ const MaintenanceGeneration = Schema.BigIntFromString.check(
   Schema.isGreaterThanOrEqualToBigInt(0n),
 );
 
+/** A committed recovery transition for one affected Submission; never a Settlement. */
+export class ThreadRecoveryFaultEvent extends Schema.Class<ThreadRecoveryFaultEvent>(
+  "@effect-agent/platform-cloudflare/ThreadRecoveryFaultEvent",
+)({
+  schemaVersion: Schema.Literal(1),
+  /** Monotonic within the physical Object; retained unchanged on delivery retries. */
+  sequence: MaintenanceGeneration,
+  transition: Schema.Literals(["created", "changed", "cleared"]),
+  threadId: ThreadId,
+  submissionId: SubmissionId,
+  occurredAt: Schema.Finite,
+  firstFailedAt: Schema.Finite,
+  /** The current failure, or the last failure for a cleared event. */
+  failure: RecoveryFailure,
+}) {}
+
+const recoveryEventKey = (sequence: bigint) => `effect-agent:thread-recovery-event:v1:${sequence}`;
+const encodeRecoveryEvent = Schema.encodeSync(ThreadRecoveryFaultEvent);
+const decodeRecoveryEvent = Schema.decodeUnknownSync(ThreadRecoveryFaultEvent);
+
+/**
+ * Ordered, at-least-once delivery through the existing host maintenance lane. Return only
+ * after durably applying the event or retaining it in a host outbox. Deduplicate by physical
+ * Object and sequence; callbacks may repeat after interruption. This is a trusted host hook,
+ * not pre-authorized UI data: the host owns recipient authorization and safe presentation.
+ * Capture services in the Layer. Do not call producers or write the raw alarm slot.
+ */
+export class ThreadRecoveryEvents extends Context.Service<
+  ThreadRecoveryEvents,
+  { readonly publish: (event: ThreadRecoveryFaultEvent) => Effect.Effect<void, DurableAlarmError> }
+>()("@effect-agent/platform-cloudflare/ThreadRecoveryEvents") {}
+
 class BindingRetry extends Schema.Class<BindingRetry>("BindingRetry")({
   threadId: ThreadId,
   submissionId: SubmissionId,
@@ -383,7 +410,7 @@ class BindingRetry extends Schema.Class<BindingRetry>("BindingRetry")({
  * neither a Settlement nor proof that external effects did not happen. A successful recovery
  * sweep clears it; repair must preserve canonical history and the original admission identity.
  */
-export class ThreadRecoveryFault extends Schema.Class<ThreadRecoveryFault>(
+class ThreadRecoveryFault extends Schema.Class<ThreadRecoveryFault>(
   "@effect-agent/platform-cloudflare/ThreadRecoveryFault",
 )({
   schemaVersion: Schema.Literal(1),
@@ -395,6 +422,8 @@ export class ThreadRecoveryFault extends Schema.Class<ThreadRecoveryFault>(
   /** Saturates at 2^31 - 1; one observation per Thread per recovery sweep. */
   attempts: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(2_147_483_647)),
   failure: RecoveryFailure,
+  /** Individually retained recipients survive settlement until their clear commits. */
+  recipientCount: Schema.optionalKey(Schema.Natural),
 }) {}
 
 const recoveryFaultKey = (threadId: ThreadId) =>
@@ -411,6 +440,67 @@ const decodeRecoveryFault = (threadId: ThreadId, encoded: unknown) => {
 };
 
 const encodeRecoveryFault = Schema.encodeSync(ThreadRecoveryFault);
+const sameRecoveryFailure = Schema.toEquivalence(RecoveryFailure);
+const decodeRecoveryRecipient = Schema.decodeUnknownSync(SubmissionId);
+const encodeRecoveryRecipient = Schema.encodeSync(SubmissionId);
+
+const recoveryRecipientKey = (threadId: ThreadId, index: number) =>
+  `effect-agent:recovery-recipient:v1:${threadId.length}:${threadId}:${index}`;
+
+const recoveryRecipientKeys = (fault: ThreadRecoveryFault, start: number) =>
+  Array.from({ length: Math.min(128, (fault.recipientCount ?? 0) - start) }, (_, offset) =>
+    recoveryRecipientKey(fault.threadId, start + offset),
+  );
+
+const readRecoveryRecipients = async (
+  storage: Pick<DurableObjectTransaction, "get">,
+  fault: ThreadRecoveryFault,
+): Promise<Array<SubmissionId>> => {
+  const ids: Array<SubmissionId> = [];
+
+  for (let start = 0; start < (fault.recipientCount ?? 0); start += 128) {
+    const keys = recoveryRecipientKeys(fault, start);
+    const values = await storage.get(keys);
+
+    for (const key of keys) ids.push(decodeRecoveryRecipient(values.get(key)));
+  }
+
+  return ids;
+};
+
+const appendRecoveryRecipients = async (
+  transaction: DurableObjectTransaction,
+  threadId: ThreadId,
+  count: number,
+  added: ReadonlyArray<SubmissionId>,
+) => {
+  for (let start = 0; start < added.length; start += 128)
+    await transaction.put(
+      Object.fromEntries(
+        added
+          .slice(start, start + 128)
+          .map((id, offset) => [
+            recoveryRecipientKey(threadId, count + start + offset),
+            encodeRecoveryRecipient(id),
+          ]),
+      ),
+    );
+};
+
+const recoveryEvent = (
+  fault: ThreadRecoveryFault,
+  submissionId: SubmissionId,
+  transition: ThreadRecoveryFaultEvent["transition"],
+  occurredAt: number,
+): Omit<ThreadRecoveryFaultEvent, "sequence"> => ({
+  schemaVersion: 1,
+  transition,
+  threadId: fault.threadId,
+  submissionId,
+  occurredAt,
+  firstFailedAt: fault.firstFailedAt,
+  failure: fault.failure,
+});
 
 interface NativePassResult {
   readonly phase: "caught-up" | "actionable";
@@ -441,6 +531,7 @@ interface NativeRecovery {
   readonly loaded: Set<ThreadId>;
   readonly reports: Map<SubmissionId, RecoveryReport>;
   readonly faults: Map<ThreadId, ThreadRecoveryFault>;
+  readonly recipients: Map<ThreadId, ReadonlySet<SubmissionId>>;
   observation?: {
     readonly generation: bigint;
     readonly activeAtStart: number;
@@ -476,6 +567,8 @@ class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
   /** Rotate old recovery independently of dispatch, including after eviction or timeout. */
   lastRecoveredThreadId: Schema.optionalKey(ThreadId),
   bindingRetries: Schema.optionalKey(Schema.Array(BindingRetry)),
+  recoveryEventSequence: Schema.optionalKey(MaintenanceGeneration),
+  recoveryEventAcknowledged: Schema.optionalKey(MaintenanceGeneration),
   /** Absent on older records. A newer mutation makes this retry obsolete. */
   retry: Schema.optionalKey(MaintenanceRetry),
 }) {}
@@ -483,6 +576,9 @@ class ThreadMaintenanceState extends Schema.Class<ThreadMaintenanceState>(
 const MAINTENANCE_STATE_KEY = "effect-agent:thread-maintenance:v1";
 const decodeMaintenanceState = Schema.decodeUnknownSync(ThreadMaintenanceState);
 const encodeMaintenanceState = Schema.encodeSync(ThreadMaintenanceState);
+
+const hasRecoveryEvents = (state: ThreadMaintenanceState) =>
+  (state.recoveryEventSequence ?? 0n) > (state.recoveryEventAcknowledged ?? 0n);
 
 const initialMaintenanceState = (): ThreadMaintenanceState =>
   ThreadMaintenanceState.make({
@@ -666,16 +762,6 @@ export class ThreadMaintenance extends Context.Service<
      */
     readonly ensureAlarm: Effect.Effect<void, MaintenancePassFailure>;
     /**
-     * Authorize `explain`, then read one bounded local record without reading execution history.
-     * None means no recorded fault, not proof of health or settlement. The host authenticates
-     * callers and verifies local Thread membership before exposing this service across RPC.
-     * Created, updated and cleared faults notify WakeScheduler after their durable commit.
-     * Provide OperationAuthorizer when constructing this Layer, as for DurableAgentRuntime.
-     */
-    readonly recoveryStatus: (
-      threadId: ThreadId,
-    ) => Effect.Effect<Option.Option<ThreadRecoveryFault>, DurableAlarmError | OperationDenied>;
-    /**
      * Serialize the pre-arm boundary with pass acknowledgement, advance the durable dirty
      * generation and arm the alarm in one transaction BEFORE running the caller's mutation.
      * A pass cannot acknowledge while that mutation remains in flight.
@@ -718,7 +804,20 @@ export class ThreadMaintenance extends Context.Service<
       const projection = yield* ThreadProjectionMaintenance;
       const messages = yield* ThreadMessageDelivery;
       const host = yield* ThreadHostMaintenance;
-      const authorizer = yield* OperationAuthorizer;
+
+      const recoveryEvents = Option.getOrElse(
+        yield* Effect.serviceOption(ThreadRecoveryEvents),
+        () => ThreadRecoveryEvents.of({ publish: () => Effect.void }),
+      );
+
+      // Hydrated by the existing maintenance-record reads, never by a status scan. All
+      // queue mutations update this hint under the same storage reservation. Eviction
+      // reconstructs it in ensureAlarm/beginPass; the durable queue remains authoritative.
+      let recoveryEventsPending = false;
+
+      const recoveryEventDeadline = Effect.sync(() =>
+        recoveryEventsPending ? Option.some(0) : Option.none<number>(),
+      );
 
       // A broken disposable index still needs a retry alarm and must not prevent startup.
       const projectionDeadline = projection.pendingDeadline.pipe(
@@ -736,9 +835,12 @@ export class ThreadMaintenance extends Context.Service<
           earliestDeadline(yield* publication.pendingDeadline, yield* messages.pendingDeadline),
           earliestDeadline(
             yield* projectionDeadline,
-            (yield* Effect.forEach(host.lanes, (lane) => lane.pendingDeadline)).reduce(
-              earliestDeadline,
-              Option.none<number>(),
+            earliestDeadline(
+              yield* recoveryEventDeadline,
+              (yield* Effect.forEach(host.lanes, (lane) => lane.pendingDeadline)).reduce(
+                earliestDeadline,
+                Option.none<number>(),
+              ),
             ),
           ),
         );
@@ -749,24 +851,84 @@ export class ThreadMaintenance extends Context.Service<
 
       const runTransaction = yield* makeStorageOperation;
 
-      const recoveryStatus = Effect.fn("ThreadMaintenance.recoveryStatus")(function* (
-        threadId: ThreadId,
-      ) {
-        yield* authorizer.authorize(
-          OperationAuthorizationRequest.make({ operation: "explain", threadId }),
+      const appendRecoveryEvents = async (
+        transaction: DurableObjectTransaction,
+        events: ReadonlyArray<Omit<ThreadRecoveryFaultEvent, "sequence">>,
+      ) => {
+        if (events.length === 0) return;
+        const { state } = await readMaintenanceState(transaction);
+        let sequence = state.recoveryEventSequence ?? 0n;
+
+        for (const event of events) {
+          sequence++;
+          await transaction.put(
+            recoveryEventKey(sequence),
+            encodeRecoveryEvent(ThreadRecoveryFaultEvent.make({ ...event, sequence })),
+          );
+        }
+        await transaction.put(
+          MAINTENANCE_STATE_KEY,
+          encodeMaintenanceState(
+            ThreadMaintenanceState.make({
+              ...state,
+              recoveryEventSequence: sequence,
+            }),
+          ),
         );
+        recoveryEventsPending = true;
+      };
 
-        return yield* runTransaction("read Thread recovery status", async () => {
-          const encoded = await ctx.storage.get(recoveryFaultKey(threadId));
+      const recoveryEventLane: ThreadHostMaintenanceLane = {
+        dispatchTimeoutMillis: 30_000,
+        pendingDeadline: recoveryEventDeadline,
+        run: Effect.gen(function* () {
+          if (!recoveryEventsPending) return;
 
-          return encoded === undefined
-            ? Option.none()
-            : Option.some(decodeRecoveryFault(threadId, encoded));
-        });
-      });
+          const range = yield* runTransaction("select recovery events", () =>
+            ctx.storage.transaction(async (transaction) => {
+              const { state } = await readMaintenanceState(transaction);
 
-      const recordRecoveryStatus = Effect.fn("ThreadMaintenance.recordRecoveryStatus")(function* (
+              return {
+                next: (state.recoveryEventAcknowledged ?? 0n) + 1n,
+                through: state.recoveryEventSequence ?? 0n,
+              };
+            }),
+          );
+
+          for (let sequence = range.next; sequence <= range.through; sequence++) {
+            const event = yield* runTransaction("read recovery event", async () => {
+              const event = decodeRecoveryEvent(await ctx.storage.get(recoveryEventKey(sequence)));
+
+              if (event.sequence !== sequence)
+                throw new Error("Recovery event does not match its sequence key");
+
+              return event;
+            });
+
+            // No storage reservation or source mutation gate is held during host delivery.
+            yield* recoveryEvents.publish(event);
+            yield* runTransaction("acknowledge recovery event", () =>
+              ctx.storage.transaction(async (transaction) => {
+                const { state } = await readMaintenanceState(transaction);
+
+                const next = ThreadMaintenanceState.make({
+                  ...state,
+                  recoveryEventAcknowledged: sequence,
+                });
+
+                await transaction.delete(recoveryEventKey(sequence));
+                await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
+                recoveryEventsPending = hasRecoveryEvents(next);
+              }),
+            );
+          }
+        }),
+      };
+
+      const recordRecoveryFaults = Effect.fn("ThreadMaintenance.recordRecoveryFaults")(function* (
         result: RecoverySweepResult,
+        recovery: NativeRecovery,
+        current?: ReadonlyArray<SubmissionWorkItem>,
       ) {
         const threads = new Map<ThreadId, RecoveryFailure | undefined>();
 
@@ -775,13 +937,19 @@ export class ThreadMaintenance extends Context.Service<
         if (threads.size === 0) return new Map<ThreadId, ThreadRecoveryFault>();
         const now = yield* Clock.currentTimeMillis;
 
+        // Fault-only discovery uses control state even when retained payloads cannot decode.
+        const submissions =
+          current ??
+          (result.blocked.length === 0 ? [] : yield* Stream.runCollect(ledger.scanNonterminal));
+
         yield* failpoint.hit("maintenance:recovery-status:before");
 
-        const retained = yield* runTransaction("record Thread recovery status", () =>
+        const retained = yield* runTransaction("record Thread recovery faults", () =>
           ctx.storage.transaction(async (transaction) => {
-            const changed: Array<ThreadId> = [];
+            const events: Array<Omit<ThreadRecoveryFaultEvent, "sequence">> = [];
             const newlyBlocked: Array<ThreadRecoveryFault> = [];
             const faults = new Map<ThreadId, ThreadRecoveryFault>();
+            const recipients = new Map<ThreadId, ReadonlySet<SubmissionId>>();
 
             for (const [threadId, failure] of threads) {
               const key = recoveryFaultKey(threadId);
@@ -790,13 +958,33 @@ export class ThreadMaintenance extends Context.Service<
               const previous =
                 encoded === undefined ? undefined : decodeRecoveryFault(threadId, encoded);
 
+              const previousIds =
+                previous === undefined ? [] : await readRecoveryRecipients(transaction, previous);
+
+              const known = new Set(previousIds);
+
+              recipients.set(threadId, known);
+
               if (failure === undefined) {
                 if (previous !== undefined) {
                   await transaction.delete(key);
-                  changed.push(threadId);
+                  for (let start = 0; start < (previous.recipientCount ?? 0); start += 128)
+                    await transaction.delete(recoveryRecipientKeys(previous, start));
+                  for (const id of previous.recipientCount === undefined
+                    ? result.reports
+                        .filter((report) => report.threadId === threadId)
+                        .map((report) => report.submissionId)
+                    : previousIds)
+                    events.push(recoveryEvent(previous, id, "cleared", now));
                 }
                 continue;
               }
+
+              const added = submissions
+                .filter((row) => row.threadId === threadId && !known.has(row.submissionId))
+                .map((row) => row.submissionId);
+
+              await appendRecoveryRecipients(transaction, threadId, previousIds.length, added);
 
               const fault = ThreadRecoveryFault.make({
                 schemaVersion: 1,
@@ -806,19 +994,33 @@ export class ThreadMaintenance extends Context.Service<
                 attempts: Math.min(2_147_483_647, (previous?.attempts ?? 0) + 1),
                 retryAt: now + Math.min(60_000, 5_000 * 2 ** Math.min(30, previous?.attempts ?? 0)),
                 failure,
+                recipientCount: previousIds.length + added.length,
               });
 
               await transaction.put(key, encodeRecoveryFault(fault));
-              changed.push(threadId);
+              if (previous !== undefined && !sameRecoveryFailure(previous.failure, failure))
+                for (const id of previousIds) events.push(recoveryEvent(fault, id, "changed", now));
+              for (const id of added) {
+                known.add(id);
+                events.push(recoveryEvent(fault, id, "created", now));
+              }
               faults.set(threadId, fault);
               if (previous === undefined) newlyBlocked.push(fault);
             }
 
-            return { changed, newlyBlocked, faults };
+            await appendRecoveryEvents(transaction, events);
+
+            return {
+              changed: new Set(events.map((event) => event.threadId)),
+              newlyBlocked,
+              faults,
+              recipients,
+            };
           }),
         );
 
         yield* failpoint.hit("maintenance:recovery-status:after");
+        for (const [threadId, ids] of retained.recipients) recovery.recipients.set(threadId, ids);
         // A healthy unchanged head must not wake its own maintenance loop.
         for (const threadId of retained.changed) yield* wakes.notify(threadId);
         for (const fault of retained.newlyBlocked)
@@ -838,7 +1040,7 @@ export class ThreadMaintenance extends Context.Service<
       ) {
         const result = yield* runtime.runRecovery({ threadId });
         // Visibility is committed before a claim or any fallible auxiliary join.
-        const faults = yield* recordRecoveryStatus(result);
+        const faults = yield* recordRecoveryFaults(result, recovery);
 
         for (const report of result.reports) recovery.reports.set(report.submissionId, report);
         recovery.faults.delete(threadId);
@@ -854,6 +1056,8 @@ export class ThreadMaintenance extends Context.Service<
         const retry = yield* runTransaction("ensure maintenance alarm", () =>
           ctx.storage.transaction(async (transaction) => {
             const { state, initialized } = await readMaintenanceState(transaction);
+
+            recoveryEventsPending = hasRecoveryEvents(state);
 
             if (!initialized) {
               await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(state));
@@ -900,6 +1104,8 @@ export class ThreadMaintenance extends Context.Service<
         const result = yield* runTransaction("begin maintenance pass", () =>
           ctx.storage.transaction(async (transaction) => {
             const { state, initialized } = await readMaintenanceState(transaction);
+
+            recoveryEventsPending = hasRecoveryEvents(state);
 
             observed.generation = state.dirty;
             if (!initialized) {
@@ -1194,15 +1400,66 @@ export class ThreadMaintenance extends Context.Service<
 
         const current = yield* Stream.runCollect(ledger.scanNonterminal);
         const selectionTime = yield* Clock.currentTimeMillis;
+        const submissionsByThread = new Map<ThreadId, Array<SubmissionId>>();
+
+        for (const row of current) {
+          const ids = submissionsByThread.get(row.threadId) ?? [];
+
+          ids.push(row.submissionId);
+          submissionsByThread.set(row.threadId, ids);
+        }
 
         yield* runTransaction("read Thread recovery deadlines", async () => {
-          for (const threadId of new Set(current.map((row) => row.threadId))) {
-            if (recovery.loaded.has(threadId)) continue;
-            const encoded = await ctx.storage.get(recoveryFaultKey(threadId));
+          for (const [threadId, ids] of submissionsByThread) {
+            if (!recovery.loaded.has(threadId)) {
+              const encoded = await ctx.storage.get(recoveryFaultKey(threadId));
 
-            if (encoded !== undefined)
-              recovery.faults.set(threadId, decodeRecoveryFault(threadId, encoded));
-            recovery.loaded.add(threadId);
+              if (encoded !== undefined) {
+                const fault = decodeRecoveryFault(threadId, encoded);
+
+                recovery.faults.set(threadId, fault);
+                recovery.recipients.set(
+                  threadId,
+                  new Set(await readRecoveryRecipients(ctx.storage, fault)),
+                );
+              }
+              recovery.loaded.add(threadId);
+            }
+            const fault = recovery.faults.get(threadId);
+
+            if (
+              fault === undefined ||
+              ids.every((id) => recovery.recipients.get(threadId)?.has(id))
+            )
+              continue;
+
+            // Admissions during backoff need visibility without accelerating recovery.
+            // Preserve recipients even if recovery later settles them before clearing.
+            await ctx.storage.transaction(async (transaction) => {
+              const encoded = await transaction.get(recoveryFaultKey(threadId));
+
+              if (encoded === undefined) return;
+              const previous = decodeRecoveryFault(threadId, encoded);
+              const previousIds = await readRecoveryRecipients(transaction, previous);
+              const known = new Set(previousIds);
+              const added = ids.filter((id) => !known.has(id));
+
+              if (added.length === 0) return;
+
+              const updated = ThreadRecoveryFault.make({
+                ...previous,
+                recipientCount: previousIds.length + added.length,
+              });
+
+              await appendRecoveryRecipients(transaction, threadId, previousIds.length, added);
+              await transaction.put(recoveryFaultKey(threadId), encodeRecoveryFault(updated));
+              await appendRecoveryEvents(
+                transaction,
+                added.map((id) => recoveryEvent(updated, id, "created", selectionTime)),
+              );
+              recovery.faults.set(threadId, updated);
+              recovery.recipients.set(threadId, new Set([...previousIds, ...added]));
+            });
           }
         });
         const reports = recovery.reports;
@@ -1245,13 +1502,15 @@ export class ThreadMaintenance extends Context.Service<
           if (Result.isSuccess(intent)) {
             if (intent.success !== undefined) stopping.add(head.threadId);
           } else {
-            const faults = yield* recordRecoveryStatus(
+            const faults = yield* recordRecoveryFaults(
               RecoverySweepResult.make({
                 reports: [],
                 blocked: [
                   RecoveryBlocked.make({ threadId: head.threadId, failure: intent.failure }),
                 ],
               }),
+              recovery,
+              current,
             );
 
             for (const [threadId, fault] of faults) recoveryFaults.set(threadId, fault);
@@ -1523,8 +1782,9 @@ export class ThreadMaintenance extends Context.Service<
 
         // Each lane has at most one finite wave. A completion is retained until the single
         // scheduling loop observes it; a busy sibling cannot consume another lane's hint.
-        const lanes = host.lanes.map((lane) => ({
+        const lanes = [recoveryEventLane, ...host.lanes].map((lane) => ({
           ...lane,
+          recovery: lane === recoveryEventLane,
           initial: true,
           check: true,
           exhausted: false,
@@ -1541,6 +1801,7 @@ export class ThreadMaintenance extends Context.Service<
           loaded: new Set(),
           reports: new Map(),
           faults: new Map(),
+          recipients: new Map(),
           started: false,
           needsCheckpoint: false,
           recovered: 0,
@@ -1566,7 +1827,7 @@ export class ThreadMaintenance extends Context.Service<
               yield* failpoint.hit("maintenance:select:after");
               yield* recoverThread(threadId, recovery);
               recovery.pending.delete(threadId);
-              yield* wakes.notify(threadId);
+              if (!recovery.faults.has(threadId)) yield* wakes.notify(threadId);
             }
           }),
         );
@@ -1683,7 +1944,15 @@ export class ThreadMaintenance extends Context.Service<
           if (now >= until) break;
 
           for (const lane of lanes) {
-            if (lane.fiber !== undefined || lane.exhausted || !lane.check) continue;
+            // Empty recovery delivery must not extend native retirement or consume a
+            // scheduling turn. Actual transitions share the ordinary bounded lane below.
+            if (
+              lane.fiber !== undefined ||
+              lane.exhausted ||
+              !lane.check ||
+              (lane.recovery && !recoveryEventsPending)
+            )
+              continue;
             lane.check = false;
             lane.fiber = yield* fork(
               Effect.gen(function* () {
@@ -1974,7 +2243,6 @@ export class ThreadMaintenance extends Context.Service<
           }),
         ),
         ensureAlarm: mutations.withSnapshot(() => ensureAlarm()),
-        recoveryStatus,
         withMutation: (body) =>
           mutations.withMutation(
             body.pipe(

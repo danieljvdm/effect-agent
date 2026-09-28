@@ -147,22 +147,81 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
 const sameSystemMessage = Schema.toEquivalence(Prompt.SystemMessage);
 
 /**
- * Project system instructions and the output contract into one leading block.
- * Repeated Runs append instructions to canonical history; letting those copies
- * move the contract breaks the preceding user/tool prefix used by provider caches.
- * Keep the last occurrence of each equivalent system message, preserving the
- * precedence of distinct instructions and their native provider options.
+ * Keep OpenAI system instructions in conversation order so changing late guidance
+ * cannot invalidate the preceding user/tool cache prefix. Omit an exact repeat
+ * only when no distinct system instruction intervened; returning to an earlier
+ * instruction after a different one must preserve the new directive's precedence.
+ * Anchor the immutable output contract after the initial system block.
+ * Restore leading static instructions for caller-supplied conversation-only history.
  *
  * This runs after preparation and compaction. Canonical messages, protected
  * instruction/input spans and compaction coverage retain their original positions.
- * Conversation order and message identities are unchanged. A single system block
- * also prevents Anthropic's last-system-group conversion from discarding earlier
- * application instructions or the output contract.
+ * Other providers retain the grouped-system projection: keep the last equivalent
+ * instruction with its native options, then the contract and conversation. This
+ * prevents Anthropic's last-system-group conversion from discarding instructions.
  */
 export const prepareModelPrompt = (
   prompt: Prompt.Prompt,
   contract: Prompt.SystemMessage | undefined,
+  provider: string,
+  staticInstructions: Prompt.RawInput | undefined,
 ): Prompt.Prompt => {
+  if (provider === "openai") {
+    const content: Array<Prompt.Message> = [];
+    let lastSystem: Prompt.SystemMessage | undefined;
+    let ordered = prompt.content;
+
+    if (staticInstructions !== undefined) {
+      const firstConversation = prompt.content.findIndex((message) => message.role !== "system");
+
+      const leading = prompt.content.slice(
+        0,
+        firstConversation === -1 ? prompt.content.length : firstConversation,
+      );
+
+      const restored: Array<Prompt.Message> = [];
+
+      const instructions =
+        typeof staticInstructions === "string"
+          ? [Prompt.systemMessage({ content: staticInstructions })]
+          : Prompt.make(staticInstructions).content;
+
+      for (const message of instructions) {
+        if (message.role !== "system") break;
+        if (
+          leading.some(
+            (candidate) => candidate.role === "system" && sameSystemMessage(candidate, message),
+          )
+        )
+          break;
+
+        const original = prompt.content.find(
+          (candidate) => candidate.role === "system" && sameSystemMessage(candidate, message),
+        );
+
+        if (original === undefined) break;
+        restored.push(original);
+      }
+      if (restored.length > 0)
+        ordered = [...leading, ...restored, ...prompt.content.slice(leading.length)];
+    }
+
+    for (const message of ordered) {
+      if (message.role === "system") {
+        if (lastSystem !== undefined && sameSystemMessage(lastSystem, message)) continue;
+        lastSystem = message;
+      }
+      content.push(message);
+    }
+    if (contract !== undefined) {
+      const firstConversation = content.findIndex((message) => message.role !== "system");
+
+      content.splice(firstConversation === -1 ? content.length : firstConversation, 0, contract);
+    }
+
+    return Prompt.fromMessages(content);
+  }
+
   const systems: Array<Prompt.SystemMessage> = [];
   const conversation: Array<Prompt.Message> = [];
   const seen = new Map<string, Array<Prompt.SystemMessage>>();

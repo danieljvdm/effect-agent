@@ -87,6 +87,7 @@ import { type WakeScheduler } from "effect-agent/wake-scheduler";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
 
 import {
+  type ThreadRecoveryEvents,
   DurableAlarmError,
   ThreadMaintenance,
   ThreadHostMaintenance,
@@ -423,6 +424,11 @@ export const layerHostConfig = (
   );
 
 export interface ThreadPublicationOptions<E = never, R = never, P = never> {
+  /** Per-Submission recovery fault transitions. Capture host services once per incarnation;
+   * acknowledge only after durable application or outbox retention. Delivery runs in a
+   * separate bounded maintenance lane and does not gate native execution.
+   */
+  readonly recoveryEvents?: Layer.Layer<ThreadRecoveryEvents, E, R>;
   /** Typed native facts, retained atomically and published asynchronously in owner batches.
    * The handler returns after the application batch and its receipts commit. No journal
    * scan is needed. The handler receives private native evidence, not pre-authorized UI data.
@@ -831,6 +837,7 @@ const sharedLayer = <A, E, R, PE = never, PR = never>(
       return Layer.mergeAll(
         maintenanceRuntime,
         ThreadMaintenance.layer.pipe(
+          Layer.provide(options.recoveryEvents ?? Layer.empty),
           Layer.provide(maintenanceRuntime),
           Layer.provide(messageRecovery),
         ),

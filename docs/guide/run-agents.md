@@ -24,10 +24,16 @@ deliberately measures a sequential workflow. Continuity fixtures serialize chang
 Code Mode examples bound generated programs separately. Node host worker concurrency is a separate
 setting.
 
-Outgoing requests place system instructions and the output contract before the conversation.
-Unchanged instructions therefore stay in a stable prefix across Turns and Runs. Exact repeated
-system messages keep their last occurrence, including native provider options; stored history
-remains intact. Supply native `Prompt.systemMessage` options for provider cache controls, such as
+OpenAI requests preserve system instructions in conversation order and place the output contract
+after the initial system block. Changing instructions in later Runs and appended system context
+stay after earlier history, preserving its cache prefix. An exact repeated instruction is omitted
+only when no different system instruction intervenes. Conversation-only history can recover its
+leading static instructions from those still present in the prepared prompt. Stored history remains intact.
+
+Other providers group system instructions and the output contract before the conversation,
+keeping the last equivalent instruction and its native options. This preserves all instructions
+through Anthropic's system-message conversion; changing system context can still invalidate its
+history cache. Supply native `Prompt.systemMessage` options for provider cache controls, such as
 OpenAI's `options.openai.promptCacheBreakpoint` or Anthropic's `options.anthropic.cacheControl`.
 
 The immutable output contract also retains its message identity across turns, allowing opt-in
@@ -35,9 +41,10 @@ native `ResponseIdTracker` reuse for ordinary append-only prompts. Context prepa
 references, and appended run status use full requests so provider-held responses cannot replay
 discarded material. Full requests can still use provider prompt caching.
 
-Changed instructions, prepared context, compaction, and transient references can invalidate cached
-prefixes. Provider caching, minimum prompt lengths, and billing depend on the selected provider
-and configuration; stable ordering does not guarantee a cache hit.
+Keep tools and fixed instructions stable, and append changing context after history. Rewriting or
+prepending context, compaction, and changing provider settings can invalidate cached prefixes.
+Provider caching, minimum prompt lengths, and billing depend on the selected provider and
+configuration; stable ordering does not guarantee a cache hit.
 
 Context preparation is optional. Provide `RunContextPreparation` to load extra context;
 without it, Runs use their normal prompt and compaction behavior. See

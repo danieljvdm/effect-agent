@@ -168,10 +168,20 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
         );
 
         const context =
-          historyMode === "prepared"
+          historyMode !== "retained"
             ? {
                 prepare: ({ source }: { readonly source: Prompt.Prompt }) =>
-                  Effect.succeed({ prompt: source }),
+                  Effect.succeed({
+                    prompt:
+                      historyMode === "conversation-only"
+                        ? Prompt.concat(
+                            Prompt.make([
+                              { role: "system", content: "Prepared application policy" },
+                            ]),
+                            source,
+                          )
+                        : source,
+                  }),
               }
             : undefined;
 
@@ -186,6 +196,7 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
             historyMode !== "conversation-only"
               ? { threadId: first.threadId, context }
               : {
+                  context,
                   history: Prompt.fromMessages(
                     stored.content.filter((message) => message.role !== "system"),
                   ),
@@ -196,7 +207,7 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
         }
         expect(requests).toHaveLength(3);
         for (const request of requests) {
-          expect(request.input[0]).toEqual({
+          expect(request.input[historyMode === "conversation-only" ? 1 : 0]).toEqual({
             role: "developer",
             content: [
               {
@@ -207,6 +218,7 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
             ],
           });
           expect(systemText(request)).toEqual([
+            ...(historyMode === "conversation-only" ? ["Prepared application policy"] : []),
             instructionText,
             expect.stringContaining("Final output contract:"),
           ]);
@@ -226,45 +238,82 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
       }).pipe(Effect.provide(Layer.merge(InMemory.layer, ContextCompactor.layerRollover))),
   );
 
-  it.effect("preserves tool-result prefixes and tool schemas across consecutive tool rounds", () =>
-    Effect.gen(function* () {
-      const { model, requests } = yield* captureOpenAi((call) => call < 3);
-      let executions = 0;
+  // Requested red/green regression: changing late guidance must not rewrite the
+  // serialized user/tool prefix. HTTP capture avoids cache expiry/routing noise.
+  it.effect.each(["none", "prepared", "transient"] as const)(
+    "preserves tool-result prefixes and tool schemas with %s system context",
+    (contextMode) =>
+      Effect.gen(function* () {
+        const { model, requests } = yield* captureOpenAi((call) => call < 3);
+        let executions = 0;
 
-      const agent = Agent.withModel(
-        Agent.make("cache-tools", {
-          input: Schema.String,
-          output: Schema.String,
-          instructions: "Look up the answer.",
-          toolkit: lookup,
-          policy,
-        }),
-        model,
-      );
+        const notes = (turn: number) =>
+          Prompt.fromMessages([Prompt.systemMessage({ content: `Working notes: ${turn}` })]);
 
-      const result = yield* AgentRuntime.run(agent, "Question").pipe(
-        Effect.provide(
-          lookup.toLayer({
-            lookup: () => Effect.sync(() => `result-${++executions}`),
+        const agent = Agent.withModel(
+          Agent.make("cache-tools", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: "Look up the answer.",
+            toolkit: lookup,
+            policy,
           }),
-        ),
-      );
+          model,
+        );
 
-      expect(result.output).toBe("done");
-      expect(executions).toBe(2);
-      expect(requests).toHaveLength(3);
-      for (let index = 1; index < requests.length; index++) {
-        const previous = requests[index - 1]!;
+        const result = yield* AgentRuntime.run(agent, "Question", {
+          context:
+            contextMode === "prepared"
+              ? {
+                  prepare: ({ source, turn }) =>
+                    Effect.succeed({ prompt: Prompt.concat(source, notes(turn)) }),
+                }
+              : undefined,
+          transientContext:
+            contextMode === "transient"
+              ? { load: ({ turn }) => Effect.succeed(notes(turn)) }
+              : undefined,
+        }).pipe(
+          Effect.provide(
+            lookup.toLayer({
+              lookup: () => Effect.sync(() => `result-${++executions}`),
+            }),
+          ),
+        );
 
-        expect(requests[index]!.input.slice(0, previous.input.length)).toEqual(previous.input);
-        expect(requests[index]!.tools).toEqual(previous.tools);
-        expect(requests[index]!.input.at(-1)).toMatchObject({
-          type: "function_call_output",
-          call_id: `call-${index}`,
-          output: `result-${index}`,
-        });
-      }
-    }).pipe(Effect.provide(InMemory.layer)),
+        expect(result.output).toBe("done");
+        expect(executions).toBe(2);
+        expect(requests).toHaveLength(3);
+        for (let index = 1; index < requests.length; index++) {
+          const previous = requests[index - 1]!;
+
+          const prefix = contextMode === "none" ? previous.input : previous.input.slice(0, -1);
+
+          expect(requests[index]!.input.slice(0, prefix.length)).toEqual(prefix);
+          expect(requests[index]!.tools).toEqual(previous.tools);
+          expect(requests[index]!.input.at(contextMode === "none" ? -1 : -2)).toMatchObject({
+            type: "function_call_output",
+            call_id: `call-${index}`,
+            output: `result-${index}`,
+          });
+        }
+        if (contextMode !== "none") {
+          for (const [index, request] of requests.entries()) {
+            expect(request.input.at(-1)).toMatchObject({
+              role: "developer",
+              content: [{ type: "input_text", text: `Working notes: ${index + 1}` }],
+            });
+            expect(systemText(request).filter((text) => text.startsWith("Working notes:"))).toEqual(
+              [`Working notes: ${index + 1}`],
+            );
+          }
+          const history = yield* ThreadHistory.ThreadHistory;
+
+          expect(JSON.stringify(yield* history.load(result.threadId))).not.toContain(
+            "Working notes:",
+          );
+        }
+      }).pipe(Effect.provide(InMemory.layer)),
   );
 
   it.effect.each(["user", "tool"] as const)(
@@ -343,6 +392,7 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
         );
 
         yield* AgentRuntime.run(agent, "Original question", {
+          history: Prompt.make("Earlier question"),
           context:
             transient === "prepared"
               ? {
@@ -419,19 +469,23 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
 
         expect(systemText(request)).toEqual([
           "Application policy",
+          "Repeat",
+          expect.stringContaining("Final output contract:"),
           "Different",
           "Repeat",
           "Repeat",
-          expect.stringContaining("Final output contract:"),
         ]);
-        expect(request.input.slice(0, 5).every(isSystem)).toBe(true);
-        expect(request.input[2]).not.toEqual(request.input[3]);
-        expect(request.input[3]).toMatchObject({
+        expect(request.input.slice(0, 3).every(isSystem)).toBe(true);
+        expect(request.input[6]).not.toEqual(request.input[7]);
+        expect(request.input[7]).toMatchObject({
           content: [{ prompt_cache_breakpoint: { mode: "explicit" } }],
         });
-        expect(request.input.slice(5)).toMatchObject([
+        expect(request.input.slice(3)).toMatchObject([
           { role: "user", content: [{ text: "Old question" }] },
+          { role: "developer", content: [{ text: "Different" }] },
           { role: "assistant", content: [{ text: "Old answer" }] },
+          { role: "developer", content: [{ text: "Repeat" }] },
+          { role: "developer", content: [{ text: "Repeat" }] },
           { role: "user", content: [{ text: '"New question"' }] },
         ]);
         const retained = yield* ThreadHistory.ThreadHistory;
@@ -442,34 +496,48 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
       }).pipe(Effect.provide(InMemory.layer)),
   );
 
-  it.effect("re-evaluates changed instructions without erasing earlier distinct instructions", () =>
-    Effect.gen(function* () {
-      const { model, requests } = yield* captureOpenAi();
+  it.effect(
+    "preserves history prefixes and latest precedence when instructions change and repeat",
+    () =>
+      Effect.gen(function* () {
+        const { model, requests } = yield* captureOpenAi();
 
-      const agent = Agent.withModel(
-        Agent.make("cache-dynamic", {
-          input: Schema.String,
-          output: Schema.String,
-          instructions: (input) => `Answer in ${input}.`,
-          toolkit: Toolkit.empty,
-          policy,
-        }),
-        model,
-      );
+        const agent = Agent.withModel(
+          Agent.make("cache-dynamic", {
+            input: Schema.String,
+            output: Schema.String,
+            instructions: (input) => `Answer in ${input}.`,
+            toolkit: Toolkit.empty,
+            policy,
+          }),
+          model,
+        );
 
-      const first = yield* AgentRuntime.run(agent, "French");
+        const first = yield* AgentRuntime.run(agent, "French");
 
-      yield* AgentRuntime.run(agent, "German", { threadId: first.threadId });
-      expect(systemText(requests[1]!)).toEqual([
-        "Answer in French.",
-        "Answer in German.",
-        expect.stringContaining("Final output contract:"),
-      ]);
-      expect(requests[1]!.input.slice(0, 3).every(isSystem)).toBe(true);
-      expect(requests[1]!.input.slice(0, requests[0]!.input.length)).not.toEqual(
-        requests[0]!.input,
-      );
-    }).pipe(Effect.provide(InMemory.layer)),
+        yield* AgentRuntime.run(agent, "German", { threadId: first.threadId });
+        yield* AgentRuntime.run(agent, "French", { threadId: first.threadId });
+        expect(systemText(requests[1]!)).toEqual([
+          "Answer in French.",
+          expect.stringContaining("Final output contract:"),
+          "Answer in German.",
+        ]);
+        expect(systemText(requests[2]!)).toEqual([
+          "Answer in French.",
+          expect.stringContaining("Final output contract:"),
+          "Answer in German.",
+          "Answer in French.",
+        ]);
+        for (let index = 1; index < requests.length; index++) {
+          const previous = requests[index - 1]!;
+
+          expect(requests[index]!.input.slice(0, previous.input.length)).toEqual(previous.input);
+          expect(requests[index]!.input.at(-2)).toMatchObject({
+            role: "developer",
+            content: [{ text: `Answer in ${index === 1 ? "German" : "French"}.` }],
+          });
+        }
+      }).pipe(Effect.provide(InMemory.layer)),
   );
 
   it.effect("starts a reusable prefix after compaction without moving canonical coverage", () =>
@@ -498,7 +566,9 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
 
       expect(result.output).toBe("done");
       expect(requests).toHaveLength(2);
-      expect(requests[0]!.input.slice(0, 2).every(isSystem)).toBe(true);
+      expect(systemText(requests[0]!)).toContainEqual(
+        expect.stringContaining("Final output contract:"),
+      );
       expect(JSON.stringify(requests[0])).not.toContain("OLD-CONTEXT");
       expect(JSON.stringify(requests[0])).toContain("Current question");
       expect(requests[1]!.input.slice(0, requests[0]!.input.length)).toEqual(requests[0]!.input);
@@ -620,16 +690,37 @@ describe("prompt caching: https://github.com/danieljvdm/effect-agent/issues/651"
             }),
         };
 
-        const first = yield* AgentRuntime.run(agent, "First question", { context });
+        const transientContext = {
+          load: () =>
+            Effect.succeed(
+              Prompt.fromMessages([
+                Prompt.systemMessage({ content: `Working notes: ${requests.length + 1}` }),
+              ]),
+            ),
+        };
 
-        yield* AgentRuntime.run(agent, "Second question", { context, threadId: first.threadId });
+        const first = yield* AgentRuntime.run(agent, "First question", {
+          context,
+          transientContext,
+        });
+
+        yield* AgentRuntime.run(agent, "Second question", {
+          context,
+          transientContext,
+          threadId: first.threadId,
+        });
         expect(requests).toHaveLength(2);
         expect(requests[0]!.system).toMatchObject([
           { type: "text", text: "Application policy" },
           { type: "text", text: "Author instructions", cache_control: { type: "ephemeral" } },
+          { type: "text", text: "Working notes: 1" },
           { type: "text", text: expect.stringContaining("Final output contract:") },
         ]);
-        expect(requests[1]!.system).toEqual(requests[0]!.system);
+        expect(requests[1]!.system).toMatchObject([
+          ...requests[0]!.system.slice(0, 2),
+          { type: "text", text: "Working notes: 2" },
+          requests[0]!.system.at(-1),
+        ]);
         if (runStatus === "appended") {
           // Anthropic combines adjacent user messages into one content array.
           expect(requests[0]!.messages).toMatchObject([
