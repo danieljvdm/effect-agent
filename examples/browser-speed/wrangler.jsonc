@@ -1,0 +1,19 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "effect-agent-browser-speed",
+  "workers_dev": true,
+  "preview_urls": false,
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"],
+  },
+  "browser": { "binding": "BROWSER", "remote": true },
+  "durable_objects": { "bindings": [{ "name": "LAB", "class_name": "BrowserLab" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BrowserLab"] }],
+  "observability": { "enabled": false },
+}

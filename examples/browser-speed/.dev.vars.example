@@ -1,0 +1,6 @@
+CLOUDFLARE_ACCOUNT_ID=
+BROWSER_RENDERING_API_TOKEN=
+OPENAI_API_KEY=
+# Optional comparison providers; all credentials stay in the Worker.
+WORKERS_AI_API_KEY=
+TYPESAFE_API_KEY=

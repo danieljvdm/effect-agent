@@ -1,0 +1,37 @@
+{
+  "name": "@effect-agent/example-browser-speed",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev"
+  },
+  "dependencies": {
+    "@effect-agent/platform-cloudflare": "workspace:*",
+    "@effect/ai-openai": "catalog:",
+    "@effect/ai-openai-compat": "catalog:",
+    "@effect/ai-typesafe": "catalog:",
+    "@effect/atom-react": "catalog:",
+    "@fontsource-variable/ibm-plex-sans": "catalog:",
+    "@fontsource/ibm-plex-mono": "catalog:",
+    "effect": "catalog:",
+    "effect-agent": "workspace:*",
+    "effect-cf": "catalog:",
+    "lucide-react": "catalog:",
+    "puppeteer-core": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "esbuild": "catalog:",
+    "miniflare": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "wrangler": "catalog:"
+  }
+}

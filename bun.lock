@@ -48,6 +48,38 @@
         "vue": "catalog:",
       },
     },
+    "examples/browser-speed": {
+      "name": "@effect-agent/example-browser-speed",
+      "dependencies": {
+        "@effect-agent/platform-cloudflare": "workspace:*",
+        "@effect/ai-openai": "catalog:",
+        "@effect/ai-openai-compat": "catalog:",
+        "@effect/ai-typesafe": "catalog:",
+        "@effect/atom-react": "catalog:",
+        "@fontsource-variable/ibm-plex-sans": "catalog:",
+        "@fontsource/ibm-plex-mono": "catalog:",
+        "effect": "catalog:",
+        "effect-agent": "workspace:*",
+        "effect-cf": "catalog:",
+        "lucide-react": "catalog:",
+        "puppeteer-core": "catalog:",
+        "react": "catalog:",
+        "react-dom": "catalog:",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "catalog:",
+        "@effect/vitest": "catalog:",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "@types/react-dom": "catalog:",
+        "@vitejs/plugin-react": "catalog:",
+        "esbuild": "catalog:",
+        "miniflare": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+        "wrangler": "catalog:",
+      },
+    },
     "examples/travel-planner": {
       "name": "@effect-agent/example-travel-planner",
       "dependencies": {
@@ -512,6 +544,7 @@
     "@cloudflare/workers-types": "5.20260825.1",
     "@effect/ai-anthropic": "4.0.0-rc.117",
     "@effect/ai-openai": "4.0.0-rc.117",
+    "@effect/ai-openai-compat": "4.0.0-rc.117",
     "@effect/ai-typesafe": "4.0.0-rc.117",
     "@effect/atom-react": "4.0.0-rc.117",
     "@effect/platform-browser": "4.0.0-rc.117",
@@ -757,6 +790,8 @@
 
     "@effect-agent/example-browser-run-worker-proof": ["@effect-agent/example-browser-run-worker-proof@workspace:tooling/browser-run-worker-proof"],
 
+    "@effect-agent/example-browser-speed": ["@effect-agent/example-browser-speed@workspace:examples/browser-speed"],
+
     "@effect-agent/example-cloudflare-memory": ["@effect-agent/example-cloudflare-memory@workspace:tooling/cloudflare-memory"],
 
     "@effect-agent/example-context-continuity-eval": ["@effect-agent/example-context-continuity-eval@workspace:tooling/context-continuity-eval"],
@@ -796,6 +831,8 @@
     "@effect/ai-anthropic": ["@effect/ai-anthropic@4.0.0-rc.117", "", { "peerDependencies": { "effect": "^4.0.0-rc.117" } }, "sha512-UENH5wxqQud9NLlX2WqauiWuJ+Q9dBW2bOxMOsUJalZ0YdjbcK3LgNTZjrOR+0jPGTlBR9OIgF9qqFPZg6J0AA=="],
 
     "@effect/ai-openai": ["@effect/ai-openai@4.0.0-rc.117", "", { "peerDependencies": { "effect": "^4.0.0-rc.117" } }, "sha512-EGQtI0Y8B/PgEQ3ObZ8RYfIwTL5f5gXegO386aoskR4S5XrDr42mJk+7gJ/86SQ1mc38eYD4zEHz8f4Q3RkUgg=="],
+
+    "@effect/ai-openai-compat": ["@effect/ai-openai-compat@4.0.0-rc.117", "", { "peerDependencies": { "effect": "^4.0.0-rc.117" } }, "sha512-TJFO5CGOks+y9d6Fbj3/lfWO4FHWMIS0h+8MOMEcNyDau/BTZYIYP/Ab9OID0Rwsbvq3Wi7kxJKpA88QgaVqkw=="],
 
     "@effect/ai-typesafe": ["@effect/ai-typesafe@4.0.0-rc.117", "", { "peerDependencies": { "effect": "^4.0.0-rc.117" } }, "sha512-/cjCfCXEXS+vGDL8TUiYdPRwCDtyJyRiLe5+Z4IAOJgSnMebfSR4eHOhNstpZpW19wksM+BdFiZV3VNZI6g3pA=="],
 

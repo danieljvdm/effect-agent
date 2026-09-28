@@ -56,17 +56,18 @@ includes them; verify that upgrade with a frozen install and `vp run check:deplo
 
 See the [package map](reference/packages.md) for public packages and capabilities.
 
-| Directory                          | Purpose                                                 |
-| ---------------------------------- | ------------------------------------------------------- |
-| `packages/*`                       | Framework and private PR-review integration packages    |
-| `examples/travel-planner`          | Canonical Cloudflare application, deployed with Alchemy |
-| `tooling/runtime-benchmark`        | Deterministic runtime comparisons                       |
-| `tooling/context-continuity-eval`  | Release continuity gates and deployed performance       |
-| `tooling/cloudflare-memory`        | Thread-to-Memory latency and heap measurements          |
-| `tooling/browser-run-worker-proof` | Opt-in hosted Browser Run verification                  |
-| `tooling/pr-review-eval`           | Opt-in live review evaluation                           |
-| `tooling/semantic-memory-eval`     | Semantic-memory quality evaluation                      |
-| `action/`                          | PR-review Action contract and ignored build output      |
+| Directory                          | Purpose                                                   |
+| ---------------------------------- | --------------------------------------------------------- |
+| `packages/*`                       | Framework and private PR-review integration packages      |
+| `examples/travel-planner`          | Canonical Cloudflare application, deployed with Alchemy   |
+| `examples/browser-speed`           | Interactive browser latency lab and controlled task board |
+| `tooling/runtime-benchmark`        | Deterministic runtime comparisons                         |
+| `tooling/context-continuity-eval`  | Release continuity gates and deployed performance         |
+| `tooling/cloudflare-memory`        | Thread-to-Memory latency and heap measurements            |
+| `tooling/browser-run-worker-proof` | Opt-in hosted Browser Run verification                    |
+| `tooling/pr-review-eval`           | Opt-in live review evaluation                             |
+| `tooling/semantic-memory-eval`     | Semantic-memory quality evaluation                        |
+| `action/`                          | PR-review Action contract and ignored build output        |
 
 Framework code stays in `packages/*`. The canonical app and operational harnesses are leaf workspaces.
 Provider integrations come from upstream Effect AI Layers, including `@effect/ai-typesafe`.

@@ -121,6 +121,7 @@ Use this in place of the earlier `BunRuntime.runMain` call.
   [durable execution](docs/concepts/durability.md), and
   [Effect Workflows](docs/guide/workflows.md) — keep history and resume work.
 - [Cloudflare travel planner](examples/travel-planner/) and the [PR reviewer](packages/pr-review/README.md).
+- [Browser speed lab](examples/browser-speed/) — chat-driven browser tasks with independent verification and a timing waterfall.
 
 Start with the [getting-started guide](docs/guide/getting-started.md), or explore the
 [package map](docs/reference/packages.md#capability-inventory) and

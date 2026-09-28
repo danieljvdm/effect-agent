@@ -90,6 +90,7 @@
     "@cloudflare/workers-types": "5.20260825.1",
     "@effect/ai-anthropic": "4.0.0-rc.117",
     "@effect/ai-openai": "4.0.0-rc.117",
+    "@effect/ai-openai-compat": "4.0.0-rc.117",
     "@effect/ai-typesafe": "4.0.0-rc.117",
     "@effect/atom-react": "4.0.0-rc.117",
     "@effect/platform-browser": "4.0.0-rc.117",
