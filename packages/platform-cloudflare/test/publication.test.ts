@@ -153,7 +153,7 @@ const latch = () => {
 
 describe("durable host publication", () => {
   // Regression: c68edc7a made host publication an execution prerequisite.
-  it("runs routed and alarm attempts with publication debt, then publishes one ordered batch", () =>
+  it("runs routed and alarm attempts with publication debt, then publishes bounded ordered batches", () =>
     withThread(async (thread, _now, advance) => {
       let providerCalls = 0;
 
@@ -191,21 +191,39 @@ describe("durable host publication", () => {
       await alarm(thread).catch(() => undefined);
       expect(providerCalls).toBe(2);
       expect(await allSettled(thread, namespace)()).toBe(true);
+
+      // Regression: bce45cdd loaded the entire owner backlog before persisting a retry.
+      await runClient(
+        CloudflareThreadClient.use((client) =>
+          client.submit(
+            { definition: plannerDefinition },
+            { question: "backlog", ref: thread },
+            submitOptions(thread, "backlog"),
+          ),
+        ),
+        namespace,
+      );
+      await alarm(thread).catch(() => undefined);
+      expect(providerCalls).toBe(3);
       expect(lifecycleBatches.get(thread)).toHaveLength(1);
       lifecycleBatches.delete(thread);
 
       const before = await lifecycleRows(thread);
 
-      expect(before.length).toBeGreaterThan(3);
+      expect(before.length).toBeGreaterThan(8);
       expect(before.every((row) => row.payload_json !== null)).toBe(true);
       failedLifecycleThreads.delete(thread);
       await advance(11_000);
       await quiesce(thread);
       const batches = lifecycleBatches.get(thread) ?? [];
 
-      expect(batches).toHaveLength(1);
-      expect(batches[0]?.map((fact) => fact.id)).toEqual(before.map((row) => row.id));
-      expect(batches[0]?.map((fact) => fact.ordinal)).toEqual(before.map((row) => row.ordinal));
+      expect(batches.every((batch) => batch.length <= 8)).toBe(true);
+      expect(batches.flatMap((batch) => batch.map((fact) => fact.id))).toEqual(
+        before.map((row) => row.id),
+      );
+      expect(batches.flatMap((batch) => batch.map((fact) => fact.ordinal))).toEqual(
+        before.map((row) => row.ordinal),
+      );
       expect(batches[0]?.slice(0, 3).map((fact) => fact.fact._tag)).toEqual([
         "SubmissionReady",
         "UserInputRecorded",
@@ -267,20 +285,19 @@ describe("durable host publication", () => {
       const release = latch();
 
       publicationControls.set(thread, { entered: entered.resolve, release: release.promise });
-      await mutate(thread, 1);
-      const first = alarm(thread);
+      const first = mutate(thread, 1);
 
       await entered.promise;
       publicationControls.delete(thread);
       try {
         await mutate(thread, 2);
-        // The in-flight drain captured the older source; the new mutation must stay armed.
-        expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
+        // The older drain now writes a stale cursor after the newer publication acknowledged.
       } finally {
         release.resolve();
         await first;
       }
-
+      expect((await cursor(thread)).source).toBe(1);
+      expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
       await quiesce(thread);
       expect((await cursor(thread)).source).toBe(2);
     }));
@@ -324,11 +341,13 @@ describe("durable host publication", () => {
       );
     }));
 
-  it("returns the committed submission before background publication and repairs it by alarm", () =>
+  it("returns the committed submission when immediate publication fails and repairs it by alarm", () =>
     withThread(async (thread) => {
       publicationControls.set(thread, { failure: "failure" });
       const receipt = await submit(thread);
 
+      // Regression: bce45cdd skipped the required custom host-publication hook.
+      expect(publicationResources.get(thread)?.acquired ?? 0).toBeGreaterThan(0);
       expect((await laneRows(thread, namespace))[0]?.submission_id).toBe(receipt.submissionId);
       expect(await scheduledAlarm(thread, namespace)).not.toBeNull();
       publicationControls.delete(thread);

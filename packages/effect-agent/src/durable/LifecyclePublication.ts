@@ -122,8 +122,12 @@ export class LifecyclePublicationError extends Schema.TaggedError<LifecyclePubli
   },
 ) {}
 
-/** One owner's pending facts, strictly ordered by its durable ordinals. */
+/** Bound both retained facts and the immutable admission evidence resolved before dispatch. */
+export const lifecyclePublicationBatchMaxFacts = 8;
+
+/** One owner's bounded pending prefix, strictly ordered by its durable ordinals. */
 export const LifecyclePublicationBatch = Schema.NonEmptyArray(LifecyclePublication).check(
+  Schema.isMaxLength(lifecyclePublicationBatchMaxFacts),
   Schema.makeFilter(
     (facts) =>
       facts.every((fact, index) => {
@@ -142,7 +146,7 @@ export type LifecyclePublicationBatch = typeof LifecyclePublicationBatch.Type;
 
 /** Native recovery state, independent of Attempts. Hosts serialize drains per storage owner. */
 export interface LifecyclePublicationStorage {
-  /** Select up to `limit` due owners, with all pending facts for each selected owner. */
+  /** Select up to `limit` due owners, with a bounded pending prefix for each selected owner. */
   readonly pending: (
     nowMillis: number,
     limit: number,
@@ -171,7 +175,8 @@ export interface LifecyclePublicationStorage {
 
 /**
  * Publish one owner's ordered batch in one idempotent host transaction, including authorization,
- * records, receipts and delivery intents. Return only after the entire batch commits. Retries
+ * records, receipts and delivery intents. Larger backlogs continue in later batches.
+ * Return only after the entire batch commits. Retries
  * may include already committed identities plus later facts; deduplicate each fact's `id`.
  * Private input/update/result fields remain private; select declared public fields explicitly.
  * Revocation/deletion is an acknowledged domain decision, not an infrastructure retry.

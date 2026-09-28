@@ -445,10 +445,11 @@ The adapter retains each typed fact in the source transaction. The existing alar
 pending facts asynchronously through an independent maintenance lane. Attempts, model calls,
 input joins, and handoffs continue while publication is pending or failing.
 
-Implement `publish(batch)` for a nonempty, ordinal-ordered array from one `ownerThreadId`.
+Implement `publish(batch)` for a nonempty, ordinal-ordered array of at most eight facts from one
+`ownerThreadId`. Larger backlogs continue in later batches.
 Commit the whole batch's authorization decisions, records, receipts, and delivery intents in one
-idempotent host transaction before returning. Each call includes all pending facts for its
-selected owner; facts committed during delivery belong to a later batch. Retries can include
+idempotent host transaction before returning. Each call takes a bounded prefix of its owner's
+pending facts; facts committed during delivery belong to a later batch. Retries can include
 already committed identities, so deduplicate each fact's `id`. Acknowledgement is atomic for the
 selected batch and preserves its identity/fingerprint receipts. Publication never replays a model
 or Tool operation. Destination deletion or revoked authority is an acknowledged domain decision.
@@ -523,9 +524,10 @@ The platform prearms a native generation before ingress mutations and publicatio
 runtime writes. It prepares a generation only after its producers have returned, drains publication
 before recovery or potentially slow Agent work, and keeps the earliest publication/runtime alarm.
 Pending publication defers runtime work, including when its retry deadline is in the future.
-After commit, only local invalidation runs inline. An invalidation failure is logged without
-changing the committed source result; the
-new generation repairs missed invalidation after a crash. Alarm failures propagate for Workerd
+Required custom publication also drains after each source commit. Native lifecycle publication
+uses its independent maintenance lane. A post-commit publication failure is logged without
+changing the committed source result; a new generation repairs missed invalidation after a crash.
+Alarm failures propagate for Workerd
 retry, and interruption remains interruption. Custom host facts must be committed through
 `ThreadMaintenance.withMutation` to get the same prearm and post-commit hooks.
 

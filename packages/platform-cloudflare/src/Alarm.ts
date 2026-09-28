@@ -348,11 +348,11 @@ const earliestDeadline = (
       : left
     : right;
 
-/** @internal Invalidate locally after commit; maintenance owns all delivery work. */
+/** @internal Required host publication only; native lifecycle facts use a maintenance lane. */
 export const publishCommitted = Effect.gen(function* () {
   const publication = yield* ThreadPublication;
 
-  yield* publication.invalidate;
+  yield* publication.invalidate.pipe(Effect.andThen(publication.drain));
 }).pipe(
   Effect.catchCause((cause) =>
     Cause.hasInterrupts(cause)

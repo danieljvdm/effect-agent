@@ -5,6 +5,7 @@ import {
   LifecyclePublicationBatch,
   LifecyclePublicationConfig,
   LifecyclePublicationError,
+  lifecyclePublicationBatchMaxFacts,
   type LifecyclePublicationStorage,
 } from "effect-agent/lifecycle-publication";
 import { SqlClient } from "effect/unstable/sql/SqlClient";
@@ -12,6 +13,7 @@ import { SqlClient } from "effect/unstable/sql/SqlClient";
 import { makeSqlQuery, SqlInteger } from "./SqlStorage.ts";
 
 const codec = Schema.fromJsonString(LifecyclePublication);
+const maxPendingPayloadBytes = 4 * 1024 * 1024;
 
 const Row = Schema.Struct({
   id: Schema.String,
@@ -31,6 +33,8 @@ const failure = (cause: unknown) =>
  * identity/fingerprint remains. Receipts must never be cascade-deleted with a Thread or its
  * projections.
  * The additive table has its own closed Schema; it does not change a native format in place.
+ * Selection reads sizes before payloads, with a 4 MiB budget across selected owners. An
+ * individually larger valid fact runs alone; no pending tail is loaded or acknowledged early.
  */
 export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.make")(function* (
   namespace?: string,
@@ -174,42 +178,88 @@ export const makeSqlLifecyclePublication = Effect.fn("SqlLifecyclePublication.ma
           }),
         )({ nowMillis, limit }).pipe(Effect.mapError(failure));
 
-        // Limit owners, never facts. A deferred or parked prefix blocks its whole owner.
-        const rows = yield* sql`WITH owners AS (
-          SELECT p.owner_thread_id, p.due_at_millis FROM ${relation} p
+        // A deferred or parked prefix blocks its whole owner. Select metadata before payloads.
+        const owners = yield* sql`SELECT p.owner_thread_id FROM ${relation} p
           WHERE p.payload_json IS NOT NULL AND p.due_at_millis <= ${nowMillis}
           AND NOT EXISTS (SELECT 1 FROM ${relation} before_p WHERE before_p.owner_thread_id = p.owner_thread_id AND before_p.ordinal < p.ordinal AND before_p.payload_json IS NOT NULL)
-          ORDER BY p.due_at_millis, p.owner_thread_id LIMIT ${limit}
-        ) SELECT p.id, p.owner_thread_id, p.ordinal, p.fingerprint, p.payload_json, p.due_at_millis
-          FROM ${relation} p JOIN owners ON owners.owner_thread_id = p.owner_thread_id
-          WHERE p.payload_json IS NOT NULL ORDER BY owners.due_at_millis, p.owner_thread_id, p.ordinal`.pipe(
+          ORDER BY p.due_at_millis, p.owner_thread_id LIMIT ${limit}`.pipe(
           execute,
           Effect.mapError(failure),
-          Effect.flatMap(decodeRows),
+          Effect.flatMap(
+            Schema.decodeUnknownEffect(
+              Schema.Array(Schema.Struct({ owner_thread_id: Schema.String })),
+            ),
+          ),
+          Effect.mapError(failure),
         );
 
-        const owners = new Map<string, Array<LifecyclePublication>>();
+        const batches: Array<LifecyclePublicationBatch> = [];
+        let selectedBytes = 0;
 
-        for (const row of rows) {
-          if (row.payload_json === null)
-            return yield* LifecyclePublicationError.make({ reason: "corrupt" });
-
-          const publication = yield* Schema.decodeEffect(codec)(row.payload_json).pipe(
+        for (const owner of owners) {
+          const sizes = yield* sql`SELECT ordinal, ${sql.onDialectOrElse({
+            pg: () => sql`octet_length(payload_json)`,
+            orElse: () => sql`length(CAST(payload_json AS BLOB))`,
+          })} AS payload_bytes FROM ${relation}
+            WHERE owner_thread_id = ${owner.owner_thread_id} AND payload_json IS NOT NULL
+            ORDER BY ordinal LIMIT ${lifecyclePublicationBatchMaxFacts}`.pipe(
+            execute,
+            Effect.mapError(failure),
+            Effect.flatMap(
+              Schema.decodeUnknownEffect(
+                Schema.Array(Schema.Struct({ ordinal: SqlInteger, payload_bytes: SqlInteger })),
+              ),
+            ),
             Effect.mapError(failure),
           );
 
-          yield* verify(publication, row);
-          const facts = owners.get(row.owner_thread_id) ?? [];
+          let lastOrdinal: number | undefined;
 
-          facts.push(publication);
-          owners.set(row.owner_thread_id, facts);
+          for (const row of sizes) {
+            // An individually larger valid fact runs alone, so it cannot strand its owner.
+            if (
+              selectedBytes + row.payload_bytes > maxPendingPayloadBytes &&
+              (lastOrdinal !== undefined || batches.length > 0)
+            )
+              break;
+            lastOrdinal = row.ordinal;
+            selectedBytes += row.payload_bytes;
+          }
+          if (lastOrdinal === undefined) continue;
+
+          const rows =
+            yield* sql`SELECT id, owner_thread_id, ordinal, fingerprint, payload_json, due_at_millis
+            FROM ${relation} WHERE owner_thread_id = ${owner.owner_thread_id}
+            AND ordinal <= ${lastOrdinal} AND payload_json IS NOT NULL ORDER BY ordinal`.pipe(
+              execute,
+              Effect.mapError(failure),
+              Effect.flatMap(decodeRows),
+            );
+
+          const facts = yield* Effect.forEach(rows, (row) =>
+            Effect.gen(function* () {
+              if (row.payload_json === null)
+                return yield* LifecyclePublicationError.make({ reason: "corrupt" });
+
+              const publication = yield* Schema.decodeEffect(codec)(row.payload_json).pipe(
+                Effect.mapError(failure),
+              );
+
+              yield* verify(publication, row);
+
+              return publication;
+            }),
+          );
+
+          batches.push(
+            yield* Schema.decodeUnknownEffect(Schema.toType(LifecyclePublicationBatch))(facts).pipe(
+              Effect.mapError(failure),
+            ),
+          );
+          if (selectedBytes >= maxPendingPayloadBytes) break;
         }
 
-        return yield* Effect.forEach(owners.values(), (facts) =>
-          Schema.decodeUnknownEffect(Schema.toType(LifecyclePublicationBatch))(facts).pipe(
-            Effect.mapError(failure),
-          ),
-        );
+        return batches;
       }),
     acknowledge: (batch) =>
       transaction(
