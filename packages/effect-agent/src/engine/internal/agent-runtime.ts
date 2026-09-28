@@ -3880,6 +3880,8 @@ const estimateContextTokens = Effect.fn("AgentRuntime.estimateContextTokens")(fu
 const nextContextEstimate = Effect.fn("AgentRuntime.nextContextEstimate")(function* (
   context: RunContext,
   view: ReadonlyArray<Prompt.Message>,
+  provider: string,
+  staticInstructions: Prompt.RawInput | undefined,
 ) {
   const state = context.compaction;
 
@@ -3896,7 +3898,7 @@ const nextContextEstimate = Effect.fn("AgentRuntime.nextContextEstimate")(functi
   }
 
   return yield* estimateContextTokens(
-    prepareModelPrompt(Prompt.fromMessages(view), undefined).content,
+    prepareModelPrompt(Prompt.fromMessages(view), undefined, provider, staticInstructions).content,
   );
 });
 
@@ -5551,6 +5553,13 @@ const makeTurn = <
       const withCallModel = <A, E, R>(operation: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
         modelServices === undefined ? operation : Effect.provide(operation, modelServices);
 
+      const provider = yield* withCallModel(Model.ProviderName);
+
+      const staticInstructions =
+        typeof agent.definition.instructions === "function"
+          ? undefined
+          : agent.definition.instructions;
+
       const priorCompactionPrefix = context.preparedCompactionSource?.prefix;
 
       if (priorCompactionPrefix !== undefined && priorCompactionPrefix.length > 0) {
@@ -5752,8 +5761,11 @@ const makeTurn = <
       // canonical indices still locate appended content and compaction coverage.
       const estimateSourceContext = (view: ReadonlyArray<Prompt.Message>) =>
         options.context === undefined && options.transientContext === undefined
-          ? nextContextEstimate(context, view)
-          : estimateCallTokens(prepareModelPrompt(Prompt.fromMessages(view), undefined).content);
+          ? nextContextEstimate(context, view, provider, staticInstructions)
+          : estimateCallTokens(
+              prepareModelPrompt(Prompt.fromMessages(view), undefined, provider, staticInstructions)
+                .content,
+            );
 
       let prepared = buildCompactedView(modelContext.prompt.content, context.compaction);
       let sourceTokens: number | undefined;
@@ -6186,6 +6198,8 @@ const makeTurn = <
             prepareModelPrompt(
               Prompt.fromMessages([...basis.content, ...transientContext.content]),
               outputContract._tag === "rendered" ? outputContract.part : undefined,
+              provider,
+              staticInstructions,
             ),
             turn,
             priorToolCalls,

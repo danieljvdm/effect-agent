@@ -47,11 +47,12 @@ from successful Tool receipts can therefore read their canonical records during 
 compacts the prepared history, then loads optional references through
 `RunContextPreparation.transientContext.load`. If the references exceed the remaining budget,
 the engine can compact canonical history further while keeping the same reference snapshot.
-It appends the references and derived run status to the compacted view. The outgoing request groups
-system messages into one leading block, followed by the output contract and the conversation.
-Exact system-message repeats, including provider options, keep their last occurrence; distinct
-instructions retain their relative precedence. This projection preserves stored history and
-compaction boundaries. Compaction summaries never receive transient references. Durable
+It appends the references to the compacted view. OpenAI requests preserve the position of system
+instructions, with the output contract after the initial system block; changing late instructions
+therefore leave earlier history reusable. Other providers group system instructions and the output
+contract before the conversation. Derived run status follows this projection, which preserves
+stored history and compaction boundaries. See [prompt caching](./run-agents) for provider differences.
+Compaction summaries never receive transient references. Durable
 recovery rebuilds the committed model view before applying prompt preparation; a transient loader
 receives the current Attempt's official source, Thread ID, Run ID, Turn ID, and Turn number.
 
@@ -93,7 +94,9 @@ discarded material cannot remain in a provider-held conversation. Prompt caching
 matching prefixes. A transient user-message suffix can move OpenAI's implicit cache-write boundary
 past the retained history, even when the reference text stays identical. To reuse that history,
 place native explicit cache markers in the stable prefix through context preparation; keep
-untrusted references in user messages.
+untrusted references in user messages. Append changing trusted system guidance after `source`;
+OpenAI keeps it after the user/tool cache boundary. Prepending changing content still invalidates
+the prefix, and Anthropic's grouped system block cannot preserve this trailing position.
 
 Prepared prompts receive fresh context estimates, including replacement content. For nondurable
 compaction, retain the original instruction/input messages or an unambiguous, content-equivalent
