@@ -422,8 +422,8 @@ class ThreadRecoveryFault extends Schema.Class<ThreadRecoveryFault>(
   /** Saturates at 2^31 - 1; one observation per Thread per recovery sweep. */
   attempts: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(2_147_483_647)),
   failure: RecoveryFailure,
-  /** Previously announced Submissions remain here until their clear transition commits. */
-  submissionIds: Schema.optionalKey(Schema.Array(SubmissionId)),
+  /** Individually retained recipients survive settlement until their clear commits. */
+  recipientCount: Schema.optionalKey(Schema.Natural),
 }) {}
 
 const recoveryFaultKey = (threadId: ThreadId) =>
@@ -441,6 +441,51 @@ const decodeRecoveryFault = (threadId: ThreadId, encoded: unknown) => {
 
 const encodeRecoveryFault = Schema.encodeSync(ThreadRecoveryFault);
 const sameRecoveryFailure = Schema.toEquivalence(RecoveryFailure);
+const decodeRecoveryRecipient = Schema.decodeUnknownSync(SubmissionId);
+const encodeRecoveryRecipient = Schema.encodeSync(SubmissionId);
+
+const recoveryRecipientKey = (threadId: ThreadId, index: number) =>
+  `effect-agent:recovery-recipient:v1:${threadId.length}:${threadId}:${index}`;
+
+const recoveryRecipientKeys = (fault: ThreadRecoveryFault, start: number) =>
+  Array.from({ length: Math.min(128, (fault.recipientCount ?? 0) - start) }, (_, offset) =>
+    recoveryRecipientKey(fault.threadId, start + offset),
+  );
+
+const readRecoveryRecipients = async (
+  storage: Pick<DurableObjectTransaction, "get">,
+  fault: ThreadRecoveryFault,
+): Promise<Array<SubmissionId>> => {
+  const ids: Array<SubmissionId> = [];
+
+  for (let start = 0; start < (fault.recipientCount ?? 0); start += 128) {
+    const keys = recoveryRecipientKeys(fault, start);
+    const values = await storage.get(keys);
+
+    for (const key of keys) ids.push(decodeRecoveryRecipient(values.get(key)));
+  }
+
+  return ids;
+};
+
+const appendRecoveryRecipients = async (
+  transaction: DurableObjectTransaction,
+  threadId: ThreadId,
+  count: number,
+  added: ReadonlyArray<SubmissionId>,
+) => {
+  for (let start = 0; start < added.length; start += 128)
+    await transaction.put(
+      Object.fromEntries(
+        added
+          .slice(start, start + 128)
+          .map((id, offset) => [
+            recoveryRecipientKey(threadId, count + start + offset),
+            encodeRecoveryRecipient(id),
+          ]),
+      ),
+    );
+};
 
 const recoveryEvent = (
   fault: ThreadRecoveryFault,
@@ -486,6 +531,7 @@ interface NativeRecovery {
   readonly loaded: Set<ThreadId>;
   readonly reports: Map<SubmissionId, RecoveryReport>;
   readonly faults: Map<ThreadId, ThreadRecoveryFault>;
+  readonly recipients: Map<ThreadId, ReadonlySet<SubmissionId>>;
   observation?: {
     readonly generation: bigint;
     readonly activeAtStart: number;
@@ -881,6 +927,7 @@ export class ThreadMaintenance extends Context.Service<
 
       const recordRecoveryFaults = Effect.fn("ThreadMaintenance.recordRecoveryFaults")(function* (
         result: RecoverySweepResult,
+        recovery: NativeRecovery,
         current?: ReadonlyArray<SubmissionWorkItem>,
       ) {
         const threads = new Map<ThreadId, RecoveryFailure | undefined>();
@@ -902,6 +949,7 @@ export class ThreadMaintenance extends Context.Service<
             const events: Array<Omit<ThreadRecoveryFaultEvent, "sequence">> = [];
             const newlyBlocked: Array<ThreadRecoveryFault> = [];
             const faults = new Map<ThreadId, ThreadRecoveryFault>();
+            const recipients = new Map<ThreadId, ReadonlySet<SubmissionId>>();
 
             for (const [threadId, failure] of threads) {
               const key = recoveryFaultKey(threadId);
@@ -910,17 +958,33 @@ export class ThreadMaintenance extends Context.Service<
               const previous =
                 encoded === undefined ? undefined : decodeRecoveryFault(threadId, encoded);
 
+              const previousIds =
+                previous === undefined ? [] : await readRecoveryRecipients(transaction, previous);
+
+              const known = new Set(previousIds);
+
+              recipients.set(threadId, known);
+
               if (failure === undefined) {
                 if (previous !== undefined) {
                   await transaction.delete(key);
-                  for (const id of previous.submissionIds ??
-                    result.reports
-                      .filter((report) => report.threadId === threadId)
-                      .map((report) => report.submissionId))
+                  for (let start = 0; start < (previous.recipientCount ?? 0); start += 128)
+                    await transaction.delete(recoveryRecipientKeys(previous, start));
+                  for (const id of previous.recipientCount === undefined
+                    ? result.reports
+                        .filter((report) => report.threadId === threadId)
+                        .map((report) => report.submissionId)
+                    : previousIds)
                     events.push(recoveryEvent(previous, id, "cleared", now));
                 }
                 continue;
               }
+
+              const added = submissions
+                .filter((row) => row.threadId === threadId && !known.has(row.submissionId))
+                .map((row) => row.submissionId);
+
+              await appendRecoveryRecipients(transaction, threadId, previousIds.length, added);
 
               const fault = ThreadRecoveryFault.make({
                 schemaVersion: 1,
@@ -930,22 +994,15 @@ export class ThreadMaintenance extends Context.Service<
                 attempts: Math.min(2_147_483_647, (previous?.attempts ?? 0) + 1),
                 retryAt: now + Math.min(60_000, 5_000 * 2 ** Math.min(30, previous?.attempts ?? 0)),
                 failure,
-                submissionIds: [
-                  ...new Set([
-                    ...(previous?.submissionIds ?? []),
-                    ...submissions
-                      .filter((row) => row.threadId === threadId)
-                      .map((row) => row.submissionId),
-                  ]),
-                ],
+                recipientCount: previousIds.length + added.length,
               });
 
               await transaction.put(key, encodeRecoveryFault(fault));
-              for (const id of fault.submissionIds ?? []) {
-                if (!previous?.submissionIds?.includes(id))
-                  events.push(recoveryEvent(fault, id, "created", now));
-                else if (!sameRecoveryFailure(previous.failure, failure))
-                  events.push(recoveryEvent(fault, id, "changed", now));
+              if (previous !== undefined && !sameRecoveryFailure(previous.failure, failure))
+                for (const id of previousIds) events.push(recoveryEvent(fault, id, "changed", now));
+              for (const id of added) {
+                known.add(id);
+                events.push(recoveryEvent(fault, id, "created", now));
               }
               faults.set(threadId, fault);
               if (previous === undefined) newlyBlocked.push(fault);
@@ -957,11 +1014,13 @@ export class ThreadMaintenance extends Context.Service<
               changed: new Set(events.map((event) => event.threadId)),
               newlyBlocked,
               faults,
+              recipients,
             };
           }),
         );
 
         yield* failpoint.hit("maintenance:recovery-status:after");
+        for (const [threadId, ids] of retained.recipients) recovery.recipients.set(threadId, ids);
         // A healthy unchanged head must not wake its own maintenance loop.
         for (const threadId of retained.changed) yield* wakes.notify(threadId);
         for (const fault of retained.newlyBlocked)
@@ -981,7 +1040,7 @@ export class ThreadMaintenance extends Context.Service<
       ) {
         const result = yield* runtime.runRecovery({ threadId });
         // Visibility is committed before a claim or any fallible auxiliary join.
-        const faults = yield* recordRecoveryFaults(result);
+        const faults = yield* recordRecoveryFaults(result, recovery);
 
         for (const report of result.reports) recovery.reports.set(report.submissionId, report);
         recovery.faults.delete(threadId);
@@ -1355,13 +1414,23 @@ export class ThreadMaintenance extends Context.Service<
             if (!recovery.loaded.has(threadId)) {
               const encoded = await ctx.storage.get(recoveryFaultKey(threadId));
 
-              if (encoded !== undefined)
-                recovery.faults.set(threadId, decodeRecoveryFault(threadId, encoded));
+              if (encoded !== undefined) {
+                const fault = decodeRecoveryFault(threadId, encoded);
+
+                recovery.faults.set(threadId, fault);
+                recovery.recipients.set(
+                  threadId,
+                  new Set(await readRecoveryRecipients(ctx.storage, fault)),
+                );
+              }
               recovery.loaded.add(threadId);
             }
             const fault = recovery.faults.get(threadId);
 
-            if (fault === undefined || ids.every((id) => fault.submissionIds?.includes(id)))
+            if (
+              fault === undefined ||
+              ids.every((id) => recovery.recipients.get(threadId)?.has(id))
+            )
               continue;
 
             // Admissions during backoff need visibility without accelerating recovery.
@@ -1371,21 +1440,25 @@ export class ThreadMaintenance extends Context.Service<
 
               if (encoded === undefined) return;
               const previous = decodeRecoveryFault(threadId, encoded);
-              const added = ids.filter((id) => !previous.submissionIds?.includes(id));
+              const previousIds = await readRecoveryRecipients(transaction, previous);
+              const known = new Set(previousIds);
+              const added = ids.filter((id) => !known.has(id));
 
               if (added.length === 0) return;
 
               const updated = ThreadRecoveryFault.make({
                 ...previous,
-                submissionIds: [...(previous.submissionIds ?? []), ...added],
+                recipientCount: previousIds.length + added.length,
               });
 
+              await appendRecoveryRecipients(transaction, threadId, previousIds.length, added);
               await transaction.put(recoveryFaultKey(threadId), encodeRecoveryFault(updated));
               await appendRecoveryEvents(
                 transaction,
                 added.map((id) => recoveryEvent(updated, id, "created", selectionTime)),
               );
               recovery.faults.set(threadId, updated);
+              recovery.recipients.set(threadId, new Set([...previousIds, ...added]));
             });
           }
         });
@@ -1436,6 +1509,7 @@ export class ThreadMaintenance extends Context.Service<
                   RecoveryBlocked.make({ threadId: head.threadId, failure: intent.failure }),
                 ],
               }),
+              recovery,
               current,
             );
 
@@ -1710,6 +1784,7 @@ export class ThreadMaintenance extends Context.Service<
         // scheduling loop observes it; a busy sibling cannot consume another lane's hint.
         const lanes = [recoveryEventLane, ...host.lanes].map((lane) => ({
           ...lane,
+          recovery: lane === recoveryEventLane,
           initial: true,
           check: true,
           exhausted: false,
@@ -1726,6 +1801,7 @@ export class ThreadMaintenance extends Context.Service<
           loaded: new Set(),
           reports: new Map(),
           faults: new Map(),
+          recipients: new Map(),
           started: false,
           needsCheckpoint: false,
           recovered: 0,
@@ -1868,7 +1944,15 @@ export class ThreadMaintenance extends Context.Service<
           if (now >= until) break;
 
           for (const lane of lanes) {
-            if (lane.fiber !== undefined || lane.exhausted || !lane.check) continue;
+            // Empty recovery delivery must not extend native retirement or consume a
+            // scheduling turn. Actual transitions share the ordinary bounded lane below.
+            if (
+              lane.fiber !== undefined ||
+              lane.exhausted ||
+              !lane.check ||
+              (lane.recovery && !recoveryEventsPending)
+            )
+              continue;
             lane.check = false;
             lane.fiber = yield* fork(
               Effect.gen(function* () {
