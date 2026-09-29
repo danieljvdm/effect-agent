@@ -776,12 +776,10 @@ export class ThreadMutationGate extends Context.Service<
             failpoint.hit("maintenance:mutation:armed").pipe(
               Effect.andThen(body),
               // The committed outbox may be claimed by the alarm even while the caller
-              // is suspended after commit. Native certification keeps its broader guard.
-              Effect.tap(() =>
-                generationGate
-                  .withPermit(releaseLanes(enrolled, true))
-                  .pipe(Effect.andThen(notify)),
-              ),
+              // is suspended after commit. This synchronous decrement does not acquire the
+              // native snapshot gate: a snapshot may conservatively retain its active count.
+              // Native certification keeps its broader guard until the mutation is released.
+              Effect.tap(() => releaseLanes(enrolled, true).pipe(Effect.andThen(notify))),
               Effect.tap(() => failpoint.hit("maintenance:mutation:finished")),
             ),
           (enrolled) => endMutation(enrolled).pipe(Effect.andThen(notify)),
